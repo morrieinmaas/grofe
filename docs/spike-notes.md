@@ -12,8 +12,10 @@ Run it: `cargo run --example spike` (your `$SHELL`) or
 
 ## What works (agent-verified on macOS)
 
-- Spawning per spec §4.8: `openpty`, `FD_CLOEXEC` on master and slave, `pre_exec`
-  with only `setsid`, `ioctl(TIOCSCTTY)`, `dup2` to 0/1/2. The child is a
+- Spawning per spec §4.8: `openpty`, then `FD_CLOEXEC` on master and slave
+  (a separate `fcntl`, not atomic with `openpty`; harmless in the spike, which
+  spawns one child, but grofe serialises spawns under one process-wide lock),
+  `pre_exec` with only `setsid`, `ioctl(TIOCSCTTY)`, `dup2` to 0/1/2. The child is a
   session leader with the pty as controlling tty.
 - `/bin/sh` echo round trip (`echo_roundtrip`).
 - `PtyWrite` replies: a shell that sends CPR (`CSI 6n`) and blocks in `read` gets
@@ -34,9 +36,10 @@ Run it: `cargo run --example spike` (your `$SHELL`) or
 | Underline styles collapse to plain `4`; underline colour (`cell.underline_color()`) and OSC 8 hyperlinks (`cell.hyperlink()`) not emitted | ours | Data is in the cell, the renderer just ignores it. |
 | No mouse, no focus events | ours | Spike never enables outer mouse/focus reporting; raw stdin bytes are forwarded with no decoding. |
 | Kitty keyboard protocol off | ours | `Config::kitty_keyboard` defaults to false. |
-| No synchronized output on the outer side, full redraw every frame | ours | Out of scope; M1 compositor diffs. Flicker possible on large redraws. |
+| No synchronized output on the outer side, full redraw every frame | ours | Out of scope; the M2 renderer (T2.2) diffs. Flicker possible on large redraws. |
 | Blocking reader/writer/stdin threads, not tokio `AsyncFd` | ours | Spike choice. M1 uses `AsyncFd` per §8. |
-| Each `Processor::new()` pre-allocates a 2 MiB sync-update buffer | lib | `vte` 0.15 `SYNC_BUFFER_SIZE = 0x20_0000`, `Vec::with_capacity`. That is 2 MiB per pane before any output; fine for tens of panes, worth knowing. |
+| Each `Processor::new()` reserves a 2 MiB sync-update buffer | lib | `vte` 0.15 `SYNC_BUFFER_SIZE = 0x20_0000`, `Vec::with_capacity`. It is a reservation, resident only once a synchronized update (mode 2026) buffers bytes, but the capacity is retained after the buffer is cleared, so a pane that has used mode 2026 (nvim does) may keep up to 2 MiB resident. Fine for tens of panes, worth knowing. |
+| No OSC 7 (cwd), OSC 9 or OSC 777 | lib | `vte` 0.15 does not parse them; its `osc_dispatch` handles only 0/2, 4, 8, 10-12, 22, 50, 52, 104 and 110-112. Needs a grofe byte scanner run before `advance`, one that survives sequences split across reads (M3, T3.3). |
 | XTVERSION (`CSI > q`) gets no reply | lib | vte 0.15 has no dispatch for it. Apps that probe it (nvim) just time out; answer it ourselves if one misbehaves. |
 | `Term` never emits `Wakeup` or `ChildExit` | lib | Those come from alacritty's own `event_loop`/`tty`, which we do not use. Our reader signals redraws; the child handle signals exit. |
 | Two drainers (reader, sync-timeout on main) share one event buffer | ours | Order is kept by enqueueing to the writer while holding the event lock. With one reader task per pane in M1 this goes away. |
@@ -193,12 +196,11 @@ the `Smulx` distinction is lost by the time it reaches the outer terminal.
 The non-SGR extras (title, clipboard, cursor colour, focus) are not
 exercised live; the source citations above (`drain_events()` in
 `examples/spike.rs`) are the evidence, matching the Gaps table earlier in
-this document, which already records them as deferred to M1.
+this document, which already records them as not yet forwarded.
 
 **Decision.** Since not every capability `tmux-256color` adds over
 `screen-256color` survives the M0 spike's render path, D7's bar for
 switching is not met. `src/term.rs::resolve_term()` keeps `screen-256color`
 as the default (falling back to `xterm-256color` if even that entry is
 missing on the host), with `COLORTERM=truecolor` unconditionally. Revisit
-once M1's compositor forwards title, clipboard, cursor colour and focus
-events, and once the renderer stops collapsing underline styles.
+once the M2 renderer (T2.2) emits underline styles and M3 passthrough (T3.3) forwards title, OSC 52, cursor colour and focus; T3.6 re-runs this table against the real render path.

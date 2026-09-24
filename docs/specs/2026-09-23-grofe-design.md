@@ -51,7 +51,7 @@ If performance becomes the headline, the project has lost the plot.
 | D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and canopy's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
 | D5 | **Single-owner state.** One tokio task (the server actor) owns the model. Pane I/O tasks, client connections and timers send it messages. The only shared state is each pane's terminal behind a mutex, with bounded lock holds (§4.8). | Removes a class of concurrency bugs; easy for parallel implementers to reason about. |
 | D6 | **Window size follows the latest active client**, where "latest" means last input, debounced ~500 ms so two attached clients do not make the window flap. Larger clients are letterboxed (window drawn at its size, the rest filled with a dim pattern). Smaller clients are cropped, with a viewport that follows the active pane's cursor. The emulator reflows the primary screen on resize; alt-screen apps just get SIGWINCH. | Every multiplexer picks a side. tmux users already know this behavior. |
-| D7 | **Advertise a small, honest `TERM`.** Default `screen-256color` plus `COLORTERM=truecolor`. T0.4 checked whether every extra capability `tmux-256color`'s terminfo entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survives the M0 spike's render path end to end. It does not: the spike's renderer collapses every underline style to plain underline, and several non-SGR extras are not forwarded to the outer terminal at all yet. So the default stays `screen-256color`, falling back to `xterm-256color` per host when even that entry is missing. Revisit once the M1 compositor forwards the missing events and the renderer stops collapsing underline styles. | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. |
+| D7 | **Advertise a small, honest `TERM`.** Default `screen-256color` plus `COLORTERM=truecolor`. T0.4 checked whether every extra capability `tmux-256color`'s terminfo entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survives the M0 spike's render path end to end. It does not: the spike's renderer collapses every underline style to plain underline, and several non-SGR extras are not forwarded to the outer terminal at all yet. So the default stays `screen-256color`, falling back to `xterm-256color` per host when even that entry is missing. That last resort advertises more than `screen-256color` and exists only for hosts lacking both `screen-256color` and `tmux-256color`. Revisit once the M2 renderer (T2.2) emits underline styles and M3 passthrough (T3.3) forwards title, OSC 52, cursor colour and focus; T3.6 re-runs the check. | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. |
 | D8 | **No subprocesses in the status line, ever.** The status line renders formats over options. Dynamic content arrives by something external setting an option. `run-shell` exists for key bindings only. | The one real performance problem in tmux setups, deleted by design. |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
 | D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). | Keeps core general, and gives the plugin API a real, demanding first user. |
@@ -281,8 +281,11 @@ are added when a test, the status line, or a plugin needs them. Candidates:
 
 - **Spawning.** `std::process::Command` with `pre_exec` doing only
   async-signal-safe calls (`setsid`, `ioctl(TIOCSCTTY)`, `dup2` of the slave to
-  0/1/2). The master fd gets `FD_CLOEXEC` immediately so no child inherits another
-  pane's master (leaked masters stop `kill-pane` from hanging up). std resets
+  0/1/2). The master and slave get `FD_CLOEXEC` right after `openpty` so no child
+  inherits another pane's master (leaked masters stop `kill-pane` from hanging
+  up). Setting it is not atomic with `openpty`, so spawns are serialised under
+  one process-wide lock from openpty to spawn so a concurrent fork cannot
+  inherit a master. std resets
   SIGPIPE and the signal mask for the child. Exit is observed via the child handle,
   not a global SIGCHLD handler.
 - **Reader task** (one per pane) reads the master via `AsyncFd`, and owns the
@@ -291,15 +294,17 @@ are added when a test, the status line, or a plugin needs them. Candidates:
   DSR/CPR, colour queries, size reports) straight to the pane's writer queue in
   order, never through the actor. Other listener events become `PaneEvent`s to the
   actor: `Title`, `Bell`, `Clipboard` (OSC 52 store), `ColorRequest` (answered from
-  the configured palette), `Cwd` (OSC 7). It also drives the parser's
+  the configured palette). It also drives the parser's
   synchronized-update timeout so a pane that begins an update and dies cannot
   freeze. It sets the dirty flag and wakes the render scheduler.
 - **Writer task** (one per pane) owns writes to the master through a bounded
   queue. The actor only enqueues, so a large paste into a pane that is not reading
   cannot stall the server.
 - **Foreground command and cwd** are sampled on a timer and cached (they are
-  syscalls: `tcgetpgrp`, then `/proc` on Linux or `libproc` on macOS). OSC 7, when
-  a shell emits it, is the preferred cwd source.
+  syscalls: `tcgetpgrp`, then `/proc` on Linux or `libproc` on macOS). In M1
+  cwd comes only from sampling: `vte` 0.15 does not parse OSC 7. From M3
+  grofe's own OSC byte scanner (T3.3, §4.9) reads OSC 7, which is then the
+  preferred cwd source when a shell emits it, and emits `PaneEvent::Cwd`.
 
 ### 4.9 Passthrough
 
@@ -307,7 +312,9 @@ The emulator consumes every byte, so nothing passes through implicitly. grofe
 re-emits exactly this set to attached clients: OSC 52 clipboard (per config),
 window title, bell (also sets the window activity flag, which agents rely on),
 OSC 8 hyperlinks (re-emitted from cell hyperlink attributes), and OSC 9 / OSC 777
-notifications. Unsupported in v1: sixel, kitty graphics, arbitrary DCS
+notifications. `vte` 0.15 does not parse OSC 9 or OSC 777, so those come from
+the same grofe OSC byte scanner that reads OSC 7 (§4.8), run over pane output
+before the parser sees it. Unsupported in v1: sixel, kitty graphics, arbitrary DCS
 passthrough (a nested tmux works as a normal terminal app, without passthrough).
 
 ---
@@ -393,8 +400,8 @@ after dogfooding.
 ## 6. Persistence and pane identity (M4)
 
 - **Snapshot.** The server writes `$XDG_STATE_HOME/grofe/<socket>/state.json`
-  (with a `version` field) on structural change and on cwd change (OSC 7 or the
-  sampling timer), debounced ~1 s, and on clean shutdown. Writes are atomic (temp
+  (with a `version` field) on structural change and on cwd change (the sampling
+  timer; OSC 7 from M3), debounced ~1 s, and on clean shutdown. Writes are atomic (temp
   file plus rename). Per pane: `uid`, `cwd`, spawn `argv`, `resume`, and user
   options set with `--persist`.
 - **Restore.** `grofe start-server --restore`, or `restore-on-start = true` in
@@ -481,10 +488,14 @@ parses every extra SGR capability tmux advertises (italics, strikeout,
 hidden text, the `Smulx` extended underline styles), but the M0 spike's
 render path does not reproduce all of them: underline styles collapse to
 plain underline, and non-SGR extras (title relay, OSC 52 clipboard, cursor
-colour, focus events) are not forwarded to the outer terminal yet. Since not
+colour, focus events) are not forwarded to the outer terminal yet: the M2 renderer (T2.2) emits underline styles and M3 passthrough (T3.3) forwards title, OSC 52, cursor colour and focus. Since not
 every extra capability works end to end, grofe stays on the smaller,
 honest `screen-256color` for now. See docs/spike-notes.md's "TERM decision"
 section for the full evidence.
+
+An inner `CSI > q` (XTVERSION) gets no reply from the library; grofe answers
+it only if an app needs it. This is distinct from the client's probe of the
+outer terminal in §4.4.
 
 **Zellij files worth reading:** `zellij-server/src/panes/grid.rs`,
 `terminal_pane.rs`, `os_input_output_unix.rs`, `pty.rs`, `screen.rs`, `route.rs`,

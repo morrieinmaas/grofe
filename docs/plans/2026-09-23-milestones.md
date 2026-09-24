@@ -74,8 +74,9 @@ Cargo.toml
 src/
   main.rs            # CLI entry, subcommand table
   lib.rs             # module declarations
-  types.rs           # T0.5: ids, Rect, Dir, Edge, SplitSize, CaptureOpts, InputModes
+  types.rs           # T0.5: ids, Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts, MouseEncoding, InputModes
   event.rs           # T0.5: Event enum (serde)
+  term.rs            # T0.4: inner TERM resolution (consumed by T1.4)
   paths.rs           # socket, lock, state and log paths
   protocol.rs        # hellos, control messages, attach frames, codecs
   cmd/
@@ -126,6 +127,7 @@ Signatures are indicative; names and responsibilities are binding.
 
 ```rust
 // types.rs
+// ids derive Ord (ordered by number)
 pub struct SessionId(pub u32);  // Display "$N"
 pub struct WindowId(pub u32);   // Display "@N"
 pub struct PaneId(pub u32);     // Display "%N"
@@ -133,9 +135,13 @@ pub struct Rect { pub x: u16, pub y: u16, pub cols: u16, pub rows: u16 }
 pub enum Dir { Horizontal, Vertical }
 pub enum Edge { Left, Right, Up, Down }
 pub enum SplitSize { Half, Percent(u8), Cells(u16) }
-pub struct CaptureOpts { pub start: Option<i32>, pub end: Option<i32>, pub escapes: bool }
+pub enum CaptureBound { Line(i32), HistoryStart /* -S - */, VisibleEnd /* -E - */ }
+pub struct CaptureOpts { pub start: Option<CaptureBound>, pub end: Option<CaptureBound>, pub escapes: bool }
+                        // None = tmux default: first / last visible line
+pub enum MouseEncoding { X10 /* default */, Utf8, Sgr }
 pub struct InputModes { pub app_cursor: bool, pub app_keypad: bool, pub kitty_flags: u8,
-                        pub bracketed_paste: bool, pub mouse: MouseMode, pub focus: bool }
+                        pub bracketed_paste: bool, pub mouse: MouseMode, pub mouse_encoding: MouseEncoding,
+                        pub focus: bool, pub alt_screen: bool, pub alternate_scroll: bool }
 
 // event.rs
 #[derive(Serialize)] #[serde(tag = "event", rename_all = "kebab-case")]
@@ -187,14 +193,14 @@ impl PaneHandle {
     pub fn capture(&self, opts: &CaptureOpts) -> String;
     pub fn pid(&self) -> Option<u32>;
     pub fn current_command(&self) -> Option<String>;   // cached, timer-sampled
-    pub fn current_path(&self) -> Option<PathBuf>;     // OSC 7 first, then sampled
+    pub fn current_path(&self) -> Option<PathBuf>;     // sampled (OSC 7 from M3)
     pub fn modes(&self) -> InputModes;
     pub fn take_dirty(&self) -> bool;
     pub fn snapshot_rows(&self, rows: Range<u16>) -> RowsSnapshot;  // M2 renderer input, copied under lock
 }
 pub enum PaneEvent { Exited(PaneId, Option<i32>) /* child exited AND master drained */,
                      Title(PaneId, String), Bell(PaneId), Clipboard(PaneId, String),
-                     Cwd(PaneId, PathBuf) }
+                     Cwd(PaneId, PathBuf) /* emitted from M3 (OSC 7 scanner) */ }
 ```
 
 ### Protocol and actor (T1.1a, T1.1b)
@@ -241,14 +247,16 @@ let mut ev = srv.subscribe(&["pane-exited"])?;
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
 | **T0.1** Library verification | **Done 2026-09-23** during planning (spec §8) | spec §8 | none | met |
-| **T0.2** Skeleton + CI | `cargo init`; every module in the crate layout as an empty file with its `mod` line; every dependency through M3 (`tokio`, `tokio-util`, `nix`, `libproc` (macOS), `alacritty_terminal`, `crossterm`, `serde`, `serde_json`, `toml`, `ulid`, `base64`, `anyhow`/`thiserror`; dev: `insta`, `expectrl`, `proptest`, `tempfile`); `CLAUDE.md`; GitHub Actions matrix (`ubuntu-latest`, `macos-latest`): fmt, clippy, test, bats, and install neovim, fzf, htop, tmux | `Cargo.toml`, `Cargo.lock`, all empty modules, `CLAUDE.md`, `.github/` | none | CI green on an empty test; every listed tool present on both runners |
+| **T0.2** Skeleton + CI | `cargo init`; every module in the crate layout as an empty file with its `mod` line; every dependency through M3 (`tokio`, `tokio-util`, `nix`, `libproc` (macOS), `alacritty_terminal`, `crossterm`, `serde`, `serde_json`, `toml`, `ulid`, `base64`, `anyhow`/`thiserror`, `futures-util` (`sink`), `unicode-width`; dev: `insta`, `expectrl`, `proptest`, `tempfile`); `CLAUDE.md`; GitHub Actions matrix (`ubuntu-latest`, `macos-latest`): fmt, clippy, test, bats, and install neovim, fzf, htop, tmux | `Cargo.toml`, `Cargo.lock`, all empty modules, `CLAUDE.md`, `.github/` | none | CI green on an empty test; every listed tool present on both runners |
 | **T0.5** Shared types | `types.rs`, `event.rs` per contract, with `Display`/`FromStr` for ids and unit tests | `src/types.rs`, `src/event.rs` | T0.2 | ids round-trip `%3`/`@2`/`$1`; `Event` serializes to the §4.6 JSON |
 | **T0.3** Single-pane spike | `examples/spike.rs`: spawn `$SHELL` per spec §4.8 (pre_exec, CLOEXEC), feed `alacritty_terminal` with a listener that answers PtyWrite, render the grid full-screen with a naive full redraw, forward input, handle resize. Throwaway code | `examples/spike.rs`, `tests/spike.rs`, `docs/spike-notes.md` | T0.2 | `tests/spike.rs` (expectrl): starts the spike, runs `nvim -u NONE`, inserts text, asserts it on the reconstructed screen, `:q` restores the shell prompt; `printf '\e[6n'` gets a reply. **[owner]** live run in Ghostty: true colour, cursor shape, resize reflow, less, fzf; gaps tagged "lib" or "ours" in the notes |
 | **T0.4** Decide `TERM` | Per spec D7: list `infocmp tmux-256color` capabilities, test the extras in the spike, pick the default, record per-OS fallback | spec D7, `docs/spike-notes.md` | T0.3 | Decision recorded; a test asserts the resolved `TERM` per OS |
 
 **Exit gate:** reviewer confirms spike tests on both OSes; **[owner]** accepts the
 library picks. If `alacritty_terminal` fails the spike, M0 extends; nothing else
-starts on a lib that failed.
+starts on a lib that failed. "CI green" is **[owner]**-gated on GitHub Actions
+billing; until it runs, a Linux container run (`rust:1-bookworm` with neovim) at
+the final SHA stands in for the Linux leg.
 
 ---
 
@@ -267,8 +275,8 @@ starts on a lib that failed.
 | **T1.1a** Paths and protocol | `paths.rs` (socket, lock, state, log paths per spec §4.1); `protocol.rs`: hellos with `ClientCtx`, JSON-lines codec, attach frame codec, version check | `src/paths.rs`, `src/protocol.rs` | Unit: frame codec round-trips arbitrary bytes and split reads; hello round-trips; version mismatch error names the side to upgrade; paths honour `XDG_RUNTIME_DIR` and fall back on macOS |
 | **T1.2** Parser, targets, formats, key names | `cmd/*` for the M1 set with tmux-compatible flags; target forms per spec §4.5; formats `#{var}` and `#{?c,a,b}`; key-name table with `-l`/`-H` semantics | `src/cmd/*` | Table tests: every M1 command parses from tmux-style argv; bad flags give tmux-like errors; every supported target form; unsupported forms give a clear error; format cases; `send-keys` arg classification (key name vs literal) |
 | **T1.3** Layout tree | `server/layout.rs` per contract: n-ary behaviour, percent and cell sizes, collapse on remove, deterministic remainder distribution, neighbours, borders | `src/server/layout.rs` | Unit tests for each operation; one proptest: after random split/remove sequences, rects never overlap and rects plus borders exactly tile the area |
-| **T1.4** Pane | `server/pane/*` per contract and spec §4.8: spawn with pre_exec and CLOEXEC, reader task with bounded parse per lock and listener handling (PtyWrite to writer queue, other events to actor), writer task with bounded queue, dead detection (exit AND drained), resize, `capture`, cached foreground command and cwd on both OSes | `src/server/pane/*` | Tests (no server): `sh -c 'echo hi'` capture contains `hi` and `Exited` arrives after the output; `printf '\e[6n'; read` gets a CPR reply; resize changes `tput cols`; a 1 MiB input into `sleep 10` returns immediately from `enqueue_input` and a second pane stays responsive; no pane master fd is open in a sibling child (`ls /proc/self/fd` or `lsof`); `current_path` follows a `cd` |
-| **T1.1b** Lifecycle, actor, CLI, harness | Server start per spec §4.1 (flock, re-exec `grofe __server`, readiness pipe, stale socket), actor loop with stub dispatcher answering `kill-server`, one-shot CLI with exit status, `main.rs` subcommand table, `tests/common` harness | `src/server/mod.rs`, `src/main.rs`, `tests/common/`, `tests/lifecycle.rs` | Integration: CLI auto-starts a server; a second call reuses it; ten concurrent CLIs start exactly one server; `kill-server` stops it and removes the socket; a stale socket is replaced; the server log exists |
+| **T1.4** Pane | `server/pane/*` per contract and spec §4.8: spawn with pre_exec and CLOEXEC (FD_CLOEXEC is not atomic with openpty: spawns are serialised under one process-wide lock from openpty to spawn so a concurrent fork cannot inherit a master); env: `TERM` = `term::resolve_term()` resolved once at server start and `COLORTERM` = `term::COLORTERM`, applied AFTER `PaneSpawn.env` so the outer `TERM` never leaks, plus `GROFE`/`GROFE_PANE`; `Config.scrolling_history` from `history-limit` (spec default 50000; lib default 10000); the reader sets the dirty flag and `Notify` itself (`Term` never emits `Wakeup`); reader task with bounded parse per lock and listener handling (PtyWrite to writer queue, other events to actor), writer task with bounded queue, dead detection (exit AND drained, where drained means the master hit EIO/EOF, or a bounded grace period, e.g. 200 ms, passed with no further output, for when a background grandchild holds the slave), resize, `capture`, cached foreground command and cwd on both OSes | `src/server/pane/*` | Tests (no server): `sh -c 'echo hi'` capture contains `hi` and `Exited` arrives after the output; `printf '\e[6n'; read` gets a CPR reply; resize changes `tput cols`; a 1 MiB input into `sleep 10` returns immediately from `enqueue_input` and a second pane stays responsive; no pane master fd is open in a sibling child (`ls /proc/self/fd` or `lsof`); `current_path` follows a `cd`; a pane that sends `\e[?2026h` then stops still captures its text after ~150 ms (sync timeout driven by the reader) |
+| **T1.1b** Lifecycle, actor, CLI, harness | Server start per spec §4.1 (flock, re-exec `grofe __server`, readiness pipe, stale socket); the daemon puts /dev/null on fds 0/1/2 before any pane spawn (else a slave fd landing on 0-2 keeps CLOEXEC and closes at exec); actor loop with stub dispatcher answering `kill-server`, one-shot CLI with exit status, `main.rs` subcommand table, `tests/common` harness | `src/server/mod.rs`, `src/main.rs`, `tests/common/`, `tests/lifecycle.rs` | Integration: CLI auto-starts a server; a second call reuses it; ten concurrent CLIs start exactly one server; `kill-server` stops it and removes the socket; a stale socket is replaced; the server log exists |
 
 **Wave B (after A; T1.5b and T1.5c parallel after T1.5a).**
 
@@ -295,11 +303,11 @@ on macOS; CI green on both OSes.
 
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
-| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM; refuse nested attach without `-f`; `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing |
-| **T2.2** Renderer | `server/render.rs` per the M2 seams and spec §4.4: compose, diff, colour downgrade by caps, synchronized output, absolute cursor moves around wide cells, letterbox and crop viewport | `src/server/render.rs`, `tests/snapshots/`, `tests/render.rs` | Round-trip snapshots: single pane, splits, active border, colours in truecolor and 256 modes, emoji + VS16 + combining marks, cursor; unchanged frame diffs to nothing; one-cell change emits a short sequence |
+| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM (a panic in any thread restores the tty and exits); refuse nested attach without `-f`; `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing |
+| **T2.2** Renderer | `server/render.rs` per the M2 seams and spec §4.4: compose, diff, colour downgrade by caps, synchronized output, absolute cursor moves around wide cells, letterbox and crop viewport; replace `tests/term.rs`'s smulx negative test with a positive underline-style snapshot | `src/server/render.rs`, `tests/snapshots/`, `tests/render.rs` | Round-trip snapshots: single pane, splits, active border, colours in truecolor and 256 modes, emoji + VS16 + combining marks, cursor; unchanged frame diffs to nothing; one-cell change emits a short sequence |
 | **T2.3** Input and key tables | `server/input.rs`: decode client bytes (CSI, SS3, UTF-8, kitty keys, SGR mouse, paste as opaque blob), key tables with prefix and repeat, encode for a pane's `InputModes`, `InputHook` trait | `src/server/input.rs` | Table tests for decode and encode; prefix then `%` routes to the bound command; paste containing the prefix key is never matched; escape-time resolves lone ESC |
 | **T2.6** Status line | `server/status.rs`: render `status.left/right` formats to a `StyledLine` with styles; add `#{==:a,b}`, nesting and escaping to `cmd/format.rs` (contract edit: T2.6 co-owns `format.rs` for this) | `src/server/status.rs`, `src/cmd/format.rs` | Unit: formats with conditionals and user options render; overlong content truncates on the left side as tmux does |
-| **T2.4** Acceptance harness | `tests/acceptance/{main,harness}.rs`: spawn `grofe attach` in a pty via expectrl, feed keys, reconstruct its output through `alacritty_terminal`, assert on screen text and cursor | `tests/acceptance/main.rs`, `tests/acceptance/harness.rs` | Harness self-test passes against the spike binary |
+| **T2.4** Acceptance harness | `tests/acceptance/{main,harness}.rs`: spawn `grofe attach` in a pty via expectrl, feed keys, reconstruct its output through `alacritty_terminal`, assert on screen text and cursor; consolidate the pty+reconstruct harness duplicated in `tests/spike.rs` and `tests/term.rs` into `tests/acceptance/harness.rs`; fix `spike_bin`'s debug-profile assumption | `tests/acceptance/main.rs`, `tests/acceptance/harness.rs`, `tests/spike.rs`, `tests/term.rs` | Harness self-test passes against the spike binary |
 
 **Wave B (T2.5b after T2.5a).**
 
@@ -321,7 +329,7 @@ on macOS; CI green on both OSes.
 |---|---|---|---|
 | **T3.1** Config core | `config/*`: schema structs (options from spec §5.2 including `status.style` and `pane-border`), layering (spec §5.1), winning-source provenance, unknown-key and type errors, `show-config --explain`, `show-config --file` without a server (`show-config` arm in `main.rs`) | `src/config/*`, `show-config` arm in `src/main.rs`, `tests/config.rs` | Unit: layering order; provenance names the right file; a type error fails with file and key; unknown key suggests the closest valid one; `--file` works with no server running |
 | **T3.2** Mouse and scrollback view | Click to focus; wheel scrolls a read-only scrollback overlay in panes without mouse mode; wheel passes through to panes that requested mouse | `src/server/mouse.rs`, `tests/acceptance/t3_2.rs` | Acceptance: wheel in a shell scrolls history; wheel in Neovim scrolls Neovim; click focuses a pane |
-| **T3.3** Passthrough | Spec §4.9 set: OSC 52, title, bell with activity flag, OSC 8 from cell hyperlinks, OSC 9/777; bracketed paste and focus forwarding verified end to end | `src/server/passthrough.rs`, `tests/acceptance/t3_3.rs` | Acceptance: Neovim `"+y` produces an OSC 52 sequence in the outer pty stream; a multi-line paste into Neovim arrives as one bracketed paste; `printf '\a'` sets the window activity flag |
+| **T3.3** Passthrough | Spec §4.9 set: OSC 52, title, bell with activity flag, OSC 8 from cell hyperlinks, OSC 9/777; OSC 7/9/777 byte scanner (`vte` 0.15 parses none of them; survives split reads; feeds `PaneEvent::Cwd`); bracketed paste and focus forwarding verified end to end | `src/server/passthrough.rs`, `tests/acceptance/t3_3.rs` | Acceptance: Neovim `"+y` produces an OSC 52 sequence in the outer pty stream; a multi-line paste into Neovim arrives as one bracketed paste; `printf '\a'` sets the window activity flag |
 | **T3.4** Prompt and run-shell | `prefix :` prompt in the status line with line editing and history; `command-prompt`; `run-shell` for bindings | `src/server/prompt.rs`, `tests/acceptance/t3_4.rs` | Acceptance: `prefix :` then `split-window -h` splits; a binding to `run-shell 'touch /tmp/x'` creates the file |
 
 **Wave B.**
@@ -329,7 +337,7 @@ on macOS; CI green on both OSes.
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
 | **T3.5** Wire config | Config drives options and key tables; `reload` applies the diff; `bind-key`, `unbind-key`, `list-keys` (with source and description), `source-file`; README install and usage | `src/server/dispatch/options.rs` additions, `src/server/input.rs` table loading, `README.md`, `tests/config_live.rs`, `.github/workflows/readme.yml` | Integration: editing a conf.d file then `reload` changes a binding; `list-keys` shows each binding's source; README steps pass in a clean Linux container job |
-| **T3.6** Dogfood readiness | Complete acceptance suite (spec §8 list, nested tmux and nested grofe included) green on both OSes; panic hook writes a report to the state dir; `docs/dogfood.md` log template with the copy-mode fallback (shift-drag) noted | `tests/acceptance/t3_6.rs`, panic hook in `src/main.rs`, `docs/dogfood.md` | CI green; a forced panic writes a report; **[owner]** starts the dogfood week |
+| **T3.6** Dogfood readiness | Complete acceptance suite (spec §8 list, nested tmux and nested grofe included) green on both OSes; panic hook writes a report to the state dir; `docs/dogfood.md` log template with the copy-mode fallback (shift-drag) noted; re-run the T0.4 capability table against the real render path; flip D7 to tmux-256color if every extra capability now passes | `tests/acceptance/t3_6.rs`, panic hook in `src/main.rs`, `docs/dogfood.md` | CI green; a forced panic writes a report; **[owner]** starts the dogfood week |
 
 **Exit gate:** **[owner]** a week of daily use, logged in `docs/dogfood.md`. The
 log feeds the task breakdown for M4 and M5.

@@ -30,7 +30,8 @@ const DEFAULT_TERM: &str = "screen-256color";
 
 /// Used when even `DEFAULT_TERM`'s terminfo entry is missing on this host.
 /// It advertises more than `screen-256color` does and exists only for hosts
-/// lacking both `screen-256color` and `tmux-256color`.
+/// lacking both `screen-256color` and `tmux-256color` (only the former is
+/// checked; ncurses ships the two together).
 const LAST_RESORT_TERM: &str = "xterm-256color";
 
 /// `TERM` grofe should export to a freshly spawned pane: `DEFAULT_TERM` if
