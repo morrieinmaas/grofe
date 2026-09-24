@@ -153,3 +153,52 @@ Run `cargo run --example spike` in Ghostty and tick each item, noting anything o
 - [ ] fzf: `ls | fzf`, arrow keys, typing, Enter
 - [ ] htop: colours, live updates, F10 quits
 - [ ] Ctrl-] quits and leaves the outer terminal usable (echo on, cursor visible, normal screen)
+
+## TERM decision (T0.4)
+
+D7 asked whether the inner `TERM` should move from `screen-256color` to
+`tmux-256color`, conditional on every extra capability `tmux-256color`'s
+terminfo entry advertises actually working end to end through the M0
+pipeline. It does not, so the default stays `screen-256color` plus
+`COLORTERM=truecolor`.
+
+**Capability comparison.** `infocmp -1x -d screen-256color tmux-256color` on
+this machine (Homebrew ncurses 6.6; `-x` is required, the extended
+capabilities like `Smulx` and `smxx` are invisible without it). The extra
+string capabilities that affect what an app running in the pane can emit,
+grouped by what they do:
+
+| Capability | Escape | Category | alacritty_terminal 0.26 | Spike's outer render |
+|---|---|---|---|---|
+| `sitm`/`ritm` | `\E[3m` / `\E[23m` (italic) | SGR attribute | `Attr::Italic` → `Flags::ITALIC` (`term/mod.rs`) | Emitted (`STYLE` mask, `sgr()` code `3`) |
+| `smxx`/`rmxx` | `\E[9m` / `\E[29m` (strikeout) | SGR attribute | `Attr::Strike` → `Flags::STRIKEOUT` | Emitted (code `9`) |
+| `invis` | `\E[8m` (hidden) | SGR attribute | `Attr::Hidden` → `Flags::HIDDEN` | Emitted (code `8`) |
+| `smso`/`rmso` | `\E[7m`/`\E[27m` (reverse, tmux's standout) | SGR attribute | `Attr::Reverse` → `Flags::INVERSE` | Emitted (code `7`); already reachable under `screen-256color` too, since its own `sgr` cap uses the same reverse parameter |
+| `Smulx` | `\E[4:%p1%dm` (extended underline: double/curly/dotted/dashed) | SGR attribute | Parsed correctly: `vte`'s `attrs_from_sgr_parameters` maps `[4,2]`/`[4,3]`/`[4,4]`/`[4,5]` to `DoubleUnderline`/`Undercurl`/`DottedUnderline`/`DashedUnderline` (`ansi.rs`) | **Not emitted distinctly.** `examples/spike.rs`'s `STYLE` mask includes `Flags::ALL_UNDERLINES` as one group, and `sgr()` writes a bare code `4` for any of them; the style byte is dropped |
+| `dsl`/`fsl`/`tsl` | OSC 0 (window title via the status-line mechanism) | Non-SGR (title) | `Event::Title`/`Event::ResetTitle` fire | **Not forwarded.** `drain_events()` only logs `Event::Title`/`Event::ResetTitle` |
+| `Ms` | OSC 52 (clipboard) | Non-SGR (clipboard) | `Event::ClipboardStore`/`Event::ClipboardLoad` fire | **Not forwarded.** `ClipboardStore` only logged; `ClipboardLoad` ignored entirely |
+| `Cs`/`Cr` | OSC 12 / OSC 112 (cursor colour set/reset) | Non-SGR (cursor colour) | Internal colour state updates | **Not emitted.** `render()` writes DECSCUSR (shape) and visibility but no cursor-colour escape |
+| `fd`/`fe` | `\E[?1004h`/`l` (focus reporting) | Non-SGR (focus events) | `TermMode::FOCUS_IN_OUT` tracked | **Not forwarded.** Spike never enables outer focus reporting or synthesizes `FocusIn`/`FocusOut` (already listed as a Gap above) |
+| `Se`/`Ss` | `\E[2 q` / `\E[%p1%d q` (DECSCUSR, cursor style) | Non-SGR (cursor shape) | `cursor_style()` tracked | Emitted unconditionally every frame (not gated on TERM either way); still on the pending owner live-run checklist, unverified in a real terminal |
+| `hs`, `XF`, `E3`, `RV`/`XR`/`rv`/`xr`, `kf13`-`kf63`, `kDC`/`kEND`/`kHOM`/`kIC`/`kLFT`/`kNXT`/`kPRV`/`kRIT` (+numbered variants), `kUP`/`kDN`, `kxIN`/`kxOUT` | various | Not per-pane rendering (`hs`/`XF`: outer status line; `E3`: erase scrollback, invisible to a single full-redraw frame; `RV`/`XR`/`rv`/`xr`: version reporting, unhandled by `vte` either way; the `k*` set: modified-key *input* encoding, decided by the client's key encoder in M1, not by the inner emulator) | n/a | n/a |
+
+**Evidence.** `tests/term.rs::smulx_underline_style_does_not_survive_the_spike`
+drives the spike through `expectrl`, writes `\e[3mBB\e[23m \e[9mCC\e[29m
+\e[4:3mDD\e[24m` (italic, strikeout, curly underline) into it, and
+reconstructs the outer screen with a second `Term`. Italic and strikeout
+land as `Flags::ITALIC` / `Flags::STRIKEOUT` on the reconstructed cells,
+confirming those two extras genuinely work end to end. The curly-underline
+cell lands as plain `Flags::UNDERLINE`, `Flags::UNDERCURL` absent, confirming
+the `Smulx` distinction is lost by the time it reaches the outer terminal.
+The non-SGR extras (title, clipboard, cursor colour, focus) are not
+exercised live; the source citations above (`drain_events()` in
+`examples/spike.rs`) are the evidence, matching the Gaps table earlier in
+this document, which already records them as deferred to M1.
+
+**Decision.** Since not every capability `tmux-256color` adds over
+`screen-256color` survives the M0 spike's render path, D7's bar for
+switching is not met. `src/term.rs::resolve_term()` keeps `screen-256color`
+as the default (falling back to `xterm-256color` if even that entry is
+missing on the host), with `COLORTERM=truecolor` unconditionally. Revisit
+once M1's compositor forwards title, clipboard, cursor colour and focus
+events, and once the renderer stops collapsing underline styles.

@@ -51,7 +51,7 @@ If performance becomes the headline, the project has lost the plot.
 | D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and canopy's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
 | D5 | **Single-owner state.** One tokio task (the server actor) owns the model. Pane I/O tasks, client connections and timers send it messages. The only shared state is each pane's terminal behind a mutex, with bounded lock holds (§4.8). | Removes a class of concurrency bugs; easy for parallel implementers to reason about. |
 | D6 | **Window size follows the latest active client**, where "latest" means last input, debounced ~500 ms so two attached clients do not make the window flap. Larger clients are letterboxed (window drawn at its size, the rest filled with a dim pattern). Smaller clients are cropped, with a viewport that follows the active pane's cursor. The emulator reflows the primary screen on resize; alt-screen apps just get SIGWINCH. | Every multiplexer picks a side. tmux users already know this behavior. |
-| D7 | **Advertise a small, honest `TERM`.** Default `screen-256color` plus `COLORTERM=truecolor`. T0.4 upgrades the default to `tmux-256color` only if the spike shows its extra capabilities (italics, strikethrough, the rest of `infocmp`'s list) work, and falls back per host when the entry is missing. | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. |
+| D7 | **Advertise a small, honest `TERM`.** Default `screen-256color` plus `COLORTERM=truecolor`. T0.4 checked whether every extra capability `tmux-256color`'s terminfo entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survives the M0 spike's render path end to end. It does not: the spike's renderer collapses every underline style to plain underline, and several non-SGR extras are not forwarded to the outer terminal at all yet. So the default stays `screen-256color`, falling back to `xterm-256color` per host when even that entry is missing. Revisit once the M1 compositor forwards the missing events and the renderer stops collapsing underline styles. | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. |
 | D8 | **No subprocesses in the status line, ever.** The status line renders formats over options. Dynamic content arrives by something external setting an option. `run-shell` exists for key bindings only. | The one real performance problem in tmux setups, deleted by design. |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
 | D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). | Keeps core general, and gives the plugin API a real, demanding first user. |
@@ -472,7 +472,19 @@ Not usable: `wezterm-term` is not published on crates.io.
 Apache-2.0 if it is ever published.
 
 **Inner `TERM`:** D7. WezTerm advertises `xterm-256color`; Zellij sets nothing
-and panes inherit the outer `TERM`.
+and panes inherit the outer `TERM`. grofe panes get `screen-256color` plus
+`COLORTERM=truecolor`, resolved by `src/term.rs::resolve_term()` against the
+host's compiled terminfo database (falling back to `xterm-256color` if even
+`screen-256color` is missing). T0.4 compared `tmux-256color`'s terminfo
+entry against `screen-256color`'s and confirmed `alacritty_terminal` 0.26
+parses every extra SGR capability tmux advertises (italics, strikeout,
+hidden text, the `Smulx` extended underline styles), but the M0 spike's
+render path does not reproduce all of them: underline styles collapse to
+plain underline, and non-SGR extras (title relay, OSC 52 clipboard, cursor
+colour, focus events) are not forwarded to the outer terminal yet. Since not
+every extra capability works end to end, grofe stays on the smaller,
+honest `screen-256color` for now. See docs/spike-notes.md's "TERM decision"
+section for the full evidence.
 
 **Zellij files worth reading:** `zellij-server/src/panes/grid.rs`,
 `terminal_pane.rs`, `os_input_output_unix.rs`, `pty.rs`, `screen.rs`, `route.rs`,
