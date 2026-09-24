@@ -113,9 +113,12 @@ kitty flags (`KITTY_KEYBOARD_PROTOCOL` = any). Default is
 `SHOW_CURSOR | LINE_WRAP | ALTERNATE_SCROLL | URGENCY_HINTS`.
 
 **Resize.** `term.resize(size)` takes any `Dimensions` by value; a no-op if
-unchanged. It reflows the primary screen only when not on the alt screen
-(`grid.resize(reflow = !is_alt, ...)`), clears the selection on column change and
-resets the scroll region. Separately `ioctl(TIOCSWINSZ)` on the master
+unchanged. It resizes both screens with `grid.resize(!is_alt, ...)` and
+`inactive_grid.resize(is_alt, ...)` (the bool is `reflow`). `swap_alt` swaps the
+two grids, so while the alt screen is active the primary sits in `inactive_grid`.
+Net effect: the primary screen is always reflowed (also while an alt-screen app
+runs), the alt screen is never reflowed (the app redraws it after SIGWINCH).
+It also clears the selection on column change and resets the scroll region. Separately `ioctl(TIOCSWINSZ)` on the master
 (`nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, nix::pty::Winsize)`);
 the kernel then sends SIGWINCH to the child's foreground process group.
 

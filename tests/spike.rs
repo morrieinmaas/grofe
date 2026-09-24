@@ -147,8 +147,14 @@ fn echo_roundtrip() {
 #[test]
 fn cpr_reply() {
     let mut s = Screen::start(&["/bin/sh"]);
-    // `read` only returns once the spike answered the CPR query through PtyWrite.
-    s.send("printf '\\033[6n'; read -rs -d R x; echo got-cpr-$((6*7))\r");
+    // POSIX (works in dash too): read the reply byte by byte until the final `R`.
+    // The loop blocks until the spike answers through PtyWrite, and the marker is
+    // printed only if the reply looks like `ESC[row;colR`.
+    s.send(concat!(
+        "stty raw -echo; printf '\\033[6n'; x=; ",
+        "while c=$(dd bs=1 count=1 2>/dev/null); [ \"$c\" != R ]; do x=\"$x$c\"; done; ",
+        "stty sane; case \"$x\" in *\\[*\\;*) echo got-cpr-$((6*7));; esac\r"
+    ));
     s.wait_for("got-cpr-42");
     s.send("\x1d");
     s.wait_exit();
