@@ -102,15 +102,19 @@ impl Screen {
     }
 
     fn wait_for(&mut self, needle: &str) {
+        self.wait_until(&format!("{needle:?}"), |text| text.contains(needle));
+    }
+
+    fn wait_until(&mut self, what: &str, done: impl Fn(&str) -> bool) {
         let deadline = Instant::now() + TIMEOUT;
         loop {
             let open = self.pump();
-            if self.text().contains(needle) {
+            if done(&self.text()) {
                 return;
             }
             assert!(
                 open && Instant::now() < deadline,
-                "timed out waiting for {needle:?}; screen:\n{}",
+                "timed out waiting for {what}; screen:\n{}",
                 self.text()
             );
             sleep(Duration::from_millis(20));
@@ -173,5 +177,33 @@ fn nvim_edit() {
     // Let nvim finish the Esc before `:` so it is not read as Alt-:.
     sleep(Duration::from_millis(300));
     s.send(":q!\r");
+    s.wait_exit();
+}
+
+#[test]
+fn nvim_exit_restores_primary_screen() {
+    if !on_path("nvim") {
+        eprintln!("skipping nvim_exit_restores_primary_screen: nvim not on PATH");
+        return;
+    }
+    let mut s = Screen::start(&["/bin/sh"]);
+    s.send("PS1='gp> '\r");
+    s.send("echo primary-$((20+1))\r");
+    s.wait_for("primary-21");
+    s.send("nvim -u NONE -i NONE\r");
+    s.wait_until("nvim on the alternate screen", |text| {
+        text.contains('~') && !text.contains("primary-21")
+    });
+    s.send("ihello-alt\x1b");
+    s.wait_for("hello-alt");
+    // Let nvim finish the Esc before `:` so it is not read as Alt-:.
+    sleep(Duration::from_millis(300));
+    s.send(":q!\r");
+    s.wait_until("the primary screen with a fresh prompt", |text| {
+        text.contains("primary-21")
+            && !text.contains("hello-alt")
+            && text.lines().any(|line| line.trim_end() == "gp>")
+    });
+    s.send("\x1d");
     s.wait_exit();
 }

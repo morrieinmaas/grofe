@@ -12,7 +12,8 @@
 //! dashed underline drawn via `Smulx` reaches the outer terminal as a
 //! regular underline. Several non-SGR extras (window title, OSC 52 paste,
 //! cursor colour, focus events) are not forwarded to the outer terminal at
-//! all yet; those are already tracked as M1 work in the spike's Gaps table.
+//! all yet: the M2 renderer (T2.2) emits underline styles and M3 passthrough
+//! (T3.3) forwards title, OSC 52, cursor colour and focus.
 //! Since the bar is not met, grofe keeps advertising the smaller, honest
 //! `screen-256color`. See docs/spike-notes.md's "TERM decision" section for
 //! the full capability-by-capability evidence.
@@ -28,10 +29,14 @@ pub const COLORTERM: &str = "truecolor";
 const DEFAULT_TERM: &str = "screen-256color";
 
 /// Used when even `DEFAULT_TERM`'s terminfo entry is missing on this host.
+/// It advertises more than `screen-256color` does and exists only for hosts
+/// lacking both `screen-256color` and `tmux-256color`.
 const LAST_RESORT_TERM: &str = "xterm-256color";
 
 /// `TERM` grofe should export to a freshly spawned pane: `DEFAULT_TERM` if
 /// its compiled terminfo entry exists on this host, else `LAST_RESORT_TERM`.
+/// It walks the filesystem, so callers should resolve once at server start
+/// and reuse the result for every spawn.
 pub fn resolve_term() -> &'static str {
     resolve_from(&search_dirs())
 }
@@ -63,8 +68,8 @@ pub fn entry_exists(dirs: &[PathBuf], term: &str) -> bool {
 
 /// Standard terminfo search locations, most to least specific: `$TERMINFO`,
 /// `~/.terminfo`, each `$TERMINFO_DIRS` entry, then the usual compiled-in
-/// system locations (including Homebrew's on macOS).
-fn search_dirs() -> Vec<PathBuf> {
+/// system locations (including Homebrew's keg-only ncurses on macOS).
+pub fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("TERMINFO") {
         dirs.push(PathBuf::from(dir));
@@ -81,7 +86,8 @@ fn search_dirs() -> Vec<PathBuf> {
             "/lib/terminfo",
             "/usr/share/terminfo",
             "/usr/lib/terminfo",
-            "/opt/homebrew/share/terminfo",
+            "/usr/local/share/terminfo",
+            "/opt/homebrew/opt/ncurses/share/terminfo",
         ]
         .map(PathBuf::from),
     );

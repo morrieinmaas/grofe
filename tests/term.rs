@@ -49,13 +49,18 @@ fn missing_default_falls_back() {
 
 #[test]
 fn resolves_on_real_host() {
-    let resolved = term::resolve_term();
-    assert!(!resolved.is_empty());
-    assert!(
-        ["screen-256color", "xterm-256color"].contains(&resolved),
-        "unexpected TERM candidate: {resolved}"
-    );
-    eprintln!("resolved TERM on this host: {resolved}");
+    // Both CI hosts ship screen-256color; a regression in the search list
+    // (a dropped or mistyped dir) must fail here rather than silently fall
+    // through to the xterm-256color last resort.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        assert!(
+            term::entry_exists(&term::search_dirs(), "screen-256color"),
+            "screen-256color not found in {:?}",
+            term::search_dirs()
+        );
+        assert_eq!(term::resolve_term(), "screen-256color");
+    }
     assert_eq!(term::COLORTERM, "truecolor");
 }
 
@@ -185,9 +190,11 @@ fn smulx_underline_style_does_not_survive_the_spike() {
     // Turn off tty echo first, on its own line, so the *next* line's raw
     // bytes (which look like escape codes as plain typed text) are not
     // echoed back verbatim. Only `printf`'s real output should appear.
-    session.write_all(b"stty -echo\r").expect("write");
+    session
+        .write_all(b"stty -echo; echo READY-$((1+1))\r")
+        .expect("write");
     session.flush().expect("flush");
-    sleep(Duration::from_millis(300));
+    wait_for(&mut session, &mut term, &mut parser, "READY-2", deadline);
 
     session
         .write_all(b"printf '\\033[3mBB\\033[23m \\033[9mCC\\033[29m \\033[4:3mDD\\033[24m\\n'\r")

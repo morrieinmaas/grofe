@@ -9,10 +9,11 @@ Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones
 - File ownership per the plan's "Owns" column is a hard boundary: a task edits
   only the files it owns. If you need a dependency that isn't already in
   `Cargo.toml`, report it as missing rather than editing `Cargo.toml` yourself.
+- Contract names in the plan are binding; to change one, stop and report.
 
 ## Checks that must pass
 
-- `cargo fmt`
+- `cargo fmt` (CI checks `cargo fmt --check`)
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 - `bats tests/cli.bats`

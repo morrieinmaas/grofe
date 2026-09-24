@@ -1,4 +1,5 @@
-//! ids, Rect, Dir, Edge, SplitSize, CaptureOpts, InputModes.
+//! ids, Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts, MouseEncoding,
+//! InputModes.
 
 use std::fmt;
 use std::str::FromStr;
@@ -17,7 +18,9 @@ pub struct IdParseError {
 /// serde (via the Display/FromStr round trip) impls.
 macro_rules! runtime_id {
     ($name:ident, $sigil:literal, $kind:literal) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
         #[serde(into = "String", try_from = "String")]
         pub struct $name(pub u32);
 
@@ -96,11 +99,25 @@ pub enum SplitSize {
     Cells(u16),
 }
 
+/// One end of a `capture-pane` line range, as tmux's `-S` / `-E` take it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureBound {
+    /// A line number: 0 is the first visible line, negative lines are
+    /// history (-1 is the line just above the visible screen).
+    Line(i32),
+    /// `-S -`: the oldest line of scrollback history.
+    HistoryStart,
+    /// `-E -`: the last line of the visible screen.
+    VisibleEnd,
+}
+
 /// Options for `capture-pane`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureOpts {
-    pub start: Option<i32>,
-    pub end: Option<i32>,
+    /// `-S`; `None` is tmux's default, the first visible line.
+    pub start: Option<CaptureBound>,
+    /// `-E`; `None` is tmux's default, the last visible line.
+    pub end: Option<CaptureBound>,
     pub escapes: bool,
 }
 
@@ -114,6 +131,16 @@ pub enum MouseMode {
     Motion,
 }
 
+/// How mouse reports are encoded: legacy X10 bytes, UTF-8 extended (mode
+/// 1005) or SGR (mode 1006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseEncoding {
+    #[default]
+    X10,
+    Utf8,
+    Sgr,
+}
+
 /// The terminal input modes a pane's emulator has requested, used to decode
 /// client input into the right escape sequences for that pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -123,7 +150,12 @@ pub struct InputModes {
     pub kitty_flags: u8,
     pub bracketed_paste: bool,
     pub mouse: MouseMode,
+    pub mouse_encoding: MouseEncoding,
     pub focus: bool,
+    /// The pane is on the alternate screen (mode 1049/47/1047).
+    pub alt_screen: bool,
+    /// Wheel events become cursor keys on the alternate screen (mode 1007).
+    pub alternate_scroll: bool,
 }
 
 #[cfg(test)]
@@ -199,7 +231,31 @@ mod tests {
     fn input_modes_default_is_off_and_false() {
         let modes = InputModes::default();
         assert_eq!(modes.mouse, MouseMode::Off);
+        assert_eq!(modes.mouse_encoding, MouseEncoding::X10);
         assert!(!modes.app_cursor);
         assert!(!modes.bracketed_paste);
+        assert!(!modes.alt_screen);
+        assert!(!modes.alternate_scroll);
+    }
+
+    #[test]
+    fn mouse_encoding_defaults_to_x10() {
+        assert_eq!(MouseEncoding::default(), MouseEncoding::X10);
+    }
+
+    #[test]
+    fn ids_order_by_number() {
+        let mut ids = vec![PaneId(10), PaneId(2), PaneId(7)];
+        ids.sort();
+        assert_eq!(ids, [PaneId(2), PaneId(7), PaneId(10)]);
+        assert!(WindowId(1) < WindowId(2));
+        assert!(SessionId(3) > SessionId(0));
+    }
+
+    #[test]
+    fn capture_bounds_distinguish_dash_from_line_numbers() {
+        // `-S -` / `-E -` are their own variants, not a line-number sentinel.
+        assert_ne!(CaptureBound::HistoryStart, CaptureBound::Line(i32::MIN));
+        assert_ne!(CaptureBound::VisibleEnd, CaptureBound::Line(i32::MAX));
     }
 }
