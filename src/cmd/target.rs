@@ -110,6 +110,21 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
             .map_err(|_| ParseError::BadTarget(s.to_string()));
     }
 
+    // A bare ".pane" (no session/window part at all, no ':') means the
+    // current window's pane N (spec: "empty or omitted means current").
+    if let Some(pane_part) = s.strip_prefix('.')
+        && !s.contains(':')
+    {
+        if pane_part.is_empty() || pane_part.contains('.') || is_unsupported_token(pane_part) {
+            return Err(ParseError::UnsupportedTarget(s.to_string()));
+        }
+        return Ok(Target::Pane(PaneRef {
+            session: SessionRef::Current,
+            window: WindowRef::Current,
+            pane: parse_pane_part(pane_part)?,
+        }));
+    }
+
     if is_unsupported_token(s) {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
     }
@@ -125,15 +140,22 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 
     let session_part = &s[..colon_idx];
     let rest = &s[colon_idx + 1..];
-    if session_part.is_empty() {
-        return Err(ParseError::UnsupportedTarget(s.to_string()));
-    }
-    let session = parse_session_ref(session_part)?;
+    // Empty session part ("`:2`", "`sess:`", "`:`") means current (spec:
+    // "empty or omitted means current").
+    let session = if session_part.is_empty() {
+        SessionRef::Current
+    } else {
+        parse_session_ref(session_part)?
+    };
 
     let mut dot_positions = rest.match_indices('.');
     let Some((dot_idx, _)) = dot_positions.next() else {
-        if rest.is_empty() || is_unsupported_token(rest) {
+        if is_unsupported_token(rest) {
             return Err(ParseError::UnsupportedTarget(s.to_string()));
+        }
+        if rest.is_empty() {
+            // "sess:" / ":": the session's current window.
+            return Ok(Target::Window(session, WindowRef::Current));
         }
         return Ok(Target::Window(session, parse_window_ref(rest)?));
     };
@@ -143,12 +165,18 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 
     let window_part = &rest[..dot_idx];
     let pane_part = &rest[dot_idx + 1..];
-    if window_part.is_empty() || pane_part.is_empty() || is_unsupported_token(window_part) {
+    if pane_part.is_empty() || is_unsupported_token(window_part) {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
     }
+    // Empty window part ("`sess:.1`", "`:.1`"): the current window.
+    let window = if window_part.is_empty() {
+        WindowRef::Current
+    } else {
+        parse_window_ref(window_part)?
+    };
     Ok(Target::Pane(PaneRef {
         session,
-        window: parse_window_ref(window_part)?,
+        window,
         pane: parse_pane_part(pane_part)?,
     }))
 }
@@ -300,12 +328,65 @@ mod tests {
         ));
     }
 
+    /// Empty or omitted target parts mean current (spec §4.5).
     #[test]
-    fn empty_session_before_colon_is_unsupported() {
-        assert!(matches!(
-            parse_target(":1"),
-            Err(ParseError::UnsupportedTarget(_))
-        ));
+    fn empty_session_before_colon_means_current() {
+        assert_eq!(
+            parse_target(":2").unwrap(),
+            Target::Window(SessionRef::Current, WindowRef::Index(2))
+        );
+    }
+
+    #[test]
+    fn bare_dot_pane_means_current_window() {
+        assert_eq!(
+            parse_target(".1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Index(1),
+            })
+        );
+    }
+
+    #[test]
+    fn trailing_colon_means_session_current_window() {
+        assert_eq!(
+            parse_target("sess:").unwrap(),
+            Target::Window(SessionRef::Name("sess".to_string()), WindowRef::Current)
+        );
+    }
+
+    #[test]
+    fn lone_colon_means_current_session_and_window() {
+        assert_eq!(
+            parse_target(":").unwrap(),
+            Target::Window(SessionRef::Current, WindowRef::Current)
+        );
+    }
+
+    #[test]
+    fn colon_dot_pane_means_current_session_and_window() {
+        assert_eq!(
+            parse_target(":.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Index(1),
+            })
+        );
+    }
+
+    #[test]
+    fn session_dot_pane_means_session_current_window() {
+        assert_eq!(
+            parse_target("sess:.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Name("sess".to_string()),
+                window: WindowRef::Current,
+                pane: PanePart::Index(1),
+            })
+        );
     }
 
     #[test]

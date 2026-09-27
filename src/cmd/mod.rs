@@ -27,14 +27,24 @@ pub enum ParseError {
     EmptyCommand,
     #[error("unknown command: {0}")]
     UnknownCommand(String),
-    #[error("unknown flag -{0}")]
-    UnknownFlag(char),
-    #[error("unknown flag --{0}")]
+    /// A short flag (`-z`) the command doesn't recognise. Worded like
+    /// tmux's own CLI: `command kill-server: unknown flag -z`.
+    #[error("command {0}: unknown flag -{1}")]
+    UnknownFlag(String, char),
+    /// A `--long` flag tmux's single-dash-at-a-time flag scanner doesn't
+    /// recognise. tmux never shows the offending text: `--anything` fails
+    /// on the flag scanner's second character (itself a `-`), so the
+    /// message is always `command set-option: invalid flag --`.
+    #[error("command {0}: invalid flag --")]
     UnknownLongFlag(String),
-    #[error("-{0}: option requires an argument")]
-    MissingValue(char),
-    #[error("command {0}: too many arguments")]
-    TooManyArguments(String),
+    /// A value-taking flag given with no value. Worded like tmux's own
+    /// CLI: `command kill-session: -t expects an argument`.
+    #[error("command {0}: -{1} expects an argument")]
+    MissingValue(String, char),
+    /// More positionals than the command accepts. Worded like tmux's own
+    /// CLI: `command select-pane: too many arguments (need at most 0)`.
+    #[error("command {0}: too many arguments (need at most {1})")]
+    TooManyArguments(String, usize),
     #[error("command {0}: missing argument")]
     MissingArgument(String),
     /// A target string that isn't in the supported grammar (spec §4.5):
@@ -128,11 +138,16 @@ pub struct SelectPane {
     pub target: Target,
 }
 
-/// What `resize-pane` does: move a border by a cell count, or toggle zoom
-/// (`-Z`).
+/// What `resize-pane` does: move one or more borders by a shared cell
+/// count, or toggle zoom (`-Z`). Per tmux, `-L`/`-R`/`-U`/`-D` are boolean
+/// flags (`-LR` sets both) and the amount is a single trailing positional
+/// shared by whichever directions were given, not a per-flag value:
+/// `resize-pane -L 3 -R 5` has two positionals for a command that takes
+/// at most one, so it's tmux's own too-many-arguments error, not two
+/// separate amounts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResizeAction {
-    Edge(Edge, u16),
+    Edges(Vec<Edge>, u16),
     ToggleZoom,
 }
 

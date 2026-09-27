@@ -43,15 +43,29 @@ pub fn key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
         return None;
     }
 
+    // xterm's modifier parameter, for the named keys with a defined
+    // modified CSI form: arrows, Home/End, Insert/Delete, PageUp/PageDown
+    // and F1-F12 (verified against `infocmp -1x xterm-256color`: kUP5,
+    // kLFT5, kHOM5, kEND5, kDC5, kNXT5, kPRV5, and the F-key modified
+    // forms). 2 Shift, 3 Meta, 5 Ctrl; combinations add (C-S = 6, C-M = 7,
+    // C-M-S = 8). This already encodes meta, so a hit here returns
+    // directly with no further ESC-prefixing.
+    let modifier = if shift || meta || ctrl {
+        Some(1 + shift as u8 + 2 * meta as u8 + 4 * ctrl as u8)
+    } else {
+        None
+    };
+    if let Some(bytes) = modified_key_bytes(rest, modifier, modes) {
+        return Some(bytes);
+    }
+
     let base = if ctrl {
         if shift {
             return None; // C-S- combos on a plain char aren't meaningful.
         }
         ctrl_byte(rest)?
-    } else if let Some(bytes) = arrow_bytes(rest, shift, modes) {
-        bytes
     } else if shift {
-        return None; // S- is only supported for the arrow keys.
+        return None; // S- is only supported for the modifier-aware keys above.
     } else {
         named_or_char_bytes(rest)?
     };
@@ -64,6 +78,91 @@ pub fn key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
     } else {
         base
     })
+}
+
+/// The named keys with a modifier-aware xterm CSI form. `modifier` is
+/// `None` for the unmodified key, which keeps its existing encoding
+/// (matching screen-256color: SS3 for arrows in `app_cursor` mode, CSI
+/// otherwise; vt220 tilde forms for the rest), or `Some(n)` for xterm's
+/// modifier parameter (see [`key_bytes`]). `None` return means `rest`
+/// isn't one of these keys.
+fn modified_key_bytes(rest: &str, modifier: Option<u8>, modes: &InputModes) -> Option<Vec<u8>> {
+    if let Some(letter) = arrow_letter(rest) {
+        return Some(match modifier {
+            Some(m) => format!("\x1b[1;{m}{letter}").into_bytes(),
+            None if modes.app_cursor => format!("\x1bO{letter}").into_bytes(),
+            None => format!("\x1b[{letter}").into_bytes(),
+        });
+    }
+    if let Some(letter) = f1_to_f4_letter(rest) {
+        return Some(match modifier {
+            Some(m) => format!("\x1b[1;{m}{letter}").into_bytes(),
+            None => format!("\x1bO{letter}").into_bytes(),
+        });
+    }
+    if rest == "Home" {
+        return Some(match modifier {
+            Some(m) => format!("\x1b[1;{m}H").into_bytes(),
+            None => b"\x1b[1~".to_vec(),
+        });
+    }
+    if rest == "End" {
+        return Some(match modifier {
+            Some(m) => format!("\x1b[1;{m}F").into_bytes(),
+            None => b"\x1b[4~".to_vec(),
+        });
+    }
+    if let Some(num) = tilde_num(rest) {
+        return Some(match modifier {
+            Some(m) => format!("\x1b[{num};{m}~").into_bytes(),
+            None => format!("\x1b[{num}~").into_bytes(),
+        });
+    }
+    None
+}
+
+/// `Up`/`Down`/`Left`/`Right`'s CSI/SS3 final letter.
+fn arrow_letter(rest: &str) -> Option<char> {
+    match rest {
+        "Up" => Some('A'),
+        "Down" => Some('B'),
+        "Right" => Some('C'),
+        "Left" => Some('D'),
+        _ => None,
+    }
+}
+
+/// `F1`-`F4`'s SS3/modified-CSI final letter (`F5`-`F12` use the tilde
+/// form instead, via [`tilde_num`]).
+fn f1_to_f4_letter(rest: &str) -> Option<char> {
+    match rest {
+        "F1" => Some('P'),
+        "F2" => Some('Q'),
+        "F3" => Some('R'),
+        "F4" => Some('S'),
+        _ => None,
+    }
+}
+
+/// The leading number in the vt220 tilde form (`\x1b[<num>~`, or
+/// `\x1b[<num>;<mod>~` when modified), shared by Insert/Delete/
+/// PageUp/PageDown and F5-F12.
+fn tilde_num(rest: &str) -> Option<u16> {
+    match rest {
+        "Insert" => Some(2),
+        "Delete" => Some(3),
+        "PageUp" | "PPage" => Some(5),
+        "PageDown" | "NPage" => Some(6),
+        "F5" => Some(15),
+        "F6" => Some(17),
+        "F7" => Some(18),
+        "F8" => Some(19),
+        "F9" => Some(20),
+        "F10" => Some(21),
+        "F11" => Some(23),
+        "F12" => Some(24),
+        _ => None,
+    }
 }
 
 /// `C-<x>`: the control byte for a single ASCII letter, or one of the
@@ -85,30 +184,9 @@ fn ctrl_byte(rest: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// `Up`/`Down`/`Left`/`Right`, honouring `app_cursor` (SS3 vs CSI) and
-/// `shift` (the extended CSI modifier form; xterm sends CSI, never SS3,
-/// for a modified arrow key even in application-cursor mode).
-fn arrow_bytes(rest: &str, shift: bool, modes: &InputModes) -> Option<Vec<u8>> {
-    let letter = match rest {
-        "Up" => 'A',
-        "Down" => 'B',
-        "Right" => 'C',
-        "Left" => 'D',
-        _ => return None,
-    };
-    Some(if shift {
-        format!("\x1b[1;2{letter}").into_bytes()
-    } else if modes.app_cursor {
-        format!("\x1bO{letter}").into_bytes()
-    } else {
-        format!("\x1b[{letter}").into_bytes()
-    })
-}
-
-/// Everything `key_bytes` knows besides the arrows: `Enter`, `Tab`,
-/// `BSpace`, `Escape`, `Space`, `Home`/`End`, `PageUp`/`PageDown`
-/// (`PPage`/`NPage` aliases), `Insert`/`Delete`, `F1`-`F12`, and a single
-/// printable character sent as itself.
+/// Everything `key_bytes` knows besides the modifier-aware named keys
+/// (handled by [`modified_key_bytes`]): `Enter`, `Tab`, `BSpace`,
+/// `Escape`, `Space`, and a single printable character sent as itself.
 fn named_or_char_bytes(rest: &str) -> Option<Vec<u8>> {
     let named: &[u8] = match rest {
         "Enter" => b"\r",
@@ -116,24 +194,6 @@ fn named_or_char_bytes(rest: &str) -> Option<Vec<u8>> {
         "BSpace" => b"\x7f",
         "Escape" => b"\x1b",
         "Space" => b" ",
-        "Home" => b"\x1b[1~",
-        "End" => b"\x1b[4~",
-        "PageUp" | "PPage" => b"\x1b[5~",
-        "PageDown" | "NPage" => b"\x1b[6~",
-        "Insert" => b"\x1b[2~",
-        "Delete" => b"\x1b[3~",
-        "F1" => b"\x1bOP",
-        "F2" => b"\x1bOQ",
-        "F3" => b"\x1bOR",
-        "F4" => b"\x1bOS",
-        "F5" => b"\x1b[15~",
-        "F6" => b"\x1b[17~",
-        "F7" => b"\x1b[18~",
-        "F8" => b"\x1b[19~",
-        "F9" => b"\x1b[20~",
-        "F10" => b"\x1b[21~",
-        "F11" => b"\x1b[23~",
-        "F12" => b"\x1b[24~",
         _ => return single_char_bytes(rest),
     };
     Some(named.to_vec())
@@ -319,7 +379,77 @@ mod tests {
         assert!(is_key_name("a"));
         assert!(is_key_name("C-c"));
         assert!(is_key_name("Up"));
+        assert!(is_key_name("C-Up"));
         assert!(!is_key_name("hello"));
         assert!(!is_key_name(""));
+    }
+
+    /// xterm's modified-key CSI forms (spec: "Ctrl (and Shift/Meta
+    /// combos) with named keys"), verified against `infocmp -1x
+    /// xterm-256color`: kUP5, kLFT5, kHOM5, kEND5, kDC5, kNXT5, kPRV5 and
+    /// the F-key modified forms. The modifier parameter is 2 Shift, 3
+    /// Meta, 5 Ctrl, and combinations add (C-S = 6, C-M = 7, C-M-S = 8).
+    #[test]
+    fn modified_named_keys_use_xterms_csi_forms() {
+        let cases: &[(&str, &[u8])] = &[
+            // Arrows: infocmp kUP/kDN/kRIT/kLFT (2) and kUP5/kDN5/kRIT5/
+            // kLFT5 (5), kUP6..7 etc for combos.
+            ("S-Up", b"\x1b[1;2A"),
+            ("C-Up", b"\x1b[1;5A"),
+            ("C-Down", b"\x1b[1;5B"),
+            ("C-Right", b"\x1b[1;5C"),
+            ("C-Left", b"\x1b[1;5D"),
+            ("C-S-Up", b"\x1b[1;6A"),
+            ("C-M-Up", b"\x1b[1;7A"),
+            // Home/End: kHOM/kEND (2), kHOM5/kEND5 (5).
+            ("S-Home", b"\x1b[1;2H"),
+            ("C-Home", b"\x1b[1;5H"),
+            ("S-End", b"\x1b[1;2F"),
+            ("C-End", b"\x1b[1;5F"),
+            // Insert/Delete: kIC/kDC (2), kIC5/kDC5 (5).
+            ("S-Insert", b"\x1b[2;2~"),
+            ("C-Insert", b"\x1b[2;5~"),
+            ("S-Delete", b"\x1b[3;2~"),
+            ("C-Delete", b"\x1b[3;5~"),
+            // PageUp/PageDown: kPRV/kNXT (2), kPRV5/kNXT5 (5).
+            ("S-PageUp", b"\x1b[5;2~"),
+            ("C-PageUp", b"\x1b[5;5~"),
+            ("S-PageDown", b"\x1b[6;2~"),
+            ("C-PageDown", b"\x1b[6;5~"),
+            // F1-F4 (SS3 unmodified, CSI modified): kf13 (S-F1), kf25
+            // (C-F1).
+            ("S-F1", b"\x1b[1;2P"),
+            ("C-F1", b"\x1b[1;5P"),
+            ("C-F4", b"\x1b[1;5S"),
+            // F5-F12 (tilde form): kf17 (S-F5), kf29 (C-F5), kf36
+            // (C-F12).
+            ("S-F5", b"\x1b[15;2~"),
+            ("C-F5", b"\x1b[15;5~"),
+            ("C-F12", b"\x1b[24;5~"),
+        ];
+        for (name, want) in cases {
+            assert_eq!(
+                key_bytes(name, &modes(false)),
+                Some(want.to_vec()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmodified_named_keys_unchanged_by_the_modifier_table() {
+        // The unmodified encodings stay exactly as before (screen-256color).
+        assert_eq!(key_bytes("Home", &modes(false)), Some(b"\x1b[1~".to_vec()));
+        assert_eq!(key_bytes("End", &modes(false)), Some(b"\x1b[4~".to_vec()));
+        assert_eq!(
+            key_bytes("Insert", &modes(false)),
+            Some(b"\x1b[2~".to_vec())
+        );
+        assert_eq!(
+            key_bytes("Delete", &modes(false)),
+            Some(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(key_bytes("F1", &modes(false)), Some(b"\x1bOP".to_vec()));
+        assert_eq!(key_bytes("F5", &modes(false)), Some(b"\x1b[15~".to_vec()));
     }
 }

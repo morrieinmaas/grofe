@@ -24,11 +24,6 @@ enum FlagKind {
     /// A value is required, attached (`-tfoo`) or the next token (`-t
     /// foo`).
     Value,
-    /// A value may be attached, or taken from the next token if that
-    /// token doesn't itself look like a flag; otherwise the flag is
-    /// present with no captured value (the caller applies its own
-    /// default, e.g. `resize-pane -L` means "by 1 cell").
-    OptionalValue,
 }
 
 struct FlagTable {
@@ -72,7 +67,10 @@ fn find_long(table: &FlagTable, name: &str) -> Option<(&'static str, FlagKind)> 
 /// token that isn't a flag; everything after that is positional
 /// verbatim, which is what lets a trailing shell command (e.g. `new-window
 /// -d sleep 30`) keep its own `-`-prefixed arguments untouched.
-fn tokenize(argv: &[String], table: &FlagTable) -> Result<ParsedFlags, ParseError> {
+///
+/// `cmd_name` is threaded through only to word flag errors like tmux's
+/// own CLI (`command <cmd_name>: unknown flag -z`).
+fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<ParsedFlags, ParseError> {
     let mut flags = ParsedFlags::default();
     let mut i = 0;
     let mut flags_done = false;
@@ -95,7 +93,7 @@ fn tokenize(argv: &[String], table: &FlagTable) -> Result<ParsedFlags, ParseErro
                 }
                 // No M1 long flag currently takes a value; if one is
                 // added, wire attached/separate value handling in here.
-                _ => return Err(ParseError::UnknownLongFlag(name.to_string())),
+                _ => return Err(ParseError::UnknownLongFlag(cmd_name.to_string())),
             }
             i += 1;
             continue;
@@ -106,7 +104,7 @@ fn tokenize(argv: &[String], table: &FlagTable) -> Result<ParsedFlags, ParseErro
             while ci < chars.len() {
                 let c = chars[ci];
                 match find_short(table, c) {
-                    None => return Err(ParseError::UnknownFlag(c)),
+                    None => return Err(ParseError::UnknownFlag(cmd_name.to_string(), c)),
                     Some(FlagKind::Bool) => {
                         flags.present.insert(c);
                         ci += 1;
@@ -116,23 +114,12 @@ fn tokenize(argv: &[String], table: &FlagTable) -> Result<ParsedFlags, ParseErro
                         let attached: String = chars[ci + 1..].iter().collect();
                         if attached.is_empty() {
                             i += 1;
-                            let value = argv.get(i).ok_or(ParseError::MissingValue(c))?;
+                            let value = argv
+                                .get(i)
+                                .ok_or_else(|| ParseError::MissingValue(cmd_name.to_string(), c))?;
                             flags.values.insert(c, value.clone());
                         } else {
                             flags.values.insert(c, attached);
-                        }
-                        ci = chars.len();
-                    }
-                    Some(FlagKind::OptionalValue) => {
-                        flags.present.insert(c);
-                        let attached: String = chars[ci + 1..].iter().collect();
-                        if !attached.is_empty() {
-                            flags.values.insert(c, attached);
-                        } else if let Some(next) = argv.get(i + 1)
-                            && !next.starts_with('-')
-                        {
-                            flags.values.insert(c, next.clone());
-                            i += 1;
                         }
                         ci = chars.len();
                     }
@@ -167,11 +154,13 @@ fn parse_u16(s: &str, what: &str) -> Result<u16, ParseError> {
         .map_err(|_| ParseError::Other(format!("invalid {what}: {s}")))
 }
 
-fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str) -> Result<(), ParseError> {
-    if flags.positionals.is_empty() {
+/// Rejects positionals beyond `max`, worded like tmux's own CLI:
+/// `command <cmd_name>: too many arguments (need at most <max>)`.
+fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Result<(), ParseError> {
+    if flags.positionals.len() <= max {
         Ok(())
     } else {
-        Err(ParseError::TooManyArguments(cmd_name.to_string()))
+        Err(ParseError::TooManyArguments(cmd_name.to_string(), max))
     }
 }
 
@@ -190,6 +179,7 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
             short: NEW_SESSION_SHORT,
             long: &[],
         },
+        "new-session",
     )?;
     let width = flags
         .values
@@ -220,8 +210,9 @@ fn parse_target_only(argv: &[String], cmd_name: &str) -> Result<Target, ParseErr
             short: TARGET_ONLY_SHORT,
             long: &[],
         },
+        cmd_name,
     )?;
-    no_extra_positionals(&flags, cmd_name)?;
+    no_extra_positionals(&flags, cmd_name, 0)?;
     target_or_current(&flags.values, 't')
 }
 
@@ -264,8 +255,9 @@ fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
             short: FORMAT_ONLY_SHORT,
             long: &[],
         },
+        "list-sessions",
     )?;
-    no_extra_positionals(&flags, "list-sessions")?;
+    no_extra_positionals(&flags, "list-sessions", 0)?;
     Ok(Command::ListSessions(ListSessions {
         format: flags.values.get(&'F').cloned(),
     }))
@@ -280,8 +272,9 @@ fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
             short: TARGET_FORMAT_SHORT,
             long: &[],
         },
+        "list-windows",
     )?;
-    no_extra_positionals(&flags, "list-windows")?;
+    no_extra_positionals(&flags, "list-windows", 0)?;
     Ok(Command::ListWindows(ListWindows {
         target: target_or_current(&flags.values, 't')?,
         format: flags.values.get(&'F').cloned(),
@@ -295,8 +288,9 @@ fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
             short: TARGET_FORMAT_SHORT,
             long: &[],
         },
+        "list-panes",
     )?;
-    no_extra_positionals(&flags, "list-panes")?;
+    no_extra_positionals(&flags, "list-panes", 0)?;
     Ok(Command::ListPanes(ListPanes {
         target: target_or_current(&flags.values, 't')?,
         format: flags.values.get(&'F').cloned(),
@@ -317,6 +311,7 @@ fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
             short: NEW_WINDOW_SHORT,
             long: &[],
         },
+        "new-window",
     )?;
     Ok(Command::NewWindow(NewWindow {
         detached: flags.present.contains(&'d'),
@@ -343,6 +338,7 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
             short: SPLIT_WINDOW_SHORT,
             long: &[],
         },
+        "split-window",
     )?;
     let dir = match (flags.present.contains(&'h'), flags.present.contains(&'v')) {
         (true, true) => {
@@ -398,7 +394,9 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
             short: SELECT_PANE_SHORT,
             long: &[],
         },
+        "select-pane",
     )?;
+    no_extra_positionals(&flags, "select-pane", 0)?;
     let edges: Vec<Edge> = [
         ('L', Edge::Left),
         ('R', Edge::Right),
@@ -420,11 +418,15 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+// tmux's own resize-pane grammar: -L/-R/-U/-D/-Z are all boolean flags
+// (`-LR` sets two directions at once), and the cell count is a single
+// trailing positional shared by whichever directions were given, not a
+// per-flag value.
 const RESIZE_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('L', FlagKind::OptionalValue),
-    ('R', FlagKind::OptionalValue),
-    ('U', FlagKind::OptionalValue),
-    ('D', FlagKind::OptionalValue),
+    ('L', FlagKind::Bool),
+    ('R', FlagKind::Bool),
+    ('U', FlagKind::Bool),
+    ('D', FlagKind::Bool),
     ('Z', FlagKind::Bool),
     ('t', FlagKind::Value),
 ];
@@ -436,11 +438,19 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
             short: RESIZE_PANE_SHORT,
             long: &[],
         },
+        "resize-pane",
     )?;
-    let edges: Vec<char> = ['L', 'R', 'U', 'D']
-        .into_iter()
-        .filter(|c| flags.present.contains(c))
-        .collect();
+    no_extra_positionals(&flags, "resize-pane", 1)?;
+    let edges: Vec<Edge> = [
+        ('L', Edge::Left),
+        ('R', Edge::Right),
+        ('U', Edge::Up),
+        ('D', Edge::Down),
+    ]
+    .into_iter()
+    .filter(|(c, _)| flags.present.contains(c))
+    .map(|(_, edge)| edge)
+    .collect();
     let zoom = flags.present.contains(&'Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(
@@ -450,32 +460,16 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     let action = if zoom {
         ResizeAction::ToggleZoom
     } else {
-        match edges.as_slice() {
-            [] => {
-                return Err(ParseError::Other(
-                    "resize-pane: expected one of -L -R -U -D -Z".to_string(),
-                ));
-            }
-            [c] => {
-                let edge = match *c {
-                    'L' => Edge::Left,
-                    'R' => Edge::Right,
-                    'U' => Edge::Up,
-                    'D' => Edge::Down,
-                    _ => unreachable!("edges is built from exactly L/R/U/D"),
-                };
-                let amount = match flags.values.get(c) {
-                    Some(s) => parse_u16(s, "resize amount")?,
-                    None => 1,
-                };
-                ResizeAction::Edge(edge, amount)
-            }
-            _ => {
-                return Err(ParseError::Other(
-                    "resize-pane: only one direction allowed".to_string(),
-                ));
-            }
+        if edges.is_empty() {
+            return Err(ParseError::Other(
+                "resize-pane: expected one of -L -R -U -D -Z".to_string(),
+            ));
         }
+        let amount = match flags.positionals.first() {
+            Some(s) => parse_u16(s, "resize amount")?,
+            None => 1,
+        };
+        ResizeAction::Edges(edges, amount)
     };
     Ok(Command::ResizePane(ResizePane {
         action,
@@ -492,6 +486,7 @@ fn parse_respawn_pane(argv: &[String]) -> Result<Command, ParseError> {
             short: RESPAWN_PANE_SHORT,
             long: &[],
         },
+        "respawn-pane",
     )?;
     Ok(Command::RespawnPane(RespawnPane {
         kill: flags.present.contains(&'k'),
@@ -513,6 +508,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
             short: SEND_KEYS_SHORT,
             long: &[],
         },
+        "send-keys",
     )?;
     let literal = flags.present.contains(&'l');
     let hex = flags.present.contains(&'H');
@@ -559,7 +555,9 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
             short: CAPTURE_PANE_SHORT,
             long: &[],
         },
+        "capture-pane",
     )?;
+    no_extra_positionals(&flags, "capture-pane", 0)?;
     let start = match flags.values.get(&'S') {
         Some(s) if s == "-" => Some(CaptureBound::HistoryStart),
         Some(s) => Some(parse_capture_line(s)?),
@@ -618,6 +616,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
             short: SET_OPTION_SHORT,
             long: SET_OPTION_LONG,
         },
+        "set-option",
     )?;
     let scope = parse_scope(&flags)?;
     let mut positionals = flags.positionals.iter();
@@ -627,7 +626,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         .ok_or_else(|| ParseError::MissingArgument("set-option".to_string()))?;
     let value = positionals.next().cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments("set-option".to_string()));
+        return Err(ParseError::TooManyArguments("set-option".to_string(), 2));
     }
     Ok(Command::SetOption(SetOption {
         scope,
@@ -654,12 +653,13 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
             short: SHOW_OPTIONS_SHORT,
             long: &[],
         },
+        "show-options",
     )?;
     let scope = parse_scope(&flags)?;
     let mut positionals = flags.positionals.iter();
     let name = positionals.next().cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments("show-options".to_string()));
+        return Err(ParseError::TooManyArguments("show-options".to_string(), 1));
     }
     Ok(Command::ShowOptions(ShowOptions {
         scope,
@@ -677,11 +677,15 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
             short: DISPLAY_MESSAGE_SHORT,
             long: &[],
         },
+        "display-message",
     )?;
     let mut positionals = flags.positionals.iter();
     let text = positionals.next().cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments("display-message".to_string()));
+        return Err(ParseError::TooManyArguments(
+            "display-message".to_string(),
+            1,
+        ));
     }
     Ok(Command::DisplayMessage(DisplayMessage {
         print: flags.present.contains(&'p'),
@@ -691,13 +695,13 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_kill_server(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS)?;
-    no_extra_positionals(&flags, "kill-server")?;
+    let flags = tokenize(argv, &NO_FLAGS, "kill-server")?;
+    no_extra_positionals(&flags, "kill-server", 0)?;
     Ok(Command::KillServer(KillServer))
 }
 
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS)?;
+    let flags = tokenize(argv, &NO_FLAGS, "subscribe")?;
     Ok(Command::Subscribe(Subscribe {
         events: flags.positionals,
     }))
@@ -782,13 +786,31 @@ mod tests {
     #[test]
     fn unknown_flag_error_matches_tmux() {
         let err = parse(&argv(&["kill-server", "-z"])).unwrap_err();
-        assert_eq!(err.to_string(), "unknown flag -z");
+        assert_eq!(err.to_string(), "command kill-server: unknown flag -z");
+    }
+
+    #[test]
+    fn missing_value_error_matches_tmux() {
+        let err = parse(&argv(&["kill-session", "-t"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "command kill-session: -t expects an argument"
+        );
+    }
+
+    #[test]
+    fn unknown_long_flag_error_matches_tmux() {
+        let err = parse(&argv(&["set-option", "--bogus", "name", "value"])).unwrap_err();
+        assert_eq!(err.to_string(), "command set-option: invalid flag --");
     }
 
     #[test]
     fn too_many_arguments_error_matches_tmux() {
         let err = parse(&argv(&["kill-server", "extra"])).unwrap_err();
-        assert_eq!(err.to_string(), "command kill-server: too many arguments");
+        assert_eq!(
+            err.to_string(),
+            "command kill-server: too many arguments (need at most 0)"
+        );
     }
 
     #[test]
@@ -1061,12 +1083,21 @@ mod tests {
     }
 
     #[test]
+    fn select_pane_rejects_trailing_positionals() {
+        let err = parse(&argv(&["select-pane", "-t", "%3", "extra"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "command select-pane: too many arguments (need at most 0)"
+        );
+    }
+
+    #[test]
     fn resize_pane_with_explicit_cell_count() {
         let cmd = parse(&argv(&["resize-pane", "-L", "5"])).unwrap();
         assert_eq!(
             cmd,
             Command::ResizePane(ResizePane {
-                action: ResizeAction::Edge(Edge::Left, 5),
+                action: ResizeAction::Edges(vec![Edge::Left], 5),
                 target: Target::Current,
             })
         );
@@ -1078,9 +1109,34 @@ mod tests {
         assert_eq!(
             cmd,
             Command::ResizePane(ResizePane {
-                action: ResizeAction::Edge(Edge::Down, 1),
+                action: ResizeAction::Edges(vec![Edge::Down], 1),
                 target: Target::Current,
             })
+        );
+    }
+
+    /// tmux: `-L`/`-R`/`-U`/`-D` are boolean flags, so `-LR` sets both
+    /// directions, sharing the one trailing amount.
+    #[test]
+    fn resize_pane_combined_direction_flags() {
+        let cmd = parse(&argv(&["resize-pane", "-LR", "5"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::ResizePane(ResizePane {
+                action: ResizeAction::Edges(vec![Edge::Left, Edge::Right], 5),
+                target: Target::Current,
+            })
+        );
+    }
+
+    /// tmux: with only one shared trailing amount, `-L 3 -R 5` has two
+    /// positionals for a command that takes at most one.
+    #[test]
+    fn resize_pane_two_amounts_is_too_many_arguments() {
+        let err = parse(&argv(&["resize-pane", "-L", "3", "-R", "5"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "command resize-pane: too many arguments (need at most 1)"
         );
     }
 
@@ -1256,6 +1312,15 @@ mod tests {
     }
 
     #[test]
+    fn capture_pane_rejects_trailing_positionals() {
+        let err = parse(&argv(&["capture-pane", "-p", "extra"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "command capture-pane: too many arguments (need at most 0)"
+        );
+    }
+
+    #[test]
     fn set_option_alias_and_scope_and_persist() {
         let cmd = parse(&argv(&["set", "-g", "--persist", "history-limit", "50000"])).unwrap();
         assert_eq!(
@@ -1299,7 +1364,7 @@ mod tests {
     fn set_option_too_many_positionals() {
         assert!(matches!(
             parse(&argv(&["set-option", "name", "value", "extra"])),
-            Err(ParseError::TooManyArguments(_))
+            Err(ParseError::TooManyArguments(_, _))
         ));
     }
 
@@ -1341,7 +1406,7 @@ mod tests {
     fn display_message_too_many_positionals() {
         assert!(matches!(
             parse(&argv(&["display-message", "one", "two"])),
-            Err(ParseError::TooManyArguments(_))
+            Err(ParseError::TooManyArguments(_, _))
         ));
     }
 
