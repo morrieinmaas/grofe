@@ -129,6 +129,66 @@ impl Size {
 
 nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, Winsize);
 
+/// Ceiling on how many fds the fallback close-loop scans (macOS, or a Linux
+/// kernel too old for `close_range`, i.e. before 5.9). `getrlimit`'s current
+/// soft limit is normally in the low thousands; a runaway or `RLIM_INFINITY`
+/// value is capped here rather than scanned one fd at a time.
+// ponytail: 65536 fds is the scan ceiling; a pane's child never legitimately
+// holds more open fds than that.
+const MAX_FD_SCAN: u32 = 65536;
+
+/// The current `RLIMIT_NOFILE` soft limit, capped at [`MAX_FD_SCAN`]. Must be
+/// read before `fork` and passed into `pre_exec` by value: `pre_exec` runs in
+/// the child between `fork` and `exec`, where only async-signal-safe calls
+/// are allowed, and `getrlimit` is not one of them.
+fn nofile_limit() -> u32 {
+    let mut rl = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `rl` is a valid, writable `rlimit`.
+    let cur = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) } == 0 {
+        rl.rlim_cur
+    } else {
+        MAX_FD_SCAN as libc::rlim_t
+    };
+    u32::try_from(cur).unwrap_or(MAX_FD_SCAN).min(MAX_FD_SCAN)
+}
+
+/// Close every fd above 2 in the child (spec §4.8). macOS has no
+/// `accept4`/`SOCK_CLOEXEC`, so tokio (and std, for some other fds) sets
+/// `FD_CLOEXEC` on an accepted socket with a separate, non-atomic `fcntl`
+/// after `accept()`. A pane forked while another thread is between those two
+/// calls would otherwise inherit that live client connection, or any other
+/// transient fd, into the child. Async-signal-safe: no allocation, no locks,
+/// and never reads `/dev/fd` or `/proc` (`opendir` allocates).
+fn close_inherited_fds(limit: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: a bare syscall, no allocation. `close_range` closes every
+        // fd in [3, u32::MAX] that is actually open; fds that are not open
+        // are skipped, not an error.
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                3 as libc::c_uint,
+                u32::MAX as libc::c_uint,
+                0 as libc::c_int,
+            )
+        };
+        if ret == 0 {
+            return;
+        }
+        // Falls through to the loop below on ENOSYS (kernel older than 5.9).
+    }
+    for fd in 3..limit as i32 {
+        // SAFETY: closing a possibly-unopened fd is safe; EBADF is ignored.
+        unsafe {
+            libc::close(fd);
+        }
+    }
+}
+
 /// Serialises spawns from `openpty` to `spawn`: `FD_CLOEXEC` is set by a
 /// separate `fcntl`, so without this a concurrent fork could inherit a master.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
@@ -431,6 +491,7 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
     // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
     fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     let slave = pty.slave.as_raw_fd();
+    let fd_limit = nofile_limit();
     // SAFETY: the closure only makes async-signal-safe libc calls.
     unsafe {
         cmd.pre_exec(move || {
@@ -445,6 +506,7 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
                     return Err(stdio::Error::last_os_error());
                 }
             }
+            close_inherited_fds(fd_limit);
             Ok(())
         });
     }

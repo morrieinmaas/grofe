@@ -1,5 +1,6 @@
 //! T1.4 pane tests: spawn, emulate, read and write, no server.
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -361,4 +362,31 @@ async fn synchronized_update_is_flushed_before_exited() {
     next_exit(&mut p).await;
     let out = screen(&p.handle);
     assert!(out.contains("SYNCED"), "{out}");
+}
+
+/// A fd opened in the test process without `CLOEXEC` must not survive into a
+/// spawned pane's child (spec §4.8, T1.4b). This is the fd a non-atomic
+/// `accept()` + `fcntl(FD_CLOEXEC)` elsewhere in the process (macOS has no
+/// `accept4`/`SOCK_CLOEXEC`) can otherwise leak into a pane forked mid-race.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inherited_fd_without_cloexec_is_closed_in_the_child() {
+    let (read_fd, write_fd) = nix::unistd::pipe().expect("pipe");
+    // Clear CLOEXEC explicitly, rather than relying on the pair's default.
+    nix::fcntl::fcntl(
+        &read_fd,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )
+    .expect("clear cloexec");
+    let target = read_fd.as_raw_fd();
+
+    let script = format!(
+        "if [ -e /dev/fd/{target} ]; then echo STATE=open; else echo STATE=closed; fi; echo DONE; sleep 5"
+    );
+    let p = sh(1, &script);
+    wait_screen(&p.handle, "DONE").await;
+    let out = screen(&p.handle);
+    assert!(out.contains("STATE=closed"), "{out}");
+
+    drop(write_fd);
+    drop(read_fd);
 }
