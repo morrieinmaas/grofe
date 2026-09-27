@@ -27,6 +27,7 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         rows: 24,
         history_limit: 1000,
         socket: PathBuf::from("/tmp/grofe-test.sock"),
+        term: grofe::server::pane::inner_term(),
     }
 }
 
