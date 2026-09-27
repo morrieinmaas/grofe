@@ -285,10 +285,17 @@ impl Subscription {
     }
 
     fn read_reply(&mut self, timeout: Duration) -> Result<Reply, String> {
-        self.reader
+        // macOS refuses setsockopt with EINVAL once the peer has closed the
+        // socket; what it sent before closing is still buffered, and reading
+        // cannot block any more, so read it (then EOF) anyway.
+        match self
+            .reader
             .get_ref()
             .set_read_timeout(Some(timeout.max(Duration::from_millis(1))))
-            .map_err(|e| e.to_string())?;
+        {
+            Err(e) if e.raw_os_error() != Some(nix::libc::EINVAL) => return Err(e.to_string()),
+            _ => {}
+        }
         let mut line = String::new();
         match self.reader.read_line(&mut line) {
             Ok(0) => Err("server closed the connection".to_string()),

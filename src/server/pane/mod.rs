@@ -37,23 +37,32 @@ use procinfo::ProcSample;
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
+///
+/// Every event carries the spawn's `generation` ([`PaneHandle::generation`]),
+/// so events from a process a `respawn-pane` replaced (already queued when
+/// it ran) can be told apart and ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaneEvent {
-    /// Child exited and the master drained (EOF/EIO or grace period). The
-    /// `u64` is the spawn's generation ([`PaneHandle::generation`]), so an
-    /// exit from a process a `respawn-pane` replaced can be told apart.
-    Exited(PaneId, u64, Option<i32>),
+pub struct PaneEvent {
+    pub pane: PaneId,
+    pub generation: u64,
+    pub kind: PaneEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneEventKind {
+    /// Child exited and the master drained (EOF/EIO or grace period).
+    Exited(Option<i32>),
     /// Raw bytes read from the master, sent only while the output tap is
     /// on ([`set_output_tap`]).
-    Output(PaneId, Vec<u8>),
-    Title(PaneId, String),
-    Bell(PaneId),
+    Output(Vec<u8>),
+    Title(String),
+    Bell,
     /// OSC 52 clipboard store, already decoded.
-    Clipboard(PaneId, String),
+    Clipboard(String),
     /// Emitted from M3 (OSC 7 scanner).
-    Cwd(PaneId, PathBuf),
+    Cwd(PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
-    Graphics(PaneId, Vec<u8>),
+    Graphics(Vec<u8>),
 }
 
 /// What to spawn in a new pane.
@@ -204,7 +213,7 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Turns the output tap on or off for every pane in this process (one
 /// server per process): while on, each reader also sends what it reads as
-/// [`PaneEvent::Output`], for `pane-output` subscribers.
+/// [`PaneEventKind::Output`], for `pane-output` subscribers.
 pub fn set_output_tap(on: bool) {
     io::OUTPUT_TAP.store(on, Ordering::Relaxed);
 }
@@ -361,7 +370,7 @@ impl PaneHandle {
         self.pid
     }
 
-    /// This spawn's generation, as carried by its [`PaneEvent::Exited`].
+    /// This spawn's generation, as carried by every [`PaneEvent`] it sends.
     pub fn generation(&self) -> u64 {
         self.generation
     }

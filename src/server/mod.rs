@@ -45,7 +45,7 @@ use crate::cmd::{self, Command};
 use crate::event::Event;
 use crate::paths::{self, Env};
 use crate::protocol::{self, ClientCtx, Hello, Reply, Request};
-use pane::PaneEvent;
+use pane::{PaneEvent, PaneEventKind};
 
 /// Logged once per server process, first thing after the log is open, as
 /// `grofe server starting: pid <pid>, socket <path>`. The test harness counts
@@ -61,10 +61,9 @@ pub enum ServerMsg {
         req: Request,
         reply: oneshot::Sender<Reply>,
     },
-    /// A `subscribe` request: like `Control`, plus the connection's event
-    /// queue, which the actor keeps as the subscriber.
+    /// A `subscribe` request, with the connection's event queue, which the
+    /// actor keeps as the subscriber.
     Subscribe {
-        ctx: ClientCtx,
         req: Request,
         reply: oneshot::Sender<Reply>,
         tx: mpsc::Sender<Event>,
@@ -148,20 +147,25 @@ pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<S
     dispatch::run(state, ctx, argv)
 }
 
-/// Handles one pane event. A dead pane is reported (`pane-exited`, with
-/// its status) and removed unless `remain-on-exit` keeps it, and the
-/// removal cascades (spec §4.2). An exit from a process `respawn-pane`
-/// already replaced (an older generation) is ignored. Output read while
-/// the tap is on becomes `pane-output`.
+/// Handles one pane event. Events from a process `respawn-pane` already
+/// replaced (an older generation) or from a pane that is gone are ignored.
+/// A dead pane is reported (`pane-exited`, with its status) and removed
+/// unless `remain-on-exit` keeps it, and the removal cascades (spec §4.2).
+/// Output read while the tap is on becomes `pane-output`.
 fn handle_pane_event(state: &mut State, event: PaneEvent) {
-    match event {
-        PaneEvent::Exited(pane, generation, status) => {
-            let Some(p) = state.model.panes.get(&pane) else {
-                return;
-            };
-            if p.handle.generation() != generation {
-                return;
-            }
+    let PaneEvent {
+        pane,
+        generation,
+        kind,
+    } = event;
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    if p.handle.generation() != generation {
+        return;
+    }
+    match kind {
+        PaneEventKind::Exited(status) => {
             let uid = p.uid.clone();
             state.events.emit(Event::PaneExited { pane, uid, status });
             state.model.pane_exited(pane, status);
@@ -169,7 +173,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
                 state.exit = true;
             }
         }
-        PaneEvent::Output(pane, bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
+        PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
         _ => {}
     }
     state.events.flush();
@@ -494,18 +498,13 @@ fn handle(state: &mut State, msg: ServerMsg) {
             let result = dispatch(state, &ctx, &req.argv);
             finish(state, req.id, result, reply);
         }
-        ServerMsg::Subscribe {
-            ctx,
-            req,
-            reply,
-            tx,
-        } => {
+        ServerMsg::Subscribe { req, reply, tx } => {
             let result = match cmd::parse(&req.argv) {
                 Ok(Command::Subscribe(c)) => {
                     state.events.subscribe(c.events, tx).map(|()| String::new())
                 }
-                // Not a subscribe after all: run it as any other command.
-                Ok(_) => dispatch(state, &ctx, &req.argv),
+                // The connection sends only a `subscribe` verb here.
+                Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
             };
             finish(state, req.id, result, reply);
@@ -599,7 +598,6 @@ async fn connection(
         let (reply_tx, reply_rx) = oneshot::channel();
         let msg = if req.argv.first().is_some_and(|verb| verb == "subscribe") {
             ServerMsg::Subscribe {
-                ctx: ctx.clone(),
                 req,
                 reply: reply_tx,
                 tx: events_tx.clone(),

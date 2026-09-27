@@ -99,41 +99,17 @@ impl Control {
     }
 }
 
-/// A subscription read with one fixed timeout.
-struct RawSub {
-    _writer: UnixStream,
-    reader: BufReader<UnixStream>,
+/// A pane command that waits for `flag` to exist, then exits with
+/// `status`, so a test decides when the pane exits.
+fn exit_on(flag: &std::path::Path, status: i32) -> String {
+    format!(
+        "while [ ! -e {} ]; do sleep 0.01; done; exit {status}",
+        flag.display()
+    )
 }
 
-impl RawSub {
-    fn open(srv: &TestServer, names: &[&str]) -> RawSub {
-        let mut c = Control::open(srv);
-        let mut req = vec!["subscribe".to_string()];
-        req.extend(names.iter().map(|n| n.to_string()));
-        writeln!(c.writer, "{}", Control::line(1, &req)).unwrap();
-        c.writer.set_read_timeout(Some(WAIT)).unwrap();
-        let mut sub = RawSub {
-            _writer: c.writer,
-            reader: c.reader,
-        };
-        match sub.reply() {
-            Reply::Ok { .. } => sub,
-            other => panic!("subscribe: {other:?}"),
-        }
-    }
-
-    fn reply(&mut self) -> Reply {
-        let mut line = String::new();
-        self.reader.read_line(&mut line).expect("reading an event");
-        serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad line {line:?}: {e}"))
-    }
-
-    fn next(&mut self) -> Event {
-        match self.reply() {
-            Reply::Event(ev) => ev,
-            other => panic!("expected an event, got {other:?}"),
-        }
-    }
+fn touch(flag: &std::path::Path) {
+    std::fs::write(flag, "").unwrap();
 }
 
 fn argv(args: &[&str]) -> Vec<String> {
@@ -145,11 +121,14 @@ fn argv(args: &[&str]) -> Vec<String> {
 #[test]
 fn pane_exited_fires_once_with_the_exit_status() {
     let srv = TestServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("go");
     let mut sub = srv.subscribe(&["pane-exited"]).unwrap();
-    srv.cmd(&["new-session", "-d", "-s", "e", "sleep 0.2; exit 3"])
+    srv.cmd(&["new-session", "-d", "-s", "e", &exit_on(&flag, 3)])
         .unwrap();
     let pane = pane_id(&srv, "e");
     let uid = display(&srv, "e", "#{pane_uid}");
+    touch(&flag);
 
     assert_eq!(
         next(&mut sub),
@@ -174,11 +153,14 @@ fn natural_exit_with_remain_on_exit_off_still_reports_the_status() {
     srv.cmd(&["new-session", "-d", "-s", "keep", "sleep 30"])
         .unwrap();
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("go");
     let mut sub = srv.subscribe(&["pane-exited"]).unwrap();
-    srv.cmd(&["new-session", "-d", "-s", "gone", "sleep 0.2; exit 5"])
+    srv.cmd(&["new-session", "-d", "-s", "gone", &exit_on(&flag, 5)])
         .unwrap();
     let pane = pane_id(&srv, "gone");
     let uid = display(&srv, "gone", "#{pane_uid}");
+    touch(&flag);
     assert_eq!(
         next(&mut sub),
         Event::PaneExited {
@@ -240,12 +222,10 @@ fn kill_window_session_and_server_report_their_panes() {
     let window = ids("a:2");
     let session = ids("b");
     let rest = [ids("a:1"), ids("c")].concat();
-    // Not the harness's subscription: on macOS it cannot read what is
-    // still buffered once the server has closed the socket (kill-server).
-    let mut sub = RawSub::open(&srv, &["pane-exited"]);
+    let mut sub = srv.subscribe(&["pane-exited"]).unwrap();
 
-    let expect = |killed: Vec<(PaneId, String)>, sub: &mut RawSub| {
-        let mut got: Vec<Event> = killed.iter().map(|_| sub.next()).collect();
+    let expect = |killed: Vec<(PaneId, String)>, sub: &mut Subscription| {
+        let mut got: Vec<Event> = killed.iter().map(|_| next(sub)).collect();
         let mut want: Vec<Event> = killed
             .into_iter()
             .map(|(pane, uid)| Event::PaneExited {
@@ -265,12 +245,10 @@ fn kill_window_session_and_server_report_their_panes() {
     expect(session, &mut sub);
     srv.cmd(&["kill-server"]).unwrap();
     expect(rest, &mut sub);
-    let mut line = String::new();
-    assert_eq!(
-        sub.reader.read_line(&mut line).unwrap(),
-        0,
-        "after kill-server: {line}"
-    );
+    match sub.next(WAIT) {
+        Err(e) => assert!(e.contains("closed"), "{e}"),
+        Ok(ev) => panic!("unexpected event after kill-server: {ev:?}"),
+    }
 }
 
 // --- pane-output ---------------------------------------------------------
@@ -374,19 +352,16 @@ fn unsubscribed_events_are_not_sent() {
 #[test]
 fn bare_subscribe_gets_everything_but_pane_output() {
     let srv = TestServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("go");
     let mut all = srv.subscribe(&[]).unwrap();
-    srv.cmd(&[
-        "new-session",
-        "-d",
-        "-s",
-        "b",
-        "printf 'visible-output\\n'; sleep 0.3; exit 4",
-    ])
-    .unwrap();
+    let script = format!("printf 'visible-output\\n'; {}", exit_on(&flag, 4));
+    srv.cmd(&["new-session", "-d", "-s", "b", &script]).unwrap();
     srv.wait_for(|| srv.capture("b").contains("visible-output"), WAIT)
         .unwrap();
     srv.cmd(&["set", "-g", "@after-output", "1"]).unwrap();
     assert_eq!(next(&mut all), option_changed("@after-output", Some("1")));
+    touch(&flag);
     assert!(matches!(
         next(&mut all),
         Event::PaneExited {
@@ -507,35 +482,40 @@ fn disconnected_subscribers_are_cleaned_up() {
 
 // --- respawn generation --------------------------------------------------
 
-/// `respawn-pane -k` racing the old process's exit: the old process's
-/// `Exited`, already queued when the respawn runs, must not mark the new
-/// process dead or report it. The actor is kept busy with a slow capture
-/// while the old processes exit and the respawns queue behind it, so the
-/// stale exits and the respawns are handled in a random interleaving.
-#[test]
-fn respawn_ignores_the_old_processes_exit() {
-    const PANES: usize = 8;
-    let srv = TestServer::start();
+const RACE_PANES: usize = 8;
+
+/// Sets up the respawn race: a pane with a long history (so capturing it
+/// keeps the actor busy) and [`RACE_PANES`] windows running `old(flag)`.
+/// Returns their pane ids and the flag dir.
+fn race_panes(
+    srv: &TestServer,
+    old: impl Fn(&std::path::Path) -> String,
+) -> (Vec<PaneId>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     srv.cmd(&["new-session", "-d", "-s", "big", "seq 1 60000; sleep 30"])
         .unwrap();
     srv.wait_for(|| srv.capture("big").contains("60000"), WAIT)
         .unwrap();
-    let mut ids = Vec::new();
-    for i in 0..PANES {
-        let flag = dir.path().join(format!("go{i}"));
-        let script = format!(
-            "while [ ! -e {} ]; do sleep 0.005; done; exit 7",
-            flag.display()
-        );
-        srv.cmd(&["new-window", "-d", "-t", "big", &script])
-            .unwrap();
-        ids.push(pane_id(&srv, &format!("big:{}", i + 2)));
-    }
-    let mut sub = srv.subscribe(&["pane-exited"]).unwrap();
+    let ids = (0..RACE_PANES)
+        .map(|i| {
+            let script = old(&dir.path().join(format!("go{i}")));
+            srv.cmd(&["new-window", "-d", "-t", "big", &script])
+                .unwrap();
+            pane_id(srv, &format!("big:{}", i + 2))
+        })
+        .collect();
+    (ids, dir)
+}
 
-    // Slow command first, then the exits, then the respawns behind it.
-    let slow = Control::open(&srv);
+/// Keeps the actor busy with two slow captures, sets every flag while it
+/// is (so each old process acts and its pane events queue up), then queues
+/// `requests` behind the captures, each on its own connection and in order,
+/// so they wait in the actor's queue together. Stale pane events and the
+/// requests are then handled in a random interleaving. Returns the replies
+/// in request order.
+fn race(srv: &TestServer, dir: &std::path::Path, requests: Vec<Vec<String>>) -> Vec<Reply> {
+    let mut conns: Vec<Control> = requests.iter().map(|_| Control::open(srv)).collect();
+    let slow = Control::open(srv);
     let busy = thread::spawn(move || {
         slow.pipeline(vec![
             argv(&["capture-pane", "-p", "-S", "-", "-t", "big:1"]),
@@ -543,46 +523,53 @@ fn respawn_ignores_the_old_processes_exit() {
         ])
     });
     thread::sleep(Duration::from_millis(5));
-    for i in 0..PANES {
-        std::fs::write(dir.path().join(format!("go{i}")), "").unwrap();
+    for i in 0..RACE_PANES {
+        touch(&dir.join(format!("go{i}")));
     }
     thread::sleep(Duration::from_millis(40));
+    for (c, req) in conns.iter_mut().zip(&requests) {
+        writeln!(c.writer, "{}", Control::line(1, req)).unwrap();
+        // Keeps the requests in order across connections.
+        thread::sleep(Duration::from_millis(2));
+    }
+    let replies = conns
+        .iter_mut()
+        .map(|c| {
+            c.writer.set_read_timeout(Some(WAIT)).unwrap();
+            let mut line = String::new();
+            c.reader.read_line(&mut line).unwrap();
+            serde_json::from_str(&line).unwrap()
+        })
+        .collect();
+    busy.join().unwrap();
+    replies
+}
+
+/// `respawn-pane -k` racing the old process's exit: the old process's
+/// `Exited`, already queued when the respawn runs, must not be applied to
+/// the respawned pane. The bug is caught by the `pane_dead` checks: with
+/// remain-on-exit on, a stale exit marks the new, running process dead.
+/// (A `pane-exited` for the old process is legitimate when its exit was
+/// handled before the respawn, so events cannot tell the two apart.)
+#[test]
+fn respawn_ignores_the_old_processes_exit() {
+    let srv = TestServer::start();
+    let (ids, dir) = race_panes(&srv, |flag| exit_on(flag, 7));
+    // `exec`, so the foreground argv is `sleep 30` whatever `/bin/sh` is:
+    // not every shell execs the last command of `sh -c` itself.
     let respawns = ids
         .iter()
-        .map(|id| argv(&["respawn-pane", "-k", "-t", &id.to_string(), "sleep 30"]))
+        .map(|id| argv(&["respawn-pane", "-k", "-t", &id.to_string(), "exec sleep 30"]))
         .collect();
-    let replies = Control::open(&srv).pipeline(respawns);
+    let replies = race(&srv, dir.path(), respawns);
     assert!(
         replies.iter().all(|r| matches!(r, Reply::Ok { .. })),
         "{replies:?}"
     );
-    busy.join().unwrap();
 
     // Every stale exit has been handled once a few more round trips went
     // through the actor.
     thread::sleep(QUIET);
-    for id in &ids {
-        let t = id.to_string();
-        assert_eq!(display(&srv, &t, "#{pane_dead}"), "0", "{t} marked dead");
-    }
-    // An exit reported before its pane's respawn ran is the old process's
-    // own, legitimately; none may come after the respawns.
-    let mut late = Vec::new();
-    while let Ok(ev) = sub.next(QUIET) {
-        late.push(ev);
-    }
-    for ev in &late {
-        assert!(
-            matches!(
-                ev,
-                Event::PaneExited {
-                    status: Some(7),
-                    ..
-                }
-            ),
-            "{ev:?}"
-        );
-    }
     for id in &ids {
         let t = id.to_string();
         assert_eq!(display(&srv, &t, "#{pane_dead}"), "0", "{t} marked dead");
@@ -592,6 +579,60 @@ fn respawn_ignores_the_old_processes_exit() {
         )
         .unwrap_or_else(|e| panic!("{t} is not running the new command: {e}"));
     }
+}
+
+/// Output the old process wrote, queued across `respawn-pane -k`, is not
+/// delivered as the respawned pane's `pane-output`. Each respawn is queued
+/// right before a `set @after-%N` fence: the fence's `option-changed` is
+/// emitted after the respawn ran, so any old output for that pane seen
+/// after it came from a stale event.
+#[test]
+fn respawn_ignores_the_old_processes_output() {
+    const OLD: &[u8] = b"OLD-OUTPUT-MARK";
+    let srv = TestServer::start();
+    let (ids, dir) = race_panes(&srv, |flag| {
+        format!(
+            "while [ ! -e {} ]; do sleep 0.01; done; printf OLD-OUTPUT-MARK; sleep 30",
+            flag.display()
+        )
+    });
+    let mut sub = srv.subscribe(&["pane-output", "option-changed"]).unwrap();
+    let requests = ids
+        .iter()
+        .flat_map(|id| {
+            let t = id.to_string();
+            [
+                argv(&["respawn-pane", "-k", "-t", &t, "exec sleep 30"]),
+                argv(&["set", "-g", &format!("@after-{t}"), "1"]),
+            ]
+        })
+        .collect();
+    let replies = race(&srv, dir.path(), requests);
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Ok { .. })),
+        "{replies:?}"
+    );
+
+    let mut fenced = std::collections::BTreeSet::new();
+    while let Ok(ev) = sub.next(QUIET) {
+        match ev {
+            Event::OptionChanged { name, .. } => {
+                fenced.insert(name.trim_start_matches("@after-").to_string());
+            }
+            Event::PaneOutput { pane, data } => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap();
+                let old = bytes.windows(OLD.len()).any(|w| w == OLD);
+                assert!(
+                    !(old && fenced.contains(&pane.to_string())),
+                    "{pane}: old output delivered after its respawn"
+                );
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+    assert_eq!(fenced.len(), RACE_PANES, "fences seen: {fenced:?}");
 }
 
 // --- zoom on natural removal ---------------------------------------------
@@ -622,13 +663,16 @@ fn a_pane_exiting_from_a_zoomed_window_unzooms_it() {
         "sleep 30",
     ])
     .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("go");
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
     srv.cmd(&["split-window", "-h", "-t", "z", "sleep 30"])
         .unwrap();
-    srv.cmd(&["split-window", "-h", "-t", "z", "sleep 0.5"])
+    srv.cmd(&["split-window", "-h", "-t", "z", &exit_on(&flag, 0)])
         .unwrap();
     srv.cmd(&["resize-pane", "-Z", "-t", "z:1.1"]).unwrap();
     assert_eq!(display(&srv, "z:1.1", "#{window_zoomed_flag}"), "1");
+    touch(&flag);
 
     srv.wait_for(|| panes(&srv, "z", "#{pane_id}").len() == 2, WAIT)
         .unwrap();
@@ -652,22 +696,26 @@ fn the_zoomed_pane_exiting_unzooms_its_window() {
         "sleep 30",
     ])
     .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = (dir.path().join("go1"), dir.path().join("go2"));
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
     srv.cmd(&["split-window", "-h", "-t", "z", "sleep 30"])
         .unwrap();
-    srv.cmd(&["split-window", "-h", "-t", "z", "sleep 0.5"])
+    srv.cmd(&["split-window", "-h", "-t", "z", &exit_on(&first, 0)])
         .unwrap();
     srv.cmd(&["resize-pane", "-Z", "-t", "z:1.3"]).unwrap();
     assert_eq!(display(&srv, "z:1.3", "#{pane_width}"), "80");
+    touch(&first);
     srv.wait_for(|| panes(&srv, "z", "#{pane_id}").len() == 2, WAIT)
         .unwrap();
     assert_eq!(zoom_state(&srv, "z"), ["1 40 z=0 a=0", "2 39 z=0 a=1"]);
 
     srv.cmd(&["new-window", "-t", "z", "sleep 30"]).unwrap();
-    srv.cmd(&["split-window", "-h", "-t", "z:2", "sleep 0.5"])
+    srv.cmd(&["split-window", "-h", "-t", "z:2", &exit_on(&second, 0)])
         .unwrap();
     srv.cmd(&["resize-pane", "-Z", "-t", "z:2.2"]).unwrap();
     assert_eq!(display(&srv, "z:2.2", "#{window_zoomed_flag}"), "1");
+    touch(&second);
     srv.wait_for(|| panes(&srv, "z:2", "#{pane_id}").len() == 1, WAIT)
         .unwrap();
     assert_eq!(zoom_state(&srv, "z:2"), ["1 80 z=0 a=1"]);

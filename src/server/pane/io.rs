@@ -13,7 +13,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
-use super::{Emu, PaneEvent, QueueFull, lock};
+use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::types::PaneId;
 
 /// Bytes parsed per lock hold (spec §4.8).
@@ -185,22 +185,31 @@ pub(crate) async fn reader(mut r: Reader) {
                 drained = true;
             }
         }
-        // With backpressure, like `Exited`, so a subscriber sees every byte
-        // and the output keeps its order ahead of the exit.
+        // With backpressure, like `Exited`: the actor gets every byte, in
+        // order ahead of the exit (a subscriber whose queue overflows still
+        // loses some, and is told with `events-dropped`).
         if let Some(bytes) = tapped {
-            let _ = r.to_actor.send(PaneEvent::Output(r.id, bytes)).await;
+            let event = r.event(PaneEventKind::Output(bytes));
+            let _ = r.to_actor.send(event).await;
         }
     }
     // A child that began a synchronized update and exited before its timeout
     // leaves text in the parser's sync buffer; show it before reporting exit.
     r.flush_sync();
-    let _ = r
-        .to_actor
-        .send(PaneEvent::Exited(r.id, r.generation, exit.flatten()))
-        .await;
+    let event = r.event(PaneEventKind::Exited(exit.flatten()));
+    let _ = r.to_actor.send(event).await;
 }
 
 impl Reader {
+    /// An event from this pane, stamped with this spawn's generation.
+    fn event(&self, kind: PaneEventKind) -> PaneEvent {
+        PaneEvent {
+            pane: self.id,
+            generation: self.generation,
+            kind,
+        }
+    }
+
     /// End a pending synchronized update, if any, and handle its events.
     fn flush_sync(&self) {
         let pending = {
@@ -260,11 +269,11 @@ impl Reader {
                         cell_height: 0,
                     }));
                 }
-                Event::Title(title) => self.notify(PaneEvent::Title(self.id, title)),
-                Event::ResetTitle => self.notify(PaneEvent::Title(self.id, String::new())),
+                Event::Title(title) => self.notify(PaneEventKind::Title(title)),
+                Event::ResetTitle => self.notify(PaneEventKind::Title(String::new())),
                 Event::Bell => bell = true,
                 Event::ClipboardStore(_, text) => {
-                    self.notify(PaneEvent::Clipboard(self.id, text));
+                    self.notify(PaneEventKind::Clipboard(text));
                 }
                 _ => {}
             }
@@ -272,7 +281,7 @@ impl Reader {
         // One bell per batch: a flood of BELs (a tty discarding overflow input
         // rings once per byte) must not become a flood of events.
         if bell {
-            self.notify(PaneEvent::Bell(self.id));
+            self.notify(PaneEventKind::Bell);
         }
         self.dirty.store(true, Ordering::Release);
         self.wake.notify_one();
@@ -286,7 +295,7 @@ impl Reader {
 
     /// Best effort: a full actor queue drops titles and bells rather than
     /// stalling output. Only `Exited` is sent with backpressure.
-    fn notify(&self, event: PaneEvent) {
-        let _ = self.to_actor.try_send(event);
+    fn notify(&self, kind: PaneEventKind) {
+        let _ = self.to_actor.try_send(self.event(kind));
     }
 }

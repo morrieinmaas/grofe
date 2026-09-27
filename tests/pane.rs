@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use grofe::server::pane::{PaneEvent, PaneHandle, PaneSpawn};
+use grofe::server::pane::{PaneEvent, PaneEventKind, PaneHandle, PaneSpawn};
 use grofe::types::{CaptureBound, CaptureOpts, PaneId};
 use tokio::sync::{Notify, mpsc};
 
@@ -70,7 +70,10 @@ async fn next_exit(p: &mut Pane) -> Option<i32> {
     let fut = async {
         loop {
             match p.events.recv().await {
-                Some(PaneEvent::Exited(_, _, code)) => return code,
+                Some(PaneEvent {
+                    kind: PaneEventKind::Exited(code),
+                    ..
+                }) => return code,
                 Some(_) => continue,
                 None => panic!("event channel closed without Exited"),
             }
@@ -345,8 +348,16 @@ async fn title_and_bell_reach_the_actor() {
     while title.is_none() || bells == 0 {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, p.events.recv()).await {
-            Ok(Some(PaneEvent::Title(PaneId(3), t))) => title = Some(t),
-            Ok(Some(PaneEvent::Bell(PaneId(3)))) => bells += 1,
+            Ok(Some(PaneEvent {
+                pane: PaneId(3),
+                kind: PaneEventKind::Title(t),
+                ..
+            })) => title = Some(t),
+            Ok(Some(PaneEvent {
+                pane: PaneId(3),
+                kind: PaneEventKind::Bell,
+                ..
+            })) => bells += 1,
             Ok(Some(other)) => panic!("unexpected {other:?}"),
             Ok(None) | Err(_) => panic!("title={title:?} bells={bells}"),
         }
