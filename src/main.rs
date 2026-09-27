@@ -4,6 +4,7 @@
 //! re-exec a server safely. Only `grofe __server` builds a runtime (spec
 //! §4.1).
 
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
@@ -171,7 +172,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(&e),
     };
-    match request(stream, argv) {
+    match request(stream, socket, argv) {
         Ok(Reply::Ok { out, .. }) => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(out.as_bytes());
@@ -313,13 +314,37 @@ fn wait_ready(mut pipe: File, timeout: Duration) -> Result<String, String> {
     }
 }
 
+/// The pane id to send in this request's [`ClientCtx`] (spec §4.2, §4.6).
+///
+/// `$GROFE_PANE` is only meaningful for the server that set it: from inside
+/// a pane of server A, `grofe -L other ...` or `grofe -S /x.sock ...`
+/// targets a different server B, and A's `%N` must not be sent to B, which
+/// could resolve it to an unrelated pane there (tmux avoids the same
+/// mistake by checking `$TMUX`'s socket against the server it talks to).
+/// So `grofe` (`$GROFE`) is trusted only when it identifies the same
+/// socket as `target`, compared by canonical parent directory plus file
+/// name rather than as raw strings (`paths::same_socket`), and an
+/// unparsable `grofe_pane` is ignored either way.
+fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -> Option<PaneId> {
+    let grofe = grofe?;
+    if !paths::same_socket(Path::new(grofe), target) {
+        return None;
+    }
+    grofe_pane?.parse().ok()
+}
+
 /// Sends the control hello and one request, and reads until its reply.
-fn request(stream: UnixStream, argv: &[String]) -> Result<Reply, String> {
+///
+/// `target` is the socket this request is being sent to, used to decide
+/// whether `$GROFE_PANE` applies (see [`client_pane`]).
+fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        pane: std::env::var("GROFE_PANE")
-            .ok()
-            .and_then(|p| p.parse::<PaneId>().ok()),
+        pane: client_pane(
+            std::env::var_os("GROFE").as_deref(),
+            std::env::var("GROFE_PANE").ok().as_deref(),
+            target,
+        ),
         env: std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
@@ -349,5 +374,79 @@ fn request(stream: UnixStream, argv: &[String]) -> Result<Reply, String> {
             Ok(reply) => return Ok(reply),
             Err(e) => return Err(format!("bad reply from server: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_pane_matches_the_same_socket() {
+        let socket = Path::new("/run/user/501/grofe/default.sock");
+        assert_eq!(
+            client_pane(
+                Some(OsStr::new("/run/user/501/grofe/default.sock")),
+                Some("%3"),
+                socket
+            ),
+            Some(PaneId(3))
+        );
+    }
+
+    #[test]
+    fn client_pane_matches_via_a_symlinked_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let via_link = link.join("default.sock");
+        let via_real = real_dir.join("default.sock");
+        assert_eq!(
+            client_pane(Some(via_link.as_os_str()), Some("%5"), &via_real),
+            Some(PaneId(5))
+        );
+    }
+
+    #[test]
+    fn client_pane_ignores_a_different_socket() {
+        let target = Path::new("/run/user/501/grofe/other.sock");
+        assert_eq!(
+            client_pane(
+                Some(OsStr::new("/run/user/501/grofe/default.sock")),
+                Some("%3"),
+                target
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn client_pane_is_none_when_grofe_is_unset() {
+        let target = Path::new("/run/user/501/grofe/default.sock");
+        assert_eq!(client_pane(None, Some("%3"), target), None);
+    }
+
+    #[test]
+    fn client_pane_ignores_garbage_grofe_pane() {
+        let socket = Path::new("/run/user/501/grofe/default.sock");
+        assert_eq!(
+            client_pane(
+                Some(OsStr::new("/run/user/501/grofe/default.sock")),
+                Some("garbage"),
+                socket
+            ),
+            None
+        );
+        assert_eq!(
+            client_pane(
+                Some(OsStr::new("/run/user/501/grofe/default.sock")),
+                None,
+                socket
+            ),
+            None
+        );
     }
 }

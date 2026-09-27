@@ -120,6 +120,13 @@ fn absolute_socket_path(socket: &Path) -> PathBuf {
     }
 }
 
+/// Whether `a` and `b` name the same socket: same canonical parent
+/// directory plus file name (see [`absolute_socket_path`]), not merely the
+/// same string, so `/var/...` and `/private/var/...` (macOS) compare equal.
+pub fn same_socket(a: &Path, b: &Path) -> bool {
+    absolute_socket_path(a) == absolute_socket_path(b)
+}
+
 /// FNV-1a (64-bit): a small hash that is stable across Rust/std versions
 /// (unlike `std::hash::DefaultHasher`), used only to disambiguate
 /// state/log file names for two sockets that happen to share a file stem.
@@ -392,6 +399,32 @@ mod tests {
         };
         let socket = Path::new("/tmp/test-a/run/default.sock");
         assert_ne!(log_path(&a, socket), log_path(&b, socket));
+    }
+
+    #[test]
+    fn same_socket_matches_an_identical_path() {
+        let socket = Path::new("/run/user/501/grofe/default.sock");
+        assert!(same_socket(socket, socket));
+    }
+
+    #[test]
+    fn same_socket_matches_via_a_symlinked_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let via_link = link.join("default.sock");
+        let via_real = real_dir.join("default.sock");
+        assert!(same_socket(&via_link, &via_real));
+    }
+
+    #[test]
+    fn same_socket_rejects_a_different_socket() {
+        let a = Path::new("/run/user/501/grofe/default.sock");
+        let b = Path::new("/run/user/501/grofe/other.sock");
+        assert!(!same_socket(a, b));
     }
 
     #[test]
