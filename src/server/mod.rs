@@ -85,11 +85,15 @@ impl StartOptions {
     }
 }
 
-/// Everything the actor owns. The model (T1.5a) joins it here.
+/// Everything the actor owns.
 pub struct State {
     /// This server's socket; panes get it as `GROFE`.
     pub socket: PathBuf,
     pub options: StartOptions,
+    /// Sessions, windows and panes.
+    pub model: model::Model,
+    /// The `TERM` panes get, resolved once at start.
+    pub inner_term: &'static str,
     /// Handed to `PaneHandle::spawn`: pane events reach the actor through it.
     pub pane_events: mpsc::Sender<PaneEvent>,
     /// Handed to `PaneHandle::spawn`: pane output wakes the renderer (M2).
@@ -115,23 +119,21 @@ impl State {
 /// The dispatch seam: runs one command (`argv[0]` is the verb) against the
 /// actor's state, returning the command's stdout or its error message.
 ///
-/// A stub until T1.5a replaces the body with its `dispatch` module.
+/// The work happens in [`dispatch::run`].
 pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    let _ = ctx;
-    match argv.first().map(String::as_str) {
-        Some("kill-server") => {
-            state.exit = true;
-            Ok(String::new())
-        }
-        Some(verb) => Err(format!("unknown command: {verb}")),
-        None => Err("no command given".to_string()),
-    }
+    dispatch::run(state, ctx, argv)
 }
 
-/// Handles one pane event. Filled in by T1.5a (dead panes) and T1.6
-/// (`pane-exited` / `pane-output` emission).
+/// Handles one pane event. A dead pane is removed unless `remain-on-exit`
+/// keeps it, and the removal cascades (spec §4.2). T1.6 adds the
+/// `pane-exited` / `pane-output` emission here.
 fn handle_pane_event(state: &mut State, event: PaneEvent) {
-    let _ = (state, event);
+    if let PaneEvent::Exited(pane, status) = event {
+        state.model.pane_exited(pane, status);
+        if state.model.closed() {
+            state.exit = true;
+        }
+    }
 }
 
 /// Entry point of `grofe __server`: runs the server until it exits and
@@ -265,14 +267,14 @@ async fn serve(
     let (pane_tx, pane_rx) = mpsc::channel(256);
     let state = State {
         socket,
+        model: model::Model::new(options.remain_on_exit),
+        inner_term: pane::inner_term(),
         options,
         pane_events: pane_tx,
         wake: Arc::new(Notify::new()),
         exit: false,
         socket_id,
     };
-    // T1.5a: resolve the inner TERM once here (`pane::inner_term()`) and
-    // keep it in `State`.
 
     let (msg_tx, msg_rx) = mpsc::channel(64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
