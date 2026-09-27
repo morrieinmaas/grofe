@@ -67,10 +67,7 @@ impl TestServer {
             .prefix("grofe")
             .tempdir()
             .expect("create test tempdir");
-        // Canonical (macOS: /var -> /private/var), so the socket path the
-        // server derives its log name from before bind is the same one
-        // `paths::log_path` sees afterwards, when the socket exists.
-        let root = fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+        let root = dir.path().to_path_buf();
         let home = root.join("home");
         let config_home = root.join("config");
         let state_home = root.join("state");

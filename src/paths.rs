@@ -94,11 +94,16 @@ pub fn log_path(env: &Env, socket: &Path) -> PathBuf {
     state_dir(env).join(format!("{}.log", instance_name(socket)))
 }
 
-/// Lexically absolutises `socket` against the current working directory
-/// (no filesystem access beyond reading the cwd), then canonicalises the
-/// result if it already exists, so `..`/symlinks resolve for a socket that
-/// exists but a not-yet-created one (the common case: paths are derived
-/// before the server binds) still gets a stable, purely lexical path.
+/// Resolves `socket` to a path that is stable whether or not the socket
+/// file itself exists yet. Absolutises it lexically against the current
+/// working directory (no filesystem access beyond reading the cwd, for a
+/// relative `-S`), then canonicalises its *parent* directory, which always
+/// exists by the time a server starts or a client connects even when the
+/// socket file does not, and rejoins the file name. That resolves
+/// `..`/symlinks in the parent (macOS's `/var` -> `/private/var`, any
+/// symlinked home) the same way before and after bind, so the same `-S`
+/// string always derives the same instance name. Falls back to the purely
+/// lexical path if the parent doesn't exist either.
 fn absolute_socket_path(socket: &Path) -> PathBuf {
     let absolute = if socket.is_absolute() {
         socket.to_path_buf()
@@ -107,7 +112,12 @@ fn absolute_socket_path(socket: &Path) -> PathBuf {
             .map(|cwd| cwd.join(socket))
             .unwrap_or_else(|_| socket.to_path_buf())
     };
-    std::fs::canonicalize(&absolute).unwrap_or(absolute)
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(file_name)) => std::fs::canonicalize(parent)
+            .map(|canon| canon.join(file_name))
+            .unwrap_or(absolute),
+        _ => absolute,
+    }
 }
 
 /// FNV-1a (64-bit): a small hash that is stable across Rust/std versions
@@ -342,6 +352,30 @@ mod tests {
         };
         let socket = Path::new("/proj-a/grofe.sock");
         assert_eq!(log_path(&e, socket), log_path(&e, socket));
+    }
+
+    #[test]
+    fn log_path_is_stable_across_a_symlinked_parent_before_and_after_the_socket_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let e = Env {
+            xdg_state_home: Some(tmp.path().join("state").display().to_string()),
+            ..env()
+        };
+        let socket = link.join("test.sock");
+
+        let before = log_path(&e, &socket);
+        std::fs::File::create(&socket).unwrap();
+        let after = log_path(&e, &socket);
+
+        assert_eq!(
+            before, after,
+            "log_path must not depend on the socket file itself existing"
+        );
     }
 
     #[test]
