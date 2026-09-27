@@ -78,10 +78,17 @@ grofe does not read `tmux.conf`, but it will convert one for you:
 grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 ```
 
-Options, key bindings and status formats come across; anything that cannot
-(shell commands in the status line, `if-shell`, plugins) is listed with the
-reason, so you know exactly what is left to do. Your `tmux.conf` is never
-touched, and tmux keeps working alongside grofe while you try it.
+Options, key bindings, hooks and status formats come across, including `#()`
+segments, which become cached status sources; anything that cannot (plugins
+above all) is listed with the reason, so you know exactly what is left to do.
+Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
+you try it.
+
+Once your config has moved, you can put grofe on your `PATH` under the name
+`tmux` (a symlink, since a shell alias does not reach scripts). It then sets
+`TMUX` and `TMUX_PANE` in its panes and answers the commands and formats that
+scripts and tools send, so things like `fzf --tmux` and vim-tmux-navigator keep
+working. Real tmux stays available by its full path.
 
 ## Terminals
 
@@ -93,8 +100,10 @@ older key encoding and without inline images.
 
 ## What it isn't
 
-grofe is not a drop-in replacement for tmux: it does not run tmux plugins, and
-it does not run on Windows. It is also not trying to be Zellij: no modal
+grofe is not a general reimplementation of tmux. It answers to the name `tmux`
+for everyday scripts and tools, but it does not read `tmux.conf` or run tmux
+plugins: your setup moves over once, to grofe's own config. It also does not
+run on Windows. It is also not trying to be Zellij: no modal
 interface, no WebAssembly plugins, just tmux's way of working with the rough
 edges taken off.
 
