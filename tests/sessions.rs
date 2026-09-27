@@ -70,8 +70,10 @@ fn sessions_are_created_listed_and_found() {
     let srv = TestServer::start();
     assert_eq!(srv.cmd(&["list-sessions"]).unwrap(), "");
 
-    new_session(&srv, "alpha");
+    // Created in reverse order, so a name-sorted listing (tmux's order)
+    // differs from creation/id order.
     new_session(&srv, "beta");
+    new_session(&srv, "alpha");
 
     let out = lines(&srv.cmd(&["list-sessions"]).unwrap());
     assert_eq!(out.len(), 2, "{out:?}");
@@ -294,7 +296,7 @@ fn dead_pane_stays_with_remain_on_exit() {
 fn exited_pane_closes_its_window_but_not_the_session() {
     let srv = TestServer::unstarted();
     start_without_remain(&srv, &["new-session", "-d", "-s", "a", "sleep", "30"]);
-    srv.cmd(&["new-window", "-t", "a", "sleep 1"]).unwrap();
+    srv.cmd(&["new-window", "-t", "a", "sleep 2"]).unwrap();
     assert_eq!(
         lines(&srv.cmd(&["list-windows", "-t", "a"]).unwrap()).len(),
         2
@@ -319,4 +321,35 @@ fn last_pane_exiting_closes_window_session_and_server() {
     start_without_remain(&srv, &["new-session", "-d", "-s", "a", "sleep 0.3"]);
     srv.wait_for(|| !srv.is_running(), WAIT)
         .expect("server still running after its last pane exited");
+}
+
+/// A pane's own exit can race an explicit `kill-window`/`kill-session` that
+/// removes it first: the natural `PaneEvent::Exited` that later reaches the
+/// actor for an id no longer in the model must be a no-op, not a crash or a
+/// state mismatch. This uses fast-exiting panes so the race is plausible on
+/// every run; the assertions hold regardless of which side won it.
+#[test]
+fn late_pane_exit_after_kill_is_ignored() {
+    let srv = TestServer::start();
+    new_session(&srv, "a");
+    new_session(&srv, "keep");
+
+    // kill-window races the fast pane's own exit.
+    srv.cmd(&["new-window", "-t", "a", "true"]).unwrap();
+    srv.cmd(&["kill-window", "-t", "a:2"]).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let out = lines(&srv.cmd(&["list-windows", "-t", "a"]).unwrap());
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(srv.cmd(&["has-session", "-t", "keep"]).is_ok());
+    assert!(srv.is_running());
+
+    // kill-session races the fast pane's own exit.
+    srv.cmd(&["new-session", "-d", "-s", "b", "true"]).unwrap();
+    srv.cmd(&["kill-session", "-t", "b"]).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(srv.cmd(&["has-session", "-t", "b"]).is_err());
+    assert!(srv.cmd(&["has-session", "-t", "a"]).is_ok());
+    assert!(srv.cmd(&["has-session", "-t", "keep"]).is_ok());
+    assert!(srv.is_running());
+    assert!(srv.cmd(&["list-sessions"]).is_ok());
 }

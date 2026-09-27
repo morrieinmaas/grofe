@@ -80,11 +80,13 @@ pub fn has_session(state: &mut State, ctx: &ClientCtx, c: HasSession) -> Result<
 }
 
 /// `list-sessions` in the default format; `-F` is routed to `options`.
+/// tmux sorts sessions by name, not by id.
 pub fn list_sessions(state: &State, _c: ListSessions) -> Result<String, String> {
     let model = &state.model;
-    Ok(model
-        .sessions
-        .values()
+    let mut sessions: Vec<&Session> = model.sessions.values().collect();
+    sessions.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(sessions
+        .into_iter()
         .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
         .collect())
 }

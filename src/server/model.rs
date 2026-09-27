@@ -136,8 +136,9 @@ impl Model {
         PaneId(self.next_pane - 1)
     }
 
-    /// Inserts a new session. Its windows (and their panes) must already
-    /// be in the model.
+    /// Inserts a new session with an empty window list. `new_session`
+    /// calls this before `insert_window` for the session's first window;
+    /// `insert_window` is what adds it to `session.windows`.
     pub fn insert_session(&mut self, session: Session) {
         self.had_session = true;
         self.sessions.insert(session.id, session);
@@ -418,7 +419,17 @@ impl Model {
                     .ok_or_else(|| format!("can't find pane: {id}"))?;
                 let unqualified =
                     r.session == SessionRef::Current && r.window == WindowRef::Current;
-                if !unqualified && pane.window != self.window_ref(&r.session, &r.window, ctx)? {
+                let mismatched = if unqualified {
+                    false
+                } else if r.window == WindowRef::Current {
+                    // The window part is unspecified: the pane only needs
+                    // to belong to the named session, not to that
+                    // session's *active* window.
+                    self.session_of_pane(id) != self.session_ref(&r.session, ctx)?
+                } else {
+                    pane.window != self.window_ref(&r.session, &r.window, ctx)?
+                };
+                if mismatched {
                     return Err(format!("can't find pane: {id}"));
                 }
                 Ok(id)
@@ -474,5 +485,136 @@ impl Resolve for Model {
                 Ok(self.session_of_pane(p))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio::sync::{Notify, mpsc};
+
+    use super::*;
+    use crate::server::pane::PaneSpawn;
+
+    // `session:%pane` (an explicit session, no window part) has no string
+    // form in today's target grammar (cmd/target.rs only builds
+    // `PaneRef::window: Current` for a bare, fully-unqualified `%pane`), so
+    // this drives `Resolve` directly with a hand-built `Target`, the same
+    // way cmd/target.rs's own tests drive it through a `FakeModel`.
+
+    fn spawn_pane(model: &mut Model, window: WindowId) -> PaneId {
+        let id = model.alloc_pane_id();
+        let (tx, _rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            id,
+            argv: Some(vec!["sleep".to_string(), "30".to_string()]),
+            cwd: std::env::temp_dir(),
+            env: Vec::new(),
+            cols: 80,
+            rows: 24,
+            history_limit: 1000,
+            socket: std::env::temp_dir().join("grofe-model-test.sock"),
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        model.panes.insert(
+            id,
+            Pane {
+                id,
+                uid: id.to_string(),
+                window,
+                argv: None,
+                cwd: std::env::temp_dir(),
+                resume: None,
+                dead: None,
+                cols: 80,
+                rows: 24,
+                handle,
+            },
+        );
+        id
+    }
+
+    fn add_session(model: &mut Model, name: &str, active: WindowId) -> SessionId {
+        let id = model.alloc_session_id();
+        model.insert_session(Session {
+            id,
+            name: name.to_string(),
+            windows: Vec::new(),
+            active,
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+            cols: 80,
+            rows: 24,
+        });
+        id
+    }
+
+    fn ctx() -> ClientCtx {
+        ClientCtx {
+            cwd: std::env::temp_dir(),
+            pane: None,
+            env: Vec::new(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn qualified_pane_id_checks_the_session_not_the_active_window() {
+        let mut model = Model::new(true);
+
+        // Session "a" has two windows: 1 (active) and 2 (not).
+        let w1 = model.alloc_window_id();
+        let w2 = model.alloc_window_id();
+        let p1 = spawn_pane(&mut model, w1);
+        let p2 = spawn_pane(&mut model, w2);
+        let a = add_session(&mut model, "a", w1);
+        model.insert_window(Window {
+            id: w1,
+            session: a,
+            index: 1,
+            name: "one".to_string(),
+            layout: LayoutTree::new(p1),
+            active: p1,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+        });
+        model.insert_window(Window {
+            id: w2,
+            session: a,
+            index: 2,
+            name: "two".to_string(),
+            layout: LayoutTree::new(p2),
+            active: p2,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+        });
+
+        // A second session, owning nothing of "a"'s.
+        let wb = model.alloc_window_id();
+        add_session(&mut model, "b", wb);
+
+        let ctx = ctx();
+
+        // p2 lives in a's non-active window (w2). Qualified as session "a"
+        // with the window part unspecified, it must still resolve: the
+        // check is against the session, not against a's active window.
+        let target = Target::Pane(PaneRef {
+            session: SessionRef::Name("a".to_string()),
+            window: WindowRef::Current,
+            pane: PanePart::Id(p2),
+        });
+        assert_eq!(model.resolve_pane(&target, &ctx).unwrap(), p2);
+
+        // The same pane qualified with a session that does not own it is
+        // rejected.
+        let target = Target::Pane(PaneRef {
+            session: SessionRef::Name("b".to_string()),
+            window: WindowRef::Current,
+            pane: PanePart::Id(p2),
+        });
+        let err = model.resolve_pane(&target, &ctx).unwrap_err();
+        assert!(err.contains(&format!("can't find pane: {p2}")), "{err}");
     }
 }
