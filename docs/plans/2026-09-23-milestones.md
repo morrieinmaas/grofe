@@ -17,7 +17,7 @@ parallel worktrees without conflicts.
 | **M2** | Attach client, renderer, input, key tables, status line | Acceptance suite: attach, split, Neovim/fzf/less, detach, reattach at a different size. Owner hands-on session | 2 weeks |
 | **M3** | Config, mouse, clipboard, scrollback view, prompt, key bindings, kitty graphics placeholders | **Dogfood start.** Full acceptance suite green in CI; owner daily-drives for a week in Ghostty and WezTerm, tmux as fallback | 1.5 weeks + dogfood week |
 | **M3.5** | Minimal `grofe import-tmux` (spec §5.5) | A fixture tmux.conf converts to golden TOML that loads in grofe with no errors; every unconvertible line is reported | ~3 days, during the dogfood week |
-| **M3.6** | tmux compatibility for the owner's workflow (spec D1, D12, §4.5): the `tmux` name and server identity, CLI/target/format/option breadth, cached `#()` status sources, hooks and server environment, popups and menus (moved from M5), multi-row status, all reached through a table-driven tmux front end (`src/compat/`), the owner's daily config ported (canopy, `user.conf`, navigator), compat suite | **Alias day.** The compat suite is green in CI against goldens recorded from tmux 3.7b; **[owner]** `tmux` on PATH resolves to grofe with the ported config for a week of normal work, real tmux kept as `env -u TMUX <absolute path>` as the fallback | ~7 weeks |
+| **M3.6** | tmux compatibility for the owner's workflow (spec D1, D12, §4.5): the `tmux` name and server identity, CLI/target/format/option breadth, cached `#()` status sources, hooks and server environment, popups and menus (moved from M5), multi-row status, all reached through a table-driven tmux front end (`src/compat/`), the owner's daily config ported (canopy, `user.conf`, navigator), compat suite | **Alias day.** The compat suite is green in CI against goldens recorded from tmux 3.7b; **[owner]** `tmux` on PATH resolves to grofe with the ported config for a week of normal work, real tmux kept as `env -u TMUX <absolute path>` as the fallback | ~6.5 weeks |
 | **M3.7** | Port the remaining TPM plugins once to grofe-native equivalents | Key parity passes for every table; each plugin row's acceptance passes; **[owner]** each daily binding used once | ~1.5 weeks alongside M4; closes with M5 (TP.5 yank and TP.9's copy-mode rows need copy mode) |
 | **M4** | Native persistence and pane identity | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it. Then across a real reboot (owner-verified) | 1 week |
 | **M5** | Copy mode, buffers, `copy-pipe*` (popups and menus moved to M3.6) | Scope doc approved first; vi selection over wrapped lines, regex search, OSC 52 copy, `copy-pipe-and-cancel`; then the yank port (TP.5). **No-difference parity** for the owner's workflow | 2 weeks |
@@ -53,20 +53,20 @@ runs alongside the dogfood week; it does not move dogfood start.
 
 **Critical path to alias day:** the dogfood-start path above, then (with TC.0
 and TC.0b already done during M1 to M3) the M3.6 stub edit → TC.2 → TC.2b →
-TC.11 → TC.10 → FE.4 → FE.2 → TP.0 → TP.1 → TC.13, about 28 working days with
-review cycles; the serial front-end lane (FE.1, FE.3, FE.4, FE.2 in
-`src/compat/tmux.rs`) is what sets it.
+TC.11 → TC.10 → FE.4 → TP.0 → TP.1 → TC.13, about 25 working days with
+review cycles. FE.1 lands first; FE.2, FE.3 and FE.4 then run in parallel, one
+file each under `src/compat/tmux/`.
 **Estimate, honestly, assuming at least three parallel implementer lanes**
-(native Wave B has five tasks that can start at once, beside the FE lane):
-alias day about **week 15** from the start (7 to dogfood start, the dogfood
-week with M3.5, about 7 for M3.6: 5.6 weeks of path work plus 30%); M4
-alongside M3.7's parallel tasks ends about week 16.5; M5, which also closes
-M3.7 through TP.5 and TP.9's copy-mode rows, ends about week **19**, and with
+(native Wave B has five tasks that can start at once, beside the FE tasks):
+alias day about **week 14.5** from the start (7 to dogfood start, the dogfood
+week with M3.5, about 6.5 for M3.6: 5 weeks of path work plus 30%); M4
+alongside M3.7's parallel tasks ends about week 16; M5, which also closes
+M3.7 through TP.5 and TP.9's copy-mode rows, ends about week **18.5**, and with
 it no-difference parity. Against the plan before the compat decision (M5 done
-at about week 11), that is about **8 weeks more**: M3.6 about 7, M3.7 about 1.5
+at about week 11), that is about **7.5 weeks more**: M3.6 about 6.5, M3.7 about 1.5
 of which one overlaps M4, and TP.5 inside M5. With one lane, M3.6 alone is
 about 66 task-days, roughly 17 weeks with the buffer, and alias day moves to
-about week 25.
+about week 25 (splitting the front end saves nothing in one lane).
 
 M0 to M3.7 are planned to task level. M4 onward are planned at milestone level and
 broken into tasks when the previous milestone closes, shaped by dogfooding.
@@ -160,8 +160,12 @@ src/
   client.rs          # M2: attach client + capability probe
   compat/
     mod.rs           # M3.6: argv0, identity, dialect, TMUX value, compat-miss log (TC.1)
-    tmux.rs          # M3.6: the tmux front end's mapping table and dispatcher,
-                     #   tmux output formats, error texts, option names (FE.*)
+    tmux/
+      mod.rs         # M3.6: table schema, dispatcher, area registration, aliases and
+                     #   prefix, global flags, -V, error texts, option names (FE.1)
+      formats.rs     # M3.6: format rewriting, #() to sources, option, status and hook rows (FE.3)
+      bindings.rs    # M3.6: if-shell, command-alias, popup and menu flags, list-keys (FE.4)
+      structure.rs   # M3.6: structure and client verbs, layout codec, list-* output (FE.2)
   config/
     mod.rs           # M3
     provenance.rs
@@ -448,11 +452,13 @@ points at grofe (spec D12).
   grows only for these features, with each verb shaped like tmux's where grofe
   has the same concept and no better form. Native acceptance runs through
   grofe's own CLI.
-- **Front-end tasks (FE.*)** own `src/compat/tmux.rs`: the mapping table, its
+- **Front-end tasks (FE.*)** own `src/compat/tmux/`: the mapping table, its
   rows' cosmetic or semantic marks, tmux's output formats, error texts and
-  timing checks, and the goldens from real tmux 3.7b. Each area's rows land
-  after the native features they map to. The table is one file, so the FE
-  tasks run in one lane, one after another.
+  timing checks, and the goldens from real tmux 3.7b. FE.1 lands the schema
+  and the dispatcher that the area files register rows into (the M2 hook
+  registration pattern); FE.2, FE.3 and FE.4 then run in parallel, each owning
+  one area file and its golden tests. Each area's rows land after the native
+  features they map to.
 
 **Before Wave A starts:**
 
@@ -463,8 +469,9 @@ points at grofe (spec D12).
   `not implemented: <verb>`, placed in the file of the task that owns it:
   `dispatch/hooks.rs` (TC.5), `dispatch/structure.rs` (TC.8),
   `dispatch/client.rs` (TC.9), `dispatch/menu.rs` (TC.7), `dispatch/popup.rs`
-  (TC.6), `dispatch/bindings.rs` (TC.10); and `src/compat/tmux.rs` with an
-  empty table and a dispatcher stub that rejects every tmux form. After the
+  (TC.6), `dispatch/bindings.rs` (TC.10); and `src/compat/tmux/` with
+  `mod.rs` holding a dispatcher stub that rejects every tmux form, and empty
+  `formats.rs`, `bindings.rs` and `structure.rs`. After the
   stub edit no M3.6 task edits `dispatch/mod.rs`. New flags on verbs that
   already exist are handled in those verbs' existing handler files, by the
   task named in their row.
@@ -528,8 +535,11 @@ lands before TC.9 and TC.10).**
 | **TC.10** Conditional, bindings and mouse | grofe's conditional (format form and shell form; shell form off the actor, background form not waiting) in `dispatch/bindings.rs`; spec §4.5's built-in mouse model: bindable mouse keys acting on the pane or status range under the pointer, status range clicks setting `mouse_status_range`, border drag resize, a menu from a mouse key opening at the pointer; binding notes; custom tables | `src/server/dispatch/bindings.rs`, additions to `src/server/input.rs` and `src/server/mouse.rs` (T3.2 merged), `tests/acceptance/tc_10.rs` | TC.2, TC.3, TC.7, TC.11 | A root C-h binding whose format condition matches `nvim` sends C-h into nvim and moves focus from a shell; a shell-form condition that sleeps 2 s does not delay a second client; a `MouseDown1Status` binding conditioned on `#{m:*net*,#{mouse_status_range}}` fires only on the `net` range; dragging a border resizes both panes; `DoubleClick1Pane` fires; a `MouseDown3Pane` binding that opens a menu opens it at the pointer cell |
 | **TC.6** Popups | `display-popup` with every flag in spec §4.5's overlays row, as an overlay plus input hook (T2.5a); the popup's command runs in its own pty with the environment tmux gives a popup; closes on exit when asked, otherwise on a key; nested attach from a popup (spec §4.6) | `src/server/popup.rs`, `src/server/dispatch/popup.rs`, one registration line in `src/server/mod.rs`, `tests/acceptance/tc_6.rs` | TC.1, TC.2, TC.5 | A popup at 80% by 60% with a rounded border and title runs in its `-d` directory; `-c <client>` opens on that client only; inside a popup, attaching another session shows it, and detaching returns to the popup's caller; a hidden environment variable reaches the popup as TC.5 defines |
 
-**Front-end lane (FE.*, one after another, since all own `src/compat/tmux.rs`;
-each starts when its Depends are merged).** Every row an FE task adds carries
+**Front-end tasks (FE.1 first; then FE.2, FE.3 and FE.4 in parallel, each
+starting when its Depends are merged; merge order FE.1, FE.2, FE.3, FE.4).**
+FE.1 registers each area file's rows in `src/compat/tmux/mod.rs` up front
+(each area exposes one row-set function, empty until its task fills it), so
+no later FE task edits `mod.rs`. Every row an FE task adds carries
 its mapping kind, its cosmetic or semantic marks, and a golden recorded with
 TC.0b into `tests/fixtures/compat/golden/<task>/`. Every FE task's acceptance
 also includes: each of its rows' goldens matches; a cosmetic flag it marks is
@@ -538,10 +548,10 @@ with tmux's error text and one `compat-miss.log` line.
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **FE.1** Front-end core | The table's schema (tmux form, mapping kind, grofe target, per-flag cosmetic or semantic, milestone, golden id) and dispatcher (tmux argv to one or more native `Command`s, or a tmux error); tmux 3.7b's alias table (from TC.0b's `list-commands` golden) and prefix rule; bare `tmux` as `new-session`; global `-L -S -f -V -2 -u` and `-V`'s output; targets `=name`, `=name:window` (to `SessionRef::Exact`, with its resolution arm) and bare `=` refused; tmux's error texts; the tmux option name table (moved from `import_tmux.rs`; contract edit: FE.1 co-owns `import_tmux.rs` for the move) with `set`/`show` flag merges; pass-through rows for every M1 to M3 verb whose tmux form is identical; `display -p` in the middle of a `\;` chain | `src/compat/tmux.rs`, `SessionRef::Exact` in `src/cmd/target.rs` and its arm in `src/server/model.rs`, the table move in `src/import_tmux.rs`, `tests/compat_frontend.rs`, `tests/fixtures/compat/golden/fe_1/` | TC.1, TC.2, TC.0b | Through a `tmux` symlink: `tmux -V` prints `tmux 3.7b` and `grofe -V` grofe's version; every alias in the golden resolves, `tmux a` attaches, and an ambiguous prefix errors as the golden; `=x` never matches `xy`, `=x:2` is window 2 of exactly `x`, `-t =` errors naming the mouse target; `set -gw`, `show -gqv` and `set -p -t "$TMUX_PANE" @a 1 \; set -p -t "$TMUX_PANE" @b 2` behave as their goldens; `display -p` mid-chain returns what the golden returns; every argv in `corpus.txt` whose verb is from M1 to M3 translates; TI.1's goldens unchanged |
-| **FE.3** Formats, options, status, hooks | Rows for: tmux format strings rewritten into grofe formats (short forms `#S #I #W #h #P`, `##` and `##{`, `#(cmd)` registered as an inline source through TC.4 and replaced by `#{@src-<hash>}`); tmux option names for status and window-status options, `status-format[N]`, `command-alias[N]`, `-ga`/`-as` onto TC.2b's lists; `show-options` output format; the twelve tmux hook names onto grofe events (TC.5), with `set-hook -g/-gu` and `show-hooks`, and hook timing relative to the command; `set-environment`/`show-environment` flags | `src/compat/tmux.rs` rows, `tests/compat_frontend_fe3.rs`, `tests/fixtures/compat/golden/fe_3/` | FE.1, TC.2b, TC.3, TC.4, TC.5, TC.11 | Every inventory format string, expanded after rewriting against a fixed scripted model, equals tmux 3.7b's expansion (goldens, normalized); for the canopy fixture theme, the rendered status (pty-attached client on both sides) matches tmux's cell for cell with source values fixed; `show -g` output equals its golden; each hook name fires exactly once per triggering action, in the same order relative to its command's reply as the golden; `show-environment -g` equals its golden |
-| **FE.4** Bindings and overlays | Rows for: `if-shell` and `if -F` onto grofe's conditional (TC.10); `command-alias` onto grofe aliases (TC.7); `display-popup` flags (border style and title cosmetic where unsupported), `display-menu`, `display-panes`, `confirm-before`, `command-prompt -I -p -k -T`, `list-keys -1N`; `list-keys` output format; mouse argv forms (`send -M`, `resize-pane -M`, `copy-mode -M`, `display-menu -x M`) marked semantic | `src/compat/tmux.rs` rows, `tests/compat_frontend_fe4.rs`, `tests/fixtures/compat/golden/fe_4/` | FE.3, TC.6, TC.7, TC.10 | `bind -n C-h if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'` translates and behaves as in tmux; `fzf --tmux` from a pane opens in a popup and its selection reaches the caller (skipped when the installed fzf lacks `--tmux`); `env` inside a popup matches the golden; `display-popup -b double` on a grofe without that style is ignored with a log line; `list-keys -T prefix` output equals its golden; `send -M` fails with tmux's text and a log line |
-| **FE.2** Structure, client and listing | Rows for: the TC.8 and TC.9 verbs' tmux forms; tmux layout strings (checksum form) read by `select-layout` and written by `#{window_layout}`, through TC.8's geometry export and import; `new-session -A`, `switch-client -c/-T`, `detach-client -s`, `info` as `show-messages -JT`; `list-*` default output formats and `-f` filters | `src/compat/tmux.rs` rows, `tests/compat_frontend_fe2.rs`, `tests/fixtures/compat/golden/fe_2/` | FE.4, TC.8, TC.9 | After the same scripted splits at 200x50, `#{window_layout}` equals tmux 3.7b's golden byte for byte; `select-layout '<golden string>'` reproduces the golden geometry; join, swap, break, rotate, move and `select-layout -E` each match their golden `list-panes -a -F`; `list-sessions`, `list-windows -a` and `list-panes -a` with no `-F` equal their goldens; `has-session -t =x` exit statuses equal tmux's; `info` exits 0 with a server and 1 without |
+| **FE.1** Front-end core | The table's schema (tmux form, mapping kind, grofe target, per-flag cosmetic or semantic, milestone, golden id) and dispatcher (tmux argv to one or more native `Command`s, or a tmux error); tmux 3.7b's alias table (from TC.0b's `list-commands` golden) and prefix rule; bare `tmux` as `new-session`; global `-L -S -f -V -2 -u` and `-V`'s output; targets `=name`, `=name:window` (to `SessionRef::Exact`, with its resolution arm) and bare `=` refused; tmux's error texts; the tmux option name table (moved from `import_tmux.rs`; contract edit: FE.1 co-owns `import_tmux.rs` for the move) with `set`/`show` flag merges; pass-through rows for every M1 to M3 verb whose tmux form is identical; `display -p` in the middle of a `\;` chain | `src/compat/tmux/mod.rs` (schema, dispatcher, area registration), `SessionRef::Exact` in `src/cmd/target.rs` and its arm in `src/server/model.rs`, the table move in `src/import_tmux.rs`, `tests/compat_frontend.rs`, `tests/fixtures/compat/golden/fe_1/` | TC.1, TC.2, TC.0b | Through a `tmux` symlink: `tmux -V` prints `tmux 3.7b` and `grofe -V` grofe's version; every alias in the golden resolves, `tmux a` attaches, and an ambiguous prefix errors as the golden; `=x` never matches `xy`, `=x:2` is window 2 of exactly `x`, `-t =` errors naming the mouse target; `set -gw`, `show -gqv` and `set -p -t "$TMUX_PANE" @a 1 \; set -p -t "$TMUX_PANE" @b 2` behave as their goldens; `display -p` mid-chain returns what the golden returns; every argv in `corpus.txt` whose verb is from M1 to M3 translates; TI.1's goldens unchanged |
+| **FE.2** Structure, client and listing | Rows for: the TC.8 and TC.9 verbs' tmux forms; tmux layout strings (checksum form) read by `select-layout` and written by `#{window_layout}`, through TC.8's geometry export and import; `new-session -A`, `switch-client -c/-T`, `detach-client -s`, `info` as `show-messages -JT`; `list-*` default output formats and `-f` filters | `src/compat/tmux/structure.rs`, `tests/compat_frontend_fe2.rs`, `tests/fixtures/compat/golden/fe_2/` | FE.1, TC.8, TC.9 | After the same scripted splits at 200x50, `#{window_layout}` equals tmux 3.7b's golden byte for byte; `select-layout '<golden string>'` reproduces the golden geometry; join, swap, break, rotate, move and `select-layout -E` each match their golden `list-panes -a -F`; `list-sessions`, `list-windows -a` and `list-panes -a` with no `-F` equal their goldens; `has-session -t =x` exit statuses equal tmux's; `info` exits 0 with a server and 1 without |
+| **FE.3** Formats, options, status, hooks | Rows for: tmux format strings rewritten into grofe formats (short forms `#S #I #W #h #P`, `##` and `##{`, `#(cmd)` registered as an inline source through TC.4 and replaced by `#{@src-<hash>}`); tmux option names for status and window-status options, `status-format[N]`, `command-alias[N]`, `-ga`/`-as` onto TC.2b's lists; `show-options` output format; the twelve tmux hook names onto grofe events (TC.5), with `set-hook -g/-gu` and `show-hooks`, and hook timing relative to the command; `set-environment`/`show-environment` flags | `src/compat/tmux/formats.rs`, `tests/compat_frontend_fe3.rs`, `tests/fixtures/compat/golden/fe_3/` | FE.1, TC.2b, TC.3, TC.4, TC.5, TC.11 | Every inventory format string, expanded after rewriting against a fixed scripted model, equals tmux 3.7b's expansion (goldens, normalized); for the canopy fixture theme, the rendered status (pty-attached client on both sides) matches tmux's cell for cell with source values fixed; `show -g` output equals its golden; each hook name fires exactly once per triggering action, in the same order relative to its command's reply as the golden; `show-environment -g` equals its golden |
+| **FE.4** Bindings and overlays | Rows for: `if-shell` and `if -F` onto grofe's conditional (TC.10); `command-alias` onto grofe aliases (TC.7); `display-popup` flags (border style and title cosmetic where unsupported), `display-menu`, `display-panes`, `confirm-before`, `command-prompt -I -p -k -T`, `list-keys -1N`; `list-keys` output format; mouse argv forms (`send -M`, `resize-pane -M`, `copy-mode -M`, `display-menu -x M`) marked semantic | `src/compat/tmux/bindings.rs`, `tests/compat_frontend_fe4.rs`, `tests/fixtures/compat/golden/fe_4/` | FE.1, TC.6, TC.7, TC.10 | `bind -n C-h if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'` translates and behaves as in tmux; `fzf --tmux` from a pane opens in a popup and its selection reaches the caller (skipped when the installed fzf lacks `--tmux`); `env` inside a popup matches the golden; `display-popup -b double` on a grofe without that style is ignored with a log line; `list-keys -T prefix` output equals its golden; `send -M` fails with tmux's text and a log line |
 
 **Wave C: the owner's daily config (after Wave B; TP.0 first, then TP.1 and
 TP.2 in parallel).** Moved from M3.7 so alias day runs the owner's ported
@@ -550,7 +560,7 @@ there with their own bats tests, and each has a grofe-side check.
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **TP.0** import-tmux learns M3.6 | Spec §5.5's "with M3.6" list: `#()` to status sources, `if-shell`, `set-hook`, `set-environment`, `command-alias`, custom tables, mouse bindings, `display-popup`/`display-menu` bindings, `status 2` rows; command strings in bindings and hooks translated through the front end's table, so the converter and the live front end share one mapping | `src/import_tmux.rs`, `tests/fixtures/import-tmux/` | all of Wave B, FE.2 | On the canopy-style fixture the report shrinks to plugin and TPM lines and spec §4.5 out-of-scope items; the output loads with `show-config --file`; goldens updated in the same change |
+| **TP.0** import-tmux learns M3.6 | Spec §5.5's "with M3.6" list: `#()` to status sources, `if-shell`, `set-hook`, `set-environment`, `command-alias`, custom tables, mouse bindings, `display-popup`/`display-menu` bindings, `status 2` rows; command strings in bindings and hooks translated through the front end's table, so the converter and the live front end share one mapping | `src/import_tmux.rs`, `tests/fixtures/import-tmux/` | all of Wave B, FE.2, FE.3, FE.4 | On the canopy-style fixture the report shrinks to plugin and TPM lines and spec §4.5 out-of-scope items; the output loads with `show-config --file`; goldens updated in the same change |
 | **TP.1** canopy core and the owner's user config | canopy's conf.d `00-core`, `05-caps`, `10-keys` (from `keys.tsv`), `20-status`, `30-plugins`, and athome's `user.conf`, drafted with TP.0: canopy's generator emits `conf.d/NN-canopy-*.toml` (bindings with `name`, `desc`, `group`, `repeat`); two status rows at the top with pills and themes as options; canopy-status, pet, network and battery as named status sources; `user.conf` (including `B g G M N P T W K ?`) becomes athome's `user.toml`; `canopy validate` becomes `show-config --file` (spec §7.1) | canopy's grofe backend and generator; athome `dot_config/grofe/` | TP.0 | `grofe show-config --file` on the generated tree loads with no errors; the rendered status matches tmux's rendering of the same theme cell for cell (sources set to fixed strings); every binding in canopy's `keys.tsv` and the owner's `user.conf` has a grofe binding (a subset of TP.9's check, run here) |
 | **TP.2** vim-tmux-navigator | root `C-h/j/k/l/C-\` generated into canopy's `conf.d/NN-canopy-nav.toml` as `if -F` on `#{pane_current_argv}` (matching `nvim`, `vim`, `fzf` and the owner's list), replacing the plugin's `if-shell` plus `ps` per keypress; Neovim's side unchanged (it calls `tmux -S <$TMUX socket> select-pane`) | canopy's nav fragment and its generator; `tests/acceptance/tp_2.rs` in grofe | TC.10 | C-h in a shell moves focus left; in nvim it reaches nvim, also when nvim runs under a wrapper whose comm differs; nvim at its left edge moves focus through its own `tmux` call; no move while zoomed, as the plugin's default; zero processes spawned per keypress (counted) |
 
@@ -558,16 +568,14 @@ there with their own bats tests, and each has a grofe-side check.
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **TC.13** Compat acceptance suite | Spec §9's compat bullet, using TC.0b's recorder, normalizations and defaults fixture on both sides; the suite runs every scenario with `tmux` on the temp `PATH` pointing at grofe and the ported config from Wave C loaded. Scenarios: canopy `bin/*` (the canopy-agent hook path, canopy-status), `tsess`, `cockpit`, `fzf --tmux` (through the acceptance harness), vim-tmux-navigator's `tmux` calls from a headless Neovim, a smug-style start (`has-session`, `new -d`, `new-window`, `split-window`, `select-layout main-vertical`, `send-keys`), and a replay of every corpus argv through the front end. canopy and athome are found through `GROFE_COMPAT_CANOPY` and `GROFE_COMPAT_ATHOME` (skipped loudly when unset); CI checks both out at pinned SHAs in a `compat` job. Where tmux is not deterministic, the scenario asserts structure instead, and the file says so per scenario | `tests/compat/scenarios/`, `tests/fixtures/compat/golden/tc_13/`, the `compat` job in `.github/workflows/` | Waves A to C, the FE lane | Every scenario's normalized output is byte-identical to its golden; the corpus replay gives no `unknown` or `not implemented` error and leaves `compat-miss.log` empty; `command -v tmux` inside the suite resolves to the grofe symlink and `tmux -V` prints the compat level; editing one golden turns the suite red; the sockets under the user's real tmux and grofe directories are identical before and after a run |
+| **TC.13** Compat acceptance suite | Spec §9's compat bullet, using TC.0b's recorder, normalizations and defaults fixture on both sides; the suite runs every scenario with `tmux` on the temp `PATH` pointing at grofe and the ported config from Wave C loaded. Scenarios: canopy `bin/*` (the canopy-agent hook path, canopy-status), `tsess`, `cockpit`, `fzf --tmux` (through the acceptance harness), vim-tmux-navigator's `tmux` calls from a headless Neovim, a smug-style start (`has-session`, `new -d`, `new-window`, `split-window`, `select-layout main-vertical`, `send-keys`), and a replay of every corpus argv through the front end. canopy and athome are found through `GROFE_COMPAT_CANOPY` and `GROFE_COMPAT_ATHOME` (skipped loudly when unset); CI checks both out at pinned SHAs in a `compat` job. Where tmux is not deterministic, the scenario asserts structure instead, and the file says so per scenario | `tests/compat/scenarios/`, `tests/fixtures/compat/golden/tc_13/`, the `compat` job in `.github/workflows/` | Waves A to C, the FE tasks | Every scenario's normalized output is byte-identical to its golden; the corpus replay gives no `unknown` or `not implemented` error and leaves `compat-miss.log` empty; `command -v tmux` inside the suite resolves to the grofe symlink and `tmux -V` prints the compat level; editing one golden turns the suite red; the sockets under the user's real tmux and grofe directories are identical before and after a run |
 
 **Critical path inside M3.6** (review cycles included): stub edit → TC.2 (3 d)
-→ TC.2b (2 d) → TC.11 (3 d) → TC.10 (3 d) → FE.4 (3 d) → FE.2 (3 d) → TP.0
-(3 d) → TP.1 (4 d) → TC.13 (4 d), about 28 working days. The FE lane is the binding
-constraint: FE.1 (4 d) starts after TC.2, FE.3 (3 d) waits for TC.11, FE.4
-(3 d) for TC.10, FE.2 for TC.9, so the lane runs from day 3 to day 17 with
-one idle day. Splitting the table across files would let FE tasks run in
-parallel and save about 3 days, but the table stays in one file, as the owner
-decided. TC.0 and TC.0b run before the stub edit, during M1 to M3.
+→ TC.2b (2 d) → TC.11 (3 d) → TC.10 (3 d) → FE.4 (3 d) → TP.0 (3 d) → TP.1
+(4 d) → TC.13 (4 d), about 25 working days. FE.1 (4 d) runs from day 3 to 7,
+after TC.2; FE.3 (TC.11, day 8 to 11) and FE.2 (TC.9, day 11 to 14) finish
+inside FE.4's window (TC.10, day 11 to 14), so the three area files cost no
+more than the slowest of them. The one-file lane this replaces took 28 days. TC.0 and TC.0b run before the stub edit, during M1 to M3.
 
 **Exit gate (alias day):** reviewer runs the compat suite on both OSes from a
 clean clone; CI `compat` job green; **[owner]** puts the `tmux` symlink first
