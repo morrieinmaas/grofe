@@ -14,7 +14,7 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 crossterm = "0.29.0"
 futures-util = { version = "0.3.34", features = ["sink"] }
-nix = { version = "0.31.3", features = ["term", "process", "signal", "fs", "ioctl", "poll"] }
+nix = { version = "0.31.3", features = ["user", "term", "process", "signal", "fs", "ioctl", "poll"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"
