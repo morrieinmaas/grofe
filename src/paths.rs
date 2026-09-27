@@ -13,7 +13,7 @@
 //! [`Env::from_process`] is the one impure entry point, for real callers.
 
 use std::io;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 /// The env values path derivation reads, gathered up front so the
@@ -41,15 +41,8 @@ impl Env {
 }
 
 /// The real effective uid.
-///
-/// No `libc` crate dependency: this is one syscall with no preconditions,
-/// and `uid_t` is a 32-bit unsigned int on every platform grofe targets.
 fn current_uid() -> u32 {
-    unsafe extern "C" {
-        fn geteuid() -> u32;
-    }
-    // SAFETY: geteuid(2) takes no arguments and cannot fail.
-    unsafe { geteuid() }
+    nix::unistd::geteuid().as_raw()
 }
 
 /// An env value, treated as absent when unset *or* empty (XDG basedir
@@ -101,27 +94,95 @@ pub fn log_path(env: &Env, socket: &Path) -> PathBuf {
     state_dir(env).join(format!("{}.log", instance_name(socket)))
 }
 
-/// The socket's file stem, used to name its state and log files.
-///
-// ponytail: two different `-S` paths that share a file stem (e.g. run from
-// two different directories) collide under the same `XDG_STATE_HOME`. Real
-// usage names instances via `-L`, and tests get a fresh `XDG_STATE_HOME`
-// per run, so this ceiling is unreached in practice.
-fn instance_name(socket: &Path) -> &str {
-    socket
+/// Lexically absolutises `socket` against the current working directory
+/// (no filesystem access beyond reading the cwd), then canonicalises the
+/// result if it already exists, so `..`/symlinks resolve for a socket that
+/// exists but a not-yet-created one (the common case: paths are derived
+/// before the server binds) still gets a stable, purely lexical path.
+fn absolute_socket_path(socket: &Path) -> PathBuf {
+    let absolute = if socket.is_absolute() {
+        socket.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(socket))
+            .unwrap_or_else(|_| socket.to_path_buf())
+    };
+    std::fs::canonicalize(&absolute).unwrap_or(absolute)
+}
+
+/// FNV-1a (64-bit): a small hash that is stable across Rust/std versions
+/// (unlike `std::hash::DefaultHasher`), used only to disambiguate
+/// state/log file names for two sockets that happen to share a file stem.
+/// Not used for anything security-sensitive.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+/// A name for `socket`'s state/log files: its file stem, suffixed with a
+/// short stable hash of its absolute path so two `-S` sockets that happen
+/// to share a stem (e.g. a per-project `grofe.sock`) never collide, and
+/// the same socket always derives the same name.
+fn instance_name(socket: &Path) -> String {
+    let stem = socket
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("default")
+        .unwrap_or("default");
+    let hash = fnv1a64(absolute_socket_path(socket).as_os_str().as_encoded_bytes());
+    format!("{stem}-{:08x}", hash as u32)
 }
 
 /// Creates `path` (and any missing parents) with permissions restricted to
-/// the owner, matching spec §4.1's `0700` directories. A no-op if `path`
-/// already exists.
+/// the owner, matching spec §4.1's `0700` directories.
+///
+/// `DirBuilder::create` with `recursive(true)` is a no-op if `path` already
+/// exists, so it alone would silently accept a directory (or symlink)
+/// another user pre-created in a shared `/tmp` fallback, loose or with the
+/// wrong owner (the tmux CVE-2012-1180 class of attack). So after
+/// creating it, this `lstat`s `path` itself, without following a trailing
+/// symlink, and rejects it unless it is a plain directory, owned by us,
+/// with no group/other permission bits set.
 pub fn ensure_private_dir(path: &Path) -> io::Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(path)
+        .create(path)?;
+
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(io::Error::other(format!(
+            "{} is a symlink, refusing to use it",
+            path.display()
+        )));
+    }
+    if !meta.is_dir() {
+        return Err(io::Error::other(format!(
+            "{} is not a directory",
+            path.display()
+        )));
+    }
+    let uid = current_uid();
+    if meta.uid() != uid {
+        return Err(io::Error::other(format!(
+            "{} is owned by uid {}, not us (uid {uid})",
+            path.display(),
+            meta.uid()
+        )));
+    }
+    if meta.mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!(
+            "{} has group/other permissions ({:o}), refusing to use it",
+            path.display(),
+            meta.mode() & 0o777
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -241,10 +302,46 @@ mod tests {
             ..env()
         };
         let socket = Path::new("/custom/other.sock");
-        assert_eq!(
-            log_path(&e, socket),
-            PathBuf::from("/home/u/.state/grofe/other.log")
+        let path = log_path(&e, socket);
+        assert_eq!(path.parent(), Some(Path::new("/home/u/.state/grofe")));
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("log"));
+        assert!(
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .starts_with("other-"),
+            "expected a stem-derived name, got {path:?}"
         );
+    }
+
+    #[test]
+    fn log_path_differs_for_two_sockets_sharing_a_stem_in_different_dirs() {
+        let e = Env {
+            xdg_state_home: Some("/home/u/.state".to_string()),
+            ..env()
+        };
+        let a = log_path(&e, Path::new("/proj-a/grofe.sock"));
+        let b = log_path(&e, Path::new("/proj-b/grofe.sock"));
+        assert_ne!(a, b);
+        for path in [&a, &b] {
+            assert!(
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .starts_with("grofe-"),
+                "expected a stem-derived name, got {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_path_is_deterministic_for_the_same_socket() {
+        let e = Env {
+            xdg_state_home: Some("/home/u/.state".to_string()),
+            ..env()
+        };
+        let socket = Path::new("/proj-a/grofe.sock");
+        assert_eq!(log_path(&e, socket), log_path(&e, socket));
     }
 
     #[test]
@@ -276,5 +373,28 @@ mod tests {
 
         // Calling it again on an existing directory is fine.
         ensure_private_dir(&target).unwrap();
+    }
+
+    #[test]
+    fn ensure_private_dir_rejects_existing_loose_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("loose");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(ensure_private_dir(&target).is_err());
+    }
+
+    #[test]
+    fn ensure_private_dir_rejects_a_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        assert!(ensure_private_dir(&link).is_err());
     }
 }
