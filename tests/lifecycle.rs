@@ -195,35 +195,62 @@ fn subscribe_reports_the_servers_answer() {
     assert!(srv.subscribe(&["pane-exited"]).is_err());
 }
 
+/// Runs the CLI without `-S` (the harness always passes one), so the socket
+/// lands in grofe's own directory under the test's `XDG_RUNTIME_DIR`.
+fn run_without_s(srv: &TestServer, args: &[&str]) -> common::CmdOutput {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_grofe"));
+    cmd.args(args)
+        .current_dir(&srv.home)
+        .env_remove("GROFE")
+        .env_remove("GROFE_PANE")
+        .env("HOME", &srv.home)
+        .env("XDG_STATE_HOME", &srv.state_home)
+        .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
+    common::run_bounded(cmd, common::CMD_TIMEOUT)
+}
+
 #[test]
 fn default_socket_dir_is_created_private() {
     use std::os::unix::fs::PermissionsExt;
 
-    // `-L` uses grofe's own directory under XDG_RUNTIME_DIR, which the CLI
-    // creates (and verifies) 0700. The harness always passes `-S`, so this
-    // test builds its command by hand and cleans up its own server.
+    // This test cleans up its own server: TestServer only knows its `-S`.
     let srv = TestServer::unstarted();
-    let grofe = |args: &[&str]| {
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_grofe"));
-        cmd.args(args)
-            .current_dir(&srv.home)
-            .env_remove("GROFE")
-            .env_remove("GROFE_PANE")
-            .env("HOME", &srv.home)
-            .env("XDG_STATE_HOME", &srv.state_home)
-            .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
-        common::run_bounded(cmd, common::CMD_TIMEOUT)
-    };
-    let started = grofe(&["-L", "t", "start-server"]);
+    let started = run_without_s(&srv, &["-L", "t", "start-server"]);
     let dir = srv.runtime_dir.join("grofe");
     let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode() & 0o777);
     let running = UnixStream::connect(dir.join("t.sock")).is_ok();
-    let killed = grofe(&["-L", "t", "kill-server"]);
+    let killed = run_without_s(&srv, &["-L", "t", "kill-server"]);
 
     assert!(started.status.success(), "{started:?}");
     assert_eq!(mode.ok(), Some(0o700));
     assert!(running);
     assert!(killed.status.success(), "{killed:?}");
+}
+
+#[test]
+fn a_loose_default_socket_dir_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let srv = TestServer::unstarted();
+    let dir = srv.runtime_dir.join("grofe");
+    std::fs::create_dir(&dir).expect("create socket dir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod 0777");
+
+    let out = run_without_s(&srv, &["-L", "t", "start-server"]);
+    // Clean up first in case a server started anyway.
+    let running = UnixStream::connect(dir.join("t.sock")).is_ok();
+    if running {
+        let _ = run_without_s(&srv, &["-L", "t", "kill-server"]);
+    }
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        out.stderr.contains(&dir.display().to_string()),
+        "error does not name the directory: {:?}",
+        out.stderr
+    );
+    assert!(!running);
+    assert!(!exists(&dir.join("t.sock")));
 }
 
 fn cloexec_pipe() -> (OwnedFd, OwnedFd) {
