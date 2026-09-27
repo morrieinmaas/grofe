@@ -12,19 +12,19 @@
 //! the last time its size was set (by a split or a resize), against the area
 //! passed to that call. [`LayoutTree::compute`] turns weights into concrete
 //! rects for a given area by distributing that area's cells proportionally
-//! to weight, reserving one cell per child first so proportional rounding can
-//! never take a child to zero, then splitting the remainder with a
-//! deterministic rule (largest fractional remainder first, ties broken by
-//! the lower child index). When the area matches the one last used to set
-//! the weights this usually reproduces the exact sizes, and always does when
-//! every child's weight is within one cell of an even split; it can differ by
-//! a cell or two when weights are highly skewed, in exchange for never
-//! rounding a child to zero. When the area is smaller than the one the
-//! weights were set against (the window shrank), sizes rescale
-//! proportionally, still with a floor of one cell per child as long as the
-//! area has room for all of them; if it doesn't, the lowest-index children
-//! get one cell each until cells run out and the rest get none (M2 does not
-//! shrink a window below one cell per pane in practice).
+//! to weight, rounding down and handing leftover cells to the largest
+//! fractional remainders first, ties broken by the lower child index. On the
+//! area a split or resize last set the weights against, the weights already
+//! sum to exactly that area's available cells, so this reproduces the exact
+//! sizes every time, with no drift across repeated splits or resizes. When
+//! the area differs (the window resized), sizes rescale proportionally; if
+//! that proportional rounding would take a child to zero even though its
+//! weight is >= 1, one cell per child is reserved up front and the rest
+//! distributed the same way, so a rescale never zeroes a pane out. If the
+//! area is too small for every pane to get even one reserved cell, the
+//! lowest-index children get one cell each until cells run out and the rest
+//! get none (M2 does not shrink a window below one cell per pane in
+//! practice).
 //!
 //! Signatures here differ from the contract sketch in one respect: `split`,
 //! `resize` and `neighbour` take an explicit `area: Rect`. `SplitSize::Cells`,
@@ -314,6 +314,16 @@ fn split_sizes(avail: u16, size: SplitSize) -> Option<(u16, u16)> {
 /// then handing the leftover cells one at a time to the largest fractional
 /// remainders, ties broken by the lower index. Deterministic, and the result
 /// always sums to exactly `total`.
+///
+/// Tries the plain proportional pass first: when `weights` already sum to
+/// `total` (the case every call from within this module relies on: a split
+/// or resize sets weights that sum to exactly the area's available cells),
+/// this reproduces those weights exactly, with no rounding drift. Only if
+/// that pass would give some child zero cells despite its weight being >= 1
+/// (only possible when `total` differs from the weights' sum, i.e. the area
+/// changed since the weights were set) does it fall back to reserving one
+/// cell per child up front and distributing the rest the same way, so a
+/// rescale never zeroes a pane out.
 fn distribute(total: u16, weights: &[u32]) -> Vec<u16> {
     let n = weights.len();
     if n == 0 {
@@ -330,24 +340,27 @@ fn distribute(total: u16, weights: &[u32]) -> Vec<u16> {
         }
         return sizes;
     }
-    // Reserve one cell per child up front so proportional rounding can never
-    // take a child below one, then distribute what's left the same way as
-    // before (rounding down, handing leftover cells to the largest
-    // fractional remainders, ties broken by the lower index).
+    let plain = distribute_proportional(total, weights);
+    if plain.iter().all(|&size| size >= 1) {
+        return plain;
+    }
+    // The plain pass zeroed a child out: reserve one cell per child up front
+    // so it can't, then distribute what's left the same way.
     let reserved = n as u16;
-    let mut sizes = distribute_above_floor(total - reserved, weights);
+    let mut sizes = distribute_proportional(total - reserved, weights);
     for size in &mut sizes {
         *size += 1;
     }
     sizes
 }
 
-/// The proportional pass `distribute` reserves one cell per child around:
-/// splits `total` cells among `weights` by weight, rounding down and handing
-/// the leftover cells one at a time to the largest fractional remainders,
-/// ties broken by the lower index. The result always sums to exactly `total`
-/// but, unlike `distribute`, may give a child zero cells.
-fn distribute_above_floor(total: u16, weights: &[u32]) -> Vec<u16> {
+/// The proportional pass `distribute` tries first, and falls back to around
+/// a one-cell-per-child reservation: splits `total` cells among `weights` by
+/// weight, rounding down and handing the leftover cells one at a time to the
+/// largest fractional remainders, ties broken by the lower index. The result
+/// always sums to exactly `total` but, unlike `distribute`, may give a child
+/// zero cells.
+fn distribute_proportional(total: u16, weights: &[u32]) -> Vec<u16> {
     let n = weights.len();
     let total_weight: u64 = weights.iter().map(|&w| u64::from(w.max(1))).sum();
     let total = u64::from(total);
@@ -390,6 +403,7 @@ fn child_rects(dir: Dir, area: Rect, children: &[Child]) -> Vec<Rect> {
         Dir::Horizontal => {
             let avail = area.cols.saturating_sub(n.saturating_sub(1));
             let sizes = distribute(avail, &weights);
+            let bound = area.x + area.cols;
             let mut x = area.x;
             let mut rects = Vec::with_capacity(sizes.len());
             for w in sizes {
@@ -399,13 +413,19 @@ fn child_rects(dir: Dir, area: Rect, children: &[Child]) -> Vec<Rect> {
                     cols: w,
                     rows: area.rows,
                 });
-                x += w + 1;
+                // Clamped to `bound`: when `area` itself is too short even
+                // for the borders (a deeper split's local share can be
+                // squeezed to 0 by an ancestor's below-floor rescale), the
+                // "+1" for a border between children would otherwise walk
+                // every remaining child's rect past the parent's own area.
+                x = (x + w + 1).min(bound);
             }
             rects
         }
         Dir::Vertical => {
             let avail = area.rows.saturating_sub(n.saturating_sub(1));
             let sizes = distribute(avail, &weights);
+            let bound = area.y + area.rows;
             let mut y = area.y;
             let mut rects = Vec::with_capacity(sizes.len());
             for w in sizes {
@@ -415,7 +435,10 @@ fn child_rects(dir: Dir, area: Rect, children: &[Child]) -> Vec<Rect> {
                     cols: area.cols,
                     rows: w,
                 });
-                y += w + 1;
+                // See the Horizontal arm above: clamped so a degenerate
+                // (too-small-for-its-own-borders) area can't push later
+                // children's rects past it.
+                y = (y + w + 1).min(bound);
             }
             rects
         }
@@ -525,16 +548,31 @@ fn collect_borders(node: &Node, area: Rect, out: &mut Vec<BorderSegment>) {
         for pair in rects.windows(2) {
             let r = pair[0];
             match dir {
-                Dir::Horizontal => out.push(BorderSegment::Vertical {
-                    col: r.x + r.cols,
-                    row: area.y,
-                    len: area.rows,
-                }),
-                Dir::Vertical => out.push(BorderSegment::Horizontal {
-                    row: r.y + r.rows,
-                    col: area.x,
-                    len: area.cols,
-                }),
+                Dir::Horizontal => {
+                    let col = r.x + r.cols;
+                    // `area` itself can be a degenerate (zero-width) slot a
+                    // parent's below-floor rescale squeezed a whole subtree
+                    // into (see `child_rects`); its children then all clamp
+                    // to the same point and there's no cell left for a
+                    // border between them, only for panes drawn beyond it.
+                    if col < area.x + area.cols {
+                        out.push(BorderSegment::Vertical {
+                            col,
+                            row: area.y,
+                            len: area.rows,
+                        });
+                    }
+                }
+                Dir::Vertical => {
+                    let row = r.y + r.rows;
+                    if row < area.y + area.rows {
+                        out.push(BorderSegment::Horizontal {
+                            row,
+                            col: area.x,
+                            len: area.cols,
+                        });
+                    }
+                }
             }
         }
         for (child, rect) in children.iter().zip(rects) {
@@ -921,14 +959,12 @@ mod tests {
             .unwrap();
         tree.resize(area, A, Edge::Right, 100);
         // resize's own clamp pins weights to [19, 1] (B at its one-cell
-        // minimum at resize time). distribute()'s floor reservation then
-        // rounds that 19:1 skew to 18:2 on render: reserving one cell for
-        // every child up front can't also reproduce a ratio this extreme
-        // bit-for-bit (see the module docs). B still never renders below one
-        // cell, which is the invariant this test guards.
+        // minimum). Rendered on the same area those weights were set
+        // against, compute() reproduces them exactly: B stays at 1 cell,
+        // never below.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&A].cols, 18);
-        assert_eq!(rects[&B].cols, 2);
+        assert_eq!(rects[&A].cols, 19);
+        assert_eq!(rects[&B].cols, 1);
     }
 
     #[test]
@@ -992,11 +1028,17 @@ mod tests {
 
     #[test]
     fn distribute_never_zeroes_a_child_when_total_fits_all() {
-        // Reproduces the cases the review found: with the plain proportional
-        // pass alone, distribute(9, [1, 198]) was [0, 9] and distribute(20,
-        // [1, 198]) was [0, 20], even though every weight is >= 1. Both
-        // children must get at least one cell whenever total >= children.
-        assert_eq!(distribute(199, &[1, 198]), vec![2, 197]);
+        // total == the weights' own sum (the "same area they were set
+        // against" case): the plain pass is exact on the first try, so no
+        // fallback is needed and none of the review's original numbers
+        // apply here.
+        assert_eq!(distribute(199, &[1, 198]), vec![1, 198]);
+        // Reproduces the cases the review found: on a smaller total (the
+        // area shrank since these weights were set), the plain proportional
+        // pass alone gave distribute(9, [1, 198]) = [0, 9] and
+        // distribute(20, [1, 198]) = [0, 20], even though every weight is
+        // >= 1. Both children must get at least one cell whenever
+        // total >= children.
         assert_eq!(distribute(9, &[1, 198]), vec![1, 8]);
         assert_eq!(distribute(20, &[1, 198]), vec![1, 19]);
         for result in [
@@ -1017,6 +1059,64 @@ mod tests {
         assert_eq!(distribute(1, &[1, 1, 1]), vec![1, 0, 0]);
         assert_eq!(distribute(2, &[1, 1, 1]), vec![1, 1, 0]);
         assert_eq!(distribute(1, &[1, 1000]), vec![1, 0]);
+    }
+
+    #[test]
+    fn cells_split_reproduces_stored_sizes_on_the_build_area() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 69);
+        assert_eq!(rects[&B].cols, 10);
+    }
+
+    #[test]
+    fn resize_after_cells_split_moves_the_border_by_exactly_the_delta() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        let before: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        let border_before = before[&A].cols;
+
+        tree.resize(area, B, Edge::Left, 5);
+
+        let after: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        let border_after = after[&A].cols;
+        assert_eq!(border_before - border_after, 5);
+        assert_eq!(after[&A].cols, 64);
+        assert_eq!(after[&B].cols, 15);
+    }
+
+    #[test]
+    fn three_pane_cells_split_reproduces_stored_sizes_on_the_build_area() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, A, Dir::Horizontal, C, SplitSize::Cells(10))
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 58);
+        assert_eq!(rects[&C].cols, 10);
+        assert_eq!(rects[&B].cols, 10);
     }
 
     #[test]
@@ -1117,6 +1217,22 @@ mod tests {
         }
     }
 
+    /// The weight of `pane`'s slot in its immediate parent's children list
+    /// (`None` for a pane not in the tree, or the root's sole leaf, which has
+    /// no parent and so no weight of its own).
+    fn weight_of(root: &Node, pane: PaneId) -> Option<u32> {
+        let mut path = Vec::new();
+        if !find_path(root, pane, &mut path) || path.is_empty() {
+            return None;
+        }
+        let idx = path[path.len() - 1];
+        let parent_path = &path[..path.len() - 1];
+        match node_at(root, parent_path) {
+            Node::Split { children, .. } => Some(children[idx].weight),
+            Node::Leaf(_) => None,
+        }
+    }
+
     fn op_strategy() -> impl Strategy<Value = (bool, bool, u8, u16, usize)> {
         (
             any::<bool>(),
@@ -1142,6 +1258,17 @@ mod tests {
             let mut tree = LayoutTree::new(PaneId(0));
             let mut alive = vec![PaneId(0)];
             let mut next_id = 1u32;
+            // A split's two new weights sum to exactly its group's local
+            // avail only as long as that group's weights already summed to
+            // its local avail beforehand; split() preserves that exactness,
+            // it doesn't restore it. remove() doesn't renormalise the
+            // siblings it leaves behind (by design: their sizes then grow
+            // proportionally at render time instead), so it can leave a
+            // group's weights short of its local avail, and every later
+            // split in that group inherits the shortfall. Once any remove
+            // has happened, later splits are no longer guaranteed exact, so
+            // stop checking.
+            let mut any_removed = false;
 
             for (is_split, horiz, size_kind, size_val, target) in ops {
                 if is_split {
@@ -1156,11 +1283,28 @@ mod tests {
                     if tree.split(area, target_pane, dir, new_pane, size).is_ok() {
                         next_id += 1;
                         alive.push(new_pane);
+
+                        if !any_removed {
+                            // The split we just made sets weights that sum
+                            // to exactly the local area available at the
+                            // time, so rendering on the build area must
+                            // reproduce those two sizes exactly right now.
+                            let rects: std::collections::HashMap<_, _> =
+                                tree.compute(area).into_iter().collect();
+                            let target_weight = weight_of(&tree.root, target_pane).unwrap();
+                            let new_weight = weight_of(&tree.root, new_pane).unwrap();
+                            prop_assert_eq!(
+                                u32::from(axis_len(dir, rects[&target_pane])),
+                                target_weight
+                            );
+                            prop_assert_eq!(u32::from(axis_len(dir, rects[&new_pane])), new_weight);
+                        }
                     }
                 } else if alive.len() > 1 {
                     let idx = target % alive.len();
                     tree.remove(alive[idx]);
                     alive.remove(idx);
+                    any_removed = true;
                 }
             }
 
