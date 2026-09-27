@@ -83,6 +83,11 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
     let pane = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&pane].window;
     let Some(edge) = c.edge else {
+        // As tmux 3.7b: selecting the already-active pane keeps the zoom,
+        // changing the active pane leaves it.
+        if model.windows.get(&window).is_some_and(|w| w.active != pane) {
+            unzoom(model, window);
+        }
         if let Some(w) = model.windows.get_mut(&window) {
             w.active = pane;
         }

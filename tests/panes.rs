@@ -164,6 +164,33 @@ fn split_window_without_room_errors_like_tmux() {
     assert!(!ran.exists());
 }
 
+/// A spawn failure (a missing `-c` directory, a deliberate divergence from
+/// tmux's `$HOME` fallback) leaves the window exactly as it was.
+#[test]
+fn split_window_spawn_failure_leaves_the_layout_unchanged() {
+    let srv = TestServer::start();
+    session(&srv, "f", 81, 20);
+    srv.cmd(&["split-window", "-h", "-t", "f", "sleep 30"])
+        .unwrap();
+    let fmt = "#{pane_id} #{pane_width}x#{pane_height} #{pane_active}";
+    let before = panes(&srv, "f", fmt);
+
+    let missing = srv.home.join("no-such-dir");
+    let err = srv
+        .cmd(&[
+            "split-window",
+            "-v",
+            "-t",
+            "f:1.1",
+            "-c",
+            missing.to_str().unwrap(),
+            "sleep 30",
+        ])
+        .unwrap_err();
+    assert!(err.contains("can't start pane in"), "{err}");
+    assert_eq!(panes(&srv, "f", fmt), before);
+}
+
 /// `-c` is expanded at execution time against the target pane: a pane
 /// that `cd`s after the session started splits into its new cwd.
 #[test]
@@ -278,6 +305,22 @@ fn resize_pane_zoom_toggles_the_active_pane_to_the_window_size() {
     assert_eq!(display(&srv, "z", "#{window_zoomed_flag}"), "0");
     assert_eq!(widths(&srv, "z"), vec![40, 40]);
 
+    // As tmux 3.7b: selecting the already-active pane keeps the zoom,
+    // selecting another pane leaves it.
+    srv.cmd(&["resize-pane", "-Z", "-t", "z:1.2"]).unwrap();
+    srv.cmd(&["select-pane", "-t", "z:1.2"]).unwrap();
+    assert_eq!(display(&srv, "z", "#{window_zoomed_flag}"), "1");
+    assert_eq!(widths(&srv, "z"), vec![40, 81]);
+    srv.cmd(&["select-pane", "-t", "z:1.1"]).unwrap();
+    assert_eq!(
+        panes(
+            &srv,
+            "z",
+            "#{pane_width}x#{pane_height} #{pane_active} #{window_zoomed_flag}"
+        ),
+        vec!["40x20 1 0", "40x20 0 0"]
+    );
+
     // A layout change unzooms, as in tmux.
     srv.cmd(&["resize-pane", "-Z", "-t", "z"]).unwrap();
     srv.cmd(&["split-window", "-v", "-t", "z", "sleep 30"])
@@ -384,8 +427,14 @@ fn respawn_pane_keeps_the_uid() {
 #[test]
 fn send_keys_encodes_key_names_literals_and_hex() {
     let srv = TestServer::start();
-    srv.cmd(&["new-session", "-d", "-s", "k", "stty -echo; exec cat -vt"])
-        .unwrap();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "k",
+        "stty -echo -isig; exec cat -vt",
+    ])
+    .unwrap();
     srv.wait_for(
         || display(&srv, "k", "#{pane_current_command}").ends_with("cat"),
         WAIT,
@@ -403,6 +452,12 @@ fn send_keys_encodes_key_names_literals_and_hex() {
     srv.cmd(&["send-keys", "-t", "k", "Tab", "Up", "x y", "Enter"])
         .unwrap();
     wait_for_line(&srv, "k", "^I^[[Ax y");
+
+    // Modifiers: C-c is 0x03 (isig is off, so it reaches cat as data) and
+    // M-x is ESC x.
+    srv.cmd(&["send-keys", "-t", "k", "C-c", "M-x", "Enter"])
+        .unwrap();
+    wait_for_line(&srv, "k", "^C^[x");
 }
 
 #[test]
