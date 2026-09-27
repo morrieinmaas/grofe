@@ -52,13 +52,16 @@ fn main() -> ExitCode {
     match verb.as_str() {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
-            let socket = globals.socket();
-            match connect_or_start(&socket) {
+            let (socket, own_dir) = globals.resolve();
+            match connect_or_start(&socket, own_dir) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             }
         }
-        _ => one_shot(&globals.socket(), rest),
+        _ => {
+            let (socket, own_dir) = globals.resolve();
+            one_shot(&socket, own_dir, rest)
+        }
     }
 }
 
@@ -72,14 +75,23 @@ impl Globals {
     /// `-S` wins, then `-L`, then `$GROFE` (set inside panes), then the
     /// default socket.
     fn socket(&self) -> PathBuf {
-        let env = Env::from_process();
+        self.resolve().0
+    }
+
+    /// The socket path, and whether its directory is grofe's own (the
+    /// default or `-L` location) rather than one the user named with `-S`
+    /// or `$GROFE`. Only grofe's own directory is verified private, as tmux
+    /// does not police `-S` parents.
+    fn resolve(&self) -> (PathBuf, bool) {
         if self.socket.is_none()
             && self.name.is_none()
             && let Some(s) = std::env::var_os("GROFE").filter(|s| !s.is_empty())
         {
-            return PathBuf::from(s);
+            return (PathBuf::from(s), false);
         }
-        paths::socket_path(&env, self.socket.as_deref(), self.name.as_deref())
+        let env = Env::from_process();
+        let path = paths::socket_path(&env, self.socket.as_deref(), self.name.as_deref());
+        (path, self.socket.is_none())
     }
 }
 
@@ -149,9 +161,9 @@ fn fail(msg: &str) -> ExitCode {
 }
 
 /// Sends `argv` as one control-mode request and exits with its status.
-fn one_shot(socket: &Path, argv: &[String]) -> ExitCode {
+fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     let stream = if AUTO_START.contains(&argv[0].as_str()) {
-        connect_or_start(socket)
+        connect_or_start(socket, own_dir)
     } else {
         connect(socket)
     };
@@ -185,15 +197,20 @@ fn connect(socket: &Path) -> Result<UnixStream, String> {
 /// Connects, starting a server first if none runs (spec §4.1): under a
 /// flock on `<sock>.lock`, re-check; a socket that refuses connection is
 /// stale and removed; then re-exec `grofe __server` and wait for readiness.
-fn connect_or_start(socket: &Path) -> Result<UnixStream, String> {
-    if let Ok(stream) = UnixStream::connect(socket) {
-        return Ok(stream);
-    }
+///
+/// `own_dir` (the default or `-L` location): the socket directory is always
+/// created or verified private, before any connect, so a pre-created
+/// world-writable `/tmp/grofe-$UID` is refused. For a user-named `-S` path
+/// the parent is only created when missing.
+fn connect_or_start(socket: &Path, own_dir: bool) -> Result<UnixStream, String> {
     if let Some(dir) = socket.parent().filter(|d| !d.as_os_str().is_empty())
-        && !dir.exists()
+        && (own_dir || !dir.exists())
     {
         paths::ensure_private_dir(dir)
-            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+            .map_err(|e| format!("socket directory {} is not usable: {e}", dir.display()))?;
+    }
+    if let Ok(stream) = UnixStream::connect(socket) {
+        return Ok(stream);
     }
     let lock_path = paths::lock_path(socket);
     let lock_file = OpenOptions::new()
@@ -228,6 +245,9 @@ fn start_server(socket: &Path) -> Result<(), String> {
     // The write end must survive the child's stdio setup, which owns 0-2.
     let write_end = if write_end.as_raw_fd() <= 2 {
         let fd = fcntl(&write_end, FcntlArg::F_DUPFD(3)).map_err(|e| format!("fcntl: {e}"))?;
+        // The original must close too, or a server that dies at start-up
+        // leaves a writer open and we wait out the whole timeout.
+        drop(write_end);
         // SAFETY: F_DUPFD just returned this new fd; we are its only owner.
         unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) }
     } else {

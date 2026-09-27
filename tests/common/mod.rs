@@ -205,19 +205,25 @@ impl Drop for TestServer {
         if !self.is_running() {
             return;
         }
+        // The socket answers, so the latest logged pid is the live server.
+        let pid = last_logged_pid(&self.log()).map(nix::unistd::Pid::from_raw);
         let _ = self.run_quiet_kill();
-        if wait_until(|| !self.is_running(), Duration::from_secs(3)).is_ok() {
-            return;
+        if wait_until(|| !self.is_running(), Duration::from_secs(3)).is_err() {
+            // Fallback for a hung server.
+            if let Some(pid) = pid {
+                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            }
+            let _ = fs::remove_file(&self.socket);
         }
-        // Fallback for a hung server: SIGKILL the latest logged pid. Only
-        // reached while the socket still answers, so that pid is live.
-        if let Some(pid) = last_logged_pid(&self.log()) {
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
-                nix::sys::signal::Signal::SIGKILL,
+        // Wait for the process itself to go, so a `pgrep` right after the
+        // test finds nothing. Bounded: a zombie nobody reaps still counts
+        // as alive to kill(pid, 0).
+        if let Some(pid) = pid {
+            let _ = wait_until(
+                || nix::sys::signal::kill(pid, None).is_err(),
+                Duration::from_secs(3),
             );
         }
-        let _ = fs::remove_file(&self.socket);
     }
 }
 

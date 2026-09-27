@@ -22,19 +22,27 @@ fn new_session_auto_starts_a_server() {
     let srv = TestServer::unstarted();
     assert!(!srv.is_running());
 
-    // The stub dispatcher rejects new-session until T1.5a; the auto-start
-    // decision is the CLI's and happens regardless.
-    let _ = srv.run(&["new-session", "-d", "-s", "t"]);
+    let out = srv.run(&["new-session", "-d", "-s", "t"]);
 
+    assert_reached_server(&out);
     assert!(srv.is_running(), "log:\n{}", srv.log());
     assert_eq!(srv.server_starts(), 1);
+}
+
+/// The CLI got its request to the server. The stub dispatcher rejects
+/// new-session until T1.5a, which switches this to success.
+fn assert_reached_server(out: &common::CmdOutput) {
+    assert!(
+        out.stderr.contains("unknown command: new-session"),
+        "CLI did not reach the server: {out:?}"
+    );
 }
 
 #[test]
 fn second_new_session_reuses_the_server() {
     let srv = TestServer::unstarted();
-    let _ = srv.run(&["new-session", "-d"]);
-    let _ = srv.run(&["new-session", "-d"]);
+    assert_reached_server(&srv.run(&["new-session", "-d"]));
+    assert_reached_server(&srv.run(&["new-session", "-d"]));
 
     assert!(srv.is_running());
     assert_eq!(srv.server_starts(), 1, "log:\n{}", srv.log());
@@ -43,19 +51,14 @@ fn second_new_session_reuses_the_server() {
 #[test]
 fn ten_concurrent_new_sessions_start_exactly_one_server() {
     let srv = TestServer::unstarted();
-    let children: Vec<_> = (0..10)
-        .map(|_| {
-            let mut cmd = srv.command();
-            cmd.args(["new-session", "-d"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn grofe")
-        })
-        .collect();
-    for child in children {
-        wait_child(child, Duration::from_secs(10)).expect("CLI exits");
+    let outs: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..10)
+            .map(|_| s.spawn(|| srv.run(&["new-session", "-d"])))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for out in &outs {
+        assert_reached_server(out);
     }
 
     assert!(srv.is_running());
@@ -190,6 +193,37 @@ fn subscribe_reports_the_servers_answer() {
     // No events exist until T1.6; the stub dispatcher rejects the request
     // and the harness surfaces that as an error instead of hanging.
     assert!(srv.subscribe(&["pane-exited"]).is_err());
+}
+
+#[test]
+fn default_socket_dir_is_created_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // `-L` uses grofe's own directory under XDG_RUNTIME_DIR, which the CLI
+    // creates (and verifies) 0700. The harness always passes `-S`, so this
+    // test builds its command by hand and cleans up its own server.
+    let srv = TestServer::unstarted();
+    let grofe = |args: &[&str]| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.args(args)
+            .current_dir(&srv.home)
+            .env_remove("GROFE")
+            .env_remove("GROFE_PANE")
+            .env("HOME", &srv.home)
+            .env("XDG_STATE_HOME", &srv.state_home)
+            .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
+        common::run_bounded(cmd, common::CMD_TIMEOUT)
+    };
+    let started = grofe(&["-L", "t", "start-server"]);
+    let dir = srv.runtime_dir.join("grofe");
+    let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode() & 0o777);
+    let running = UnixStream::connect(dir.join("t.sock")).is_ok();
+    let killed = grofe(&["-L", "t", "kill-server"]);
+
+    assert!(started.status.success(), "{started:?}");
+    assert_eq!(mode.ok(), Some(0o700));
+    assert!(running);
+    assert!(killed.status.success(), "{killed:?}");
 }
 
 fn cloexec_pipe() -> (OwnedFd, OwnedFd) {
