@@ -25,7 +25,7 @@ pub mod status;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,9 +33,12 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::{SinkExt, StreamExt};
+use nix::fcntl::{Flock, FlockArg};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::cmd::{self, Command};
@@ -67,6 +70,8 @@ pub enum ServerMsg {
         tx: mpsc::Sender<Event>,
     },
     Pane(PaneEvent),
+    /// A client connection ended.
+    Closed,
     // M2: client frames.
 }
 
@@ -113,6 +118,13 @@ pub struct State {
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
+    /// Started implicitly by a session-creating command (`__server
+    /// --exit-when-empty`): exits once it has no sessions and no client
+    /// connections, even if it never had a session. `start-server` leaves
+    /// it off, so that server stays up empty.
+    exit_when_empty: bool,
+    /// Open client connections, counted by the actor as it accepts them.
+    connections: usize,
     /// (dev, ino) of the socket we bound, so we only ever remove our own.
     socket_id: Option<(u64, u64)>,
 }
@@ -166,7 +178,9 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
 /// Entry point of `grofe __server`: runs the server until it exits and
 /// returns the process exit code. Must run before any thread or runtime
 /// exists (it closes inherited fds wholesale).
-pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>) -> i32 {
+///
+/// `exit_when_empty`: see [`State`]; the CLI's auto-start path sets it.
+pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool) -> i32 {
     close_inherited_fds(ready_fd);
     // SAFETY: the CLI passed us this fd as the write end of the readiness
     // pipe, and close_inherited_fds kept it open; nothing else owns it.
@@ -198,7 +212,7 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>) -> i32 {
         }
     };
     let options = StartOptions::from_env();
-    match runtime.block_on(serve(socket.to_path_buf(), ready, options)) {
+    match runtime.block_on(serve(socket.to_path_buf(), ready, options, exit_when_empty)) {
         Ok(()) => {
             eprintln!("grofe server exiting");
             0
@@ -271,6 +285,7 @@ async fn serve(
     socket: PathBuf,
     mut ready: Option<File>,
     options: StartOptions,
+    exit_when_empty: bool,
 ) -> anyhow::Result<()> {
     let signals = (
         signal(SignalKind::terminate()).context("installing SIGTERM handler")?,
@@ -301,43 +316,101 @@ async fn serve(
         wake: Arc::new(Notify::new()),
         events: events::Events::default(),
         exit: false,
+        exit_when_empty,
+        connections: 0,
         socket_id,
     };
 
     let (msg_tx, msg_rx) = mpsc::channel(64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (alive_tx, mut alive_rx) = mpsc::channel::<()>(1);
-    let accept = tokio::spawn(accept_loop(listener, msg_tx, shutdown_rx, alive_tx));
+    let conns = Connections {
+        msgs: msg_tx,
+        shutdown: shutdown_rx,
+        alive: alive_tx,
+    };
     signal_ready(&mut ready, "ok");
 
-    let state = actor(state, msg_rx, pane_rx, signals).await;
+    // The actor owns the listener (dropped when it returns: no more
+    // accepts) and `conns`, the last `alive` sender outside connections.
+    let state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
     state.remove_socket();
     // Hang up the panes and let go of the subscribers' queues before the
     // connections drain them.
     drop(state);
 
-    // Stop accepting, let connections finish writing in-flight replies
-    // (the `kill-server` reply among them), then return.
+    // Let connections finish writing in-flight replies (the `kill-server`
+    // reply among them), then return.
     let _ = shutdown_tx.send(true);
-    accept.abort();
-    let _ = accept.await;
     let _ = tokio::time::timeout(Duration::from_secs(1), alive_rx.recv()).await;
     Ok(())
 }
 
+/// What a connection task needs, handed out by the actor as it accepts.
+struct Connections {
+    msgs: mpsc::Sender<ServerMsg>,
+    shutdown: watch::Receiver<bool>,
+    alive: mpsc::Sender<()>,
+}
+
+impl Connections {
+    /// Runs one connection, then tells the actor it closed.
+    fn spawn(&self, stream: UnixStream) {
+        let msgs = self.msgs.clone();
+        let (shutdown, alive) = (self.shutdown.clone(), self.alive.clone());
+        tokio::spawn(async move {
+            connection(stream, msgs.clone(), shutdown, alive).await;
+            let _ = msgs.send(ServerMsg::Closed).await;
+        });
+    }
+}
+
+/// How often an empty auto-started server with no connections re-checks
+/// whether to exit: its starter may never connect (it timed out, was
+/// interrupted, or died), so no connection close would trigger the check.
+const EMPTY_RECHECK: Duration = Duration::from_secs(2);
+
+/// How long accepting pauses after an accept error (e.g. EMFILE).
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+/// Accepting happens here, not in a task of its own, so the connection
+/// count and the listener's backlog are consistent whenever
+/// [`exit_if_empty`] looks at them.
 async fn actor(
     mut state: State,
+    listener: UnixListener,
+    conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
     (mut sigterm, mut sigint): (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
 ) -> State {
+    // Set after an accept error: accepting pauses, commands and pane events
+    // keep flowing.
+    let mut accept_paused_until: Option<Instant> = None;
     loop {
+        let idle =
+            state.exit_when_empty && state.connections == 0 && state.model.sessions.is_empty();
         tokio::select! {
             msg = msgs.recv() => match msg {
                 Some(msg) => handle(&mut state, msg),
                 None => break,
             },
             Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
+                Ok((stream, _)) => {
+                    state.connections += 1;
+                    conns.spawn(stream);
+                }
+                Err(e) => {
+                    // e.g. EMFILE: back off instead of spinning.
+                    eprintln!("grofe server: accept: {e}");
+                    accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
+                }
+            },
+            _ = sleep_until(accept_paused_until.unwrap_or_else(Instant::now)),
+                if accept_paused_until.is_some() => accept_paused_until = None,
+            // Falls through to the exit_if_empty below.
+            _ = sleep(EMPTY_RECHECK), if idle => {}
             _ = sigterm.recv() => {
                 eprintln!("grofe server: SIGTERM");
                 break;
@@ -347,11 +420,72 @@ async fn actor(
                 break;
             }
         }
+        exit_if_empty(&mut state, &listener);
         if state.exit {
             break;
         }
     }
     state
+}
+
+/// For an auto-started server: exit once there are no sessions and no
+/// client connections, after the first request completes (success or not).
+///
+/// A sibling CLI may be connecting right now, so this must not strand it:
+/// - it takes the start lock (without waiting); a CLI holding it is about
+///   to connect, and that connection's close checks again;
+/// - it moves the socket aside, so no new connection can arrive, then looks
+///   at the listener's backlog: one already queued means stay, and the
+///   socket goes back;
+/// - with the lock held no other server can bind the path meanwhile, and a
+///   CLI that found no socket waits on the lock, then connects or starts
+///   a fresh server.
+///
+/// While the socket is aside, a plain `connect` (a non-starting command
+/// such as `has-session`) gets ENOENT even if the server then stays up; the
+/// CLI retries such a connect once after a short wait to cover this window.
+fn exit_if_empty(state: &mut State, listener: &UnixListener) {
+    if !state.exit_when_empty
+        || state.exit
+        || state.connections > 0
+        || !state.model.sessions.is_empty()
+    {
+        return;
+    }
+    let Ok(lock_file) = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(paths::lock_path(&state.socket))
+    else {
+        return;
+    };
+    let Ok(_lock) = Flock::lock(lock_file, FlockArg::LockExclusiveNonblock) else {
+        return;
+    };
+    let ours = fs::symlink_metadata(&state.socket)
+        .is_ok_and(|m| Some((m.dev(), m.ino())) == state.socket_id);
+    if !ours {
+        // Gone or replaced: nobody can reach us through it any more.
+        state.exit = true;
+        return;
+    }
+    let mut aside = state.socket.clone().into_os_string();
+    aside.push(".exiting");
+    let aside = PathBuf::from(aside);
+    if fs::rename(&state.socket, &aside).is_err() {
+        return;
+    }
+    let mut fds = [PollFd::new(listener.as_fd(), PollFlags::POLLIN)];
+    if poll(&mut fds, PollTimeout::ZERO).is_ok_and(|n| n > 0) {
+        if fs::rename(&aside, &state.socket).is_ok() {
+            return;
+        }
+        eprintln!("grofe server: cannot restore {}", state.socket.display());
+    }
+    let _ = fs::remove_file(&aside);
+    state.exit = true;
 }
 
 fn handle(state: &mut State, msg: ServerMsg) {
@@ -377,6 +511,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             finish(state, req.id, result, reply);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
+        ServerMsg::Closed => state.connections = state.connections.saturating_sub(1),
     }
 }
 
@@ -398,31 +533,6 @@ fn finish(
     };
     let _ = reply.send(reply_msg);
     state.events.flush();
-}
-
-async fn accept_loop(
-    listener: UnixListener,
-    msgs: mpsc::Sender<ServerMsg>,
-    shutdown: watch::Receiver<bool>,
-    alive: mpsc::Sender<()>,
-) {
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                tokio::spawn(connection(
-                    stream,
-                    msgs.clone(),
-                    shutdown.clone(),
-                    alive.clone(),
-                ));
-            }
-            Err(e) => {
-                // e.g. EMFILE: back off instead of spinning.
-                eprintln!("grofe server: accept: {e}");
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
 }
 
 /// One client connection. `_alive` is held until the task ends, so shutdown

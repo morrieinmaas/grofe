@@ -234,10 +234,7 @@ impl Drop for TestServer {
         // test finds nothing. Bounded: a zombie nobody reaps still counts
         // as alive to kill(pid, 0).
         if let Some(pid) = pid {
-            let _ = wait_until(
-                || nix::sys::signal::kill(pid, None).is_err(),
-                Duration::from_secs(3),
-            );
+            let _ = wait_until(|| process_gone(pid), Duration::from_secs(3));
         }
     }
 }
@@ -299,6 +296,28 @@ impl Subscription {
             Err(e) => Err(format!("reading reply: {e}")),
         }
     }
+}
+
+/// Whether process `pid` has exited. A zombie counts as gone: a detached
+/// server is re-parented to PID 1, which in a container may never reap it,
+/// so `kill(pid, 0)` alone would keep succeeding after it exited.
+pub fn process_gone(pid: nix::unistd::Pid) -> bool {
+    nix::sys::signal::kill(pid, None).is_err() || is_zombie(pid)
+}
+
+/// Linux: the state field of `/proc/<pid>/stat` (after the `(comm)`) is `Z`.
+#[cfg(target_os = "linux")]
+fn is_zombie(pid: nix::unistd::Pid) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+    })
+}
+
+/// Elsewhere (macOS) launchd reaps orphans promptly, so `kill` is enough.
+#[cfg(not(target_os = "linux"))]
+fn is_zombie(_pid: nix::unistd::Pid) -> bool {
+    false
 }
 
 /// Polls `cond` every 10 ms until it holds or `timeout` passes.

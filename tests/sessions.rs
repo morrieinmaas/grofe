@@ -356,3 +356,28 @@ fn late_pane_exit_after_kill_is_ignored() {
     assert!(srv.is_running());
     assert!(srv.cmd(&["list-sessions"]).is_ok());
 }
+
+/// `GROFE_PANE` names a pane of the server in `GROFE`. A CLI whose `GROFE`
+/// is another socket, while it targets `srv` with `-S`, must act as if no
+/// pane was given, even though that pane id exists on `srv`.
+#[test]
+fn grofe_pane_from_another_server_is_ignored() {
+    let srv = TestServer::start();
+    new_session(&srv, "a");
+    let a_pane = pane_ids(&srv, "a")[0].clone();
+    // Newest session, so the no-pane fallback resolves here instead.
+    new_session(&srv, "b");
+    let b_pane = pane_ids(&srv, "b")[0].clone();
+    assert_ne!(a_pane, b_pane);
+
+    let own = cmd_from_pane(&srv, &a_pane, &["display-message", "-p", "#{pane_id}"]).unwrap();
+    assert_eq!(own.trim(), a_pane, "GROFE=srv resolves through the pane");
+
+    let mut cmd = srv.command();
+    cmd.env("GROFE", srv.home.join("other.sock"))
+        .env("GROFE_PANE", &a_pane)
+        .args(["display-message", "-p", "#{pane_id}"]);
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout.trim(), b_pane, "a foreign GROFE_PANE was used");
+}
