@@ -1,119 +1,118 @@
 # grofe
 
-**tmux, if it were designed today.** Same sessions, windows and panes, same
-prefix key, same `split-window` and `send-keys`. Your muscle memory transfers in
-five minutes. What changes is everything tmux users have been working around for
-twenty years.
+A terminal multiplexer for people who like tmux and are tired of working
+around it.
 
-> **Status: early development.** The foundations are built and tested (milestone
-> M0); nothing is usable day to day yet. Everything below is the design, each
-> feature tagged with the milestone that delivers it. See the
-> [design](docs/specs/2026-09-23-grofe-design.md) and the
-> [plan](docs/plans/2026-09-23-milestones.md).
+grofe keeps what tmux got right: sessions, windows and panes, a server that
+outlives your terminal, a prefix key, and commands like `split-window` and
+`send-keys`. If you know tmux, you already know how to drive grofe. What it
+changes is the part you keep fighting: sessions that die with the machine, a
+config language nobody can debug, and a status line that forks a shell on every
+redraw.
 
-## Why grofe
+> grofe is in early development and not usable day to day yet. If you want to
+> follow along or help, read on.
 
-### 1. Reboot, and your panes come back running the same things (M4)
+## What's different
 
-tmux loses everything when the server dies. The standard fix is
-resurrect plus continuum: a save file, a regex of which processes may be
-restored, a strategy script per program, and a timer that only saves while a
-client is attached.
+**Your work survives a reboot.** In grofe a pane knows what it is running and
+how to bring it back. After a crash or a restart, your panes return in the same
+layout, in the same directories, running the same programs: your editor
+session, your REPL, the coding agent halfway through a conversation. No
+resurrect, no continuum, no list of process names to whitelist. Before you
+reboot, `grofe reboot-check` tells you exactly what will come back.
 
-In grofe, a pane has a **durable identity** and a **resume command**. They are
-fields on the pane, not a convention between plugins. A Claude Code session, an
-nvim session or a REPL registers how to bring itself back, and after a crash or
-a reboot the pane returns with the same identity, running the same thing, in the
-same place. `grofe reboot-check` tells you, before you reboot, exactly which
-panes will come back and why the others will not.
+**A config you can actually debug.** Configuration is TOML with a schema. A
+typo is an error that names the file, the line and the setting you probably
+meant, not a silently ignored option. Ask where a value came from and grofe
+tells you:
 
-### 2. A config you can reason about (M3)
+```console
+$ grofe show-config status.right --explain
+status.right = "#{session_name} #{host_short}"
+  set by ~/.config/grofe/user.toml
+```
 
-tmux config is an untyped command stream with `if-shell` as its only
-conditional. Errors are reported without a file or line, `source-file` with a
-glob reports success if anything matched, and the only way to learn what a
-setting actually resolved to is to ask a running server.
+Your own file always loads last, so tools and themes can add to your setup
+without overriding you. Reloading checks everything first and either applies
+all of it or none of it.
 
-grofe's config is TOML with a schema:
+```toml
+prefix = "C-b"
+mouse = true
 
-- **Typed.** A string where a number belongs is an error naming the file,
-  line and key, never a silent default. Unknown keys get a "did you mean".
-- **Layered, with provenance.** `grofe show-config status.right --explain` tells
-  you the value and which file set it. `--file` answers without a running server.
-- **Your file always wins.** Tools drop fragments into `conf.d/`; your own file
-  loads last.
-- **Reload is atomic.** Every layer is validated first; either all of it applies
-  or none of it does, and you see every error at once.
-- **Lua when you need logic** (M6), instead of shell snippets inside strings.
+[keys.prefix]
+"|" = "split-window -h -c '#{pane_current_path}'"
+"-" = "split-window -v -c '#{pane_current_path}'"
+```
 
-### 3. A status line that cannot slow you down (M2)
+**A status line that never slows you down.** grofe does not run commands from
+the status line, ever. Anything dynamic (a build result, an agent's state, the
+battery) is pushed in by whatever knows the value, so redraws stay instant no
+matter how much you put there.
 
-The real performance problem in tmux setups is not the redraw, it is `#()` in
-the status line: a fork per segment, per redraw, forever. grofe has **no
-subprocesses in the status line**, by design. Segments are formats over options,
-and anything dynamic is pushed in by whatever knows the value. On a real setup,
-removing 20 forks from one status line cut render time from ~97 ms to ~67 ms.
+**Modern terminal support out of the box.** True colour, the kitty keyboard
+protocol (so keys like a bare `q` or `Ctrl-Enter` reach Neovim, Helix and
+coding agents intact), clipboard over OSC 52, hyperlinks, focus events and
+tear-free redraws. The defaults are the ones most people end up configuring
+anyway: mouse on, numbering from 1, no half-second escape delay, new panes in
+the current directory.
 
-### 4. Modern terminals, by default (M2 to M3)
+**Scriptable.** Everything you can do with a key you can do from the command
+line, and `grofe control` speaks a simple JSON protocol with an event stream,
+so scripts and plugins react to what happens instead of polling. Plugins are
+ordinary programs in whatever language you like, with Lua available for the
+quick things.
 
-- **The kitty keyboard protocol, per pane.** nvim, helix and coding agents ask
-  for it; tmux's `extended-keys` quietly does not deliver it, which is why a
-  bare `q` sometimes does nothing inside tmux. grofe encodes keys for each pane
-  in the mode that pane asked for.
-- True colour, synchronized output (no tearing), OSC 52 clipboard, hyperlinks,
-  focus events and bracketed paste, all on.
-- **Saner defaults:** windows and panes numbered from 1, mouse on, 25 ms escape
-  time instead of 500, new panes open in the current directory, a large
-  scrollback.
-- **An honest `TERM`.** Panes get a terminfo entry whose every capability grofe
-  actually implements, instead of a promise it does not keep.
+**Good at running agents.** If you keep several coding agents busy at once,
+grofe can show which ones are working, which are waiting for you, and which
+have finished, and take you straight to the one that needs attention. After a
+reboot, each agent comes back to its own conversation.
 
-### 5. Scriptable all the way down (M1, M6)
+## What it isn't
 
-Every action is a command, and every command works the same from the CLI, a key
-binding, or `grofe control`: a JSON-lines protocol with request ids, structured
-errors and an **event stream** (panes exiting, focus changing, options set).
-Scripts and tests drive grofe headlessly. Plugins (M6) are ordinary programs in
-any language speaking that same protocol, or Lua for the synchronous cases. No
-polling, no WASM runtime.
-
-### 6. Made for running agents (M7)
-
-If you run several coding agents at once, grofe is built for you. Pane identity,
-resume commands and pane options are core; on top, a first-party `agents` plugin
-tracks five normalized states (`idle`, `working`, `blocked`, `completed`,
-`exited`) for Claude Code, opencode, pi and codex, shows them in borders and the
-status line without a single fork, and jumps you to the agent that needs you.
-After a reboot, each agent pane returns to its own conversation.
+grofe is not a drop-in replacement for tmux. It does not read `tmux.conf` or
+run tmux plugins, and it does not run on Windows. It is also not trying to be
+Zellij: no modal interface, no WebAssembly plugins, just tmux's way of working
+with the rough edges taken off.
 
 ## Why Rust
 
-Not for speed; tmux is already fast. For a **single static binary**, for
-mature terminal emulation libraries (grofe builds on `alacritty_terminal`), and
-for memory safety in a long-lived daemon that holds your live work. A client
-crash cannot take your panes with it: all state lives in the server.
+Not for speed; tmux is already fast. Rust gives grofe a single binary with no
+runtime dependencies, access to solid terminal emulation libraries (grofe is
+built on the one inside Alacritty), and memory safety for a long-running
+process that holds your live work. The attached client is deliberately thin,
+so if it crashes your panes don't notice.
 
-## What grofe is not
+## Status
 
-- **Not a tmux drop-in.** It does not read `tmux.conf` or run tmux plugins. The
-  object model, keys and command names are familiar; the config is new.
-- **Not Zellij.** tmux semantics, no modal UI, no WASM plugins.
-- **Not for Windows**, and in v1 it does not pass through image protocols (sixel,
-  kitty graphics): inline images from agents fall back to half-blocks.
+The foundation is in place: the crate, the shared types, and a working
+single-pane prototype that runs a shell and Neovim through the emulator. You
+can try the prototype from a checkout:
 
-## Compared
+```sh
+cargo run --example spike      # quit with Ctrl-]
+```
 
-| | tmux | Zellij | grofe |
-|---|---|---|---|
-| tmux keys and command names | yes | no | yes |
-| Panes survive reboot running their programs | via plugins | session resurrection (layout and commands) | native (M4) |
-| Typed config with provenance | no | KDL, no provenance | TOML + schema (M3) |
-| Status line forks | per segment, per redraw | plugins | none, by design |
-| Kitty keyboard protocol per pane | limited | yes | yes (M2) |
-| Scripting | CLI + `-CC` | CLI + WASM | CLI + JSON events (M1), plugins in any language (M6) |
-| Agent awareness | via plugins | no | first-party plugin (M7) |
+The next steps are the headless server, then attaching and drawing multiple
+panes, then configuration, at which point grofe becomes usable as a daily
+driver. The [roadmap](docs/plans/2026-09-23-milestones.md) has the details and
+the [design document](docs/specs/2026-09-23-grofe-design.md) explains the
+reasoning behind every choice.
 
-## Try it
+grofe runs on macOS and Linux.
 
-Not yet. The single-pane spike runs today (`cargo run --example spike`, quit
-with `Ctrl-]`); the first daily-drivable build is milestone M3.
+## Contributing
+
+Issues and ideas are welcome. The design document is the best place to start;
+if something in it looks wrong, that is exactly the kind of feedback that is
+most useful right now. To build and test:
+
+```sh
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+## License
+
+MIT or Apache-2.0, at your option.
