@@ -90,7 +90,8 @@ aliases and formats that scripts and tools send, so things like `fzf --tmux`
 and vim-tmux-navigator keep working. Once your config has moved, you can put
 grofe on your `PATH` under the name `tmux` (a symlink, since a shell alias does
 not reach scripts); a server started under that name also reports itself as
-tmux (`TERM_PROGRAM`, `tmux -V`). Real tmux stays available by its full path.
+tmux (`TERM_PROGRAM`, `tmux -V`). tmux compatibility is a translation layer;
+grofe works differently underneath. Real tmux stays available by its full path.
 Inside a grofe pane, run it as `env -u TMUX /path/to/tmux`, because `$TMUX`
 there points at grofe.
 
