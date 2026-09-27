@@ -84,6 +84,14 @@ enum Axis {
     Col,
 }
 
+/// Which side of a node the space freed by a removed sibling entered from,
+/// along the growth axis `grow` is called with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Front,
+    Back,
+}
+
 impl LayoutTree {
     /// A window with a single pane filling the whole area.
     pub fn new(pane: PaneId) -> Self {
@@ -195,26 +203,37 @@ impl LayoutTree {
         }
         let idx = path[path.len() - 1];
         let parent_path = &path[..path.len() - 1];
-        let Node::Split { children, .. } = node_at_mut(&mut self.root, parent_path) else {
+        let Node::Split { dir, children } = node_at_mut(&mut self.root, parent_path) else {
             unreachable!("parent path always resolves to a split")
         };
+        let dir = *dir;
         let removed = children.remove(idx);
-        let collapse = if children.len() == 1 {
-            children.pop()
-        } else {
-            // Like tmux's layout_destroy_cell: give the removed child's
-            // weight, plus the one border cell that's now gone too, to its
-            // neighbour (the previous child, or the new first child if the
-            // removed one was first). Keeps the survivors' weights summing
-            // to exactly the group's new local avail, same as after a split
-            // or a resize.
-            let neighbour = idx.saturating_sub(1);
-            children[neighbour].weight += removed.weight + 1;
-            None
-        };
-        if let Some(remaining) = collapse {
+        // The removed child's own weight, plus the one border cell that's
+        // now gone too, is the extent whoever inherits its space gains
+        // along `dir`. It goes to the side the removed child sat on: the
+        // previous child if there was one, otherwise the new first child.
+        let gain = removed.weight + 1;
+        let side = if idx == 0 { Side::Front } else { Side::Back };
+        if children.len() == 1 {
+            // The survivor takes over the whole slot this split occupied,
+            // growing by `gain` along `dir`. Unlike the non-collapse case,
+            // `dir` here isn't necessarily this survivor's own split axis
+            // (it's this split's axis, the one being discarded), so the
+            // growth has to be pushed down through it explicitly.
+            let mut remaining = children.pop().unwrap();
+            grow(&mut remaining.node, dir, gain, side);
             let slot = node_at_mut(&mut self.root, parent_path);
             *slot = remaining.node;
+        } else {
+            // Like tmux's layout_destroy_cell: give the removed child's
+            // cells to its neighbour directly (its own weight, in this
+            // group's list). If the neighbour is itself a nested split,
+            // push the same growth down into it too (grow's doc comment),
+            // since a same-axis descendant further down would otherwise
+            // keep weights summing to the neighbour's OLD extent.
+            let neighbour = idx.saturating_sub(1);
+            children[neighbour].weight += gain;
+            grow(&mut children[neighbour].node, dir, gain, side);
         }
     }
 
@@ -496,6 +515,47 @@ fn node_at_mut<'a>(node: &'a mut Node, path: &[usize]) -> &'a mut Node {
     }
 }
 
+/// Grows `node`'s own extent along `dir` by `delta` cells, freed by a
+/// removed sibling elsewhere in the tree and entering from `side`. Matches
+/// tmux's `layout_resize_adjust`.
+///
+/// A leaf has no weight of its own to grow: its size lives entirely in its
+/// parent's `Child::weight`, which the caller already adjusted. A split
+/// along `dir` (the growth axis) only has one child actually touching the
+/// freed space: the last child if it came from the back, the first if it
+/// came from the front. That child's own weight grows by `delta`, and
+/// `grow` recurses into just that child, since none of the split's other
+/// children changed extent. A split along the other axis doesn't subdivide
+/// `dir` at all, so growing it doesn't change any of its children's own
+/// weights (those are shares of the *other* axis); it changes what every
+/// one of them inherits along `dir`, so all of them recurse with the same
+/// delta and side.
+fn grow(node: &mut Node, dir: Dir, delta: u32, side: Side) {
+    if delta == 0 {
+        return;
+    }
+    match node {
+        Node::Leaf(_) => {}
+        Node::Split {
+            dir: node_dir,
+            children,
+        } => {
+            if *node_dir == dir {
+                let idx = match side {
+                    Side::Front => 0,
+                    Side::Back => children.len() - 1,
+                };
+                children[idx].weight += delta;
+                grow(&mut children[idx].node, dir, delta, side);
+            } else {
+                for child in children.iter_mut() {
+                    grow(&mut child.node, dir, delta, side);
+                }
+            }
+        }
+    }
+}
+
 fn rect_at_path(node: &Node, area: Rect, path: &[usize]) -> Rect {
     match path {
         [] => area,
@@ -605,6 +665,7 @@ mod tests {
     const B: PaneId = PaneId(2);
     const C: PaneId = PaneId(3);
     const D: PaneId = PaneId(4);
+    const E: PaneId = PaneId(5);
 
     #[test]
     fn single_pane_fills_area() {
@@ -1009,6 +1070,94 @@ mod tests {
     }
 
     #[test]
+    fn collapse_grows_a_nested_same_axis_descendant() {
+        // Regression for the fix-round-4 bug: a 2-child collapse promotes
+        // the surviving child by one tree level without touching that
+        // child's own weight, which is correct for the child directly, but
+        // a descendant two levels down whose own split axis realigns with
+        // the collapsed level's used to keep weights summing to its OLD
+        // extent, unaware its container just grew.
+        //
+        // root (Vertical) [A(9), B-side (Horizontal, weight 5) [
+        //     B-slot (Vertical, weight 4) [B(2), D(2)],
+        //     C(3),
+        // ]]
+        //
+        // Removing A collapses root's 2-child Vertical split: the B-side
+        // Horizontal split is promoted to root, growing from 5 rows to the
+        // full 15 (its own axis, Horizontal/cols, is untouched by this).
+        // B-slot is Vertical, the same axis root's collapse just grew, so
+        // its own weights (summing to 4, valid for its old 5-row share)
+        // would be short of the new 15-row share by 10 (9 removed + 1
+        // border) unless that growth is pushed down into it.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 8,
+            rows: 15,
+        };
+        tree.split(area, A, Dir::Vertical, B, SplitSize::Cells(5))
+            .unwrap();
+        tree.split(area, B, Dir::Horizontal, C, SplitSize::Cells(3))
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, D, SplitSize::Cells(2))
+            .unwrap();
+        tree.remove(A);
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&B].rows, 12);
+        assert_eq!(rects[&D].rows, 2);
+        assert_eq!(rects[&C].cols, 3);
+    }
+
+    #[test]
+    fn remove_grows_a_nested_same_axis_split_inside_the_neighbour() {
+        // Regression for the same fix-round-4 bug, in the non-collapsing
+        // remove branch: the neighbour that inherits a removed sibling's
+        // cells can itself be a group with a same-axis descendant of its
+        // own, which needs the same growth pushed down into it.
+        //
+        // root (Horizontal) [A(59), neighbour (Vertical, weight 9) [
+        //     B(6),
+        //     C-slot (Horizontal, weight 3) [C(6), D(2)],
+        // ], E(10)]
+        //
+        // Removing A (first, of 3 root children, so no collapse) hands its
+        // 59 cells plus a border to the neighbour directly (root's own
+        // weight for that slot). The neighbour's own axis is Vertical,
+        // perpendicular to root's Horizontal, so B and C-slot both inherit
+        // the wider share; C-slot's own axis is Horizontal again, the same
+        // one root's remove just grew, so its C/D weights need that growth
+        // pushed down into them too.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 10,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(20))
+            .unwrap();
+        tree.split(area, B, Dir::Horizontal, E, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, C, SplitSize::Cells(3))
+            .unwrap();
+        tree.split(area, C, Dir::Horizontal, D, SplitSize::Cells(2))
+            .unwrap();
+        tree.remove(A);
+
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&C].cols, 66);
+        assert_eq!(rects[&D].cols, 2);
+
+        // A follow-up resize inside the neighbour must still be exact.
+        tree.resize(area, D, Edge::Left, 5);
+        let after: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(after[&C].cols, 61);
+        assert_eq!(after[&D].cols, 7);
+    }
+
+    #[test]
     fn neighbour_picks_by_centre_line_overlap() {
         let (tree, area) = a_over_bc_tree();
         assert_eq!(tree.neighbour(area, A, Edge::Right), Some(B));
@@ -1330,38 +1479,6 @@ mod tests {
         }
     }
 
-    /// Whether `pane`'s immediate parent group's weights already sum to
-    /// exactly that group's own local avail for `area` (`None` for a pane
-    /// not in the tree, or the root's sole leaf, which has no parent group).
-    ///
-    /// This is the actual precondition `distribute`'s plain pass needs to
-    /// reproduce a group's weights exactly (see its doc comment): split,
-    /// resize and a non-collapsing remove all preserve it, so checking it
-    /// directly (rather than assuming it from the op history) also covers
-    /// the one case that doesn't: a 2-child collapse promotes the surviving
-    /// child by one tree level without touching its own weights, which
-    /// keeps *that* child's own group exact, but can leave one of *its*
-    /// descendants stale if that descendant splits along the same axis the
-    /// collapsed level did (the collapse changes what the perpendicular
-    /// level in between passes down to it, without resetting its weights).
-    fn group_is_exact(root: &Node, area: Rect, pane: PaneId) -> Option<bool> {
-        let mut path = Vec::new();
-        if !find_path(root, pane, &mut path) || path.is_empty() {
-            return None;
-        }
-        let parent_path = &path[..path.len() - 1];
-        let parent_rect = rect_at_path(root, area, parent_path);
-        match node_at(root, parent_path) {
-            Node::Split { dir, children } => {
-                let n = children.len() as u16;
-                let avail = axis_len(*dir, parent_rect).saturating_sub(n.saturating_sub(1));
-                let sum: u32 = children.iter().map(|c| c.weight).sum();
-                Some(u32::from(avail) == sum)
-            }
-            Node::Leaf(_) => None,
-        }
-    }
-
     fn op_strategy() -> impl Strategy<Value = (bool, bool, u8, u16, usize)> {
         (
             any::<bool>(),
@@ -1405,24 +1522,21 @@ mod tests {
                         // A split's two new weights sum to exactly its
                         // group's local avail as long as that group's
                         // weights already summed to its local avail
-                        // beforehand (see distribute's doc comment): split,
-                        // resize and a non-collapsing remove all preserve
-                        // that invariant for the group they touch directly.
-                        // A 2-child collapse can still leave a deeper
-                        // descendant stale (group_is_exact's doc comment),
-                        // so check the actual precondition rather than
-                        // assume it from the op history.
-                        if group_is_exact(&tree.root, area, target_pane) == Some(true) {
-                            let rects: std::collections::HashMap<_, _> =
-                                tree.compute(area).into_iter().collect();
-                            let target_weight = weight_of(&tree.root, target_pane).unwrap();
-                            let new_weight = weight_of(&tree.root, new_pane).unwrap();
-                            prop_assert_eq!(
-                                u32::from(axis_len(dir, rects[&target_pane])),
-                                target_weight
-                            );
-                            prop_assert_eq!(u32::from(axis_len(dir, rects[&new_pane])), new_weight);
-                        }
+                        // beforehand (see distribute's doc comment). Split,
+                        // resize, and remove (both branches, via `grow`)
+                        // all preserve that invariant everywhere in the
+                        // tree, not just for the group a remove touches
+                        // directly, so this holds unconditionally: build-area
+                        // rendering must reproduce these two sizes exactly.
+                        let rects: std::collections::HashMap<_, _> =
+                            tree.compute(area).into_iter().collect();
+                        let target_weight = weight_of(&tree.root, target_pane).unwrap();
+                        let new_weight = weight_of(&tree.root, new_pane).unwrap();
+                        prop_assert_eq!(
+                            u32::from(axis_len(dir, rects[&target_pane])),
+                            target_weight
+                        );
+                        prop_assert_eq!(u32::from(axis_len(dir, rects[&new_pane])), new_weight);
                     }
                 } else if alive.len() > 1 {
                     let idx = target % alive.len();
