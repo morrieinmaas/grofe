@@ -672,3 +672,37 @@ fn the_zoomed_pane_exiting_unzooms_its_window() {
         .unwrap();
     assert_eq!(zoom_state(&srv, "z:2"), ["1 80 z=0 a=1"]);
 }
+
+// --- connection counting -------------------------------------------------
+
+/// A subscriber is an open connection like any other: it keeps an empty
+/// auto-started server up, and its close lets the server exit.
+#[test]
+fn a_subscriber_keeps_an_empty_auto_started_server_until_it_closes() {
+    let srv = TestServer::unstarted();
+    let mut cmd = srv.command();
+    cmd.args(["__server", "--exit-when-empty"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let server = cmd.spawn().expect("spawn server");
+    common::wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+    let mut sub = srv.subscribe(&["option-changed"]).unwrap();
+
+    // A first request that leaves no session arms the exit-when-empty rule.
+    let out = srv.run(&["new-session", "-d", "-c", "/nonexistent/grofe-t16"]);
+    assert!(!out.status.success(), "{out:?}");
+    thread::sleep(QUIET);
+    assert!(
+        srv.is_running(),
+        "exited under a subscriber; log:\n{}",
+        srv.log()
+    );
+    srv.cmd(&["set", "-g", "@still", "1"]).unwrap();
+    assert_eq!(next(&mut sub), option_changed("@still", Some("1")));
+
+    drop(sub);
+    let status = common::wait_child(server, WAIT).expect("server exits once the subscriber closes");
+    assert!(status.success(), "{status:?}");
+    assert!(!common::exists(&srv.socket), "socket left behind");
+}
