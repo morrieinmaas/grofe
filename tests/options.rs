@@ -72,8 +72,14 @@ fn user_options_default_to_session_scope() {
         srv.cmd(&["show", "-t", "a", "@u"]).unwrap(),
         "@u \"one two\"\n"
     );
-    assert_eq!(srv.cmd(&["show", "-g", "@u"]).unwrap(), "");
+    // As tmux: showing a user option not set at that scope is an error.
+    let err = srv.cmd(&["show", "-g", "@u"]).unwrap_err();
+    assert!(err.contains("invalid option: @u"), "{err}");
+    let err = srv.cmd(&["show", "-t", "b", "@nope"]).unwrap_err();
+    assert!(err.contains("invalid option: @nope"), "{err}");
     assert_eq!(display(&srv, "a", "#{@u}"), "one two\n");
+    srv.cmd(&["set", "-g", "@e", ""]).unwrap();
+    assert_eq!(srv.cmd(&["show", "-g", "@e"]).unwrap(), "@e ''\n");
     assert_eq!(display(&srv, "b", "#{@u}"), "\n");
 }
 
@@ -105,10 +111,24 @@ fn unknown_builtin_option_errors() {
     assert!(err.contains("invalid option: no-such-option"), "{err}");
     let err = srv.cmd(&["show", "-g", "no-such-option"]).unwrap_err();
     assert!(err.contains("invalid option: no-such-option"), "{err}");
-    let err = srv
-        .cmd(&["set", "-g", "remain-on-exit", "maybe"])
-        .unwrap_err();
-    assert!(err.contains("invalid value for remain-on-exit"), "{err}");
+    // Value errors are worded as tmux words them.
+    for (name, value, want) in [
+        ("remain-on-exit", "maybe", "unknown value: maybe"),
+        ("history-limit", "abc", "value is invalid: abc"),
+        ("history-limit", "3x", "value is invalid: 3x"),
+        ("history-limit", "-3", "value is too small: -3"),
+        (
+            "history-limit",
+            "2147483648",
+            "value is too large: 2147483648",
+        ),
+        ("pane-base-index", "65536", "value is too large: 65536"),
+    ] {
+        let err = srv.cmd(&["set", "-g", name, value]).unwrap_err();
+        assert!(err.contains(want), "{name} {value}: {err}");
+    }
+    srv.cmd(&["set", "-g", "history-limit", "2147483647"])
+        .unwrap();
     let err = srv.cmd(&["set", "-g", "@x"]).unwrap_err();
     assert!(err.contains("empty value"), "{err}");
     // A user option needs no declaration.
@@ -120,7 +140,7 @@ fn remain_on_exit_is_looked_up_per_pane() {
     let srv = TestServer::start();
     new_session(&srv, "r");
     for _ in 0..3 {
-        srv.cmd(&["new-window", "-d", "-t", "r", "sleep", "2"])
+        srv.cmd(&["new-window", "-d", "-t", "r", "sleep", "30"])
             .unwrap();
     }
     srv.cmd(&["set", "-p", "-t", "r:2.1", "remain-on-exit", "on"])
@@ -128,6 +148,15 @@ fn remain_on_exit_is_looked_up_per_pane() {
     srv.cmd(&["set", "-w", "-t", "r:4", "remain-on-exit", "on"])
         .unwrap();
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
+    // Only now end the panes in windows 2 to 4.
+    for w in ["r:2", "r:3", "r:4"] {
+        let pid: i32 = display(&srv, w, "#{pane_pid}").trim().parse().unwrap();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+    }
 
     let windows = || srv.cmd(&["list-windows", "-t", "r", "-F", "#{window_index}"]);
     srv.wait_for(|| windows().is_ok_and(|w| w == "1\n2\n4\n"), WAIT)
@@ -279,4 +308,74 @@ fn dash_c_expands_pane_current_path_of_the_target() {
     .unwrap();
     let got = wait_for_file(&out);
     assert_eq!(got, format!("{}\n", sub.canonicalize().unwrap().display()));
+}
+
+/// As tmux: a flag option set with no value flips the value it has at
+/// that scope, inherited or not.
+#[test]
+fn bool_option_with_no_value_toggles() {
+    let srv = TestServer::start();
+    new_session(&srv, "t");
+    let show = |args: &[&str]| srv.cmd(args).unwrap();
+
+    // The harness starts servers with remain-on-exit on.
+    srv.cmd(&["set", "-g", "remain-on-exit"]).unwrap();
+    assert_eq!(
+        show(&["show", "-g", "remain-on-exit"]),
+        "remain-on-exit off\n"
+    );
+    srv.cmd(&["set", "-g", "remain-on-exit"]).unwrap();
+    assert_eq!(
+        show(&["show", "-g", "remain-on-exit"]),
+        "remain-on-exit on\n"
+    );
+
+    // No window value yet: the inherited `on` flips to a window `off`.
+    srv.cmd(&["set", "-w", "-t", "t:1", "remain-on-exit"])
+        .unwrap();
+    assert_eq!(
+        show(&["show", "-w", "-t", "t:1", "remain-on-exit"]),
+        "remain-on-exit off\n"
+    );
+    // The pane inherits the window's `off` and flips it to `on`.
+    srv.cmd(&["set", "-p", "-t", "t:1.1", "remain-on-exit"])
+        .unwrap();
+    assert_eq!(
+        show(&["show", "-p", "-t", "t:1.1", "remain-on-exit"]),
+        "remain-on-exit on\n"
+    );
+
+    // A number option still needs a value.
+    let err = srv.cmd(&["set", "-g", "history-limit"]).unwrap_err();
+    assert!(err.contains("empty value"), "{err}");
+}
+
+/// A `-c` directory that does not exist is an error and leaves nothing
+/// behind. tmux falls back to $HOME silently; grofe deliberately fails.
+#[test]
+fn dash_c_with_a_missing_directory_fails_cleanly() {
+    let srv = TestServer::start();
+    new_session(&srv, "m");
+    let missing = srv.home.join("no-such-dir");
+    let err = srv
+        .cmd(&[
+            "new-window",
+            "-t",
+            "m",
+            "-c",
+            missing.to_str().unwrap(),
+            "sleep",
+            "30",
+        ])
+        .unwrap_err();
+    assert!(err.contains("can't start pane in"), "{err}");
+    assert!(err.contains("no-such-dir"), "{err}");
+    let windows = srv
+        .cmd(&["list-windows", "-t", "m", "-F", "#{window_index}"])
+        .unwrap();
+    assert_eq!(windows, "1\n");
+    let panes = srv
+        .cmd(&["list-panes", "-t", "m", "-F", "#{pane_id}"])
+        .unwrap();
+    assert_eq!(panes.lines().count(), 1, "{panes}");
 }

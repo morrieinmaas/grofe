@@ -12,6 +12,7 @@
 //! window and its session.
 
 use std::collections::BTreeMap;
+use std::num::IntErrorKind;
 
 use crate::cmd::{
     Command, DisplayMessage, FormatVars, ListPanes, ListSessions, ListWindows, OptionScope,
@@ -27,7 +28,10 @@ pub const REMAIN_ON_EXIT: &str = "remain-on-exit";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Bool,
-    Number,
+    /// A whole number from 0 to `max` (tmux's bounds).
+    Number {
+        max: i64,
+    },
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -45,19 +49,25 @@ struct Builtin {
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
-        kind: Kind::Number,
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
         scope: OptionScope::Session,
         default: "1",
     },
     Builtin {
         name: "history-limit",
-        kind: Kind::Number,
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
         scope: OptionScope::Session,
         default: "50000",
     },
     Builtin {
         name: "pane-base-index",
-        kind: Kind::Number,
+        kind: Kind::Number {
+            max: u16::MAX as i64,
+        },
         scope: OptionScope::Window,
         default: "1",
     },
@@ -206,23 +216,34 @@ fn check_name(name: &str) -> Result<(), String> {
 }
 
 /// The normalized value to store for `name`, or an error for an unknown
-/// option or a value of the wrong type.
+/// option or a value of the wrong type, worded as tmux words it.
 fn validate(name: &str, value: &str) -> Result<String, String> {
     check_name(name)?;
     let Some(b) = builtin(name) else {
         return Ok(value.to_string());
     };
-    let invalid = || format!("invalid value for {name}: {value}");
     match b.kind {
         Kind::Bool => match value {
             "on" | "yes" | "true" | "1" => Ok("on".to_string()),
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
-            _ => Err(invalid()),
+            _ => Err(format!("unknown value: {value}")),
         },
-        Kind::Number => value
-            .parse::<u64>()
-            .map(|n| n.to_string())
-            .map_err(|_| invalid()),
+        Kind::Number { max } => {
+            let too_small = || format!("value is too small: {value}");
+            let too_large = || format!("value is too large: {value}");
+            let n = value.parse::<i64>().map_err(|e| match e.kind() {
+                IntErrorKind::PosOverflow => too_large(),
+                IntErrorKind::NegOverflow => too_small(),
+                _ => format!("value is invalid: {value}"),
+            })?;
+            if n < 0 {
+                Err(too_small())
+            } else if n > max {
+                Err(too_large())
+            } else {
+                Ok(n.to_string())
+            }
+        }
     }
 }
 
@@ -288,11 +309,37 @@ fn set_option(model: &mut Model, ctx: &ClientCtx, c: SetOption) -> Result<String
     // T1.6: emit `option-changed` when these return true.
     if c.unset {
         model.options.unset(owner, &c.name)?;
-    } else {
-        let value = c.value.as_deref().ok_or("empty value")?;
-        model.options.set(owner, &c.name, value, c.persist)?;
+        return Ok(String::new());
     }
+    let value = match c.value {
+        Some(value) => value,
+        // As tmux: a flag option given no value flips the value it has at
+        // this scope, inherited or not.
+        None if builtin(&c.name).is_some_and(|b| b.kind == Kind::Bool) => {
+            let current = model.options.lookup(&c.name, &owner_chain(model, owner));
+            bool_str(current != Some("on")).to_string()
+        }
+        None => return Err("empty value".to_string()),
+    };
+    model.options.set(owner, &c.name, &value, c.persist)?;
     Ok(String::new())
+}
+
+/// The owners a lookup at `owner` walks before global: `owner` and the
+/// objects above it.
+fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
+    match owner {
+        Owner::Global => Vec::new(),
+        Owner::Session(_) => vec![owner],
+        Owner::Window(w) => {
+            let mut chain = vec![owner];
+            if let Some(w) = model.windows.get(&w) {
+                chain.push(Owner::Session(w.session));
+            }
+            chain
+        }
+        Owner::Pane(p) => chain(model, p),
+    }
 }
 
 fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String, String> {
@@ -300,6 +347,10 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
     let owner = owner(model, scope, &c.target, ctx)?;
     if let Some(name) = &c.name {
         check_name(name)?;
+        // As tmux: a user option not set at this scope is an error.
+        if name.starts_with('@') && model.options.get(owner, name).is_none() {
+            return Err(format!("invalid option: {name}"));
+        }
     }
     Ok(model
         .options
@@ -309,10 +360,12 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         .collect())
 }
 
-/// A value as `show-options` prints it: quoted when empty or when it
-/// holds whitespace, as tmux does.
+/// A value as `show-options` prints it, as tmux does: `''` when empty,
+/// double-quoted when it holds whitespace.
 fn quote(value: &str) -> String {
-    if value.is_empty() || value.contains(char::is_whitespace) {
+    if value.is_empty() {
+        "''".to_string()
+    } else if value.contains(char::is_whitespace) {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         value.to_string()
@@ -538,6 +591,6 @@ mod tests {
     fn show_quotes_values_with_spaces() {
         assert_eq!(quote("a"), "a");
         assert_eq!(quote("a b"), "\"a b\"");
-        assert_eq!(quote(""), "\"\"");
+        assert_eq!(quote(""), "''");
     }
 }
