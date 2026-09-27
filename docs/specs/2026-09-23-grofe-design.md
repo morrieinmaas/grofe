@@ -35,7 +35,9 @@ If performance becomes the headline, the project has lost the plot.
 
 **What grofe is not:**
 
-- Not a tmux drop-in. It does not read `tmux.conf` or run tmux plugins.
+- Not a tmux drop-in. It does not read `tmux.conf` at runtime or run tmux
+  plugins. A one-shot converter, `grofe import-tmux` (M3.5, §5.5), turns the
+  common subset of a `tmux.conf` into grofe TOML.
 - Not Zellij. No WASM plugin runtime, no modal UI by default, tmux semantics.
 - Not cross-platform beyond Unix. macOS and Linux only.
 
@@ -45,7 +47,7 @@ If performance becomes the headline, the project has lost the plot.
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | **tmux-familiar, not tmux-compatible.** Match tmux's object model, default key bindings, CLI verb names, common flags, target syntax and a subset of format strings (§4.5). Do not parse `tmux.conf`, run tmux plugins, or speak tmux's `-CC` wire format in v1. | Muscle memory and scripts transfer; tmux's config language and plugin semantics are exactly what we are escaping. `-CC` (iTerm2 integration) is a possible M8, not a v1 promise. |
+| D1 | **tmux-familiar, not tmux-compatible.** Match tmux's object model, default key bindings, CLI verb names, common flags, target syntax and a subset of format strings (§4.5). Do not read `tmux.conf` at runtime, run tmux plugins, or speak tmux's `-CC` wire format in v1. `grofe import-tmux` (M3.5, §5.5) converts the common subset of a `tmux.conf` once, to TOML the user then owns. | Muscle memory and scripts transfer; tmux's config language and plugin semantics are exactly what we are escaping. A one-shot converter lowers the switching cost without making tmux's language part of grofe. `-CC` (iTerm2 integration) is a possible M8, not a v1 promise. |
 | D2 | **One binary, `grofe`.** It is the server, the attach client, and the CLI. Only session-creating commands auto-start a server (§4.1); every other command fails fast when none is running. | One thing to install and version. Agent hooks call `set` constantly, often from IDEs outside grofe, and must never spawn a stray server. |
 | D3 | **The server renders; the client is thin.** The attach client puts the tty in raw mode, probes the outer terminal's capabilities once, forwards input bytes and resize events, and writes whatever bytes the server sends. All state and all composition live in the server. | Client crashes are survivable by construction. Same split as tmux. |
 | D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and canopy's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
@@ -55,6 +57,7 @@ If performance becomes the headline, the project has lost the plot.
 | D8 | **No subprocesses in the status line, ever.** The status line renders formats over options. Dynamic content arrives by something external setting an option. `run-shell` exists for key bindings only. | The one real performance problem in tmux setups, deleted by design. canopy measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (canopy 6ef854a). |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
 | D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). | Keeps core general, and gives the plugin API a real, demanding first user. |
+| D11 | **Ghostty and WezTerm are the first-class outer terminals.** grofe is tested and tuned against both: kitty keyboard, synchronized output, OSC 52 and kitty graphics placeholders (§4.9). Other terminals work with legacy key encoding and whatever features the capability probe (§4.4) finds; missing features degrade, never break. WezTerm speaks kitty keys only with `enable_kitty_keyboard = true` in the user's WezTerm config, and grofe's docs must say so. | Two modern terminals cover the owner's machines and most of the target audience. Naming them keeps the manual checks and the probe fixtures concrete. |
 
 **Publishability rule (inherited from athome and canopy):** no identities,
 hostnames, or machine specifics in shipped files.
@@ -168,9 +171,10 @@ reason.
 
 - **Per-client capabilities.** Before its hello the client probes the outer
   terminal once (DA1, XTVERSION, DECRQM for synchronized output 2026, kitty
-  keyboard query) and sends a caps struct: truecolor or 256, styled underline,
-  synchronized output, kitty keys. The renderer downgrades colours and styles per
-  client.
+  keyboard query, kitty graphics query) and sends a caps struct: truecolor or
+  256, styled underline, synchronized output, kitty keys, kitty graphics. The
+  renderer downgrades colours and styles per client. The probe's answers are
+  tuned against Ghostty and WezTerm (D11); anything else gets what it answers.
 - **Compose and diff.** Per client the server keeps the last frame (a cell
   buffer). On change it snapshots the visible rows of each affected pane under
   that pane's lock, releases the lock, composes the next frame (pane rows clipped
@@ -207,6 +211,7 @@ key bindings, control mode and plugins all produce argv.
 | `kill-server`, `subscribe` (control mode) | M1 |
 | `attach-session`/`attach`, `detach-client`, `next-window`, `previous-window`, `last-window`, `rename-session`, `rename-window`, `switch-client` (`-l -p -n`), `send-prefix`, `list-clients`, `capture-pane -e` | M2 |
 | `bind-key`, `unbind-key`, `list-keys`, `source-file`, `reload`, `show-config`, `command-prompt`, `run-shell` (bindings only, D8), `select-layout` (§4.3), `;` command sequences | M3 |
+| `import-tmux` (grofe's own, not a tmux verb; runs without a server, §5.5) | M3.5 |
 | `pane-set-resume`, `reboot-check`, `start-server --restore` | M4 |
 | `display-popup -E`, `display-menu` (needed by canopy's palette and which-key) | M5 |
 
@@ -247,7 +252,7 @@ resolve correctly for a CLI call made from inside a pane:
 ```json
 {"grofe": 1, "mode": "control", "cwd": "/home/u/src", "pane": "%3", "env": {"SSH_AUTH_SOCK": "..."}}
 {"grofe": 1, "mode": "attach", "cwd": "...", "pane": null, "env": {...},
- "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "sync": true, "kitty_keys": true}, "session": "main"}
+ "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "sync": true, "kitty_keys": true, "kitty_graphics": true}, "session": "main"}
 ```
 
 `pane` is `$GROFE_PANE` when set. Attaching from inside a grofe pane is refused
@@ -334,6 +339,8 @@ are added when a test, the status line, or a plugin needs them. Candidates:
   cwd comes only from sampling: `vte` 0.15 does not parse OSC 7. From M3
   grofe's own OSC byte scanner (T3.3, §4.9) reads OSC 7, which is then the
   preferred cwd source when a shell emits it, and emits `PaneEvent::Cwd`.
+  The same scanner also frames kitty graphics commands (APC `_G`, §4.9),
+  which `vte` 0.15 drops.
 
 ### 4.9 Passthrough
 
@@ -343,8 +350,38 @@ window title, bell (also sets the window activity flag, which agents rely on),
 OSC 8 hyperlinks (re-emitted from cell hyperlink attributes), and OSC 9 / OSC 777
 notifications. `vte` 0.15 does not parse OSC 9 or OSC 777, so those come from
 the same grofe OSC byte scanner that reads OSC 7 (§4.8), run over pane output
-before the parser sees it. Unsupported in v1: sixel, kitty graphics, arbitrary DCS
-passthrough (a nested tmux works as a normal terminal app, without passthrough).
+before the parser sees it. Unsupported in v1: sixel, kitty graphics direct
+placement, arbitrary DCS passthrough (a nested tmux works as a normal terminal
+app, without passthrough).
+
+**Inline images [planned, M3]: kitty graphics via Unicode placeholders.** grofe
+supports the kitty graphics protocol's Unicode-placeholder mode, the mode kitty
+documents for multiplexers. The application transmits image data and creates a
+virtual placement (APC `_G` with `U=1`), then prints U+10EEEE placeholder
+characters where the image should appear. The row and column of each cell are
+encoded as combining diacritics, and the image id is encoded in the foreground
+colour (and the placement id in the underline colour).
+
+- **Transmit.** `vte` 0.15 drops APC, so the pre-advance byte scanner that reads
+  OSC 7/9/777 (§4.8) also frames APC `_G` sequences, surviving split reads. The
+  transmit, virtual-placement and delete commands are forwarded to every
+  attached client whose probe reports kitty graphics (§4.4), queued ahead of the
+  next frame. Image ids are remapped per pane so two panes that both pick id 1
+  cannot collide; forwarded commands carry `q=2` so the outer terminal's replies
+  never land in grofe's input stream, and grofe answers the pane's own queries
+  (`a=q`) from the client's caps.
+- **Placeholders are text.** The emulator stores placeholder characters and
+  their diacritics as ordinary cell content, so scrolling, splits, zoom and
+  resize need no image tracking: the outer terminal draws whatever placeholder
+  cells grofe renders. The renderer's only special case is the per-pane id
+  remap: it rewrites a placeholder cell's colour to the remapped id and never
+  downgrades that colour.
+- **Late attach.** The server keeps the last transmitted data per image id,
+  under a memory cap (oldest evicted first), and re-sends it to a client that
+  attaches later or needs a full redraw.
+- **Out of scope in v1:** direct placement (any placement without `U=1`) and
+  sixel. Both draw at screen positions and need
+  per-pane image tracking and clipping.
 
 ### 4.10 Status line [planned, M2]
 
@@ -476,6 +513,25 @@ plugin binds, and `list-keys` marks bindings that did not come from the config
 table, so a doctor can flag them. tmux-resurrect silently took over canopy's
 `prefix C-s` this way (canopy 94435f6).
 
+### 5.5 Importing a tmux.conf [planned, M3.5]
+
+`grofe import-tmux [<tmux.conf>] [-o <path>]` reads a `tmux.conf` (default
+`~/.tmux.conf`, then `~/.config/tmux/tmux.conf`), follows `source-file`, and
+writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
+
+- **Converted:** `set`/`set-option` of options grofe has (tmux names mapped to
+  the schema, e.g. `status-left` to `status.left`), `bind-key`/`unbind-key`
+  including `-n`, `-r` and `-T` with the `prefix` and `root` tables, `prefix`,
+  `mouse`, `base-index`, and `status-left`/`status-right` formats that do not
+  use `#()`.
+- **Reported, not converted:** every other line, each with its file, line and
+  reason: `#()` in a format (D8), `if-shell`, `run-shell` and hooks, plugins
+  and TPM, options grofe does not have. The report goes to stderr, so stdout
+  stays valid TOML.
+- The output loads in grofe with no errors, and is meant as a starting
+  `config.toml` or `user.toml` that the user then edits. There is no
+  round trip and no runtime reading of tmux.conf (D1).
+
 ---
 
 ## 6. Persistence and pane identity (M4)
@@ -574,6 +630,7 @@ canopy keeps its tmux path until grofe reaches parity, then gains a grofe backen
 | resurrect, continuum, save strategy | replaced by grofe M4 |
 | `reboot-check` | core (M4) says whether a resume is set; the agents plugin adds reasons ("no session id reported") |
 | `adopt` | agents plugin (M7). No respawn: adopt only calls `pane-set-resume` on the live pane, so the unsent-input guard is unnecessary for adopt itself. Keeps dry-run by default and idempotence |
+| inline images (`allow-passthrough on`) | an agent's kitty graphics in placeholder mode pass through natively (§4.9), with no passthrough option; direct placement and sixel do not pass, and those programs fall back to whatever they draw without graphics |
 | palette, which-key, key search | `display-popup -E` + fzf and `display-menu` (M5), backed by `list-keys` descriptions |
 | login autostart | canopy ships the launchd/systemd unit running `grofe start-server --restore`; the unit gives panes a real `PATH`, or relies on `argv[0]` resolution (§6) |
 
@@ -636,8 +693,9 @@ outer terminal in §4.4.
 
 **Acceptance suite (terminal correctness):** Neovim (alt screen, true colour,
 cursor shape, mouse, bracketed paste, focus events, background colour query),
-fzf, less, htop, `git log` with a pager, a nested tmux and a nested grofe, and a
-wide-character and emoji screen. Every item must pass before a milestone that
+fzf, less, htop, `git log` with a pager, a nested tmux and a nested grofe, a
+wide-character and emoji screen, and `kitten icat --unicode-placeholder` where
+kitten is installed. Every item must pass before a milestone that
 claims daily-driver status is done.
 
 ---
@@ -645,7 +703,8 @@ claims daily-driver status is done.
 ## 9. Testing
 
 - **Unit:** command parser, targets, format expansion, layout, config layering
-  and provenance, protocol framing, key encode and decode.
+  and provenance, protocol framing, key encode and decode, and the capability
+  probe against recorded replies from Ghostty and WezTerm (D11).
 - **Integration (the backbone):** each test starts a server on a unique `-S`
   socket with `remain-on-exit = true`, with `HOME`, `XDG_STATE_HOME` and
   `XDG_RUNTIME_DIR` in tempdirs and restore-on-start forced off, so a test can
@@ -686,17 +745,18 @@ claims daily-driver status is done.
 | Scope creep toward "replace tmux for everyone" | §1 non-goals, D1, and the milestone column in §4.5. New commands need a dogfooding reason. |
 | Protocol churn breaking tests | Protocol internal until M6; tests go through one harness module. |
 | Terminal replies stuck behind the actor, making apps hang | §4.8: replies go from the reader straight to the writer queue. |
+| Inline images help only programs that use kitty's placeholder mode | Before building it, a T0-style check records which of the owner's tools emit placeholders (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant). Programs that use direct placement or sixel still show nothing, as in v1's non-goals. |
 
 ---
 
 ## 11. Non-goals (v1)
 
 - Windows support.
-- Reading `tmux.conf`, running tmux plugins, tmux's `-CC` wire format (M8 maybe).
+- Reading `tmux.conf` at runtime and running tmux plugins (`grofe import-tmux`
+  converts once, M3.5, §5.5); tmux's `-CC` wire format (M8 maybe).
 - WASM plugins.
 - Network session sharing.
-- Sixel, kitty graphics, arbitrary DCS passthrough. canopy runs tmux with
-  `allow-passthrough on`, so for canopy users on grofe an agent's inline images
-  fall back to half-block rendering.
+- Sixel, kitty graphics direct placement, arbitrary DCS passthrough. Kitty
+  graphics in Unicode-placeholder mode are supported (§4.9).
 - Scrollback persistence across restarts.
 - Layout presets beyond `main-vertical` and `even-*` (§4.3), until dogfooding asks.
