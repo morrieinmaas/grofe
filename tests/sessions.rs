@@ -35,10 +35,13 @@ fn pane_ids(srv: &TestServer, target: &str) -> Vec<String> {
         .collect()
 }
 
-/// Runs the CLI as if from inside pane `pane` (`GROFE_PANE` set).
+/// Runs the CLI as if from inside pane `pane` of `srv`, with `GROFE` and
+/// `GROFE_PANE` set as a real pane has them.
 fn cmd_from_pane(srv: &TestServer, pane: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd = srv.command();
-    cmd.env("GROFE_PANE", pane).args(args);
+    cmd.env("GROFE", &srv.socket)
+        .env("GROFE_PANE", pane)
+        .args(args);
     let out = run_bounded(cmd, CMD_TIMEOUT);
     if out.status.success() {
         Ok(out.stdout)
