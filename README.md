@@ -51,10 +51,11 @@ mouse = true
 "-" = "split-window -v -c '#{pane_current_path}'"
 ```
 
-**A status line that never slows you down.** grofe does not run commands from
-the status line, ever. Anything dynamic (a build result, an agent's state, the
-battery) is pushed in by whatever knows the value, so redraws stay instant no
-matter how much you put there.
+**A status line that never slows you down.** grofe's status line never forks
+on redraw. Commands you configure for it (the classic `#(...)` segments) run on
+a timer, one at a time, and their output is cached; anything else dynamic (a
+build result, an agent's state) is pushed in by whatever knows the value. So
+redraws stay instant no matter how much you put there.
 
 **Modern terminal support out of the box.** True colour, the kitty keyboard
 protocol (so keys like a bare `q` or `Ctrl-Enter` reach Neovim, Helix and
@@ -84,11 +85,14 @@ above all) is listed with the reason, so you know exactly what is left to do.
 Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
 you try it.
 
-Once your config has moved, you can put grofe on your `PATH` under the name
-`tmux` (a symlink, since a shell alias does not reach scripts). It then sets
-`TMUX` and `TMUX_PANE` in its panes and answers the commands and formats that
-scripts and tools send, so things like `fzf --tmux` and vim-tmux-navigator keep
-working. Real tmux stays available by its full path.
+grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
+aliases and formats that scripts and tools send, so things like `fzf --tmux`
+and vim-tmux-navigator keep working. Once your config has moved, you can put
+grofe on your `PATH` under the name `tmux` (a symlink, since a shell alias does
+not reach scripts); a server started under that name also reports itself as
+tmux (`TERM_PROGRAM`, `tmux -V`). Real tmux stays available by its full path.
+Inside a grofe pane, run it as `env -u TMUX /path/to/tmux`, because `$TMUX`
+there points at grofe.
 
 ## Terminals
 
