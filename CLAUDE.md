@@ -17,6 +17,9 @@ Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 - `bats tests/cli.bats`
+- `scripts/ci-local.sh` runs the whole CI workflow locally (Linux jobs in a
+  container via `act`, then the macOS leg natively). It is the CI gate while
+  GitHub Actions is unavailable.
 
 ## Testing
 
