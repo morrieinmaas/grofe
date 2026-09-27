@@ -1,0 +1,83 @@
+name: CI
+
+# Split by cost (spec §9): `unit` runs on every push; `acceptance` (integration
+# tests driving neovim and friends, plus bats) runs on pull requests, main and
+# manual dispatch. Separate jobs so one red job cannot hide another.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test (lib, bins, doc)
+        run: |
+          cargo test --lib --bins
+          cargo test --doc
+
+  acceptance:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y neovim fzf htop tmux bats
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim fzf htop tmux bats-core
+
+      - name: Verify tools present
+        run: |
+          nvim --version | head -1
+          fzf --version
+          htop --version
+          tmux -V
+          bats --version
+
+      - name: cargo test (integration)
+        run: cargo test --test '*'
+
+      - name: bats
+        run: |
+          cargo build
+          bats tests/cli.bats
