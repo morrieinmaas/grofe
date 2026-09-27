@@ -38,7 +38,8 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     };
     let s = &model.sessions[&session];
     let env = s.env.clone();
-    let cwd = resolve_cwd(ctx, c.cwd.as_deref(), &s.cwd);
+    let target = model.windows.get(&s.active).map(|w| w.active);
+    let cwd = resolve_cwd(model, ctx, target, c.cwd.as_deref(), &s.cwd);
     let size = (s.cols, s.rows);
 
     let window = state.model.alloc_window_id();
