@@ -1,4 +1,14 @@
 //! Actor, lifecycle, accept, hook registration.
+//!
+//! Process start (spec §4.1): the CLI re-execs itself as `grofe __server -S
+//! <sock> --ready-fd <n>`, detached. [`run_daemon`] is that process's whole
+//! life: it closes every inherited fd above 2 (except the readiness pipe),
+//! puts `/dev/null` on stdin and the log on stdout/stderr, and only then
+//! builds the tokio runtime, binds, and writes `ok` to the readiness pipe.
+//!
+//! One actor task owns all server state ([`State`]); connection tasks turn
+//! control-mode requests into [`ServerMsg::Control`] and write the reply
+//! back. Commands run through the single [`dispatch`] seam.
 
 pub mod clients;
 pub mod dispatch;
@@ -12,3 +22,415 @@ pub mod passthrough;
 pub mod prompt;
 pub mod render;
 pub mod status;
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context as _;
+use futures_util::{SinkExt, StreamExt};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio_util::codec::{Framed, LinesCodec};
+
+use crate::paths::{self, Env};
+use crate::protocol::{self, ClientCtx, Hello, Reply, Request};
+use pane::PaneEvent;
+
+/// Logged once per server process, first thing after the log is open, as
+/// `grofe server starting: pid <pid>, socket <path>`. The test harness counts
+/// these lines to prove one server per socket.
+pub const START_MARKER: &str = "grofe server starting";
+
+/// A message into the server actor.
+#[derive(Debug)]
+pub enum ServerMsg {
+    /// One control-mode request; the actor answers on `reply`.
+    Control {
+        ctx: ClientCtx,
+        req: Request,
+        reply: oneshot::Sender<Reply>,
+    },
+    Pane(PaneEvent),
+    // M2: client frames.
+}
+
+/// Settings read from the server's environment at start. They stand in for
+/// config until it exists, and the test harness sets both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartOptions {
+    /// `GROFE_RESTORE_ON_START=0` turns it off. Read now, used from M4, so
+    /// a test server can never restore the user's real sessions.
+    pub restore_on_start: bool,
+    /// `GROFE_REMAIN_ON_EXIT=1` turns it on: the initial global value of
+    /// the `remain-on-exit` option (spec default off; tests run with it on).
+    pub remain_on_exit: bool,
+}
+
+impl StartOptions {
+    pub const RESTORE_ON_START_ENV: &str = "GROFE_RESTORE_ON_START";
+    pub const REMAIN_ON_EXIT_ENV: &str = "GROFE_REMAIN_ON_EXIT";
+
+    pub fn from_env() -> StartOptions {
+        let var = |name| std::env::var(name).ok();
+        StartOptions {
+            restore_on_start: var(Self::RESTORE_ON_START_ENV).as_deref() != Some("0"),
+            remain_on_exit: var(Self::REMAIN_ON_EXIT_ENV).as_deref() == Some("1"),
+        }
+    }
+}
+
+/// Everything the actor owns. The model (T1.5a) joins it here.
+pub struct State {
+    /// This server's socket; panes get it as `GROFE`.
+    pub socket: PathBuf,
+    pub options: StartOptions,
+    /// Handed to `PaneHandle::spawn`: pane events reach the actor through it.
+    pub pane_events: mpsc::Sender<PaneEvent>,
+    /// Handed to `PaneHandle::spawn`: pane output wakes the renderer (M2).
+    pub wake: Arc<Notify>,
+    /// Set by a command (`kill-server`, the last session closing): the
+    /// actor removes the socket, sends the reply, and stops.
+    pub exit: bool,
+    /// (dev, ino) of the socket we bound, so we only ever remove our own.
+    socket_id: Option<(u64, u64)>,
+}
+
+impl State {
+    fn remove_socket(&self) {
+        let Ok(meta) = fs::symlink_metadata(&self.socket) else {
+            return;
+        };
+        if Some((meta.dev(), meta.ino())) == self.socket_id {
+            let _ = fs::remove_file(&self.socket);
+        }
+    }
+}
+
+/// The dispatch seam: runs one command (`argv[0]` is the verb) against the
+/// actor's state, returning the command's stdout or its error message.
+///
+/// A stub until T1.5a replaces the body with its `dispatch` module.
+pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let _ = ctx;
+    match argv.first().map(String::as_str) {
+        Some("kill-server") => {
+            state.exit = true;
+            Ok(String::new())
+        }
+        Some(verb) => Err(format!("unknown command: {verb}")),
+        None => Err("no command given".to_string()),
+    }
+}
+
+/// Handles one pane event. Filled in by T1.5a (dead panes) and T1.6
+/// (`pane-exited` / `pane-output` emission).
+fn handle_pane_event(state: &mut State, event: PaneEvent) {
+    let _ = (state, event);
+}
+
+/// Entry point of `grofe __server`: runs the server until it exits and
+/// returns the process exit code. Must run before any thread or runtime
+/// exists (it closes inherited fds wholesale).
+pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>) -> i32 {
+    close_inherited_fds(ready_fd);
+    // SAFETY: the CLI passed us this fd as the write end of the readiness
+    // pipe, and close_inherited_fds kept it open; nothing else owns it.
+    let mut ready = ready_fd.map(|fd| unsafe { File::from_raw_fd(fd) });
+
+    let log = paths::log_path(&Env::from_process(), socket);
+    if let Err(e) = redirect_stdio(&log) {
+        signal_ready(
+            &mut ready,
+            &format!("cannot open log {}: {e}", log.display()),
+        );
+        return 1;
+    }
+    eprintln!(
+        "{START_MARKER}: pid {}, socket {}",
+        std::process::id(),
+        socket.display()
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("grofe server: cannot build runtime: {e}");
+            signal_ready(&mut ready, &format!("cannot build runtime: {e}"));
+            return 1;
+        }
+    };
+    let options = StartOptions::from_env();
+    match runtime.block_on(serve(socket.to_path_buf(), ready, options)) {
+        Ok(()) => {
+            eprintln!("grofe server exiting");
+            0
+        }
+        Err(e) => {
+            eprintln!("grofe server error: {e:#}");
+            1
+        }
+    }
+}
+
+/// Closes every fd above 2 except `keep`: a leaked pipe from whoever
+/// started the CLI would otherwise keep its reader waiting for an EOF that
+/// never comes (spec §4.1).
+fn close_inherited_fds(keep: Option<RawFd>) {
+    let fds: Vec<RawFd> = match fs::read_dir("/dev/fd") {
+        Ok(dir) => dir
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+            .collect(),
+        // ponytail: without /dev/fd, only fds below 1024 are closed.
+        Err(_) => (3..1024).collect(),
+    };
+    for fd in fds {
+        if fd > 2 && Some(fd) != keep {
+            // EBADF (e.g. the read_dir handle, already closed) is fine.
+            let _ = nix::unistd::close(fd);
+        }
+    }
+}
+
+/// `/dev/null` on fd 0 and the log on fds 1 and 2, so every std stream is a
+/// valid fd before any pane spawns: a pty slave landing on 0-2 would keep
+/// its CLOEXEC-less number and be closed at exec.
+fn redirect_stdio(log: &Path) -> io::Result<()> {
+    if let Some(dir) = log.parent() {
+        paths::ensure_private_dir(dir)?;
+    }
+    let null = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")?;
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(log)?;
+    nix::unistd::dup2_stdin(&null)?;
+    nix::unistd::dup2_stdout(&log)?;
+    nix::unistd::dup2_stderr(&log)?;
+    // If either opened onto 0-2 (because that slot was closed), it now is
+    // one of the std streams: keep it open rather than dropping it.
+    for file in [null, log] {
+        let fd = file.into_raw_fd();
+        if fd > 2 {
+            let _ = nix::unistd::close(fd);
+        }
+    }
+    Ok(())
+}
+
+/// Tells the waiting CLI how start-up went (`ok` or an error), then closes
+/// the pipe. A no-op after the first call.
+fn signal_ready(ready: &mut Option<File>, msg: &str) {
+    if let Some(mut f) = ready.take() {
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
+async fn serve(
+    socket: PathBuf,
+    mut ready: Option<File>,
+    options: StartOptions,
+) -> anyhow::Result<()> {
+    let signals = (
+        signal(SignalKind::terminate()).context("installing SIGTERM handler")?,
+        signal(SignalKind::interrupt()).context("installing SIGINT handler")?,
+    );
+    let listener = match UnixListener::bind(&socket) {
+        Ok(l) => l,
+        Err(e) => {
+            signal_ready(
+                &mut ready,
+                &format!("cannot bind {}: {e}", socket.display()),
+            );
+            return Err(e).context(format!("binding {}", socket.display()));
+        }
+    };
+    let socket_id = fs::symlink_metadata(&socket)
+        .ok()
+        .map(|m| (m.dev(), m.ino()));
+    eprintln!("grofe server listening on {}", socket.display());
+
+    let (pane_tx, pane_rx) = mpsc::channel(256);
+    let state = State {
+        socket,
+        options,
+        pane_events: pane_tx,
+        wake: Arc::new(Notify::new()),
+        exit: false,
+        socket_id,
+    };
+    // T1.5a: resolve the inner TERM once here (`pane::inner_term()`) and
+    // keep it in `State`.
+
+    let (msg_tx, msg_rx) = mpsc::channel(64);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (alive_tx, mut alive_rx) = mpsc::channel::<()>(1);
+    let accept = tokio::spawn(accept_loop(listener, msg_tx, shutdown_rx, alive_tx));
+    signal_ready(&mut ready, "ok");
+
+    let state = actor(state, msg_rx, pane_rx, signals).await;
+    state.remove_socket();
+
+    // Stop accepting, let connections finish writing in-flight replies
+    // (the `kill-server` reply among them), then return.
+    let _ = shutdown_tx.send(true);
+    accept.abort();
+    let _ = accept.await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), alive_rx.recv()).await;
+    Ok(())
+}
+
+async fn actor(
+    mut state: State,
+    mut msgs: mpsc::Receiver<ServerMsg>,
+    mut pane_events: mpsc::Receiver<PaneEvent>,
+    (mut sigterm, mut sigint): (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
+) -> State {
+    loop {
+        tokio::select! {
+            msg = msgs.recv() => match msg {
+                Some(msg) => handle(&mut state, msg),
+                None => break,
+            },
+            Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            _ = sigterm.recv() => {
+                eprintln!("grofe server: SIGTERM");
+                break;
+            }
+            _ = sigint.recv() => {
+                eprintln!("grofe server: SIGINT");
+                break;
+            }
+        }
+        if state.exit {
+            break;
+        }
+    }
+    state
+}
+
+fn handle(state: &mut State, msg: ServerMsg) {
+    match msg {
+        ServerMsg::Control { ctx, req, reply } => {
+            let result = dispatch(state, &ctx, &req.argv);
+            if state.exit {
+                // Before replying, so a CLI that saw the reply finds no socket.
+                state.remove_socket();
+            }
+            let reply_msg = match result {
+                Ok(out) => Reply::Ok { id: req.id, out },
+                Err(err) => Reply::Err { id: req.id, err },
+            };
+            let _ = reply.send(reply_msg);
+        }
+        ServerMsg::Pane(event) => handle_pane_event(state, event),
+    }
+}
+
+async fn accept_loop(
+    listener: UnixListener,
+    msgs: mpsc::Sender<ServerMsg>,
+    shutdown: watch::Receiver<bool>,
+    alive: mpsc::Sender<()>,
+) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                tokio::spawn(connection(
+                    stream,
+                    msgs.clone(),
+                    shutdown.clone(),
+                    alive.clone(),
+                ));
+            }
+            Err(e) => {
+                // e.g. EMFILE: back off instead of spinning.
+                eprintln!("grofe server: accept: {e}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+/// One client connection. `_alive` is held until the task ends, so shutdown
+/// can wait for in-flight replies to be written.
+async fn connection(
+    stream: UnixStream,
+    msgs: mpsc::Sender<ServerMsg>,
+    mut shutdown: watch::Receiver<bool>,
+    _alive: mpsc::Sender<()>,
+) {
+    let mut lines = Framed::new(stream, protocol::lines_codec());
+    let hello = tokio::select! {
+        line = lines.next() => line,
+        _ = shutdown.changed() => return,
+    };
+    let Some(Ok(hello)) = hello else { return };
+    let ctx = match protocol::decode_hello(&hello) {
+        Ok(Hello::Control(ctx)) => ctx,
+        Ok(Hello::Attach { .. }) => {
+            let _ = send(&mut lines, &error_reply(0, "attach is not supported yet")).await;
+            return;
+        }
+        Err(e) => {
+            let _ = send(&mut lines, &error_reply(0, &e.to_string())).await;
+            return;
+        }
+    };
+
+    loop {
+        let line = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            line = lines.next() => line,
+        };
+        let Some(Ok(line)) = line else { break };
+        let req: Request = match serde_json::from_str(&line) {
+            Ok(req) => req,
+            Err(e) => {
+                let reply = error_reply(0, &format!("malformed request: {e}"));
+                if send(&mut lines, &reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let msg = ServerMsg::Control {
+            ctx: ctx.clone(),
+            req,
+            reply: reply_tx,
+        };
+        if msgs.send(msg).await.is_err() {
+            break;
+        }
+        let Ok(reply) = reply_rx.await else { break };
+        if send(&mut lines, &reply).await.is_err() {
+            break;
+        }
+    }
+}
+
+fn error_reply(id: u64, err: &str) -> Reply {
+    Reply::Err {
+        id,
+        err: err.to_string(),
+    }
+}
+
+async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyhow::Result<()> {
+    lines.send(serde_json::to_string(reply)?).await?;
+    Ok(())
+}
