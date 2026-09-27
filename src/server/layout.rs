@@ -12,10 +12,19 @@
 //! the last time its size was set (by a split or a resize), against the area
 //! passed to that call. [`LayoutTree::compute`] turns weights into concrete
 //! rects for a given area by distributing that area's cells proportionally
-//! to weight, with a deterministic remainder rule (largest fractional
-//! remainder first, ties broken by the lower child index). When the area
-//! matches the one last used to set the weights, this reproduces the exact
-//! sizes; when it differs (the window resized), it rescales proportionally.
+//! to weight, reserving one cell per child first so proportional rounding can
+//! never take a child to zero, then splitting the remainder with a
+//! deterministic rule (largest fractional remainder first, ties broken by
+//! the lower child index). When the area matches the one last used to set
+//! the weights this usually reproduces the exact sizes, and always does when
+//! every child's weight is within one cell of an even split; it can differ by
+//! a cell or two when weights are highly skewed, in exchange for never
+//! rounding a child to zero. When the area is smaller than the one the
+//! weights were set against (the window shrank), sizes rescale
+//! proportionally, still with a floor of one cell per child as long as the
+//! area has room for all of them; if it doesn't, the lowest-index children
+//! get one cell each until cells run out and the rest get none (M2 does not
+//! shrink a window below one cell per pane in practice).
 //!
 //! Signatures here differ from the contract sketch in one respect: `split`,
 //! `resize` and `neighbour` take an explicit `area: Rect`. `SplitSize::Cells`,
@@ -310,6 +319,36 @@ fn distribute(total: u16, weights: &[u32]) -> Vec<u16> {
     if n == 0 {
         return Vec::new();
     }
+    if (total as usize) < n {
+        // Not enough cells for every child to get one. Simplest well-defined
+        // floor: children at lower indices get one cell each until cells run
+        // out, the rest get none. M2 doesn't shrink a window below one cell
+        // per pane in practice, so this path exists to be safe, not fair.
+        let mut sizes = vec![0u16; n];
+        for size in sizes.iter_mut().take(total as usize) {
+            *size = 1;
+        }
+        return sizes;
+    }
+    // Reserve one cell per child up front so proportional rounding can never
+    // take a child below one, then distribute what's left the same way as
+    // before (rounding down, handing leftover cells to the largest
+    // fractional remainders, ties broken by the lower index).
+    let reserved = n as u16;
+    let mut sizes = distribute_above_floor(total - reserved, weights);
+    for size in &mut sizes {
+        *size += 1;
+    }
+    sizes
+}
+
+/// The proportional pass `distribute` reserves one cell per child around:
+/// splits `total` cells among `weights` by weight, rounding down and handing
+/// the leftover cells one at a time to the largest fractional remainders,
+/// ties broken by the lower index. The result always sums to exactly `total`
+/// but, unlike `distribute`, may give a child zero cells.
+fn distribute_above_floor(total: u16, weights: &[u32]) -> Vec<u16> {
+    let n = weights.len();
     let total_weight: u64 = weights.iter().map(|&w| u64::from(w.max(1))).sum();
     let total = u64::from(total);
     let mut sizes = vec![0u16; n];
@@ -881,9 +920,15 @@ mod tests {
         tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
             .unwrap();
         tree.resize(area, A, Edge::Right, 100);
+        // resize's own clamp pins weights to [19, 1] (B at its one-cell
+        // minimum at resize time). distribute()'s floor reservation then
+        // rounds that 19:1 skew to 18:2 on render: reserving one cell for
+        // every child up front can't also reproduce a ratio this extreme
+        // bit-for-bit (see the module docs). B still never renders below one
+        // cell, which is the invariant this test guards.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&A].cols, 19);
-        assert_eq!(rects[&B].cols, 1);
+        assert_eq!(rects[&A].cols, 18);
+        assert_eq!(rects[&B].cols, 2);
     }
 
     #[test]
@@ -945,6 +990,133 @@ mod tests {
         assert_eq!(distribute(0, &[3, 5, 2]).iter().sum::<u16>(), 0);
     }
 
+    #[test]
+    fn distribute_never_zeroes_a_child_when_total_fits_all() {
+        // Reproduces the cases the review found: with the plain proportional
+        // pass alone, distribute(9, [1, 198]) was [0, 9] and distribute(20,
+        // [1, 198]) was [0, 20], even though every weight is >= 1. Both
+        // children must get at least one cell whenever total >= children.
+        assert_eq!(distribute(199, &[1, 198]), vec![2, 197]);
+        assert_eq!(distribute(9, &[1, 198]), vec![1, 8]);
+        assert_eq!(distribute(20, &[1, 198]), vec![1, 19]);
+        for result in [
+            distribute(199, &[1, 198]),
+            distribute(9, &[1, 198]),
+            distribute(20, &[1, 198]),
+        ] {
+            assert!(result.iter().all(|&size| size >= 1));
+        }
+    }
+
+    #[test]
+    fn distribute_below_floor_gives_lowest_indices_one_cell_each() {
+        // total < children: there's no well-defined "fair" split (that's the
+        // area-too-small-for-every-pane case), so the lowest-index children
+        // get one cell each until cells run out, regardless of weight.
+        assert_eq!(distribute(0, &[1, 1, 1]), vec![0, 0, 0]);
+        assert_eq!(distribute(1, &[1, 1, 1]), vec![1, 0, 0]);
+        assert_eq!(distribute(2, &[1, 1, 1]), vec![1, 1, 0]);
+        assert_eq!(distribute(1, &[1, 1000]), vec![1, 0]);
+    }
+
+    #[test]
+    fn compute_on_a_shrunk_area_never_zeroes_a_pane() {
+        // Built against a large area with a skewed weight ratio (198:1),
+        // then rendered on a much smaller area: exactly the rescale path the
+        // review's repro exercises, at the LayoutTree level rather than
+        // distribute() directly.
+        let big = Rect {
+            x: 0,
+            y: 0,
+            cols: 200,
+            rows: 50,
+        };
+        let mut tree = LayoutTree::new(A);
+        tree.split(big, A, Dir::Horizontal, B, SplitSize::Cells(1))
+            .unwrap();
+
+        let small = Rect {
+            x: 0,
+            y: 0,
+            cols: 9,
+            rows: 50,
+        };
+        let rects: std::collections::HashMap<_, _> = tree.compute(small).into_iter().collect();
+        assert!(rects[&A].cols >= 1);
+        assert!(rects[&B].cols >= 1);
+        assert_eq!(rects[&A].cols + rects[&B].cols + 1, small.cols);
+    }
+
+    /// Whether `rects` and `borders` (as `LayoutTree::compute`/`borders`
+    /// return for `area`) cover every cell of `area` exactly once: no
+    /// overlaps, no gaps.
+    fn tiles_exactly(area: Rect, rects: &[(PaneId, Rect)], borders: &[BorderSegment]) -> bool {
+        let mut grid = vec![0u32; area.cols as usize * area.rows as usize];
+        let mut mark = |r: Rect| {
+            for y in r.y..r.y + r.rows {
+                for x in r.x..r.x + r.cols {
+                    grid[y as usize * area.cols as usize + x as usize] += 1;
+                }
+            }
+        };
+        for (_, r) in rects {
+            mark(*r);
+        }
+        for b in borders {
+            match *b {
+                BorderSegment::Vertical { col, row, len } => {
+                    mark(Rect {
+                        x: col,
+                        y: row,
+                        cols: 1,
+                        rows: len,
+                    });
+                }
+                BorderSegment::Horizontal { row, col, len } => {
+                    mark(Rect {
+                        x: col,
+                        y: row,
+                        cols: len,
+                        rows: 1,
+                    });
+                }
+            }
+        }
+        grid.iter().all(|&c| c == 1)
+    }
+
+    /// Whether every split node in `node`'s subtree, rendered at `rect`,
+    /// keeps all of its own immediate children >= 1 cell along its own axis
+    /// whenever its own area (after reserving one cell per border, same as
+    /// `child_rects`) can fit one cell for each of its own children.
+    ///
+    /// A single top-level "is the area big enough" check can't characterise
+    /// this for a nested tree: a split several levels down can still fall
+    /// short even when the top-level area is generously larger than the
+    /// total pane count, because a deeper split only ever receives whatever
+    /// share its parent's (weight-proportional, not need-aware)
+    /// distribution gave it. Nodes that fall short are allowed to zero a
+    /// child out (see the module docs); this only checks nodes that have
+    /// enough room not to.
+    fn no_child_zeroed_where_it_fits(node: &Node, rect: Rect) -> bool {
+        match node {
+            Node::Leaf(_) => true,
+            Node::Split { dir, children } => {
+                let n = children.len();
+                let local_total = axis_len(*dir, rect);
+                let avail = local_total.saturating_sub((n as u16).saturating_sub(1));
+                let fits = (avail as usize) >= n;
+                let rects = child_rects(*dir, rect, children);
+                let ok_here = !fits || rects.iter().all(|r| axis_len(*dir, *r) >= 1);
+                ok_here
+                    && children
+                        .iter()
+                        .zip(rects)
+                        .all(|(c, r)| no_child_zeroed_where_it_fits(&c.node, r))
+            }
+        }
+    }
+
     fn op_strategy() -> impl Strategy<Value = (bool, bool, u8, u16, usize)> {
         (
             any::<bool>(),
@@ -956,13 +1128,15 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        #![proptest_config(ProptestConfig::with_cases(256))]
 
         #[test]
         fn split_and_remove_sequences_tile_exactly(
             ops in prop::collection::vec(op_strategy(), 0..16),
             area_cols in 8u16..40,
             area_rows in 6u16..30,
+            render_cols in 8u16..40,
+            render_rows in 6u16..30,
         ) {
             let area = Rect { x: 0, y: 0, cols: area_cols, rows: area_rows };
             let mut tree = LayoutTree::new(PaneId(0));
@@ -990,31 +1164,32 @@ mod tests {
                 }
             }
 
+            // Exact tiling holds unconditionally, on the area the tree was
+            // built against.
             let rects = tree.compute(area);
             let borders = tree.borders(area);
+            prop_assert!(tiles_exactly(area, &rects, &borders));
 
-            let mut grid = vec![0u32; area.cols as usize * area.rows as usize];
-            let mut mark = |r: Rect| {
-                for y in r.y..r.y + r.rows {
-                    for x in r.x..r.x + r.cols {
-                        grid[y as usize * area.cols as usize + x as usize] += 1;
-                    }
-                }
-            };
-            for (_, r) in &rects {
-                mark(*r);
-            }
-            for b in &borders {
-                match *b {
-                    BorderSegment::Vertical { col, row, len } => {
-                        mark(Rect { x: col, y: row, cols: 1, rows: len });
-                    }
-                    BorderSegment::Horizontal { row, col, len } => {
-                        mark(Rect { x: col, y: row, cols: len, rows: 1 });
-                    }
-                }
-            }
-            prop_assert!(grid.iter().all(|&c| c == 1));
+            // Render on a second, independently-chosen area (the "the
+            // terminal resized" path: it may be smaller, larger, or equal in
+            // either dimension). Exact tiling still holds unconditionally.
+            // Every pane still gets at least one cell whenever that area has
+            // room for all of them: each of this level's splits guarantees
+            // that for its own immediate children as long as its own local
+            // total covers its own child count, which holds here because the
+            // render area is at least as large, in each dimension, as the
+            // number of panes alive.
+            let render_area = Rect { x: 0, y: 0, cols: render_cols, rows: render_rows };
+            let render_rects = tree.compute(render_area);
+            let render_borders = tree.borders(render_area);
+            prop_assert!(tiles_exactly(render_area, &render_rects, &render_borders));
+
+            // Every split's own immediate children stay >= 1x1 whenever that
+            // split's own local area can fit them (see
+            // `no_child_zeroed_where_it_fits`'s docs for why "the area can
+            // fit all panes" has to be checked node by node for a nested
+            // tree, not just at the top).
+            prop_assert!(no_child_zeroed_where_it_fits(&tree.root, render_area));
         }
     }
 }
