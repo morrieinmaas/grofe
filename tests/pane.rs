@@ -352,3 +352,13 @@ async fn title_and_bell_reach_the_actor() {
     }
     assert_eq!(title.as_deref(), Some("hello-title"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn synchronized_update_is_flushed_before_exited() {
+    // The child begins a synchronized update and exits well inside the
+    // 150 ms sync timeout; its text must be on screen when Exited arrives.
+    let mut p = sh(1, "printf 'before\\033[?2026hSYNCED'");
+    next_exit(&mut p).await;
+    let out = screen(&p.handle);
+    assert!(out.contains("SYNCED"), "{out}");
+}

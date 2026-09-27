@@ -171,18 +171,16 @@ pub(crate) async fn reader(mut r: Reader) {
                 quiet_since = quiet_since.max(Instant::now());
             }
             _ = tokio::time::sleep_until(sync.unwrap_or(grace)), if sync.is_some() => {
-                {
-                    let mut emu = lock(&r.emu);
-                    let Emu { term, parser } = &mut *emu;
-                    parser.stop_sync(term);
-                }
-                r.after_parse();
+                r.flush_sync();
             }
             _ = tokio::time::sleep_until(grace), if exit.is_some() && !drained => {
                 drained = true;
             }
         }
     }
+    // A child that began a synchronized update and exited before its timeout
+    // leaves text in the parser's sync buffer; show it before reporting exit.
+    r.flush_sync();
     let _ = r
         .to_actor
         .send(PaneEvent::Exited(r.id, exit.flatten()))
@@ -190,6 +188,22 @@ pub(crate) async fn reader(mut r: Reader) {
 }
 
 impl Reader {
+    /// End a pending synchronized update, if any, and handle its events.
+    fn flush_sync(&self) {
+        let pending = {
+            let mut emu = lock(&self.emu);
+            let Emu { term, parser } = &mut *emu;
+            let pending = parser.sync_timeout().sync_timeout().is_some();
+            if pending {
+                parser.stop_sync(term);
+            }
+            pending
+        };
+        if pending {
+            self.after_parse();
+        }
+    }
+
     fn feed(&mut self, bytes: &[u8]) {
         {
             let mut emu = lock(&self.emu);
