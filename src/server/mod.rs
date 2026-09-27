@@ -41,9 +41,11 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::codec::{Framed, LinesCodec};
 
+use crate::cmd::{self, Command};
+use crate::event::Event;
 use crate::paths::{self, Env};
 use crate::protocol::{self, ClientCtx, Hello, Reply, Request};
-use pane::PaneEvent;
+use pane::{PaneEvent, PaneEventKind};
 
 /// Logged once per server process, first thing after the log is open, as
 /// `grofe server starting: pid <pid>, socket <path>`. The test harness counts
@@ -58,6 +60,13 @@ pub enum ServerMsg {
         ctx: ClientCtx,
         req: Request,
         reply: oneshot::Sender<Reply>,
+    },
+    /// A `subscribe` request, with the connection's event queue, which the
+    /// actor keeps as the subscriber.
+    Subscribe {
+        req: Request,
+        reply: oneshot::Sender<Reply>,
+        tx: mpsc::Sender<Event>,
     },
     Pane(PaneEvent),
     /// A client connection ended.
@@ -103,6 +112,8 @@ pub struct State {
     pub pane_events: mpsc::Sender<PaneEvent>,
     /// Handed to `PaneHandle::spawn`: pane output wakes the renderer (M2).
     pub wake: Arc<Notify>,
+    /// Subscribers and the events commands recorded for them.
+    pub events: events::Events,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -136,16 +147,36 @@ pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<S
     dispatch::run(state, ctx, argv)
 }
 
-/// Handles one pane event. A dead pane is removed unless `remain-on-exit`
-/// keeps it, and the removal cascades (spec §4.2). T1.6 adds the
-/// `pane-exited` / `pane-output` emission here.
+/// Handles one pane event. Events from a process `respawn-pane` already
+/// replaced (an older generation) or from a pane that is gone are ignored.
+/// A dead pane is reported (`pane-exited`, with its status) and removed
+/// unless `remain-on-exit` keeps it, and the removal cascades (spec §4.2).
+/// Output read while the tap is on becomes `pane-output`.
 fn handle_pane_event(state: &mut State, event: PaneEvent) {
-    if let PaneEvent::Exited(pane, status) = event {
-        state.model.pane_exited(pane, status);
-        if state.model.closed() {
-            state.exit = true;
-        }
+    let PaneEvent {
+        pane,
+        generation,
+        kind,
+    } = event;
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    if p.handle.generation() != generation {
+        return;
     }
+    match kind {
+        PaneEventKind::Exited(status) => {
+            let uid = p.uid.clone();
+            state.events.emit(Event::PaneExited { pane, uid, status });
+            state.model.pane_exited(pane, status);
+            if state.model.closed() {
+                state.exit = true;
+            }
+        }
+        PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
+        _ => {}
+    }
+    state.events.flush();
 }
 
 /// Entry point of `grofe __server`: runs the server until it exits and
@@ -287,6 +318,7 @@ async fn serve(
         options,
         pane_events: pane_tx,
         wake: Arc::new(Notify::new()),
+        events: events::Events::default(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -307,6 +339,9 @@ async fn serve(
     // accepts) and `conns`, the last `alive` sender outside connections.
     let state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
     state.remove_socket();
+    // Hang up the panes and let go of the subscribers' queues before the
+    // connections drain them.
+    drop(state);
 
     // Let connections finish writing in-flight replies (the `kill-server`
     // reply among them), then return.
@@ -461,19 +496,42 @@ fn handle(state: &mut State, msg: ServerMsg) {
     match msg {
         ServerMsg::Control { ctx, req, reply } => {
             let result = dispatch(state, &ctx, &req.argv);
-            if state.exit {
-                // Before replying, so a CLI that saw the reply finds no socket.
-                state.remove_socket();
-            }
-            let reply_msg = match result {
-                Ok(out) => Reply::Ok { id: req.id, out },
-                Err(err) => Reply::Err { id: req.id, err },
+            finish(state, req.id, result, reply);
+        }
+        ServerMsg::Subscribe { req, reply, tx } => {
+            let result = match cmd::parse(&req.argv) {
+                Ok(Command::Subscribe(c)) => {
+                    state.events.subscribe(c.events, tx).map(|()| String::new())
+                }
+                // The connection sends only a `subscribe` verb here.
+                Ok(_) => Err("not a subscribe command".to_string()),
+                Err(e) => Err(e.to_string()),
             };
-            let _ = reply.send(reply_msg);
+            finish(state, req.id, result, reply);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
         ServerMsg::Closed => state.connections = state.connections.saturating_sub(1),
     }
+}
+
+/// Sends a command's reply, then the events it caused, so a connection
+/// writes its reply before those events.
+fn finish(
+    state: &mut State,
+    id: u64,
+    result: Result<String, String>,
+    reply: oneshot::Sender<Reply>,
+) {
+    if state.exit {
+        // Before replying, so a CLI that saw the reply finds no socket.
+        state.remove_socket();
+    }
+    let reply_msg = match result {
+        Ok(out) => Reply::Ok { id, out },
+        Err(err) => Reply::Err { id, err },
+    };
+    let _ = reply.send(reply_msg);
+    state.events.flush();
 }
 
 /// One client connection. `_alive` is held until the task ends, so shutdown
@@ -502,10 +560,28 @@ async fn connection(
         }
     };
 
+    // This connection's event queue; the actor holds a sender once it
+    // subscribes.
+    let (events_tx, mut events_rx) = mpsc::channel(events::QUEUE);
     loop {
         let line = tokio::select! {
             biased;
-            _ = shutdown.changed() => break,
+            _ = shutdown.changed() => {
+                // Events the actor queued before it stopped (a
+                // `kill-server`'s `pane-exited`) still go out.
+                while let Ok(event) = events_rx.try_recv() {
+                    if send(&mut lines, &Reply::Event(event)).await.is_err() {
+                        break;
+                    }
+                }
+                break;
+            }
+            Some(event) = events_rx.recv() => {
+                if send(&mut lines, &Reply::Event(event)).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             line = lines.next() => line,
         };
         let Some(Ok(line)) = line else { break };
@@ -520,10 +596,18 @@ async fn connection(
             }
         };
         let (reply_tx, reply_rx) = oneshot::channel();
-        let msg = ServerMsg::Control {
-            ctx: ctx.clone(),
-            req,
-            reply: reply_tx,
+        let msg = if req.argv.first().is_some_and(|verb| verb == "subscribe") {
+            ServerMsg::Subscribe {
+                req,
+                reply: reply_tx,
+                tx: events_tx.clone(),
+            }
+        } else {
+            ServerMsg::Control {
+                ctx: ctx.clone(),
+                req,
+                reply: reply_tx,
+            }
         };
         if msgs.send(msg).await.is_err() {
             break;

@@ -14,7 +14,7 @@ use std::io as stdio;
 use std::ops::Range;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use alacritty_terminal::Term;
@@ -37,18 +37,32 @@ use procinfo::ProcSample;
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
+///
+/// Every event carries the spawn's `generation` ([`PaneHandle::generation`]),
+/// so events from a process a `respawn-pane` replaced (already queued when
+/// it ran) can be told apart and ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaneEvent {
+pub struct PaneEvent {
+    pub pane: PaneId,
+    pub generation: u64,
+    pub kind: PaneEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneEventKind {
     /// Child exited and the master drained (EOF/EIO or grace period).
-    Exited(PaneId, Option<i32>),
-    Title(PaneId, String),
-    Bell(PaneId),
+    Exited(Option<i32>),
+    /// Raw bytes read from the master, sent only while the output tap is
+    /// on ([`set_output_tap`]).
+    Output(Vec<u8>),
+    Title(String),
+    Bell,
     /// OSC 52 clipboard store, already decoded.
-    Clipboard(PaneId, String),
+    Clipboard(String),
     /// Emitted from M3 (OSC 7 scanner).
-    Cwd(PaneId, PathBuf),
+    Cwd(PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
-    Graphics(PaneId, Vec<u8>),
+    Graphics(Vec<u8>),
 }
 
 /// What to spawn in a new pane.
@@ -193,6 +207,17 @@ fn close_inherited_fds(limit: u32) {
 /// separate `fcntl`, so without this a concurrent fork could inherit a master.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
+/// Generations handed out by [`PaneHandle::spawn`]: unique per spawn in
+/// this process, so also per respawn of the same pane.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Turns the output tap on or off for every pane in this process (one
+/// server per process): while on, each reader also sends what it reads as
+/// [`PaneEventKind::Output`], for `pane-output` subscribers.
+pub fn set_output_tap(on: bool) {
+    io::OUTPUT_TAP.store(on, Ordering::Relaxed);
+}
+
 /// The inner `TERM`, resolved on first use. The server calls this once at
 /// start so the terminfo walk does not land on the first spawn.
 pub fn inner_term() -> &'static str {
@@ -204,6 +229,7 @@ pub fn inner_term() -> &'static str {
 /// closes the master, which hangs up the child.
 pub struct PaneHandle {
     pid: Option<u32>,
+    generation: u64,
     master: Arc<AsyncFd<OwnedFd>>,
     emu: Arc<Mutex<Emu>>,
     input: Arc<InputQueue>,
@@ -238,6 +264,7 @@ impl PaneHandle {
         };
         let (master, child) = spawn_child(&spec, size)?;
         let pid = child.id();
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
 
         let events = Arc::default();
@@ -255,6 +282,7 @@ impl PaneHandle {
 
         let reader = tokio::spawn(io::reader(io::Reader {
             id: spec.id,
+            generation,
             master: Arc::clone(&master),
             child,
             emu: Arc::clone(&emu),
@@ -273,6 +301,7 @@ impl PaneHandle {
 
         Ok(Self {
             pid,
+            generation,
             master,
             emu,
             input,
@@ -339,6 +368,11 @@ impl PaneHandle {
 
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// This spawn's generation, as carried by every [`PaneEvent`] it sends.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The foreground process's name, from the last sample.

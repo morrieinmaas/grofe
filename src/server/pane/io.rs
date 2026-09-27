@@ -13,7 +13,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
-use super::{Emu, PaneEvent, QueueFull, lock};
+use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::types::PaneId;
 
 /// Bytes parsed per lock hold (spec §4.8).
@@ -29,6 +29,9 @@ const WRITE_CHUNK: usize = 4096;
 /// After the child exits, the master counts as drained once it has been quiet
 /// this long, for when a background grandchild still holds the slave.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
+
+/// See [`super::set_output_tap`].
+pub(crate) static OUTPUT_TAP: AtomicBool = AtomicBool::new(false);
 
 /// Listener events are buffered while the emulator lock is held and handled
 /// by the reader after unlocking.
@@ -120,6 +123,7 @@ pub(crate) async fn writer(
 /// Everything the reader task owns.
 pub(crate) struct Reader {
     pub(crate) id: PaneId,
+    pub(crate) generation: u64,
     pub(crate) master: Arc<AsyncFd<OwnedFd>>,
     pub(crate) child: tokio::process::Child,
     pub(crate) emu: Arc<Mutex<Emu>>,
@@ -140,6 +144,7 @@ pub(crate) async fn reader(mut r: Reader) {
     let mut quiet_since = Instant::now();
 
     while !(drained && exit.is_some()) {
+        let mut tapped = None;
         let sync = lock(&r.emu)
             .parser
             .sync_timeout()
@@ -159,6 +164,9 @@ pub(crate) async fn reader(mut r: Reader) {
                     Ok(Ok(n)) => {
                         r.feed(&buf[..n]);
                         quiet_since = Instant::now();
+                        if OUTPUT_TAP.load(Ordering::Relaxed) {
+                            tapped = Some(buf[..n].to_vec());
+                        }
                     }
                     Ok(Err(e)) if e.raw_os_error() == Some(Errno::EINTR as i32) => {}
                     // EIO once every slave holder has gone.
@@ -177,17 +185,31 @@ pub(crate) async fn reader(mut r: Reader) {
                 drained = true;
             }
         }
+        // With backpressure, like `Exited`: the actor gets every byte, in
+        // order ahead of the exit (a subscriber whose queue overflows still
+        // loses some, and is told with `events-dropped`).
+        if let Some(bytes) = tapped {
+            let event = r.event(PaneEventKind::Output(bytes));
+            let _ = r.to_actor.send(event).await;
+        }
     }
     // A child that began a synchronized update and exited before its timeout
     // leaves text in the parser's sync buffer; show it before reporting exit.
     r.flush_sync();
-    let _ = r
-        .to_actor
-        .send(PaneEvent::Exited(r.id, exit.flatten()))
-        .await;
+    let event = r.event(PaneEventKind::Exited(exit.flatten()));
+    let _ = r.to_actor.send(event).await;
 }
 
 impl Reader {
+    /// An event from this pane, stamped with this spawn's generation.
+    fn event(&self, kind: PaneEventKind) -> PaneEvent {
+        PaneEvent {
+            pane: self.id,
+            generation: self.generation,
+            kind,
+        }
+    }
+
     /// End a pending synchronized update, if any, and handle its events.
     fn flush_sync(&self) {
         let pending = {
@@ -247,11 +269,11 @@ impl Reader {
                         cell_height: 0,
                     }));
                 }
-                Event::Title(title) => self.notify(PaneEvent::Title(self.id, title)),
-                Event::ResetTitle => self.notify(PaneEvent::Title(self.id, String::new())),
+                Event::Title(title) => self.notify(PaneEventKind::Title(title)),
+                Event::ResetTitle => self.notify(PaneEventKind::Title(String::new())),
                 Event::Bell => bell = true,
                 Event::ClipboardStore(_, text) => {
-                    self.notify(PaneEvent::Clipboard(self.id, text));
+                    self.notify(PaneEventKind::Clipboard(text));
                 }
                 _ => {}
             }
@@ -259,7 +281,7 @@ impl Reader {
         // One bell per batch: a flood of BELs (a tty discarding overflow input
         // rings once per byte) must not become a flood of events.
         if bell {
-            self.notify(PaneEvent::Bell(self.id));
+            self.notify(PaneEventKind::Bell);
         }
         self.dirty.store(true, Ordering::Release);
         self.wake.notify_one();
@@ -273,7 +295,7 @@ impl Reader {
 
     /// Best effort: a full actor queue drops titles and bells rather than
     /// stalling output. Only `Exited` is sent with backpressure.
-    fn notify(&self, event: PaneEvent) {
-        let _ = self.to_actor.try_send(event);
+    fn notify(&self, kind: PaneEventKind) {
+        let _ = self.to_actor.try_send(self.event(kind));
     }
 }

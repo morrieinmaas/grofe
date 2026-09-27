@@ -18,8 +18,10 @@ use crate::cmd::{
     Command, DisplayMessage, FormatVars, ListPanes, ListSessions, ListWindows, OptionScope,
     Resolve, SetOption, ShowOptions, Target, expand,
 };
+use crate::event::Event;
 use crate::protocol::ClientCtx;
 use crate::server::State;
+use crate::server::events::Events;
 use crate::server::model::{Model, PANE_BASE_INDEX};
 use crate::types::{PaneId, SessionId, WindowId};
 
@@ -293,7 +295,7 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     options.retain_live(model);
     model.options = options;
     match cmd {
-        Command::SetOption(c) => set_option(model, ctx, c),
+        Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
         Command::ShowOptions(c) => show_options(model, ctx, c),
         Command::DisplayMessage(c) => display_message(model, ctx, c),
         Command::ListSessions(c) => list_sessions(model, c),
@@ -303,12 +305,31 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     }
 }
 
-fn set_option(model: &mut Model, ctx: &ClientCtx, c: SetOption) -> Result<String, String> {
+fn set_option(
+    model: &mut Model,
+    events: &mut Events,
+    ctx: &ClientCtx,
+    c: SetOption,
+) -> Result<String, String> {
     let scope = default_scope(c.scope, Some(&c.name));
     let owner = owner(model, scope, &c.target, ctx)?;
-    // T1.6: emit `option-changed` when these return true.
+    // `option-changed` only for a real change (spec §4.2).
+    let changed = |model: &Model, events: &mut Events| {
+        events.emit(Event::OptionChanged {
+            scope: match owner {
+                Owner::Global => "global".to_string(),
+                Owner::Session(id) => id.to_string(),
+                Owner::Window(id) => id.to_string(),
+                Owner::Pane(id) => id.to_string(),
+            },
+            name: c.name.clone(),
+            value: model.options.get(owner, &c.name).map(|e| e.value.clone()),
+        });
+    };
     if c.unset {
-        model.options.unset(owner, &c.name)?;
+        if model.options.unset(owner, &c.name)? {
+            changed(model, events);
+        }
         return Ok(String::new());
     }
     let value = match c.value {
@@ -321,7 +342,9 @@ fn set_option(model: &mut Model, ctx: &ClientCtx, c: SetOption) -> Result<String
         }
         None => return Err("empty value".to_string()),
     };
-    model.options.set(owner, &c.name, &value, c.persist)?;
+    if model.options.set(owner, &c.name, &value, c.persist)? {
+        changed(model, events);
+    }
     Ok(String::new())
 }
 

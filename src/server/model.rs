@@ -33,6 +33,10 @@ pub const HISTORY_LIMIT: usize = 50_000;
 /// `default-size`).
 pub const DEFAULT_SIZE: (u16, u16) = (80, 24);
 
+/// Panes a removal took out whose exit was not reported yet, as
+/// `(id, uid)`: the caller emits `pane-exited` for each.
+pub type Removed = Vec<(PaneId, String)>;
+
 pub struct Session {
     pub id: SessionId,
     pub name: String,
@@ -220,61 +224,94 @@ impl Model {
     }
 
     /// Removes a pane. Its window closes if this was its last pane;
-    /// otherwise the remaining panes are laid out again.
-    pub fn remove_pane(&mut self, pane: PaneId) {
+    /// otherwise the window is unzoomed (as tmux 3.7b does whenever a pane
+    /// leaves) and the remaining panes are laid out again. Returns the
+    /// removed panes still live, for `pane-exited`.
+    pub fn remove_pane(&mut self, pane: PaneId) -> Removed {
         let Some(window_id) = self.panes.get(&pane).map(|p| p.window) else {
-            return;
+            return Vec::new();
         };
         let Some(window) = self.windows.get_mut(&window_id) else {
-            self.panes.remove(&pane);
-            return;
+            return self.take_panes(&[pane]);
         };
         let order = window.pane_ids();
         if order.len() <= 1 {
-            self.remove_window(window_id);
-            return;
+            return self.remove_window(window_id);
         }
         let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
+        window.zoomed = false;
         window.layout.remove(pane);
         if window.active == pane {
             let rest: Vec<PaneId> = order.into_iter().filter(|p| *p != pane).collect();
             window.active = rest[pos.min(rest.len() - 1)];
         }
-        self.panes.remove(&pane);
+        let removed = self.take_panes(&[pane]);
         self.relayout(window_id);
+        removed
     }
 
     /// Removes a window and its panes. Its session closes if this was its
-    /// last window.
-    pub fn remove_window(&mut self, window: WindowId) {
+    /// last window. Returns the removed panes still live.
+    pub fn remove_window(&mut self, window: WindowId) -> Removed {
         let Some(w) = self.windows.remove(&window) else {
-            return;
+            return Vec::new();
         };
-        self.panes.retain(|_, p| p.window != window);
+        let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
+        let removed = self.take_panes(&ids);
         let Some(session) = self.sessions.get_mut(&w.session) else {
-            return;
+            return removed;
         };
         let pos = session.windows.iter().position(|id| *id == window);
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
             self.sessions.remove(&w.session);
-            return;
+            return removed;
         }
         if session.active == window {
             let pos = pos.unwrap_or(0).min(session.windows.len() - 1);
             session.active = session.windows[pos];
         }
+        removed
     }
 
-    /// Removes a session with all its windows and panes.
-    pub fn remove_session(&mut self, session: SessionId) {
+    /// Removes a session with all its windows and panes. Returns the
+    /// removed panes still live.
+    pub fn remove_session(&mut self, session: SessionId) -> Removed {
         let Some(s) = self.sessions.remove(&session) else {
-            return;
+            return Vec::new();
         };
         for w in &s.windows {
             self.windows.remove(w);
         }
-        self.panes.retain(|_, p| !s.windows.contains(&p.window));
+        let ids = self.panes_in(|p| s.windows.contains(&p.window));
+        self.take_panes(&ids)
+    }
+
+    /// The live panes, as removing them all (server exit) would return.
+    pub fn live_panes(&self) -> Removed {
+        self.panes
+            .values()
+            .filter(|p| p.dead.is_none())
+            .map(|p| (p.id, p.uid.clone()))
+            .collect()
+    }
+
+    fn panes_in(&self, keep: impl Fn(&Pane) -> bool) -> Vec<PaneId> {
+        self.panes
+            .values()
+            .filter(|p| keep(p))
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Drops `ids` from the pane map, returning those whose exit was not
+    /// reported yet (a dead pane kept by `remain-on-exit` already was).
+    fn take_panes(&mut self, ids: &[PaneId]) -> Removed {
+        ids.iter()
+            .filter_map(|id| self.panes.remove(id))
+            .filter(|p| p.dead.is_none())
+            .map(|p| (p.id, p.uid.clone()))
+            .collect()
     }
 
     /// Gives every pane in `window` its layout size, resizing the ptys whose

@@ -73,7 +73,8 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
 
 pub fn kill_window(state: &mut State, ctx: &ClientCtx, c: KillWindow) -> Result<String, String> {
     let window = state.model.resolve_window(&c.target, ctx)?;
-    state.model.remove_window(window);
+    let removed = state.model.remove_window(window);
+    state.events.panes_killed(removed);
     Ok(String::new())
 }
 

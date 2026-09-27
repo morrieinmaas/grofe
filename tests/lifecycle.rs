@@ -186,9 +186,10 @@ fn dropping_the_harness_stops_the_server_even_on_panic() {
 #[test]
 fn subscribe_reports_the_servers_answer() {
     let srv = TestServer::start();
-    // No events exist until T1.6; the stub dispatcher rejects the request
-    // and the harness surfaces that as an error instead of hanging.
-    assert!(srv.subscribe(&["pane-exited"]).is_err());
+    // The harness surfaces the server's answer either way instead of
+    // hanging: accepted, or refused with the server's error.
+    assert!(srv.subscribe(&["pane-exited"]).is_ok());
+    assert!(srv.subscribe(&["no-such-event"]).is_err());
 }
 
 /// Runs the CLI without `-S` (the harness always passes one), so the socket
