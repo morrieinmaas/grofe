@@ -5,7 +5,8 @@
 //!
 //! - `home/`: `HOME` (so `~/.config/grofe` and `~/.local/state` are the test's),
 //! - `config/`: `XDG_CONFIG_HOME`,
-//! - `state/`: `XDG_STATE_HOME` (the server log lands in `state/grofe/`),
+//! - `state/`: `XDG_STATE_HOME` (the server log lands in `state/grofe/`,
+//!   named by `grofe::paths::log_path`; use [`TestServer::log_path`]),
 //! - `run/`: `XDG_RUNTIME_DIR`, and the unique `-S` socket `run/test.sock`.
 //!
 //! `GROFE` and `GROFE_PANE` are removed from the environment, so a test run
@@ -33,6 +34,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use grofe::event::Event;
+use grofe::paths::{self, Env};
 use grofe::protocol::{ClientCtx, Hello, Reply, Request, encode_hello};
 use grofe::server::{START_MARKER, StartOptions};
 use tempfile::TempDir;
@@ -150,9 +152,22 @@ impl TestServer {
         UnixStream::connect(&self.socket).is_ok()
     }
 
-    /// The server log path: `$XDG_STATE_HOME/grofe/<socket stem>.log`.
+    /// The path-derivation env the server sees, for `grofe::paths`.
+    pub fn paths_env(&self) -> Env {
+        let s = |p: &Path| Some(p.display().to_string());
+        Env {
+            xdg_runtime_dir: s(&self.runtime_dir),
+            tmpdir: None,
+            xdg_state_home: s(&self.state_home),
+            home: s(&self.home),
+            uid: nix::unistd::geteuid().as_raw(),
+        }
+    }
+
+    /// The server log path, derived by `grofe::paths::log_path` exactly as
+    /// the server derives it (never re-implemented here).
     pub fn log_path(&self) -> PathBuf {
-        self.state_home.join("grofe").join("test.log")
+        paths::log_path(&self.paths_env(), &self.socket)
     }
 
     /// The server log's contents (empty if there is none yet).
