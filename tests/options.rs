@@ -269,6 +269,24 @@ fn display_message_prints_pane_variables() {
     assert!(default.trim_end().ends_with("current pane 1"), "{default}");
 }
 
+/// tmux silently falls back to the current pane when `-t` names nothing;
+/// per the orchestrator's ruling, native grofe errors instead, the same
+/// as every other command taking a pane target (that leniency is left to
+/// the M3.6 compat front end).
+#[test]
+fn display_message_errors_on_an_unresolvable_target() {
+    let srv = TestServer::start();
+    new_session(&srv, "d");
+    let err = srv
+        .cmd(&["display-message", "-p", "-t", "no-such-session", "hi"])
+        .unwrap_err();
+    assert!(err.contains("can't find session: no-such-session"), "{err}");
+    let err = srv
+        .cmd(&["display-message", "-p", "-t", "%999", "hi"])
+        .unwrap_err();
+    assert!(err.contains("can't find pane: %999"), "{err}");
+}
+
 #[test]
 fn pane_current_argv_shows_the_foreground_argv() {
     let srv = TestServer::start();
