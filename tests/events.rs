@@ -508,13 +508,15 @@ fn race_panes(
 }
 
 /// Keeps the actor busy with two slow captures, sets every flag while it
-/// is (so each old process acts and its pane events queue up), then queues
-/// `requests` behind the captures, each on its own connection and in order,
-/// so they wait in the actor's queue together. Stale pane events and the
-/// requests are then handled in a random interleaving. Returns the replies
-/// in request order.
-fn race(srv: &TestServer, dir: &std::path::Path, requests: Vec<Vec<String>>) -> Vec<Reply> {
-    let mut conns: Vec<Control> = requests.iter().map(|_| Control::open(srv)).collect();
+/// is (so each old process acts and its pane events queue up), then sends
+/// each group of requests behind the captures, pipelined on a connection
+/// of its own. A connection reads its next request only after the reply
+/// to the previous one, so a group runs in order; the groups' first
+/// requests wait in the actor's queue together. Stale pane events and the
+/// requests are then handled in a random interleaving. Returns the replies,
+/// group by group.
+fn race(srv: &TestServer, dir: &std::path::Path, groups: Vec<Vec<Vec<String>>>) -> Vec<Reply> {
+    let mut conns: Vec<Control> = groups.iter().map(|_| Control::open(srv)).collect();
     let slow = Control::open(srv);
     let busy = thread::spawn(move || {
         slow.pipeline(vec![
@@ -527,20 +529,20 @@ fn race(srv: &TestServer, dir: &std::path::Path, requests: Vec<Vec<String>>) -> 
         touch(&dir.join(format!("go{i}")));
     }
     thread::sleep(Duration::from_millis(40));
-    for (c, req) in conns.iter_mut().zip(&requests) {
-        writeln!(c.writer, "{}", Control::line(1, req)).unwrap();
-        // Keeps the requests in order across connections.
-        thread::sleep(Duration::from_millis(2));
+    for (c, group) in conns.iter_mut().zip(&groups) {
+        for (id, req) in group.iter().enumerate() {
+            writeln!(c.writer, "{}", Control::line(id as u64, req)).unwrap();
+        }
     }
-    let replies = conns
-        .iter_mut()
-        .map(|c| {
-            c.writer.set_read_timeout(Some(WAIT)).unwrap();
+    let mut replies = Vec::new();
+    for (c, group) in conns.iter_mut().zip(&groups) {
+        c.writer.set_read_timeout(Some(WAIT)).unwrap();
+        for _ in group {
             let mut line = String::new();
             c.reader.read_line(&mut line).unwrap();
-            serde_json::from_str(&line).unwrap()
-        })
-        .collect();
+            replies.push(serde_json::from_str(&line).unwrap());
+        }
+    }
     busy.join().unwrap();
     replies
 }
@@ -559,7 +561,15 @@ fn respawn_ignores_the_old_processes_exit() {
     // not every shell execs the last command of `sh -c` itself.
     let respawns = ids
         .iter()
-        .map(|id| argv(&["respawn-pane", "-k", "-t", &id.to_string(), "exec sleep 30"]))
+        .map(|id| {
+            vec![argv(&[
+                "respawn-pane",
+                "-k",
+                "-t",
+                &id.to_string(),
+                "exec sleep 30",
+            ])]
+        })
         .collect();
     let replies = race(&srv, dir.path(), respawns);
     assert!(
@@ -582,10 +592,10 @@ fn respawn_ignores_the_old_processes_exit() {
 }
 
 /// Output the old process wrote, queued across `respawn-pane -k`, is not
-/// delivered as the respawned pane's `pane-output`. Each respawn is queued
-/// right before a `set @after-%N` fence: the fence's `option-changed` is
-/// emitted after the respawn ran, so any old output for that pane seen
-/// after it came from a stale event.
+/// delivered as the respawned pane's `pane-output`. Each respawn is
+/// pipelined with a `set @after-%N` fence on its own connection, so the
+/// fence runs after its respawn and its `option-changed` marks that point:
+/// any old output for that pane seen after it came from a stale event.
 #[test]
 fn respawn_ignores_the_old_processes_output() {
     const OLD: &[u8] = b"OLD-OUTPUT-MARK";
@@ -599,9 +609,9 @@ fn respawn_ignores_the_old_processes_output() {
     let mut sub = srv.subscribe(&["pane-output", "option-changed"]).unwrap();
     let requests = ids
         .iter()
-        .flat_map(|id| {
+        .map(|id| {
             let t = id.to_string();
-            [
+            vec![
                 argv(&["respawn-pane", "-k", "-t", &t, "exec sleep 30"]),
                 argv(&["set", "-g", &format!("@after-{t}"), "1"]),
             ]
