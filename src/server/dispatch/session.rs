@@ -71,7 +71,8 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
 
 pub fn kill_session(state: &mut State, ctx: &ClientCtx, c: KillSession) -> Result<String, String> {
     let id = state.model.resolve_session(&c.target, ctx)?;
-    state.model.remove_session(id);
+    let removed = state.model.remove_session(id);
+    state.events.panes_killed(removed);
     Ok(String::new())
 }
 

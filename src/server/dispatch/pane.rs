@@ -71,7 +71,8 @@ fn kill_pane(state: &mut State, ctx: &ClientCtx, c: KillPane) -> Result<String, 
     let pane = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&pane].window;
     unzoom(model, window);
-    model.remove_pane(pane);
+    let removed = model.remove_pane(pane);
+    state.events.panes_killed(removed);
     Ok(String::new())
 }
 
@@ -258,11 +259,9 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         .map_err(|e| format!("respawn pane failed: can't start pane in {cwd}: {e}"))?;
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
-        // process (`-k`), and stops its tasks, so it never reports an exit.
-        // ponytail: an `Exited` the old reader already queued before `-k`
-        // is indistinguishable from the new process's (the event carries
-        // only the pane id); closing that needs a spawn generation in
-        // `PaneEvent`.
+        // process (`-k`), and stops its tasks. An `Exited` its reader had
+        // already queued carries the old handle's generation, which the
+        // actor ignores.
         p.handle = handle;
         p.dead = None;
         p.argv = argv.clone();

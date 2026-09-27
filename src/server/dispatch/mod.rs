@@ -66,11 +66,14 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::ListPanes(_) => options::run(state, ctx, cmd),
 
         Command::KillServer(_) => {
+            let live = state.model.live_panes();
+            state.events.panes_killed(live);
             state.exit = true;
             Ok(String::new())
         }
-        // T1.6: subscriptions need the connection's outbound channel.
-        Command::Subscribe(_) => Err("subscribe: not implemented yet".to_string()),
+        // The actor handles `subscribe` itself (`ServerMsg::Subscribe`),
+        // since it needs the connection's event queue.
+        Command::Subscribe(_) => Err("subscribe needs a control connection".to_string()),
     }
 }
 

@@ -70,7 +70,7 @@ async fn next_exit(p: &mut Pane) -> Option<i32> {
     let fut = async {
         loop {
             match p.events.recv().await {
-                Some(PaneEvent::Exited(_, code)) => return code,
+                Some(PaneEvent::Exited(_, _, code)) => return code,
                 Some(_) => continue,
                 None => panic!("event channel closed without Exited"),
             }

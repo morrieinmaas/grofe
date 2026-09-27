@@ -30,6 +30,9 @@ const WRITE_CHUNK: usize = 4096;
 /// this long, for when a background grandchild still holds the slave.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
 
+/// See [`super::set_output_tap`].
+pub(crate) static OUTPUT_TAP: AtomicBool = AtomicBool::new(false);
+
 /// Listener events are buffered while the emulator lock is held and handled
 /// by the reader after unlocking.
 pub(crate) type EventBuf = Arc<Mutex<Vec<Event>>>;
@@ -120,6 +123,7 @@ pub(crate) async fn writer(
 /// Everything the reader task owns.
 pub(crate) struct Reader {
     pub(crate) id: PaneId,
+    pub(crate) generation: u64,
     pub(crate) master: Arc<AsyncFd<OwnedFd>>,
     pub(crate) child: tokio::process::Child,
     pub(crate) emu: Arc<Mutex<Emu>>,
@@ -140,6 +144,7 @@ pub(crate) async fn reader(mut r: Reader) {
     let mut quiet_since = Instant::now();
 
     while !(drained && exit.is_some()) {
+        let mut tapped = None;
         let sync = lock(&r.emu)
             .parser
             .sync_timeout()
@@ -159,6 +164,9 @@ pub(crate) async fn reader(mut r: Reader) {
                     Ok(Ok(n)) => {
                         r.feed(&buf[..n]);
                         quiet_since = Instant::now();
+                        if OUTPUT_TAP.load(Ordering::Relaxed) {
+                            tapped = Some(buf[..n].to_vec());
+                        }
                     }
                     Ok(Err(e)) if e.raw_os_error() == Some(Errno::EINTR as i32) => {}
                     // EIO once every slave holder has gone.
@@ -177,13 +185,18 @@ pub(crate) async fn reader(mut r: Reader) {
                 drained = true;
             }
         }
+        // With backpressure, like `Exited`, so a subscriber sees every byte
+        // and the output keeps its order ahead of the exit.
+        if let Some(bytes) = tapped {
+            let _ = r.to_actor.send(PaneEvent::Output(r.id, bytes)).await;
+        }
     }
     // A child that began a synchronized update and exited before its timeout
     // leaves text in the parser's sync buffer; show it before reporting exit.
     r.flush_sync();
     let _ = r
         .to_actor
-        .send(PaneEvent::Exited(r.id, exit.flatten()))
+        .send(PaneEvent::Exited(r.id, r.generation, exit.flatten()))
         .await;
 }
 
