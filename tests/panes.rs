@@ -134,7 +134,6 @@ fn split_window_sizes_and_list_panes_format_match_the_layout() {
 }
 
 #[test]
-#[ignore = "needs T1.3 final layout"]
 fn split_window_percent_sizes_like_tmux() {
     let srv = TestServer::start();
     session(&srv, "c", 81, 25);
@@ -142,7 +141,7 @@ fn split_window_percent_sizes_like_tmux() {
         .unwrap();
     srv.cmd(&["split-window", "-v", "-p", "20", "-t", "c:1.1", "sleep 30"])
         .unwrap();
-    // tmux 3.7b: 20% of the 25-row pane is a 5-row pane above a 19-row one.
+    // tmux 3.7b: 20% of the 25-row pane gives a new 5-row pane below 19 rows.
     assert_eq!(heights(&srv, "c"), vec![19, 5, 25]);
 }
 
@@ -152,11 +151,17 @@ fn split_window_without_room_errors_like_tmux() {
     session(&srv, "s", 4, 10);
     srv.cmd(&["split-window", "-h", "-t", "s", "sleep 30"])
         .unwrap();
+    let ran = srv.home.join("ran");
+    let script = format!("touch '{}'; sleep 30", ran.display());
     let err = srv
-        .cmd(&["split-window", "-h", "-t", "s:1.1", "sleep 30"])
+        .cmd(&["split-window", "-h", "-t", "s:1.1", &script])
         .unwrap_err();
+    // tmux 3.7b's text, verbatim.
     assert_eq!(err.trim_end(), "size or position no space for a new pane");
     assert_eq!(panes(&srv, "s", "#{pane_id}").len(), 2);
+    // The command never started: no pane was spawned for a failed split.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!ran.exists());
 }
 
 /// `-c` is expanded at execution time against the target pane: a pane

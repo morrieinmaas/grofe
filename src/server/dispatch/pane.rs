@@ -7,6 +7,7 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::State;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::layout::LayoutError;
 use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
 use crate::server::pane::{PaneHandle, PaneSpawn};
 use crate::types::{Edge, PaneId, Rect, WindowId};
@@ -37,6 +38,18 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     let env = s.env.clone();
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
 
+    // Check for room on a copy first, so a command is never started for a
+    // pane that cannot be placed.
+    let w = &model.windows[&window];
+    let mut trial = w.layout.clone();
+    trial
+        .split(w.area(), target, c.dir, PaneId(u32::MAX), c.size)
+        .map_err(|e| match e {
+            // tmux 3.7b's text, verbatim.
+            LayoutError::TooSmall(_) => "size or position no space for a new pane".to_string(),
+            LayoutError::NotFound(_) => e.to_string(),
+        })?;
+
     unzoom(&mut state.model, window);
     let new = spawn_pane(state, window, env, command_argv(c.command), cwd, size)?;
     let model = &mut state.model;
@@ -44,12 +57,9 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         model.panes.remove(&new);
         return Err(format!("can't find window: {window}"));
     };
-    if w.layout
-        .split(w.area(), target, c.dir, new, c.size)
-        .is_err()
-    {
+    if let Err(e) = w.layout.split(w.area(), target, c.dir, new, c.size) {
         model.panes.remove(&new);
-        return Err("size or position no space for a new pane".to_string());
+        return Err(e.to_string());
     }
     w.active = new;
     model.relayout(window);
