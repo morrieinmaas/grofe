@@ -51,10 +51,11 @@ mouse = true
 "-" = "split-window -v -c '#{pane_current_path}'"
 ```
 
-**A status line that never slows you down.** grofe does not run commands from
-the status line, ever. Anything dynamic (a build result, an agent's state, the
-battery) is pushed in by whatever knows the value, so redraws stay instant no
-matter how much you put there.
+**A status line that never slows you down.** grofe's status line never forks
+on redraw. Commands you configure for it (the classic `#(...)` segments) run on
+a timer, one at a time, and their output is cached; anything else dynamic (a
+build result, an agent's state) is pushed in by whatever knows the value. So
+redraws stay instant no matter how much you put there.
 
 **Modern terminal support out of the box.** True colour, the kitty keyboard
 protocol (so keys like a bare `q` or `Ctrl-Enter` reach Neovim, Helix and
@@ -78,10 +79,21 @@ grofe does not read `tmux.conf`, but it will convert one for you:
 grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 ```
 
-Options, key bindings and status formats come across; anything that cannot
-(shell commands in the status line, `if-shell`, plugins) is listed with the
-reason, so you know exactly what is left to do. Your `tmux.conf` is never
-touched, and tmux keeps working alongside grofe while you try it.
+Options, key bindings, hooks and status formats come across, including `#()`
+segments, which become cached status sources; anything that cannot (plugins
+above all) is listed with the reason, so you know exactly what is left to do.
+Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
+you try it.
+
+grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
+aliases and formats that scripts and tools send, so things like `fzf --tmux`
+and vim-tmux-navigator keep working. Once your config has moved, you can put
+grofe on your `PATH` under the name `tmux` (a symlink, since a shell alias does
+not reach scripts); a server started under that name also reports itself as
+tmux (`TERM_PROGRAM`, `tmux -V`). tmux compatibility is a translation layer;
+grofe works differently underneath. Real tmux stays available by its full path.
+Inside a grofe pane, run it as `env -u TMUX /path/to/tmux`, because `$TMUX`
+there points at grofe.
 
 ## Terminals
 
@@ -93,8 +105,10 @@ older key encoding and without inline images.
 
 ## What it isn't
 
-grofe is not a drop-in replacement for tmux: it does not run tmux plugins, and
-it does not run on Windows. It is also not trying to be Zellij: no modal
+grofe is not a general reimplementation of tmux. It answers to the name `tmux`
+for everyday scripts and tools, but it does not read `tmux.conf` or run tmux
+plugins: your setup moves over once, to grofe's own config. It also does not
+run on Windows. It is also not trying to be Zellij: no modal
 interface, no WebAssembly plugins, just tmux's way of working with the rough
 edges taken off.
 
