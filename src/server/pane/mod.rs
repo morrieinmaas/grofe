@@ -1,11 +1,39 @@
 //! PaneHandle, spawn, pre_exec.
+//!
+//! A pane is a child process on a pty, fed through `alacritty_terminal`. Each
+//! pane runs three tokio tasks (spec §4.8): the reader (owns the master's read
+//! side, the emulator's listener, the sync timeout and dead detection), the
+//! writer (owns writes to the master through a bounded queue) and a sampler
+//! (foreground command, argv and cwd, once a second).
 
 pub mod io;
 pub mod procinfo;
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::io as stdio;
+use std::ops::Range;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use crate::types::PaneId;
+use alacritty_terminal::Term;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::{self, TermMode};
+use alacritty_terminal::vte::ansi::{Color, Processor};
+use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
+use nix::libc;
+use nix::pty::{Winsize, openpty};
+use tokio::io::unix::AsyncFd;
+use tokio::sync::{Notify, mpsc};
+use tokio::task::JoinHandle;
+
+pub use alacritty_terminal::term::cell::Flags as CellFlags;
+
+use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
+use io::{InputQueue, Listener};
+use procinfo::ProcSample;
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
@@ -21,4 +49,410 @@ pub enum PaneEvent {
     Cwd(PaneId, PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(PaneId, Vec<u8>),
+}
+
+/// What to spawn in a new pane.
+#[derive(Debug, Clone)]
+pub struct PaneSpawn {
+    pub id: PaneId,
+    /// `None` starts the user's shell (`$SHELL`, else `/bin/sh`) as a login shell.
+    pub argv: Option<Vec<String>>,
+    pub cwd: PathBuf,
+    /// Applied over the server's own environment; grofe's `TERM`, `COLORTERM`,
+    /// `GROFE` and `GROFE_PANE` are applied after it and always win.
+    pub env: Vec<(String, String)>,
+    pub cols: u16,
+    pub rows: u16,
+    /// The `history-limit` option: scrollback lines kept.
+    pub history_limit: usize,
+    /// The server's socket path, exported as `GROFE`.
+    pub socket: PathBuf,
+}
+
+/// `enqueue_input` refused bytes because the pane's writer queue is full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("pane input queue is full")]
+pub struct QueueFull;
+
+/// One cell of a [`RowsSnapshot`]: the character plus its style.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnapCell {
+    pub c: char,
+    pub fg: Color,
+    pub bg: Color,
+    pub flags: CellFlags,
+    /// Zero-width characters combined with `c`.
+    pub zerowidth: Vec<char>,
+}
+
+/// An owned copy of some visible rows, taken under the pane lock (M2 renderer
+/// input).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RowsSnapshot {
+    pub rows: Vec<Vec<SnapCell>>,
+}
+
+/// The emulator: `Term` and its parser, always locked together.
+pub(crate) struct Emu {
+    pub(crate) term: Term<Listener>,
+    pub(crate) parser: Processor,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Size {
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+}
+
+impl Dimensions for Size {
+    fn total_lines(&self) -> usize {
+        self.screen_lines()
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows as usize
+    }
+    fn columns(&self) -> usize {
+        self.cols as usize
+    }
+}
+
+impl Size {
+    fn winsize(self) -> Winsize {
+        Winsize {
+            ws_row: self.rows,
+            ws_col: self.cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        }
+    }
+}
+
+nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, Winsize);
+
+/// Serialises spawns from `openpty` to `spawn`: `FD_CLOEXEC` is set by a
+/// separate `fcntl`, so without this a concurrent fork could inherit a master.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+/// The inner `TERM`, resolved on first use. The server calls this once at
+/// start so the terminfo walk does not land on the first spawn.
+pub fn inner_term() -> &'static str {
+    static TERM: OnceLock<&'static str> = OnceLock::new();
+    TERM.get_or_init(crate::term::resolve_term)
+}
+
+/// A running (or dead, until dropped) pane. Dropping it stops its tasks and
+/// closes the master, which hangs up the child.
+pub struct PaneHandle {
+    pid: Option<u32>,
+    master: Arc<AsyncFd<OwnedFd>>,
+    emu: Arc<Mutex<Emu>>,
+    input: Arc<InputQueue>,
+    dirty: Arc<AtomicBool>,
+    sample: Arc<Mutex<ProcSample>>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for PaneHandle {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl PaneHandle {
+    /// Spawn `spec` on a new pty and start its tasks. Must be called from
+    /// within a tokio runtime.
+    pub fn spawn(
+        spec: PaneSpawn,
+        to_actor: mpsc::Sender<PaneEvent>,
+        wake: Arc<Notify>,
+    ) -> stdio::Result<Self> {
+        let size = Size {
+            cols: spec.cols.max(1),
+            rows: spec.rows.max(1),
+        };
+        let (master, child) = spawn_child(&spec, size)?;
+        let pid = child.id();
+        let master = Arc::new(AsyncFd::new(master)?);
+
+        let events = Arc::default();
+        let config = term::Config {
+            scrolling_history: spec.history_limit,
+            ..term::Config::default()
+        };
+        let emu = Arc::new(Mutex::new(Emu {
+            term: Term::new(config, &size, Listener(Arc::clone(&events))),
+            parser: Processor::new(),
+        }));
+        let dirty = Arc::new(AtomicBool::new(false));
+        let sample = Arc::new(Mutex::new(ProcSample::default()));
+        let (input, input_rx) = InputQueue::new();
+
+        let reader = tokio::spawn(io::reader(io::Reader {
+            id: spec.id,
+            master: Arc::clone(&master),
+            child,
+            emu: Arc::clone(&emu),
+            events,
+            input: Arc::clone(&input),
+            dirty: Arc::clone(&dirty),
+            wake,
+            to_actor,
+        }));
+        let writer = tokio::spawn(io::writer(
+            Arc::clone(&master),
+            input_rx,
+            Arc::clone(&input),
+        ));
+        let sampler = tokio::spawn(procinfo::sampler(Arc::clone(&master), Arc::clone(&sample)));
+
+        Ok(Self {
+            pid,
+            master,
+            emu,
+            input,
+            dirty,
+            sample,
+            tasks: vec![reader, writer, sampler],
+        })
+    }
+
+    /// Queue bytes for the pane's writer. Never blocks.
+    pub fn enqueue_input(&self, bytes: Vec<u8>) -> Result<(), QueueFull> {
+        self.input.push(bytes)
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> stdio::Result<()> {
+        let size = Size {
+            cols: cols.max(1),
+            rows: rows.max(1),
+        };
+        lock(&self.emu).term.resize(size);
+        // SAFETY: a valid fd we hold and a pointer to a live Winsize.
+        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &size.winsize()) }?;
+        Ok(())
+    }
+
+    /// Plain-text lines per tmux's `capture-pane -p`: one line per row,
+    /// trailing blanks trimmed, each ending in `\n`.
+    pub fn capture(&self, opts: &CaptureOpts) -> String {
+        // ponytail: `escapes` (-e) is ignored until the M2 renderer can emit SGR.
+        let emu = lock(&self.emu);
+        let grid = emu.term.grid();
+        let history = grid.history_size() as i32;
+        let last = grid.screen_lines() as i32 - 1;
+        let bound = |b: Option<CaptureBound>, default: i32| match b {
+            None => default,
+            Some(CaptureBound::Line(n)) => n.clamp(-history, last),
+            Some(CaptureBound::HistoryStart) => -history,
+            Some(CaptureBound::VisibleEnd) => last,
+        };
+        let (start, end) = (bound(opts.start, 0), bound(opts.end, last));
+        let mut out = String::new();
+        for line in start..=end {
+            let row = &grid[Line(line)];
+            let mut text = String::new();
+            for col in 0..grid.columns() {
+                let cell = &row[Column(col)];
+                if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
+                    text.push(' ');
+                    continue;
+                }
+                text.push(cell.c);
+                if let Some(zw) = cell.zerowidth() {
+                    text.extend(zw);
+                }
+            }
+            out.push_str(text.trim_end_matches(' '));
+            out.push('\n');
+        }
+        out
+    }
+
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// The foreground process's name, from the last sample.
+    pub fn current_command(&self) -> Option<String> {
+        lock(&self.sample).command.clone()
+    }
+
+    /// The foreground process's full argv, from the last sample.
+    pub fn current_argv(&self) -> Option<Vec<String>> {
+        lock(&self.sample).argv.clone()
+    }
+
+    /// The foreground process's cwd, from the last sample.
+    pub fn current_path(&self) -> Option<PathBuf> {
+        lock(&self.sample).path.clone()
+    }
+
+    pub fn modes(&self) -> InputModes {
+        let mode = *lock(&self.emu).term.mode();
+        let mouse = if mode.contains(TermMode::MOUSE_MOTION) {
+            MouseMode::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            MouseMode::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            MouseMode::Click
+        } else {
+            MouseMode::Off
+        };
+        let mouse_encoding = if mode.contains(TermMode::SGR_MOUSE) {
+            MouseEncoding::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            MouseEncoding::Utf8
+        } else {
+            MouseEncoding::X10
+        };
+        InputModes {
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
+            app_keypad: mode.contains(TermMode::APP_KEYPAD),
+            kitty_flags: ((mode & TermMode::KITTY_KEYBOARD_PROTOCOL).bits()
+                / TermMode::DISAMBIGUATE_ESC_CODES.bits()) as u8,
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+            mouse,
+            mouse_encoding,
+            focus: mode.contains(TermMode::FOCUS_IN_OUT),
+            alt_screen: mode.contains(TermMode::ALT_SCREEN),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+        }
+    }
+
+    /// Whether the screen changed since the last call; clears the flag.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty.swap(false, Ordering::AcqRel)
+    }
+
+    /// Copy the visible rows in `rows` (0 is the top row; out-of-range rows
+    /// are skipped).
+    pub fn snapshot_rows(&self, rows: Range<u16>) -> RowsSnapshot {
+        let emu = lock(&self.emu);
+        let grid = emu.term.grid();
+        let end = rows.end.min(grid.screen_lines() as u16);
+        let rows = (rows.start..end)
+            .map(|r| {
+                let row = &grid[Line(r as i32)];
+                (0..grid.columns())
+                    .map(|c| {
+                        let cell = &row[Column(c)];
+                        SnapCell {
+                            c: cell.c,
+                            fg: cell.fg,
+                            bg: cell.bg,
+                            flags: cell.flags,
+                            zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        RowsSnapshot { rows }
+    }
+}
+
+/// The environment a pane's child gets on top of the server's own: the spawn
+/// env, a UTF-8 locale if none is set, then grofe's variables.
+fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
+    let mut env: Vec<(OsString, OsString)> =
+        spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
+    let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| {
+        let set = |v: &str| !v.is_empty();
+        match spec.env.iter().rev().find(|(name, _)| name == k) {
+            Some((_, v)) => set(v),
+            None => std::env::var(k).is_ok_and(|v| set(&v)),
+        }
+    });
+    if !has_locale {
+        let utf8 = if cfg!(target_os = "macos") {
+            "UTF-8"
+        } else {
+            "C.UTF-8"
+        };
+        env.push(("LC_CTYPE".into(), utf8.into()));
+    }
+    env.push(("TERM".into(), inner_term().into()));
+    env.push(("COLORTERM".into(), crate::term::COLORTERM.into()));
+    env.push(("GROFE".into(), spec.socket.clone().into_os_string()));
+    env.push(("GROFE_PANE".into(), spec.id.to_string().into()));
+    env
+}
+
+/// The shell for a pane with no argv: `SHELL` from the spawn env, then the
+/// server's, then `/bin/sh`.
+fn default_shell(spec: &PaneSpawn) -> String {
+    spec.env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "SHELL")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("SHELL").ok())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".into())
+}
+
+/// Open a pty and spawn the child on it (spec §4.8). Returns the master,
+/// non-blocking and close-on-exec.
+fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::process::Child)> {
+    let mut cmd = match &spec.argv {
+        Some(argv) => {
+            let (prog, args) = argv
+                .split_first()
+                .ok_or_else(|| stdio::Error::new(stdio::ErrorKind::InvalidInput, "empty argv"))?;
+            let mut cmd = tokio::process::Command::new(prog);
+            cmd.args(args);
+            cmd
+        }
+        None => {
+            let shell = default_shell(spec);
+            let name = Path::new(&shell)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| shell.clone());
+            let mut cmd = tokio::process::Command::new(&shell);
+            cmd.arg0(format!("-{name}"));
+            cmd
+        }
+    };
+    cmd.current_dir(&spec.cwd).envs(child_env(spec));
+
+    let _guard = lock(&SPAWN_LOCK);
+    let pty = openpty(&size.winsize(), None)?;
+    fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
+    fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    let slave = pty.slave.as_raw_fd();
+    // SAFETY: the closure only makes async-signal-safe libc calls.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(stdio::Error::last_os_error());
+            }
+            if libc::ioctl(slave, libc::TIOCSCTTY as _, 0) < 0 {
+                return Err(stdio::Error::last_os_error());
+            }
+            for fd in 0..3 {
+                if libc::dup2(slave, fd) < 0 {
+                    return Err(stdio::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    let child = cmd.spawn()?;
+    drop(pty.slave);
+    drop(_guard);
+
+    let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
+    fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+    Ok((pty.master, child))
 }

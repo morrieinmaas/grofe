@@ -24,8 +24,6 @@ toml = "1.1.6"
 ulid = "3.0.0"
 unicode-width = "0.2.2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-libproc = "0.14.11"
 
 [dev-dependencies]
 expectrl = "0.9.0"
