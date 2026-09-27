@@ -296,6 +296,41 @@ mod tests {
         );
     }
 
+    /// `session:@N` is a valid window id in the window slot (verified
+    /// against tmux 3.7b: `select-pane -t sess:@N` and `select-window -t
+    /// sess:@N` both resolve to that window).
+    #[test]
+    fn session_and_window_by_id() {
+        assert_eq!(
+            parse_target("work:@2").unwrap(),
+            Target::Window(
+                SessionRef::Name("work".to_string()),
+                WindowRef::Id(WindowId(2))
+            )
+        );
+    }
+
+    /// `session:%N` is NOT a pane shortcut in the window slot: verified
+    /// against real tmux 3.7b, `select-pane -t sess:%N`, `capture-pane -t
+    /// sess:%N`, `send-keys -t sess:%N` and `select-window -t sess:%N` all
+    /// fail identically with `can't find window: %N` for both pane-taking
+    /// and window-taking commands. tmux treats `%N` there as a literal
+    /// (failed) window lookup, not as a pane id, so grofe's grammar is
+    /// already right: parsing succeeds with a window named `%N`, and
+    /// resolving that name against the live model (T1.5a) is where it
+    /// fails, same as tmux (which also parses this syntactically before
+    /// failing to find the window at lookup time).
+    #[test]
+    fn session_and_window_percent_id_is_a_literal_window_name() {
+        assert_eq!(
+            parse_target("work:%3").unwrap(),
+            Target::Window(
+                SessionRef::Name("work".to_string()),
+                WindowRef::Name("%3".to_string())
+            )
+        );
+    }
+
     #[test]
     fn session_window_and_pane_by_index() {
         assert_eq!(

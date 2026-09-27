@@ -589,9 +589,17 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
 ];
 const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
 
+/// Resolves `-g -s -w -p` to a scope. Verified against real tmux 3.7b:
+/// `set -gw`, `set -gp`, `set -gs` and `set -gswp` all succeed there, with
+/// no "only one of" error for any flag combination tmux accepts `-g`
+/// alongside. tmux's `-g` is a modifier ("the global variant of whichever
+/// scope"), not a scope of its own; grofe has a single flat Global scope
+/// (spec §4.2), so any `-g` wins outright over whatever else was given.
 fn parse_scope(flags: &ParsedFlags) -> Result<Option<OptionScope>, ParseError> {
+    if flags.present.contains(&'g') {
+        return Ok(Some(OptionScope::Global));
+    }
     let scopes: Vec<OptionScope> = [
-        ('g', OptionScope::Global),
         ('s', OptionScope::Session),
         ('w', OptionScope::Window),
         ('p', OptionScope::Pane),
@@ -604,7 +612,7 @@ fn parse_scope(flags: &ParsedFlags) -> Result<Option<OptionScope>, ParseError> {
         [] => Ok(None),
         [scope] => Ok(Some(*scope)),
         _ => Err(ParseError::Other(
-            "only one of -g -s -w -p allowed".to_string(),
+            "only one of -s -w -p allowed".to_string(),
         )),
     }
 }
@@ -1369,11 +1377,41 @@ mod tests {
     }
 
     #[test]
-    fn set_option_rejects_multiple_scope_flags() {
+    fn set_option_rejects_multiple_non_global_scope_flags() {
         assert!(matches!(
-            parse(&argv(&["set-option", "-g", "-s", "name", "value"])),
+            parse(&argv(&["set-option", "-w", "-p", "name", "value"])),
             Err(ParseError::Other(_))
         ));
+    }
+
+    /// tmux: `-g` combined with `-w`/`-p`/`-s` is a common idiom (`set -gw
+    /// ...`) and always succeeds; grofe has one flat Global scope, so `-g`
+    /// wins over whatever else was given.
+    #[test]
+    fn set_option_g_with_w_is_global() {
+        let cmd = parse(&argv(&["set-option", "-gw", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Global));
+    }
+
+    #[test]
+    fn set_option_g_with_p_is_global() {
+        let cmd = parse(&argv(&["set-option", "-gp", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Global));
+    }
+
+    #[test]
+    fn set_option_g_with_s_is_global() {
+        let cmd = parse(&argv(&["set-option", "-gs", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Global));
     }
 
     #[test]
@@ -1383,6 +1421,19 @@ mod tests {
             cmd,
             Command::ShowOptions(ShowOptions {
                 scope: Some(OptionScope::Window),
+                target: Target::Current,
+                name: None,
+            })
+        );
+    }
+
+    #[test]
+    fn show_options_g_with_w_is_global() {
+        let cmd = parse(&argv(&["show-options", "-gw"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::ShowOptions(ShowOptions {
+                scope: Some(OptionScope::Global),
                 target: Target::Current,
                 name: None,
             })
