@@ -1,1 +1,1195 @@
 //! layout tree: n-ary splits, percent and cell sizes, collapse on remove.
+//!
+//! One algorithm, per spec §4.3: a window's layout is a tree of cells. Each
+//! internal cell splits its area horizontally or vertically among children;
+//! leaves are panes. Splitting a pane in the direction its parent already
+//! splits adds a sibling; splitting in the other direction wraps the pane in
+//! a new split. Borders are one cell wide and shared between neighbours, so a
+//! split of `n` panes along an axis of length `W` gives pane sizes that sum
+//! to `W - (n - 1)`.
+//!
+//! Each child of a split stores a `weight`: the number of cells it occupied
+//! the last time its size was set (by a split or a resize), against the area
+//! passed to that call. [`LayoutTree::compute`] turns weights into concrete
+//! rects for a given area by distributing that area's cells proportionally
+//! to weight, reserving one cell per child first so proportional rounding can
+//! never take a child to zero, then splitting the remainder with a
+//! deterministic rule (largest fractional remainder first, ties broken by
+//! the lower child index). When the area matches the one last used to set
+//! the weights this usually reproduces the exact sizes, and always does when
+//! every child's weight is within one cell of an even split; it can differ by
+//! a cell or two when weights are highly skewed, in exchange for never
+//! rounding a child to zero. When the area is smaller than the one the
+//! weights were set against (the window shrank), sizes rescale
+//! proportionally, still with a floor of one cell per child as long as the
+//! area has room for all of them; if it doesn't, the lowest-index children
+//! get one cell each until cells run out and the rest get none (M2 does not
+//! shrink a window below one cell per pane in practice).
+//!
+//! Signatures here differ from the contract sketch in one respect: `split`,
+//! `resize` and `neighbour` take an explicit `area: Rect`. `SplitSize::Cells`,
+//! `resize`'s cell delta, and `neighbour`'s centre-line pick are all
+//! inherently geometric, and the tree otherwise has no way to learn the
+//! window's current size (`LayoutTree::new` takes no area either). Threading
+//! `area` through explicitly keeps the tree a plain value type driven only by
+//! its stored weights, with no cached, possibly-stale size.
+
+use crate::types::{Dir, Edge, PaneId, Rect, SplitSize};
+
+/// Error returned when a split can't be applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LayoutError {
+    #[error("no such pane: {0}")]
+    NotFound(PaneId),
+    #[error("not enough room to split pane {0}")]
+    TooSmall(PaneId),
+}
+
+/// One contiguous, one-cell-wide run of border cells, as the M2 renderer will
+/// draw it. `Vertical` runs come from horizontal (side-by-side) splits;
+/// `Horizontal` runs come from vertical (stacked) splits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderSegment {
+    /// A vertical run at column `col`, spanning `len` rows starting at `row`.
+    Vertical { col: u16, row: u16, len: u16 },
+    /// A horizontal run at row `row`, spanning `len` cols starting at `col`.
+    Horizontal { row: u16, col: u16, len: u16 },
+}
+
+#[derive(Debug, Clone)]
+struct Child {
+    /// Relative size within this child's sibling group; see the module docs.
+    weight: u32,
+    node: Node,
+}
+
+#[derive(Debug, Clone)]
+enum Node {
+    Leaf(PaneId),
+    Split { dir: Dir, children: Vec<Child> },
+}
+
+/// The n-ary split tree for one window.
+#[derive(Debug, Clone)]
+pub struct LayoutTree {
+    root: Node,
+}
+
+/// Which axis a point-in-rect lookup runs along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    Row,
+    Col,
+}
+
+impl LayoutTree {
+    /// A window with a single pane filling the whole area.
+    pub fn new(pane: PaneId) -> Self {
+        LayoutTree {
+            root: Node::Leaf(pane),
+        }
+    }
+
+    /// Splits `target` into itself and `new`, in direction `dir`, sized per
+    /// `size`. If `target`'s parent already splits in `dir`, `new` becomes a
+    /// sibling next to `target`; otherwise `target` is wrapped in a new split.
+    pub fn split(
+        &mut self,
+        area: Rect,
+        target: PaneId,
+        dir: Dir,
+        new: PaneId,
+        size: SplitSize,
+    ) -> Result<(), LayoutError> {
+        let mut path = Vec::new();
+        if !find_path(&self.root, target, &mut path) {
+            return Err(LayoutError::NotFound(target));
+        }
+
+        if path.is_empty() {
+            let raw = axis_len(dir, area);
+            let avail = raw.saturating_sub(1);
+            let (target_size, new_size) =
+                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
+            self.root = Node::Split {
+                dir,
+                children: vec![
+                    Child {
+                        weight: u32::from(target_size),
+                        node: Node::Leaf(target),
+                    },
+                    Child {
+                        weight: u32::from(new_size),
+                        node: Node::Leaf(new),
+                    },
+                ],
+            };
+            return Ok(());
+        }
+
+        let idx = path[path.len() - 1];
+        let parent_path = &path[..path.len() - 1];
+        let parent_rect = rect_at_path(&self.root, area, parent_path);
+        let parent_dir = match node_at(&self.root, parent_path) {
+            Node::Split { dir, .. } => *dir,
+            Node::Leaf(_) => unreachable!("parent path always resolves to a split"),
+        };
+
+        if parent_dir == dir {
+            // Splitting in the direction the parent already splits: add new
+            // as a sibling right after target, carved out of target's slice.
+            let Node::Split { children, .. } = node_at_mut(&mut self.root, parent_path) else {
+                unreachable!("parent path always resolves to a split")
+            };
+            let rects = child_rects(dir, parent_rect, children);
+            let current = axis_len(dir, rects[idx]);
+            let avail = current.saturating_sub(1);
+            let (target_size, new_size) =
+                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
+            children[idx].weight = u32::from(target_size);
+            children.insert(
+                idx + 1,
+                Child {
+                    weight: u32::from(new_size),
+                    node: Node::Leaf(new),
+                },
+            );
+        } else {
+            // Splitting the other way: wrap target's leaf in a new split.
+            let target_rect = rect_at_path(&self.root, area, &path);
+            let raw = axis_len(dir, target_rect);
+            let avail = raw.saturating_sub(1);
+            let (target_size, new_size) =
+                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
+            let slot = node_at_mut(&mut self.root, &path);
+            *slot = Node::Split {
+                dir,
+                children: vec![
+                    Child {
+                        weight: u32::from(target_size),
+                        node: Node::Leaf(target),
+                    },
+                    Child {
+                        weight: u32::from(new_size),
+                        node: Node::Leaf(new),
+                    },
+                ],
+            };
+        }
+        Ok(())
+    }
+
+    /// Removes `pane`. If its parent split is left with exactly one child,
+    /// that split collapses into the remaining child. A no-op if `pane` is
+    /// not in the tree, or is the tree's only pane (nothing to collapse into;
+    /// callers discard the window instead in that case).
+    pub fn remove(&mut self, pane: PaneId) {
+        let mut path = Vec::new();
+        if !find_path(&self.root, pane, &mut path) {
+            return;
+        }
+        if path.is_empty() {
+            return;
+        }
+        let idx = path[path.len() - 1];
+        let parent_path = &path[..path.len() - 1];
+        let Node::Split { children, .. } = node_at_mut(&mut self.root, parent_path) else {
+            unreachable!("parent path always resolves to a split")
+        };
+        children.remove(idx);
+        let collapse = if children.len() == 1 {
+            children.pop()
+        } else {
+            None
+        };
+        if let Some(remaining) = collapse {
+            let slot = node_at_mut(&mut self.root, parent_path);
+            *slot = remaining.node;
+        }
+    }
+
+    /// Moves the border on `pane`'s `edge` side by `delta` cells (positive
+    /// grows `pane` toward that edge). Clamped so neither side goes below one
+    /// cell; a no-op (not a panic) if `pane` has no neighbour across `edge`,
+    /// or the clamp reduces the requested delta to zero.
+    pub fn resize(&mut self, area: Rect, pane: PaneId, edge: Edge, delta: i32) {
+        let mut path = Vec::new();
+        if !find_path(&self.root, pane, &mut path) {
+            return;
+        }
+        for depth in (0..path.len()).rev() {
+            let idx = path[depth];
+            let parent_path = &path[..depth];
+            let parent_rect = rect_at_path(&self.root, area, parent_path);
+            let Node::Split { dir, children } = node_at_mut(&mut self.root, parent_path) else {
+                unreachable!("parent path always resolves to a split")
+            };
+            let Some(far_idx) = far_sibling(edge, *dir, idx, children.len()) else {
+                continue;
+            };
+            let dir = *dir;
+            let rects = child_rects(dir, parent_rect, children);
+            let near_size = axis_len(dir, rects[idx]);
+            let far_size = axis_len(dir, rects[far_idx]);
+            let max_grow = i32::from(far_size.saturating_sub(1));
+            let max_shrink = i32::from(near_size.saturating_sub(1));
+            let clamped = delta.clamp(-max_shrink, max_grow);
+            if clamped == 0 {
+                return;
+            }
+            let new_near = (i32::from(near_size) + clamped).max(1) as u16;
+            let new_far = (i32::from(far_size) - clamped).max(1) as u16;
+            children[idx].weight = u32::from(new_near);
+            children[far_idx].weight = u32::from(new_far);
+            return;
+        }
+    }
+
+    /// The pane adjacent to `pane` across `edge`, among panes sharing the
+    /// nearest ancestor split on that axis, chosen by overlap with `pane`'s
+    /// centre line (deterministic: the far subtree's leaf whose span on the
+    /// cross axis contains that centre coordinate).
+    pub fn neighbour(&self, area: Rect, pane: PaneId, edge: Edge) -> Option<PaneId> {
+        let mut path = Vec::new();
+        if !find_path(&self.root, pane, &mut path) {
+            return None;
+        }
+        let pane_rect = rect_at_path(&self.root, area, &path);
+        for depth in (0..path.len()).rev() {
+            let idx = path[depth];
+            let parent_path = &path[..depth];
+            let Node::Split { dir, children } = node_at(&self.root, parent_path) else {
+                unreachable!("parent path always resolves to a split")
+            };
+            let Some(far_idx) = far_sibling(edge, *dir, idx, children.len()) else {
+                continue;
+            };
+            let parent_rect = rect_at_path(&self.root, area, parent_path);
+            let rects = child_rects(*dir, parent_rect, children);
+            let far_rect = rects[far_idx];
+            let (axis, coord) = match edge {
+                Edge::Left | Edge::Right => (Axis::Row, pane_rect.y + pane_rect.rows / 2),
+                Edge::Up | Edge::Down => (Axis::Col, pane_rect.x + pane_rect.cols / 2),
+            };
+            return Some(find_leaf_at(&children[far_idx].node, far_rect, axis, coord));
+        }
+        None
+    }
+
+    /// The rect of every pane for `area`, excluding borders.
+    pub fn compute(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        let mut out = Vec::new();
+        collect_rects(&self.root, area, &mut out);
+        out
+    }
+
+    /// Every border segment for `area`.
+    pub fn borders(&self, area: Rect) -> Vec<BorderSegment> {
+        let mut out = Vec::new();
+        collect_borders(&self.root, area, &mut out);
+        out
+    }
+}
+
+/// `target_size, new_size` for splitting `avail` cells (already short one
+/// cell for the new border) between the existing pane and the new one.
+/// `None` if there's no room for both to keep at least one cell.
+fn split_sizes(avail: u16, size: SplitSize) -> Option<(u16, u16)> {
+    if avail < 2 {
+        return None;
+    }
+    let new_size = match size {
+        SplitSize::Half => avail / 2,
+        SplitSize::Percent(p) => {
+            let p = u32::from(p.min(100));
+            ((u32::from(avail) * p + 50) / 100) as u16
+        }
+        SplitSize::Cells(n) => n,
+    };
+    let new_size = new_size.clamp(1, avail - 1);
+    Some((avail - new_size, new_size))
+}
+
+/// Splits `total` cells among `weights` proportionally, rounding down and
+/// then handing the leftover cells one at a time to the largest fractional
+/// remainders, ties broken by the lower index. Deterministic, and the result
+/// always sums to exactly `total`.
+fn distribute(total: u16, weights: &[u32]) -> Vec<u16> {
+    let n = weights.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if (total as usize) < n {
+        // Not enough cells for every child to get one. Simplest well-defined
+        // floor: children at lower indices get one cell each until cells run
+        // out, the rest get none. M2 doesn't shrink a window below one cell
+        // per pane in practice, so this path exists to be safe, not fair.
+        let mut sizes = vec![0u16; n];
+        for size in sizes.iter_mut().take(total as usize) {
+            *size = 1;
+        }
+        return sizes;
+    }
+    // Reserve one cell per child up front so proportional rounding can never
+    // take a child below one, then distribute what's left the same way as
+    // before (rounding down, handing leftover cells to the largest
+    // fractional remainders, ties broken by the lower index).
+    let reserved = n as u16;
+    let mut sizes = distribute_above_floor(total - reserved, weights);
+    for size in &mut sizes {
+        *size += 1;
+    }
+    sizes
+}
+
+/// The proportional pass `distribute` reserves one cell per child around:
+/// splits `total` cells among `weights` by weight, rounding down and handing
+/// the leftover cells one at a time to the largest fractional remainders,
+/// ties broken by the lower index. The result always sums to exactly `total`
+/// but, unlike `distribute`, may give a child zero cells.
+fn distribute_above_floor(total: u16, weights: &[u32]) -> Vec<u16> {
+    let n = weights.len();
+    let total_weight: u64 = weights.iter().map(|&w| u64::from(w.max(1))).sum();
+    let total = u64::from(total);
+    let mut sizes = vec![0u16; n];
+    let mut remainders = vec![0u64; n];
+    let mut assigned = 0u64;
+    for (i, &w) in weights.iter().enumerate() {
+        let w = u64::from(w.max(1));
+        let raw = total * w;
+        let base = raw / total_weight;
+        sizes[i] = base as u16;
+        remainders[i] = raw % total_weight;
+        assigned += base;
+    }
+    let mut leftover = total.saturating_sub(assigned);
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]).then(a.cmp(&b)));
+    for i in order {
+        if leftover == 0 {
+            break;
+        }
+        sizes[i] += 1;
+        leftover -= 1;
+    }
+    sizes
+}
+
+fn axis_len(dir: Dir, rect: Rect) -> u16 {
+    match dir {
+        Dir::Horizontal => rect.cols,
+        Dir::Vertical => rect.rows,
+    }
+}
+
+/// The rects of `children` laid out in `dir` across `area`.
+fn child_rects(dir: Dir, area: Rect, children: &[Child]) -> Vec<Rect> {
+    let weights: Vec<u32> = children.iter().map(|c| c.weight).collect();
+    let n = weights.len() as u16;
+    match dir {
+        Dir::Horizontal => {
+            let avail = area.cols.saturating_sub(n.saturating_sub(1));
+            let sizes = distribute(avail, &weights);
+            let mut x = area.x;
+            let mut rects = Vec::with_capacity(sizes.len());
+            for w in sizes {
+                rects.push(Rect {
+                    x,
+                    y: area.y,
+                    cols: w,
+                    rows: area.rows,
+                });
+                x += w + 1;
+            }
+            rects
+        }
+        Dir::Vertical => {
+            let avail = area.rows.saturating_sub(n.saturating_sub(1));
+            let sizes = distribute(avail, &weights);
+            let mut y = area.y;
+            let mut rects = Vec::with_capacity(sizes.len());
+            for w in sizes {
+                rects.push(Rect {
+                    x: area.x,
+                    y,
+                    cols: area.cols,
+                    rows: w,
+                });
+                y += w + 1;
+            }
+            rects
+        }
+    }
+}
+
+fn find_path(node: &Node, pane: PaneId, path: &mut Vec<usize>) -> bool {
+    match node {
+        Node::Leaf(p) => *p == pane,
+        Node::Split { children, .. } => {
+            for (i, child) in children.iter().enumerate() {
+                path.push(i);
+                if find_path(&child.node, pane, path) {
+                    return true;
+                }
+                path.pop();
+            }
+            false
+        }
+    }
+}
+
+fn node_at<'a>(node: &'a Node, path: &[usize]) -> &'a Node {
+    match path {
+        [] => node,
+        [idx, rest @ ..] => match node {
+            Node::Split { children, .. } => node_at(&children[*idx].node, rest),
+            Node::Leaf(_) => node,
+        },
+    }
+}
+
+fn node_at_mut<'a>(node: &'a mut Node, path: &[usize]) -> &'a mut Node {
+    match path {
+        [] => node,
+        [idx, rest @ ..] => match node {
+            Node::Split { children, .. } => node_at_mut(&mut children[*idx].node, rest),
+            Node::Leaf(_) => node,
+        },
+    }
+}
+
+fn rect_at_path(node: &Node, area: Rect, path: &[usize]) -> Rect {
+    match path {
+        [] => area,
+        [idx, rest @ ..] => match node {
+            Node::Split { dir, children } => {
+                let rects = child_rects(*dir, area, children);
+                rect_at_path(&children[*idx].node, rects[*idx], rest)
+            }
+            Node::Leaf(_) => area,
+        },
+    }
+}
+
+/// The sibling index across `edge` from child `idx` in a split of direction
+/// `dir` with `len` children, if `edge`'s axis matches `dir` and that
+/// neighbour exists.
+fn far_sibling(edge: Edge, dir: Dir, idx: usize, len: usize) -> Option<usize> {
+    match (edge, dir) {
+        (Edge::Left, Dir::Horizontal) if idx > 0 => Some(idx - 1),
+        (Edge::Right, Dir::Horizontal) if idx + 1 < len => Some(idx + 1),
+        (Edge::Up, Dir::Vertical) if idx > 0 => Some(idx - 1),
+        (Edge::Down, Dir::Vertical) if idx + 1 < len => Some(idx + 1),
+        _ => None,
+    }
+}
+
+/// Descends `node` (occupying `rect`) to the leaf whose span along `axis`
+/// contains `coord`. Falls back to the last child if `coord` lands exactly on
+/// a border between children (deterministic, if an edge case).
+fn find_leaf_at(node: &Node, rect: Rect, axis: Axis, coord: u16) -> PaneId {
+    match node {
+        Node::Leaf(pane) => *pane,
+        Node::Split { dir, children } => {
+            let rects = child_rects(*dir, rect, children);
+            for (child, r) in children.iter().zip(rects.iter()) {
+                let (start, len) = match axis {
+                    Axis::Row => (r.y, r.rows),
+                    Axis::Col => (r.x, r.cols),
+                };
+                if coord >= start && coord < start + len {
+                    return find_leaf_at(&child.node, *r, axis, coord);
+                }
+            }
+            let last = children.len() - 1;
+            find_leaf_at(&children[last].node, rects[last], axis, coord)
+        }
+    }
+}
+
+fn collect_rects(node: &Node, area: Rect, out: &mut Vec<(PaneId, Rect)>) {
+    match node {
+        Node::Leaf(pane) => out.push((*pane, area)),
+        Node::Split { dir, children } => {
+            let rects = child_rects(*dir, area, children);
+            for (child, rect) in children.iter().zip(rects) {
+                collect_rects(&child.node, rect, out);
+            }
+        }
+    }
+}
+
+fn collect_borders(node: &Node, area: Rect, out: &mut Vec<BorderSegment>) {
+    if let Node::Split { dir, children } = node {
+        let rects = child_rects(*dir, area, children);
+        for pair in rects.windows(2) {
+            let r = pair[0];
+            match dir {
+                Dir::Horizontal => out.push(BorderSegment::Vertical {
+                    col: r.x + r.cols,
+                    row: area.y,
+                    len: area.rows,
+                }),
+                Dir::Vertical => out.push(BorderSegment::Horizontal {
+                    row: r.y + r.rows,
+                    col: area.x,
+                    len: area.cols,
+                }),
+            }
+        }
+        for (child, rect) in children.iter().zip(rects) {
+            collect_borders(&child.node, rect, out);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const A: PaneId = PaneId(1);
+    const B: PaneId = PaneId(2);
+    const C: PaneId = PaneId(3);
+
+    #[test]
+    fn single_pane_fills_area() {
+        let tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 30,
+            rows: 10,
+        };
+        assert_eq!(tree.compute(area), vec![(A, area)]);
+        assert_eq!(tree.borders(area), vec![]);
+    }
+
+    #[test]
+    fn split_not_found_errors() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 30,
+            rows: 10,
+        };
+        assert_eq!(
+            tree.split(area, PaneId(99), Dir::Horizontal, B, SplitSize::Half),
+            Err(LayoutError::NotFound(PaneId(99)))
+        );
+    }
+
+    #[test]
+    fn split_too_small_errors() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 2,
+            rows: 5,
+        };
+        assert_eq!(
+            tree.split(area, A, Dir::Horizontal, B, SplitSize::Half),
+            Err(LayoutError::TooSmall(A))
+        );
+    }
+
+    #[test]
+    fn split_minimum_width_succeeds() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 3,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 1);
+        assert_eq!(rects[&B].cols, 1);
+    }
+
+    #[test]
+    fn half_split_gives_target_the_larger_share_on_odd_avail() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 10,
+            rows: 4,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        let rects = tree.compute(area);
+        assert_eq!(
+            rects,
+            vec![
+                (
+                    A,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        cols: 5,
+                        rows: 4
+                    }
+                ),
+                (
+                    B,
+                    Rect {
+                        x: 6,
+                        y: 0,
+                        cols: 4,
+                        rows: 4
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            tree.borders(area),
+            vec![BorderSegment::Vertical {
+                col: 5,
+                row: 0,
+                len: 4
+            }]
+        );
+    }
+
+    #[test]
+    fn percent_split_rounds_to_nearest() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 41,
+            rows: 3,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Percent(25))
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 30);
+        assert_eq!(rects[&B].cols, 10);
+    }
+
+    #[test]
+    fn cells_split_and_add_sibling_makes_three_columns() {
+        // Matches spec §4.3: splitting in the direction the parent already
+        // splits adds a sibling column rather than nesting.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 17,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, B, Dir::Horizontal, C, SplitSize::Half)
+            .unwrap();
+
+        assert_eq!(
+            tree.compute(area),
+            vec![
+                (
+                    A,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        cols: 8,
+                        rows: 5
+                    }
+                ),
+                (
+                    B,
+                    Rect {
+                        x: 9,
+                        y: 0,
+                        cols: 4,
+                        rows: 5
+                    }
+                ),
+                (
+                    C,
+                    Rect {
+                        x: 14,
+                        y: 0,
+                        cols: 3,
+                        rows: 5
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            tree.borders(area),
+            vec![
+                BorderSegment::Vertical {
+                    col: 8,
+                    row: 0,
+                    len: 5
+                },
+                BorderSegment::Vertical {
+                    col: 13,
+                    row: 0,
+                    len: 5
+                },
+            ]
+        );
+    }
+
+    /// Builds A | (B / C): A left, B and C stacked on the right. Used by the
+    /// remove/collapse, neighbour and nested-borders tests below.
+    fn a_over_bc_tree() -> (LayoutTree, Rect) {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 10,
+        };
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, C, SplitSize::Cells(3))
+            .unwrap();
+        (tree, area)
+    }
+
+    #[test]
+    fn wrap_split_nests_perpendicular_to_parent() {
+        let (tree, area) = a_over_bc_tree();
+        assert_eq!(
+            tree.compute(area),
+            vec![
+                (
+                    A,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        cols: 10,
+                        rows: 10
+                    }
+                ),
+                (
+                    B,
+                    Rect {
+                        x: 11,
+                        y: 0,
+                        cols: 10,
+                        rows: 6
+                    }
+                ),
+                (
+                    C,
+                    Rect {
+                        x: 11,
+                        y: 7,
+                        cols: 10,
+                        rows: 3
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            tree.borders(area),
+            vec![
+                BorderSegment::Vertical {
+                    col: 10,
+                    row: 0,
+                    len: 10
+                },
+                BorderSegment::Horizontal {
+                    row: 6,
+                    col: 11,
+                    len: 10
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_collapses_single_child_split() {
+        let (mut tree, area) = a_over_bc_tree();
+        tree.remove(B);
+        assert_eq!(
+            tree.compute(area),
+            vec![
+                (
+                    A,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        cols: 10,
+                        rows: 10
+                    }
+                ),
+                (
+                    C,
+                    Rect {
+                        x: 11,
+                        y: 0,
+                        cols: 10,
+                        rows: 10
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            tree.borders(area),
+            vec![BorderSegment::Vertical {
+                col: 10,
+                row: 0,
+                len: 10
+            }]
+        );
+    }
+
+    #[test]
+    fn remove_last_pane_is_a_no_op() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 10,
+            rows: 5,
+        };
+        tree.remove(A);
+        assert_eq!(tree.compute(area), vec![(A, area)]);
+    }
+
+    #[test]
+    fn remove_missing_pane_is_a_no_op() {
+        let (mut tree, area) = a_over_bc_tree();
+        let before = tree.compute(area);
+        tree.remove(PaneId(99));
+        assert_eq!(tree.compute(area), before);
+    }
+
+    #[test]
+    fn remove_down_to_one_pane_collapses_root() {
+        let (mut tree, area) = a_over_bc_tree();
+        tree.remove(B);
+        tree.remove(C);
+        assert_eq!(tree.compute(area), vec![(A, area)]);
+        assert_eq!(tree.borders(area), vec![]);
+    }
+
+    #[test]
+    fn neighbour_picks_by_centre_line_overlap() {
+        let (tree, area) = a_over_bc_tree();
+        assert_eq!(tree.neighbour(area, A, Edge::Right), Some(B));
+        assert_eq!(tree.neighbour(area, B, Edge::Left), Some(A));
+        assert_eq!(tree.neighbour(area, C, Edge::Left), Some(A));
+        assert_eq!(tree.neighbour(area, C, Edge::Up), Some(B));
+        assert_eq!(tree.neighbour(area, B, Edge::Up), None);
+        assert_eq!(tree.neighbour(area, A, Edge::Left), None);
+        assert_eq!(tree.neighbour(area, A, Edge::Up), None);
+    }
+
+    #[test]
+    fn neighbour_missing_pane_is_none() {
+        let (tree, area) = a_over_bc_tree();
+        assert_eq!(tree.neighbour(area, PaneId(99), Edge::Right), None);
+    }
+
+    #[test]
+    fn resize_grows_one_side_and_shrinks_the_other() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.resize(area, A, Edge::Right, 3);
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 13);
+        assert_eq!(rects[&B].cols, 7);
+    }
+
+    #[test]
+    fn resize_clamps_to_minimum_one_cell() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.resize(area, A, Edge::Right, 100);
+        // resize's own clamp pins weights to [19, 1] (B at its one-cell
+        // minimum at resize time). distribute()'s floor reservation then
+        // rounds that 19:1 skew to 18:2 on render: reserving one cell for
+        // every child up front can't also reproduce a ratio this extreme
+        // bit-for-bit (see the module docs). B still never renders below one
+        // cell, which is the invariant this test guards.
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&A].cols, 18);
+        assert_eq!(rects[&B].cols, 2);
+    }
+
+    #[test]
+    fn resize_past_the_clamp_is_a_no_op() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.resize(area, A, Edge::Right, 100);
+        let before = tree.compute(area);
+        tree.resize(area, A, Edge::Right, 5);
+        assert_eq!(tree.compute(area), before);
+    }
+
+    #[test]
+    fn resize_with_no_neighbour_is_a_no_op() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 5,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        let before = tree.compute(area);
+        tree.resize(area, A, Edge::Left, 5);
+        assert_eq!(tree.compute(area), before);
+    }
+
+    #[test]
+    fn resize_missing_pane_is_a_no_op() {
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 5,
+        };
+        let before = tree.compute(area);
+        tree.resize(area, PaneId(99), Edge::Left, 5);
+        assert_eq!(tree.compute(area), before);
+    }
+
+    #[test]
+    fn distribute_breaks_ties_by_lower_index() {
+        assert_eq!(distribute(10, &[1, 1, 1]), vec![4, 3, 3]);
+    }
+
+    #[test]
+    fn distribute_sum_always_matches_total() {
+        assert_eq!(distribute(20, &[11, 10]).iter().sum::<u16>(), 20);
+        assert_eq!(distribute(7, &[3, 5, 2]).iter().sum::<u16>(), 7);
+        assert_eq!(distribute(0, &[3, 5, 2]).iter().sum::<u16>(), 0);
+    }
+
+    #[test]
+    fn distribute_never_zeroes_a_child_when_total_fits_all() {
+        // Reproduces the cases the review found: with the plain proportional
+        // pass alone, distribute(9, [1, 198]) was [0, 9] and distribute(20,
+        // [1, 198]) was [0, 20], even though every weight is >= 1. Both
+        // children must get at least one cell whenever total >= children.
+        assert_eq!(distribute(199, &[1, 198]), vec![2, 197]);
+        assert_eq!(distribute(9, &[1, 198]), vec![1, 8]);
+        assert_eq!(distribute(20, &[1, 198]), vec![1, 19]);
+        for result in [
+            distribute(199, &[1, 198]),
+            distribute(9, &[1, 198]),
+            distribute(20, &[1, 198]),
+        ] {
+            assert!(result.iter().all(|&size| size >= 1));
+        }
+    }
+
+    #[test]
+    fn distribute_below_floor_gives_lowest_indices_one_cell_each() {
+        // total < children: there's no well-defined "fair" split (that's the
+        // area-too-small-for-every-pane case), so the lowest-index children
+        // get one cell each until cells run out, regardless of weight.
+        assert_eq!(distribute(0, &[1, 1, 1]), vec![0, 0, 0]);
+        assert_eq!(distribute(1, &[1, 1, 1]), vec![1, 0, 0]);
+        assert_eq!(distribute(2, &[1, 1, 1]), vec![1, 1, 0]);
+        assert_eq!(distribute(1, &[1, 1000]), vec![1, 0]);
+    }
+
+    #[test]
+    fn compute_on_a_shrunk_area_never_zeroes_a_pane() {
+        // Built against a large area with a skewed weight ratio (198:1),
+        // then rendered on a much smaller area: exactly the rescale path the
+        // review's repro exercises, at the LayoutTree level rather than
+        // distribute() directly.
+        let big = Rect {
+            x: 0,
+            y: 0,
+            cols: 200,
+            rows: 50,
+        };
+        let mut tree = LayoutTree::new(A);
+        tree.split(big, A, Dir::Horizontal, B, SplitSize::Cells(1))
+            .unwrap();
+
+        let small = Rect {
+            x: 0,
+            y: 0,
+            cols: 9,
+            rows: 50,
+        };
+        let rects: std::collections::HashMap<_, _> = tree.compute(small).into_iter().collect();
+        assert!(rects[&A].cols >= 1);
+        assert!(rects[&B].cols >= 1);
+        assert_eq!(rects[&A].cols + rects[&B].cols + 1, small.cols);
+    }
+
+    /// Whether `rects` and `borders` (as `LayoutTree::compute`/`borders`
+    /// return for `area`) cover every cell of `area` exactly once: no
+    /// overlaps, no gaps.
+    fn tiles_exactly(area: Rect, rects: &[(PaneId, Rect)], borders: &[BorderSegment]) -> bool {
+        let mut grid = vec![0u32; area.cols as usize * area.rows as usize];
+        let mut mark = |r: Rect| {
+            for y in r.y..r.y + r.rows {
+                for x in r.x..r.x + r.cols {
+                    grid[y as usize * area.cols as usize + x as usize] += 1;
+                }
+            }
+        };
+        for (_, r) in rects {
+            mark(*r);
+        }
+        for b in borders {
+            match *b {
+                BorderSegment::Vertical { col, row, len } => {
+                    mark(Rect {
+                        x: col,
+                        y: row,
+                        cols: 1,
+                        rows: len,
+                    });
+                }
+                BorderSegment::Horizontal { row, col, len } => {
+                    mark(Rect {
+                        x: col,
+                        y: row,
+                        cols: len,
+                        rows: 1,
+                    });
+                }
+            }
+        }
+        grid.iter().all(|&c| c == 1)
+    }
+
+    /// Whether every split node in `node`'s subtree, rendered at `rect`,
+    /// keeps all of its own immediate children >= 1 cell along its own axis
+    /// whenever its own area (after reserving one cell per border, same as
+    /// `child_rects`) can fit one cell for each of its own children.
+    ///
+    /// A single top-level "is the area big enough" check can't characterise
+    /// this for a nested tree: a split several levels down can still fall
+    /// short even when the top-level area is generously larger than the
+    /// total pane count, because a deeper split only ever receives whatever
+    /// share its parent's (weight-proportional, not need-aware)
+    /// distribution gave it. Nodes that fall short are allowed to zero a
+    /// child out (see the module docs); this only checks nodes that have
+    /// enough room not to.
+    fn no_child_zeroed_where_it_fits(node: &Node, rect: Rect) -> bool {
+        match node {
+            Node::Leaf(_) => true,
+            Node::Split { dir, children } => {
+                let n = children.len();
+                let local_total = axis_len(*dir, rect);
+                let avail = local_total.saturating_sub((n as u16).saturating_sub(1));
+                let fits = (avail as usize) >= n;
+                let rects = child_rects(*dir, rect, children);
+                let ok_here = !fits || rects.iter().all(|r| axis_len(*dir, *r) >= 1);
+                ok_here
+                    && children
+                        .iter()
+                        .zip(rects)
+                        .all(|(c, r)| no_child_zeroed_where_it_fits(&c.node, r))
+            }
+        }
+    }
+
+    fn op_strategy() -> impl Strategy<Value = (bool, bool, u8, u16, usize)> {
+        (
+            any::<bool>(),
+            any::<bool>(),
+            0u8..3,
+            0u16..80,
+            any::<usize>(),
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn split_and_remove_sequences_tile_exactly(
+            ops in prop::collection::vec(op_strategy(), 0..16),
+            area_cols in 8u16..40,
+            area_rows in 6u16..30,
+            render_cols in 8u16..40,
+            render_rows in 6u16..30,
+        ) {
+            let area = Rect { x: 0, y: 0, cols: area_cols, rows: area_rows };
+            let mut tree = LayoutTree::new(PaneId(0));
+            let mut alive = vec![PaneId(0)];
+            let mut next_id = 1u32;
+
+            for (is_split, horiz, size_kind, size_val, target) in ops {
+                if is_split {
+                    let target_pane = alive[target % alive.len()];
+                    let dir = if horiz { Dir::Horizontal } else { Dir::Vertical };
+                    let size = match size_kind % 3 {
+                        0 => SplitSize::Half,
+                        1 => SplitSize::Percent(size_val as u8),
+                        _ => SplitSize::Cells(size_val),
+                    };
+                    let new_pane = PaneId(next_id);
+                    if tree.split(area, target_pane, dir, new_pane, size).is_ok() {
+                        next_id += 1;
+                        alive.push(new_pane);
+                    }
+                } else if alive.len() > 1 {
+                    let idx = target % alive.len();
+                    tree.remove(alive[idx]);
+                    alive.remove(idx);
+                }
+            }
+
+            // Exact tiling holds unconditionally, on the area the tree was
+            // built against.
+            let rects = tree.compute(area);
+            let borders = tree.borders(area);
+            prop_assert!(tiles_exactly(area, &rects, &borders));
+
+            // Render on a second, independently-chosen area (the "the
+            // terminal resized" path: it may be smaller, larger, or equal in
+            // either dimension). Exact tiling still holds unconditionally.
+            // Every pane still gets at least one cell whenever that area has
+            // room for all of them: each of this level's splits guarantees
+            // that for its own immediate children as long as its own local
+            // total covers its own child count, which holds here because the
+            // render area is at least as large, in each dimension, as the
+            // number of panes alive.
+            let render_area = Rect { x: 0, y: 0, cols: render_cols, rows: render_rows };
+            let render_rects = tree.compute(render_area);
+            let render_borders = tree.borders(render_area);
+            prop_assert!(tiles_exactly(render_area, &render_rects, &render_borders));
+
+            // Every split's own immediate children stay >= 1x1 whenever that
+            // split's own local area can fit them (see
+            // `no_child_zeroed_where_it_fits`'s docs for why "the area can
+            // fit all panes" has to be checked node by node for a nested
+            // tree, not just at the top).
+            prop_assert!(no_child_zeroed_where_it_fits(&tree.root, render_area));
+        }
+    }
+}
