@@ -9,14 +9,16 @@
 //! to `W - (n - 1)`.
 //!
 //! Each child of a split stores a `weight`: the number of cells it occupied
-//! the last time its size was set (by a split or a resize), against the area
-//! passed to that call. [`LayoutTree::compute`] turns weights into concrete
-//! rects for a given area by distributing that area's cells proportionally
-//! to weight, rounding down and handing leftover cells to the largest
-//! fractional remainders first, ties broken by the lower child index. On the
-//! area a split or resize last set the weights against, the weights already
-//! sum to exactly that area's available cells, so this reproduces the exact
-//! sizes every time, with no drift across repeated splits or resizes. When
+//! the last time its size was set (by a split, a resize, or a sibling's
+//! removal handing it that sibling's cells), against the area passed to
+//! that call. [`LayoutTree::compute`] turns weights into concrete rects for
+//! a given area by distributing that area's cells proportionally to weight,
+//! rounding down and handing leftover cells to the largest fractional
+//! remainders first, ties broken by the lower child index. On the area a
+//! split, resize, or remove last set the weights against, the weights
+//! already sum to exactly that area's available cells, so this reproduces
+//! the exact sizes every time, with no drift across repeated splits,
+//! resizes or removes. When
 //! the area differs (the window resized), sizes rescale proportionally; if
 //! that proportional rounding would take a child to zero even though its
 //! weight is >= 1, one cell per child is reserved up front and the rest
@@ -196,10 +198,18 @@ impl LayoutTree {
         let Node::Split { children, .. } = node_at_mut(&mut self.root, parent_path) else {
             unreachable!("parent path always resolves to a split")
         };
-        children.remove(idx);
+        let removed = children.remove(idx);
         let collapse = if children.len() == 1 {
             children.pop()
         } else {
+            // Like tmux's layout_destroy_cell: give the removed child's
+            // weight, plus the one border cell that's now gone too, to its
+            // neighbour (the previous child, or the new first child if the
+            // removed one was first). Keeps the survivors' weights summing
+            // to exactly the group's new local avail, same as after a split
+            // or a resize.
+            let neighbour = idx.saturating_sub(1);
+            children[neighbour].weight += removed.weight + 1;
             None
         };
         if let Some(remaining) = collapse {
@@ -277,6 +287,10 @@ impl LayoutTree {
     }
 
     /// The rect of every pane for `area`, excluding borders.
+    ///
+    /// A pane's rect can be 0 cells wide or tall only when `area` is too
+    /// small to hold every pane plus its borders; callers must not size a
+    /// PTY to 0 from such a rect (M2's job, when it resizes panes).
     pub fn compute(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::new();
         collect_rects(&self.root, area, &mut out);
@@ -316,9 +330,10 @@ fn split_sizes(avail: u16, size: SplitSize) -> Option<(u16, u16)> {
 /// always sums to exactly `total`.
 ///
 /// Tries the plain proportional pass first: when `weights` already sum to
-/// `total` (the case every call from within this module relies on: a split
-/// or resize sets weights that sum to exactly the area's available cells),
-/// this reproduces those weights exactly, with no rounding drift. Only if
+/// `total` (the case every call from within this module relies on: a split,
+/// a resize, or a remove that doesn't collapse its split all keep a group's
+/// weights summing to exactly the area's available cells), this reproduces
+/// those weights exactly, with no rounding drift. Only if
 /// that pass would give some child zero cells despite its weight being >= 1
 /// (only possible when `total` differs from the weights' sum, i.e. the area
 /// changed since the weights were set) does it fall back to reserving one
@@ -589,6 +604,7 @@ mod tests {
     const A: PaneId = PaneId(1);
     const B: PaneId = PaneId(2);
     const C: PaneId = PaneId(3);
+    const D: PaneId = PaneId(4);
 
     #[test]
     fn single_pane_fills_area() {
@@ -909,6 +925,87 @@ mod tests {
         tree.remove(C);
         assert_eq!(tree.compute(area), vec![(A, area)]);
         assert_eq!(tree.borders(area), vec![]);
+    }
+
+    #[test]
+    fn remove_first_child_gives_its_cells_to_the_next_sibling() {
+        // Same three-pane build as three_pane_cells_split_reproduces_stored_sizes_on_the_build_area:
+        // [A(58), C(10), B(10)], sum 78 == 80 - 2 borders.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, A, Dir::Horizontal, C, SplitSize::Cells(10))
+            .unwrap();
+        // A is first in the group; removing it hands its 58 cells, plus the
+        // border that's now gone too, to the new first child, C.
+        tree.remove(A);
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&C].cols, 69);
+        assert_eq!(rects[&B].cols, 10);
+    }
+
+    #[test]
+    fn split_after_remove_reproduces_the_requested_cells_exactly() {
+        // Regression for the fix-round-3 bug: before remove() gave a
+        // removed child's cells to its neighbour, the survivors' weights
+        // fell short of the group's new local avail, so this Cells(10)
+        // split (whose `current` is read from the group's *rendered* size)
+        // picked up the drift and rendered 12 cols instead of 10.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, A, Dir::Horizontal, C, SplitSize::Half)
+            .unwrap();
+        tree.remove(C);
+        tree.split(area, B, Dir::Horizontal, D, SplitSize::Cells(10))
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!(rects[&D].cols, 10);
+    }
+
+    #[test]
+    fn resize_after_remove_in_a_three_pane_group_moves_the_border_by_exactly_the_delta() {
+        // Regression for the same fix-round-3 bug, on resize instead of
+        // split: three Cells(10) splits give [A(47), D(10), C(10), B(10)];
+        // removing B (last) hands its cells to C. Before the fix, the
+        // A|D border (unrelated to the removed group member) would still
+        // move by less than the requested delta, because resize's own
+        // `near`/`far` reads came from a rescaled, non-exact render.
+        let mut tree = LayoutTree::new(A);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 80,
+            rows: 24,
+        };
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, A, Dir::Horizontal, C, SplitSize::Cells(10))
+            .unwrap();
+        tree.split(area, A, Dir::Horizontal, D, SplitSize::Cells(10))
+            .unwrap();
+        tree.remove(B);
+
+        let before: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        let border_before = before[&A].cols;
+
+        tree.resize(area, D, Edge::Left, 5);
+
+        let after: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        let border_after = after[&A].cols;
+        assert_eq!(border_before - border_after, 5);
     }
 
     #[test]
@@ -1233,6 +1330,38 @@ mod tests {
         }
     }
 
+    /// Whether `pane`'s immediate parent group's weights already sum to
+    /// exactly that group's own local avail for `area` (`None` for a pane
+    /// not in the tree, or the root's sole leaf, which has no parent group).
+    ///
+    /// This is the actual precondition `distribute`'s plain pass needs to
+    /// reproduce a group's weights exactly (see its doc comment): split,
+    /// resize and a non-collapsing remove all preserve it, so checking it
+    /// directly (rather than assuming it from the op history) also covers
+    /// the one case that doesn't: a 2-child collapse promotes the surviving
+    /// child by one tree level without touching its own weights, which
+    /// keeps *that* child's own group exact, but can leave one of *its*
+    /// descendants stale if that descendant splits along the same axis the
+    /// collapsed level did (the collapse changes what the perpendicular
+    /// level in between passes down to it, without resetting its weights).
+    fn group_is_exact(root: &Node, area: Rect, pane: PaneId) -> Option<bool> {
+        let mut path = Vec::new();
+        if !find_path(root, pane, &mut path) || path.is_empty() {
+            return None;
+        }
+        let parent_path = &path[..path.len() - 1];
+        let parent_rect = rect_at_path(root, area, parent_path);
+        match node_at(root, parent_path) {
+            Node::Split { dir, children } => {
+                let n = children.len() as u16;
+                let avail = axis_len(*dir, parent_rect).saturating_sub(n.saturating_sub(1));
+                let sum: u32 = children.iter().map(|c| c.weight).sum();
+                Some(u32::from(avail) == sum)
+            }
+            Node::Leaf(_) => None,
+        }
+    }
+
     fn op_strategy() -> impl Strategy<Value = (bool, bool, u8, u16, usize)> {
         (
             any::<bool>(),
@@ -1258,17 +1387,6 @@ mod tests {
             let mut tree = LayoutTree::new(PaneId(0));
             let mut alive = vec![PaneId(0)];
             let mut next_id = 1u32;
-            // A split's two new weights sum to exactly its group's local
-            // avail only as long as that group's weights already summed to
-            // its local avail beforehand; split() preserves that exactness,
-            // it doesn't restore it. remove() doesn't renormalise the
-            // siblings it leaves behind (by design: their sizes then grow
-            // proportionally at render time instead), so it can leave a
-            // group's weights short of its local avail, and every later
-            // split in that group inherits the shortfall. Once any remove
-            // has happened, later splits are no longer guaranteed exact, so
-            // stop checking.
-            let mut any_removed = false;
 
             for (is_split, horiz, size_kind, size_val, target) in ops {
                 if is_split {
@@ -1284,11 +1402,17 @@ mod tests {
                         next_id += 1;
                         alive.push(new_pane);
 
-                        if !any_removed {
-                            // The split we just made sets weights that sum
-                            // to exactly the local area available at the
-                            // time, so rendering on the build area must
-                            // reproduce those two sizes exactly right now.
+                        // A split's two new weights sum to exactly its
+                        // group's local avail as long as that group's
+                        // weights already summed to its local avail
+                        // beforehand (see distribute's doc comment): split,
+                        // resize and a non-collapsing remove all preserve
+                        // that invariant for the group they touch directly.
+                        // A 2-child collapse can still leave a deeper
+                        // descendant stale (group_is_exact's doc comment),
+                        // so check the actual precondition rather than
+                        // assume it from the op history.
+                        if group_is_exact(&tree.root, area, target_pane) == Some(true) {
                             let rects: std::collections::HashMap<_, _> =
                                 tree.compute(area).into_iter().collect();
                             let target_weight = weight_of(&tree.root, target_pane).unwrap();
@@ -1304,7 +1428,6 @@ mod tests {
                     let idx = target % alive.len();
                     tree.remove(alive[idx]);
                     alive.remove(idx);
-                    any_removed = true;
                 }
             }
 
