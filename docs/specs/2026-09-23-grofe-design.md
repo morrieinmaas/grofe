@@ -608,8 +608,8 @@ confirms them in practice before anything is built on top.
 
 Not usable: `wezterm-term` is not published on crates.io.
 
-**Licensing:** `alacritty_terminal` is Apache-2.0 only, so grofe will be MIT OR
-Apache-2.0 if it is ever published.
+**Licensing:** grofe is Apache-2.0, which matches `alacritty_terminal`
+(Apache-2.0 only).
 
 **Inner `TERM`:** D7. WezTerm advertises `xterm-256color`; Zellij sets nothing
 and panes inherit the outer `TERM`. grofe panes get `screen-256color` plus
