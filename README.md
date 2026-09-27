@@ -22,6 +22,11 @@ session, your REPL, the coding agent halfway through a conversation. No
 resurrect, no continuum, no list of process names to whitelist. Before you
 reboot, `grofe reboot-check` tells you exactly what will come back.
 
+**Good at running agents.** If you keep several coding agents busy at once,
+grofe shows which ones are working, which are waiting for you, and which have
+finished, and takes you straight to the one that needs attention. After a
+reboot, each agent comes back to its own conversation, not a fresh one.
+
 **A config you can actually debug.** Configuration is TOML with a schema. A
 typo is an error that names the file, the line and the setting you probably
 meant, not a silently ignored option. Ask where a value came from and grofe
@@ -53,10 +58,11 @@ matter how much you put there.
 
 **Modern terminal support out of the box.** True colour, the kitty keyboard
 protocol (so keys like a bare `q` or `Ctrl-Enter` reach Neovim, Helix and
-coding agents intact), clipboard over OSC 52, hyperlinks, focus events and
-tear-free redraws. The defaults are the ones most people end up configuring
-anyway: mouse on, numbering from 1, no half-second escape delay, new panes in
-the current directory.
+coding agents intact), clipboard over OSC 52, hyperlinks, focus events,
+tear-free redraws, and inline images through kitty's graphics protocol. The
+defaults are the ones most people end up configuring anyway: mouse on,
+numbering from 1, no half-second escape delay, new panes in the current
+directory.
 
 **Scriptable.** Everything you can do with a key you can do from the command
 line, and `grofe control` speaks a simple JSON protocol with an event stream,
@@ -64,17 +70,33 @@ so scripts and plugins react to what happens instead of polling. Plugins are
 ordinary programs in whatever language you like, with Lua available for the
 quick things.
 
-**Good at running agents.** If you keep several coding agents busy at once,
-grofe can show which ones are working, which are waiting for you, and which
-have finished, and take you straight to the one that needs attention. After a
-reboot, each agent comes back to its own conversation.
+## Switching from tmux
+
+grofe does not read `tmux.conf`, but it will convert one for you:
+
+```sh
+grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
+```
+
+Options, key bindings and status formats come across; anything that cannot
+(shell commands in the status line, `if-shell`, plugins) is listed with the
+reason, so you know exactly what is left to do. Your `tmux.conf` is never
+touched, and tmux keeps working alongside grofe while you try it.
+
+## Terminals
+
+grofe works in any modern terminal and is built and tested against
+[Ghostty](https://ghostty.org) and [WezTerm](https://wezterm.org), where every
+feature above is available. In WezTerm, set `enable_kitty_keyboard = true` so
+keys reach your programs unmangled. Other terminals get the same grofe with
+older key encoding and without inline images.
 
 ## What it isn't
 
-grofe is not a drop-in replacement for tmux. It does not read `tmux.conf` or
-run tmux plugins, and it does not run on Windows. It is also not trying to be
-Zellij: no modal interface, no WebAssembly plugins, just tmux's way of working
-with the rough edges taken off.
+grofe is not a drop-in replacement for tmux: it does not run tmux plugins, and
+it does not run on Windows. It is also not trying to be Zellij: no modal
+interface, no WebAssembly plugins, just tmux's way of working with the rough
+edges taken off.
 
 ## Why Rust
 
