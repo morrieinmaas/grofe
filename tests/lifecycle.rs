@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, exists, wait_child, wait_until};
+use common::{TestServer, exists, process_gone, wait_child, wait_until};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
@@ -271,4 +271,146 @@ fn reads_eof_within(fd: &OwnedFd, timeout: Duration) -> bool {
         }
         _ => false,
     }
+}
+
+/// The pid of the most recent server started on `srv`'s socket, from its log.
+fn logged_server_pid(srv: &TestServer) -> nix::unistd::Pid {
+    let log = srv.log();
+    let pid = log
+        .lines()
+        .rev()
+        .find(|l| l.contains(grofe::server::START_MARKER))
+        .and_then(|l| l.split("pid ").nth(1))
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no server pid in log:\n{log}"));
+    nix::unistd::Pid::from_raw(pid)
+}
+
+/// The server process is gone and so is its socket.
+fn assert_server_gone(srv: &TestServer, pid: nix::unistd::Pid) {
+    wait_until(|| process_gone(pid), WAIT)
+        .unwrap_or_else(|e| panic!("server {pid} still alive: {e}\nlog:\n{}", srv.log()));
+    assert!(!exists(&srv.socket), "socket left behind");
+}
+
+const MISSING_DIR: &str = "/nonexistent/grofe-c9";
+
+#[test]
+fn a_failed_first_new_session_leaves_no_server() {
+    let srv = TestServer::unstarted();
+    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(srv.server_starts(), 1, "log:\n{}", srv.log());
+    assert_server_gone(&srv, logged_server_pid(&srv));
+}
+
+#[test]
+fn a_successful_first_new_session_keeps_the_server() {
+    let srv = TestServer::unstarted();
+    assert_reached_server(&srv.run(&["new-session", "-d", "sleep", "30"]));
+    let pid = logged_server_pid(&srv);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!process_gone(pid));
+    assert!(srv.is_running(), "log:\n{}", srv.log());
+}
+
+#[test]
+fn explicit_start_server_stays_up_after_a_failed_new_session() {
+    let srv = TestServer::start();
+    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    assert!(!out.status.success(), "{out:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(srv.is_running(), "log:\n{}", srv.log());
+    assert_eq!(srv.cmd(&["list-sessions"]).unwrap(), "");
+}
+
+#[test]
+fn killing_the_last_session_of_an_auto_started_server_stops_it() {
+    let srv = TestServer::unstarted();
+    assert_reached_server(&srv.run(&["new-session", "-d", "-s", "only", "sleep", "30"]));
+    let pid = logged_server_pid(&srv);
+    srv.cmd(&["kill-session", "-t", "only"]).unwrap();
+    assert_server_gone(&srv, pid);
+}
+
+/// An open client connection keeps an empty auto-started server up: it
+/// exits only once that connection closes too.
+#[test]
+fn an_empty_auto_started_server_waits_for_open_connections() {
+    use std::io::Write;
+
+    let srv = TestServer::unstarted();
+    let mut cmd = srv.command();
+    cmd.args(["__server", "--exit-when-empty"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let server = cmd.spawn().expect("spawn server");
+    wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+
+    let mut idle = UnixStream::connect(&srv.socket).expect("connect");
+    let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(srv.ctx())).unwrap();
+    writeln!(idle, "{hello}").unwrap();
+
+    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    assert!(!out.status.success(), "{out:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        srv.is_running(),
+        "exited with a connection open; log:\n{}",
+        srv.log()
+    );
+
+    drop(idle);
+    let status = wait_child(server, WAIT).expect("server exits once the last connection closes");
+    assert!(status.success(), "{status:?}");
+    assert!(!exists(&srv.socket), "socket left behind");
+}
+
+#[test]
+fn concurrent_auto_starts_survive_one_failing_new_session() {
+    let srv = TestServer::unstarted();
+    let (bad, good): (common::CmdOutput, Vec<common::CmdOutput>) = std::thread::scope(|s| {
+        let bad = s.spawn(|| srv.run(&["new-session", "-d", "-c", MISSING_DIR]));
+        let good: Vec<_> = (0..6)
+            .map(|_| s.spawn(|| srv.run(&["new-session", "-d", "sleep", "30"])))
+            .collect();
+        (
+            bad.join().unwrap(),
+            good.into_iter().map(|h| h.join().unwrap()).collect(),
+        )
+    });
+    assert!(!bad.status.success(), "{bad:?}");
+    for out in &good {
+        assert_reached_server(out);
+    }
+    assert!(srv.is_running(), "log:\n{}", srv.log());
+    let sessions = srv.cmd(&["list-sessions"]).unwrap();
+    assert_eq!(
+        sessions.lines().count(),
+        6,
+        "{sessions}\nlog:\n{}",
+        srv.log()
+    );
+}
+
+/// An auto-started server whose starter never connects (it timed out, was
+/// interrupted, or died after the ready signal) still exits on its own.
+#[test]
+fn an_auto_started_server_nobody_connects_to_exits() {
+    let srv = TestServer::unstarted();
+    let mut cmd = srv.command();
+    cmd.args(["__server", "--exit-when-empty"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let server = cmd.spawn().expect("spawn server");
+    // Watch for the socket file only: connecting would count as a client.
+    wait_until(|| exists(&srv.socket), WAIT).expect("server binds");
+
+    let status = wait_child(server, Duration::from_secs(10))
+        .unwrap_or_else(|e| panic!("idle server did not exit: {e}\nlog:\n{}", srv.log()));
+    assert!(status.success(), "{status:?}");
+    assert!(!exists(&srv.socket), "socket left behind");
 }

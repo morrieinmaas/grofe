@@ -27,6 +27,9 @@ const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [a
 /// How long the CLI waits for a freshly started server to report ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a connect that found no socket waits before its one retry.
+const CONNECT_RETRY: Duration = Duration::from_millis(5);
+
 /// Commands that start a server when none is running (spec §4.1). Every
 /// other command fails fast with `no server running on <socket>`.
 const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
@@ -54,7 +57,7 @@ fn main() -> ExitCode {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
-            match connect_or_start(&socket, own_dir) {
+            match connect_or_start(&socket, own_dir, false) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             }
@@ -134,12 +137,18 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     Ok((globals, &args[i..]))
 }
 
-/// `grofe __server -S <sock> --ready-fd <n>`: the detached server process.
+/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]`: the
+/// detached server process.
 fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     let mut socket = globals.socket.clone();
     let mut ready_fd = None;
+    let mut exit_when_empty = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        if arg == "--exit-when-empty" {
+            exit_when_empty = true;
+            continue;
+        }
         match (arg.as_str(), it.next()) {
             ("-S", Some(path)) => socket = Some(PathBuf::from(path)),
             ("--ready-fd", Some(fd)) => match fd.parse() {
@@ -150,7 +159,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
         }
     }
     let socket = socket.unwrap_or_else(|| globals.socket());
-    match server::run_daemon(&socket, ready_fd) {
+    match server::run_daemon(&socket, ready_fd, exit_when_empty) {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
     }
@@ -164,7 +173,8 @@ fn fail(msg: &str) -> ExitCode {
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     let stream = if AUTO_START.contains(&argv[0].as_str()) {
-        connect_or_start(socket, own_dir)
+        // Implicit start: that server exits if it ends up with no sessions.
+        connect_or_start(socket, own_dir, true)
     } else {
         connect(socket)
     };
@@ -186,8 +196,19 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 }
 
 /// Connects to a running server, or explains that there is none.
+///
+/// A missing socket is retried once after a short wait: an auto-started
+/// server deciding whether to exit moves its socket aside for a moment and
+/// may put it back (see `server::exit_if_empty`).
 fn connect(socket: &Path) -> Result<UnixStream, String> {
-    UnixStream::connect(socket).map_err(|e| match e.kind() {
+    let result = UnixStream::connect(socket).or_else(|e| {
+        if e.kind() != io::ErrorKind::NotFound {
+            return Err(e);
+        }
+        std::thread::sleep(CONNECT_RETRY);
+        UnixStream::connect(socket)
+    });
+    result.map_err(|e| match e.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
             format!("no server running on {}", socket.display())
         }
@@ -203,7 +224,14 @@ fn connect(socket: &Path) -> Result<UnixStream, String> {
 /// created or verified private, before any connect, so a pre-created
 /// world-writable `/tmp/grofe-$UID` is refused. For a user-named `-S` path
 /// the parent is only created when missing.
-fn connect_or_start(socket: &Path, own_dir: bool) -> Result<UnixStream, String> {
+///
+/// `exit_when_empty` marks a server started by a session-creating command
+/// rather than `start-server`: it exits if it ends up with no sessions.
+fn connect_or_start(
+    socket: &Path,
+    own_dir: bool,
+    exit_when_empty: bool,
+) -> Result<UnixStream, String> {
     if let Some(dir) = socket.parent().filter(|d| !d.as_os_str().is_empty())
         && (own_dir || !dir.exists())
     {
@@ -234,13 +262,13 @@ fn connect_or_start(socket: &Path, own_dir: bool) -> Result<UnixStream, String> 
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("error connecting to {}: {e}", socket.display())),
     }
-    start_server(socket)?;
+    start_server(socket, exit_when_empty)?;
     connect(socket)
 }
 
 /// Re-execs this binary as a detached `grofe __server` and waits for it to
 /// report ready over an inherited pipe. Called with the start lock held.
-fn start_server(socket: &Path) -> Result<(), String> {
+fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
     let (read_end, write_end) = nix::unistd::pipe().map_err(|e| format!("pipe: {e}"))?;
     fcntl(&read_end, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| format!("fcntl: {e}"))?;
     // The write end must survive the child's stdio setup, which owns 0-2.
@@ -265,6 +293,9 @@ fn start_server(socket: &Path) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if exit_when_empty {
+        cmd.arg("--exit-when-empty");
+    }
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork
     // and exec. It detaches the server from our session and terminal.
     unsafe {
