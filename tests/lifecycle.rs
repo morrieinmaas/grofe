@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, exists, wait_child, wait_until};
+use common::{TestServer, exists, process_gone, wait_child, wait_until};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
@@ -285,10 +285,6 @@ fn logged_server_pid(srv: &TestServer) -> nix::unistd::Pid {
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| panic!("no server pid in log:\n{log}"));
     nix::unistd::Pid::from_raw(pid)
-}
-
-fn process_gone(pid: nix::unistd::Pid) -> bool {
-    nix::sys::signal::kill(pid, None).is_err()
 }
 
 /// The server process is gone and so is its socket.
