@@ -28,7 +28,8 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
             .find(|n| model.session_by_name(n).is_none())
             .unwrap_or_else(|| id.0.to_string()),
     };
-    let cwd = resolve_cwd(ctx, c.cwd.as_deref(), &ctx.cwd);
+    let here = ctx.pane.filter(|p| model.panes.contains_key(p));
+    let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
     let size = (
         c.width.unwrap_or(DEFAULT_SIZE.0).max(1),
         c.height.unwrap_or(DEFAULT_SIZE.1).max(1),

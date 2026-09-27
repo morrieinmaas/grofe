@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::protocol::ClientCtx;
+use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
 use crate::types::{PaneId, Rect, SessionId, WindowId};
@@ -104,9 +105,9 @@ pub struct Model {
     pub sessions: BTreeMap<SessionId, Session>,
     pub windows: BTreeMap<WindowId, Window>,
     pub panes: BTreeMap<PaneId, Pane>,
-    /// The global `remain-on-exit` value, seeded from the server's start
-    /// options. T1.5c's option store takes this over.
-    pub remain_on_exit: bool,
+    /// Every option value, scoped (spec §4.2). The global
+    /// `remain-on-exit` is seeded from the server's start options.
+    pub options: Options,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -116,7 +117,7 @@ pub struct Model {
 impl Model {
     pub fn new(remain_on_exit: bool) -> Model {
         Model {
-            remain_on_exit,
+            options: Options::new(remain_on_exit),
             ..Model::default()
         }
     }
@@ -162,12 +163,12 @@ impl Model {
         self.had_session && self.sessions.is_empty()
     }
 
-    /// Whether `pane` stays after its process exits.
-    // T1.5c: resolve the scoped option (pane over window over session over
-    // global) here.
+    /// Whether `pane` stays after its process exits: `remain-on-exit`
+    /// looked up pane over window over session over global.
     pub fn remain_on_exit(&self, pane: PaneId) -> bool {
-        let _ = pane;
-        self.remain_on_exit
+        self.options
+            .lookup(REMAIN_ON_EXIT, &options::chain(self, pane))
+            == Some("on")
     }
 
     pub fn session_by_name(&self, name: &str) -> Option<SessionId> {

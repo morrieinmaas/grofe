@@ -22,7 +22,7 @@ use ulid::Ulid;
 use crate::cmd::{self, Command};
 use crate::protocol::ClientCtx;
 use crate::server::State;
-use crate::server::model::{HISTORY_LIMIT, Pane};
+use crate::server::model::{HISTORY_LIMIT, Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn};
 use crate::types::{PaneId, WindowId};
 
@@ -87,13 +87,32 @@ pub(crate) fn command_argv(command: Option<Vec<String>>) -> Option<Vec<String>> 
     }
 }
 
-/// A `-c` value made absolute against the request's cwd, or `default` when
-/// no `-c` was given.
-// T1.5c: expand formats in `dir` against the target here (spec §4.5).
-pub(crate) fn resolve_cwd(ctx: &ClientCtx, dir: Option<&str>, default: &Path) -> PathBuf {
-    match dir {
-        Some(dir) => ctx.cwd.join(dir),
-        None => default.to_path_buf(),
+/// A `-c` value, its formats expanded against the `target` pane (spec
+/// §4.5: at execution time, so `#{pane_current_path}` is the target's cwd
+/// now) and made absolute against the request's cwd; `default` when no
+/// `-c` was given. With no target pane, variables expand to nothing.
+pub(crate) fn resolve_cwd(
+    model: &Model,
+    ctx: &ClientCtx,
+    target: Option<PaneId>,
+    dir: Option<&str>,
+    default: &Path,
+) -> PathBuf {
+    let Some(dir) = dir else {
+        return default.to_path_buf();
+    };
+    let dir = match target {
+        Some(pane) => cmd::expand(dir, &options::FormatCtx::new(model, pane)),
+        None => cmd::expand(dir, &NoVars),
+    };
+    ctx.cwd.join(dir)
+}
+
+struct NoVars;
+
+impl cmd::FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
     }
 }
 
