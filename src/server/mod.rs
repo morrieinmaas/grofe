@@ -38,6 +38,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::paths::{self, Env};
@@ -333,6 +334,14 @@ impl Connections {
     }
 }
 
+/// How often an empty auto-started server with no connections re-checks
+/// whether to exit: its starter may never connect (it timed out, was
+/// interrupted, or died), so no connection close would trigger the check.
+const EMPTY_RECHECK: Duration = Duration::from_secs(2);
+
+/// How long accepting pauses after an accept error (e.g. EMFILE).
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
 /// Accepting happens here, not in a task of its own, so the connection
 /// count and the listener's backlog are consistent whenever
 /// [`exit_if_empty`] looks at them.
@@ -344,14 +353,19 @@ async fn actor(
     mut pane_events: mpsc::Receiver<PaneEvent>,
     (mut sigterm, mut sigint): (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
 ) -> State {
+    // Set after an accept error: accepting pauses, commands and pane events
+    // keep flowing.
+    let mut accept_paused_until: Option<Instant> = None;
     loop {
+        let idle =
+            state.exit_when_empty && state.connections == 0 && state.model.sessions.is_empty();
         tokio::select! {
             msg = msgs.recv() => match msg {
                 Some(msg) => handle(&mut state, msg),
                 None => break,
             },
             Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
-            accepted = listener.accept() => match accepted {
+            accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
                 Ok((stream, _)) => {
                     state.connections += 1;
                     conns.spawn(stream);
@@ -359,9 +373,13 @@ async fn actor(
                 Err(e) => {
                     // e.g. EMFILE: back off instead of spinning.
                     eprintln!("grofe server: accept: {e}");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    accept_paused_until = Some(Instant::now() + ACCEPT_BACKOFF);
                 }
             },
+            _ = sleep_until(accept_paused_until.unwrap_or_else(Instant::now)),
+                if accept_paused_until.is_some() => accept_paused_until = None,
+            // Falls through to the exit_if_empty below.
+            _ = sleep(EMPTY_RECHECK), if idle => {}
             _ = sigterm.recv() => {
                 eprintln!("grofe server: SIGTERM");
                 break;
@@ -391,6 +409,10 @@ async fn actor(
 /// - with the lock held no other server can bind the path meanwhile, and a
 ///   CLI that found no socket waits on the lock, then connects or starts
 ///   a fresh server.
+///
+/// While the socket is aside, a plain `connect` (a non-starting command
+/// such as `has-session`) gets ENOENT even if the server then stays up; the
+/// CLI retries such a connect once after a short wait to cover this window.
 fn exit_if_empty(state: &mut State, listener: &UnixListener) {
     if !state.exit_when_empty
         || state.exit

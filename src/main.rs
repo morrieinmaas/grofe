@@ -27,6 +27,9 @@ const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [a
 /// How long the CLI waits for a freshly started server to report ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a connect that found no socket waits before its one retry.
+const CONNECT_RETRY: Duration = Duration::from_millis(5);
+
 /// Commands that start a server when none is running (spec §4.1). Every
 /// other command fails fast with `no server running on <socket>`.
 const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
@@ -193,8 +196,19 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 }
 
 /// Connects to a running server, or explains that there is none.
+///
+/// A missing socket is retried once after a short wait: an auto-started
+/// server deciding whether to exit moves its socket aside for a moment and
+/// may put it back (see `server::exit_if_empty`).
 fn connect(socket: &Path) -> Result<UnixStream, String> {
-    UnixStream::connect(socket).map_err(|e| match e.kind() {
+    let result = UnixStream::connect(socket).or_else(|e| {
+        if e.kind() != io::ErrorKind::NotFound {
+            return Err(e);
+        }
+        std::thread::sleep(CONNECT_RETRY);
+        UnixStream::connect(socket)
+    });
+    result.map_err(|e| match e.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
             format!("no server running on {}", socket.display())
         }

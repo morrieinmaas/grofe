@@ -398,3 +398,23 @@ fn concurrent_auto_starts_survive_one_failing_new_session() {
         srv.log()
     );
 }
+
+/// An auto-started server whose starter never connects (it timed out, was
+/// interrupted, or died after the ready signal) still exits on its own.
+#[test]
+fn an_auto_started_server_nobody_connects_to_exits() {
+    let srv = TestServer::unstarted();
+    let mut cmd = srv.command();
+    cmd.args(["__server", "--exit-when-empty"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let server = cmd.spawn().expect("spawn server");
+    // Watch for the socket file only: connecting would count as a client.
+    wait_until(|| exists(&srv.socket), WAIT).expect("server binds");
+
+    let status = wait_child(server, Duration::from_secs(10))
+        .unwrap_or_else(|e| panic!("idle server did not exit: {e}\nlog:\n{}", srv.log()));
+    assert!(status.success(), "{status:?}");
+    assert!(!exists(&srv.socket), "socket left behind");
+}
