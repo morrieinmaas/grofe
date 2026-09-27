@@ -589,31 +589,31 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
 ];
 const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
 
-/// Resolves `-g -s -w -p` to a scope. Verified against real tmux 3.7b:
-/// `set -gw`, `set -gp`, `set -gs` and `set -gswp` all succeed there, with
-/// no "only one of" error for any flag combination tmux accepts `-g`
-/// alongside. tmux's `-g` is a modifier ("the global variant of whichever
-/// scope"), not a scope of its own; grofe has a single flat Global scope
-/// (spec §4.2), so any `-g` wins outright over whatever else was given.
-fn parse_scope(flags: &ParsedFlags) -> Result<Option<OptionScope>, ParseError> {
+/// Resolves `-g -s -w -p` to a scope, by tmux's own precedence: never an
+/// error, just a fixed order of preference over whichever flags were
+/// given. Verified against tmux 3.7b's actual `options_scope_from_flags`
+/// (options.c): it checks `-s` first and returns immediately (server
+/// scope, unconditionally, even alongside other flags), then `-p`
+/// (pane), then `-w` (window), and only falls through to session scope
+/// once none of those are present; `-g` only ever modifies the window or
+/// session branches there, and is never even consulted once `-s` or `-p`
+/// has matched. grofe simplifies `-g` to always win outright (round-1
+/// ruling: grofe has one flat Global scope, unlike tmux's separate
+/// per-type global tables), so grofe's order is `-g`, then `-s`
+/// (grofe's own scope, not tmux's real "-s = server"), then `-p`, then
+/// `-w`. Confirmed live: `set -wp`/`set -pw` land on the pane (not the
+/// window), and `set -sw`/`set -sp` land on grofe's session scope.
+fn parse_scope(flags: &ParsedFlags) -> Option<OptionScope> {
     if flags.present.contains(&'g') {
-        return Ok(Some(OptionScope::Global));
-    }
-    let scopes: Vec<OptionScope> = [
-        ('s', OptionScope::Session),
-        ('w', OptionScope::Window),
-        ('p', OptionScope::Pane),
-    ]
-    .into_iter()
-    .filter(|(c, _)| flags.present.contains(c))
-    .map(|(_, scope)| scope)
-    .collect();
-    match scopes.as_slice() {
-        [] => Ok(None),
-        [scope] => Ok(Some(*scope)),
-        _ => Err(ParseError::Other(
-            "only one of -s -w -p allowed".to_string(),
-        )),
+        Some(OptionScope::Global)
+    } else if flags.present.contains(&'s') {
+        Some(OptionScope::Session)
+    } else if flags.present.contains(&'p') {
+        Some(OptionScope::Pane)
+    } else if flags.present.contains(&'w') {
+        Some(OptionScope::Window)
+    } else {
+        None
     }
 }
 
@@ -626,7 +626,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         },
         "set-option",
     )?;
-    let scope = parse_scope(&flags)?;
+    let scope = parse_scope(&flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals
         .next()
@@ -663,7 +663,7 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
         },
         "show-options",
     )?;
-    let scope = parse_scope(&flags)?;
+    let scope = parse_scope(&flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals.next().cloned();
     if positionals.next().is_some() {
@@ -1376,12 +1376,48 @@ mod tests {
         ));
     }
 
+    /// tmux's real `options_scope_from_flags` (options.c) never rejects a
+    /// flag combination; it picks by a fixed precedence instead. Verified
+    /// against tmux 3.7b's source and live behaviour (`set -wp`/`set -pw`
+    /// land on the pane, not the window): `-p` beats `-w` when both are
+    /// given, order of the flags doesn't matter.
     #[test]
-    fn set_option_rejects_multiple_non_global_scope_flags() {
-        assert!(matches!(
-            parse(&argv(&["set-option", "-w", "-p", "name", "value"])),
-            Err(ParseError::Other(_))
-        ));
+    fn set_option_w_and_p_together_is_pane() {
+        let cmd = parse(&argv(&["set-option", "-wp", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Pane));
+    }
+
+    #[test]
+    fn set_option_p_and_w_together_is_pane_regardless_of_flag_order() {
+        let cmd = parse(&argv(&["set-option", "-pw", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Pane));
+    }
+
+    /// tmux checks `-s` first and returns immediately, before ever
+    /// looking at `-p`/`-w`; grofe's `-s` is its own Session scope (not
+    /// tmux's real server scope), so `-sw`/`-sp` land on Session.
+    #[test]
+    fn set_option_s_and_w_together_is_session() {
+        let cmd = parse(&argv(&["set-option", "-sw", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Session));
+    }
+
+    #[test]
+    fn set_option_s_and_p_together_is_session() {
+        let cmd = parse(&argv(&["set-option", "-sp", "name", "value"])).unwrap();
+        let Command::SetOption(set) = cmd else {
+            panic!("expected SetOption");
+        };
+        assert_eq!(set.scope, Some(OptionScope::Session));
     }
 
     /// tmux: `-g` combined with `-w`/`-p`/`-s` is a common idiom (`set -gw
