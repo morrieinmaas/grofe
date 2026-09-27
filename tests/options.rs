@@ -135,6 +135,17 @@ fn unknown_builtin_option_errors() {
     srv.cmd(&["set", "-g", "@anything", "1"]).unwrap();
 }
 
+/// tmux 3.7b checks the option name before the missing value: an unknown
+/// name given no value says `invalid option: <name>`, not `empty value`.
+#[test]
+fn unknown_option_with_no_value_names_the_option() {
+    let srv = TestServer::start();
+    new_session(&srv, "a");
+    let err = srv.cmd(&["set", "-g", "bogus-option"]).unwrap_err();
+    assert!(err.contains("invalid option: bogus-option"), "{err}");
+    assert!(!err.contains("empty value"), "{err}");
+}
+
 #[test]
 fn remain_on_exit_is_looked_up_per_pane() {
     let srv = TestServer::start();

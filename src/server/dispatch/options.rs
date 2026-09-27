@@ -340,7 +340,12 @@ fn set_option(
             let current = model.options.lookup(&c.name, &owner_chain(model, owner));
             bool_str(current != Some("on")).to_string()
         }
-        None => return Err("empty value".to_string()),
+        // An unknown name is reported before an absent value (tmux checks
+        // the name first).
+        None => {
+            check_name(&c.name)?;
+            return Err("empty value".to_string());
+        }
     };
     if model.options.set(owner, &c.name, &value, c.persist)? {
         changed(model, events);
