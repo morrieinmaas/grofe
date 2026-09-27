@@ -115,4 +115,4 @@ cargo clippy --all-targets -- -D warnings
 
 ## License
 
-MIT or Apache-2.0, at your option.
+Apache License 2.0. See [LICENSE](LICENSE).
