@@ -29,13 +29,9 @@ fn new_session_auto_starts_a_server() {
     assert_eq!(srv.server_starts(), 1);
 }
 
-/// The CLI got its request to the server. The stub dispatcher rejects
-/// new-session until T1.5a, which switches this to success.
+/// The CLI got its request to the server, which created the session.
 fn assert_reached_server(out: &common::CmdOutput) {
-    assert!(
-        out.stderr.contains("unknown command: new-session"),
-        "CLI did not reach the server: {out:?}"
-    );
+    assert!(out.status.success(), "new-session failed: {out:?}");
 }
 
 #[test]
