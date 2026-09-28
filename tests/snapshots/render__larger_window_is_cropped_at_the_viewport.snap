@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: dump(&term)
+---
+| 6789abc
+|two
+| xy
+cursor: row 2 col 3 shape Block blink false

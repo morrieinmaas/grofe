@@ -1,0 +1,10 @@
+---
+source: tests/render.rs
+expression: dump(&term)
+---
+|$
+|
+|
+|[t] 1:sh* 😀
+cursor: row 0 col 2 shape Block blink false
+r3 c0-8: fg=Black bg=Green

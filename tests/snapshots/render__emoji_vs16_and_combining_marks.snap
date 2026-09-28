@@ -1,0 +1,7 @@
+---
+source: tests/render.rs
+expression: dump(&term)
+---
+|a👍b ❤️c éf 漢字g
+|
+cursor: row 0 col 16 shape Block blink false
