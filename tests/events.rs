@@ -744,7 +744,7 @@ fn a_subscriber_keeps_an_empty_auto_started_server_until_it_closes() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let server = cmd.spawn().expect("spawn server");
-    common::wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+    srv.wait_listening(WAIT).expect("server comes up");
     let mut sub = srv.subscribe(&["option-changed"]).unwrap();
 
     // A first request that leaves no session arms the exit-when-empty rule.

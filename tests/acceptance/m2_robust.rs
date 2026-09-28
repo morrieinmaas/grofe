@@ -214,6 +214,73 @@ fn a_huge_resize_frame_is_capped_and_the_server_keeps_answering() {
     assert!(took < Duration::from_secs(1), "list-sessions took {took:?}");
 }
 
+/// Reads `client` until no frame has come for `quiet`, so a check that
+/// follows starts from a client with nothing pending.
+fn drain(client: &mut UnixStream, reader: &mut Reader, quiet: Duration) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while reader.read(client, quiet, |_| false).frames > 0 {
+        assert!(Instant::now() < deadline, "the client never went quiet");
+    }
+}
+
+/// Commands that only read do not redraw an attached client: each redraw
+/// of a large client is actor time every other request waits behind. A
+/// command that changes what is drawn still redraws.
+///
+/// A redraw whose screen is unchanged sends nothing, so the status line
+/// shows seconds: any redraw a second after the last one sends new bytes.
+#[test]
+fn read_only_commands_do_not_redraw_clients() {
+    let srv = start();
+    let mut control = Control::connect(&srv);
+    // No clock redraws of its own, only redraws something asked for.
+    control
+        .cmd(&["set", "-g", "status-interval", "0"])
+        .expect("set");
+    control
+        .cmd(&["set", "-g", "status-right", "%H:%M:%S"])
+        .expect("set");
+    let mut client = raw_attach(&srv, (80, 24));
+    let mut reader = Reader::new();
+    reader.read(&mut client, Duration::from_secs(10), |r| {
+        contains(&r.output, b"idle-pane")
+    });
+    // Longer than NAME_INTERVAL, so automatic-rename has settled.
+    drain(&mut client, &mut reader, Duration::from_millis(700));
+    // The clock has moved on since the last redraw.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let reads: &[&[&str]] = &[
+        &["list-sessions"],
+        &["list-windows", "-t", "main"],
+        &["list-panes", "-t", "main", "-F", "#{pane_id}"],
+        &["list-clients"],
+        &["show-options", "-g"],
+        &["has-session", "-t", "main"],
+        &["display-message", "-p", "-t", "main", "#{window_name}"],
+        &["capture-pane", "-p", "-t", "main"],
+        &["__attach-check", "-t", "main"],
+    ];
+    for argv in reads {
+        control
+            .cmd(argv)
+            .unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+    }
+    let got = reader.read(&mut client, Duration::from_millis(500), |_| false);
+    assert_eq!(got.frames, 0, "a read-only command redrew the client");
+
+    control
+        .cmd(&["rename-window", "-t", "main", "renamed-win"])
+        .expect("rename-window");
+    let got = reader.read(&mut client, Duration::from_secs(10), |r| {
+        contains(&r.output, b"renamed-win")
+    });
+    assert!(
+        contains(&got.output, b"renamed-win"),
+        "rename-window did not redraw the status line"
+    );
+}
+
 /// The same size in the attach hello is capped the same way.
 #[test]
 fn a_huge_size_in_the_hello_is_capped() {

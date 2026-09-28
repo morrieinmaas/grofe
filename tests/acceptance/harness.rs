@@ -40,10 +40,13 @@ pub struct Harness {
 
 impl Harness {
     /// Spawn `cmd` in a pty fixed at `cols`x`rows` from the first byte it
-    /// reads: `cmd` is wrapped in a shell that sets the size with `stty`
-    /// before `exec`ing the real program, so a TUI that reads the window
-    /// size once at startup (rather than waiting for a `SIGWINCH`) still
-    /// sees the right size. Env vars and the working directory set on `cmd`
+    /// reads: `cmd` is wrapped in a shell that waits for a go line before
+    /// `exec`ing the real program, and the size is set before that line is
+    /// sent, so a TUI that reads the window size once at startup (rather
+    /// than waiting for a `SIGWINCH`) still sees the right size. (A `stty`
+    /// in the wrapper is not enough: ptyprocess sets 80x24 on the master
+    /// after the wrapper has exec'd, and under load that lands after the
+    /// `stty`.) Env vars and the working directory set on `cmd`
     /// are carried through the wrapper; `env_clear` is not; the wrapper
     /// shell otherwise inherits this process's environment as usual.
     ///
@@ -54,9 +57,7 @@ impl Harness {
     /// socket (M2 fix round 1).
     pub fn spawn(cmd: Command, cols: u16, rows: u16) -> Harness {
         let mut wrapper = Command::new("/bin/sh");
-        wrapper.arg("-c").arg(format!(
-            "stty cols {cols} rows {rows} && exec \"$0\" \"$@\""
-        ));
+        wrapper.arg("-c").arg("read -r go && exec \"$0\" \"$@\"");
         wrapper.arg(cmd.get_program());
         wrapper.args(cmd.get_args());
         if let Some(dir) = cmd.get_current_dir() {
@@ -79,12 +80,19 @@ impl Harness {
             &TermSize::new(cols as usize, rows as usize),
             VoidListener,
         );
-        Harness {
+        let mut harness = Harness {
             session,
             term,
             parser: Processor::new(),
             raw: Vec::new(),
-        }
+        };
+        harness
+            .session
+            .get_process_mut()
+            .set_window_size(cols, rows)
+            .expect("size the pty");
+        harness.send("\n");
+        harness
     }
 
     /// `grofe attach -t <target>` (`grofe` is a `TestServer::command()`,

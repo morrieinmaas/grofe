@@ -591,9 +591,12 @@ fn handle(state: &mut State, msg: ServerMsg) {
             if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
+            let read_only = dispatch::read_only(&req.argv);
             let result = dispatch(state, &ctx, &req.argv);
             finish(state, req.id, result, reply);
-            clients::changed(state);
+            if !read_only {
+                clients::changed(state);
+            }
         }
         ServerMsg::Subscribe { req, reply, tx } => {
             let result = match cmd::parse(&req.argv) {

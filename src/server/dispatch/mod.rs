@@ -44,8 +44,10 @@ pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String
     }
     let cmds = cmd::parse_sequence(argv).map_err(|e| e.to_string())?;
     // Names follow their panes (automatic-rename) before a command reads
-    // or targets them.
-    window::automatic_rename(&mut state.model);
+    // or targets them. A new name is drawn even if the command only reads.
+    if window::automatic_rename(&mut state.model) {
+        clients::mark_all_dirty(state);
+    }
     let mut out = String::new();
     let mut result = Ok(());
     for cmd in cmds {
@@ -61,6 +63,35 @@ pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String
         state.exit = true;
     }
     result.map(|()| out)
+}
+
+/// Whether a request only reads: nothing an attached client draws can
+/// change, so its clients need no redraw (a redraw of a large client is
+/// actor time every other request waits behind). Unknown or unparsable
+/// requests count as changing something.
+// ponytail: an explicit list. The upgrade path is a per-command "changed"
+// result from dispatch, so each handler says what it touched.
+pub fn read_only(argv: &[String]) -> bool {
+    if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
+        return true;
+    }
+    let Ok(cmds) = cmd::parse_sequence(argv) else {
+        return false;
+    };
+    cmds.iter().all(|c| {
+        matches!(
+            c,
+            Command::ListSessions(_)
+                | Command::ListWindows(_)
+                | Command::ListPanes(_)
+                | Command::ListClients(_)
+                | Command::ListKeys(_)
+                | Command::ShowOptions(_)
+                | Command::HasSession(_)
+                | Command::CapturePane(_)
+                | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
+        )
+    })
 }
 
 /// For a handler whose answer comes later (`run-shell` from the CLI): the
@@ -231,4 +262,38 @@ pub(crate) fn spawn_pane(
         },
     );
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn only_listed_commands_are_read_only() {
+        for words in [
+            &["list-sessions"][..],
+            &["lsw"],
+            &["show-options", "-g"],
+            &["has-session", "-t", "main"],
+            &["display-message", "-p", "#{window_name}"],
+            &["capture-pane", "-p"],
+            &[ATTACH_CHECK, "-t", "main"],
+        ] {
+            assert!(read_only(&argv(words)), "{words:?}");
+        }
+        for words in [
+            &["display-message", "hello"][..],
+            &["rename-window", "x"],
+            &["set", "-g", "status", "off"],
+            &["send-keys", "a"],
+            &["no-such-command"],
+            &[],
+        ] {
+            assert!(!read_only(&argv(words)), "{words:?}");
+        }
+    }
 }
