@@ -97,8 +97,14 @@ pub trait InputHook {
 pub enum Input {
     Key(Key),
     /// Bracketed-paste content, without the markers. Never matched against
-    /// bindings.
-    Paste(Vec<u8>),
+    /// bindings. A paste longer than the decoder holds arrives in pieces:
+    /// `start` is set on the first, `end` on the last, both on a paste that
+    /// fits in one, so a pane still sees one bracketed paste.
+    Paste {
+        data: Vec<u8>,
+        start: bool,
+        end: bool,
+    },
     Mouse(Mouse),
     /// Focus in (`true`) or out, from the outer terminal's mode 1004.
     Focus(bool),
@@ -309,6 +315,8 @@ pub struct Decoder {
     /// Paste bytes at the front of `buf` already searched for the end
     /// marker, so a long paste is scanned once.
     paste_scanned: usize,
+    /// A piece of the current paste has already been passed on.
+    paste_begun: bool,
 }
 
 const PASTE_START: &[u8] = b"\x1b[200~";
@@ -353,11 +361,11 @@ impl Decoder {
             return out;
         }
         if self.in_paste {
-            if !self.buf.is_empty() {
-                out.push(Input::Paste(std::mem::take(&mut self.buf)));
+            if !self.buf.is_empty() || self.paste_begun {
+                let data = std::mem::take(&mut self.buf);
+                out.push(self.paste_piece(data, true));
             }
             self.in_paste = false;
-            self.paste_scanned = 0;
         } else {
             self.drain(true, &mut out);
         }
@@ -384,10 +392,10 @@ impl Decoder {
                 let rest = &self.buf[pos..];
                 let from = self.paste_scanned.saturating_sub(PASTE_END.len() - 1);
                 if let Some(end) = find(&rest[from..], PASTE_END).map(|i| i + from) {
-                    out.push(Input::Paste(rest[..end].to_vec()));
+                    let data = rest[..end].to_vec();
+                    out.push(self.paste_piece(data, true));
                     pos += end + PASTE_END.len();
                     self.in_paste = false;
-                    self.paste_scanned = 0;
                     continue;
                 }
                 self.paste_scanned = rest.len();
@@ -396,7 +404,8 @@ impl Decoder {
                     // start of the end marker.
                     let keep = PASTE_END.len() - 1;
                     let n = rest.len() - keep;
-                    out.push(Input::Paste(rest[..n].to_vec()));
+                    let data = rest[..n].to_vec();
+                    out.push(self.paste_piece(data, false));
                     pos += n;
                     self.paste_scanned = keep;
                 }
@@ -414,6 +423,7 @@ impl Decoder {
                         Tok::PasteStart => {
                             self.in_paste = true;
                             self.paste_scanned = 0;
+                            self.paste_begun = false;
                         }
                         Tok::Ignore => {}
                     }
@@ -422,6 +432,13 @@ impl Decoder {
         }
         self.buf.drain(..pos);
         pos
+    }
+
+    /// The next piece of the current paste; `end` if it is the last.
+    fn paste_piece(&mut self, data: Vec<u8>, end: bool) -> Input {
+        let start = !self.paste_begun;
+        self.paste_begun = true;
+        Input::Paste { data, start, end }
     }
 }
 
@@ -934,9 +951,9 @@ impl KeyState {
             // Never matched; like tmux 3.7b, a paste also ends a pending
             // prefix or repeat (recorded: prefix, then a paste, leaves the
             // client in root).
-            Input::Paste(data) => {
+            Input::Paste { data, start, end } => {
                 self.set_table(ROOT_TABLE);
-                Routed::ToPane(encode_paste(data, modes))
+                Routed::ToPane(encode_paste(data, *start, *end, modes))
             }
             // ponytail: mouse routing (bindable mouse keys, pane forwarding)
             // is M3's (TC.10); M2 decodes and drops it.
@@ -1216,14 +1233,14 @@ fn kitty_encode(key: &Key, modes: &InputModes, flags: u8) -> Vec<u8> {
     }
 }
 
-/// Paste content for a pane: wrapped in bracketed-paste markers when the
+/// A piece of paste content for a pane: with the bracketed-paste start
+/// marker before the first piece and the end marker after the last when the
 /// pane asked for mode 2004, as is otherwise.
-pub fn encode_paste(data: &[u8], modes: &InputModes) -> Vec<u8> {
-    if modes.bracketed_paste {
-        [PASTE_START, data, PASTE_END].concat()
-    } else {
-        data.to_vec()
-    }
+pub fn encode_paste(data: &[u8], start: bool, end: bool, modes: &InputModes) -> Vec<u8> {
+    let bracket = modes.bracketed_paste;
+    let open: &[u8] = if bracket && start { PASTE_START } else { b"" };
+    let close: &[u8] = if bracket && end { PASTE_END } else { b"" };
+    [open, data, close].concat()
 }
 
 #[cfg(test)]
@@ -1246,6 +1263,14 @@ mod tests {
         let mut out = d.feed(bytes, t, ET);
         out.extend(d.flush(t + ET, ET));
         out
+    }
+
+    fn whole(data: &[u8]) -> Input {
+        Input::Paste {
+            data: data.to_vec(),
+            start: true,
+            end: true,
+        }
     }
 
     fn modes(kitty_flags: u8) -> InputModes {
@@ -1626,14 +1651,7 @@ mod tests {
     #[test]
     fn paste_is_one_opaque_blob() {
         let got = decode(b"a\x1b[200~\x02%\x1b[A\x1b\x1b[201~b");
-        assert_eq!(
-            got,
-            vec![
-                key("a"),
-                Input::Paste(b"\x02%\x1b[A\x1b".to_vec()),
-                key("b")
-            ]
-        );
+        assert_eq!(got, vec![key("a"), whole(b"\x02%\x1b[A\x1b"), key("b")]);
     }
 
     #[test]
@@ -1645,10 +1663,7 @@ mod tests {
         assert_eq!(d.deadline(ET), Some(t + PASTE_TIMEOUT));
         assert_eq!(d.flush(t + Duration::from_secs(1), ET), vec![]);
         let t1 = t + Duration::from_secs(4);
-        assert_eq!(
-            d.feed(b"1~x", t1, ET),
-            vec![Input::Paste(b"hello ".to_vec()), key("x")]
-        );
+        assert_eq!(d.feed(b"1~x", t1, ET), vec![whole(b"hello "), key("x")]);
     }
 
     #[test]
@@ -1661,44 +1676,81 @@ mod tests {
         // Each read restarts the wait.
         assert_eq!(d.deadline(ET), Some(t1 + PASTE_TIMEOUT));
         assert_eq!(d.flush(t + PASTE_TIMEOUT, ET), vec![]);
-        assert_eq!(
-            d.flush(t1 + PASTE_TIMEOUT, ET),
-            vec![Input::Paste(b"abcdef".to_vec())]
-        );
+        assert_eq!(d.flush(t1 + PASTE_TIMEOUT, ET), vec![whole(b"abcdef")]);
         assert_eq!(d.deadline(ET), None);
         // Keys are keys again.
         assert_eq!(d.feed(b"\x02", t1 + PASTE_TIMEOUT, ET), vec![key("C-b")]);
     }
 
-    #[test]
-    fn a_long_unterminated_paste_is_passed_on_in_bounded_chunks() {
+    /// Feeds 2.5 MiB of paste in 64 KiB reads with `end` as the last read
+    /// (split across two reads), and returns the pane stream for a
+    /// bracketed-paste pane.
+    fn stream_long_paste(tail: &[&[u8]], flush_at: Option<Instant>) -> (Vec<u8>, Vec<u8>, Decoder) {
         let t = Instant::now();
         let mut d = Decoder::new();
-        let mut delivered = Vec::new();
-        let mut take = |out: Vec<Input>| {
+        let mut state = KeyState::new();
+        let bracketed = InputModes {
+            bracketed_paste: true,
+            ..InputModes::default()
+        };
+        let mut stream = Vec::new();
+        let route = |out: Vec<Input>, state: &mut KeyState, stream: &mut Vec<u8>| {
             for i in out {
-                let Input::Paste(p) = i else {
-                    panic!("{i:?}");
-                };
-                delivered.extend(p);
+                assert!(matches!(i, Input::Paste { .. }), "{i:?}");
+                let settings = KeySettings::default();
+                match state.route(&i, t, &KeyTables::default(), &settings, &bracketed) {
+                    Routed::ToPane(b) => stream.extend(b),
+                    r => panic!("{r:?}"),
+                }
             }
         };
-        take(d.feed(PASTE_START, t, ET));
+        route(d.feed(PASTE_START, t, ET), &mut state, &mut stream);
         let chunk: Vec<u8> = (0..64 * 1024).map(|i| b'a' + (i % 26) as u8).collect();
         let mut sent = Vec::new();
         for _ in 0..40 {
-            take(d.feed(&chunk, t, ET));
+            route(d.feed(&chunk, t, ET), &mut state, &mut stream);
             sent.extend_from_slice(&chunk);
             assert!(d.buf.len() <= PASTE_CAP + chunk.len(), "{}", d.buf.len());
         }
-        // An end marker split across the chunk boundary is still found.
-        take(d.feed(b"tail\x1b[2", t, ET));
+        for part in tail {
+            route(d.feed(part, t, ET), &mut state, &mut stream);
+        }
+        if let Some(at) = flush_at {
+            route(d.flush(at, ET), &mut state, &mut stream);
+        }
+        (stream, sent, d)
+    }
+
+    fn count(hay: &[u8], needle: &[u8]) -> usize {
+        hay.windows(needle.len()).filter(|w| *w == needle).count()
+    }
+
+    #[test]
+    fn a_long_paste_streams_as_one_bracketed_paste() {
+        // The end marker is split across two reads.
+        let (stream, mut sent, d) = stream_long_paste(&[b"tail\x1b[2", b"01~"], None);
         sent.extend_from_slice(b"tail");
-        take(d.feed(b"01~", t, ET));
         assert!(!d.in_paste);
         assert!(d.buf.is_empty());
-        assert_eq!(delivered.len(), sent.len());
-        assert!(delivered == sent);
+        assert_eq!(count(&stream, PASTE_START), 1);
+        assert_eq!(count(&stream, PASTE_END), 1);
+        assert!(stream.starts_with(PASTE_START));
+        assert!(stream.ends_with(PASTE_END));
+        let body = &stream[PASTE_START.len()..stream.len() - PASTE_END.len()];
+        assert_eq!(body.len(), sent.len());
+        assert!(body == sent.as_slice());
+    }
+
+    #[test]
+    fn a_long_paste_that_times_out_still_closes_its_bracket() {
+        let late = Instant::now() + Duration::from_secs(60);
+        let (stream, sent, d) = stream_long_paste(&[], Some(late));
+        assert!(!d.in_paste);
+        assert_eq!(count(&stream, PASTE_START), 1);
+        assert_eq!(count(&stream, PASTE_END), 1);
+        assert!(stream.ends_with(PASTE_END));
+        let body = &stream[PASTE_START.len()..stream.len() - PASTE_END.len()];
+        assert!(body == sent.as_slice());
     }
 
     #[test]
@@ -2335,7 +2387,13 @@ mod tests {
             bracketed_paste: true,
             ..InputModes::default()
         };
-        assert_eq!(encode_paste(b"hi", &plain), b"hi");
-        assert_eq!(encode_paste(b"hi", &bracketed), b"\x1b[200~hi\x1b[201~");
+        assert_eq!(encode_paste(b"hi", true, true, &plain), b"hi");
+        assert_eq!(
+            encode_paste(b"hi", true, true, &bracketed),
+            b"\x1b[200~hi\x1b[201~"
+        );
+        assert_eq!(encode_paste(b"hi", true, false, &bracketed), b"\x1b[200~hi");
+        assert_eq!(encode_paste(b"hi", false, false, &bracketed), b"hi");
+        assert_eq!(encode_paste(b"hi", false, true, &bracketed), b"hi\x1b[201~");
     }
 }
