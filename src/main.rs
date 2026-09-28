@@ -13,7 +13,8 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use grofe::client;
 use grofe::paths::{self, Env};
@@ -36,6 +37,7 @@ const CONNECT_RETRY: Duration = Duration::from_millis(5);
 const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
 
 fn main() -> ExitCode {
+    install_panic_report();
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
@@ -55,6 +57,11 @@ fn main() -> ExitCode {
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
     match verb.as_str() {
+        "__server" => {}
+        "attach-session" | "attach" => report_panics_for(&globals.socket(), "client"),
+        _ => report_panics_for(&globals.socket(), "cli"),
+    }
+    match verb.as_str() {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
@@ -71,6 +78,94 @@ fn main() -> ExitCode {
             one_shot(&socket, own_dir, rest)
         }
     }
+}
+
+/// The instance a panic report is written for, and the process's role
+/// (`server`, the attach `client`, or a one-shot `cli` call), once the socket is known.
+static PANIC_TARGET: OnceLock<(PathBuf, &'static str)> = OnceLock::new();
+
+fn report_panics_for(socket: &Path, role: &'static str) {
+    let _ = PANIC_TARGET.set((socket.to_path_buf(), role));
+}
+
+/// Installed first thing: a panic writes a report beside the instance's
+/// server log (R22), then runs the previous hook. The attach client installs
+/// its own hook later (T2.1), which restores the tty and then calls this one.
+fn install_panic_report() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some((socket, role)) = PANIC_TARGET.get() {
+            match write_panic_report(socket, role, info) {
+                Ok(path) => eprintln!("grofe: panic report written to {}", path.display()),
+                Err(e) => eprintln!("grofe: cannot write a panic report: {e}"),
+            }
+        }
+        previous(info);
+    }));
+}
+
+/// `<state dir>/grofe/<instance>.panic.<unix-ms>.log`, derived from the
+/// server log's path so a test's `-S` socket keeps it in the test's state
+/// dir.
+fn panic_report_path(socket: &Path, unix_ms: u128) -> PathBuf {
+    let log = paths::log_path(&Env::from_process(), socket);
+    let instance = log
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "grofe".to_string());
+    log.with_file_name(format!("{instance}.panic.{unix_ms}.log"))
+}
+
+fn write_panic_report(
+    socket: &Path,
+    role: &str,
+    info: &std::panic::PanicHookInfo<'_>,
+) -> io::Result<PathBuf> {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = panic_report_path(socket, unix_ms);
+    if let Some(dir) = path.parent() {
+        paths::ensure_private_dir(dir)?;
+    }
+    let payload = info.payload();
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("(non-string panic payload)");
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let thread = std::thread::current();
+    let report = format!(
+        "grofe panic report\n\
+         version: {}\n\
+         os: {} {}\n\
+         role: {role}\n\
+         pid: {}\n\
+         socket: {}\n\
+         thread: {}\n\
+         location: {location}\n\
+         message: {message}\n\
+         backtrace:\n{}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::process::id(),
+        socket.display(),
+        thread.name().unwrap_or("<unnamed>"),
+        std::backtrace::Backtrace::force_capture(),
+    );
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(report.as_bytes())?;
+    Ok(path)
 }
 
 /// `-L` / `-S`, which come before the command, as in tmux.
@@ -163,6 +258,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
         }
     }
     let socket = socket.unwrap_or_else(|| globals.socket());
+    report_panics_for(&socket, "server");
     match server::run_daemon(&socket, ready_fd, exit_when_empty) {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
