@@ -1099,6 +1099,31 @@ mod tests {
         assert_eq!(p.take_typeahead(), b"\x1b");
     }
 
+    /// R28: focus reports from the outer terminal are input, never taken
+    /// for a late probe reply, at every split point and around a late DA1.
+    #[test]
+    fn focus_reports_pass_the_late_reply_filter_at_every_split() {
+        let bytes: &[u8] = b"a\x1b[I\x1b[?2026;2$y\x1b[O\x1b[?62;22c\x1b[Ib";
+        for cut in 0..=bytes.len() {
+            let (x, y) = bytes.split_at(cut);
+            let mut p = ProbeParser::default();
+            p.feed(x);
+            let mut got = p.take_typeahead();
+            p.feed(y);
+            got.extend(p.into_typeahead());
+            assert_eq!(got, b"a\x1b[I\x1b[O\x1b[Ib", "split at {cut}");
+        }
+        // A focus report held back as `ESC` or `ESC [` at the end of a read
+        // joins the rest of it from the next read.
+        for head in [&b"\x1b"[..], b"\x1b["] {
+            let mut p = ProbeParser::default();
+            p.feed(head);
+            assert!(p.take_typeahead().is_empty());
+            p.feed(&b"\x1b[O"[head.len()..]);
+            assert_eq!(p.take_typeahead(), b"\x1b[O");
+        }
+    }
+
     #[test]
     fn bytes_after_da1_are_typeahead() {
         let p = parse(b"\x1b[?62c\x1b[?0u");
