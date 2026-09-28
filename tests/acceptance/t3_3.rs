@@ -363,3 +363,41 @@ fn hyperlinks_are_reemitted_around_their_text() {
         "the open carries the link's id"
     );
 }
+
+// ---- OSC 9 and 777 ----
+
+/// Case 7, notifications: OSC 9 and 777 reach the outer stream verbatim.
+#[test]
+fn notifications_are_reemitted_verbatim() {
+    let srv = start("read l; printf '\\033]9;done\\007\\033]777;notify;T;B\\007'; exec cat");
+    let mut a = attach(&srv);
+    let mark = a.output().len();
+    a.send("\r");
+    a.wait_for_output(b"\x1b]9;done\x07", mark);
+    a.wait_for_output(b"\x1b]777;notify;T;B\x07", mark);
+}
+
+// ---- cursor colour ----
+
+/// R16: a client gets its active pane's cursor colour, a reset when it
+/// shows a pane that set none, the colour again on returning, and the
+/// reset when the pane sends OSC 112.
+#[test]
+fn cursor_colour_follows_the_active_pane() {
+    let srv =
+        start("read l; printf '\\033]12;#ff0000\\007'; read l; printf '\\033]112\\007'; exec cat");
+    let mut a = attach(&srv);
+    let set: &[u8] = b"\x1b]12;#ff0000\x07";
+    let reset: &[u8] = b"\x1b]112\x07";
+
+    a.send("\r");
+    let at = a.wait_for_output(set, 0);
+    srv.cmd(&["new-window", "-t", "main", "cat"])
+        .expect("new-window");
+    let at = a.wait_for_output(reset, at);
+    srv.cmd(&["select-window", "-t", "main:1"])
+        .expect("select-window");
+    let at = a.wait_for_output(set, at);
+    a.send("\r");
+    a.wait_for_output(reset, at);
+}

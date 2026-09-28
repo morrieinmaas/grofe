@@ -831,6 +831,7 @@ fn render_dirty(state: &mut State) {
         {
             graphics::on_full_redraw(state, id);
         }
+        crate::server::passthrough::on_active_changed(state, id);
         let Some(c) = state.clients.get(&id) else {
             continue;
         };

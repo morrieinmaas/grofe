@@ -8,7 +8,10 @@
 //! - the title (OSC 0/2), to the clients whose active pane set it (R15);
 //! - BEL, to the session's clients, also setting `window_bell_flag` (R13);
 //! - OSC 8 hyperlinks, re-emitted by `render::diff` from the cells (R20);
-//! - OSC 7, read by the [`Scanner`] into `PaneEventKind::Cwd`.
+//! - OSC 7, read by the [`Scanner`] into `PaneEventKind::Cwd`;
+//! - OSC 9 and 777 notifications, verbatim to the session's clients;
+//! - OSC 12/112 cursor colour, to each client the active pane's (R16),
+//!   re-sent when a client's active pane changes ([`on_active_changed`]).
 //!
 //! The [`Scanner`] runs over each pane's output ahead of the emulator,
 //! which parses neither OSC 7/9/777 nor APC. It also frames kitty graphics
@@ -16,6 +19,7 @@
 //! bytes never reach the emulator.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -41,10 +45,15 @@ const BEL: u8 = 0x07;
 const CAN: u8 = 0x18;
 const SUB: u8 = 0x1a;
 
-/// What the server keeps for passthrough. Nothing yet: every item is
-/// relayed as it arrives.
+/// What the server keeps for passthrough: cursor colours, the one item a
+/// client must be re-sent when it shows another pane.
 #[derive(Debug, Default)]
-pub struct Passthrough {}
+pub struct Passthrough {
+    /// Each pane's cursor colour (its OSC 12 body), while it has set one.
+    cursor: BTreeMap<PaneId, Vec<u8>>,
+    /// The cursor colour each client was last sent; absent is its default.
+    sent: BTreeMap<ClientId, Vec<u8>>,
+}
 
 /// Scans a pane's output ahead of the emulator for what `vte` does not
 /// parse (OSC 7, APC `_G`). One per pane reader; its state carries over
@@ -232,6 +241,8 @@ impl Scanner {
             && let Some(path) = osc7_path(uri)
         {
             found.push(PaneEventKind::Cwd(path));
+        } else if relayed(&payload) {
+            found.push(PaneEventKind::Osc(payload));
         }
     }
 }
@@ -248,6 +259,19 @@ fn osc7_path(uri: &[u8]) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(OsStr::from_bytes(&percent_decode(path))))
+}
+
+/// Whether passthrough re-emits this OSC body: a notification (9, 777)
+/// or the cursor colour (12, 112), but not a colour query, which the
+/// emulator answers.
+fn relayed(body: &[u8]) -> bool {
+    if body == b"12;?" {
+        return false;
+    }
+    body == b"112"
+        || [&b"9;"[..], b"777;", b"12;", b"112;"]
+            .iter()
+            .any(|p| body.starts_with(p))
 }
 
 fn percent_decode(s: &[u8]) -> Vec<u8> {
@@ -326,8 +350,48 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         PaneEventKind::Title(title) if active_pane(state, session) == Some(pane) => {
             send(state, clients_on(state, session), &osc2(&title));
         }
+        PaneEventKind::Osc(body) if body.starts_with(b"12;") || body.starts_with(b"112") => {
+            if body.starts_with(b"12;") {
+                state.passthrough.cursor.insert(pane, body);
+            } else {
+                state.passthrough.cursor.remove(&pane);
+            }
+            for id in clients_on(state, session) {
+                on_active_changed(state, id);
+            }
+        }
+        PaneEventKind::Osc(body) => send(state, clients_on(state, session), &osc(&body)),
         _ => {}
     }
+}
+
+/// Client `id` is about to be drawn: if its active pane's cursor colour
+/// is not the one it was last sent (another pane, or the pane changed
+/// it), send it, or reset to the default for a pane that set none (R16).
+pub fn on_active_changed(state: &mut State, id: ClientId) {
+    let Some(session) = state.clients.get(&id).map(|c| c.session) else {
+        return;
+    };
+    let active = active_pane(state, session);
+    let pt = &mut state.passthrough;
+    pt.cursor.retain(|p, _| state.model.panes.contains_key(p));
+    pt.sent.retain(|c, _| state.clients.contains_key(c));
+    let want = active.and_then(|p| pt.cursor.get(&p)).cloned();
+    if want.as_ref() == pt.sent.get(&id) {
+        return;
+    }
+    let seq = match want {
+        Some(body) => {
+            let seq = osc(&body);
+            pt.sent.insert(id, body);
+            seq
+        }
+        None => {
+            pt.sent.remove(&id);
+            osc(b"112")
+        }
+    };
+    clients::queue_raw(state, id, &seq);
 }
 
 /// The clients attached to `session`.
@@ -350,6 +414,14 @@ fn send(state: &mut State, to: Vec<ClientId>, bytes: &[u8]) {
     for id in to {
         clients::queue_raw(state, id, bytes);
     }
+}
+
+/// An OSC with `body`, terminated by BEL, control characters dropped.
+fn osc(body: &[u8]) -> Vec<u8> {
+    let mut out = b"\x1b]".to_vec();
+    out.extend(body.iter().filter(|b| !b.is_ascii_control()));
+    out.push(BEL);
+    out
 }
 
 /// OSC 52 storing `text` in the clipboard, as tmux writes it (`Ms`).
@@ -541,6 +613,39 @@ mod tests {
     fn relayed_sequences() {
         assert_eq!(osc52("hello\n"), b"\x1b]52;c;aGVsbG8K\x07");
         assert_eq!(osc2("a\x1bb\x07c"), b"\x1b]2;abc\x07");
+        assert_eq!(osc(b"9;a\x01b"), b"\x1b]9;ab\x07");
+    }
+
+    /// Notifications and cursor colours become `Osc` with their bare body,
+    /// split anywhere; colour queries and other OSCs do not.
+    #[test]
+    fn notifications_and_cursor_colours_are_found() {
+        for (input, body) in [
+            (&b"\x1b]9;done\x07"[..], &b"9;done"[..]),
+            (b"\x1b]777;notify;T;B\x1b\\", b"777;notify;T;B"),
+            (b"\x1b]12;#ff0000\x07", b"12;#ff0000"),
+            (b"\x1b]112\x07", b"112"),
+        ] {
+            for cut in 0..=input.len() {
+                let (a, b) = input.split_at(cut);
+                let (out, events) = scan_all(&[a, b]);
+                assert_eq!(out, input, "split at {cut}");
+                assert_eq!(
+                    events,
+                    vec![PaneEventKind::Osc(body.to_vec())],
+                    "split at {cut}"
+                );
+            }
+        }
+        for input in [
+            &b"\x1b]12;?\x07"[..],
+            b"\x1b]2;title\x07",
+            b"\x1b]99;x\x07",
+            b"\x1b]1122\x07",
+        ] {
+            let (_, events) = scan_all(&[input]);
+            assert!(events.is_empty(), "{input:?}: {events:?}");
+        }
     }
 
     proptest! {

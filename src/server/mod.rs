@@ -240,7 +240,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         kind @ (PaneEventKind::Title(_)
         | PaneEventKind::Bell
         | PaneEventKind::Clipboard(_)
-        | PaneEventKind::Cwd(_)) => passthrough::on_pane_event(state, pane, kind),
+        | PaneEventKind::Cwd(_)
+        | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
     state.events.flush();
