@@ -294,14 +294,38 @@ fn a_stalled_client_gets_each_image_once() {
         .filter_map(|l| l.trim().parse().ok())
         .collect();
     assert_eq!(pids.len(), 1, "the attach client: {pids:?}");
-    let pid = nix::unistd::Pid::from_raw(pids[0]);
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).expect("SIGSTOP");
+    let stopped = Stopped::new(nix::unistd::Pid::from_raw(pids[0]));
     touch(&go);
-    std::thread::sleep(Duration::from_secs(3));
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).expect("SIGCONT");
+    // The pane prints all its lines while the client cannot read.
+    if let Err(e) = common::wait_until(|| srv.capture("main").contains("END"), WAIT) {
+        panic!("{e}: the pane never finished:\n{}", srv.capture("main"));
+    }
+    drop(stopped);
     a.wait_for("END");
-    let ids = transmit_ids(a.output());
+    let out = a.output().to_vec();
+    // A dropped frame makes the next one a full redraw: a second one
+    // proves the stall dropped frames.
+    let full = out.windows(4).filter(|w| *w == b"\x1b[2J").count();
+    assert!(full >= 2, "no frame was dropped ({full} full redraw)");
+    let ids = transmit_ids(&out);
     assert_eq!(ids.len(), 1, "{ids:?}");
+}
+
+/// A process stopped with SIGSTOP, continued when dropped (also when the
+/// test fails), so it is never left stopped.
+struct Stopped(nix::unistd::Pid);
+
+impl Stopped {
+    fn new(pid: nix::unistd::Pid) -> Stopped {
+        nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).expect("SIGSTOP");
+        Stopped(pid)
+    }
+}
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        let _ = nix::sys::signal::kill(self.0, nix::sys::signal::Signal::SIGCONT);
+    }
 }
 
 /// Runs a pane script that sends `query` then DA1 and prints, with `od`,

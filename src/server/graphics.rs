@@ -581,6 +581,8 @@ pub fn on_full_redraw(state: &mut State, id: ClientId) {
     {
         return;
     }
+    // ponytail: once per client, so a wipe on the terminal's side (Ghostty
+    // Cmd+K, kitty's clear) loses the images until the client reattaches.
     if !state.graphics.sent.insert(id) {
         return;
     }
