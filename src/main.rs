@@ -379,6 +379,7 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
         env: std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
+        client: None,
     };
     let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
     let req = serde_json::to_string(&Request {

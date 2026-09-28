@@ -1,5 +1,5 @@
-//! ids, Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts, MouseEncoding,
-//! InputModes.
+//! ids (including ClientId), Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts,
+//! MouseEncoding, InputModes.
 
 use std::fmt;
 use std::str::FromStr;
@@ -65,6 +65,12 @@ macro_rules! runtime_id {
 runtime_id!(SessionId, "$", "session");
 runtime_id!(WindowId, "@", "window");
 runtime_id!(PaneId, "%", "pane");
+
+/// An attached client, numbered by the server as it attaches (M2). Never
+/// reused within a server. It has no sigil or wire form yet: tmux names
+/// clients by tty, and `list-clients` output is T2.5a's to define.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ClientId(pub u32);
 
 /// A rectangular region of the client's screen, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
