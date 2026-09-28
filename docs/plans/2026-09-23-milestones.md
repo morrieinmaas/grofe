@@ -329,20 +329,35 @@ pub enum ServerMsg { Control { ctx: ClientCtx, req: Request, reply: oneshot::Sen
                      Pane(PaneEvent), /* M2: client frames */ }
 ```
 
-### M2 seams (T2.2, T2.3, T2.5a)
+### M2 seams (T2.2, T2.3, T2.5a), as amended by T3.0
 
 ```rust
 // render.rs
-pub struct FrameInputs<'a> { pub area: Rect, pub panes: Vec<(Rect, RowsSnapshot)>, pub borders: Vec<BorderSegment>,
-                             pub active: PaneId, pub status: Option<StyledLine>, pub overlays: &'a [&'a dyn Overlay],
-                             pub cursor: Option<CursorState> }
-pub fn compose(inputs: &FrameInputs) -> Frame;
-pub fn diff(prev: &Frame, next: &Frame, caps: &Caps) -> Vec<u8>;
-pub trait Overlay { fn draw(&self, frame: &mut Frame); }
+pub struct Screen { pub cols: u16, pub rows: u16, pub cells: Vec<SnapCell>, pub cursor: Option<CursorState> }
+pub struct FrameInputs<'a> { pub client: (u16, u16), pub viewport: (u16, u16), pub area: Rect,
+                             pub panes: Vec<(PaneId, Rect, RowsSnapshot)>, pub borders: Vec<BorderSegment>,
+                             pub border_style: Style, pub active_border_style: Style, pub active: PaneId,
+                             pub status: Option<StyledLine>, pub cursor: Option<CursorState>,
+                             pub graphics: Option<&'a graphics::Remap> /* T3.8 */ }
+pub fn compose(inputs: &FrameInputs) -> Screen;
+pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8>;
+pub fn fix_wide_pairs(screen: &mut Screen);        // run after overlays
+pub struct OverlayCtx { pub client: ClientId, pub viewport: (u16, u16), pub status_row: Option<u16>,
+                        pub panes: Vec<(PaneId, Rect)> /* client coordinates */ }
+pub trait Overlay { fn draw(&self, state: &State, client: ClientId, cx: &OverlayCtx, screen: &mut Screen); }
 // input.rs
-pub enum Routed { Command(Vec<String>), ToPane(Vec<u8>), Consumed }
-pub trait InputHook { fn on_key(&mut self, key: &Key, client: ClientId) -> Option<Routed>; }
-// server/mod.rs (T2.5a): register_overlay, register_input_hook; M3 tasks add one registration line each.
+pub enum Routed { Command(Vec<Vec<String>>), ToPane(Vec<u8>), Consumed }
+pub struct Binding { pub cmds: Vec<Vec<String>>, pub repeat: bool /* T3.5 adds source, desc, name */ }
+pub trait InputHook { fn on_input(&self, state: &mut State, client: ClientId, input: &Input, now: Instant) -> Option<Routed>; }
+// cmd/parse.rs (T3.0)
+pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError>;
+// server/mod.rs (T2.5a, T3.0): register_overlay, register_input_hook. T3.0 writes every M3
+// registration line in register_builtins, in priority order (prompt, then mouse): hooks run in
+// that order and the first Some wins; overlays draw in reverse order, highest priority on top.
+// Module state lives in typed State fields (prompt::Prompts, mouse::MouseState,
+// passthrough::Passthrough, graphics::Graphics); hooks and overlays are stateless.
+// Outer-terminal mouse modes are written by the server inside ordinary Output frames
+// (clients::queue_raw); the client's RESET_TAIL resets them. No new Frame kind.
 ```
 
 ### Test harness (T1.1b)
@@ -439,11 +454,16 @@ and in which terminal.
 
 ## M3: config and dogfood
 
-**Wave A (parallel; each task registers through the T2.5a hooks with one line in `server/mod.rs`).**
+**Wave 0: T3.0 seam wave** (one task, before Wave A): the stubs, seams and
+contract edits listed in the M3 addendum, including every
+`register_builtins` line. After it no Wave A or Wave B task edits
+`server/mod.rs`.
+
+**Wave A (parallel after T3.0; merge order T3.7, T3.1, T3.3, T3.2, T3.4; T3.8's placeholder survey may run here, doc only).**
 
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
-| **T3.1** Config core | `config/*`: schema structs (options from spec §5.2 including `status.style`, `pane-border` and key tables with `name` and `repeat`), layering (spec §5.1, `user.toml` last), `requires` header (spec §5.2), winning-source provenance, unknown-key and type errors with file and line, duplicate key and duplicate `name` rejection, `show-config --explain`, `show-config --file` without a server resolving the machine's full chain (`show-config` arm in `main.rs`) | `src/config/*`, `show-config` arm in `src/main.rs`, `tests/config.rs` | Unit: layering order, with `user.toml` beating a conf.d fragment; provenance names the right file; a type error fails with file, line and key; unknown key suggests the closest valid one; a file with `requires = "grofe >= 99.0"` and an unknown key is skipped with a warning while the same key without the header is an error; a key bound twice and a `name` used twice are both rejected; `--file` works with no server running, includes the user layers, and finishes under a test timeout |
+| **T3.1** Config core | `config/*`: schema structs (options from spec §5.2 including `status.style`, `pane-border` and key tables with `name` and `repeat`), layering (spec §5.1, `user.toml` last), `requires` header (spec §5.2), winning-source provenance, unknown-key and type errors with file and line, duplicate key and duplicate `name` rejection, `show-config --explain`, `show-config --file` without a server resolving the machine's full chain (repeatable; the layer slot follows the extension: .toml replaces config.toml, .lua is reserved for layer 5, T6.6) (`show-config` arm in `main.rs`) | `src/config/*`, `show-config` arm in `src/main.rs`, `tests/config.rs` | Unit: layering order, with `user.toml` beating a conf.d fragment; provenance names the right file; a type error fails with file, line and key; unknown key suggests the closest valid one; a file with `requires = "grofe >= 99.0"` and an unknown key is skipped with a warning while the same key without the header is an error; a key bound twice and a `name` used twice are both rejected; `--file` works with no server running, includes the user layers, and finishes under a test timeout |
 | **T3.2** Mouse and scrollback view | Click to focus; wheel scrolls a read-only scrollback overlay in panes without mouse mode; wheel passes through to panes that requested mouse | `src/server/mouse.rs`, `tests/acceptance/t3_2.rs` | Acceptance: wheel in a shell scrolls history; wheel in Neovim scrolls Neovim; click focuses a pane |
 | **T3.3** Passthrough | Spec §4.9 set: OSC 52, title, bell with activity flag, OSC 8 from cell hyperlinks, OSC 9/777; OSC 7/9/777 byte scanner (`vte` 0.15 parses none of them; survives split reads; feeds `PaneEvent::Cwd`), which also frames APC `_G` sequences (`vte` drops APC) into `PaneEvent::Graphics` for T3.8; bracketed paste and focus forwarding verified end to end | `src/server/passthrough.rs`, `tests/acceptance/t3_3.rs` | Acceptance: Neovim `"+y` produces an OSC 52 sequence in the outer pty stream; a multi-line paste into Neovim arrives as one bracketed paste; `printf '\a'` sets the window activity flag. Unit: an APC `_G` sequence split across two reads yields one `PaneEvent::Graphics` and none of its bytes reach the emulator |
 | **T3.4** Prompt and run-shell | `prefix :` prompt in the status line with line editing and history; `command-prompt`; `run-shell` for bindings | `src/server/prompt.rs`, `tests/acceptance/t3_4.rs` | Acceptance: `prefix :` then `split-window -h` splits; a binding to `run-shell 'touch /tmp/x'` creates the file |
@@ -454,8 +474,17 @@ and in which terminal.
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
 | **T3.5** Wire config | Config drives options and key tables (`repeat` bindings, `name`s in `list-keys`); `reload` validates every layer, then applies all or nothing and reports all errors (spec §5.4); `bind-key`, `unbind-key`, `list-keys` (with source and description; runtime and plugin binds marked as outside the table), `source-file` (relative paths against the including file); `;` command sequences in binding strings and the CLI (contract edit: T3.5 co-owns `cmd/parse.rs` for this); README install and usage, including the supported terminals and the WezTerm `enable_kitty_keyboard = true` note (spec D11) | `src/server/dispatch/options.rs` additions, `src/server/input.rs` table loading, `src/cmd/parse.rs` (sequences), `README.md`, `tests/config_live.rs`, `.github/workflows/readme.yml` | Integration: editing a conf.d file then `reload` changes a binding; a `reload` with errors in two files reports both and changes nothing; `source-file sub.toml` from a conf.d file loads the file next to it whatever the server's cwd; `list-keys` shows each binding's source and marks a runtime `bind-key`; a `split-window ; select-pane -L` binding runs both; README steps pass in a clean Linux container job |
-| **T3.8** Kitty graphics placeholders | Spec §4.9. First a T0-style check, recorded before any code: which of the owner's tools emit placeholder mode (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant); **[owner]** reviews the result. Then `server/graphics.rs`: consume `PaneEvent::Graphics` from T3.3's scanner; per-pane image id remap; forward transmit, virtual-placement (`U=1`) and delete commands with `q=2` to clients whose caps report kitty graphics, queued ahead of the next frame; answer the pane's `a=q` queries from caps; keep the last data per image id under a memory cap and re-send it on attach and full redraw; the renderer rewrites placeholder cell colours to the remapped id and never downgrades them (contract edit: T3.8 co-owns `render.rs` for this); direct placement and sixel ignored | `src/server/graphics.rs`, one registration line in `src/server/mod.rs`, placeholder colour rewrite in `src/server/render.rs`, `tests/acceptance/t3_8.rs`, `docs/graphics-notes.md` | Acceptance (skipped when `kitten` is absent): `kitten icat --unicode-placeholder` in a pane produces the APC transmit in the outer pty stream and placeholder cells on the reconstructed screen; the placeholder cells survive a split and a scroll with the image id intact; a second client attaching afterwards receives the image data. Unit: two panes that both transmit id 1 are forwarded with distinct ids; the cache evicts oldest first at its cap |
+| **T3.8** Kitty graphics placeholders | Spec §4.9. First a T0-style check, recorded before any code: which of the owner's tools emit placeholder mode (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant); **[owner]** reviews the result. Then `server/graphics.rs`: consume `PaneEvent::Graphics` from T3.3's scanner; per-pane image id remap; forward transmit, virtual-placement (`U=1`) and delete commands with `q=2` to clients whose caps report kitty graphics, queued ahead of the next frame; answer the pane's `a=q` queries from caps; keep the last data per image id under a memory cap and re-send it on attach and full redraw; the renderer rewrites placeholder cell colours to the remapped id and never downgrades them (contract edit: T3.8 co-owns `render.rs` for this); direct placement and sixel ignored | `src/server/graphics.rs`, `tests/fixtures/graphics/`, placeholder colour rewrite in `src/server/render.rs`, `tests/acceptance/t3_8.rs`, `docs/graphics-notes.md` | Acceptance (skipped when `kitten` is absent): `kitten icat --unicode-placeholder` in a pane produces the APC transmit in the outer pty stream and placeholder cells on the reconstructed screen; the placeholder cells survive a split and a scroll with the image id intact; a second client attaching afterwards receives the image data. Unit: two panes that both transmit id 1 are forwarded with distinct ids; the cache evicts oldest first at its cap |
 | **T3.6** Dogfood readiness | Complete acceptance suite (spec §8 list, nested tmux and nested grofe included) green on both OSes; panic hook writes a report to the state dir; `docs/dogfood.md` log template with the copy-mode fallback (shift-drag) noted; re-run the T0.4 capability table against the real render path; flip D7 to tmux-256color if every extra capability now passes (a capability that still fails is logged as a gap to fix before alias day, spec D7) | `tests/acceptance/t3_6.rs`, panic hook in `src/main.rs`, `docs/dogfood.md` | CI green; the kitty-flags bare-`q` check from T2.5b passes with a config loaded; a forced panic writes a report; **[owner]** starts the dogfood week |
+
+> **Options added by T3.0.** `dispatch/options.rs`'s `BUILTINS` belongs to
+> T1.5c and, in M3, to T3.5's additions; T3.0 adds the rows M3 reads (`mouse`,
+> `set-clipboard`, `focus-events`, `pane-border-style`,
+> `pane-active-border-style`, `status-position`) so Wave A can use them. They
+> use tmux's names and scopes, and spec §5.3's defaults where grofe differs:
+> `mouse on` (tmux `off`), `set-clipboard on` (tmux `external`),
+> `focus-events on` (tmux `off`). `status-position` accepts only `bottom` until
+> TC.11. This is the one exception to "M2 rows use tmux's defaults".
 
 **Exit gate:** **[owner]** a week of daily use in both Ghostty and WezTerm,
 logged in `docs/dogfood.md` with the terminal named per entry. The log feeds the
@@ -824,10 +853,11 @@ binding asks.
   `ShowBuffer`, `ListBuffers`, `DeleteBuffer`, `PasteBuffer`, `ChooseBuffer`
   with empty flag structs, routed to stubs; the `-X`, `-N` and `-F` fields on
   `SendKeys` (TM.1 fills them); every new built-in option registered in the
-  schema and option table with its tmux default (`mode-keys`, `set-clipboard`,
+  schema and option table with its tmux default (`mode-keys`,
   `word-separators`, `wrap-search`, `copy-command`, `buffer-limit`,
   `mode-style`, `copy-mode-match-style`, `copy-mode-current-match-style`);
-  the `FormatVars` entries `copy_cursor_x`, `copy_cursor_y`,
+  `set-clipboard` already exists from T3.0 with grofe's default `on` (spec
+  §5.3); the stub does not re-register it; the `FormatVars` entries `copy_cursor_x`, `copy_cursor_y`,
   `copy_cursor_word`, `scroll_position`, `pane_in_mode`, `pane_mode` and
   `buffer_*`, reading accessors the owning tasks fill; and every M5 default
   binding in `src/server/input.rs`'s default tables, as data: the 93
