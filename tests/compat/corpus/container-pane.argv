@@ -1,0 +1,47 @@
+-L <socket> -f /dev/null new-session -d 'sleep 600' \; set -g @continuum-restore-max-delay <value> \; source-file <file>
+-L <socket> kill-server
+-L <socket> show -g -q -v @continuum-restore
+-V
+attach-session -t <session>
+capture-pane -e -p -t <name>
+capture-pane -e -p -t <session>:3
+display-message 'tmux-claude-session-manager: jq is required for the picker'
+display-message -p #{@theme_bg}|#{@theme_fg}|#{@theme_blue}|#{@theme_green}|#{@theme_grey}|#{@theme_red}|#{@pill_l}|#{@pill_r}|#{@canopy_status_battery}|#{@canopy_status_net}
+display-message -p #{pid}
+display-message -p '#{@canopy_status_battery}\t#{@canopy_status_net}\t#{@pill_l}\t#{@pill_r}\t#{@theme_bg}\t#{@theme_fg}\t#{@theme_blue}\t#{@theme_yellow}\t#{@theme_green}\t#{@theme_grey}\t#{@theme_muted}\t#{@theme_red}\t#{@continuum-restore}\t#{@continuum-save-interval}\t#{@resurrect-dir}\t#{@resurrect-save}\t#{@resurrect-restore}\t#{@resurrect-strategy-nvim}\t#{@resurrect-save-command-strategy}\t#{@resurrect-processes}\t#{@canopy_resume_stagger_ms}\t'
+display-message -p -t %N #{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}
+display-message -p -t %N #{pane_pid}
+display-message -p -t %N #{pane_start_command}
+display-message -p -t %N '#{window_width} #{window_height}' \; list-commands new-pane
+has-session -t %N
+has-session -t =<session>
+if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t %N' \; new-pane -P -F #{pane_id} -t %N -c <dir> -x 138 -y 30 -X 31 -Y 9 sh -c 'tmux set-option -p -t "$TMUX_PANE" remain-on-exit off 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" @fzf-border-label '"'"' tsess — prefix K '"'"' 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" pane-border-format '"'"'#{@fzf-border-label}'"'"' 2> /dev/null; export __FZF_INTERNAL_TMUX_LABEL_PANE="$TMUX_PANE"; '"'"'sh'"'"' '"'"'/tmp/fzf-temp-<n>'"'"'; echo $? > '"'"'/tmp/fzf-temp-<n>.code'"'"'; tmux wait-for -S '"'"'fzf-fzf-temp-<n>'"'"''
+info
+list-clients
+list-panes -a -F #{pane_id}
+list-panes -t @N -F '#{pane_id} #{pane_title}'
+list-sessions
+list-sessions -F #S
+list-windows -t <session> -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'
+refresh-client -S
+select-pane -t %N
+set -g @theme_bg <value>
+set -g @theme_blue <value>
+set -g @theme_fg <value>
+set -g @theme_green <value>
+set -g @theme_grey <value>
+set -g @theme_muted <value>
+set -g @theme_yellow <value>
+set -p -t %N @canopy_agent_state <value> \; set -p -t %N @canopy_agent_source <value> \; set -p -t %N @canopy_agent_session <value> \; set -p -t %N @canopy_agent_ts <value>
+set-option -p -t %N @fzf-border-label <value>
+set-option -p -t %N pane-border-format #{@fzf-border-label}
+set-option -p -t %N remain-on-exit off
+show -g -q -v @continuum-restore
+show -g -q -v @continuum-save-interval
+show -g -q -v @continuum-save-last-timestamp
+show -g -q -v @resurrect-dir
+show -g -q -v status-interval
+show -g -v status-right
+show-environment -g OPENSESSIONS_DIR
+wait-for -S fzf-fzf-temp-<n>
+wait-for fzf-fzf-temp-<n>

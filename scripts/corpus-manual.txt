@@ -1,0 +1,57 @@
+# Hand transcriptions for scripts/corpus.py extract.
+#
+# Each line is one tmux argv (after `tmux`), shell-quoted, for a call site
+# that builds its argv in code the static scanner cannot follow (a Rust
+# `vec!` grown with `push`, a Vim script string concatenation). Values the
+# code fills in at run time are <placeholders>. A `# source:` line names the
+# file the lines after it come from. Keep each block to what the code can
+# actually send: every optional flag combination the builder allows.
+
+# source: plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
+list-panes -a -F <pane-format>
+list-panes -s -t <target> -F <pane-format>
+list-panes -t <target> -F <pane-format>
+switch-client -t <target>
+switch-client -c <client> -t <target>
+new-session -d -P -F '#{session_name}'
+new-session -d -s <name> -P -F '#{session_name}'
+new-session -d -s <name> -c <dir> -P -F '#{session_name}'
+new-session -d -c <dir> -P -F '#{session_name}'
+run-shell -b 'sleep 0.18; tmux select-pane -t <target> -P default'
+set-window-option -t <target> remain-on-exit on
+set-window-option -t <target> remain-on-exit off
+split-window -h -f -l <width> -t <target> -P -F <pane-format> <command>
+split-window -hb -f -l <width> -t <target> -P -F <pane-format> <command>
+display-message -p '#{session_name}'
+display-message -t <target> -p '#{pane_current_path}'
+display-message -p '#{client_tty}'
+display-message -p '#{window_id}'
+display-message -p '#{pane_id}'
+display-message -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'
+display-message -c <client> -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'
+set-hook -g <hook> <command>
+set-hook -gu <hook>
+set-option -gq <option> <value>
+set-option -gu <option>
+
+# source: plugin:opensessions/apps/tui-rs/src/main.rs
+display-message -p -t <target> '#{session_name}'
+display-message -p -t <target> '#{window_id}'
+select-pane -t <target>
+display-popup -d <dir> -h 90% -w 90% -E <command>
+
+# source: plugin:opensessions/apps/tui-rs/src/runtime_context.rs
+display-message -t <target> -p '#{window_id}'
+list-panes -t <target> -F '#{pane_id} #{pane_title}'
+
+# source: nvim:vim-tmux-navigator/plugin/tmux_navigator.vim
+# s:TmuxCommand runs `tmux -S <first field of $TMUX> <args>` through system()
+-S <socket-path> display-message -p '#{window_zoomed_flag}'
+-S <socket-path> select-pane -t <$TMUX_PANE> -L
+-S <socket-path> select-pane -t <$TMUX_PANE> -D
+-S <socket-path> select-pane -t <$TMUX_PANE> -U
+-S <socket-path> select-pane -t <$TMUX_PANE> -R
+-S <socket-path> select-pane -t <$TMUX_PANE> -l
+-S <socket-path> select-pane -t <$TMUX_PANE> -L -Z
+-S <socket-path> if -F '#{pane_at_left}' '' 'select-pane -t <$TMUX_PANE> -L'
+-S <socket-path> run-shell 'ps -o state= -o comm= -t '\''#{pane_tty}'\'''
