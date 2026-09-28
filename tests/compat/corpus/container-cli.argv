@@ -19,7 +19,7 @@ list-panes -a -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{
 list-panes -a -F 'pane\t#{session_name}\t#{window_index}\t#{window_active}\t:#{window_flags}\t#{pane_index}\t#{pane_title}\t:#{pane_current_path}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{history_size}'
 list-panes -a -f #{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_current_path}'
 list-panes -s -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
-list-panes -t @N -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
+list-panes -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
 list-sessions
 list-sessions -F #{session_name}
 list-sessions -F '#{session_grouped}\t#{session_group}\t#{session_id}\t#{session_name}'
@@ -32,12 +32,12 @@ new-session -A -s <name> -d
 new-session -d -s <name> -x 200 -y 50
 neww -P -d -t <session>: -c <dir> -F #{window_id} -n <name>
 resize-pane -t %N -x 26
-select-layout -t @N main-vertical
-select-layout -t @N tiled
+select-layout -t <name> main-vertical
+select-layout -t <name> tiled
 select-pane -t %N -T opensessions-sidebar
 set-option -g -q display-time 5000
 set-option -g -q display-time 750
-set-window-option -t @N remain-on-exit on
+set-window-option -t <name> remain-on-exit on
 setenv -t <session> SMUG_SESSION <value>
 setenv -t <session> SMUG_SESSION_CONFIG_PATH <value>
 show -g -q -v @canopy_resume_stagger_ms
@@ -58,8 +58,6 @@ show-window-options -v -t <session>:1 automatic-rename
 show-window-options -v -t <session>:2 automatic-rename
 show-window-options -v -t <session>:3 automatic-rename
 show-window-options -v -t <session>:4 automatic-rename
-split-window -P -d -t @N -c <dir> -F #{pane_id}
-split-window -h -b -f -l 26 -t %N -P -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}' 'OPENSESSIONS_SESSION_NAME=main OPENSESSIONS_WINDOW_ID=@0 REFOCUS_WINDOW=@0 exec "${OPENSESSIONS_DIR:-.}"/apps/tui/scripts/start.sh'
-split-window -h -b -f -l 26 -t %N -P -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}' 'OPENSESSIONS_SESSION_NAME=main OPENSESSIONS_WINDOW_ID=@1 REFOCUS_WINDOW=@1 exec "${OPENSESSIONS_DIR:-.}"/apps/tui/scripts/start.sh'
-split-window -h -b -f -l 26 -t %N -P -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}' 'OPENSESSIONS_SESSION_NAME=main OPENSESSIONS_WINDOW_ID=@5 REFOCUS_WINDOW=@5 exec "${OPENSESSIONS_DIR:-.}"/apps/tui/scripts/start.sh'
+split-window -P -d -t <name> -c <dir> -F #{pane_id}
+split-window -h -b -f -l 26 -t %N -P -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}' 'OPENSESSIONS_SESSION_NAME=main OPENSESSIONS_WINDOW_ID=@N REFOCUS_WINDOW=@N exec "${OPENSESSIONS_DIR:-.}"/apps/tui/scripts/start.sh'
 switch-client -c <client> -t <session>

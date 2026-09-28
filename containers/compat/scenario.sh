@@ -14,6 +14,19 @@
 #   scenario.log        what the driver did
 set -euo pipefail
 
+# Only ever inside the recording container, never next to a live tmux: this
+# script starts, drives and kills a tmux server.
+if [ ! -e /run/.containerenv ] && [ ! -e /.dockerenv ]; then
+  echo "scenario: refusing to run outside a container" >&2
+  exit 1
+fi
+if [ -n "${TMUX:-}" ]; then
+  echo "scenario: refusing to run inside tmux (TMUX is set)" >&2
+  exit 1
+fi
+export TMUX_TMPDIR="$HOME/.tmux-tmp"
+mkdir -p "$TMUX_TMPDIR"
+
 real=/opt/tmux/bin/tmux
 [ "$("$real" -V)" = "tmux 3.7b" ] || { echo "scenario: need tmux 3.7b, have $("$real" -V)" >&2; exit 1; }
 out=/out
@@ -60,9 +73,6 @@ export CANOPY_STORE="$store" CANOPY_STATE="$HOME/.local/state/canopy" CANOPY_CON
 "$store/bin/canopy" caps >/dev/null
 "$store/bin/canopy" keys >/dev/null
 unset CANOPY_STORE CANOPY_STATE CANOPY_CONFIG
-
-export TMUX_TMPDIR="$HOME/.tmux-tmp"
-mkdir -p "$TMUX_TMPDIR"
 
 # --- drive it ---------------------------------------------------------------
 python3 /src/compat/drive.py --out "$out" --real "$real" 2>&1 | tee "$out/scenario.log"

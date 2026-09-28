@@ -41,12 +41,15 @@ A branch that only runs on a tmux older than 3.7b is dropped (tmux-yank's
 owner's setup still sends is kept and marked `!` in its form.
 
 **Container recording** (`scripts/record-container-corpus.sh`) builds
-`containers/compat/Containerfile`: tmux 3.7b from source (checked by hash and
-`tmux -V`), off the `PATH`, with the owner's fzf, smug and opensessions
-versions. It copies canopy, the athome files and the loaded plugins into a
+`containers/compat/Containerfile`: a Debian base pinned by digest, tmux 3.7b
+from source (checked by hash and `tmux -V`), off the `PATH`, with the owner's
+fzf, smug and opensessions versions (each download checked by sha256). It
+copies canopy's runtime files, the athome files and the loaded plugins into a
 staging directory (a git tree's own files only), refuses to continue if the
-copy holds this machine's home path, hostname or git email, and mounts it
-read-only. Inside, `containers/compat/scenario.sh` lays the setup out under a
+copy holds a denylisted string (`scripts/corpus.py screen`, the same list the
+check uses, below), and mounts it read-only in a container with no network.
+`scenario.sh` and `drive.py` refuse to run outside a container, inside tmux
+(`TMUX` set) or without a private `TMUX_TMPDIR`. Inside, `containers/compat/scenario.sh` lays the setup out under a
 container user's home as chezmoi and canopy do, installs
 `scripts/tmux-argv-recorder.sh` as the only `tmux` on `PATH`, starts the
 server through it, and `containers/compat/drive.py` exercises the setup
@@ -90,9 +93,11 @@ rules (`normalize_argv` in `scripts/corpus.py`), so both halves dedupe
 against each other:
 
 - the recording's home directory, and any `/Users/<name>` or `/home/<name>`,
-  become `~`; this machine's hostnames become `<host>`; email addresses
-  become `<email>`; digit runs of seven or more (temp-file suffixes,
-  timestamps) become `<n>`;
+  become `~`; this machine's hostnames become `<host>`, and its user and
+  ssh host names and private denylist terms `<redacted>`; email addresses
+  become `<email>`; mktemp suffixes under `/tmp` become `XXXXXX` and digit
+  runs of seven or more (timestamps) `<n>`; pane and window ids inside
+  nested command and shell strings become `%N` and `@N`;
 - `-L` and `-S` values become `<socket>` and `<socket-path>` unless they are a
   format (`-S #{socket_path}`), and `-f` values `<file>` unless `/dev/null`;
 - targets keep their shape and lose their names: `=<session>`,
@@ -103,6 +108,10 @@ against each other:
   `<value>`; `source-file` and buffer paths become `<file>`;
 - a shell variable or command substitution found statically becomes
   `<$name>` or `<$(...)>`, since its value is only known at run time;
+- a stored command string (an `if-shell` branch, a hook, a
+  `confirm-before` command, a one-string bind body) has its targets
+  normalized like a top-level command, and is rewritten only when that
+  changes something;
 - flag clusters are written out one flag each (`-gqv` is `-g -q -v`), which
   tmux parses identically.
 
@@ -113,12 +122,36 @@ the substitutions above), since the front end's tasks need them.
 
 ```sh
 GROFE_COMPAT_CANOPY=<canopy checkout> GROFE_COMPAT_ATHOME=<athome checkout> \
-GROFE_COMPAT_NVIM_PACK=<nvim pack dir> scripts/corpus.py extract
+GROFE_COMPAT_NVIM_PACK=<nvim pack dir> uv run scripts/corpus.py extract
 GROFE_COMPAT_CANOPY=<canopy checkout> GROFE_COMPAT_ATHOME=<athome checkout> \
   scripts/record-container-corpus.sh
-scripts/corpus.py coverage     # rewrites the generated section below
+uv run scripts/corpus.py coverage     # rewrites the generated section below
 scripts/check-corpus.sh
 ```
+
+## Publishability
+
+`scripts/check-corpus.sh` scans every file under `tests/compat/corpus/`,
+`scripts/compat-rows.tsv`, `scripts/corpus-manual.txt`, everything under
+`containers/compat/` and this page, and fails on any denylisted string. The
+list is built on the machine running the check, never stored:
+
+- this machine's home directory (anywhere, not only under `/Users` or
+  `/home`) and git email, matched as substrings;
+- its hostnames, user name (`$USER`, `id -un`), git user name, and the
+  `Host`/`HostName` values of `~/.ssh/config` and the files it includes
+  (public forges and loopback excepted), matched as whole words in any case;
+  a found name equal to a word the corpus uses on its own (`main`, `rec`,
+  `tmux` and the like) is skipped, since it cannot identify a machine;
+- the terms in `GROFE_COMPAT_DENYLIST`, a file outside the repository with
+  one term per line (for example `~/.secrets/grofe/denylist`, holding client
+  and employer names), matched as whole words; the terms themselves are
+  never committed.
+
+It also fails on any email address and any `/Users/<name>` or
+`/home/<name>` path (the container user `rec` excepted). Normalization
+scrubs the same names out of recordings (`<host>`, `<redacted>`), and the
+staging copy for the container is screened with the same list.
 
 A form the corpus gains needs a line in `scripts/compat-rows.tsv`, which says
 which spec 4.5 row owns it; the check refuses a row id that names nothing in
@@ -186,11 +219,11 @@ coverage`; do not edit them by hand.
 |---|---|
 | `tests/compat/corpus/static-cli.argv` | 481 |
 | `tests/compat/corpus/static-conf.argv` | 154 |
-| `tests/compat/corpus/container-cli.argv` | 65 |
+| `tests/compat/corpus/container-cli.argv` | 63 |
 | `tests/compat/corpus/container-pane.argv` | 47 |
 | `tests/compat/corpus/container-job.argv` | 333 |
 | `tests/compat/corpus/container-stored.argv` | 343 |
-| total | 1423 |
+| total | 1421 |
 
 Distinct forms (verb plus flag set, stored commands included): **286**.
 
@@ -216,7 +249,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `break-pane -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/pane.sh |
 | `capture-pane -J -p -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/save.sh |
 | `capture-pane -e -J -p` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
-| `capture-pane -e -J -p -S` | 2 | 0 | cj1 sc1 | area:Listing and inspection | yes |  | container:job, plugin:tmux-fzf-url/fzf-url.sh |
+| `capture-pane -e -J -p -S` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
 | `capture-pane -e -J -p -S -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/save.sh |
 | `capture-pane -e -p -t` | 8 | 0 | cp2 sc6 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_tsess, container:pane, plugin:tmux-claude-session-manager/scripts/picker.sh (+3) |
 | `choose-buffer -Z` | 1 | 1 | cs1 | area:Buffers and copy | yes | `-Z` | container:list-keys |
@@ -363,7 +396,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `resize-pane -Z` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `resize-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `resize-pane -t -Z` | 3 | 1 | cp1 sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh, container:pane |
-| `resize-pane -t -x` | 5 | 0 | cc1 cj1 sc3 | area:Windows and panes | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
+| `resize-pane -t -x` | 6 | 0 | cc1 cj2 sc3 | area:Windows and panes | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
 | `resize-window -t -x -y` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `respawn-pane -c -k` | 1 | 1 | sf1 | area:Windows and panes | yes | `-c` | plugin:tmux-which-key/plugin/init.tmux |
 | `respawn-pane -k` | 3 | 3 | cs3 | area:Windows and panes | yes |  | container:list-keys |
@@ -446,7 +479,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `source-file -q` | 5 | 0 | sf5 | cmd:M3 | yes | `-q` | athome:home/dot_config/tmux/tmux.conf.tmpl, canopy:tmux/tmux.conf |
 | `split-window` | 1 | 1 | cs1 | cmd:M1 | yes |  | container:list-keys |
 | `split-window -b -c -l -v` | 4 | 0 | sc4 | cmd:M1 | yes | `-b` | plugin:tmux-fzf/scripts/process.sh |
-| `split-window -b -f -F -h -l -P -t` | 4 | 0 | cc3 sc1 | cmd:M1 | yes | `-b`, `-f`, `-F`, `-P` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
+| `split-window -b -f -F -h -l -P -t` | 2 | 0 | cc1 sc1 | cmd:M1 | yes | `-b`, `-f`, `-F`, `-P` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `split-window -b -l -v` | 2 | 0 | sc2 | cmd:M1 | yes | `-b` | plugin:tmux-fzf/scripts/session.sh, plugin:tmux-fzf/scripts/window.sh |
 | `split-window -c` | 1 | 0 | sc1 | cmd:M1 | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
 | `split-window -c -d -F -P -t` | 1 | 0 | cc1 | cmd:M1 | yes | `-d`, `-F`, `-P` | container:cli |
@@ -477,7 +510,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `tmux (bare)` | 1 | 0 | sc1 | area:Invocation |  |  | canopy:bin/canopy-reboot-check, nvim:snacks.nvim/lua/snacks/image/terminal.lua, nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+8) |
 | `tmux -L` | 4 | 0 | cp2 sc2 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
 | `tmux -L -f` | 2 | 0 | cp1 sc1 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
-| `tmux -S` | 27 | 0 | cj6 sc21 | area:Invocation |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+1) |
+| `tmux -S` | 28 | 0 | cj7 sc21 | area:Invocation |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+1) |
 | `tmux -V` | 4 | 0 | cc1 cj1 cp1 sc1 | area:Invocation |  |  | canopy:bin/canopy-caps, canopy:bin/canopy-doctor, canopy:lib/tmux.sh (+10) |
 | `tmux -c` | 1 | 0 | sc1 | area:Invocation |  | `-c` | plugin:tmux-fzf/scripts/menu.sh |
 | `unbind-key` | 6 | 0 | sc5 sf1 | cmd:M3 | yes |  | canopy:tmux/conf.d/00-core.conf, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:tmux-sensible/sensible.tmux |
@@ -584,34 +617,34 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{mouse_line}` | 3 | no |
 | `#{mouse_status_range}` | 4 | yes |
 | `#{mouse_word}` | 9 | no |
-| `#{pane_active}` | 26 | yes |
+| `#{pane_active}` | 24 | yes |
 | `#{pane_at_left}` | 1 | no |
-| `#{pane_current_command}` | 12 | yes |
-| `#{pane_current_path}` | 38 | yes |
+| `#{pane_current_command}` | 10 | yes |
+| `#{pane_current_path}` | 36 | yes |
 | `#{pane_dead}` | 4 | yes |
 | `#{pane_floating_flag}` | 12 | no |
-| `#{pane_height}` | 10 | yes |
-| `#{pane_id}` | 67 | yes |
+| `#{pane_height}` | 8 | yes |
+| `#{pane_id}` | 65 | yes |
 | `#{pane_in_mode}` | 14 | yes |
-| `#{pane_index}` | 26 | yes |
-| `#{pane_left}` | 12 | yes |
+| `#{pane_index}` | 24 | yes |
+| `#{pane_left}` | 10 | yes |
 | `#{pane_marked_set}` | 6 | no |
 | `#{pane_marked}` | 6 | no |
 | `#{pane_mode}` | 10 | yes |
-| `#{pane_pid}` | 17 | yes |
-| `#{pane_right}` | 12 | no |
+| `#{pane_pid}` | 15 | yes |
+| `#{pane_right}` | 10 | no |
 | `#{pane_search_string}` | 2 | no |
 | `#{pane_start_command}` | 4 | yes |
-| `#{pane_title}` | 37 | yes |
-| `#{pane_tty}` | 20 | yes |
-| `#{pane_width}` | 25 | yes |
+| `#{pane_title}` | 35 | yes |
+| `#{pane_tty}` | 18 | yes |
+| `#{pane_width}` | 23 | yes |
 | `#{pid}` | 2 | yes |
 | `#{session_attached}` | 2 | no |
 | `#{session_created}` | 2 | no |
 | `#{session_grouped}` | 2 | yes |
 | `#{session_group}` | 2 | yes |
 | `#{session_id}` | 8 | yes |
-| `#{session_name}` | 69 | yes |
+| `#{session_name}` | 67 | yes |
 | `#{session_path}` | 2 | no |
 | `#{session_windows}` | 14 | yes |
 | `#{socket_path}` | 61 | yes |
@@ -620,8 +653,8 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{window_active}` | 9 | yes |
 | `#{window_flags}` | 5 | yes |
 | `#{window_height}` | 1 | no |
-| `#{window_id}` | 48 | yes |
-| `#{window_index}` | 32 | yes |
+| `#{window_id}` | 46 | yes |
+| `#{window_index}` | 30 | yes |
 | `#{window_layout}` | 2 | yes |
 | `#{window_name}` | 15 | yes |
 | `#{window_panes}` | 29 | yes |

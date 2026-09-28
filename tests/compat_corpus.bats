@@ -57,12 +57,88 @@ for p in pathlib.Path(sys.argv[1]).glob("*.argv"):
     [ "$status" -eq 0 ]
 }
 
-@test "a line holding this machine's home path fails the check" {
-    add_line static-cli.argv "source-file $HOME/.tmux.conf"
+@test "an absolute /Users or /home path fails the check" {
+    add_line static-cli.argv "source-file /home/someone/.tmux.conf"
     uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
     check
     [ "$status" -ne 0 ]
-    [[ "$output" == *"denylisted"* || "$output" == *"absolute home path"* ]]
+    [[ "$output" == *"absolute home path"* ]]
+}
+
+@test "the home directory is denylisted even outside /Users and /home" {
+    fake="$TMP/fakehome"
+    mkdir -p "$fake"
+    add_line static-cli.argv "source-file $fake/.tmux.conf"
+    HOME="$fake" uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
+    HOME="$fake" run uv run --quiet "$W/scripts/corpus.py" check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"denylisted string (home)"* ]]
+}
+
+@test "the hostname is denylisted as a word" {
+    host=$(hostname -s)
+    case $host in main|rec|demo|side|drive|tmux|home|work|default|server|root|user|??|?|'') skip "generic hostname" ;; esac
+    add_line static-cli.argv "display-message $host"
+    uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
+    check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"denylisted string (hostname)"* ]]
+}
+
+@test "the git email is denylisted" {
+    printf '[user]\n\temail = tc0-probe@example.invalid\n' >"$TMP/gitconfig"
+    add_line static-cli.argv "display-message tc0-probe@example.invalid"
+    cd "$TMP"
+    GIT_CONFIG_GLOBAL="$TMP/gitconfig" uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
+    GIT_CONFIG_GLOBAL="$TMP/gitconfig" run uv run --quiet "$W/scripts/corpus.py" check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"denylisted string (git email)"* ]]
+}
+
+@test "a term from the private denylist file fails the check, in any scanned file" {
+    printf '# client names\nAcmeWidgetCorp\n' >"$TMP/denylist"
+    printf '# source: manual:x\ndisplay-message acmewidgetcorp\n' >>"$W/scripts/corpus-manual.txt"
+    GROFE_COMPAT_DENYLIST="$TMP/denylist" run uv run --quiet "$W/scripts/corpus.py" check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"scripts/corpus-manual.txt: contains a denylisted string (private denylist)"* ]]
+    # and the file itself must live outside the repository
+    cp "$TMP/denylist" "$W/denylist"
+    GROFE_COMPAT_DENYLIST="$W/denylist" run uv run --quiet "$W/scripts/corpus.py" check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"outside the repository"* ]]
+}
+
+@test "a generic hostname (main, rec, tmux) does not fail a clean corpus; names match as whole words" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+for host in ("main", "rec", "tmux"):
+    corpus.socket.gethostname = lambda: host
+    corpus._cmd_out = lambda argv: host if argv[0] == "hostname" else ""
+    dl = corpus.build_denylist()
+    hits = [(p.name, h) for p in corpus.published_files() for h in corpus.deny_hits(p.read_text(), dl) if h[1] == "hostname"]
+    assert not hits, (host, hits)
+dl = corpus.Denylist([], [("corp1", "hostname")])
+assert not corpus.deny_hits("corp1x xcorp1 corp1-a", dl)
+assert corpus.deny_hits("at CORP1.", dl)
+print("ok")
+' "$W/scripts"
+    [ "$status" -eq 0 ]
+    [ "$output" = ok ]
+}
+
+@test "the staging screen uses the same denylist" {
+    mkdir -p "$TMP/stage/sub"
+    printf 'nothing here\n' >"$TMP/stage/a"
+    GROFE_COMPAT_DENYLIST="$TMP/deny2" run uv run --quiet "$W/scripts/corpus.py" screen "$TMP/stage"
+    [ "$status" -ne 0 ]  # a named denylist file that does not exist is an error
+    printf 'AcmeWidgetCorp\n' >"$TMP/deny2"
+    GROFE_COMPAT_DENYLIST="$TMP/deny2" run uv run --quiet "$W/scripts/corpus.py" screen "$TMP/stage"
+    [ "$status" -eq 0 ]
+    printf 'made for acmewidgetcorp\n' >"$TMP/stage/sub/b"
+    GROFE_COMPAT_DENYLIST="$TMP/deny2" run uv run --quiet "$W/scripts/corpus.py" screen "$TMP/stage"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"sub/b (private denylist)"* ]]
 }
 
 @test "a line holding an email address fails the check" {

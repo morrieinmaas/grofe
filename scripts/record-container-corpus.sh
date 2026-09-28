@@ -5,7 +5,7 @@
 # The owner's live tmux is never touched (plan addendum, owner constraint of
 # 2026-09-28). This script only READS the owner's sources, copies what the
 # container needs into a staging directory, refuses to go on if the copy
-# holds the home path, hostname or git email of this machine, and runs
+# holds a denylisted string of this machine (scripts/corpus.py screen), and runs
 # containers/compat/Containerfile's image with the copy mounted read-only.
 # Inside, tmux 3.7b runs from source with the argv recorder first on PATH
 # (containers/compat/scenario.sh).
@@ -14,6 +14,8 @@
 #   GROFE_COMPAT_CANOPY   canopy checkout (required)
 #   GROFE_COMPAT_ATHOME   athome checkout (required)
 #   GROFE_COMPAT_PLUGINS  TPM plugin directory (default ~/.config/tmux/plugins)
+#   GROFE_COMPAT_DENYLIST optional file OUTSIDE the repo, one private term per
+#                         line (client or employer names), screened for too
 #   TC0_KEEP=1            keep the staging and output directories
 set -euo pipefail
 
@@ -45,6 +47,14 @@ copy_tree() {
 }
 
 copy_tree "$canopy" "$work/src/canopy"
+# only what runs: canopy's docs, license, tests and CI name its author and
+# are never loaded
+for f in "$work/src/canopy"/* "$work/src/canopy"/.[!.]*; do
+  case ${f##*/} in
+    adapters|bin|lib|plugins|tmux|VERSION) ;;
+    *) rm -rf "$f" ;;
+  esac
+done
 for rel in \
   home/dot_config/tmux \
   home/dot_config/canopy/user.conf.tmpl \
@@ -63,26 +73,19 @@ rm -rf "$work/src/plugins/opensessions/bin"  # this machine's binaries; the imag
 cp "$repo/scripts/tmux-argv-recorder.sh" "$work/src/scripts/"
 cp "$repo/containers/compat/scenario.sh" "$repo/containers/compat/drive.py" "$repo/containers/compat/smug.yaml" "$work/src/compat/"
 
-# nothing of this machine goes into the container
-deny=("$HOME" "$(hostname)" "$(hostname -s)")
-email=$(git config user.email 2>/dev/null || true)
-[ -n "$email" ] && deny+=("$email")
-hits=
-for d in "${deny[@]}"; do
-  [ -n "$d" ] || continue
-  if found=$(grep -rIlF -- "$d" "$work/src" 2>/dev/null); then
-    hits+="$found"$'\n'
-  fi
-done
-if [ -n "$hits" ]; then
-  printf 'record: the staged copy holds a string of this machine (home, hostname or email); scrub these first:\n%s' "$hits" >&2
+# nothing of this machine goes into the container: the same denylist and
+# matching as scripts/check-corpus.sh (home, hostname, user and git names,
+# git email, ssh hosts, and GROFE_COMPAT_DENYLIST's private terms)
+if ! uv run "$repo/scripts/corpus.py" screen "$work/src"; then
+  echo "record: the staged copy holds a denylisted string; scrub the files above first" >&2
   exit 1
 fi
 
 chmod -R a+rX "$work/src"
 chmod 777 "$work/out"
 podman build -q -t "$image" -f "$repo/containers/compat/Containerfile" "$repo/containers/compat" >/dev/null
-podman run --rm \
+# no network: everything the recording needs is in the image or the copy
+podman run --rm --network none \
   -v "$work/src:/src:ro" \
   -v "$work/out:/out" \
   "$image" bash /src/compat/scenario.sh

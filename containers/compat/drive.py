@@ -164,6 +164,14 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--real", required=True)
     args = ap.parse_args()
+    # This starts and drives a tmux server: only inside the recording
+    # container, never inside (or next to) a live tmux.
+    if not (os.path.exists("/run/.containerenv") or os.path.exists("/.dockerenv")):
+        sys.exit("drive: refusing to run outside a container")
+    if os.environ.get("TMUX"):
+        sys.exit("drive: refusing to run inside tmux (TMUX is set)")
+    if not os.environ.get("TMUX_TMPDIR"):
+        sys.exit("drive: refusing to run without a private TMUX_TMPDIR")
     real = Real(args.real)
     home = os.environ["HOME"]
 

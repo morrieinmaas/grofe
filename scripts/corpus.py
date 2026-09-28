@@ -26,6 +26,7 @@ angle brackets, so every line is publishable.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import shlex
@@ -1143,6 +1144,7 @@ class ScrubContext:
     homes: list[str]
     hosts: list[str]
     emails: list[str]
+    words: list[str] = field(default_factory=list)  # user names, ssh hosts, private terms
 
 
 def _cmd_out(argv: list[str]) -> str:
@@ -1152,31 +1154,133 @@ def _cmd_out(argv: list[str]) -> str:
         return ""
 
 
-def scrub_context(extra_home: str | None) -> ScrubContext:
-    homes = [h for h in (os.environ.get("HOME", ""), extra_home) if h and h != "/"]
+# Hosts an ssh config names that identify nobody.
+PUBLIC_SSH_HOSTS = {
+    "github.com",
+    "ssh.github.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "codeberg.org",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+}
+# Words the corpus uses on its own (tmux's name, the recording's fixed session
+# and user names): a host or user name found automatically that equals one
+# cannot identify a machine, and denylisting it would fail every clean corpus.
+GENERIC_WORDS = {"main", "rec", "demo", "side", "drive", "tmux", "home", "work", "default", "server", "root", "user"}
+
+
+def ssh_config_hosts(home: Path) -> set[str]:
+    """Host and HostName values from ~/.ssh/config and what it includes."""
+    found: set[str] = set()
+    seen: set[Path] = set()
+
+    def read(path: Path):
+        if path in seen or not path.is_file():
+            return
+        seen.add(path)
+        for line in path.read_text(errors="replace").splitlines():
+            parts = line.split("#", 1)[0].split()
+            if len(parts) < 2:
+                continue
+            key = parts[0].lower()
+            if key in ("host", "hostname"):
+                found.update(parts[1:])
+            elif key == "include":
+                for pat in parts[1:]:
+                    pat = os.path.expanduser(pat)
+                    pat = pat if os.path.isabs(pat) else str(home / ".ssh" / pat)
+                    for g in sorted(glob.glob(pat)):
+                        read(Path(g))
+
+    read(home / ".ssh" / "config")
+    return {h for h in found if not re.search(r"[*?!]", h) and h.lower() not in PUBLIC_SSH_HOSTS}
+
+
+def private_terms() -> list[str]:
+    """GROFE_COMPAT_DENYLIST: a file OUTSIDE the repository, one term per line
+    (client and employer names and the like), so the terms themselves are
+    never committed."""
+    f = os.environ.get("GROFE_COMPAT_DENYLIST")
+    if not f:
+        return []
+    path = Path(f).expanduser().resolve()
+    if path.is_relative_to(REPO.resolve()):
+        sys.exit("GROFE_COMPAT_DENYLIST must name a file outside the repository")
+    if not path.is_file():
+        sys.exit(f"GROFE_COMPAT_DENYLIST: no such file: {f}")
+    return [t.strip() for t in path.read_text().splitlines() if t.strip() and not t.lstrip().startswith("#")]
+
+
+@dataclass
+class Denylist:
+    paths: list[tuple[str, str]]  # (term, category): substring match
+    words: list[tuple[str, str]]  # (term, category): whole word, any case
+
+
+def build_denylist() -> Denylist:
+    home = os.environ.get("HOME", "")
     hosts = {socket.gethostname(), _cmd_out(["hostname"]), _cmd_out(["hostname", "-s"])}
     hosts |= {h.split(".")[0] for h in hosts}
-    hosts = [h for h in hosts if len(h) >= 3]
-    emails = [
-        e
-        for e in {_cmd_out(["git", "config", "user.email"]), _cmd_out(["git", "config", "--global", "user.email"])}
-        if e
-    ]
-    return ScrubContext(sorted(homes, key=len, reverse=True), sorted(hosts, key=len, reverse=True), emails)
+    emails = {_cmd_out(["git", "config", "user.email"]), _cmd_out(["git", "config", "--global", "user.email"])}
+    users = {os.environ.get("USER", ""), _cmd_out(["id", "-un"])}
+    names = {_cmd_out(["git", "config", "user.name"]), _cmd_out(["git", "config", "--global", "user.name"])}
+    ssh = ssh_config_hosts(Path(home)) if home else set()
+    auto = [(h, "hostname") for h in hosts] + [(u, "user name") for u in users]
+    auto += [(n, "git user name") for n in names] + [(h, "ssh host") for h in ssh]
+    words = [(t, c) for t, c in auto if len(t) >= 3 and t.lower() not in GENERIC_WORDS]
+    words += [(t, "private denylist") for t in private_terms()]
+    paths = [(home, "home") for _ in [0] if home and home != "/"] + [(e, "git email") for e in emails if e]
+    return Denylist(paths, sorted(set(words), key=lambda x: -len(x[0])))
+
+
+def word_re(term: str) -> re.Pattern:
+    return re.compile(rf"(?<![\w.-]){re.escape(term)}(?![\w-])", re.IGNORECASE)
+
+
+def deny_hits(text: str, dl: Denylist) -> list[tuple[str, str]]:
+    hits = [(t, c) for t, c in dl.paths if t.lower() in text.lower()]
+    hits += [(t, c) for t, c in dl.words if word_re(t).search(text)]
+    return hits
+
+
+def scrub_context(extra_home: str | None) -> ScrubContext:
+    dl = build_denylist()
+    homes = [h for h in (os.environ.get("HOME", ""), extra_home) if h and h != "/"]
+    hosts = [t for t, c in dl.words if c == "hostname"]
+    emails = [t for t, c in dl.paths if c == "git email"]
+    words = [t for t, c in dl.words if c != "hostname"]
+    return ScrubContext(sorted(homes, key=len, reverse=True), hosts, emails, words)
+
+
+def _looks_random(s: str) -> bool:
+    """A mktemp suffix: has a digit, or mixes upper and lower case."""
+    return bool(re.search(r"\d", s)) or (s != s.lower() and s != s.upper())
 
 
 def scrub(s: str, ctx: ScrubContext) -> str:
     for h in ctx.homes:
         s = s.replace(h, "~")
     s = re.sub(r"/(Users|home)/[^/\s'\"<>:]+", "~", s)
-    # run-specific numbers (temp file suffixes, timestamps) would make every
-    # recording a new line
+    # run-specific values would make every recording a new line: mktemp
+    # suffixes, long numbers (temp names, timestamps), and pane and window
+    # ids inside nested command and shell strings
+    s = re.sub(
+        r"(/tmp/[\w.-]*?[-.])([A-Za-z0-9]{6,})(?![\w-])",
+        lambda m: m.group(1) + ("XXXXXX" if _looks_random(m.group(2)) else m.group(2)),
+        s,
+    )
     s = re.sub(r"(?<![\w%@$])\d{7,}(?!\w)", "<n>", s)
+    s = re.sub(r"(-[A-Za-z]\s*['\"]?)%\d+(?!\w)", r"\1%N", s)
+    s = re.sub(r"(?<![\w@#{])@\d+(?!\w)", "@N", s)
     for e in ctx.emails:
         s = s.replace(e, "<email>")
     s = EMAIL_RE.sub(lambda m: m.group(0) if m.group(0).startswith("@") else "<email>", s)
     for h in ctx.hosts:
-        s = re.sub(rf"(?<![\w.-]){re.escape(h)}(?![\w-])", "<host>", s)
+        s = word_re(h).sub("<host>", s)
+    for w in ctx.words:
+        s = word_re(w).sub("<redacted>", s)
     return unph(s)
 
 
@@ -1238,6 +1342,22 @@ VALUE_NAMES = {
 }
 
 
+def _render(cmds: list[list[str]]) -> str:
+    return unph(" ; ".join(" ".join(quote(t) for t in c) for c in cmds))
+
+
+def normalize_command_string(s: str) -> str:
+    """A stored tmux command string (if-shell branch, hook, confirm-before,
+    one-string bind body) with its targets normalized like a top-level
+    command. Left as written when normalizing changes nothing."""
+    try:
+        raw = _command_string(s)
+    except (ValueError, IndexError):
+        return s
+    norm = [normalize_cmd(c) for c in raw]
+    return _render(norm) if _render(norm) != _render(raw) else s
+
+
 def normalize_cmd(sub: list[str]) -> list[str]:
     p = parse_cmd(sub)
     if p.name is None:
@@ -1269,10 +1389,16 @@ def normalize_cmd(sub: list[str]) -> list[str]:
         pos[0] = "<name>"
     elif p.name in ("source-file", "load-buffer", "save-buffer") and pos:
         pos = [x if x == "/dev/null" or is_opaque(x) else "<file>" for x in pos]
+    elif p.name == "if-shell" and len(pos) > 1:
+        pos[1:3] = [normalize_command_string(x) for x in pos[1:3]]
+    elif p.name == "confirm-before" and pos:
+        pos[0] = normalize_command_string(pos[0])
+    elif p.name == "set-hook" and len(pos) > 1:
+        pos[1] = normalize_command_string(pos[1])
     elif p.name == "bind-key" and len(pos) > 1:
         body = pos[1:]
         if len(body) == 1 and " " in body[0]:
-            pos = [pos[0], body[0]]
+            pos = [pos[0], normalize_command_string(body[0])]
         else:
             norm_body: list[str] = []
             for c in split_chain(body):
@@ -1786,16 +1912,45 @@ def cmd_coverage(args):
 # --------------------------------------------------------------------------
 
 
-def denylist() -> list[str]:
-    ctx = scrub_context(extra_home=None)
-    return [s for s in ctx.homes + ctx.hosts + ctx.emails if s]
+# The recording container's user; its home is normalized away, but the
+# Containerfile and scenario name it.
+CONTAINER_HOME_RE = re.compile(r"/(Users|home)/(?!rec\b)[A-Za-z0-9_.-]+")
+
+
+def published_files() -> list[Path]:
+    """Every committed file TC.0 writes or that feeds the container."""
+    files = [p for p in sorted(CORPUS.rglob("*")) if p.is_file()]
+    files += [ROWS_FILE, MANUAL_FILE, DOC]
+    files += [p for p in sorted((REPO / "containers" / "compat").rglob("*")) if p.is_file()]
+    return [p for p in files if p.exists()]
+
+
+def cmd_screen(args):
+    """Refuse a directory (the staging copy for the container) that holds a
+    denylisted string. Same list and matching as check, minus the generic
+    email and home-path patterns, since third-party plugins carry their
+    authors' addresses."""
+    dl = build_denylist()
+    bad = []
+    for p in sorted(Path(args.dir).rglob("*")):
+        if not p.is_file():
+            continue
+        raw = p.read_bytes()
+        if b"\0" in raw[:8192]:
+            continue
+        for _, cat in deny_hits(raw.decode(errors="replace"), dl):
+            bad.append(f"{p.relative_to(args.dir)} ({cat})")
+    for b in bad:
+        print(f"screen: {b}", file=sys.stderr)
+    if bad:
+        sys.exit(1)
 
 
 def cmd_check(args):
     errors: list[str] = []
     corpus = read_corpus()
     sources = read_sources()
-    deny = denylist()
+    deny = build_denylist()
     for name in ARGV_FILES:
         path = CORPUS / name
         if not path.exists():
@@ -1823,19 +1978,13 @@ def cmd_check(args):
             if line not in sources.get(name, {}):
                 errors.append(f"{where}: no source in sources.tsv")
     # publishability: nothing of the machine it was recorded on
-    scanned = [CORPUS / n for n in ARGV_FILES] + [SOURCES_FILE, DOC]
-    for path in scanned:
-        if not path.exists():
-            continue
+    for path in published_files():
         text = path.read_text(errors="replace")
-        for d in deny:
-            if d in text:
-                errors.append(
-                    f"{path.relative_to(REPO)}: contains a denylisted string (home, hostname or git email): {d[:3]}..."
-                )
+        for term, cat in deny_hits(text, deny):
+            errors.append(f"{path.relative_to(REPO)}: contains a denylisted string ({cat}): {term[:2]}...")
         for m in EMAIL_RE.finditer(text):
             errors.append(f"{path.relative_to(REPO)}: contains an email address {m.group(0)[:3]}...")
-        if re.search(r"/(Users|home)/[A-Za-z0-9_.-]+", text):
+        if CONTAINER_HOME_RE.search(text):
             errors.append(f"{path.relative_to(REPO)}: contains an absolute home path")
     # every form maps to a real 4.5 row
     rules = load_rules()
@@ -1878,8 +2027,16 @@ def main():
     n.add_argument("--hooks")
     sub.add_parser("coverage")
     sub.add_parser("check")
+    sc = sub.add_parser("screen")
+    sc.add_argument("dir")
     args = ap.parse_args()
-    {"extract": cmd_extract, "normalize": cmd_normalize, "coverage": cmd_coverage, "check": cmd_check}[args.cmd](args)
+    {
+        "extract": cmd_extract,
+        "normalize": cmd_normalize,
+        "coverage": cmd_coverage,
+        "check": cmd_check,
+        "screen": cmd_screen,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":
