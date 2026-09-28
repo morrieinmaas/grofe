@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::time::Instant;
 
+use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
 use crate::cmd::{self, CommandPrompt, RunShell};
@@ -49,6 +50,9 @@ const WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
 #[derive(Debug, Default)]
 pub struct Prompts {
     open: BTreeMap<ClientId, Prompt>,
+    /// The CLI replies of `command-prompt`s waiting for their prompt to
+    /// close.
+    waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, String>>>,
     /// Lines entered at any prompt, newest last.
     history: Vec<String>,
 }
@@ -57,6 +61,14 @@ impl Prompts {
     /// Whether client `id` has a prompt open.
     pub fn is_open(&self, id: ClientId) -> bool {
         self.open.contains_key(&id)
+    }
+
+    /// Closes client `id`'s prompt, answering a CLI that waits on it.
+    fn close(&mut self, id: ClientId) -> Option<Prompt> {
+        if let Some(reply) = self.waiting.remove(&id) {
+            let _ = reply.send(Ok(String::new()));
+        }
+        self.open.remove(&id)
     }
 
     /// Adds an entered line: empty lines and a repeat of the newest are
@@ -72,7 +84,7 @@ impl Prompts {
 }
 
 /// One open prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct Prompt {
     /// Drawn before the text: `:`, `(verb) ` or `-p`'s text and a space.
     label: String,
@@ -349,7 +361,7 @@ impl InputHook for PromptHook {
         input: &Input,
         _now: Instant,
     ) -> Option<Routed> {
-        let Prompts { open, history } = &mut state.prompts;
+        let Prompts { open, history, .. } = &mut state.prompts;
         let prompt = open.get_mut(&client)?;
         let edit = match input {
             Input::Key(key) => prompt.key(key, history),
@@ -363,11 +375,11 @@ impl InputHook for PromptHook {
         let routed = match edit {
             Edit::Keep => Routed::Consumed,
             Edit::Cancel => {
-                open.remove(&client);
+                state.prompts.close(client);
                 Routed::Consumed
             }
             Edit::Enter => {
-                let prompt = open.remove(&client)?;
+                let prompt = state.prompts.close(client)?;
                 let line = prompt.line();
                 state.prompts.remember(&line);
                 let command = replace_template(&prompt.template, &line);
@@ -417,9 +429,10 @@ impl Overlay for PromptOverlay {
 
 /// `command-prompt` (R24: `-p`, `-I`, a `%%` template) on the current
 /// client. `-p` and `-I` are formats. A client whose prompt is already open
-/// keeps it, as in tmux.
-// ponytail: from the CLI tmux waits for the prompt to close unless `-b`;
-// grofe answers at once. `-k`, `-1`, `-T`, several `-p` prompts: TC.7.
+/// keeps it, as in tmux. From the CLI the reply waits until the prompt
+/// closes, as tmux's does.
+// ponytail: no `-b` (answer at once), since the parser has no such flag
+// yet; `-k`, `-1`, `-T`, several `-p` prompts: TC.7.
 pub fn command_prompt(
     state: &mut State,
     ctx: &ClientCtx,
@@ -428,6 +441,7 @@ pub fn command_prompt(
     // Prompts of clients that went away.
     let live = &state.clients;
     state.prompts.open.retain(|id, _| live.contains_key(id));
+    state.prompts.waiting.retain(|id, _| live.contains_key(id));
     let Some(id) = clients::current_client(state, ctx) else {
         return Err("no current client".to_string());
     };
@@ -444,7 +458,7 @@ pub fn command_prompt(
             .get(&client.session)
             .and_then(|s| model.windows.get(&s.active))
             .map(|w| FormatCtx::new(model, w.active));
-        cmd::expand(s, &ClientVars::new(model, client, pane))
+        cmd::expand(&long_aliases(s), &ClientVars::new(model, client, pane))
     };
     let label = match (&c.prompt, &c.template) {
         (Some(p), _) => format!("{} ", expand(p)),
@@ -457,8 +471,49 @@ pub fn command_prompt(
         .prompts
         .open
         .insert(id, Prompt::new(label, &initial, template));
+    if ctx.client.is_none() {
+        let reply = dispatch::defer_reply(state);
+        state.prompts.waiting.insert(id, reply);
+    }
     clients::mark_dirty(state, id);
     Ok(String::new())
+}
+
+/// tmux's one-letter format aliases (`#S`, `#W`, ...) in their `#{...}`
+/// form, for the stock `,` and `$` bindings' `-I "#W"` and `-I "#S"`.
+// ponytail: belongs in `cmd::expand` (not T3.4's file); only the prompt's
+// `-p` and `-I` know the aliases until then.
+fn long_aliases(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '#' {
+            out.push(c);
+            continue;
+        }
+        let Some(next) = chars.next() else {
+            out.push('#');
+            break;
+        };
+        let name = match next {
+            'D' => "pane_id",
+            'F' => "window_flags",
+            'H' => "host",
+            'I' => "window_index",
+            'P' => "pane_index",
+            'S' => "session_name",
+            'T' => "pane_title",
+            'W' => "window_name",
+            'h' => "host_short",
+            _ => {
+                out.push('#');
+                out.push(next);
+                continue;
+            }
+        };
+        out.push_str(&format!("#{{{name}}}"));
+    }
+    out
 }
 
 /// The command a template runs, for its prompt label: its first word.
@@ -473,8 +528,9 @@ fn verb(template: &str) -> String {
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
 /// runs in the session's cwd and its output is dropped.
-// ponytail: tmux prints the output of a failing command too and exits
-// with its status; grofe answers with the error alone and exits 1. From a
+// ponytail: a failing command's output comes before the error, as in tmux,
+// but on stderr with exit 1: tmux prints it on stdout and exits with the
+// command's status, which the reply protocol cannot carry yet. From a
 // binding the output would go to view mode (M5). No `-b`, `-d`, `-C`
 // (`-b` is TC.5's).
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
@@ -520,12 +576,14 @@ async fn shell(script: &str, cwd: PathBuf, socket: PathBuf) -> Result<String, St
         .wait_with_output()
         .await
         .map_err(|e| format!("'{script}' failed: {e}"))?;
-    exit_result(script, out.status)?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
-    Ok(text)
+    match exit_result(script, out.status) {
+        Ok(()) => Ok(text),
+        Err(e) => Err(text + &e),
+    }
 }
 
 fn exit_result(script: &str, status: ExitStatus) -> Result<(), String> {
@@ -759,6 +817,17 @@ mod tests {
     }
 
     #[test]
+    fn one_letter_aliases_become_long_formats() {
+        assert_eq!(long_aliases("#W"), "#{window_name}");
+        assert_eq!(
+            long_aliases("#S:#I.#P"),
+            "#{session_name}:#{window_index}.#{pane_index}"
+        );
+        // `##` and `#{` pass through for `cmd::expand`.
+        assert_eq!(long_aliases("##W #{x} #"), "##W #{x} #");
+    }
+
+    #[test]
     fn the_label_for_a_template_is_its_verb() {
         assert_eq!(verb("rename-window \"%%\""), "rename-window");
         assert_eq!(verb(""), "");
@@ -805,8 +874,12 @@ mod tests {
             Ok("/nonexistent.sock\n".to_string())
         );
         assert_eq!(
-            shell("exit 3", dir, PathBuf::from("/x")).await,
+            shell("exit 3", dir.clone(), PathBuf::from("/x")).await,
             Err("'exit 3' returned 3".to_string())
+        );
+        assert_eq!(
+            shell("echo a; exit 3", dir, PathBuf::from("/x")).await,
+            Err("a\n'echo a; exit 3' returned 3".to_string())
         );
     }
 }

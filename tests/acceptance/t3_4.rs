@@ -36,16 +36,7 @@ fn start() -> TestServer {
         "cat",
     ])
     .expect("new-session");
-    bind_colon(&srv);
     srv
-}
-
-/// tmux's stock `prefix :`. The brief expected T2.5b's default table to
-/// have it, but `input::default_bindings` does not (reported), so the
-/// tests bind it the way a user would.
-fn bind_colon(srv: &TestServer) {
-    srv.cmd(&["bind-key", ":", "command-prompt"])
-        .expect("bind-key :");
 }
 
 fn attach(srv: &TestServer) -> Harness {
@@ -254,6 +245,11 @@ fn run_shell_answers_with_stdout_and_fails_on_nonzero_exit() {
     // stderr is not the reply.
     let out = srv.run(&["run-shell", "echo out; echo err >&2"]);
     assert_eq!(out.stdout, "out\n", "{out:?}");
+
+    // A failing command's output comes before its error, as in tmux.
+    let out = srv.run(&["run-shell", "echo a; exit 3"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(out.stderr, "a\n'echo a; exit 3' returned 3\n", "{out:?}");
 }
 
 /// D8: a long `run-shell` holds its own CLI, not the server.
@@ -281,15 +277,24 @@ fn run_shell_does_not_block_other_commands() {
 }
 
 /// R24: `-I` prefills the prompt; the answer goes into the template at
-/// `%%`.
+/// `%%`. From the CLI, `command-prompt` answers once the prompt closes, as
+/// tmux's does.
 #[test]
 fn command_prompt_template_and_initial_text() {
     let srv = start();
     let mut a = attach(&srv);
-    srv.cmd(&["command-prompt", "-I", "old", "rename-window \"%%\""])
-        .expect("command-prompt");
+    let mut cli = srv.command();
+    cli.args(["command-prompt", "-I", "old", "rename-window \"%%\""])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut cli = cli.spawn().expect("spawn command-prompt");
     wait_last_row(&mut a, "(rename-window) old");
+    let waited = cli.try_wait().ok().flatten().is_none();
     a.send("\r");
+    let status = common::wait_child(cli, WAIT).expect("command-prompt exits");
+    assert!(waited, "command-prompt answered before the prompt closed");
+    assert!(status.success(), "{status:?}");
     wait_until(
         || {
             srv.cmd(&["display-message", "-p", "-t", "main", "#{window_name}"])
@@ -299,14 +304,46 @@ fn command_prompt_template_and_initial_text() {
     )
     .unwrap_or_else(|e| panic!("rename: {e}"));
 
-    // -p sets the prompt; -I is a format.
-    srv.cmd(&["command-prompt", "-p", "name", "-I", "#{window_name}!"])
-        .expect("command-prompt -p");
+    // -p sets the prompt; -I is a format. Cancelling answers too.
+    let mut cli = srv.command();
+    cli.args(["command-prompt", "-p", "name", "-I", "#{window_name}!"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let cli = cli.spawn().expect("spawn command-prompt -p");
     wait_last_row(&mut a, "name old!");
     a.send("\x03");
+    let status = common::wait_child(cli, WAIT).expect("command-prompt exits");
+    assert!(status.success(), "{status:?}");
     a.wait_until("the status row back", WAIT, |text| {
         last_row(text).starts_with("[main]")
     });
+}
+
+/// The stock `prefix ,` and `prefix $` prompts, prefilled with the names.
+#[test]
+fn stock_rename_bindings_prompt_with_the_current_name() {
+    let srv = start();
+    let mut a = attach(&srv);
+    let name = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{window_name}"])
+        .expect("window name");
+    a.send("\x02,");
+    wait_last_row(&mut a, &format!("(rename-window) {}", name.trim_end()));
+    a.send("\x15win\r");
+    wait_until(
+        || {
+            srv.cmd(&["display-message", "-p", "-t", "main", "#{window_name}"])
+                .is_ok_and(|n| n == "win\n")
+        },
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("rename-window: {e}"));
+    a.send("\x02$");
+    wait_last_row(&mut a, "(rename-session) main");
+    a.send("\x15ses\r");
+    wait_until(|| srv.cmd(&["has-session", "-t", "ses"]).is_ok(), WAIT)
+        .unwrap_or_else(|e| panic!("rename-session: {e}"));
 }
 
 /// R23: from the CLI `run-shell` runs in the CLI's cwd; from a binding, in
