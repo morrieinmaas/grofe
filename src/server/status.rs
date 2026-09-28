@@ -1,8 +1,9 @@
 //! Renders `status.left/right`, `window-status-format` and
 //! `window-status-current-format` to a [`StyledLine`] (spec §4.10).
 //!
-//! `#{...}` expansion (including inside `#[...]` style directives) and
-//! strftime sequences (`%H:%M`) both apply; option values and format
+//! strftime sequences (`%H:%M`) expand first, over the raw template, and
+//! `#{...}` expansion (including inside `#[...]` style directives)
+//! follows, as tmux 3.7b does; option values and format
 //! variables are resolved by the caller (`FormatVars`), so this module
 //! stays independent of `Model`/`PaneHandle` and is unit-testable on its
 //! own. tmux's own option names (`status-left`, `window-status-format`,
@@ -136,12 +137,16 @@ pub fn render(inputs: &StatusInputs) -> StyledLine {
     }
 }
 
-/// Expands `#{...}` (including nested ones inside `#[...]`), then
-/// strftime `%` sequences, then splits the result on `#[...]` style
-/// directives.
+/// Applies strftime `%` sequences to the raw template first, then
+/// expands `#{...}` (including nested ones inside `#[...]`), then splits
+/// the result on `#[...]` style directives. tmux 3.7b applies strftime
+/// before `#{...}` expansion, not after: a `%` inside a variable's own
+/// *value* (a session literally named `abc%dxyz`) is never touched by
+/// strftime, and a variable holding a `%`-format string (`#{@clock_fmt}`
+/// set to `%H:%M`) renders literally rather than being expanded twice.
 fn render_piece(fmt: &str, vars: &dyn FormatVars, now: &libc::tm, base: Style) -> Vec<Span> {
-    let text = expand(fmt, vars);
-    let text = apply_strftime(&text, now);
+    let text = apply_strftime(fmt, now);
+    let text = expand(&text, vars);
     styled_spans(&text, base)
 }
 
@@ -308,6 +313,11 @@ fn apply_strftime(text: &str, tm: &libc::tm) -> String {
     let Ok(cformat) = std::ffi::CString::new(text) else {
         return text.to_string();
     };
+    // 4096 bytes is far beyond any status-line-sized template (the
+    // longest built-in default, `status-right`, is a few dozen bytes);
+    // `strftime` returns 0 both for "result didn't fit" and for a
+    // legitimately empty result, so a generous fixed buffer avoids ever
+    // having to tell those two apart.
     let mut buf = vec![0u8; 4096];
     // SAFETY: `buf` outlives the call and its length is passed as `max`;
     // `cformat` is a valid NUL-terminated C string; `tm` is a valid,
@@ -367,7 +377,11 @@ fn clip_right(spans: Vec<Span>, max_cols: usize) -> Vec<Span> {
 /// Crops `spans` to at most `max_cols` display columns by dropping
 /// columns from the start, as tmux does when the whole status line is
 /// wider than the client, so the right-hand side (status-right, and the
-/// current window) stays visible.
+/// current window) stays visible. A wide (CJK, emoji) char that straddles
+/// the crop edge is dropped whole -- it can't be half-rendered -- and the
+/// column(s) of it that would have stayed visible become spaces instead,
+/// so the total width is still exactly `max_cols` (matching T2.2's "a
+/// wide char cut by the crop edge is drawn as a space").
 fn clip_left(spans: Vec<Span>, max_cols: usize) -> Vec<Span> {
     let total = spans_width(&spans);
     if total <= max_cols {
@@ -382,11 +396,19 @@ fn clip_left(spans: Vec<Span>, max_cols: usize) -> Vec<Span> {
         }
         let mut text = String::new();
         for ch in span.text.chars() {
-            if to_drop > 0 {
-                to_drop -= char_width(ch);
+            if to_drop == 0 {
+                text.push(ch);
                 continue;
             }
-            text.push(ch);
+            let w = char_width(ch);
+            if w <= to_drop {
+                to_drop -= w;
+                continue;
+            }
+            // `w > to_drop`: dropping the whole char would remove more
+            // than `to_drop` columns, so pad the remainder back in.
+            text.push_str(&" ".repeat(w - to_drop));
+            to_drop = 0;
         }
         if !text.is_empty() {
             out.push(Span {
@@ -571,13 +593,38 @@ mod tests {
     }
 
     #[test]
-    fn strftime_runs_after_hash_expansion() {
-        // A format variable's own value can itself feed strftime, since
-        // expansion happens before the strftime pass over the result.
-        let v = vars(&[("clock_fmt", "%H:%M")]);
+    fn strftime_runs_on_the_raw_template_not_a_variables_value() {
+        // Verified against real tmux 3.7b: with a session literally named
+        // `abc%dxyz`, `[#{session_name}] %H:%M` renders
+        // `[abc%dxyz] 11:08` -- the `%d` inside the variable's *value*
+        // is never touched, because strftime already ran on the raw
+        // template before `#{session_name}` was substituted in.
+        let v = vars(&[("session_name", "abc%dxyz")]);
+        let inputs = StatusInputs {
+            left: "[#{session_name}] %H:%M",
+            right: "",
+            left_length: 40,
+            right_length: 40,
+            style: "",
+            vars: &v,
+            windows: no_windows(),
+            width: 40,
+            now: fixed_tm(2026, 9, 28, 11, 8, 0),
+        };
+        let line = render(&inputs);
+        assert_eq!(plain_text(&line.spans).trim_end(), "[abc%dxyz] 11:08");
+    }
+
+    #[test]
+    fn a_variables_percent_sequences_are_not_re_expanded_by_strftime() {
+        // Verified against real tmux 3.7b: `#{@clock_fmt}` holding
+        // `%H:%M` renders literally, since strftime's one pass already
+        // happened over the raw template (which has no `%` in it) before
+        // `#{@clock_fmt}` was substituted in.
+        let v = vars(&[("@clock_fmt", "%H:%M")]);
         let inputs = StatusInputs {
             left: "",
-            right: "#{clock_fmt}",
+            right: "#{@clock_fmt}",
             left_length: 40,
             right_length: 40,
             style: "",
@@ -587,7 +634,7 @@ mod tests {
             now: fixed_tm(2026, 9, 28, 9, 30, 0),
         };
         let line = render(&inputs);
-        assert!(plain_text(&line.spans).trim_end().ends_with("09:30"));
+        assert_eq!(plain_text(&line.spans).trim(), "%H:%M");
     }
 
     #[test]
@@ -679,6 +726,49 @@ mod tests {
         assert_eq!(text.chars().count(), 10);
         assert!(text.ends_with("clock"));
         assert!(!text.contains("left-side"));
+    }
+
+    #[test]
+    fn left_crop_of_a_wide_cjk_char_pads_instead_of_underflowing() {
+        // Cropping 1 column off "你好" (width 2 each, total 4) must drop
+        // a column from inside "你" without underflowing `to_drop`; the
+        // dropped char's other column becomes a space.
+        let v = vars(&[]);
+        let inputs = StatusInputs {
+            left: "你好",
+            right: "",
+            left_length: 40,
+            right_length: 40,
+            style: "",
+            vars: &v,
+            windows: no_windows(),
+            width: 3,
+            now: fixed_tm(2026, 1, 1, 0, 0, 0),
+        };
+        let line = render(&inputs);
+        let text = plain_text(&line.spans);
+        assert_eq!(text, " 好");
+        assert_eq!(unicode_width::UnicodeWidthStr::width(text.as_str()), 3);
+    }
+
+    #[test]
+    fn left_crop_of_an_emoji_pads_instead_of_underflowing() {
+        let v = vars(&[]);
+        let inputs = StatusInputs {
+            left: "😀b",
+            right: "",
+            left_length: 40,
+            right_length: 40,
+            style: "",
+            vars: &v,
+            windows: no_windows(),
+            width: 2,
+            now: fixed_tm(2026, 1, 1, 0, 0, 0),
+        };
+        let line = render(&inputs);
+        let text = plain_text(&line.spans);
+        assert_eq!(text, " b");
+        assert_eq!(unicode_width::UnicodeWidthStr::width(text.as_str()), 2);
     }
 
     #[test]

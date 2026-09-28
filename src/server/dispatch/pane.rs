@@ -9,7 +9,7 @@ use crate::server::State;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::LayoutError;
 use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
-use crate::server::pane::{PaneHandle, PaneSpawn};
+use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::types::{Edge, PaneId, Rect, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -245,7 +245,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     let spec = PaneSpawn {
         id: pane,
         argv: argv.clone(),
-        cwd: p.cwd.clone(),
+        cwd: usable_cwd(p.cwd.clone()),
         env: model.sessions[&model.windows[&p.window].session]
             .env
             .clone(),

@@ -188,31 +188,66 @@ fn split_window_without_room_errors_like_tmux() {
     assert!(!ran.exists());
 }
 
-/// A spawn failure (a missing `-c` directory, a deliberate divergence from
-/// tmux's `$HOME` fallback) leaves the window exactly as it was.
+/// A missing `-c` directory falls back to `$HOME`, as in tmux 3.7b: the
+/// split succeeds and the new pane starts there.
 #[test]
-fn split_window_spawn_failure_leaves_the_layout_unchanged() {
+fn split_window_with_a_missing_dash_c_starts_in_home() {
     let srv = TestServer::start();
     session(&srv, "f", 81, 20);
-    srv.cmd(&["split-window", "-h", "-t", "f", "sleep 30"])
-        .unwrap();
-    let fmt = "#{pane_id} #{pane_width}x#{pane_height} #{pane_active}";
-    let before = panes(&srv, "f", fmt);
-
     let missing = srv.home.join("no-such-dir");
-    let err = srv
-        .cmd(&[
-            "split-window",
-            "-v",
-            "-t",
-            "f:1.1",
-            "-c",
-            missing.to_str().unwrap(),
-            "sleep 30",
-        ])
-        .unwrap_err();
-    assert!(err.contains("can't start pane in"), "{err}");
-    assert_eq!(panes(&srv, "f", fmt), before);
+    srv.cmd(&[
+        "split-window",
+        "-h",
+        "-t",
+        "f",
+        "-c",
+        missing.to_str().unwrap(),
+        "sleep 30",
+    ])
+    .unwrap();
+    assert_eq!(panes(&srv, "f", "#{pane_id}").len(), 2);
+    let home = fs::canonicalize(&srv.home).unwrap().display().to_string();
+    srv.wait_for(
+        || display(&srv, "f:1.2", "#{pane_current_path}") == home,
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("{e}: {}", display(&srv, "f:1.2", "#{pane_current_path}")));
+}
+
+/// A directly exec'd program that does not exist does not fail the
+/// command (tmux 3.7b): the pane is born dead with status 1, and stays
+/// dead under `remain-on-exit` (the harness default is on).
+#[test]
+fn a_program_that_fails_to_exec_gives_a_dead_pane() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "k", "grofe-no-such-cmd", "arg1"])
+        .unwrap();
+    srv.cmd(&["new-window", "-d", "-t", "k", "grofe-no-such-cmd", "x"])
+        .unwrap();
+    srv.cmd(&["split-window", "-t", "k:1", "grofe-no-such-cmd", "x"])
+        .unwrap();
+    for w in ["k:1", "k:2"] {
+        srv.wait_for(
+            || panes(&srv, w, "#{pane_dead}").iter().all(|d| d == "1"),
+            WAIT,
+        )
+        .unwrap_or_else(|e| panic!("{w}: {e}: {:?}", panes(&srv, w, "#{pane_dead}")));
+    }
+    assert_eq!(panes(&srv, "k:1", "#{pane_id}").len(), 2);
+}
+
+/// With `remain-on-exit` off, a pane whose program failed to exec goes
+/// away like any exited pane, taking its window with it.
+#[test]
+fn a_failed_exec_without_remain_on_exit_closes_the_window() {
+    let srv = TestServer::start();
+    session(&srv, "k", 80, 24);
+    srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
+    srv.cmd(&["new-window", "-d", "-t", "k", "grofe-no-such-cmd", "x"])
+        .unwrap();
+    let windows = || srv.cmd(&["list-windows", "-t", "k", "-F", "#{window_index}"]);
+    srv.wait_for(|| windows() == Ok("1\n".to_string()), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", windows()));
 }
 
 /// `-c` is expanded at execution time against the target pane: a pane

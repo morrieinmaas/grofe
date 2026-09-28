@@ -802,6 +802,9 @@ mod tests {
             ("^a", "C-a"),
             ("pgup", "PPage"),
             ("none", "None"),
+            ("C-S-a", "C-S-a"),
+            ("S-Tab", "S-Tab"),
+            ("BTab", "BTab"),
         ] {
             assert_eq!(validate("prefix", given), Ok(stored.to_string()), "{given}");
         }

@@ -89,18 +89,30 @@ fn expand_body(body: &str, vars: &dyn FormatVars) -> String {
         return expand_eq(rest, body, vars);
     }
     if let Some(rest) = body.strip_prefix("b:") {
-        return basename(&resolve(rest, vars));
+        return expand_basename(rest, vars);
     }
     resolve(body, vars)
 }
 
-/// Resolves one modifier argument or ternary condition: a bare token
-/// (no nested `#{...}`) is looked up directly as a variable name, exactly
-/// as if it had been written `#{token}`; a token that itself contains
-/// `#{...}` is expanded first and its result used as-is. This is why
-/// `#{b:pane_current_path}` looks up `pane_current_path`, while
-/// `#{b:/a/b/c}` looks up the (nonexistent) variable named `/a/b/c` and
-/// gets nothing, matching tmux 3.7b.
+/// `#{b:var}`: tmux only applies the basename transform to a bare
+/// variable-name lookup. When the argument itself contains a nested
+/// `#{...}`, tmux expands it and returns the result unchanged -- so
+/// `#{b:#{@p}}` with `@p` set to `/a/b/c` gives `/a/b/c`, not `c`, and
+/// only `#{b:pane_current_path}` (a bare name) is basenamed.
+fn expand_basename(arg: &str, vars: &dyn FormatVars) -> String {
+    if arg.contains("#{") {
+        expand(arg, vars)
+    } else {
+        basename(&vars.get(arg).unwrap_or_default())
+    }
+}
+
+/// Resolves a ternary condition: a bare token (no nested `#{...}`) is
+/// looked up directly as a variable name, exactly as if it had been
+/// written `#{token}`; a token that itself contains `#{...}` is expanded
+/// first and its result used as-is. `expand_basename` uses the same
+/// bare-vs-nested split for `#{b:var}`'s argument, but only applies its
+/// own basename transform on the bare branch.
 fn resolve(s: &str, vars: &dyn FormatVars) -> String {
     if s.contains("#{") {
         expand(s, vars)
@@ -356,13 +368,11 @@ mod tests {
     }
 
     #[test]
-    fn basename_modifier_on_a_nested_format() {
-        assert_eq!(
-            expand(
-                "#{b:#{pane_current_path}}",
-                &vars(&[("pane_current_path", "/a/b/c")])
-            ),
-            "c"
-        );
+    fn basename_modifier_does_not_apply_to_a_nested_argument() {
+        // Verified against tmux 3.7b: `b:` only basenames a bare
+        // variable-name lookup. A nested `#{...}` argument is expanded
+        // and returned as-is, even though it looks like a path.
+        assert_eq!(expand("#{b:#{@p}}", &vars(&[("@p", "/a/b/c")])), "/a/b/c");
+        assert_eq!(expand("#{b:x#{@p}}", &vars(&[("@p", "/a/b/c")])), "x/a/b/c");
     }
 }
