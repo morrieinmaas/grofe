@@ -21,9 +21,9 @@ use ulid::Ulid;
 
 use crate::cmd::{self, Command};
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::model::{HISTORY_LIMIT, Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
+use crate::server::{State, clients};
 use crate::types::{PaneId, WindowId};
 
 /// Runs one command (`argv[0]` is the verb) against the server state,
@@ -77,9 +77,9 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest)
         // replace these stubs.
-        Command::AttachSession(_) => not_yet("attach-session"),
-        Command::DetachClient(_) => not_yet("detach-client"),
-        Command::ListClients(_) => not_yet("list-clients"),
+        Command::AttachSession(c) => clients::attach_session(state, ctx, c),
+        Command::DetachClient(c) => clients::detach_client(state, ctx, c),
+        Command::ListClients(c) => clients::list_clients(state, c),
         Command::NextWindow(_) => not_yet("next-window"),
         Command::PreviousWindow(_) => not_yet("previous-window"),
         Command::LastWindow(_) => not_yet("last-window"),

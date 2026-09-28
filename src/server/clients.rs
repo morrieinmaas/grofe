@@ -1,8 +1,1158 @@
-//! client registry, writer tasks, render scheduler, attach/detach.
+//! Attached clients: the registry, per-client output with one pending
+//! frame, the render scheduler, the window-size policy, attach and detach
+//! (spec §4.4, §4.6, D6).
 //!
-//! T2.0 lands the registry entry as a stub; T2.5a fills it.
+//! Everything here runs on the actor. A client's connection task (in
+//! `server/mod.rs`) owns the socket: it sends the client's frames to the
+//! actor and writes what the actor leaves in the client's one-slot outbox.
+//!
+//! - **Output.** [`Outbox`] holds at most one pending frame. The actor only
+//!   `try_send`s into it: when the slot is still full the new diff is
+//!   dropped, the client's previous screen is forgotten, and the next frame
+//!   it gets is a full redraw (spec §4.4, slow clients). A client that stops
+//!   reading therefore never stalls the actor or another client.
+//! - **Scheduling.** Pane output sets the pane's dirty flag and wakes the
+//!   actor; [`wake`] marks the clients showing a dirty pane, commands mark
+//!   every client, and [`tick`] composes dirty clients at most once per
+//!   [`FRAME_INTERVAL`].
+//! - **Size (D6).** Each session's windows take the size of its latest
+//!   active client ([`SizeOwner`]): attaching makes a client the latest at
+//!   once, input makes it the latest after [`SIZE_DEBOUNCE`], so two clients
+//!   typing in turn do not make the window flap. A larger client
+//!   letterboxes, a smaller one crops with a viewport that follows the
+//!   active pane's cursor ([`follow`]).
+//! - **Input.** Bytes are decoded per client, each key goes to the
+//!   registered input hooks first, then through the client's key table;
+//!   bound commands run with the client's context, other keys go to the
+//!   active pane encoded for its modes.
 
-/// One attached client, keyed by `ClientId` in `State::clients`. T2.5a adds
-/// its fields (session, size, caps, writer, last Screen, activity).
-#[derive(Debug, Default)]
-pub struct ClientEntry {}
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
+
+use nix::libc;
+use tokio::sync::{mpsc, oneshot};
+
+use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
+use crate::protocol::{Caps, ClientCtx, Frame};
+use crate::server::dispatch::options::{self, FormatCtx, Owner};
+use crate::server::input::{
+    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, Routed, parse_prefix,
+};
+use crate::server::model::{Model, Session};
+use crate::server::pane::CursorState;
+use crate::server::render::{self, FrameInputs, Overlay, Screen};
+use crate::server::status::{self, StatusInputs, StyledLine, WindowStatus};
+use crate::server::{State, dispatch};
+use crate::types::{ClientId, PaneId, SessionId};
+
+/// At most one frame per client per this long (spec §4.4: ~16 ms).
+pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long a client must stay the latest active one before the window
+/// takes its size (spec D6: ~500 ms).
+pub const SIZE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// What an attach hello asks for, as the connection hands it to the actor.
+#[derive(Debug)]
+pub struct AttachRequest {
+    pub ctx: ClientCtx,
+    /// The client terminal, `(cols, rows)`.
+    pub size: (u16, u16),
+    pub term: String,
+    pub caps: Caps,
+    /// `attach -t`, raw.
+    pub target: Option<String>,
+    pub detach_others: bool,
+    pub nest: bool,
+}
+
+/// An accepted attach: the connection writes `output` (one frame at a
+/// time) and, once the actor lets go of the sender, the reason from `exit`.
+#[derive(Debug)]
+pub struct Accepted {
+    pub id: ClientId,
+    pub output: mpsc::Receiver<Vec<u8>>,
+    /// Dropped without a value when the server goes away mid-write.
+    pub exit: oneshot::Receiver<String>,
+}
+
+/// A client's one-slot output: the actor offers each new screen, and the
+/// diff goes out only if the slot is free.
+pub struct Outbox {
+    tx: mpsc::Sender<Vec<u8>>,
+    /// The screen the client shows once everything sent so far is written;
+    /// `None` forces a full redraw.
+    prev: Option<Screen>,
+    /// Set when a diff was dropped: nothing is composed for this client
+    /// until its slot is free again.
+    blocked: bool,
+}
+
+impl Outbox {
+    /// An outbox and the receiver its connection writes from.
+    pub fn new() -> (Outbox, mpsc::Receiver<Vec<u8>>) {
+        let (tx, rx) = mpsc::channel(1);
+        let outbox = Outbox {
+            tx,
+            prev: None,
+            blocked: false,
+        };
+        (outbox, rx)
+    }
+
+    /// Whether offering a frame now is worth composing one.
+    pub fn ready(&self) -> bool {
+        !self.blocked || self.tx.capacity() > 0
+    }
+
+    /// Sends the diff that turns the client's screen into `next`, as ONE
+    /// frame (so a synchronized-output begin/end pair is never split). If
+    /// the slot is still full the diff is dropped and the next offer is a
+    /// full redraw. Returns false for a dropped diff: the client still needs
+    /// a frame, and must be offered one again once [`Outbox::ready`].
+    pub fn offer(&mut self, next: Screen, caps: &Caps) -> bool {
+        let bytes = render::diff(self.prev.as_ref(), &next, caps);
+        if bytes.is_empty() {
+            return true;
+        }
+        match self.tx.try_send(bytes) {
+            Ok(()) => {
+                self.prev = Some(next);
+                self.blocked = false;
+                true
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.prev = None;
+                self.blocked = true;
+                false
+            }
+            // The connection is gone; its `ClientGone` removes the client.
+            Err(mpsc::error::TrySendError::Closed(_)) => true,
+        }
+    }
+}
+
+/// One attached client, keyed by `ClientId` in `State::clients`.
+pub struct ClientEntry {
+    /// `client_name`, what `detach-client -t` takes.
+    pub name: String,
+    pub session: SessionId,
+    /// The attaching CLI's context, with `client` set to this client.
+    pub ctx: ClientCtx,
+    /// The client terminal, `(cols, rows)`.
+    pub size: (u16, u16),
+    /// `TERM` of the client's terminal.
+    pub term: String,
+    pub caps: Caps,
+    /// Last input (or the attach itself).
+    pub activity: Instant,
+    pub decoder: Decoder,
+    pub keys: KeyState,
+    /// The window cell drawn at the client's top-left (crop, D6).
+    viewport: (u16, u16),
+    /// Needs a new frame.
+    dirty: bool,
+    outbox: Outbox,
+    exit: Option<oneshot::Sender<String>>,
+}
+
+/// Which client a session's windows are sized for (spec D6), and the
+/// client about to take over once its debounce runs out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SizeOwner {
+    pub client: ClientId,
+    pending: Option<(ClientId, Instant)>,
+}
+
+impl SizeOwner {
+    pub fn new(client: ClientId) -> SizeOwner {
+        SizeOwner {
+            client,
+            pending: None,
+        }
+    }
+
+    /// `client` sent input at `now`. The owner typing again cancels a
+    /// pending switch; another client becomes the owner [`SIZE_DEBOUNCE`]
+    /// after its first input unless the owner types meanwhile.
+    pub fn activity(&mut self, client: ClientId, now: Instant) {
+        if client == self.client {
+            self.pending = None;
+        } else if self.pending.is_none_or(|(c, _)| c != client) {
+            self.pending = Some((client, now + SIZE_DEBOUNCE));
+        }
+    }
+
+    pub fn deadline(&self) -> Option<Instant> {
+        self.pending.map(|(_, at)| at)
+    }
+
+    /// Completes a due switch; whether the owner changed.
+    pub fn settle(&mut self, now: Instant) -> bool {
+        match self.pending {
+            Some((client, at)) if now >= at => {
+                self.client = client;
+                self.pending = None;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Client state that is not per client.
+pub struct Registry {
+    next_id: u32,
+    /// Bindings by table (T2.5b fills the default tables).
+    pub key_tables: KeyTables,
+    /// See keys before the key tables, in registration order.
+    pub input_hooks: Vec<Box<dyn InputHook + Send>>,
+    /// Drawn over every client's frame, in registration order.
+    pub overlays: Vec<Box<dyn Overlay + Send>>,
+    owners: BTreeMap<SessionId, SizeOwner>,
+    render_at: Option<Instant>,
+    last_render: Option<Instant>,
+    /// When the status line is next redrawn for its clock.
+    status_at: Option<Instant>,
+}
+
+impl Default for Registry {
+    fn default() -> Registry {
+        Registry {
+            next_id: 1,
+            key_tables: KeyTables::default(),
+            input_hooks: Vec::new(),
+            overlays: Vec::new(),
+            owners: BTreeMap::new(),
+            render_at: None,
+            last_render: None,
+            status_at: None,
+        }
+    }
+}
+
+/// `client_name` for a client.
+// ponytail: tmux names a client by its tty; the attach hello carries no
+// tty path, so grofe numbers them.
+pub fn client_name(id: ClientId) -> String {
+    format!("client-{}", id.0)
+}
+
+/// Accepts an attach hello: resolves the target session (a window or pane
+/// target also selects it), refuses self-nesting without `--nest`, and
+/// registers the client as the session's latest (spec D6: attaching is
+/// activity).
+pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
+    let now = Instant::now();
+    if state.model.sessions.is_empty() {
+        return Err("no sessions".to_string());
+    }
+    let target = match &req.target {
+        Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
+        None => Target::Current,
+    };
+    let session = select_target(&mut state.model, &target, &req.ctx)?;
+    if !req.nest
+        && let Some(pane) = req.ctx.pane
+        && let Some(p) = state.model.panes.get(&pane)
+        && state.model.windows.get(&p.window).map(|w| w.session) == Some(session)
+    {
+        return Err(format!(
+            "refusing to attach session {} from inside itself (use --nest to force)",
+            state.model.sessions[&session].name
+        ));
+    }
+    if req.detach_others {
+        detach_session(state, session, None);
+    }
+
+    let id = ClientId(state.registry.next_id);
+    state.registry.next_id += 1;
+    let (outbox, output) = Outbox::new();
+    let (exit_tx, exit) = oneshot::channel();
+    let ctx = ClientCtx {
+        client: Some(id),
+        ..req.ctx
+    };
+    state.clients.insert(
+        id,
+        ClientEntry {
+            name: client_name(id),
+            session,
+            ctx,
+            size: clamp_size(req.size),
+            term: req.term,
+            caps: req.caps,
+            activity: now,
+            decoder: Decoder::new(),
+            keys: KeyState::new(),
+            viewport: (0, 0),
+            dirty: true,
+            outbox,
+            exit: Some(exit_tx),
+        },
+    );
+    state.registry.owners.insert(session, SizeOwner::new(id));
+    changed(state);
+    Ok(Accepted { id, output, exit })
+}
+
+/// Resolves an attach or switch target to its session, making a window or
+/// pane target that session's current window (and pane), as tmux does.
+fn select_target(model: &mut Model, target: &Target, ctx: &ClientCtx) -> Result<SessionId, String> {
+    let session = model.resolve_session(target, ctx)?;
+    if let Target::Window(..) | Target::Pane(_) = target {
+        let window = model.resolve_window(target, ctx)?;
+        if let Target::Pane(_) = target {
+            let pane = model.resolve_pane(target, ctx)?;
+            if let Some(w) = model.windows.get_mut(&window) {
+                w.active = pane;
+            }
+        }
+        if let Some(s) = model.sessions.get_mut(&session) {
+            s.active = window;
+        }
+    }
+    Ok(session)
+}
+
+fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
+    (cols.max(1), rows.max(1))
+}
+
+/// A frame from client `id`.
+pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
+    match frame {
+        Frame::Input(bytes) => input(state, id, &bytes, Instant::now()),
+        Frame::Resize(cols, rows) => {
+            let Some(c) = state.clients.get_mut(&id) else {
+                return;
+            };
+            c.size = clamp_size((cols, rows));
+            c.dirty = true;
+            changed(state);
+        }
+        Frame::Detach => detach(state, id),
+        // Server-to-client kinds: ignored if a client sends them.
+        Frame::Output(_) | Frame::Exit(_) => {}
+    }
+}
+
+/// Client `id`'s connection ended.
+pub fn gone(state: &mut State, id: ClientId) {
+    remove(state, id, None);
+}
+
+/// Detaches client `id` with tmux's message.
+pub fn detach(state: &mut State, id: ClientId) {
+    let reason = state
+        .clients
+        .get(&id)
+        .map(|c| detached_from(&state.model, c.session));
+    remove(state, id, reason);
+}
+
+fn detached_from(model: &Model, session: SessionId) -> String {
+    match model.sessions.get(&session) {
+        Some(s) => format!("detached (from session {})", s.name),
+        None => "detached".to_string(),
+    }
+}
+
+/// Detaches every client on `session` except `keep`.
+fn detach_session(state: &mut State, session: SessionId, keep: Option<ClientId>) {
+    let ids: Vec<ClientId> = state
+        .clients
+        .iter()
+        .filter(|(id, c)| c.session == session && Some(**id) != keep)
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        detach(state, id);
+    }
+}
+
+/// Removes a client; with a reason, it is told why (its connection writes
+/// what is still pending, then the `exit` frame).
+fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
+    let Some(mut c) = state.clients.remove(&id) else {
+        return;
+    };
+    if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
+        let _ = tx.send(reason);
+    }
+    state.model.client_last_session.remove(&id);
+    leave_session(state, id, c.session);
+}
+
+/// `id` no longer shows `session`: if it owned the size, the session's
+/// most recently active remaining client takes over at once.
+fn leave_session(state: &mut State, id: ClientId, session: SessionId) {
+    let Some(owner) = state.registry.owners.get_mut(&session) else {
+        return;
+    };
+    if owner.pending.is_some_and(|(c, _)| c == id) {
+        owner.pending = None;
+    }
+    if owner.client != id {
+        return;
+    }
+    let next = state
+        .clients
+        .iter()
+        .filter(|(cid, c)| c.session == session && **cid != id)
+        .max_by_key(|(_, c)| c.activity)
+        .map(|(cid, _)| *cid);
+    match next {
+        Some(next) => *owner = SizeOwner::new(next),
+        None => {
+            state.registry.owners.remove(&session);
+        }
+    }
+    changed(state);
+}
+
+/// Tells every client why it is going away and forgets them (server exit).
+pub fn shutdown(state: &mut State, reason: &str) {
+    for (_, mut c) in std::mem::take(&mut state.clients) {
+        if let Some(tx) = c.exit.take() {
+            let _ = tx.send(reason.to_string());
+        }
+    }
+}
+
+/// After anything that may have changed what clients show (a command, a
+/// pane exiting): clients of a session that is gone leave (as tmux's
+/// `[exited]`), window sizes follow their owners, and every client redraws.
+pub fn changed(state: &mut State) {
+    let orphans: Vec<ClientId> = state
+        .clients
+        .iter()
+        .filter(|(_, c)| !state.model.sessions.contains_key(&c.session))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in orphans {
+        remove(state, id, Some("exited".to_string()));
+    }
+    let live = &state.model.sessions;
+    state.registry.owners.retain(|s, _| live.contains_key(s));
+    apply_sizes(state);
+    for c in state.clients.values_mut() {
+        c.dirty = true;
+    }
+    request_render(state, Instant::now());
+}
+
+/// Pane output woke the actor: clients showing a pane that changed redraw.
+pub fn wake(state: &mut State) {
+    let dirty: BTreeSet<PaneId> = state
+        .model
+        .panes
+        .values()
+        .filter(|p| p.handle.take_dirty())
+        .map(|p| p.id)
+        .collect();
+    if dirty.is_empty() || state.clients.is_empty() {
+        return;
+    }
+    let model = &state.model;
+    let mut any = false;
+    for c in state.clients.values_mut() {
+        let shown = model.sessions.get(&c.session).map(|s| s.active);
+        if dirty
+            .iter()
+            .any(|p| model.panes.get(p).map(|p| p.window) == shown)
+        {
+            c.dirty = true;
+            any = true;
+        }
+    }
+    if any {
+        request_render(state, Instant::now());
+    }
+}
+
+fn request_render(state: &mut State, now: Instant) {
+    let r = &mut state.registry;
+    if r.render_at.is_none() && !state.clients.is_empty() {
+        let earliest = r.last_render.map_or(now, |last| last + FRAME_INTERVAL);
+        r.render_at = Some(earliest.max(now));
+    }
+}
+
+/// The next time [`tick`] has work: a frame, the status clock, a size
+/// owner's debounce, or a client's escape-time or repeat-time.
+pub fn deadline(state: &State) -> Option<Instant> {
+    let escape = escape_time(&state.model);
+    let r = &state.registry;
+    let clients = state
+        .clients
+        .values()
+        .flat_map(|c| [c.decoder.deadline(escape), c.keys.deadline()]);
+    [r.render_at, r.status_at]
+        .into_iter()
+        .chain(r.owners.values().map(SizeOwner::deadline))
+        .chain(clients)
+        .flatten()
+        .min()
+}
+
+/// Runs whatever is due at `now` (see [`deadline`]).
+pub fn tick(state: &mut State, now: Instant) {
+    let escape = escape_time(&state.model);
+    let ids: Vec<ClientId> = state.clients.keys().copied().collect();
+    for id in ids {
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        if c.keys.expire(now) {
+            c.dirty = true;
+            request_render(state, now);
+        }
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        if c.decoder.deadline(escape).is_some_and(|d| d <= now) {
+            for input in c.decoder.flush(now, escape) {
+                route(state, id, input, now);
+            }
+        }
+    }
+
+    let mut switched = false;
+    for owner in state.registry.owners.values_mut() {
+        switched |= owner.settle(now);
+    }
+    if switched {
+        changed(state);
+    }
+
+    if state.registry.status_at.is_some_and(|at| at <= now) {
+        state.registry.status_at = None;
+        for c in state.clients.values_mut() {
+            c.dirty = true;
+        }
+        request_render(state, now);
+    }
+
+    if state.registry.render_at.is_some_and(|at| at <= now) {
+        state.registry.render_at = None;
+        state.registry.last_render = Some(now);
+        render_dirty(state);
+        // A client whose outbox is still full keeps its dirty flag: look
+        // again next frame.
+        if state.clients.values().any(|c| c.dirty) {
+            request_render(state, now);
+        }
+    }
+    arm_status_clock(state, now);
+}
+
+/// Schedules the next status redraw for its clock, every `status-interval`
+/// seconds (the shortest among the attached sessions; 0 turns it off).
+fn arm_status_clock(state: &mut State, now: Instant) {
+    if state.registry.status_at.is_some() {
+        return;
+    }
+    let model = &state.model;
+    state.registry.status_at = state
+        .clients
+        .values()
+        .filter(|c| status_on(model, c.session))
+        .filter_map(|c| {
+            model
+                .options
+                .lookup("status-interval", &[Owner::Session(c.session)])?
+                .parse::<u64>()
+                .ok()
+                .filter(|s| *s > 0)
+        })
+        .min()
+        .map(|secs| now + Duration::from_secs(secs));
+}
+
+fn render_dirty(state: &mut State) {
+    let ids: Vec<ClientId> = state
+        .clients
+        .iter()
+        .filter(|(_, c)| c.dirty && c.outbox.ready())
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        let Some(c) = state.clients.get(&id) else {
+            continue;
+        };
+        let composed = compose_client(state, c);
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        c.dirty = false;
+        if let Some((screen, viewport)) = composed {
+            c.viewport = viewport;
+            let caps = c.caps;
+            // A dropped frame keeps the client dirty, so it is redrawn once
+            // its outbox has room even if nothing else changes.
+            c.dirty = !c.outbox.offer(screen, &caps);
+        }
+    }
+}
+
+/// Whether `session` shows a status row.
+fn status_on(model: &Model, session: SessionId) -> bool {
+    model
+        .options
+        .lookup("status", &[Owner::Session(session)])
+        .is_some_and(|v| v != "off")
+}
+
+/// The window size a client of `session` with `size` wants: its terminal
+/// less the status row, never below 1x1.
+fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (u16, u16) {
+    let status = u16::from(status_on(model, session));
+    (cols.max(1), rows.saturating_sub(status).max(1))
+}
+
+/// Sizes every session that has attached clients to its owner (spec D6).
+fn apply_sizes(state: &mut State) {
+    let sizes: Vec<(SessionId, (u16, u16))> = state
+        .registry
+        .owners
+        .iter()
+        .filter_map(|(s, o)| {
+            let c = state.clients.get(&o.client)?;
+            Some((*s, window_size(&state.model, *s, c.size)))
+        })
+        .collect();
+    for (session, size) in sizes {
+        resize_session(&mut state.model, session, size);
+    }
+}
+
+/// Gives `session` and all its windows `(cols, rows)`, laying out again
+/// (a zoomed window's active pane keeps filling it).
+fn resize_session(model: &mut Model, session: SessionId, (cols, rows): (u16, u16)) {
+    let Some(s) = model.sessions.get_mut(&session) else {
+        return;
+    };
+    s.cols = cols;
+    s.rows = rows;
+    for id in s.windows.clone() {
+        let Some(w) = model.windows.get_mut(&id) else {
+            continue;
+        };
+        if (w.cols, w.rows) == (cols, rows) {
+            continue;
+        }
+        w.cols = cols;
+        w.rows = rows;
+        let (zoomed, active) = (w.zoomed, w.active);
+        model.relayout(id);
+        if zoomed && let Some(p) = model.panes.get_mut(&active) {
+            p.cols = cols;
+            p.rows = rows;
+            if let Err(e) = p.handle.resize(cols, rows) {
+                eprintln!("grofe server: resizing {active}: {e}");
+            }
+        }
+    }
+}
+
+/// Moves a viewport of `visible` cells over a `window`, along one axis at
+/// a time, as little as needed to keep `cursor` inside (spec D6 crop). A
+/// window that fits has viewport 0.
+pub fn follow(
+    viewport: (u16, u16),
+    cursor: Option<(u16, u16)>,
+    window: (u16, u16),
+    visible: (u16, u16),
+) -> (u16, u16) {
+    let axis = |v: u16, c: Option<u16>, win: u16, vis: u16| {
+        if win <= vis {
+            return 0;
+        }
+        let max = win - vis;
+        let mut v = v.min(max);
+        if let Some(c) = c {
+            if c < v {
+                v = c;
+            } else if c >= v + vis {
+                v = c + 1 - vis;
+            }
+        }
+        v.min(max)
+    };
+    (
+        axis(viewport.0, cursor.map(|c| c.0), window.0, visible.0),
+        axis(viewport.1, cursor.map(|c| c.1), window.1, visible.1),
+    )
+}
+
+/// Composes client `c`'s next screen, and the viewport it was drawn with.
+fn compose_client(state: &State, c: &ClientEntry) -> Option<(Screen, (u16, u16))> {
+    let model = &state.model;
+    let s = model.sessions.get(&c.session)?;
+    let w = model.windows.get(&s.active)?;
+    let status = status_on(model, s.id);
+    let visible = (c.size.0, c.size.1.saturating_sub(u16::from(status)));
+    let area = w.area();
+    let (rects, borders) = if w.zoomed {
+        (vec![(w.active, area)], Vec::new())
+    } else {
+        (w.layout.compute(area), w.layout.borders(area))
+    };
+    let mut cursor = None;
+    let panes = rects
+        .into_iter()
+        .filter_map(|(id, rect)| {
+            let snap = model.panes.get(&id)?.handle.snapshot_rows(0..rect.rows);
+            if id == w.active {
+                cursor = Some(CursorState {
+                    row: snap.cursor.row.saturating_add(rect.y),
+                    col: snap.cursor.col.saturating_add(rect.x),
+                    ..snap.cursor
+                });
+            }
+            Some((id, rect, snap))
+        })
+        .collect();
+    let viewport = follow(
+        c.viewport,
+        cursor.map(|p| (p.col, p.row)),
+        (w.cols, w.rows),
+        visible,
+    );
+    let status_line = status.then(|| status_line(model, c, s));
+    let overlays: Vec<&dyn Overlay> = state
+        .registry
+        .overlays
+        .iter()
+        .map(|o| o.as_ref() as &dyn Overlay)
+        .collect();
+    let screen = render::compose(&FrameInputs {
+        client: c.size,
+        viewport,
+        area,
+        panes,
+        borders,
+        active: w.active,
+        status: status_line,
+        overlays: &overlays,
+        cursor,
+    });
+    Some((screen, viewport))
+}
+
+/// The status row for client `c` on session `s` (spec §4.10): options
+/// looked up from the current window's active pane, the window list with
+/// each window's own format and variables, the local time.
+fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
+    let active = model.windows.get(&s.active).map(|w| w.active);
+    let chain = active.map(|p| options::chain(model, p)).unwrap_or_default();
+    let chain = if chain.is_empty() {
+        vec![Owner::Session(s.id)]
+    } else {
+        chain
+    };
+    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+    let length = |name: &str| opt(name).parse::<u16>().unwrap_or(0);
+    let vars = ClientVars::new(c, active.map(|p| FormatCtx::new(model, p)));
+    let windows: Vec<(String, ClientVars)> = s
+        .windows
+        .iter()
+        .filter_map(|id| {
+            let w = model.windows.get(id)?;
+            let name = if *id == s.active {
+                "window-status-current-format"
+            } else {
+                "window-status-format"
+            };
+            let format = model
+                .options
+                .lookup(name, &options::chain(model, w.active))
+                .unwrap_or("")
+                .to_string();
+            Some((
+                format,
+                ClientVars::new(c, Some(FormatCtx::new(model, w.active))),
+            ))
+        })
+        .collect();
+    let entries: Vec<WindowStatus> = windows
+        .iter()
+        .map(|(format, vars)| WindowStatus {
+            format,
+            vars: vars as &dyn FormatVars,
+        })
+        .collect();
+    status::render(&StatusInputs {
+        left: opt("status-left"),
+        right: opt("status-right"),
+        left_length: length("status-left-length"),
+        right_length: length("status-right-length"),
+        style: opt("status-style"),
+        vars: &vars,
+        windows: &entries,
+        width: c.size.0,
+        now: local_now(),
+    })
+}
+
+/// The local broken-down time, for strftime sequences in the status line.
+fn local_now() -> libc::tm {
+    // SAFETY: `time` with a null pointer only returns the time;
+    // `localtime_r` writes into the zeroed `tm` we own (all-zero is a
+    // valid `tm`).
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        tm
+    }
+}
+
+/// Format variables for a client: `client_*` (M2 addendum: real
+/// `client_width`/`client_height`), falling through to the pane's
+/// [`FormatCtx`].
+pub struct ClientVars<'a> {
+    client: &'a ClientEntry,
+    pane: Option<FormatCtx<'a>>,
+}
+
+impl<'a> ClientVars<'a> {
+    pub fn new(client: &'a ClientEntry, pane: Option<FormatCtx<'a>>) -> ClientVars<'a> {
+        ClientVars { client, pane }
+    }
+}
+
+impl FormatVars for ClientVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        let c = self.client;
+        match name {
+            "client_width" => Some(c.size.0.to_string()),
+            "client_height" => Some(c.size.1.to_string()),
+            "client_name" => Some(c.name.clone()),
+            "client_termname" => Some(c.term.clone()),
+            "client_key_table" => Some(c.keys.table().to_string()),
+            "client_session" => self.pane.as_ref()?.get("session_name"),
+            _ => self.pane.as_ref()?.get(name),
+        }
+    }
+}
+
+/// The global `escape-time`, in milliseconds.
+fn escape_time(model: &Model) -> Duration {
+    let ms = model
+        .options
+        .lookup("escape-time", &[])
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(25);
+    Duration::from_millis(ms)
+}
+
+/// The session's `prefix` and `repeat-time`.
+fn key_settings(model: &Model, session: SessionId) -> KeySettings {
+    let chain = [Owner::Session(session)];
+    let default = KeySettings::default();
+    KeySettings {
+        prefix: model
+            .options
+            .lookup("prefix", &chain)
+            .map_or(default.prefix, |v| {
+                parse_prefix(v).unwrap_or(default.prefix)
+            }),
+        repeat_time: model
+            .options
+            .lookup("repeat-time", &chain)
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default.repeat_time, Duration::from_millis),
+    }
+}
+
+fn active_pane(model: &Model, session: SessionId) -> Option<PaneId> {
+    let s = model.sessions.get(&session)?;
+    Some(model.windows.get(&s.active)?.active)
+}
+
+/// Input bytes from client `id` at `now`: activity for D6, then each
+/// decoded input is routed in turn.
+fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
+    let escape = escape_time(&state.model);
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    c.activity = now;
+    let inputs = c.decoder.feed(bytes, now, escape);
+    if let Some(owner) = state.registry.owners.get_mut(&c.session) {
+        owner.activity(id, now);
+    }
+    for input in inputs {
+        route(state, id, input, now);
+    }
+}
+
+/// Routes one input: input hooks first (keys only), then the client's key
+/// table, reading the active pane's modes now, since a command routed just
+/// before may have changed the active pane.
+fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
+    let hooked = match &input {
+        Input::Key(key) => state
+            .registry
+            .input_hooks
+            .iter_mut()
+            .find_map(|hook| hook.on_key(key, id)),
+        _ => None,
+    };
+    let Some(session) = state.clients.get(&id).map(|c| c.session) else {
+        return;
+    };
+    let pane = active_pane(&state.model, session);
+    let routed = match hooked {
+        Some(routed) => routed,
+        None => {
+            let Some(modes) = pane
+                .and_then(|p| state.model.panes.get(&p))
+                .map(|p| p.handle.modes())
+            else {
+                return;
+            };
+            let settings = key_settings(&state.model, session);
+            let State {
+                clients, registry, ..
+            } = &mut *state;
+            let Some(c) = clients.get_mut(&id) else {
+                return;
+            };
+            let table = c.keys.table().to_string();
+            let routed = c
+                .keys
+                .route(&input, now, &registry.key_tables, &settings, &modes);
+            if c.keys.table() != table {
+                c.dirty = true;
+                request_render(state, now);
+            }
+            routed
+        }
+    };
+    match routed {
+        Routed::ToPane(bytes) => {
+            if let Some(p) = pane.and_then(|p| state.model.panes.get(&p))
+                && p.handle.enqueue_input(bytes).is_err()
+            {
+                eprintln!("grofe server: input queue full for {}", p.id);
+            }
+        }
+        Routed::Command(argv) => run_binding(state, id, &argv),
+        Routed::Consumed => {}
+    }
+}
+
+/// Runs a bound command for client `id`, with the client's context and its
+/// active pane as the current pane.
+pub fn run_binding(state: &mut State, id: ClientId, argv: &[String]) {
+    let Some(c) = state.clients.get(&id) else {
+        return;
+    };
+    let ctx = ClientCtx {
+        pane: active_pane(&state.model, c.session),
+        ..c.ctx.clone()
+    };
+    if let Err(e) = dispatch::run(state, &ctx, argv) {
+        // ponytail: tmux shows a binding's error in the status line (M3).
+        eprintln!("grofe server: {}: {e}", argv.join(" "));
+    }
+    state.events.flush();
+    changed(state);
+}
+
+/// The client a command acts on: the requesting client, else the most
+/// recently active client on the request's pane's session, else the most
+/// recently active client.
+fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId> {
+    if let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) {
+        return Some(id);
+    }
+    let session = ctx
+        .pane
+        .and_then(|p| state.model.panes.get(&p))
+        .and_then(|p| state.model.windows.get(&p.window))
+        .map(|w| w.session);
+    state
+        .clients
+        .iter()
+        .filter(|(_, c)| session.is_none_or(|s| c.session == s))
+        .max_by_key(|(_, c)| c.activity)
+        .map(|(id, _)| *id)
+}
+
+fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
+    state
+        .clients
+        .iter()
+        .find(|(_, c)| c.name == name)
+        .map(|(id, _)| *id)
+        .ok_or_else(|| format!("can't find client: {name}"))
+}
+
+/// `attach-session` run as a command: only an attached client can (its
+/// bindings, for example); it switches that client to the target session.
+/// The CLI's `attach` is the attach client itself (spec §4.6).
+pub fn attach_session(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: AttachSession,
+) -> Result<String, String> {
+    let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) else {
+        return Err("open terminal failed: not a terminal".to_string());
+    };
+    let session = select_target(&mut state.model, &c.target, ctx)?;
+    if c.detach_others {
+        detach_session(state, session, Some(id));
+    }
+    let Some(entry) = state.clients.get_mut(&id) else {
+        return Ok(String::new());
+    };
+    let old = entry.session;
+    entry.activity = Instant::now();
+    if old != session {
+        entry.session = session;
+        entry.viewport = (0, 0);
+        state.model.client_last_session.insert(id, old);
+        leave_session(state, id, old);
+    }
+    state.registry.owners.insert(session, SizeOwner::new(id));
+    Ok(String::new())
+}
+
+/// `detach-client`: `-s` detaches every client on a session, `-t` one
+/// client by name, neither the current client; `-a` detaches every client
+/// but that one instead.
+pub fn detach_client(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: DetachClient,
+) -> Result<String, String> {
+    if let Some(target) = &c.session {
+        let session = state.model.resolve_session(target, ctx)?;
+        detach_session(state, session, None);
+        return Ok(String::new());
+    }
+    let id = match &c.client {
+        Some(name) => client_by_name(state, name)?,
+        None => current_client(state, ctx).ok_or_else(|| "no current client".to_string())?,
+    };
+    if c.all_others {
+        let others: Vec<ClientId> = state.clients.keys().copied().filter(|o| *o != id).collect();
+        for other in others {
+            detach(state, other);
+        }
+    } else {
+        detach(state, id);
+    }
+    Ok(String::new())
+}
+
+/// `list-clients`, in client order; `-F` expands per client, with
+/// `client_*` variables over the client's current pane's.
+pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
+    let model = &state.model;
+    let format = c.format.unwrap_or_else(|| {
+        "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}]"
+            .to_string()
+    });
+    Ok(state
+        .clients
+        .values()
+        .map(|client| {
+            let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
+            let vars = ClientVars::new(client, pane);
+            format!("{}\n", cmd::expand(&format, &vars))
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_client_takes_the_size_only_after_the_debounce() {
+        let (a, b) = (ClientId(1), ClientId(2));
+        let t0 = Instant::now();
+        let mut owner = SizeOwner::new(a);
+        owner.activity(b, t0);
+        assert_eq!(owner.deadline(), Some(t0 + SIZE_DEBOUNCE));
+        // Typing on does not push the switch back.
+        owner.activity(b, t0 + Duration::from_millis(300));
+        assert_eq!(owner.deadline(), Some(t0 + SIZE_DEBOUNCE));
+        assert!(!owner.settle(t0 + Duration::from_millis(499)));
+        assert_eq!(owner.client, a);
+        assert!(owner.settle(t0 + SIZE_DEBOUNCE));
+        assert_eq!(owner.client, b);
+        assert_eq!(owner.deadline(), None);
+    }
+
+    #[test]
+    fn the_owner_typing_cancels_a_pending_switch() {
+        let (a, b) = (ClientId(1), ClientId(2));
+        let t0 = Instant::now();
+        let mut owner = SizeOwner::new(a);
+        owner.activity(b, t0);
+        owner.activity(a, t0 + Duration::from_millis(100));
+        assert_eq!(owner.deadline(), None);
+        assert!(!owner.settle(t0 + Duration::from_secs(1)));
+        assert_eq!(owner.client, a);
+    }
+
+    #[test]
+    fn viewport_is_zero_when_the_window_fits() {
+        assert_eq!(follow((5, 5), Some((70, 20)), (80, 23), (80, 23)), (0, 0));
+        assert_eq!(follow((5, 5), Some((10, 5)), (40, 11), (80, 23)), (0, 0));
+    }
+
+    #[test]
+    fn viewport_moves_just_enough_to_show_the_cursor() {
+        // Cursor right and below the visible area.
+        assert_eq!(follow((0, 0), Some((64, 19)), (80, 23), (40, 11)), (25, 9));
+        // Inside already: no movement.
+        assert_eq!(follow((25, 9), Some((30, 12)), (80, 23), (40, 11)), (25, 9));
+        // Left of and above it: the viewport starts at the cursor.
+        assert_eq!(follow((25, 9), Some((3, 2)), (80, 23), (40, 11)), (3, 2));
+        // Never past the window's far edge, even after a shrink.
+        assert_eq!(follow((70, 20), None, (80, 23), (40, 11)), (40, 12));
+    }
+
+    fn screen_with(c: char) -> Screen {
+        let mut s = Screen::new(4, 2);
+        s.cells[0].c = c;
+        s
+    }
+
+    #[test]
+    fn a_full_outbox_drops_the_diff_and_redraws_in_full_once_free() {
+        let caps = Caps::default();
+        let (mut outbox, mut rx) = Outbox::new();
+        assert!(outbox.offer(screen_with('a'), &caps));
+        assert!(outbox.ready());
+        // The writer has not taken the first frame: the second is dropped.
+        assert!(!outbox.offer(screen_with('b'), &caps));
+        assert!(!outbox.ready());
+        assert!(outbox.prev.is_none());
+        let first = rx.try_recv().expect("first frame");
+        assert!(
+            first.windows(4).any(|w| w == b"\x1b[2J"),
+            "full redraw first"
+        );
+        assert!(outbox.ready());
+        // The next offer is a full redraw, not a diff against 'a'.
+        assert!(outbox.offer(screen_with('b'), &caps));
+        let next = rx.try_recv().expect("redraw");
+        assert!(
+            next.windows(4).any(|w| w == b"\x1b[2J"),
+            "full redraw after a drop"
+        );
+        assert!(rx.try_recv().is_err());
+        // Unchanged: nothing is sent.
+        assert!(outbox.offer(screen_with('b'), &caps));
+        assert!(rx.try_recv().is_err());
+    }
+}

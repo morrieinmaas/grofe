@@ -641,9 +641,10 @@ fn probe() -> io::Result<ProbeParser> {
 /// Reads the handshake's one reply line a byte at a time, so no frame
 /// bytes after it are consumed.
 fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
-    stream
-        .set_read_timeout(Some(HELLO_TIMEOUT))
-        .map_err(|e| e.to_string())?;
+    // Setting a socket option fails (EINVAL on macOS) once the server has
+    // closed, which it does right after a refusal: the refusal line is
+    // still buffered, so read it without the bound rather than hide it.
+    let _ = stream.set_read_timeout(Some(HELLO_TIMEOUT));
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -658,8 +659,14 @@ fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
             Err(e) => return Err(format!("waiting for the server: {e}")),
         }
     }
-    stream.set_read_timeout(None).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&line).map_err(|e| format!("bad reply from server: {e}"))
+    let reply: Reply =
+        serde_json::from_slice(&line).map_err(|e| format!("bad reply from server: {e}"))?;
+    // Only an accepted attach reads on; a refusal's closed socket may
+    // refuse the option, and that must not replace the server's reason.
+    if let Reply::Ok { .. } = reply {
+        stream.set_read_timeout(None).map_err(|e| e.to_string())?;
+    }
+    Ok(reply)
 }
 
 /// Server frames to the tty until an `exit` frame or the server hangs up.

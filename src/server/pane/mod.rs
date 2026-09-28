@@ -140,6 +140,11 @@ pub(crate) struct Emu {
     pub(crate) parser: Processor,
 }
 
+/// The narrowest a pane's pty and emulator ever get: alacritty_terminal
+/// 0.26 panics writing a wide character into a 1-column terminal. A
+/// 1-column layout cell still renders; its pane is just 2 wide inside.
+const MIN_COLS: u16 = 2;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Size {
     pub(crate) cols: u16,
@@ -295,7 +300,7 @@ impl PaneHandle {
         wake: Arc<Notify>,
     ) -> stdio::Result<Self> {
         let size = Size {
-            cols: spec.cols.max(1),
+            cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
         let (master, child) = spawn_child(&spec, size)?;
@@ -357,7 +362,7 @@ impl PaneHandle {
 
     pub fn resize(&self, cols: u16, rows: u16) -> stdio::Result<()> {
         let size = Size {
-            cols: cols.max(1),
+            cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
         lock(&self.emu).term.resize(size);

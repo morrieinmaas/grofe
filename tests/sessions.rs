@@ -389,13 +389,9 @@ fn m2_verbs_answer_not_implemented_yet() {
     let srv = TestServer::start();
     new_session(&srv, "s");
     // `attach` is not here: the CLI runs it as the attach client (T2.1),
-    // not as a one-shot request.
+    // not as a one-shot request. `detach-client` and `list-clients` are
+    // T2.5a's (tests/acceptance/t2_5a.rs).
     for (argv, verb) in [
-        (&["detach-client", "-a"][..], "detach-client"),
-        (
-            &["list-clients", "-F", "#{client_width}"][..],
-            "list-clients",
-        ),
         (&["next-window", "-t", "s"][..], "next-window"),
         (&["previous-window"][..], "previous-window"),
         (&["last-window"][..], "last-window"),
