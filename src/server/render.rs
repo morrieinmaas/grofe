@@ -18,7 +18,7 @@ use crate::protocol::Caps;
 use crate::server::State;
 use crate::server::graphics;
 use crate::server::layout::BorderSegment;
-use crate::server::pane::{CellFlags, CursorShape, CursorState, RowsSnapshot, SnapCell};
+use crate::server::pane::{CellFlags, CursorShape, CursorState, Hyperlink, RowsSnapshot, SnapCell};
 use crate::server::status::{Style, StyledLine};
 use crate::types::{ClientId, PaneId, Rect};
 
@@ -403,6 +403,7 @@ pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
         out: Vec::new(),
         pos: None,
         pen: None,
+        link: None,
         cols: next.cols,
         caps,
     };
@@ -431,6 +432,7 @@ pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
                 w.cell(x as u16, y as u16, &row[x]);
             }
         }
+        w.link_to(None);
     }
     let drew = !w.out.is_empty();
     let was = if full { None } else { base.cursor };
@@ -492,6 +494,8 @@ struct Writer<'a> {
     pos: Option<(u16, u16)>,
     /// The SGR state last written in this diff; `None` until the first.
     pen: Option<Style>,
+    /// The OSC 8 hyperlink open on the outer terminal (R20).
+    link: Option<Hyperlink>,
     cols: u16,
     caps: &'a Caps,
 }
@@ -499,8 +503,11 @@ struct Writer<'a> {
 impl Writer<'_> {
     fn cell(&mut self, x: u16, y: u16, cell: &SnapCell) {
         if self.pos != Some((x, y)) {
+            // A link must not cover the cells the move skips.
+            self.link_to(None);
             cup(&mut self.out, x, y);
         }
+        self.link_to(cell.hyperlink.as_ref());
         let style = cell_style(cell);
         if self.pen != Some(style) {
             write_sgr(&mut self.out, &style, self.caps);
@@ -531,6 +538,24 @@ impl Writer<'_> {
             // Past the last column the cursor sits in a pending wrap.
             self.pos = (next < self.cols).then_some((next, y));
         }
+    }
+
+    /// Opens `link` (OSC 8 with its id, so a link cut by a move or a row
+    /// end stays one link), or closes the open one for `None`.
+    // ponytail: sent to every client; tmux sends OSC 8 only to terminals
+    // with its `hyperlinks` feature. A `Caps` flag for it is the M3.6
+    // upgrade.
+    fn link_to(&mut self, link: Option<&Hyperlink>) {
+        if self.link.as_ref() == link {
+            return;
+        }
+        let clean = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
+        let seq = match link {
+            Some(l) => format!("\x1b]8;id={};{}\x1b\\", clean(l.id()), clean(l.uri())),
+            None => "\x1b]8;;\x1b\\".to_string(),
+        };
+        self.out.extend_from_slice(seq.as_bytes());
+        self.link = link.cloned();
     }
 }
 
@@ -722,6 +747,53 @@ mod tests {
             (cells[3].c, cells[3].flags, cells[3].bg),
             (' ', CellFlags::empty(), red)
         );
+    }
+
+    fn find(hay: &[u8], needle: &[u8]) -> Vec<usize> {
+        (0..hay.len().saturating_sub(needle.len() - 1))
+            .filter(|&i| hay[i..].starts_with(needle))
+            .collect()
+    }
+
+    /// R20: a linked cell is drawn inside OSC 8 open and close; the link
+    /// closes before a move that skips cells and at the row end.
+    #[test]
+    fn hyperlinks_are_reemitted_around_their_cells() {
+        let link = Hyperlink::new(Some("k"), "https://example.com".to_string());
+        let open: &[u8] = b"\x1b]8;id=k;https://example.com\x1b\\";
+        let close: &[u8] = b"\x1b]8;;\x1b\\";
+
+        let mut next = Screen::new(6, 2);
+        next.cells[1].c = 'X';
+        next.cells[1].hyperlink = Some(link.clone());
+        next.cells[2].c = 'y';
+        let out = diff(None, &next, &Caps::default());
+        let o = find(&out, open);
+        assert_eq!(o.len(), 1, "{}", String::from_utf8_lossy(&out));
+        // The pen may be set between the open and the `X`.
+        let x = find(&out, b"X")[0];
+        assert!(o[0] < x, "{}", String::from_utf8_lossy(&out));
+        assert!(
+            out[x + 1..].starts_with(close),
+            "{}",
+            String::from_utf8_lossy(&out)
+        );
+
+        // Only the linked cells change: each run opens after its move and
+        // closes before the next move and at the row end.
+        let prev = Screen::new(6, 2);
+        let mut next = Screen::new(6, 2);
+        for x in [0, 3, 5] {
+            next.cells[x].c = 'L';
+            next.cells[x].hyperlink = Some(link.clone());
+        }
+        next.cells[6].c = 'z';
+        let out = diff(Some(&prev), &next, &Caps::default());
+        let text = String::from_utf8_lossy(&out);
+        assert_eq!(find(&out, open).len(), 3, "{text}");
+        assert_eq!(find(&out, close).len(), 3, "{text}");
+        let z = find(&out, b"z")[0];
+        assert!(find(&out, close).iter().all(|&c| c < z), "{text}");
     }
 
     #[test]

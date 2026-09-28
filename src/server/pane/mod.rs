@@ -69,6 +69,9 @@ pub enum PaneEventKind {
     Cwd(PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
+    /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
+    /// the `ESC ]` and terminator.
+    Osc(Vec<u8>),
 }
 
 /// What to spawn in a new pane.
