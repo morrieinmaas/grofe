@@ -13,8 +13,8 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape as VteShape, NamedColor, 
 use grofe::protocol::Caps;
 use grofe::server::layout::{BorderSegment, LayoutTree};
 use grofe::server::pane::{CellFlags, CursorShape, CursorState, RowsSnapshot, SnapCell};
-use grofe::server::render::{FrameInputs, Overlay, Screen, compose, diff, write_sgr};
-use grofe::server::status::{Span, Style, StyledLine};
+use grofe::server::render::{FrameInputs, Screen, compose, diff, fix_wide_pairs, write_sgr};
+use grofe::server::status::{Span, Style, StyledLine, parse_style};
 use grofe::types::{Dir, PaneId, Rect, SplitSize};
 
 const RICH: Caps = Caps {
@@ -23,6 +23,7 @@ const RICH: Caps = Caps {
     sync: true,
     kitty_keys: false,
     kitty_graphics: false,
+    cell_px: None,
 };
 const PLAIN: Caps = Caps {
     truecolor: false,
@@ -30,6 +31,7 @@ const PLAIN: Caps = Caps {
     sync: false,
     kitty_keys: false,
     kitty_graphics: false,
+    cell_px: None,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -57,6 +59,7 @@ fn pane(cols: u16, rows: u16, bytes: &str) -> RowsSnapshot {
                         flags: cell.flags,
                         zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                         underline_color: cell.underline_color(),
+                        hyperlink: cell.hyperlink(),
                     }
                 })
                 .collect()
@@ -114,10 +117,12 @@ fn inputs<'a>(
         area,
         panes,
         borders: tree.borders(area),
+        border_style: Style::default(),
+        active_border_style: parse_style("fg=green"),
         active,
         status: None,
-        overlays: &[],
         cursor,
+        graphics: None,
     }
 }
 
@@ -481,21 +486,51 @@ fn larger_window_is_cropped_at_the_viewport() {
     insta::assert_snapshot!(dump(&term));
 }
 
-struct Box1;
-impl Overlay for Box1 {
-    fn draw(&self, screen: &mut Screen) {
-        let cell = &mut screen.cells[1];
-        cell.c = '#';
-        cell.bg = Color::Named(NamedColor::Blue);
-    }
-}
-
+/// Overlays draw over the composed screen (the server's clients code does
+/// it, T3.0), then the wide-pair fix-up runs.
 #[test]
 fn overlays_draw_last() {
-    let overlays: [&dyn Overlay; 1] = [&Box1];
-    let mut inputs = single((6, 2), "abc");
-    inputs.overlays = &overlays;
-    insta::assert_snapshot!(round_trip(&inputs, &RICH));
+    let inputs = single((6, 2), "abc");
+    let mut screen = compose(&inputs);
+    let cell = &mut screen.cells[1];
+    cell.c = '#';
+    cell.bg = Color::Named(NamedColor::Blue);
+    fix_wide_pairs(&mut screen);
+    let term = reconstruct(&screen, &diff(None, &screen, &RICH));
+    assert_shows(&term, &screen);
+    insta::assert_snapshot!(dump(&term));
+}
+
+/// The border style options reach the border cells (T3.0): the defaults
+/// draw as M2 did, other values recolour inactive and active borders.
+#[test]
+fn border_styles_colour_the_borders() {
+    let tree = three_panes();
+    let contents = [(PaneId(1), "one"), (PaneId(2), "two"), (PaneId(3), "three")];
+    let mut inputs = inputs((30, 10), area(30, 10), &tree, &contents, PaneId(1));
+    let m2 = compose(&inputs);
+    let border = |s: &Screen| {
+        s.cells
+            .iter()
+            .filter(|c| "│─┼├┤┬┴┌┐└┘".contains(c.c))
+            .map(|c| c.fg)
+            .collect::<Vec<_>>()
+    };
+    let green = Color::Named(NamedColor::Green);
+    let plain = Color::Named(NamedColor::Foreground);
+    assert!(border(&m2).contains(&green) && border(&m2).contains(&plain));
+    inputs.border_style = parse_style("fg=red");
+    inputs.active_border_style = parse_style("fg=blue");
+    let styled = compose(&inputs);
+    let red = Color::Named(NamedColor::Red);
+    let blue = Color::Named(NamedColor::Blue);
+    let recoloured: Vec<Color> = border(&m2)
+        .into_iter()
+        .map(|c| if c == green { blue } else { red })
+        .collect();
+    assert_eq!(border(&styled), recoloured);
+    // `default` is the terminal's default style.
+    assert_eq!(parse_style("default"), Style::default());
 }
 
 // ---- diff ------------------------------------------------------------------
@@ -656,6 +691,7 @@ mod randomized {
         sync: true,
         kitty_keys: false,
         kitty_graphics: false,
+        cell_px: None,
     };
 
     const KEEP: CellFlags = CellFlags::BOLD
@@ -780,6 +816,7 @@ mod randomized {
                     flags,
                     zerowidth: Vec::new(),
                     underline_color: ul,
+                    hyperlink: None,
                 };
                 match p.kind {
                     0 => {
@@ -931,8 +968,8 @@ mod randomized {
         use super::*;
         use grofe::server::layout::LayoutTree;
         use grofe::server::pane::RowsSnapshot;
-        use grofe::server::render::{FrameInputs, compose};
-        use grofe::server::status::{Span, Style, StyledLine};
+        use grofe::server::render::{FrameInputs, compose, fix_wide_pairs};
+        use grofe::server::status::{Span, Style, StyledLine, parse_style};
         use grofe::types::{Dir, PaneId, Rect, SplitSize};
 
         fn pane(cols: u16, rows: u16, bytes: &str) -> RowsSnapshot {
@@ -959,6 +996,7 @@ mod randomized {
                                     .map(<[char]>::to_vec)
                                     .unwrap_or_default(),
                                 underline_color: cell.underline_color(),
+                                hyperlink: cell.hyperlink(),
                             }
                         })
                         .collect()
@@ -1015,8 +1053,14 @@ mod randomized {
                 let vy = if cr < wr { vy.min(wr - cr) } else { 0 };
                 let status_line = status.then(|| StyledLine { spans: vec![Span { text: st.replace("\r\n", "x").replace('\x1b', "E"), style: Style::default() }, Span { text: t3.replace("\r\n","y").replace('\x1b', "E"), style: Style { fg: Color::Named(NamedColor::Red), ..Style::default() } }] });
                 let inputs = FrameInputs { client: (cc, cr), viewport: (vx, vy), area, borders: tree.borders(area),
-                    panes, active: PaneId(1), status: status_line, overlays: &[], cursor };
+                    border_style: Style::default(), active_border_style: parse_style("fg=green"),
+                    panes, active: PaneId(1), status: status_line, cursor, graphics: None };
                 let screen = compose(&inputs);
+                // The wide-pair fix-up the server runs after overlays is a
+                // no-op on what compose made (T3.0: no overlay, no change).
+                let mut fixed = screen.clone();
+                fix_wide_pairs(&mut fixed);
+                prop_assert_eq!(&fixed, &screen);
                 for y in 0..cr as usize { for x in 0..cc as usize {
                     let c = &screen.cells[y * cc as usize + x];
                     if c.flags.contains(CellFlags::WIDE_CHAR) {

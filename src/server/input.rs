@@ -17,16 +17,20 @@
 //!   an unbound key after the prefix is dropped, and an unbound key in
 //!   `root` goes to the pane.
 //! - [`encode`] writes a key the way a terminal would for the pane's modes:
-//!   legacy xterm/screen bytes (the pane's `TERM` is screen-256color), or
+//!   legacy xterm/screen bytes (the pane's `TERM` is tmux-256color, whose
+//!   unmodified keys are screen-256color's), or
 //!   the kitty keyboard protocol for the flags the pane has pushed.
 //!
-//! [`InputHook`]s (M3 overlays) see keys before the tables; running them is
-//! the caller's job, since the registry lives in T2.5a's clients.
+//! [`InputHook`]s (M3: the prompt, the mouse) see every input before the
+//! tables; running them is the caller's job (`clients::route`), since the
+//! registry lives in T2.5a's clients.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::server::State;
 use crate::types::{ClientId, InputModes};
 
 /// A decoded key press. T2.3 may add [`KeyCode`] variants; the field names
@@ -78,18 +82,29 @@ pub struct Mods {
 /// What a key turned into after routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Routed {
-    /// A bound command's argv, for dispatch.
-    Command(Vec<String>),
+    /// A bound command sequence, each command's argv, for dispatch in
+    /// order (R12).
+    Command(Vec<Vec<String>>),
     /// Bytes for the active pane, encoded for its `InputModes`.
     ToPane(Vec<u8>),
     /// Eaten (a prefix key, an overlay's key).
     Consumed,
 }
 
-/// A hook that sees keys before the key tables (M3 overlays and prompts
-/// register one through T2.5a's API). `None` passes the key on.
+/// A hook that sees every input of every client before the key tables
+/// (M3: the prompt, the mouse; registered in `register_builtins`). `None`
+/// passes the input on; the first hook to answer `Some` wins (R1).
+///
+/// Hooks are stateless: what they remember lives in a typed field of
+/// [`State`] owned by their module, which `state` gives them.
 pub trait InputHook {
-    fn on_key(&mut self, key: &Key, client: ClientId) -> Option<Routed>;
+    fn on_input(
+        &self,
+        state: &mut State,
+        client: ClientId,
+        input: &Input,
+        now: Instant,
+    ) -> Option<Routed>;
 }
 
 /// One decoded unit of client input.
@@ -830,25 +845,92 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 pub const ROOT_TABLE: &str = "root";
 pub const PREFIX_TABLE: &str = "prefix";
 
-/// A key binding: the command to run and whether it repeats (`bind -r`).
+/// Where a binding came from (spec §5.4, key provenance).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingSource {
+    /// The built-in default table.
+    Default,
+    /// A config file layer (spec §5.1), at the key's line.
+    File { path: PathBuf, line: usize },
+    /// `bind-key` or `source-file` at runtime: outside the config table.
+    Runtime,
+    /// A plugin, by name (M6; unused in M3).
+    Plugin(String),
+}
+
+impl BindingSource {
+    /// Whether the binding came from the config table (defaults or a
+    /// file), which `reload` replaces (R10).
+    pub fn is_config(&self) -> bool {
+        matches!(self, BindingSource::Default | BindingSource::File { .. })
+    }
+}
+
+/// A key binding: the commands to run, in order, whether it repeats
+/// (`bind -r`), and where it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    pub argv: Vec<String>,
+    /// Each command's argv (R12: a binding may be a sequence), run as
+    /// already split, so a literal `;` argument stays literal.
+    pub cmds: Vec<Vec<String>>,
     pub repeat: bool,
+    pub source: BindingSource,
+    /// `desc` in the config, `bind-key -N` at runtime.
+    pub desc: Option<String>,
+    /// The config's stable `name` (spec §5.2).
+    pub name: Option<String>,
+}
+
+impl Binding {
+    /// A default-table binding: no description or name.
+    pub fn new(cmds: Vec<Vec<String>>, repeat: bool, source: BindingSource) -> Binding {
+        Binding {
+            cmds,
+            repeat,
+            source,
+            desc: None,
+            name: None,
+        }
+    }
 }
 
 /// Bindings by table name, then key.
 #[derive(Debug, Clone, Default)]
 pub struct KeyTables {
     tables: BTreeMap<String, HashMap<Key, Binding>>,
+    /// Keys removed by a runtime `unbind-key`, which `reload` keeps
+    /// removed (R10).
+    runtime_unbound: Vec<(String, Key)>,
+    /// Built by [`KeyTables::from_config`] from at least one binding.
+    configured: bool,
 }
 
 impl KeyTables {
+    /// Binds one command.
     pub fn bind(&mut self, table: &str, key: Key, argv: Vec<String>, repeat: bool) {
+        self.bind_seq(table, key, vec![argv], repeat);
+    }
+
+    /// Binds a command sequence, run in order, as a default binding.
+    pub fn bind_seq(&mut self, table: &str, key: Key, cmds: Vec<Vec<String>>, repeat: bool) {
+        self.insert(
+            table,
+            key,
+            Binding::new(cmds, repeat, BindingSource::Default),
+        );
+    }
+
+    /// Binds `b` as it is. A runtime binding ends a runtime unbind of
+    /// the same key.
+    pub fn insert(&mut self, table: &str, key: Key, b: Binding) {
+        if !b.source.is_config() {
+            self.runtime_unbound
+                .retain(|(t, k)| !(t == table && *k == key));
+        }
         self.tables
             .entry(table.to_string())
             .or_default()
-            .insert(key, Binding { argv, repeat });
+            .insert(key, b);
     }
 
     /// Remove the binding of exactly `key` (as spelled); whether one was
@@ -857,6 +939,88 @@ impl KeyTables {
         self.tables
             .get_mut(table)
             .is_some_and(|t| t.remove(key).is_some())
+    }
+
+    /// `unbind-key` at runtime: removed now and kept removed by `reload`.
+    /// A key that was not bound is not recorded, so a later config
+    /// binding of it still applies.
+    pub fn unbind_runtime(&mut self, table: &str, key: &Key) {
+        if self.unbind(table, key)
+            && !self
+                .runtime_unbound
+                .iter()
+                .any(|(t, k)| t == table && k == key)
+        {
+            self.runtime_unbound.push((table.to_string(), *key));
+        }
+    }
+
+    /// Every key bound in `table`, sorted by name (stable output).
+    pub fn keys(&self, table: &str) -> Vec<Key> {
+        let mut keys: Vec<Key> = self
+            .tables
+            .get(table)
+            .map(|t| t.keys().copied().collect())
+            .unwrap_or_default();
+        keys.sort_by_cached_key(|k| k.to_string());
+        keys
+    }
+
+    /// Whether a config binding (or unbinding) shaped these tables.
+    pub fn is_configured(&self) -> bool {
+        self.configured
+    }
+
+    /// Every table's name, sorted.
+    pub fn table_names(&self) -> impl Iterator<Item = &str> {
+        self.tables.keys().map(String::as_str)
+    }
+
+    /// The binding of exactly `key`, with no folding.
+    pub fn exact(&self, table: &str, key: &Key) -> Option<&Binding> {
+        self.tables.get(table)?.get(key)
+    }
+
+    /// The default table with the config's bindings over it (spec §5.1):
+    /// each binding from `keys` replaces the default one, and one with no
+    /// commands unbinds the key (R11).
+    pub fn from_config(keys: &[crate::config::KeyBinding]) -> KeyTables {
+        let mut t = default_bindings();
+        t.configured = !keys.is_empty();
+        for k in keys {
+            if k.cmds.is_empty() {
+                t.unbind(&k.table, &k.key);
+                continue;
+            }
+            let source = match &k.source.file {
+                Some(path) => BindingSource::File {
+                    path: path.clone(),
+                    line: k.source.line,
+                },
+                None => BindingSource::Default,
+            };
+            let mut b = Binding::new(k.cmds.clone(), k.repeat, source);
+            b.desc = k.desc.clone();
+            b.name = k.name.clone();
+            t.insert(&k.table, k.key, b);
+        }
+        t
+    }
+
+    /// `self`'s config bindings replaced by `fresh`'s (R10): runtime and
+    /// plugin bindings, and runtime unbinds, carry over.
+    pub fn with_config_from(&self, fresh: KeyTables) -> KeyTables {
+        let mut t = fresh;
+        for (table, key) in &self.runtime_unbound {
+            t.unbind(table, key);
+        }
+        t.runtime_unbound = self.runtime_unbound.clone();
+        for (table, bindings) in &self.tables {
+            for (key, b) in bindings.iter().filter(|(_, b)| !b.source.is_config()) {
+                t.insert(table, *key, b.clone());
+            }
+        }
+        t
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
@@ -887,8 +1051,8 @@ impl KeyTables {
 /// for the commands grofe has so far, with repeat where tmux has `-r`. New
 /// panes and windows open in the active pane's cwd (spec §5.3), which tmux
 /// leaves to a `-c '#{pane_current_path}'` in the user's config. Stock keys
-/// whose commands arrive later (`x` and `&` need `confirm-before`, `,` and
-/// `$` need `command-prompt`, `o` needs `+` target offsets) stay unbound.
+/// whose commands arrive later (`x` and `&` need `confirm-before`, `o`
+/// needs `+` target offsets) stay unbound.
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool| {
@@ -910,6 +1074,17 @@ pub fn default_bindings() -> KeyTables {
     bind("L", &["switch-client", "-l"], false);
     bind("z", &["resize-pane", "-Z"], false);
     bind("C-b", &["send-prefix"], false);
+    bind(":", &["command-prompt"], false);
+    bind(
+        ",",
+        &["command-prompt", "-I", "#W", "rename-window \"%%\""],
+        false,
+    );
+    bind(
+        "$",
+        &["command-prompt", "-I", "#S", "rename-session \"%%\""],
+        false,
+    );
     for n in 0..=9 {
         let target = format!(":{n}");
         bind(&n.to_string(), &["select-window", "-t", &target], false);
@@ -1053,7 +1228,7 @@ impl KeyState {
                 } else {
                     self.set_table(ROOT_TABLE);
                 }
-                return Routed::Command(b.argv.clone());
+                return Routed::Command(b.cmds.clone());
             }
             if self.table != ROOT_TABLE || repeating {
                 self.set_table(ROOT_TABLE);
@@ -1164,7 +1339,7 @@ fn utf8(c: char) -> Vec<u8> {
     c.encode_utf8(&mut b).as_bytes().to_vec()
 }
 
-/// What screen-256color panes expect, as tmux 3.7b sends it: modifiers a
+/// What tmux-256color panes expect, as tmux 3.7b sends it: modifiers a
 /// legacy form cannot carry are dropped (`C-Enter` is `\r`, `S-a` is `a`,
 /// `S-Tab` is `\t`), and keys tmux cannot send at all (`C-BSpace`,
 /// `C-Escape`: its send-keys types them as text) send nothing.
@@ -1200,7 +1375,7 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
                     vec![ESC, b'O', l]
                 }
                 (None, KeyCode::F(n @ 1..=4)) => vec![ESC, b'O', b"PQRS"[n as usize - 1]],
-                // screen-256color's khome and kend.
+                // tmux-256color's (and screen-256color's) khome and kend.
                 (None, KeyCode::Home) => b"\x1b[1~".to_vec(),
                 (None, KeyCode::End) => b"\x1b[4~".to_vec(),
                 _ => functional_bytes(f, param),
@@ -1417,26 +1592,26 @@ mod tests {
         t.bind(ROOT_TABLE, k("C-A"), argv(&["one"]), false);
         t.bind(ROOT_TABLE, k("C-S-a"), argv(&["two"]), false);
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.cmds[0][0][..]),
             Some("one")
         );
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-S-a")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-S-a")).map(|b| &b.cmds[0][0][..]),
             Some("two")
         );
         t.bind(ROOT_TABLE, k("S-Tab"), argv(&["three"]), false);
         t.bind(ROOT_TABLE, k("BTab"), argv(&["four"]), false);
         assert_eq!(
-            t.get(ROOT_TABLE, &k("S-Tab")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("S-Tab")).map(|b| &b.cmds[0][0][..]),
             Some("three")
         );
         assert_eq!(
-            t.get(ROOT_TABLE, &k("BTab")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("BTab")).map(|b| &b.cmds[0][0][..]),
             Some("four")
         );
         assert!(t.unbind(ROOT_TABLE, &k("C-S-a")));
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.cmds[0][0][..]),
             Some("one")
         );
     }
@@ -1454,7 +1629,7 @@ mod tests {
             let [Input::Key(key)] = inputs.as_slice() else {
                 panic!("{bytes:?}");
             };
-            t.get(table, key).map(|b| b.argv[0].clone())
+            t.get(table, key).map(|b| b.cmds[0][0].clone())
         };
         // kitty ctrl+shift+a (C-S-a) finds C-A.
         assert_eq!(got(ROOT_TABLE, b"\x1b[97;6u"), Some("ca".into()));
@@ -1945,7 +2120,7 @@ mod tests {
     }
 
     fn cmd(words: &[&str]) -> Routed {
-        Routed::Command(argv(words))
+        Routed::Command(vec![argv(words)])
     }
 
     fn pane(bytes: &[u8]) -> Routed {
@@ -2216,7 +2391,8 @@ mod tests {
 
     /// Legacy bytes, as tmux 3.7b sends them into a pane (recorded with
     /// `send-keys` into a raw pty on `tmux -L grofe-t23 -f /dev/null`), and
-    /// screen-256color's terminfo (`infocmp -1x`: kcuu1 `\EOA` in keypad
+    /// tmux-256color's terminfo, the same as screen-256color's for these
+    /// (`infocmp -1x`: kcuu1 `\EOA` in keypad
     /// transmit mode, khome `\E[1~`, kend `\E[4~`, kf1 `\EOP`, kcbt `\E[Z`).
     #[test]
     fn legacy_encoding_matches_tmux() {
@@ -2476,7 +2652,8 @@ mod tests {
     // ---- default key table (T2.5b) ----
 
     fn words(b: &Binding) -> Vec<&str> {
-        b.argv.iter().map(String::as_str).collect()
+        assert_eq!(b.cmds.len(), 1, "one command");
+        b.cmds[0].iter().map(String::as_str).collect()
     }
 
     /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a
@@ -2504,6 +2681,17 @@ mod tests {
             ("0", &["select-window", "-t", ":0"], false),
             ("9", &["select-window", "-t", ":9"], false),
             ("C-b", &["send-prefix"], false),
+            (":", &["command-prompt"], false),
+            (
+                ",",
+                &["command-prompt", "-I", "#W", "rename-window \"%%\""],
+                false,
+            ),
+            (
+                "$",
+                &["command-prompt", "-I", "#S", "rename-session \"%%\""],
+                false,
+            ),
             ("Up", &["select-pane", "-U"], true),
             ("Down", &["select-pane", "-D"], true),
             ("Left", &["select-pane", "-L"], true),
@@ -2523,7 +2711,7 @@ mod tests {
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
         // Stock keys whose commands M2 lacks stay unbound.
-        for name in ["x", "&", ",", "$", ":", "o", ";", "q", "s", "w", "[", "]"] {
+        for name in ["x", "&", "o", ";", "q", "s", "w", "[", "]"] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }
@@ -2531,11 +2719,104 @@ mod tests {
     #[test]
     fn every_default_binding_parses_as_a_command() {
         let t = default_bindings();
-        for b in t.tables.values().flat_map(|t| t.values()) {
-            if let Err(e) = crate::cmd::parse(&b.argv) {
-                panic!("{:?}: {e}", b.argv);
+        for argv in t
+            .tables
+            .values()
+            .flat_map(|t| t.values())
+            .flat_map(|b| &b.cmds)
+        {
+            if let Err(e) = crate::cmd::parse(argv) {
+                panic!("{argv:?}: {e}");
             }
         }
+    }
+
+    /// R12: a binding may be a sequence; `bind` is the one-command case.
+    #[test]
+    fn a_sequence_binding_routes_every_command() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables.bind_seq(
+            PREFIX_TABLE,
+            k("Z"),
+            vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
+            false,
+        );
+        assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
+        assert_eq!(
+            c.send(b"Z", t),
+            vec![Routed::Command(vec![
+                argv(&["split-window"]),
+                argv(&["select-pane", "-L"])
+            ])]
+        );
+        let b = c.tables.get(PREFIX_TABLE, &k("%")).expect("bound");
+        assert_eq!(b.cmds, vec![argv(&["split-window", "-h"])]);
+    }
+
+    fn config_key(
+        table: &str,
+        key: &str,
+        cmds: &[&[&str]],
+        line: usize,
+    ) -> crate::config::KeyBinding {
+        crate::config::KeyBinding {
+            table: table.to_string(),
+            key: k(key),
+            command: String::new(),
+            cmds: cmds.iter().map(|c| argv(c)).collect(),
+            desc: None,
+            group: None,
+            name: Some(format!("n-{key}")),
+            repeat: false,
+            source: crate::config::Source {
+                layer: crate::config::Layer::Config,
+                file: Some(PathBuf::from("/c/config.toml")),
+                line,
+            },
+        }
+    }
+
+    /// The config's bindings go over the defaults; an empty one unbinds
+    /// (R11); `reload` replaces config bindings and keeps runtime ones and
+    /// runtime unbinds (R10).
+    #[test]
+    fn config_tables_layer_over_defaults_and_reload_keeps_runtime() {
+        let t = KeyTables::from_config(&[
+            config_key(PREFIX_TABLE, "x", &[&["split-window", "-h"]], 3),
+            config_key(PREFIX_TABLE, "%", &[], 4),
+        ]);
+        let x = t.exact(PREFIX_TABLE, &k("x")).expect("x");
+        assert_eq!(
+            x.source,
+            BindingSource::File {
+                path: PathBuf::from("/c/config.toml"),
+                line: 3
+            }
+        );
+        assert_eq!(x.name.as_deref(), Some("n-x"));
+        assert!(t.exact(PREFIX_TABLE, &k("%")).is_none());
+        assert_eq!(
+            t.exact(PREFIX_TABLE, &k("c")).map(|b| &b.source),
+            Some(&BindingSource::Default)
+        );
+
+        let mut live = t;
+        live.insert(
+            PREFIX_TABLE,
+            k("y"),
+            Binding::new(vec![argv(&["new-window"])], false, BindingSource::Runtime),
+        );
+        live.unbind_runtime(PREFIX_TABLE, &k("c"));
+        let fresh = KeyTables::from_config(&[]);
+        let t = live.with_config_from(fresh);
+        assert!(t.exact(PREFIX_TABLE, &k("x")).is_none(), "config x gone");
+        assert!(t.exact(PREFIX_TABLE, &k("%")).is_some(), "stock % back");
+        assert!(t.exact(PREFIX_TABLE, &k("y")).is_some(), "runtime y kept");
+        assert!(
+            t.exact(PREFIX_TABLE, &k("c")).is_none(),
+            "runtime unbind kept"
+        );
     }
 
     #[test]

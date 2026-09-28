@@ -3,15 +3,15 @@
 use std::path::Path;
 
 use crate::cmd::{
-    self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectWindow, Target,
-    WindowRef, WindowStep,
+    self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectLayout,
+    SelectWindow, Target, WindowRef, WindowStep,
 };
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
-use crate::server::layout::LayoutTree;
-use crate::server::model::{Model, PANE_BASE_INDEX, Window};
+use crate::server::layout::{LayoutTree, Preset};
+use crate::server::model::{Model, Window};
+use crate::server::{State, clients};
 use crate::types::WindowId;
 
 const AUTOMATIC_RENAME: &str = "automatic-rename";
@@ -46,15 +46,17 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     let target = model.windows.get(&s.active).map(|w| w.active);
     let cwd = resolve_cwd(model, ctx, target, c.cwd.as_deref(), &s.cwd);
     let size = (s.cols, s.rows);
+    let cell_px = clients::cell_px(state, session);
 
     let window = state.model.alloc_window_id();
     let pane = spawn_pane(
         state,
-        window,
+        (session, window),
         env,
         command_argv(c.command),
         cwd.clone(),
         size,
+        cell_px,
     )?;
     let model = &mut state.model;
     let named = c.name.is_some();
@@ -68,6 +70,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         zoomed: false,
         cols: size.0,
         rows: size.1,
+        bell_flag: false,
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
@@ -229,7 +232,7 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
     let w = &model.windows[&window];
     Ok(w.pane_ids()
         .iter()
-        .zip(PANE_BASE_INDEX..)
+        .zip(model.pane_base_index(window)..)
         .filter_map(|(id, index)| Some((index, model.panes.get(id)?)))
         .map(|(index, p)| {
             format!(
@@ -242,4 +245,29 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
             )
         })
         .collect())
+}
+
+/// `select-layout` (spec §4.3, R18): rebuilds the window's layout as a
+/// preset over its panes in index order, the first pane being main. A
+/// zoomed window is unzoomed first, even for an unknown name, and the
+/// active pane stays, as tmux 3.7b does.
+pub fn select_layout(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SelectLayout,
+) -> Result<String, String> {
+    let model = &mut state.model;
+    let window = model.resolve_window(&c.target, ctx)?;
+    let Some(w) = model.windows.get_mut(&window) else {
+        return Err(format!("can't find window: {window}"));
+    };
+    w.zoomed = false;
+    let Some(preset) = Preset::from_name(&c.name) else {
+        model.relayout(window);
+        return Err(format!("invalid layout: {}", c.name));
+    };
+    let (area, panes) = (w.area(), w.pane_ids());
+    w.layout.preset(area, preset, &panes);
+    model.relayout(window);
+    Ok(String::new())
 }

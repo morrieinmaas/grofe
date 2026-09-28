@@ -13,6 +13,7 @@
 pub mod clients;
 pub mod dispatch;
 pub mod events;
+pub mod graphics;
 pub mod input;
 pub mod layout;
 pub mod model;
@@ -135,6 +136,17 @@ pub struct State {
     /// Key tables, input hooks, overlays, window-size owners and the render
     /// schedule: client state that is not per client.
     pub registry: clients::Registry,
+    /// Open prompts and the prompt history (T3.4).
+    pub prompts: prompt::Prompts,
+    /// Scrollback views (T3.2).
+    pub mouse: mouse::MouseState,
+    /// Passthrough state (T3.3).
+    pub passthrough: passthrough::Passthrough,
+    /// Kitty graphics: id remap and image cache (T3.8).
+    pub graphics: graphics::Graphics,
+    /// Set by a handler that answers later ([`dispatch::defer_reply`]);
+    /// taken by whoever ran the command.
+    pub deferred_reply: Option<oneshot::Receiver<Result<String, String>>>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -168,21 +180,34 @@ pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<S
     dispatch::run(state, ctx, argv)
 }
 
-/// Adds an overlay drawn over every client's frame, after those registered
-/// before it.
-pub fn register_overlay(state: &mut State, overlay: Box<dyn Overlay + Send>) {
+/// Adds an overlay drawn over every client's frame. Overlays draw in
+/// reverse registration order, so one registered earlier ends on top.
+pub fn register_overlay(state: &mut State, overlay: Arc<dyn Overlay + Send + Sync>) {
     state.registry.overlays.push(overlay);
 }
 
-/// Adds a hook that sees every client's keys before the key tables, after
-/// those registered before it.
-pub fn register_input_hook(state: &mut State, hook: Box<dyn InputHook + Send>) {
+/// Adds a hook that sees every client's input before the key tables,
+/// after those registered before it.
+pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + Sync>) {
     state.registry.input_hooks.push(hook);
 }
 
-/// The server's own overlays and input hooks. M3 tasks (prompt, popups,
-/// menus) add one registration line each here.
-fn register_builtins(_state: &mut State) {}
+/// The server's own overlays and input hooks, every M3 one (T3.0), in
+/// priority order, highest first. The rule: input hooks run in
+/// registration order and the first to answer `Some` wins; overlays draw in
+/// reverse order, so the highest-priority one ends on top. A prompt that is
+/// open therefore sees keys before the mouse and draws over the scrollback
+/// view. New ones (popups, menus) are placed by that rule.
+fn register_builtins(state: &mut State) {
+    register_input_hook(state, Arc::new(prompt::PromptHook));
+    register_overlay(state, Arc::new(prompt::PromptOverlay));
+    register_input_hook(state, Arc::new(mouse::MouseHook));
+    register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
+}
+
+/// Set to `1` to make the server panic on its first command: the test
+/// trigger for the panic report (T3.6, R22).
+pub const TEST_PANIC_ENV: &str = "GROFE_TEST_SERVER_PANIC";
 
 /// Handles one pane event. Events from a process `respawn-pane` already
 /// replaced (an older generation) or from a pane that is gone are ignored.
@@ -212,7 +237,12 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             clients::changed(state);
         }
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
-        _ => {}
+        kind @ (PaneEventKind::Title(_)
+        | PaneEventKind::Bell
+        | PaneEventKind::Clipboard(_)
+        | PaneEventKind::Cwd(_)
+        | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
+        PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
     state.events.flush();
 }
@@ -361,6 +391,11 @@ async fn serve(
         events: events::Events::default(),
         clients: BTreeMap::new(),
         registry: clients::Registry::default(),
+        prompts: prompt::Prompts::default(),
+        mouse: mouse::MouseState::default(),
+        passthrough: passthrough::Passthrough::default(),
+        graphics: graphics::Graphics::default(),
+        deferred_reply: None,
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -376,6 +411,7 @@ async fn serve(
         alive: alive_tx,
     };
     register_builtins(&mut state);
+    dispatch::options::apply_config_at_start(&mut state);
     signal_ready(&mut ready, "ok");
 
     // The actor owns the listener (dropped when it returns: no more
@@ -552,9 +588,15 @@ fn exit_if_empty(state: &mut State, listener: &UnixListener) {
 fn handle(state: &mut State, msg: ServerMsg) {
     match msg {
         ServerMsg::Control { ctx, req, reply } => {
+            if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
+                panic!("{TEST_PANIC_ENV}=1: test panic on a command");
+            }
+            let read_only = dispatch::read_only(&req.argv);
             let result = dispatch(state, &ctx, &req.argv);
             finish(state, req.id, result, reply);
-            clients::changed(state);
+            if !read_only {
+                clients::changed(state);
+            }
         }
         ServerMsg::Subscribe { req, reply, tx } => {
             let result = match cmd::parse(&req.argv) {
@@ -565,6 +607,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
             };
+            state.deferred_reply = None;
             finish(state, req.id, result, reply);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
@@ -578,7 +621,10 @@ fn handle(state: &mut State, msg: ServerMsg) {
 }
 
 /// Sends a command's reply, then the events it caused, so a connection
-/// writes its reply before those events.
+/// writes its reply before those events. A command that succeeded after
+/// deferring its answer ([`dispatch::defer_reply`]) is answered when its
+/// handler sends it, without the actor waiting; one that failed is
+/// answered with its error now, the deferred answer dropped.
 fn finish(
     state: &mut State,
     id: u64,
@@ -589,12 +635,33 @@ fn finish(
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }
-    let reply_msg = match result {
-        Ok(out) => Reply::Ok { id, out },
-        Err(err) => Reply::Err { id, err },
-    };
-    let _ = reply.send(reply_msg);
+    match (state.deferred_reply.take(), result) {
+        (Some(later), Ok(_)) => reply_later(id, later, reply),
+        (_, Ok(out)) => {
+            let _ = reply.send(Reply::Ok { id, out });
+        }
+        (_, Err(err)) => {
+            let _ = reply.send(Reply::Err { id, err });
+        }
+    }
     state.events.flush();
+}
+
+/// Sends a deferred reply once its handler answers, without the actor
+/// waiting; a handler that drops its sender answers with an error.
+fn reply_later(
+    id: u64,
+    later: oneshot::Receiver<Result<String, String>>,
+    reply: oneshot::Sender<Reply>,
+) {
+    tokio::spawn(async move {
+        let reply_msg = match later.await {
+            Ok(Ok(out)) => Reply::Ok { id, out },
+            Ok(Err(err)) => Reply::Err { id, err },
+            Err(_) => error_reply(id, "command ended without an answer"),
+        };
+        let _ = reply.send(reply_msg);
+    });
 }
 
 /// How long a new connection may take to send its hello before it is
@@ -805,4 +872,109 @@ fn error_reply(id: u64, err: &str) -> Reply {
 async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyhow::Result<()> {
     lines.send(serde_json::to_string(reply)?).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A server state with nothing in it, as the actor starts, on `socket`.
+    fn state_at(socket: PathBuf) -> State {
+        let (pane_events, _) = mpsc::channel(1);
+        let socket_id = fs::symlink_metadata(&socket)
+            .ok()
+            .map(|m| (m.dev(), m.ino()));
+        State {
+            socket,
+            options: StartOptions {
+                restore_on_start: false,
+                remain_on_exit: false,
+            },
+            model: model::Model::new(false),
+            inner_term: pane::inner_term(),
+            pane_events,
+            wake: Arc::new(Notify::new()),
+            events: events::Events::default(),
+            clients: BTreeMap::new(),
+            registry: clients::Registry::default(),
+            prompts: prompt::Prompts::default(),
+            mouse: mouse::MouseState::default(),
+            passthrough: passthrough::Passthrough::default(),
+            graphics: graphics::Graphics::default(),
+            deferred_reply: None,
+            exit: false,
+            exit_when_empty: false,
+            connections: 0,
+            socket_id,
+        }
+    }
+
+    /// Fix round 1: a handler that deferred its answer and then failed is
+    /// answered with its own error, at once.
+    #[tokio::test]
+    async fn a_handler_that_defers_then_fails_answers_with_its_error() {
+        let mut state = state_at(PathBuf::from("/nonexistent/grofe-t30.sock"));
+        let answer = dispatch::defer_reply(&mut state);
+        let (reply, mut reply_rx) = oneshot::channel();
+        finish(&mut state, 3, Err("spawn failed: boom".to_string()), reply);
+        let got = reply_rx.try_recv().expect("answered now");
+        assert!(
+            matches!(got, Reply::Err { id: 3, ref err } if err == "spawn failed: boom"),
+            "{got:?}"
+        );
+        assert!(state.deferred_reply.is_none());
+        assert!(answer.is_closed(), "the deferred answer was dropped");
+    }
+
+    /// Fix round 1: a deferred answer still goes through `finish`, so a
+    /// command that ends the server removes the socket before any reply.
+    #[tokio::test]
+    async fn a_deferred_answer_still_removes_the_socket_on_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("s.sock");
+        fs::write(&socket, b"").expect("stand-in socket");
+        let mut state = state_at(socket.clone());
+        state.exit = true;
+        let answer = dispatch::defer_reply(&mut state);
+        let (reply, reply_rx) = oneshot::channel();
+        finish(&mut state, 4, Ok(String::new()), reply);
+        assert!(!socket.exists(), "socket removed before the reply");
+        let _ = answer.send(Ok("later\n".to_string()));
+        let got = tokio::time::timeout(Duration::from_secs(5), reply_rx)
+            .await
+            .expect("in time")
+            .expect("a reply");
+        assert!(
+            matches!(got, Reply::Ok { id: 4, ref out } if out == "later\n"),
+            "{got:?}"
+        );
+    }
+
+    /// Item 8: a deferred answer reaches the request's reply once the
+    /// handler sends it; the actor never waits for it.
+    #[tokio::test]
+    async fn a_deferred_reply_is_sent_when_the_handler_answers() {
+        let (answer, later) = oneshot::channel();
+        let (reply, mut reply_rx) = oneshot::channel();
+        reply_later(7, later, reply);
+        tokio::task::yield_now().await;
+        assert!(reply_rx.try_recv().is_err(), "nothing before the answer");
+        let _ = answer.send(Ok("hi\n".to_string()));
+        let got = tokio::time::timeout(Duration::from_secs(5), reply_rx)
+            .await
+            .expect("in time")
+            .expect("a reply");
+        assert!(
+            matches!(got, Reply::Ok { id: 7, ref out } if out == "hi\n"),
+            "{got:?}"
+        );
+
+        // A handler that gives up still answers the request.
+        let (answer, later) = oneshot::channel::<Result<String, String>>();
+        let (reply, reply_rx) = oneshot::channel();
+        reply_later(8, later, reply);
+        drop(answer);
+        let got = reply_rx.await.expect("a reply");
+        assert!(matches!(got, Reply::Err { id: 8, .. }), "{got:?}");
+    }
 }

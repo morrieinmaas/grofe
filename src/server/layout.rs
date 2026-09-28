@@ -54,6 +54,41 @@ pub enum LayoutError {
     TooSmall(PaneId),
 }
 
+/// The main pane's width in `main-vertical`, as tmux's `main-pane-width`:
+/// cells, or a percent of the columns left after the border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainSize {
+    Cells(u16),
+    Percent(u8),
+}
+
+/// A `select-layout` preset (spec §4.3), sized as tmux 3.7b sizes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    /// The first pane full height on the left, the rest stacked on the
+    /// right.
+    MainVertical { main: MainSize },
+    /// Every pane side by side.
+    EvenHorizontal,
+    /// Every pane stacked.
+    EvenVertical,
+}
+
+impl Preset {
+    /// The preset tmux names `name`, if M3 has it.
+    pub fn from_name(name: &str) -> Option<Preset> {
+        match name {
+            // ponytail: tmux's `main-pane-width` default; TC.2b reads the option.
+            "main-vertical" => Some(Preset::MainVertical {
+                main: MainSize::Cells(80),
+            }),
+            "even-horizontal" => Some(Preset::EvenHorizontal),
+            "even-vertical" => Some(Preset::EvenVertical),
+            _ => None,
+        }
+    }
+}
+
 /// One contiguous, one-cell-wide run of border cells, as the M2 renderer will
 /// draw it. `Vertical` runs come from horizontal (side-by-side) splits;
 /// `Horizontal` runs come from vertical (stacked) splits.
@@ -331,6 +366,31 @@ impl LayoutTree {
         }
     }
 
+    /// Replaces the tree with `preset` over `panes` (in pane-index order,
+    /// which the new tree keeps), exact on `area`. Returns false, changing
+    /// nothing, for fewer than two panes (tmux does nothing either) or when
+    /// `area` cannot give every pane a cell.
+    ///
+    /// ponytail: tmux 3.7b grows the layout past a window too small for the
+    /// preset and clips it; a tree exact on its area cannot, so the old
+    /// layout stays.
+    pub fn preset(&mut self, area: Rect, preset: Preset, panes: &[PaneId]) -> bool {
+        if panes.len() < 2 {
+            return false;
+        }
+        let root = match preset {
+            Preset::EvenHorizontal => even(Dir::Horizontal, area.cols, panes),
+            Preset::EvenVertical => even(Dir::Vertical, area.rows, panes),
+            Preset::MainVertical { main } => main_vertical(area, main, panes),
+        };
+        let Some(root) = root else {
+            return false;
+        };
+        self.root = root;
+        self.exact_for = Some((area.cols, area.rows));
+        true
+    }
+
     /// The pane adjacent to `pane` across `edge`, among panes sharing the
     /// nearest ancestor split on that axis, chosen by overlap with `pane`'s
     /// centre line (deterministic: the far subtree's leaf whose span on the
@@ -379,6 +439,71 @@ impl LayoutTree {
         collect_borders(&self.root, area, &mut out);
         out
     }
+}
+
+/// Sizes for `n` cells side by side along `len`, as tmux's
+/// `layout_spread_cell`: the cells left after the `n - 1` borders are
+/// split evenly and the leftover go to the first cells, one each. `None`
+/// if some cell would get nothing.
+fn spread(len: u16, n: usize) -> Option<Vec<u32>> {
+    let n = u16::try_from(n).ok()?;
+    let avail = len.checked_sub(n - 1)?;
+    let each = avail / n;
+    if each == 0 {
+        return None;
+    }
+    let extra = avail % n;
+    Some(
+        (0..n)
+            .map(|i| u32::from(each + u16::from(i < extra)))
+            .collect(),
+    )
+}
+
+/// A split in `dir` of `panes` spread evenly along `len`.
+fn even(dir: Dir, len: u16, panes: &[PaneId]) -> Option<Node> {
+    let children = spread(len, panes.len())?
+        .into_iter()
+        .zip(panes)
+        .map(|(weight, pane)| Child {
+            weight,
+            node: Node::Leaf(*pane),
+        })
+        .collect();
+    Some(Node::Split { dir, children })
+}
+
+/// tmux's `layout_set_main_v`: the first pane on the left, `main` wide but
+/// leaving the right column at least one cell, and the rest spread down
+/// the right column.
+fn main_vertical(area: Rect, main: MainSize, panes: &[PaneId]) -> Option<Node> {
+    let (first, rest) = panes.split_first()?;
+    // The columns left after the border between the two columns.
+    let avail = area.cols.checked_sub(1).filter(|&a| a >= 2)?;
+    let want = match main {
+        MainSize::Cells(c) => c,
+        MainSize::Percent(p) => (u32::from(avail) * u32::from(p.min(100)) / 100) as u16,
+    };
+    // ponytail: `main-pane-width 0` or `0%` gives 1 cell here; tmux 3.7b gives a
+    // degenerate 0-cell main pane, which a tree of >= 1-cell weights cannot hold.
+    let main_cols = want.clamp(1, avail - 1);
+    let right = match rest {
+        [only] => Node::Leaf(*only),
+        _ => even(Dir::Vertical, area.rows, rest)?,
+    };
+    Some(Node::Split {
+        dir: Dir::Horizontal,
+        children: vec![
+            Child {
+                weight: u32::from(main_cols),
+                node: Node::Leaf(*first),
+            },
+            Child {
+                weight: u32::from(avail - main_cols),
+                node: right,
+            },
+        ],
+    })
 }
 
 /// `target_size, new_size` for splitting `avail` cells (already short one
@@ -2002,6 +2127,323 @@ mod tests {
                 prop_assert!(no_child_zeroed_where_it_fits(&tree.root, area));
             }
             prop_assert_eq!(tree.compute(areas[0]).len(), alive.len());
+        }
+    }
+
+    /// The panes of a preset in index order as `left,top widthxheight`,
+    /// the shape the tmux goldens are recorded in.
+    fn geometry(tree: &LayoutTree, area: Rect) -> Vec<String> {
+        tree.compute(area)
+            .iter()
+            .map(|(_, r)| format!("{},{} {}x{}", r.x, r.y, r.cols, r.rows))
+            .collect()
+    }
+
+    /// A tree over `A` to `D`, built by splits that look nothing like any
+    /// preset, so a preset has to throw the old shape away.
+    fn four_panes(area: Rect) -> LayoutTree {
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Vertical, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, B, Dir::Horizontal, C, SplitSize::Cells(7))
+            .unwrap();
+        tree.split(area, A, Dir::Vertical, D, SplitSize::Percent(30))
+            .unwrap();
+        tree
+    }
+
+    const MAIN_80: Preset = Preset::MainVertical {
+        main: MainSize::Cells(80),
+    };
+
+    /// tmux 3.7b goldens, four panes, recorded on a private socket with
+    /// `status off` (the T3.7 brief's table).
+    #[test]
+    fn presets_match_the_tmux_goldens() {
+        let cases: [((u16, u16), Preset, [&str; 4]); 6] = [
+            (
+                (200, 50),
+                MAIN_80,
+                ["0,0 80x50", "81,0 119x16", "81,17 119x16", "81,34 119x16"],
+            ),
+            (
+                (200, 50),
+                Preset::EvenHorizontal,
+                ["0,0 50x50", "51,0 49x50", "101,0 49x50", "151,0 49x50"],
+            ),
+            (
+                (200, 50),
+                Preset::EvenVertical,
+                ["0,0 200x12", "0,13 200x12", "0,26 200x12", "0,39 200x11"],
+            ),
+            (
+                (80, 24),
+                MAIN_80,
+                ["0,0 78x24", "79,0 1x8", "79,9 1x7", "79,17 1x7"],
+            ),
+            (
+                (80, 24),
+                Preset::EvenHorizontal,
+                ["0,0 20x24", "21,0 19x24", "41,0 19x24", "61,0 19x24"],
+            ),
+            (
+                (80, 24),
+                Preset::EvenVertical,
+                ["0,0 80x6", "0,7 80x5", "0,13 80x5", "0,19 80x5"],
+            ),
+        ];
+        for ((cols, rows), preset, want) in cases {
+            let area = rect(cols, rows);
+            let mut tree = four_panes(area);
+            let panes: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+            assert!(
+                tree.preset(area, preset, &panes),
+                "{preset:?} {cols}x{rows}"
+            );
+            assert_eq!(geometry(&tree, area), want, "{preset:?} {cols}x{rows}");
+            // Index order is kept: pane i of the preset is pane i before.
+            let after: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+            assert_eq!(after, panes);
+            assert!(all_exact(&tree.root, area));
+            assert_eq!(tree.exact_for, Some((cols, rows)));
+            assert!(tiles_exactly(
+                area,
+                &tree.compute(area),
+                &tree.borders(area)
+            ));
+        }
+    }
+
+    /// `main-pane-width 50%` in tmux 3.7b: half of the 199 columns left
+    /// after the border, rounded down. TC.2b wires the option; the
+    /// parameter is here now.
+    #[test]
+    fn main_vertical_takes_a_percent_width() {
+        let area = rect(200, 50);
+        let mut tree = four_panes(area);
+        let main = MainSize::Percent(50);
+        assert!(tree.preset(area, Preset::MainVertical { main }, &[A, B, C, D]));
+        assert_eq!(
+            geometry(&tree, area),
+            [
+                "0,0 99x50",
+                "100,0 100x16",
+                "100,17 100x16",
+                "100,34 100x16"
+            ]
+        );
+    }
+
+    #[test]
+    fn main_vertical_over_two_panes_puts_one_pane_on_the_right() {
+        // tmux 3.7b: 80x24, two panes, 78x24 and 1x24.
+        let area = rect(80, 24);
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Vertical, B, SplitSize::Half)
+            .unwrap();
+        assert!(tree.preset(area, MAIN_80, &[A, B]));
+        assert_eq!(geometry(&tree, area), ["0,0 78x24", "79,0 1x24"]);
+        assert!(all_exact(&tree.root, area));
+    }
+
+    /// The acceptance shape: one full-height pane on the left, the rest
+    /// stacked in one column on the right.
+    #[test]
+    fn main_vertical_gives_one_full_height_left_pane_and_a_stacked_column() {
+        let area = rect(120, 40);
+        let mut tree = four_panes(area);
+        assert!(tree.preset(area, MAIN_80, &[A, B, C, D]));
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!((rects[&A].x, rects[&A].y, rects[&A].rows), (0, 0, 40));
+        for pane in [B, C, D] {
+            assert_eq!(rects[&pane].x, rects[&A].cols + 1);
+            assert_eq!(rects[&pane].cols, 120 - rects[&A].cols - 1);
+        }
+        assert!(rects[&B].y < rects[&C].y && rects[&C].y < rects[&D].y);
+    }
+
+    #[test]
+    fn even_presets_give_sizes_within_one_cell_extra_cells_first() {
+        for n in 2..=9u32 {
+            let panes: Vec<PaneId> = (1..=n).map(PaneId).collect();
+            for (cols, rows) in [(80, 24), (200, 50), (37, 29), (17, 17)] {
+                let area = rect(cols, rows);
+                for preset in [Preset::EvenHorizontal, Preset::EvenVertical] {
+                    let mut tree = LayoutTree::new(panes[0]);
+                    for (i, p) in panes.iter().enumerate().skip(1) {
+                        tree.split(area, panes[i - 1], Dir::Vertical, *p, SplitSize::Half)
+                            .ok();
+                    }
+                    let alive: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+                    if !tree.preset(area, preset, &alive) {
+                        continue;
+                    }
+                    let sizes: Vec<u16> = tree
+                        .compute(area)
+                        .iter()
+                        .map(|(_, r)| match preset {
+                            Preset::EvenHorizontal => r.cols,
+                            _ => r.rows,
+                        })
+                        .collect();
+                    let max = *sizes.iter().max().unwrap();
+                    let min = *sizes.iter().min().unwrap();
+                    assert!(max - min <= 1, "{preset:?} {cols}x{rows}: {sizes:?}");
+                    // The bigger cells come first.
+                    assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "{sizes:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preset_over_one_pane_is_a_no_op() {
+        let area = rect(80, 24);
+        let mut tree = LayoutTree::new(A);
+        assert!(!tree.preset(area, Preset::EvenHorizontal, &[A]));
+        assert_eq!(tree.compute(area), vec![(A, area)]);
+        assert_eq!(tree.exact_for, None);
+    }
+
+    /// Five columns need nine cells; tmux 3.7b grows the layout past an
+    /// 8-column window, which a tree exact on its area cannot hold, so the
+    /// old layout stays.
+    #[test]
+    fn preset_too_big_for_the_area_changes_nothing() {
+        let area = rect(8, 10);
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Vertical, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, A, Dir::Vertical, C, SplitSize::Half)
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, D, SplitSize::Half)
+            .unwrap();
+        tree.split(area, D, Dir::Horizontal, E, SplitSize::Half)
+            .unwrap();
+        let before = tree.compute(area);
+        let panes: Vec<PaneId> = before.iter().map(|(p, _)| *p).collect();
+        assert!(!tree.preset(area, Preset::EvenHorizontal, &panes));
+        assert_eq!(tree.compute(area), before);
+        // Main-vertical needs three columns and 2n - 3 rows on the right.
+        assert!(!tree.preset(rect(2, 10), MAIN_80, &panes));
+        assert!(!tree.preset(rect(80, 6), MAIN_80, &panes));
+        assert!(tree.preset(rect(80, 7), MAIN_80, &panes));
+    }
+
+    #[test]
+    fn preset_names_parse_as_tmux_spells_them() {
+        assert_eq!(Preset::from_name("main-vertical"), Some(MAIN_80));
+        assert_eq!(
+            Preset::from_name("even-horizontal"),
+            Some(Preset::EvenHorizontal)
+        );
+        assert_eq!(
+            Preset::from_name("even-vertical"),
+            Some(Preset::EvenVertical)
+        );
+        assert_eq!(Preset::from_name("tiled"), None);
+        assert_eq!(Preset::from_name("nope"), None);
+    }
+
+    #[test]
+    fn a_split_after_a_preset_tiles_exactly() {
+        let area = rect(200, 50);
+        let mut tree = four_panes(area);
+        assert!(tree.preset(area, MAIN_80, &[A, B, C, D]));
+        tree.split(area, C, Dir::Horizontal, E, SplitSize::Half)
+            .unwrap();
+        tree.split(area, A, Dir::Vertical, PaneId(6), SplitSize::Half)
+            .unwrap();
+        assert!(all_exact(&tree.root, area));
+        assert!(tiles_exactly(
+            area,
+            &tree.compute(area),
+            &tree.borders(area)
+        ));
+        assert_eq!(tree.compute(area).len(), 6);
+    }
+
+    fn preset_strategy() -> impl Strategy<Value = Preset> {
+        prop_oneof![
+            Just(Preset::EvenHorizontal),
+            Just(Preset::EvenVertical),
+            (0u16..120).prop_map(|c| Preset::MainVertical {
+                main: MainSize::Cells(c)
+            }),
+            (0u8..=100).prop_map(|p| Preset::MainVertical {
+                main: MainSize::Percent(p)
+            }),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// T1.3's invariant survives a preset: random splits and removes,
+        /// a random preset on a random area, then more splits.
+        #[test]
+        fn presets_keep_the_tree_tiling_exactly(
+            before in prop::collection::vec((any::<bool>(), any::<bool>(), any::<usize>(), 0u8..3), 0..16),
+            after in prop::collection::vec((any::<bool>(), any::<usize>(), 0u8..3), 0..8),
+            build in (8u16..60, 6u16..40),
+            area in (1u16..60, 1u16..40),
+            preset in preset_strategy(),
+        ) {
+            let build = rect(build.0, build.1);
+            let area = rect(area.0, area.1);
+            let size = |k: u8| match k {
+                0 => SplitSize::Half,
+                1 => SplitSize::Percent(30),
+                _ => SplitSize::Cells(3),
+            };
+            let mut tree = LayoutTree::new(PaneId(0));
+            let mut alive = vec![PaneId(0)];
+            let mut next_id = 1u32;
+            for (split, horiz, target, k) in before {
+                if split || alive.len() == 1 {
+                    let dir = if horiz { Dir::Horizontal } else { Dir::Vertical };
+                    let t = alive[target % alive.len()];
+                    if tree.split(build, t, dir, PaneId(next_id), size(k)).is_ok() {
+                        alive.push(PaneId(next_id));
+                        next_id += 1;
+                    }
+                } else {
+                    let idx = target % alive.len();
+                    tree.remove(alive[idx]);
+                    alive.remove(idx);
+                }
+            }
+
+            let order: Vec<PaneId> = tree.compute(build).iter().map(|(p, _)| *p).collect();
+            let old = tree.clone();
+            if tree.preset(area, preset, &order) {
+                prop_assert_eq!(tree.exact_for, Some((area.cols, area.rows)));
+                let after: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+                prop_assert_eq!(after, order);
+            } else {
+                prop_assert_eq!(tree.compute(area), old.compute(area));
+                prop_assert_eq!(tree.exact_for, old.exact_for);
+            }
+
+            for (horiz, target, k) in after {
+                let dir = if horiz { Dir::Horizontal } else { Dir::Vertical };
+                let t = alive[target % alive.len()];
+                if tree.split(area, t, dir, PaneId(next_id), size(k)).is_ok() {
+                    alive.push(PaneId(next_id));
+                    next_id += 1;
+                }
+            }
+
+            if let Some((cols, rows)) = tree.exact_for {
+                let exact = rect(cols, rows);
+                prop_assert!(all_exact(&tree.root, exact));
+                prop_assert!(weights_within(&tree.root, exact));
+                let rects = tree.compute(exact);
+                prop_assert!(rects.iter().all(|(_, r)| r.cols >= 1 && r.rows >= 1));
+                prop_assert!(tiles_exactly(exact, &rects, &tree.borders(exact)));
+            }
+            prop_assert!(tiles_exactly(area, &tree.compute(area), &tree.borders(area)));
+            prop_assert_eq!(tree.compute(area).len(), alive.len());
         }
     }
 }

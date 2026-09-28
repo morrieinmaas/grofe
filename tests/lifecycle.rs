@@ -216,6 +216,7 @@ fn run_without_s(srv: &TestServer, args: &[&str]) -> common::CmdOutput {
         .env_remove("GROFE")
         .env_remove("GROFE_PANE")
         .env("HOME", &srv.home)
+        .env("XDG_CONFIG_HOME", &srv.config_home)
         .env("XDG_STATE_HOME", &srv.state_home)
         .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
     common::run_bounded(cmd, common::CMD_TIMEOUT)
@@ -366,7 +367,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let server = cmd.spawn().expect("spawn server");
-    wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+    srv.wait_listening(WAIT).expect("server comes up");
 
     let mut idle = UnixStream::connect(&srv.socket).expect("connect");
     let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(srv.ctx())).unwrap();

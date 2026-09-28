@@ -4,8 +4,12 @@
 //! [`session`], window commands (and the default `list-panes`) to
 //! [`window`], pane commands to [`pane`], and option and format commands
 //! (`set-option`, `show-options`, `display-message`, `-F` on the list
-//! commands) to [`options`]. After every command it checks the lifecycle
-//! cascade: once the last session is gone the server exits.
+//! commands) to [`options`]. M3's commands route the same way: key
+//! bindings and config (`bind-key`, `unbind-key`, `list-keys`,
+//! `source-file`, `reload`) to [`options`], `command-prompt` and
+//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. After
+//! every command it checks the lifecycle cascade: once the last session is
+//! gone the server exits.
 //!
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
@@ -17,30 +21,101 @@ pub mod window;
 
 use std::path::{Path, PathBuf};
 
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
 use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
-use crate::server::model::{HISTORY_LIMIT, Model, Pane};
+use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients};
-use crate::types::{PaneId, WindowId};
+use crate::server::{State, clients, graphics, prompt};
+use crate::types::{PaneId, SessionId, WindowId};
 
-/// Runs one command (`argv[0]` is the verb) against the server state,
-/// returning its stdout or its error message.
+/// Runs a request's argv (`argv[0]` is the verb) against the server
+/// state, returning its stdout or its error message.
+///
+/// argv may hold several commands, split at `;` arguments as tmux's CLI
+/// splits them ([`cmd::parse_sequence`]): they run in order and the first
+/// error stops the rest.
+// ponytail: the reply is the output of every command, or the first error
+// alone; output of commands before a failing one is dropped.
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
     if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
         return clients::attach_check(state, ctx, &argv[1..]);
     }
+    let cmds = cmd::parse_sequence(argv).map_err(|e| e.to_string())?;
+    run_commands(state, ctx, cmds)
+}
+
+/// Runs one command whose argv is already split (a binding, the prompt,
+/// the mouse): a `;` argument in it is literal, never a separator.
+pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
     let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
+    run_commands(state, ctx, vec![cmd])
+}
+
+fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
-    // or targets them.
-    window::automatic_rename(&mut state.model);
-    let result = route(state, ctx, cmd);
+    // or targets them. A new name is drawn even if the command only reads.
+    if window::automatic_rename(&mut state.model) {
+        clients::mark_all_dirty(state);
+    }
+    let mut out = String::new();
+    let mut result = Ok(());
+    for cmd in cmds {
+        match route(state, ctx, cmd) {
+            Ok(text) => out.push_str(&text),
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        }
+    }
     if state.model.closed() {
         state.exit = true;
     }
-    result
+    result.map(|()| out)
+}
+
+/// Whether a request only reads: nothing an attached client draws can
+/// change, so its clients need no redraw (a redraw of a large client is
+/// actor time every other request waits behind). Unknown or unparsable
+/// requests count as changing something.
+// ponytail: an explicit list. The upgrade path is a per-command "changed"
+// result from dispatch, so each handler says what it touched.
+pub fn read_only(argv: &[String]) -> bool {
+    if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
+        return true;
+    }
+    let Ok(cmds) = cmd::parse_sequence(argv) else {
+        return false;
+    };
+    cmds.iter().all(|c| {
+        matches!(
+            c,
+            Command::ListSessions(_)
+                | Command::ListWindows(_)
+                | Command::ListPanes(_)
+                | Command::ListClients(_)
+                | Command::ListKeys(_)
+                | Command::ShowOptions(_)
+                | Command::HasSession(_)
+                | Command::CapturePane(_)
+                | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
+        )
+    })
+}
+
+/// For a handler whose answer comes later (`run-shell` from the CLI): the
+/// actor does not wait. The request's reply is whatever is sent on the
+/// returned sender, which the handler moves into its own task; the value
+/// the handler returns is ignored. From a binding the answer is dropped.
+// ponytail: one deferred answer per request; a second call replaces the
+// first, whose sender then fails.
+pub fn defer_reply(state: &mut State) -> oneshot::Sender<Result<String, String>> {
+    let (tx, rx) = oneshot::channel();
+    state.deferred_reply = Some(rx);
+    tx
 }
 
 fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, String> {
@@ -92,7 +167,23 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::RenameWindow(c) => window::rename_window(state, ctx, c),
         Command::SwitchClient(c) => session::switch_client(state, ctx, c),
         Command::SendPrefix(c) => pane::send_prefix(state, ctx, c),
+
+        // M3: bindings and config (T3.5), the prompt and run-shell (T3.4),
+        // layout presets (T3.7).
+        Command::BindKey(c) => options::bind_key(state, c),
+        Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
+        Command::ListKeys(c) => options::list_keys(state, ctx, c),
+        Command::SourceFile(c) => options::source_file(state, ctx, c),
+        Command::Reload(c) => options::reload(state, ctx, c),
+        Command::CommandPrompt(c) => prompt::command_prompt(state, ctx, c),
+        Command::RunShell(c) => prompt::run_shell(state, ctx, c),
+        Command::SelectLayout(c) => window::select_layout(state, ctx, c),
     }
+}
+
+/// The error a command's stub answers with until its task lands.
+pub(crate) fn not_implemented(verb: &str) -> Result<String, String> {
+    Err(format!("not implemented: {verb}"))
 }
 
 /// The argv a trailing shell command runs as: a single argument goes
@@ -139,14 +230,17 @@ impl cmd::FormatVars for NoVars {
 
 /// Spawns a pane for `window` (which may not be in the model yet) with
 /// `env` (its session's), inserts it into `state.model.panes`, and returns
-/// its id. The caller puts it in the window's layout.
+/// its id. The caller puts it in the window's layout. `cell_px` is
+/// [`clients::cell_px`] for the window's session.
 pub(crate) fn spawn_pane(
     state: &mut State,
-    window: WindowId,
+    // The window's session, passed in: a new window is not in the model yet.
+    (session, window): (SessionId, WindowId),
     env: Vec<(String, String)>,
     argv: Option<Vec<String>>,
     cwd: PathBuf,
     (cols, rows): (u16, u16),
+    cell_px: Option<(u16, u16)>,
 ) -> Result<PaneId, String> {
     let id = state.model.alloc_pane_id();
     let cwd = usable_cwd(cwd);
@@ -157,9 +251,11 @@ pub(crate) fn spawn_pane(
         env,
         cols,
         rows,
-        history_limit: HISTORY_LIMIT,
+        history_limit: state.model.history_limit(session),
         socket: state.socket.clone(),
         term: state.inner_term,
+        cell_px,
+        graphics_ok: graphics::panes_graphics_ok(state),
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
@@ -179,4 +275,38 @@ pub(crate) fn spawn_pane(
         },
     );
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn only_listed_commands_are_read_only() {
+        for words in [
+            &["list-sessions"][..],
+            &["lsw"],
+            &["show-options", "-g"],
+            &["has-session", "-t", "main"],
+            &["display-message", "-p", "#{window_name}"],
+            &["capture-pane", "-p"],
+            &[ATTACH_CHECK, "-t", "main"],
+        ] {
+            assert!(read_only(&argv(words)), "{words:?}");
+        }
+        for words in [
+            &["display-message", "hello"][..],
+            &["rename-window", "x"],
+            &["set", "-g", "status", "off"],
+            &["send-keys", "a"],
+            &["no-such-command"],
+            &[],
+        ] {
+            assert!(!read_only(&argv(words)), "{words:?}");
+        }
+    }
 }

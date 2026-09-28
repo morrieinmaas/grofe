@@ -1,0 +1,53 @@
+name: README
+
+# The README's install and first-run steps, run as written in a clean Linux
+# container, so the instructions cannot drift from what grofe does. Every
+# shell block between `<!-- readme-test: begin -->` and
+# `<!-- readme-test: end -->` in README.md runs, in order, and any failing
+# command fails the job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  readme:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    container: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract the README's tested steps
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /<!-- readme-test: begin -->/ { on = 1; next }
+            /<!-- readme-test: end -->/ { on = 0; next }
+            on && /^```/ { block = !block; next }
+            on && block
+          ' README.md > "$RUNNER_TEMP/readme-steps.sh"
+          cat "$RUNNER_TEMP/readme-steps.sh"
+          grep -q 'cargo install' "$RUNNER_TEMP/readme-steps.sh"
+          grep -q 'grofe new-session' "$RUNNER_TEMP/readme-steps.sh"
+
+      - name: Run them as a new user would
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A fresh home: no config, no state, no server from an earlier step.
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_RUNTIME_DIR
+          bash -euxo pipefail "$RUNNER_TEMP/readme-steps.sh" 2>&1 | tee "$RUNNER_TEMP/readme.log"
+          # The steps' output says they did what the README says.
+          grep -q '^demo:' "$RUNNER_TEMP/readme.log"
+          grep -q 'history-limit = 100000' "$RUNNER_TEMP/readme.log"
+          grep -q 'reload the config' "$RUNNER_TEMP/readme.log"

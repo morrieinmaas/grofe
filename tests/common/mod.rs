@@ -158,6 +158,16 @@ impl TestServer {
         UnixStream::connect(&self.socket).is_ok()
     }
 
+    /// Waits, without connecting, until a server logs that it is listening
+    /// on the socket. Use this for an `--exit-when-empty` server: a probe
+    /// connection is a client, and its close lets that server exit before
+    /// the test's real connection arrives.
+    pub fn wait_listening(&self, timeout: Duration) -> Result<(), String> {
+        // The line `grofe::server::serve` logs once bind and listen are done.
+        let line = format!("grofe server listening on {}", self.socket.display());
+        wait_until(|| self.log().contains(&line), timeout)
+    }
+
     /// The path-derivation env the server sees, for `grofe::paths`.
     pub fn paths_env(&self) -> Env {
         let s = |p: &Path| Some(p.display().to_string());

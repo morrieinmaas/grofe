@@ -11,17 +11,21 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
+use std::path::Path;
 
 use crate::cmd::{
-    Command, DisplayMessage, FormatVars, ListPanes, ListSessions, ListWindows, OptionScope,
-    Resolve, SetOption, ShowOptions, Target, expand,
+    BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
+    OptionScope, Reload, Resolve, SetOption, ShowOptions, SourceFile, Target, UnbindKey, expand,
+    split_command_string,
 };
+use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
 use crate::protocol::ClientCtx;
 use crate::server::events::Events;
-use crate::server::model::{Model, PANE_BASE_INDEX};
+use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
+use crate::server::model::Model;
 use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
@@ -52,9 +56,8 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 and M2 need. `history-limit`, `base-index`
-// and `pane-base-index` are stored and shown, but the model still uses its
-// constants for them until config (M3) wires options through.
+// ponytail: only the options M1 to M3 need. `history-limit`, `base-index`
+// and `pane-base-index` take effect through the model (T3.5).
 //
 // M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
 // tmux's except where grofe differs on purpose or M2 formats cannot yet say
@@ -62,6 +65,14 @@ struct Builtin {
 // `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
 // title, and the window formats without `#{window_flags}` (M3.6). tmux's
 // escape-time is a server option; grofe's server scope is global.
+//
+// M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
+// where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
+// external), `focus-events` on (tmux off), `pane-active-border-style`
+// `fg=green` (tmux's is a format that also colours copy mode and
+// synchronized panes). `status-position` takes only `bottom` until TC.11.
+// `set-titles` (off) and `set-titles-string` match tmux's own defaults,
+// the string translated into grofe's `#{...}`-only expander (R15).
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -194,7 +205,65 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
+    Builtin {
+        name: "set-titles",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "set-titles-string",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        // tmux's default, `#S:#I:#W - "#T" #{session_alerts}`, translated
+        // into grofe's `#{...}`-only expander (R15); `session_alerts`
+        // isn't implemented and expands empty, matching tmux with no
+        // alerts set.
+        default: "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}",
+    },
+    Builtin {
+        name: "mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "set-clipboard",
+        kind: Kind::Choice(&["off", "external", "on"]),
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "focus-events",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "pane-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "pane-active-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "fg=green",
+    },
+    Builtin {
+        name: "status-position",
+        kind: Kind::Choice(&["bottom"]),
+        scope: OptionScope::Session,
+        default: "bottom",
+    },
 ];
+
+/// Every built-in option's name, in table order (T3.1 walks it to check
+/// its TOML name table is complete).
+pub fn builtin_names() -> impl Iterator<Item = &'static str> {
+    BUILTINS.iter().map(|b| b.name)
+}
 
 fn builtin(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
@@ -219,6 +288,13 @@ pub struct Entry {
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     values: BTreeMap<Owner, BTreeMap<String, Entry>>,
+    /// Global options the config set, each with the value it had before
+    /// (a built-in default or a start-time seed), so `reload` can put back
+    /// a value the config no longer sets (R10).
+    config_base: BTreeMap<String, String>,
+    /// Global options set at runtime (`set -g`, `source-file`): the config
+    /// no longer touches them (spec §5.1 layer 6, R10).
+    runtime: BTreeSet<String>,
 }
 
 impl Options {
@@ -240,7 +316,15 @@ impl Options {
         }
         Options {
             values: BTreeMap::from([(Owner::Global, global)]),
+            ..Options::default()
         }
+    }
+
+    /// Marks a global option as set at runtime, which the config then
+    /// leaves alone.
+    fn mark_runtime(&mut self, name: &str) {
+        self.config_base.remove(name);
+        self.runtime.insert(name.to_string());
     }
 
     /// Sets `name` at `owner`. Returns whether the value changed: setting
@@ -436,23 +520,19 @@ fn set_option(
 ) -> Result<String, String> {
     let scope = default_scope(c.scope, Some(&c.name));
     let owner = owner(model, scope, &c.target, ctx)?;
-    // `option-changed` only for a real change (spec §4.2).
-    let changed = |model: &Model, events: &mut Events| {
-        events.emit(Event::OptionChanged {
-            scope: match owner {
-                Owner::Global => "global".to_string(),
-                Owner::Session(id) => id.to_string(),
-                Owner::Window(id) => id.to_string(),
-                Owner::Pane(id) => id.to_string(),
-            },
-            name: c.name.clone(),
-            value: model.options.get(owner, &c.name).map(|e| e.value.clone()),
-        });
+    // A runtime value at global scope takes the option out of the
+    // config's hands (R10).
+    let changed = |model: &mut Model, events: &mut Events, changed: bool| {
+        if owner == Owner::Global {
+            model.options.mark_runtime(&c.name);
+        }
+        if changed {
+            option_changed(model, events, owner, &c.name);
+        }
     };
     if c.unset {
-        if model.options.unset(owner, &c.name)? {
-            changed(model, events);
-        }
+        let did = model.options.unset(owner, &c.name)?;
+        changed(model, events, did);
         return Ok(String::new());
     }
     let value = match c.value {
@@ -480,10 +560,23 @@ fn set_option(
             return Err("empty value".to_string());
         }
     };
-    if model.options.set(owner, &c.name, &value, c.persist)? {
-        changed(model, events);
-    }
+    let did = model.options.set(owner, &c.name, &value, c.persist)?;
+    changed(model, events, did);
     Ok(String::new())
+}
+
+/// `option-changed`, emitted only for a real change (spec §4.2).
+fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
+    events.emit(Event::OptionChanged {
+        scope: match owner {
+            Owner::Global => "global".to_string(),
+            Owner::Session(id) => id.to_string(),
+            Owner::Window(id) => id.to_string(),
+            Owner::Pane(id) => id.to_string(),
+        },
+        name: name.to_string(),
+        value: model.options.get(owner, name).map(|e| e.value.clone()),
+    });
 }
 
 /// The owners a lookup at `owner` walks before global: `owner` and the
@@ -565,6 +658,286 @@ fn quote(value: &str) -> String {
         Some('"') => format!("\"{tilde}{escaped}\""),
         Some(_) => format!("'{escaped}'"),
         None => format!("{tilde}{escaped}"),
+    }
+}
+
+/// Where the server reads its config: the process environment (R5). Unit
+/// tests never read the real config dir.
+fn config_env() -> config::Env {
+    if cfg!(test) {
+        return config::Env {
+            config_dir: None,
+            home: None,
+        };
+    }
+    config::Env::from_process()
+}
+
+/// Applies the config chain once at server start. On any error the
+/// server keeps the built-in defaults and logs every error (R9).
+pub fn apply_config_at_start(state: &mut State) {
+    match config::load(&config_env()) {
+        Ok(resolved) => {
+            log_warnings(&resolved);
+            apply_config(state, &resolved);
+        }
+        Err(errors) => {
+            eprintln!("grofe config: not applied, using built-in defaults");
+            for e in errors {
+                eprintln!("grofe config: {e}");
+            }
+        }
+    }
+}
+
+fn log_warnings(resolved: &Resolved) {
+    for w in &resolved.warnings {
+        eprintln!("grofe config: {w}");
+    }
+}
+
+/// `reload` (spec §5.4): resolves layers 1 to 4 afresh, then applies all
+/// of it or, on any error, none of it and answers every error, one per
+/// line.
+pub fn reload(state: &mut State, _ctx: &ClientCtx, _c: Reload) -> Result<String, String> {
+    let resolved = config::load(&config_env()).map_err(|errors| join_errors(&errors))?;
+    log_warnings(&resolved);
+    apply_config(state, &resolved);
+    Ok(String::new())
+}
+
+fn join_errors(errors: &[config::ConfigError]) -> String {
+    errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Swaps in a resolved config's options and bindings, replacing only what
+/// the config set before (R10): runtime values and bindings stay. Options
+/// change through the store as `set` changes them, emitting
+/// `option-changed`; the caller's `clients::changed` then re-syncs mouse
+/// modes and repaints.
+fn apply_config(state: &mut State, resolved: &Resolved) {
+    let model = &mut state.model;
+    let events = &mut state.events;
+    let configured: Vec<(&str, &str)> = resolved.configured().map(|(n, v, _)| (n, v)).collect();
+    let dropped: Vec<(String, String)> = model
+        .options
+        .config_base
+        .iter()
+        .filter(|(name, _)| !configured.iter().any(|(n, _)| n == name))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    for (name, base) in dropped {
+        model.options.config_base.remove(&name);
+        set_global(model, events, &name, &base);
+    }
+    for (name, value) in configured {
+        if model.options.runtime.contains(name) {
+            continue;
+        }
+        if !model.options.config_base.contains_key(name) {
+            let base = model
+                .options
+                .get(Owner::Global, name)
+                .map(|e| e.value.clone())
+                .unwrap_or_default();
+            model.options.config_base.insert(name.to_string(), base);
+        }
+        set_global(model, events, name, value);
+    }
+    let tables = &mut state.registry.key_tables;
+    // Nothing configured before or now: leave the tables as they are.
+    if !resolved.keys.is_empty() || tables.is_configured() {
+        *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
+    }
+}
+
+/// Sets a global option, emitting `option-changed` on a change. The
+/// loader validated the value with the same store, so an error is a bug,
+/// logged rather than fatal.
+fn set_global(model: &mut Model, events: &mut Events, name: &str, value: &str) {
+    match model.options.set(Owner::Global, name, value, false) {
+        Ok(true) => option_changed(model, events, Owner::Global, name),
+        Ok(false) => {}
+        Err(e) => eprintln!("grofe config: {name}: {e}"),
+    }
+}
+
+/// `bind-key` (R25 grown up): binds in `Registry.key_tables` as a runtime
+/// binding, which `list-keys` marks and `reload` keeps (R10). A single
+/// command argument is a command string, split like a stored one (R12);
+/// several are split at `;` arguments as the CLI splits argv (tmux 3.7b:
+/// `bind y split-window '\;' select-pane -L` binds both). Each command
+/// must parse, as tmux checks at bind time; no command at all changes
+/// nothing, as in tmux.
+pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
+    let key = parse_key(&c.key).map_err(|_| format!("unknown key: {}", c.key))?;
+    let cmds = match c.command.as_slice() {
+        [one] => split_command_string(one).map_err(|e| e.to_string())?,
+        [] => return Ok(String::new()),
+        argv => crate::cmd::parse::split_argv(argv),
+    };
+    if cmds.is_empty() {
+        return Ok(String::new());
+    }
+    for argv in &cmds {
+        crate::cmd::parse(argv).map_err(|e| e.to_string())?;
+    }
+    let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
+    b.desc = c.note;
+    state.registry.key_tables.insert(&c.table, key, b);
+    Ok(String::new())
+}
+
+/// `unbind-key [-a] [-T table] key`, worded as tmux 3.7b words it: an
+/// unknown key or table is an error, an unbound key is not.
+pub fn unbind_key(state: &mut State, _ctx: &ClientCtx, c: UnbindKey) -> Result<String, String> {
+    let tables = &mut state.registry.key_tables;
+    let key = match &c.key {
+        Some(name) => Some(parse_key(name).map_err(|_| format!("unknown key: {name}"))?),
+        None => None,
+    };
+    if !tables.exists(&c.table) {
+        return Err(format!("table {} doesn't exist", c.table));
+    }
+    let keys = match key {
+        Some(key) => vec![key],
+        None => tables.keys(&c.table),
+    };
+    for key in keys {
+        tables.unbind_runtime(&c.table, &key);
+    }
+    Ok(String::new())
+}
+
+/// `list-keys [-T table]` in grofe's native form, one line per binding:
+/// `bind-key [-r] -T <table> <key> <command>` as tmux spells it, then
+/// `  # <source>`, with `: <desc>` and `[<name>]` when set. The source is
+/// `default`, `<file>:<line>` (`~` for `$HOME`), `runtime` or
+/// `plugin <name>`, so a binding from outside the config table shows.
+// ponytail: tmux's padded `list-keys` layout is FE.4's.
+pub fn list_keys(state: &mut State, _ctx: &ClientCtx, c: ListKeys) -> Result<String, String> {
+    let tables = &state.registry.key_tables;
+    let names: Vec<&str> = match &c.table {
+        Some(t) if !tables.exists(t) => return Err(format!("table {t} doesn't exist")),
+        Some(t) => vec![t.as_str()],
+        None => tables.table_names().collect(),
+    };
+    let home = config_env().home;
+    let mut out = String::new();
+    for table in names {
+        for key in tables.keys(table) {
+            let Some(b) = tables.exact(table, &key) else {
+                continue;
+            };
+            out.push_str(&binding_line(table, &key, b, home.as_deref()));
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> String {
+    let repeat = if b.repeat { "-r " } else { "" };
+    let cmds: Vec<String> = b
+        .cmds
+        .iter()
+        .map(|argv| argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "))
+        .collect();
+    let source = match &b.source {
+        BindingSource::Default => "default".to_string(),
+        BindingSource::File { path, line } => format!("{}:{line}", tilde(path, home)),
+        BindingSource::Runtime => "runtime".to_string(),
+        BindingSource::Plugin(name) => format!("plugin {name}"),
+    };
+    let mut line = format!(
+        "bind-key {repeat}-T {table} {} {}  # {source}",
+        quote(&key.to_string()),
+        cmds.join(" \\; ")
+    );
+    if let Some(desc) = &b.desc {
+        line.push_str(&format!(": {desc}"));
+    }
+    if let Some(name) = &b.name {
+        line.push_str(&format!(" [{name}]"));
+    }
+    line
+}
+
+/// `source-file [-q] path`: loads one TOML file (and its includes) at
+/// runtime (spec §5.1). A relative path is the requester's cwd's, as in
+/// tmux; the file's own includes resolve against it. Its values and
+/// bindings count as runtime (R10): `reload` keeps them. All errors or
+/// nothing, as `reload`; `-q` hides only a missing file.
+pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
+    let path = ctx.cwd.join(&c.path);
+    if !path.exists() {
+        if c.quiet {
+            return Ok(String::new());
+        }
+        return Err(format!("No such file or directory: {}", path.display()));
+    }
+    // ponytail: Lua config is layer 5, T6.4's (M6).
+    if path.extension().is_some_and(|e| e == "lua") {
+        return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
+    }
+    let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
+    check_live_names(&state.registry.key_tables, &resolved)?;
+    log_warnings(&resolved);
+    let model = &mut state.model;
+    for (name, value, _) in resolved.configured() {
+        set_global(model, &mut state.events, name, value);
+        model.options.mark_runtime(name);
+    }
+    let tables = &mut state.registry.key_tables;
+    for k in &resolved.keys {
+        if k.cmds.is_empty() {
+            tables.unbind_runtime(&k.table, &k.key);
+            continue;
+        }
+        let mut b = Binding::new(k.cmds.clone(), k.repeat, BindingSource::Runtime);
+        b.desc = k.desc.clone();
+        b.name = k.name.clone();
+        tables.insert(&k.table, k.key, b);
+    }
+    Ok(String::new())
+}
+
+/// A `name` is unique across the live tables too (R6): `load_one` checks
+/// only inside the file it loads.
+fn check_live_names(tables: &KeyTables, resolved: &Resolved) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for k in &resolved.keys {
+        let Some(name) = &k.name else { continue };
+        let taken = tables.table_names().find_map(|table| {
+            tables
+                .keys(table)
+                .into_iter()
+                .find(|key| {
+                    !(table == k.table && *key == k.key)
+                        && tables
+                            .exact(table, key)
+                            .is_some_and(|b| b.name.as_deref() == Some(name))
+                })
+                .map(|key| format!("{table} {key}"))
+        });
+        if let Some(taken) = taken {
+            let file = k.source.file.clone().unwrap_or_default();
+            errors.push(config::ConfigError {
+                file,
+                line: k.source.line,
+                key: format!("keys.{}.{}", k.table, k.key),
+                message: format!("name {name} already used by {taken}"),
+            });
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(join_errors(&errors))
     }
 }
 
@@ -668,6 +1041,7 @@ impl FormatVars for FormatCtx<'_> {
             "window_active" => flag(s.active == w.id),
             "window_zoomed_flag" => flag(w.zoomed),
             "window_width" => w.cols.to_string(),
+            "window_bell_flag" => flag(w.bell_flag),
             "window_height" => w.rows.to_string(),
             "window_panes" => w.layout.compute(w.area()).len().to_string(),
             "session_windows" => s.windows.len().to_string(),
@@ -676,7 +1050,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
                 let pos = w.pane_ids().iter().position(|id| *id == p.id)?;
-                (pos as u32 + PANE_BASE_INDEX).to_string()
+                (pos as u32 + m.pane_base_index(w.id)).to_string()
             }
             "pane_active" => flag(w.active == p.id),
             "pane_pid" => p.handle.pid()?.to_string(),
@@ -688,6 +1062,8 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
+            "pane_left" => pane_origin(w, p.id)?.0.to_string(),
+            "pane_top" => pane_origin(w, p.id)?.1.to_string(),
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
@@ -698,12 +1074,25 @@ impl FormatVars for FormatCtx<'_> {
     }
 }
 
+/// A pane's top-left cell in its window: the layout's, or the window's
+/// origin for a zoomed window's active pane.
+fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u16)> {
+    if w.zoomed && w.active == pane {
+        return Some((0, 0));
+    }
+    w.layout
+        .compute(w.area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, r)| (r.x, r.y))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::server::model::{BASE_INDEX, HISTORY_LIMIT};
+    use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
 
     #[test]
     fn same_value_set_is_a_no_op() {
@@ -796,6 +1185,64 @@ mod tests {
         o.retain_live(&Model::default());
         let owners: BTreeSet<Owner> = o.values.keys().copied().collect();
         assert_eq!(owners, BTreeSet::from([Owner::Global]));
+    }
+
+    /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
+    /// defaults, and tmux's value checks.
+    #[test]
+    fn m3_rows_have_grofe_defaults_and_tmux_scopes() {
+        let o = Options::new(false);
+        for (name, default, scope) in [
+            ("mouse", "on", OptionScope::Session),
+            ("set-clipboard", "on", OptionScope::Global),
+            ("focus-events", "on", OptionScope::Global),
+            ("pane-border-style", "default", OptionScope::Window),
+            ("pane-active-border-style", "fg=green", OptionScope::Window),
+            ("status-position", "bottom", OptionScope::Session),
+        ] {
+            assert_eq!(o.lookup(name, &[]), Some(default), "{name}");
+            assert_eq!(builtin(name).map(|b| b.scope), Some(scope), "{name}");
+            assert!(builtin_names().any(|n| n == name), "{name}");
+        }
+        assert_eq!(validate("set-clipboard", "external"), Ok("external".into()));
+        assert_eq!(
+            validate("set-clipboard", "maybe"),
+            Err("unknown value: maybe".to_string())
+        );
+        assert_eq!(validate("mouse", "yes"), Ok("on".into()));
+        assert_eq!(
+            validate("status-position", "top"),
+            Err("unknown value: top".to_string())
+        );
+        assert_eq!(builtin_names().count(), BUILTINS.len());
+    }
+
+    /// `set-titles`/`set-titles-string` (R15): tmux's own names, scope and
+    /// `set-titles` default; `set-titles-string`'s default is tmux's own
+    /// translated into `#{...}` form.
+    #[test]
+    fn set_titles_rows_are_session_scoped_and_off_by_default() {
+        let o = Options::new(false);
+        assert_eq!(o.lookup("set-titles", &[]), Some("off"));
+        assert_eq!(
+            builtin("set-titles").map(|b| b.scope),
+            Some(OptionScope::Session)
+        );
+        assert_eq!(
+            o.lookup("set-titles-string", &[]),
+            Some(
+                "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}"
+            )
+        );
+        assert_eq!(
+            builtin("set-titles-string").map(|b| b.scope),
+            Some(OptionScope::Session)
+        );
+        assert_eq!(validate("set-titles", "yes"), Ok("on".into()));
+        assert_eq!(
+            validate("set-titles", "maybe"),
+            Err("bad value: maybe".to_string())
+        );
     }
 
     #[test]

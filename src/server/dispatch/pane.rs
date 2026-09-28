@@ -5,13 +5,13 @@ use crate::cmd::{
     SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::dispatch::options;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
 use crate::server::layout::LayoutError;
-use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
+use crate::server::model::Model;
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
+use crate::server::{State, clients, graphics};
 use crate::types::{Edge, PaneId, Rect, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -39,6 +39,8 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     let s = &model.sessions[&model.windows[&window].session];
     let env = s.env.clone();
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
+    let session = s.id;
+    let cell_px = clients::cell_px(state, session);
 
     // Check for room on a copy first, so a command is never started for a
     // pane that cannot be placed.
@@ -53,7 +55,15 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         })?;
 
     unzoom(&mut state.model, window);
-    let new = spawn_pane(state, window, env, command_argv(c.command), cwd, size)?;
+    let new = spawn_pane(
+        state,
+        (session, window),
+        env,
+        command_argv(c.command),
+        cwd,
+        size,
+        cell_px,
+    )?;
     let model = &mut state.model;
     let Some(w) = model.windows.get_mut(&window) else {
         model.panes.remove(&new);
@@ -237,7 +247,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         return Err(format!(
             "respawn pane failed: pane {session}:{}.{} still active",
             w.index,
-            index + PANE_BASE_INDEX
+            index + model.pane_base_index(w.id)
         ));
     }
     let argv = match c.command {
@@ -253,9 +263,11 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
             .clone(),
         cols: p.cols,
         rows: p.rows,
-        history_limit: HISTORY_LIMIT,
+        history_limit: model.history_limit(model.windows[&p.window].session),
         socket: state.socket.clone(),
         term: state.inner_term,
+        cell_px: clients::cell_px(state, model.windows[&p.window].session),
+        graphics_ok: graphics::panes_graphics_ok(state),
     };
     let cwd = spec.cwd.display().to_string();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())

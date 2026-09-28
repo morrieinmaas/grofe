@@ -9,13 +9,13 @@ use crate::protocol::ClientCtx;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
-use crate::server::model::{BASE_INDEX, DEFAULT_SIZE, Session, Window};
+use crate::server::model::{DEFAULT_SIZE, Session, Window};
 use crate::server::{State, clients};
 use crate::types::{SessionId, cap_size};
 
-/// `new-session`: a session with one window holding one pane.
-// ponytail: without `-d` tmux would attach; attach arrives in M2, so every
-// session is created detached for now.
+/// `new-session`: a session with one window holding one pane. The server
+/// always creates it detached; without `-d` the CLI then attaches to it
+/// (`new_and_attach` in `main.rs`).
 pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<String, String> {
     let model = &mut state.model;
     if let Some(name) = &c.name {
@@ -38,11 +38,13 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     let window = model.alloc_window_id();
     let pane = spawn_pane(
         state,
-        window,
+        (id, window),
         ctx.env.clone(),
         command_argv(c.command),
         cwd.clone(),
         size,
+        // A new session has no client yet.
+        None,
     )?;
 
     let model = &mut state.model;
@@ -62,13 +64,14 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     model.insert_window(Window {
         id: window,
         session: id,
-        index: BASE_INDEX,
+        index: model.base_index(id),
         name: default_name(&cwd),
         layout: LayoutTree::new(pane),
         active: pane,
         zoomed: false,
         cols: size.0,
         rows: size.1,
+        bell_flag: false,
     });
     Ok(String::new())
 }

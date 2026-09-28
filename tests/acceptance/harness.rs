@@ -34,14 +34,19 @@ pub struct Harness {
     session: OsSession,
     term: Term<VoidListener>,
     parser: Processor,
+    /// Every byte the child wrote so far, for checks on the raw stream.
+    raw: Vec<u8>,
 }
 
 impl Harness {
     /// Spawn `cmd` in a pty fixed at `cols`x`rows` from the first byte it
-    /// reads: `cmd` is wrapped in a shell that sets the size with `stty`
-    /// before `exec`ing the real program, so a TUI that reads the window
-    /// size once at startup (rather than waiting for a `SIGWINCH`) still
-    /// sees the right size. Env vars and the working directory set on `cmd`
+    /// reads: `cmd` is wrapped in a shell that waits for a go line before
+    /// `exec`ing the real program, and the size is set before that line is
+    /// sent, so a TUI that reads the window size once at startup (rather
+    /// than waiting for a `SIGWINCH`) still sees the right size. (A `stty`
+    /// in the wrapper is not enough: ptyprocess sets 80x24 on the master
+    /// after the wrapper has exec'd, and under load that lands after the
+    /// `stty`.) Env vars and the working directory set on `cmd`
     /// are carried through the wrapper; `env_clear` is not; the wrapper
     /// shell otherwise inherits this process's environment as usual.
     ///
@@ -52,9 +57,7 @@ impl Harness {
     /// socket (M2 fix round 1).
     pub fn spawn(cmd: Command, cols: u16, rows: u16) -> Harness {
         let mut wrapper = Command::new("/bin/sh");
-        wrapper.arg("-c").arg(format!(
-            "stty cols {cols} rows {rows} && exec \"$0\" \"$@\""
-        ));
+        wrapper.arg("-c").arg("read -r go && exec \"$0\" \"$@\"");
         wrapper.arg(cmd.get_program());
         wrapper.args(cmd.get_args());
         if let Some(dir) = cmd.get_current_dir() {
@@ -77,11 +80,40 @@ impl Harness {
             &TermSize::new(cols as usize, rows as usize),
             VoidListener,
         );
-        Harness {
+        let mut harness = Harness {
             session,
             term,
             parser: Processor::new(),
+            raw: Vec::new(),
+        };
+        harness
+            .session
+            .get_process_mut()
+            .set_window_size(cols, rows)
+            .expect("size the pty");
+        harness.send("\n");
+        harness
+    }
+
+    /// `grofe attach -t <target>` (`grofe` is a `TestServer::command()`,
+    /// already pointing at its socket) with `env` set, e.g.
+    /// `GROFE_TEST_CAPS=kitty_graphics` to claim capabilities the
+    /// reconstruction cannot answer the probe for (T3.8).
+    pub fn spawn_attach_with_env(
+        mut grofe: Command,
+        target: &str,
+        env: &[(&str, &str)],
+        cols: u16,
+        rows: u16,
+    ) -> Harness {
+        grofe
+            .args(["attach", "-t", target])
+            .env("TERM", "xterm-256color")
+            .env_remove("COLORTERM");
+        for (key, value) in env {
+            grofe.env(key, value);
         }
+        Harness::spawn(grofe, cols, rows)
     }
 
     /// Feed raw bytes to the pty, as if typed (or pasted) at the keyboard.
@@ -99,7 +131,10 @@ impl Harness {
         loop {
             match self.session.try_read(&mut buf) {
                 Ok(0) => return false,
-                Ok(n) => self.parser.advance(&mut self.term, &buf[..n]),
+                Ok(n) => {
+                    self.parser.advance(&mut self.term, &buf[..n]);
+                    self.raw.extend_from_slice(&buf[..n]);
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return true,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(_) => return false, // EIO after the child exits
@@ -128,6 +163,37 @@ impl Harness {
     pub fn text(&mut self) -> String {
         self.pump();
         self.render()
+    }
+
+    /// Every byte the child wrote so far (the raw outer stream), after
+    /// draining pending output.
+    pub fn output(&mut self) -> &[u8] {
+        self.pump();
+        &self.raw
+    }
+
+    /// Wait until the raw stream contains `needle` at or after byte `from`
+    /// (an earlier [`Self::output`] length), or panic after
+    /// [`DEFAULT_TIMEOUT`]. Returns the offset just past the match.
+    pub fn wait_for_output(&mut self, needle: &[u8], from: usize) -> usize {
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            let open = self.pump();
+            let start = from.min(self.raw.len());
+            if let Some(i) = self.raw[start..]
+                .windows(needle.len())
+                .position(|w| w == needle)
+            {
+                return start + i + needle.len();
+            }
+            assert!(
+                open && Instant::now() < deadline,
+                "timed out waiting for {:?} in the output; screen:\n{}",
+                String::from_utf8_lossy(needle),
+                self.render()
+            );
+            sleep(Duration::from_millis(20));
+        }
     }
 
     /// 0-based `(col, row)` of the cursor in the reconstructed screen, after
