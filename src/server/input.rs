@@ -732,6 +732,12 @@ fn unicode_key(code: u32, shifted: Option<u32>, mut mods: Mods) -> Tok {
     let kc = match code {
         27 => KeyCode::Escape,
         13 => KeyCode::Enter,
+        // Shift+Tab is back-tab, as tmux 3.7b decodes it (kitty `9;2u` and
+        // `CSI Z` both fire a BTab binding and send `\e[Z`).
+        9 if mods.shift => {
+            mods.shift = false;
+            KeyCode::BackTab
+        }
         9 => KeyCode::Tab,
         127 => KeyCode::Backspace,
         57376..=57398 => KeyCode::F((code - 57376 + 13) as u8),
@@ -1405,6 +1411,8 @@ mod tests {
         // legacy back-tab (BTab) finds S-Tab; kitty shift+Tab finds BTab.
         assert_eq!(got(ROOT_TABLE, b"\x1b[Z"), Some("stab".into()));
         assert_eq!(got(PREFIX_TABLE, b"\x1b[9;2u"), Some("btab".into()));
+        // A binding written S-Tab still catches kitty shift+Tab.
+        assert_eq!(got(ROOT_TABLE, b"\x1b[9;2u"), Some("stab".into()));
         // legacy meta-A (M-A) finds M-S-a.
         assert_eq!(got(ROOT_TABLE, b"\x1bA"), Some("msa".into()));
     }
@@ -1520,7 +1528,9 @@ mod tests {
             (b"\x1b[97;6u", "C-S-a"),
             (b"\x1b[13;2u", "S-Enter"),
             (b"\x1b[13;5u", "C-Enter"),
-            (b"\x1b[9;2u", "S-Tab"),
+            (b"\x1b[9;2u", "BTab"),
+            (b"\x1b[9;6u", "C-BTab"),
+            (b"\x1b[27;2;9~", "BTab"),
             (b"\x1b[27;3u", "M-Escape"),
             (b"\x1b[32;5u", "C-Space"),
             (b"\x1b[37;5u", "C-%"),
@@ -1961,6 +1971,22 @@ mod tests {
         c.send(b"\x1b[200~x\x1b[201~", t);
         assert_eq!(c.state.deadline(), None);
         assert_eq!(c.send(b"\x1b[A", t), vec![pane(b"\x1b[A")]);
+    }
+
+    /// tmux 3.7b, through an attached client on a private socket: with both
+    /// S-Tab and BTab bound, kitty `9;2u` fires BTab; unbound, it puts
+    /// `\e[Z` on the pane.
+    #[test]
+    fn kitty_shift_tab_is_btab() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables
+            .bind(ROOT_TABLE, k("S-Tab"), argv(&["stab"]), false);
+        c.tables.bind(ROOT_TABLE, k("BTab"), argv(&["btab"]), false);
+        assert_eq!(c.send(b"\x1b[9;2u", t), vec![cmd(&["btab"])]);
+        assert_eq!(c.send(b"\x1b[27;2;9~", t), vec![cmd(&["btab"])]);
+        let mut c = Client::new();
+        assert_eq!(c.send(b"\x1b[9;2u", t), vec![pane(b"\x1b[Z")]);
     }
 
     #[test]
