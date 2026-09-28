@@ -19,9 +19,28 @@ pub enum Event {
         /// Raw pane output, base64-encoded (standard alphabet).
         data: String,
     },
+    /// An option's value changed. `scope` is `global` or the owner's id
+    /// (`$N`, `@N`, `%N`); `value` is `null` once unset.
+    OptionChanged {
+        scope: String,
+        name: String,
+        value: Option<String>,
+    },
     EventsDropped {
         count: u64,
     },
+}
+
+impl Event {
+    /// The name `subscribe` matches against.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Event::PaneExited { .. } => "pane-exited",
+            Event::PaneOutput { .. } => "pane-output",
+            Event::OptionChanged { .. } => "option-changed",
+            Event::EventsDropped { .. } => "events-dropped",
+        }
+    }
 }
 
 impl Event {
@@ -58,6 +77,20 @@ mod tests {
             serde_json::to_string(&event).unwrap(),
             r#"{"event":"events-dropped","count":3}"#
         );
+    }
+
+    #[test]
+    fn option_changed_serializes_exactly() {
+        let event = Event::OptionChanged {
+            scope: "$0".into(),
+            name: "@x".into(),
+            value: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            r#"{"event":"option-changed","scope":"$0","name":"@x","value":null}"#
+        );
+        assert_eq!(event.name(), "option-changed");
     }
 
     #[test]
