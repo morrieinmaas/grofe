@@ -170,8 +170,8 @@ impl Size {
 
 nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, Winsize);
 
-/// Ceiling on how many fds the fallback close-loop scans (macOS, or a Linux
-/// kernel too old for `close_range`, i.e. before 5.9). `getrlimit`'s current
+/// Ceiling on how many fds the fallback cloexec loop scans (macOS, or a Linux
+/// kernel too old for `CLOSE_RANGE_CLOEXEC`, i.e. before 5.11). `getrlimit`'s current
 /// soft limit is normally in the low thousands; a runaway or `RLIM_INFINITY`
 /// value is capped here rather than scanned one fd at a time.
 // ponytail: 65536 fds is the scan ceiling; a pane's child never legitimately
@@ -196,36 +196,44 @@ fn nofile_limit() -> u32 {
     u32::try_from(cur).unwrap_or(MAX_FD_SCAN).min(MAX_FD_SCAN)
 }
 
-/// Close every fd above 2 in the child (spec §4.8). macOS has no
-/// `accept4`/`SOCK_CLOEXEC`, so tokio (and std, for some other fds) sets
+/// Mark every fd above 2 in the child close-on-exec (spec §4.8). macOS has
+/// no `accept4`/`SOCK_CLOEXEC`, so tokio (and std, for some other fds) sets
 /// `FD_CLOEXEC` on an accepted socket with a separate, non-atomic `fcntl`
 /// after `accept()`. A pane forked while another thread is between those two
 /// calls would otherwise inherit that live client connection, or any other
-/// transient fd, into the child. Async-signal-safe: no allocation, no locks,
-/// and never reads `/dev/fd` or `/proc` (`opendir` allocates).
-fn close_inherited_fds(limit: u32) {
+/// transient fd, into the child.
+///
+/// They are marked, not closed: std reports the `exec` result to the parent
+/// over a close-on-exec pipe, and `spawn` returns when that pipe closes.
+/// Closing it here made `spawn` return while the child was still the forked
+/// server, whose SIGTERM handler would then swallow a signal sent to the
+/// pane's pid, and made a failed `exec` look like success.
+///
+/// Async-signal-safe: no allocation, no locks, and never reads `/dev/fd` or
+/// `/proc` (`opendir` allocates).
+fn cloexec_inherited_fds(limit: u32) {
     #[cfg(target_os = "linux")]
     {
-        // SAFETY: a bare syscall, no allocation. `close_range` closes every
-        // fd in [3, u32::MAX] that is actually open; fds that are not open
-        // are skipped, not an error.
+        // SAFETY: a bare syscall, no allocation. Marks every fd in
+        // [3, u32::MAX] that is actually open; others are skipped.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_close_range,
                 3 as libc::c_uint,
                 u32::MAX as libc::c_uint,
-                0 as libc::c_int,
+                libc::CLOSE_RANGE_CLOEXEC as libc::c_int,
             )
         };
         if ret == 0 {
             return;
         }
-        // Falls through to the loop below on ENOSYS (kernel older than 5.9).
+        // Falls through to the loop below on ENOSYS or EINVAL (kernel older
+        // than 5.11).
     }
     for fd in 3..limit as i32 {
-        // SAFETY: closing a possibly-unopened fd is safe; EBADF is ignored.
+        // SAFETY: fcntl on a possibly-unopened fd is safe; EBADF is ignored.
         unsafe {
-            libc::close(fd);
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         }
     }
 }
@@ -597,7 +605,7 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
                     return Err(stdio::Error::last_os_error());
                 }
             }
-            close_inherited_fds(fd_limit);
+            cloexec_inherited_fds(fd_limit);
             Ok(())
         });
     }
@@ -643,5 +651,57 @@ mod tests {
             .map(|(_, v)| v.to_str().unwrap());
         assert_eq!(term, Some("a-term-that-is-not-the-live-cache"));
         assert_ne!(term, Some(inner_term()));
+    }
+
+    fn spec_for(argv: &[&str]) -> PaneSpawn {
+        PaneSpawn {
+            argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            ..spec_with_term("xterm-256color")
+        }
+    }
+
+    /// std learns whether `exec` worked from a close-on-exec pipe; the
+    /// child must keep it open until `exec`, or a failed `exec` reads as
+    /// success (and `spawn` returns before the child has exec'd at all).
+    #[tokio::test]
+    async fn spawn_reports_a_failed_exec() {
+        let (tx, _rx) = mpsc::channel(8);
+        let res = PaneHandle::spawn(
+            spec_for(&["/nonexistent/grofe-no-such-program"]),
+            tx,
+            Arc::new(Notify::new()),
+        );
+        assert!(res.is_err(), "spawn of a missing program succeeded");
+    }
+
+    /// The server catches SIGTERM. A pid handed out while the child was
+    /// still the forked server (before `exec`) would have a SIGTERM sent to
+    /// it run the server's handler and vanish, leaving the child running.
+    /// So once `spawn` returns, a SIGTERM must always end the child.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sigterm_right_after_spawn_ends_the_child() {
+        let _catch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        for i in 0..50 {
+            let (tx, mut rx) = mpsc::channel(8);
+            let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+                .expect("spawn");
+            let pid = handle.pid().expect("pid") as i32;
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGTERM,
+            )
+            .expect("kill");
+            let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(ev) = rx.recv().await {
+                    if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await;
+            assert_eq!(exited, Ok(true), "iteration {i}: SIGTERM to {pid} was lost");
+        }
     }
 }
