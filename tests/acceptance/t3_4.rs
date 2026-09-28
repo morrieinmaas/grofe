@@ -256,14 +256,16 @@ fn run_shell_answers_with_stdout_and_fails_on_nonzero_exit() {
 #[test]
 fn run_shell_does_not_block_other_commands() {
     let srv = start();
+    let marker = srv.home.join("slow-started");
+    let script = format!("touch '{}'; sleep 5", marker.display());
     let mut slow = srv.command();
-    slow.args(["run-shell", "sleep 5"])
+    slow.args(["run-shell", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut slow = slow.spawn().expect("spawn run-shell");
-    // Let the slow request reach the server first.
-    std::thread::sleep(Duration::from_millis(300));
+    // The slow command is running before the second CLI asks.
+    wait_until(|| marker.exists(), WAIT).unwrap_or_else(|e| panic!("run-shell started: {e}"));
     let started = Instant::now();
     let out = srv.run(&["list-sessions"]);
     let took = started.elapsed();
@@ -318,6 +320,26 @@ fn command_prompt_template_and_initial_text() {
     a.wait_until("the status row back", WAIT, |text| {
         last_row(text).starts_with("[main]")
     });
+}
+
+/// A CLI waiting on a prompt is answered when the client goes away
+/// (tmux 3.7b leaks it until the server exits; grofe answers at once).
+#[test]
+fn a_waiting_command_prompt_returns_when_its_client_goes() {
+    let srv = start();
+    let mut a = attach(&srv);
+    let mut cli = srv.command();
+    cli.args(["command-prompt", "display-message x"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let cli = cli.spawn().expect("spawn command-prompt");
+    wait_last_row(&mut a, "(display-message)");
+    // Dropping the harness kills the attach client.
+    drop(a);
+    let status =
+        common::wait_child(cli, Duration::from_secs(1)).expect("command-prompt returns within 1 s");
+    assert!(status.success(), "{status:?}");
 }
 
 /// The stock `prefix ,` and `prefix $` prompts, prefilled with the names.

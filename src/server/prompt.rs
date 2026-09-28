@@ -427,6 +427,15 @@ impl Overlay for PromptOverlay {
     }
 }
 
+/// Client `id` went away: its prompt closes, and a CLI waiting on it gets
+/// an empty success.
+// ponytail: tmux 3.7b keeps that CLI waiting until the server exits (then
+// exit 0, no output), recorded 2026-09-28 with `detach-client`; grofe
+// answers at once instead of leaking it.
+pub fn client_gone(state: &mut State, id: ClientId) {
+    state.prompts.close(id);
+}
+
 /// `command-prompt` (R24: `-p`, `-I`, a `%%` template) on the current
 /// client. `-p` and `-I` are formats. A client whose prompt is already open
 /// keeps it, as in tmux. From the CLI the reply waits until the prompt
@@ -438,10 +447,6 @@ pub fn command_prompt(
     ctx: &ClientCtx,
     c: CommandPrompt,
 ) -> Result<String, String> {
-    // Prompts of clients that went away.
-    let live = &state.clients;
-    state.prompts.open.retain(|id, _| live.contains_key(id));
-    state.prompts.waiting.retain(|id, _| live.contains_key(id));
     let Some(id) = clients::current_client(state, ctx) else {
         return Err("no current client".to_string());
     };
@@ -545,7 +550,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let reply = (!from_binding).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     tokio::spawn(async move {
-        let result = shell(&c.cmd, cwd, socket).await;
+        let result = shell(&c.cmd, cwd, socket, reply.is_some()).await;
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
@@ -553,10 +558,21 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     Ok(String::new())
 }
 
-/// Runs `script` to completion: its stdout (ending in a newline), or the
-/// error tmux words for a nonzero exit or a signal. stderr is discarded,
-/// as in tmux.
-async fn shell(script: &str, cwd: PathBuf, socket: PathBuf) -> Result<String, String> {
+/// Runs `script` to completion: its stdout (ending in a newline) when
+/// `capture` is set, or the error tmux words for a nonzero exit or a
+/// signal. stderr is discarded, as in tmux; without `capture` so is
+/// stdout, so a chatty bound command costs no server memory.
+async fn shell(
+    script: &str,
+    cwd: PathBuf,
+    socket: PathBuf,
+    capture: bool,
+) -> Result<String, String> {
+    let stdout = if capture {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     let child = {
         let _lock = pane::spawn_lock();
         tokio::process::Command::new("/bin/sh")
@@ -567,7 +583,7 @@ async fn shell(script: &str, cwd: PathBuf, socket: PathBuf) -> Result<String, St
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(stdout)
             .stderr(Stdio::null())
             .spawn()
     };
@@ -854,32 +870,43 @@ mod tests {
             shell(
                 "echo hi; echo two >&1; echo no >&2",
                 dir.clone(),
-                socket.clone()
+                socket.clone(),
+                true
             )
             .await,
             Ok("hi\ntwo\n".to_string())
         );
         assert_eq!(
-            shell("printf abc", dir.clone(), socket.clone()).await,
+            shell("printf abc", dir.clone(), socket.clone(), true).await,
             Ok("abc\n".to_string())
         );
         assert_eq!(
-            shell("true", dir.clone(), socket.clone()).await,
+            shell("true", dir.clone(), socket.clone(), true).await,
             Ok(String::new())
         );
-        let pwd = shell("pwd -P", dir.clone(), socket.clone()).await;
+        let pwd = shell("pwd -P", dir.clone(), socket.clone(), true).await;
         assert_eq!(pwd, Ok(format!("{}\n", dir.display())));
         assert_eq!(
-            shell("echo \"$GROFE\"", dir.clone(), socket).await,
+            shell("echo \"$GROFE\"", dir.clone(), socket, true).await,
             Ok("/nonexistent.sock\n".to_string())
         );
         assert_eq!(
-            shell("exit 3", dir.clone(), PathBuf::from("/x")).await,
+            shell("exit 3", dir.clone(), PathBuf::from("/x"), true).await,
             Err("'exit 3' returned 3".to_string())
         );
         assert_eq!(
-            shell("echo a; exit 3", dir, PathBuf::from("/x")).await,
+            shell("echo a; exit 3", dir, PathBuf::from("/x"), true).await,
             Err("a\n'echo a; exit 3' returned 3".to_string())
+        );
+        // Without capture (a binding) stdout goes nowhere.
+        let dir = std::env::temp_dir();
+        assert_eq!(
+            shell("echo dropped", dir.clone(), PathBuf::from("/x"), false).await,
+            Ok(String::new())
+        );
+        assert_eq!(
+            shell("echo a; exit 2", dir, PathBuf::from("/x"), false).await,
+            Err("'echo a; exit 2' returned 2".to_string())
         );
     }
 }
