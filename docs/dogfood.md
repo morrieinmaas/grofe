@@ -40,8 +40,6 @@ hurt more than described.
   grofe's emulator and two in Ghostty and WezTerm. grofe moves the cursor
   absolutely after it, so the next cell does not drift, but the emoji can
   overlap its right neighbour.
-- **`grofe new-session` does not attach.** Every session is created
-  detached (tmux attaches without `-d`); run `grofe attach` after it.
 - **`kitten icat --unicode-placeholder`** runs through grofe in the
   suite only where `kitten` is installed (T3.8's rule); the recorded
   placeholder fixture always runs. Try one image preview by hand in each

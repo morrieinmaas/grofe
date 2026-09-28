@@ -133,14 +133,6 @@ fn octal(s: &str) -> String {
     s.bytes().map(|b| format!("\\{b:03o}")).collect()
 }
 
-/// The absolute path of `bin` on `PATH` (tools are discovered, spec §9).
-fn which(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
-        .find(|p| p.is_file())
-}
-
 /// A pane script: prints `push` then `ready`, reads `n` raw bytes and shows
 /// them as hex (T2.5b's reader).
 fn hex_reader(push: &str, n: usize) -> String {
@@ -227,6 +219,8 @@ fn a_client_panic_writes_a_report_and_the_client_exits() {
     let srv = start("printf 'idle-pane'; exec sleep 600");
     let log = srv.log_path();
     let state = log.parent().expect("state dir").to_path_buf();
+    let real = paths::state_dir(&Env::from_process());
+    let real_before = panic_reports(&real, &log);
     let mut a = Harness::spawn_attach_with_env(
         srv.command(),
         "main",
@@ -246,6 +240,7 @@ fn a_client_panic_writes_a_report_and_the_client_exits() {
         report.contains("test panic in the stdin thread"),
         "{report}"
     );
+    assert_eq!(panic_reports(&real, &log), real_before, "real state dir");
     // The server is unharmed.
     srv.cmd(&["list-sessions"]).expect("server still answers");
 }
@@ -394,15 +389,16 @@ fn git_log_pages_and_q_returns() {
 
 const NESTED_TMUX: &str = "grofe-t36-nested";
 
-/// Kills the private nested tmux server, and only that one.
+/// Kills the private nested tmux server, and only that one. `tmux` is the
+/// one on `PATH` (the harness's `require_tool` found it), the same one the
+/// pane resolves with `command -v`.
 struct NestedTmux {
-    tmux: PathBuf,
     tmpdir: tempfile::TempDir,
 }
 
 impl NestedTmux {
     fn command(&self) -> Command {
-        let mut cmd = Command::new(&self.tmux);
+        let mut cmd = Command::new("tmux");
         cmd.env_remove("TMUX")
             .env("TMUX_TMPDIR", self.tmpdir.path())
             .args(["-L", NESTED_TMUX]);
@@ -428,19 +424,16 @@ fn nested_tmux_renders_and_takes_its_prefix() {
     if !require_tool("tmux") {
         return;
     }
-    let tmux = which("tmux").expect("tmux on PATH");
     let nested = NestedTmux {
-        tmux,
         tmpdir: tempfile::Builder::new()
             .prefix("t36")
             .tempdir_in("/tmp")
             .expect("tempdir"),
     };
     let srv = start(&format!(
-        "TMUX_TMPDIR={} SHELL=/bin/sh exec env -u TMUX {} -L {NESTED_TMUX} -f /dev/null \
-         new-session -s nested",
+        "TMUX_TMPDIR={} SHELL=/bin/sh exec env -u TMUX \"$(command -v tmux)\" \
+         -L {NESTED_TMUX} -f /dev/null new-session -s nested",
         shell_quote(&nested.tmpdir.path().display().to_string()),
-        shell_quote(&nested.tmux.display().to_string()),
     ));
     let mut a = attach(&srv, "");
     a.wait_for("[nested] 0:");
@@ -461,10 +454,10 @@ fn nested_tmux_renders_and_takes_its_prefix() {
 
 // ---- nested grofe (case 4) ----
 
-/// A second grofe server driven from inside a pane: its client attaches,
-/// draws its own status line inside the pane, detaches on its own prefix
-/// (sent through the outer `send-prefix`), and self-nesting on the outer
-/// session is refused.
+/// A second grofe server driven from inside a pane: `new-session` there
+/// starts it and attaches, its client draws its own status line inside the
+/// pane and detaches on its own prefix (sent through the outer
+/// `send-prefix`), and self-nesting on the outer session is refused.
 #[test]
 fn nested_grofe_runs_detaches_and_refuses_self_nesting() {
     let grofe = env!("CARGO_BIN_EXE_grofe");
@@ -479,8 +472,8 @@ fn nested_grofe_runs_detaches_and_refuses_self_nesting() {
     new_session(
         &srv,
         &format!(
-            "{g} new-session -d -s inner \"printf 'inner-pane'; exec sleep 600\" && \
-             {g} attach -t inner; printf 'inner-done\\n'; \
+            "{g} new-session -s inner \"printf 'inner-pane'; exec sleep 600\"; \
+             printf 'inner-done\\n'; \
              {} attach -t main; printf 'self-done'; exec sleep 600",
             shell_quote(grofe)
         ),
@@ -738,12 +731,8 @@ fn term_rerun_cursor_style_reaches_the_outer_cursor() {
 /// them, so an app reading tmux-256color decodes them.
 #[test]
 fn term_rerun_modified_keys_reach_the_pane_as_the_entry_spells_them() {
-    // Reads whatever arrives within a second of the last byte.
-    let srv = start(
-        "printf 'ready\\n'; stty raw -echo min 0 time 10; \
-         b=$(dd bs=1 count=64 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
-         stty sane; printf 'got:%s:end' \"$b\"; exec sleep 600",
-    );
+    // Three keys of six bytes each.
+    let srv = start(&hex_reader("", 18));
     let mut a = attach(&srv, RICH);
     a.wait_for("ready");
     a.send("\x1b[1;2D\x1b[1;2P\x1b[3;5~");
@@ -762,4 +751,58 @@ fn term_rerun_version_queries() {
     let mut a = attach(&srv, RICH);
     // ESC [ >
     a.wait_for("got:1b5b3e:end");
+}
+
+// ---- new-session attaches (tmux 3.7b) ----
+
+/// Without a terminal, `new-session` (no `-d`) fails as tmux does and
+/// creates nothing.
+#[test]
+fn new_session_without_a_terminal_fails_and_creates_nothing() {
+    let srv = TestServer::start();
+    let mut cmd = srv.command();
+    cmd.args(["new-session", "-s", "nope", "sleep 600"])
+        .stdin(Stdio::null());
+    let out = common::run_bounded(cmd, CMD_TIMEOUT);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(out.stderr, "open terminal failed: not a terminal\n");
+    assert!(srv.cmd(&["has-session", "-t", "nope"]).is_err());
+}
+
+/// With a terminal, `new-session` creates the session and attaches to it;
+/// the prefix `d` detaches and the CLI says so. An unnamed session works
+/// too, and `$TMUX` naming another server is not a refusal.
+#[test]
+fn new_session_on_a_terminal_attaches_and_detaches() {
+    let srv = TestServer::start();
+    let mut cmd = srv.command();
+    cmd.args([
+        "new-session",
+        "-s",
+        "fresh",
+        "printf 'fresh-pane'; exec sleep 600",
+    ])
+    .env("TERM", "xterm-256color")
+    .env("TMUX", "/tmp/elsewhere/default,1,0");
+    let mut a = Harness::spawn(cmd, COLS, ROWS);
+    a.wait_for("fresh-pane");
+    a.wait_for("[fresh] 1:");
+    a.send(format!("{PREFIX}d"));
+    a.wait_for("[detached (from session fresh)]");
+    a.wait_exit();
+    assert!(srv.cmd(&["has-session", "-t", "fresh"]).is_ok());
+
+    let mut cmd = srv.command();
+    cmd.args(["new", "printf 'unnamed-pane'; exec sleep 600"])
+        .env("TERM", "xterm-256color");
+    let mut b = Harness::spawn(cmd, COLS, ROWS);
+    b.wait_for("unnamed-pane");
+    let name = srv
+        .cmd(&["list-clients", "-F", "#{session_name}"])
+        .expect("list-clients");
+    let name = name.trim();
+    assert!(!name.is_empty() && name != "fresh", "{name:?}");
+    b.send(format!("{PREFIX}d"));
+    b.wait_for(&format!("[detached (from session {name})]"));
+    b.wait_exit();
 }

@@ -13,9 +13,9 @@ use crate::server::model::{DEFAULT_SIZE, Session, Window};
 use crate::server::{State, clients};
 use crate::types::{SessionId, cap_size};
 
-/// `new-session`: a session with one window holding one pane.
-// ponytail: without `-d` tmux would attach; attach arrives in M2, so every
-// session is created detached for now.
+/// `new-session`: a session with one window holding one pane. The server
+/// always creates it detached; without `-d` the CLI then attaches to it
+/// (`new_and_attach` in `main.rs`).
 pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<String, String> {
     let model = &mut state.model;
     if let Some(name) = &c.name {

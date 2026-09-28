@@ -6,7 +6,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
@@ -73,6 +73,7 @@ fn main() -> ExitCode {
         "attach-session" | "attach" => attach(&globals.socket(), rest),
         // File layers only: never starts or contacts a server (R8).
         "show-config" => grofe::config::show_config(&rest[1..]),
+        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
@@ -107,8 +108,7 @@ fn install_panic_report() {
 /// `<state dir>/grofe/<instance>.panic.<unix-ms>.log`, derived from the
 /// server log's path so a test's `-S` socket keeps it in the test's state
 /// dir.
-fn panic_report_path(socket: &Path, unix_ms: u128) -> PathBuf {
-    let log = paths::log_path(&Env::from_process(), socket);
+fn panic_report_path(log: &Path, unix_ms: u128) -> PathBuf {
     let instance = log
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -125,8 +125,8 @@ fn write_panic_report(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = panic_report_path(socket, unix_ms);
-    if let Some(dir) = path.parent() {
+    let log = paths::log_path(&Env::from_process(), socket);
+    if let Some(dir) = log.parent() {
         paths::ensure_private_dir(dir)?;
     }
     let payload = info.payload();
@@ -159,13 +159,35 @@ fn write_panic_report(
         thread.name().unwrap_or("<unnamed>"),
         std::backtrace::Backtrace::force_capture(),
     );
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)?;
+    let (mut file, path) = create_report(&log, unix_ms)?;
     file.write_all(report.as_bytes())?;
     Ok(path)
+}
+
+/// How many later milliseconds [`create_report`] tries when the name is
+/// taken.
+const REPORT_NAME_TRIES: u128 = 1000;
+
+/// Creates a new report file, never reusing one: when two panics (two
+/// threads, or a server and a client of the same instance) land in the
+/// same millisecond, the later one takes the next free millisecond, so the
+/// name keeps R22's `<instance>.panic.<unix-ms>.log` shape.
+fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
+    let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
+    for ms in unix_ms..unix_ms + REPORT_NAME_TRIES {
+        let path = panic_report_path(log, ms);
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(file) => return Ok((file, path)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
 }
 
 /// `-L` / `-S`, which come before the command, as in tmux.
@@ -268,6 +290,50 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
 fn fail(msg: &str) -> ExitCode {
     eprintln!("{}", msg.trim_end_matches('\n'));
     ExitCode::FAILURE
+}
+
+/// Whether `argv` is a `new-session` that attaches (no `-d`). One that does
+/// not parse goes to the server as usual, which reports the error.
+fn attaches(argv: &[String]) -> bool {
+    matches!(
+        grofe::cmd::parse(argv),
+        Ok(grofe::cmd::Command::NewSession(c)) if !c.detached
+    )
+}
+
+/// `new-session` without `-d`, as tmux 3.7b: without a terminal it fails
+/// before creating anything; otherwise the session is created detached,
+/// its id read back in the same request, and the client attaches to it
+/// through [`attach`] (which refuses self-nesting and restores the tty).
+///
+/// The request carries no pane, even from inside one of this server's
+/// panes, so the trailing `display-message` names the session just made
+/// (the one with the latest activity) rather than the pane's; the new
+/// session's cwd is then the CLI's own, as in tmux.
+fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
+    if !io::stdin().is_terminal() {
+        return fail("open terminal failed: not a terminal");
+    }
+    let (socket, own_dir) = globals.resolve();
+    let mut create = vec![argv[0].clone(), "-d".to_string()];
+    create.extend(argv[1..].iter().cloned());
+    create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
+    let hello = match hello_for(&socket, false) {
+        Ok(h) => h,
+        Err(e) => return fail(&e),
+    };
+    let id = match connect_or_start(&socket, own_dir, true)
+        .and_then(|stream| request_with(stream, &hello, &create))
+    {
+        Ok(Reply::Ok { out, .. }) => out.trim().to_string(),
+        Ok(Reply::Err { err, .. }) => return fail(&err),
+        Ok(Reply::Event(_)) => return fail("unexpected event reply"),
+        Err(e) => return fail(&e),
+    };
+    attach(
+        &socket,
+        &["attach-session".to_string(), "-t".to_string(), id],
+    )
 }
 
 /// Sends `argv` as one control-mode request and exits with its status.
@@ -534,7 +600,11 @@ fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -
 /// `target` is the socket this request is being sent to, used to decide
 /// whether `$GROFE_PANE` applies (see [`client_pane`]).
 fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
-    let hello = control_hello(target)?;
+    request_with(stream, &control_hello(target)?, argv)
+}
+
+/// Sends `hello` and one request, and reads until its reply.
+fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Reply, String> {
     let req = serde_json::to_string(&Request {
         id: 1,
         argv: argv.to_vec(),
@@ -551,13 +621,19 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
 /// sent (an environment too large for it), so that is known before
 /// connecting.
 fn control_hello(target: &Path) -> Result<String, String> {
+    hello_for(target, true)
+}
+
+/// [`control_hello`], sending this CLI's pane only when `with_pane`.
+fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
+    let pane = client_pane(
+        std::env::var_os("GROFE").as_deref(),
+        std::env::var("GROFE_PANE").ok().as_deref(),
+        target,
+    );
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        pane: client_pane(
-            std::env::var_os("GROFE").as_deref(),
-            std::env::var("GROFE_PANE").ok().as_deref(),
-            target,
-        ),
+        pane: pane.filter(|_| with_pane),
         env: std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
@@ -588,6 +664,16 @@ fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_taken_report_name_moves_to_the_next_millisecond() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("t.log");
+        let (_, first) = create_report(&log, 42).unwrap();
+        let (_, second) = create_report(&log, 42).unwrap();
+        assert_eq!(first, tmp.path().join("t.panic.42.log"));
+        assert_eq!(second, tmp.path().join("t.panic.43.log"));
+    }
 
     #[test]
     fn client_pane_matches_the_same_socket() {
