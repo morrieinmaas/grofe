@@ -72,6 +72,9 @@ pub struct Window {
     pub zoomed: bool,
     pub cols: u16,
     pub rows: u16,
+    /// tmux's `window_bell_flag` (R13): set by a bell (T3.3), cleared when
+    /// the window becomes its session's current window.
+    pub bell_flag: bool,
 }
 
 impl Window {
@@ -178,7 +181,9 @@ impl Model {
     }
 
     /// Makes `window` its session's active window; the one it replaces
-    /// goes on top of the session's last-window stack, as in tmux.
+    /// goes on top of the session's last-window stack, as in tmux. A window
+    /// that becomes current loses its bell flag (tmux's
+    /// `winlink_clear_flags`); reselecting the current one changes nothing.
     pub fn select_window(&mut self, window: WindowId) {
         let Some(session) = self.windows.get(&window).map(|w| w.session) else {
             return;
@@ -189,6 +194,9 @@ impl Model {
             s.last_windows.retain(|w| *w != window);
             s.last_windows.push(s.active);
             s.active = window;
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.bell_flag = false;
+            }
         }
     }
 
@@ -600,6 +608,8 @@ mod tests {
             history_limit: 1000,
             socket: std::env::temp_dir().join("grofe-model-test.sock"),
             term: crate::server::pane::inner_term(),
+            cell_px: None,
+            graphics_ok: false,
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
@@ -667,6 +677,7 @@ mod tests {
             zoomed: false,
             cols: 80,
             rows: 24,
+            bell_flag: false,
         });
         model.insert_window(Window {
             id: w2,
@@ -678,6 +689,7 @@ mod tests {
             zoomed: false,
             cols: 80,
             rows: 24,
+            bell_flag: false,
         });
 
         // A second session, owning nothing of "a"'s.
@@ -705,5 +717,38 @@ mod tests {
         });
         let err = model.resolve_pane(&target, &ctx).unwrap_err();
         assert!(err.contains(&format!("can't find pane: {p2}")), "{err}");
+    }
+
+    /// R13, as tmux 3.7b does it (recorded on a private socket): selecting
+    /// a window clears its bell flag, reselecting the current window does
+    /// not, and neither does anything to another window's flag.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn becoming_current_clears_the_bell_flag() {
+        let mut model = Model::new(true);
+        let (w1, w2) = (model.alloc_window_id(), model.alloc_window_id());
+        let (p1, p2) = (spawn_pane(&mut model, w1), spawn_pane(&mut model, w2));
+        let s = add_session(&mut model, "a", w1);
+        for (id, index, pane) in [(w1, 1, p1), (w2, 2, p2)] {
+            model.insert_window(Window {
+                id,
+                session: s,
+                index,
+                name: index.to_string(),
+                layout: LayoutTree::new(pane),
+                active: pane,
+                zoomed: false,
+                cols: 80,
+                rows: 24,
+                bell_flag: true,
+            });
+        }
+        let flag = |m: &Model, w| m.windows[&w].bell_flag;
+        model.select_window(w1);
+        assert!(flag(&model, w1), "reselecting the current window keeps it");
+        model.select_window(w2);
+        assert!(!flag(&model, w2));
+        assert!(flag(&model, w1), "the window left keeps its flag");
+        model.select_window(w1);
+        assert!(!flag(&model, w1));
     }
 }

@@ -109,6 +109,11 @@ pub struct Caps {
     pub sync: bool,
     pub kitty_keys: bool,
     pub kitty_graphics: bool,
+    /// One cell's `(width, height)` in pixels, from `CSI 16 t`; `None`
+    /// when the terminal did not say. Panes get their pixel size from it
+    /// (image tools need it).
+    #[serde(default)]
+    pub cell_px: Option<(u16, u16)>,
 }
 
 /// The JSON hello a client sends first (spec §4.6), choosing the mode for
@@ -481,6 +486,7 @@ mod tests {
                 sync: true,
                 kitty_keys: true,
                 kitty_graphics: true,
+                cell_px: Some((10, 20)),
             },
             target: Some("main:2".to_string()),
             detach_others: true,

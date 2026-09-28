@@ -1,7 +1,8 @@
 //! compose, diff, colour downgrade, synchronized output.
 //!
 //! [`compose`] builds a client's [`Screen`] from snapshotted pane rows,
-//! borders, the status line and overlays; [`diff`] turns the last screen
+//! borders and the status line; the caller then draws [`Overlay`]s over it
+//! and runs [`fix_wide_pairs`]; [`diff`] turns the last screen
 //! into the next as a minimal escape stream (spec §4.4); [`write_sgr`] is
 //! the one SGR writer, shared with `capture-pane -e`.
 //!
@@ -14,10 +15,12 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use unicode_width::UnicodeWidthChar;
 
 use crate::protocol::Caps;
+use crate::server::State;
+use crate::server::graphics;
 use crate::server::layout::BorderSegment;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, RowsSnapshot, SnapCell};
 use crate::server::status::{Style, StyledLine};
-use crate::types::{PaneId, Rect};
+use crate::types::{ClientId, PaneId, Rect};
 
 /// One client's composed frame: a cell buffer the size of its terminal.
 /// The server keeps the last one per client and diffs the next against it.
@@ -42,6 +45,7 @@ impl Screen {
             flags: CellFlags::empty(),
             zerowidth: Vec::new(),
             underline_color: None,
+            hyperlink: None,
         };
         Screen {
             cols,
@@ -70,25 +74,47 @@ pub struct FrameInputs<'a> {
     /// and rows, top row first.
     pub panes: Vec<(PaneId, Rect, RowsSnapshot)>,
     pub borders: Vec<BorderSegment>,
+    /// Border cells away from the active pane (`pane-border-style`).
+    pub border_style: Style,
+    /// Border cells around the active pane (`pane-active-border-style`).
+    pub active_border_style: Style,
     /// The pane whose borders are drawn active.
     pub active: PaneId,
     /// The status row, drawn on the client's last row; the window then has
     /// the rows above it. `None` when `status` is off.
     pub status: Option<StyledLine>,
-    /// Drawn last, in order, over everything else.
-    pub overlays: &'a [&'a dyn Overlay],
     /// The active pane's cursor in window coordinates (its rect origin
     /// added); `None` hides the cursor.
     pub cursor: Option<CursorState>,
+    /// Kitty graphics placeholder ids to rewrite (T3.8); `None` while no
+    /// pane has an image.
+    pub graphics: Option<&'a graphics::Remap>,
 }
 
-/// Something drawn over the composed frame (M3: popups, menus, prompts).
+/// Where things are on one client's screen, for an [`Overlay`] (and for
+/// input hooks, through `clients::overlay_ctx`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayCtx {
+    pub client: ClientId,
+    /// The window cell drawn at the client's top-left (D6 crop).
+    pub viewport: (u16, u16),
+    /// The client row the status line is on; `None` when `status` is off.
+    pub status_row: Option<u16>,
+    /// Each visible pane and its rect in client coordinates, clipped to
+    /// the part the client shows. With a viewport, a pane's cell `(x, y)`
+    /// is at client cell `(x + pane_left - viewport.0, ...)`: the clipped
+    /// rect alone does not say where the pane's own origin is.
+    pub panes: Vec<(PaneId, Rect)>,
+}
+
+/// Something drawn over a client's composed frame (M3: the prompt, the
+/// scrollback view; later popups and menus). Overlays are stateless: what
+/// they draw comes from `state`, for the client `client`.
+///
+/// An overlay may overwrite half of a wide pair; after every overlay has
+/// drawn, the caller runs [`fix_wide_pairs`].
 pub trait Overlay {
-    /// Draws onto the composed screen. An overlay may overwrite half of a
-    /// wide pair; after all overlays have drawn, [`compose`] turns any wide
-    /// char left without its spacer, and any spacer left without its wide
-    /// char, into a space keeping its colours.
-    fn draw(&self, screen: &mut Screen);
+    fn draw(&self, state: &State, client: ClientId, cx: &OverlayCtx, screen: &mut Screen);
 }
 
 /// Attribute flags that change how a cell looks. Everything else alacritty
@@ -117,6 +143,7 @@ fn blank_like(cell: &SnapCell) -> SnapCell {
         flags: cell.flags & STYLE_FLAGS,
         zerowidth: Vec::new(),
         underline_color: cell.underline_color,
+        hyperlink: None,
     }
 }
 
@@ -128,6 +155,7 @@ fn styled(c: char, style: &Style) -> SnapCell {
         flags: style.attrs & STYLE_FLAGS,
         zerowidth: Vec::new(),
         underline_color: style.underline_color,
+        hyperlink: None,
     }
 }
 
@@ -142,7 +170,7 @@ fn cell_style(cell: &SnapCell) -> Style {
 
 /// Composes one client's frame: the window (panes clipped into their rects,
 /// then borders) seen through the viewport, the letterbox around a smaller
-/// window, the status row, the cursor, then overlays.
+/// window, the status row and the cursor. Overlays are the caller's.
 pub fn compose(inputs: &FrameInputs) -> Screen {
     let (cols, rows) = inputs.client;
     let mut screen = Screen::new(cols, rows);
@@ -184,18 +212,13 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
         let row = c.row.checked_sub(vy)?;
         (col < cols && row < win_rows).then_some(CursorState { row, col, ..c })
     });
-    for overlay in inputs.overlays {
-        overlay.draw(&mut screen);
-    }
-    if !inputs.overlays.is_empty() {
-        fix_wide_pairs(&mut screen);
-    }
     screen
 }
 
 /// Makes every wide pair whole again: a `WIDE_CHAR` without its spacer, or
 /// a spacer without its wide char, becomes a space keeping its colours.
-fn fix_wide_pairs(screen: &mut Screen) {
+/// Run after overlays have drawn; a no-op on a screen [`compose`] made.
+pub fn fix_wide_pairs(screen: &mut Screen) {
     let cols = screen.cols as usize;
     if cols == 0 {
         return;
@@ -256,11 +279,10 @@ fn compose_window(inputs: &FrameInputs) -> Screen {
 }
 
 /// Border cells as box drawing, each glyph picked from which neighbours
-/// are border too; cells around the active pane are green, as tmux's
-/// default `pane-active-border-style`.
-// ponytail: tmux's pane-border-style / pane-active-border-style options and
-// its two-pane half-colouring (pane-border-indicators) are not read yet;
-// the colours are tmux's defaults.
+/// are border too; cells around the active pane in
+/// `pane-active-border-style`, the rest in `pane-border-style`.
+// ponytail: tmux's two-pane half-colouring (pane-border-indicators) is not
+// drawn: with two panes the whole shared border is active.
 fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
     let (w, h) = (win.cols as i32, win.rows as i32);
     let mut mask = vec![false; win.cells.len()];
@@ -310,11 +332,12 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
                 (_, _, false, false) => '│',
                 _ => '─',
             };
-            let mut style = Style::default();
-            if on_ring(x, y) {
-                style.fg = Color::Named(NamedColor::Green);
-            }
-            win.cells[(y * w + x) as usize] = styled(glyph, &style);
+            let style = if on_ring(x, y) {
+                &inputs.active_border_style
+            } else {
+                &inputs.border_style
+            };
+            win.cells[(y * w + x) as usize] = styled(glyph, style);
         }
     }
 }
@@ -652,17 +675,6 @@ mod tests {
 
     #[test]
     fn overlays_that_split_a_wide_pair_leave_spaces() {
-        struct Stomp;
-        impl Overlay for Stomp {
-            fn draw(&self, screen: &mut Screen) {
-                // Overwrite the spacer of the first pair and the wide char
-                // of the second.
-                screen.cells[1].c = 'x';
-                screen.cells[1].flags = CellFlags::empty();
-                screen.cells[2].c = 'y';
-                screen.cells[2].flags = CellFlags::empty();
-            }
-        }
         let red = Color::Named(NamedColor::Red);
         let mut snap = RowsSnapshot::default();
         let mut row = Screen::new(6, 1).cells;
@@ -680,18 +692,26 @@ mod tests {
             cols: 6,
             rows: 1,
         };
-        let overlays: [&dyn Overlay; 1] = [&Stomp];
-        let screen = compose(&FrameInputs {
+        let mut screen = compose(&FrameInputs {
             client: (6, 1),
             viewport: (0, 0),
             area,
             panes: vec![(PaneId(1), area, snap)],
             borders: Vec::new(),
+            border_style: Style::default(),
+            active_border_style: Style::default(),
             active: PaneId(1),
             status: None,
-            overlays: &overlays,
             cursor: None,
+            graphics: None,
         });
+        // What an overlay might do: overwrite the spacer of the first pair
+        // and the wide char of the second.
+        screen.cells[1].c = 'x';
+        screen.cells[1].flags = CellFlags::empty();
+        screen.cells[2].c = 'y';
+        screen.cells[2].flags = CellFlags::empty();
+        fix_wide_pairs(&mut screen);
         let cells = &screen.cells;
         assert_eq!(
             (cells[0].c, cells[0].flags, cells[0].bg),

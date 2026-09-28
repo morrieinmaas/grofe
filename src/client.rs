@@ -59,6 +59,7 @@ pub const PROBE_QUERY: &[u8] = concat!(
     "\x1b[?2026$p",                               // DECRQM synchronized output
     "\x1b[?u",                                    // kitty keyboard flags
     "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\", // kitty graphics query
+    "\x1b[16t",                                   // cell size in pixels
     "\x1b[c",                                     // DA1
 )
 .as_bytes();
@@ -91,6 +92,36 @@ const RESET_TAIL: &[u8] = concat!(
 /// test hook for "a panic in any thread restores the tty".
 pub const TEST_PANIC_ENV: &str = "GROFE_TEST_CLIENT_PANIC";
 
+/// A comma list of capabilities (`truecolor`, `styled_underline`, `sync`,
+/// `kitty_keys`, `kitty_graphics`, `cell_px=<w>x<h>`) to claim on top of
+/// what the probe found: the test hook for an outer terminal the test
+/// harness cannot be (T3.8's kitty graphics, pane pixel sizes). Unknown
+/// names are ignored.
+pub const TEST_CAPS_ENV: &str = "GROFE_TEST_CAPS";
+
+/// `caps` with every capability `list` names turned on.
+fn with_test_caps(mut caps: Caps, list: &str) -> Caps {
+    for name in list.split(',').map(str::trim) {
+        match name {
+            "truecolor" => caps.truecolor = true,
+            "styled_underline" => caps.styled_underline = true,
+            "sync" => caps.sync = true,
+            "kitty_keys" => caps.kitty_keys = true,
+            "kitty_graphics" => caps.kitty_graphics = true,
+            _ => {
+                if let Some((w, h)) = name
+                    .strip_prefix("cell_px=")
+                    .and_then(|size| size.split_once('x'))
+                    && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
+                {
+                    caps.cell_px = Some((w, h));
+                }
+            }
+        }
+    }
+    caps
+}
+
 // ------------------------------------------------------------------ probe
 
 /// One recognised answer to [`PROBE_QUERY`].
@@ -106,6 +137,8 @@ enum ProbeReply {
     KittyKeys,
     /// `APC G ... ; OK ST` (true) or an error message (false).
     KittyGraphics(bool),
+    /// `CSI 6 ; height ; width t`: one cell's size in pixels.
+    CellSize { width: u16, height: u16 },
 }
 
 enum Scan {
@@ -128,6 +161,7 @@ pub struct ProbeParser {
     sync_mode: Option<u32>,
     kitty_keys: bool,
     kitty_graphics: bool,
+    cell_px: Option<(u16, u16)>,
     done: bool,
 }
 
@@ -176,6 +210,9 @@ impl ProbeParser {
             ProbeReply::ModeReport { .. } => {}
             ProbeReply::KittyKeys => self.kitty_keys = true,
             ProbeReply::KittyGraphics(ok) => self.kitty_graphics = ok,
+            ProbeReply::CellSize { width, height } => {
+                self.cell_px = (width > 0 && height > 0).then_some((width, height));
+            }
         }
     }
 
@@ -202,6 +239,7 @@ impl ProbeParser {
             sync: matches!(self.sync_mode, Some(1..=3)),
             kitty_keys: self.kitty_keys,
             kitty_graphics: self.kitty_graphics,
+            cell_px: self.cell_px,
         }
     }
 
@@ -252,11 +290,12 @@ fn scan_reply(b: &[u8]) -> Scan {
     }
 }
 
-/// `CSI ? params (c | u | $ y)`.
+/// `CSI ? params (c | u | $ y)`, or `CSI 6 ; h ; w t`.
 fn scan_csi(b: &[u8]) -> Scan {
     match b.get(2) {
         None => return Scan::Incomplete,
         Some(b'?') => {}
+        Some(c) if c.is_ascii_digit() => return scan_cell_size(b),
         Some(_) => return Scan::NotReply,
     }
     let start = 3;
@@ -286,6 +325,36 @@ fn scan_csi(b: &[u8]) -> Scan {
             }
             Some(_) => Scan::NotReply,
         },
+        Some(_) => Scan::NotReply,
+    }
+}
+
+/// `CSI 6 ; height ; width t`, the answer to `CSI 16 t`. Anything else
+/// starting `CSI <digit>` (a key such as `CSI 1 ; 5 A`) is typeahead.
+fn scan_cell_size(b: &[u8]) -> Scan {
+    let mut i = 2;
+    while i < b.len() && (b[i].is_ascii_digit() || b[i] == b';') {
+        i += 1;
+    }
+    if i > MAX_REPLY_LEN {
+        return Scan::NotReply;
+    }
+    match b.get(i) {
+        None => Scan::Incomplete,
+        Some(b't') => {
+            let text = String::from_utf8_lossy(&b[2..i]);
+            let nums: Vec<Option<u16>> = text.split(';').map(|n| n.parse().ok()).collect();
+            match nums.as_slice() {
+                [Some(6), Some(height), Some(width)] => Scan::Reply(
+                    ProbeReply::CellSize {
+                        width: *width,
+                        height: *height,
+                    },
+                    i + 1,
+                ),
+                _ => Scan::NotReply,
+            }
+        }
         Some(_) => Scan::NotReply,
     }
 }
@@ -561,7 +630,10 @@ fn run(
     out_rx: Receiver<Out>,
 ) -> Result<String, String> {
     let mut probe = probe().map_err(|e| format!("probing the terminal: {e}"))?;
-    let caps = probe.caps(std::env::var("COLORTERM").ok().as_deref());
+    let mut caps = probe.caps(std::env::var("COLORTERM").ok().as_deref());
+    if let Ok(list) = std::env::var(TEST_CAPS_ENV) {
+        caps = with_test_caps(caps, &list);
+    }
     let typeahead = probe.take_typeahead();
 
     let (cols, rows) = tty_size();
@@ -864,6 +936,26 @@ fn start_signal_thread(out: SyncSender<Out>) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_caps_turn_named_caps_on_and_leave_the_rest() {
+        let probed = Caps {
+            sync: true,
+            ..Caps::default()
+        };
+        assert_eq!(
+            with_test_caps(probed, "kitty_graphics, truecolor,bogus,cell_px=10x20"),
+            Caps {
+                truecolor: true,
+                sync: true,
+                kitty_graphics: true,
+                cell_px: Some((10, 20)),
+                ..Caps::default()
+            }
+        );
+        assert_eq!(with_test_caps(probed, "cell_px=10"), probed);
+        assert_eq!(with_test_caps(probed, ""), probed);
+    }
+
     /// A fixture under tests/fixtures/probe: `#` lines are comments, `\e` is
     /// ESC and `\\` a backslash.
     fn fixture(text: &str) -> Vec<u8> {
@@ -901,6 +993,7 @@ mod tests {
         sync: true,
         kitty_keys: true,
         kitty_graphics: true,
+        cell_px: None,
     };
 
     #[test]
@@ -1012,6 +1105,28 @@ mod tests {
         assert!(p.done());
         assert!(!p.caps(None).kitty_keys, "a reply after DA1 is input");
         assert_eq!(p.into_typeahead(), b"\x1b[?0u");
+    }
+
+    /// `CSI 16 t` gives the cell size in pixels; a terminal that does not
+    /// answer leaves it unknown, and a key that looks similar is typeahead.
+    #[test]
+    fn the_cell_size_reply_is_read_and_its_absence_is_none() {
+        let p = parse(b"\x1b[6;20;10t\x1b[?62c");
+        assert!(p.done());
+        assert_eq!(p.caps(None).cell_px, Some((10, 20)));
+        assert!(p.into_typeahead().is_empty());
+        let p = parse(b"\x1b[?62c");
+        assert_eq!(p.caps(None).cell_px, None);
+        assert_eq!(parse(b"\x1b[6;0;0t").caps(None).cell_px, None);
+        // Split across reads.
+        let mut p = ProbeParser::default();
+        p.feed(b"\x1b[6;2");
+        p.feed(b"0;10t\x1b[?62c");
+        assert_eq!(p.caps(None).cell_px, Some((10, 20)));
+        // Keys with digits are typeahead, not replies.
+        let p = parse(b"\x1b[1;5A\x1b[3~\x1b[8;24;80t\x1b[?62c");
+        assert_eq!(p.caps(None).cell_px, None);
+        assert_eq!(p.into_typeahead(), b"\x1b[1;5A\x1b[3~\x1b[8;24;80t");
     }
 
     #[test]

@@ -15,12 +15,15 @@ use std::collections::BTreeMap;
 use std::num::IntErrorKind;
 
 use crate::cmd::{
-    Command, DisplayMessage, FormatVars, ListPanes, ListSessions, ListWindows, OptionScope,
-    Resolve, SetOption, ShowOptions, Target, expand,
+    BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
+    OptionScope, Reload, Resolve, SetOption, ShowOptions, SourceFile, Target, UnbindKey, expand,
+    split_command_string,
 };
 use crate::event::Event;
 use crate::protocol::ClientCtx;
+use crate::server::dispatch::not_implemented;
 use crate::server::events::Events;
+use crate::server::input::parse_key;
 use crate::server::model::{Model, PANE_BASE_INDEX};
 use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
@@ -62,6 +65,12 @@ struct Builtin {
 // `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
 // title, and the window formats without `#{window_flags}` (M3.6). tmux's
 // escape-time is a server option; grofe's server scope is global.
+//
+// M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
+// where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
+// external), `focus-events` on (tmux off), `pane-active-border-style`
+// `fg=green` (tmux's is a format that also colours copy mode and
+// synchronized panes). `status-position` takes only `bottom` until TC.11.
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -194,7 +203,49 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
+    Builtin {
+        name: "mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "set-clipboard",
+        kind: Kind::Choice(&["off", "external", "on"]),
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "focus-events",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "pane-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "pane-active-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "fg=green",
+    },
+    Builtin {
+        name: "status-position",
+        kind: Kind::Choice(&["bottom"]),
+        scope: OptionScope::Session,
+        default: "bottom",
+    },
 ];
+
+/// Every built-in option's name, in table order (T3.1 walks it to check
+/// its TOML name table is complete).
+pub fn builtin_names() -> impl Iterator<Item = &'static str> {
+    BUILTINS.iter().map(|b| b.name)
+}
 
 fn builtin(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
@@ -568,6 +619,46 @@ fn quote(value: &str) -> String {
     }
 }
 
+/// Applies the config chain once at server start (T3.5 fills it in; R9).
+pub fn apply_config_at_start(_state: &mut State) {}
+
+/// `bind-key`, minimal until T3.5 replaces it (R25): binds in
+/// `Registry.key_tables`, with no source and no note. A single command
+/// argument is a command string, split like a stored one (R12); several
+/// are one command's argv.
+pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
+    let key = parse_key(&c.key).map_err(|_| format!("unknown key: {}", c.key))?;
+    let cmds = match c.command.as_slice() {
+        [one] => split_command_string(one).map_err(|e| e.to_string())?,
+        argv => vec![argv.to_vec()],
+    };
+    state
+        .registry
+        .key_tables
+        .bind_seq(&c.table, key, cmds, c.repeat);
+    Ok(String::new())
+}
+
+/// `unbind-key` (T3.5).
+pub fn unbind_key(_state: &mut State, _ctx: &ClientCtx, _c: UnbindKey) -> Result<String, String> {
+    not_implemented("unbind-key")
+}
+
+/// `list-keys` (T3.5).
+pub fn list_keys(_state: &mut State, _ctx: &ClientCtx, _c: ListKeys) -> Result<String, String> {
+    not_implemented("list-keys")
+}
+
+/// `source-file` (T3.5).
+pub fn source_file(_state: &mut State, _ctx: &ClientCtx, _c: SourceFile) -> Result<String, String> {
+    not_implemented("source-file")
+}
+
+/// `reload` (T3.5, spec §5.4).
+pub fn reload(_state: &mut State, _ctx: &ClientCtx, _c: Reload) -> Result<String, String> {
+    not_implemented("reload")
+}
+
 /// tmux's default `display-message` text, minus the clock (strftime is
 /// M2).
 const DEFAULT_MESSAGE: &str =
@@ -668,6 +759,7 @@ impl FormatVars for FormatCtx<'_> {
             "window_active" => flag(s.active == w.id),
             "window_zoomed_flag" => flag(w.zoomed),
             "window_width" => w.cols.to_string(),
+            "window_bell_flag" => flag(w.bell_flag),
             "window_height" => w.rows.to_string(),
             "window_panes" => w.layout.compute(w.area()).len().to_string(),
             "session_windows" => s.windows.len().to_string(),
@@ -688,6 +780,8 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
+            "pane_left" => pane_origin(w, p.id)?.0.to_string(),
+            "pane_top" => pane_origin(w, p.id)?.1.to_string(),
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
@@ -696,6 +790,19 @@ impl FormatVars for FormatCtx<'_> {
             _ => return None,
         })
     }
+}
+
+/// A pane's top-left cell in its window: the layout's, or the window's
+/// origin for a zoomed window's active pane.
+fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u16)> {
+    if w.zoomed && w.active == pane {
+        return Some((0, 0));
+    }
+    w.layout
+        .compute(w.area())
+        .into_iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, r)| (r.x, r.y))
 }
 
 #[cfg(test)]
@@ -796,6 +903,36 @@ mod tests {
         o.retain_live(&Model::default());
         let owners: BTreeSet<Owner> = o.values.keys().copied().collect();
         assert_eq!(owners, BTreeSet::from([Owner::Global]));
+    }
+
+    /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
+    /// defaults, and tmux's value checks.
+    #[test]
+    fn m3_rows_have_grofe_defaults_and_tmux_scopes() {
+        let o = Options::new(false);
+        for (name, default, scope) in [
+            ("mouse", "on", OptionScope::Session),
+            ("set-clipboard", "on", OptionScope::Global),
+            ("focus-events", "on", OptionScope::Global),
+            ("pane-border-style", "default", OptionScope::Window),
+            ("pane-active-border-style", "fg=green", OptionScope::Window),
+            ("status-position", "bottom", OptionScope::Session),
+        ] {
+            assert_eq!(o.lookup(name, &[]), Some(default), "{name}");
+            assert_eq!(builtin(name).map(|b| b.scope), Some(scope), "{name}");
+            assert!(builtin_names().any(|n| n == name), "{name}");
+        }
+        assert_eq!(validate("set-clipboard", "external"), Ok("external".into()));
+        assert_eq!(
+            validate("set-clipboard", "maybe"),
+            Err("unknown value: maybe".to_string())
+        );
+        assert_eq!(validate("mouse", "yes"), Ok("on".into()));
+        assert_eq!(
+            validate("status-position", "top"),
+            Err("unknown value: top".to_string())
+        );
+        assert_eq!(builtin_names().count(), BUILTINS.len());
     }
 
     #[test]
