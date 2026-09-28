@@ -195,6 +195,15 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
             } else {
                 letterbox.clone()
             };
+            if cx == 0 && vx > 0 && inside {
+                // The placeholder's left neighbour is cropped away: its
+                // inherited values must be spelled out.
+                let row = wy as usize * window.cols as usize;
+                let row = &window.cells[row..row + window.cols as usize];
+                if let Some(explicit) = graphics::detach_left(row, wx as usize) {
+                    cell = explicit;
+                }
+            }
             // A wide char cut by the crop edge is drawn as a space.
             let cut_left = cx == 0 && cell.flags.contains(CellFlags::WIDE_CHAR_SPACER);
             let cut_right = cx + 1 == cols && cell.flags.contains(CellFlags::WIDE_CHAR);
@@ -246,7 +255,7 @@ fn compose_window(inputs: &FrameInputs) -> Screen {
     let area = inputs.area;
     let mut win = Screen::new(area.cols, area.rows);
     let width = area.cols as usize;
-    for (_, rect, snap) in &inputs.panes {
+    for (id, rect, snap) in &inputs.panes {
         for (ry, row) in snap.rows.iter().take(rect.rows as usize).enumerate() {
             let wy = rect.y as usize + ry;
             if wy >= area.rows as usize {
@@ -271,6 +280,11 @@ fn compose_window(inputs: &FrameInputs) -> Screen {
                     cell = blank_like(&cell);
                 }
                 win.cells[wy * width + wx] = cell;
+            }
+            let left = wy * width + rect.x as usize;
+            let right = wy * width + right;
+            if left < right {
+                graphics::rewrite_row(&mut win.cells[left..right], *id, inputs.graphics);
             }
         }
     }
@@ -492,8 +506,9 @@ struct Writer<'a> {
     out: Vec<u8>,
     /// Where the outer cursor is, when known.
     pos: Option<(u16, u16)>,
-    /// The SGR state last written in this diff; `None` until the first.
-    pen: Option<Style>,
+    /// The SGR state last written in this diff, and the caps it was
+    /// written for; `None` until the first.
+    pen: Option<(Style, Caps)>,
     /// The OSC 8 hyperlink open on the outer terminal (R20).
     link: Option<Hyperlink>,
     cols: u16,
@@ -509,9 +524,22 @@ impl Writer<'_> {
         }
         self.link_to(cell.hyperlink.as_ref());
         let style = cell_style(cell);
-        if self.pen != Some(style) {
-            write_sgr(&mut self.out, &style, self.caps);
-            self.pen = Some(style);
+        // A placeholder's colour is its image id and its underline colour
+        // the placement id: never downgraded or dropped for a terminal
+        // that shows kitty graphics.
+        let caps = if cell.c == graphics::PLACEHOLDER {
+            Caps {
+                truecolor: true,
+                styled_underline: self.caps.styled_underline || self.caps.kitty_graphics,
+                ..*self.caps
+            }
+        } else {
+            *self.caps
+        };
+        let pen = (style, caps);
+        if self.pen != Some(pen) {
+            write_sgr(&mut self.out, &style, &caps);
+            self.pen = Some(pen);
         }
         let c = if cell.c < ' ' || cell.c == '\u{7f}' {
             ' '
