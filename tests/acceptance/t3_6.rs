@@ -806,3 +806,37 @@ fn new_session_on_a_terminal_attaches_and_detaches() {
     b.wait_for(&format!("[detached (from session {name})]"));
     b.wait_exit();
 }
+
+/// A session whose command exits at once takes an auto-started server with
+/// it before the client attaches; as tmux 3.7b, the CLI says `[exited]` and
+/// exits 0.
+#[test]
+fn new_session_that_exits_at_once_reports_exited() {
+    let srv = TestServer::unstarted();
+    let base = srv.command();
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "\"$0\" \"$@\"; echo \"EXIT=$?\""])
+        .arg(base.get_program())
+        .args(base.get_args())
+        .args(["new-session", "-s", "q", "true"])
+        .env("TERM", "xterm-256color")
+        .env("GROFE_REMAIN_ON_EXIT", "0");
+    if let Some(dir) = base.get_current_dir() {
+        cmd.current_dir(dir);
+    }
+    for (key, value) in base.get_envs() {
+        if key == "GROFE_REMAIN_ON_EXIT" {
+            continue;
+        }
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
+    }
+    let mut a = Harness::spawn(cmd, COLS, ROWS);
+    a.wait_for("EXIT=");
+    let text = a.text();
+    assert!(text.contains("[exited]"), "{text}");
+    assert!(text.contains("EXIT=0"), "{text}");
+    assert!(!text.contains("Broken pipe"), "{text}");
+}

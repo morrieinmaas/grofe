@@ -330,10 +330,32 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
     };
-    attach(
-        &socket,
-        &["attach-session".to_string(), "-t".to_string(), id],
-    )
+    let argv = ["attach-session".to_string(), "-t".to_string(), id];
+    match attach_to(&socket, &argv) {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
+        // The session was made and is already gone (its command exited at
+        // once, and an auto-started server with it): tmux 3.7b says
+        // `[exited]` and exits 0.
+        Err(e) if session_gone(&e) => {
+            println!("[exited]");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// Whether an attach error means the session (or its server) went away
+/// between being created and being attached to.
+fn session_gone(err: &str) -> bool {
+    err == "no sessions"
+        || err.starts_with("no server running")
+        || err.starts_with("can't find session")
+        || err.contains("Broken pipe")
+        || err.contains("Connection reset")
+        || err.starts_with("server closed the connection")
 }
 
 /// Sends `argv` as one control-mode request and exits with its status.
@@ -370,14 +392,23 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
+    match attach_to(socket, argv) {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// [`attach`]'s work: the reason the client was let go, or the error.
+fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
     let parsed = match grofe::cmd::parse(argv) {
         Ok(grofe::cmd::Command::AttachSession(a)) => a,
-        Ok(_) => return fail("attach-session: unexpected command"),
-        Err(e) => return fail(&e.to_string()),
+        Ok(_) => return Err("attach-session: unexpected command".to_string()),
+        Err(e) => return Err(e.to_string()),
     };
-    if let Err(e) = control_hello(socket) {
-        return fail(&e);
-    }
+    control_hello(socket)?;
     // tmux's attach starts a server, which finds no sessions; grofe's does
     // not start one and says what tmux would.
     let connect_attach = || match connect(socket) {
@@ -391,14 +422,11 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
         .collect();
     match connect_attach().and_then(|s| request(s, socket, &check)) {
         Ok(Reply::Ok { .. }) => {}
-        Ok(Reply::Err { err, .. }) => return fail(&err),
-        Ok(Reply::Event(_)) => return fail("unexpected event reply"),
-        Err(e) => return fail(&e),
+        Ok(Reply::Err { err, .. }) => return Err(err),
+        Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
+        Err(e) => return Err(e),
     }
-    let stream = match connect_attach() {
-        Ok(s) => s,
-        Err(e) => return fail(&e),
-    };
+    let stream = connect_attach()?;
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: client_pane(
@@ -417,13 +445,7 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
         nest: parsed.nest,
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
-    match client::attach(stream, ctx, opts, term) {
-        Ok(reason) => {
-            println!("[{reason}]");
-            ExitCode::SUCCESS
-        }
-        Err(e) => fail(&e),
-    }
+    client::attach(stream, ctx, opts, term)
 }
 
 /// Connects to a running server, or explains that there is none.
