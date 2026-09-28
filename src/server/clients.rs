@@ -544,6 +544,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     let Some(mut c) = state.clients.remove(&id) else {
         return;
     };
+    crate::server::prompt::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
     }

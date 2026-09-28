@@ -908,8 +908,8 @@ impl KeyTables {
 /// for the commands grofe has so far, with repeat where tmux has `-r`. New
 /// panes and windows open in the active pane's cwd (spec §5.3), which tmux
 /// leaves to a `-c '#{pane_current_path}'` in the user's config. Stock keys
-/// whose commands arrive later (`x` and `&` need `confirm-before`, `,` and
-/// `$` need `command-prompt`, `o` needs `+` target offsets) stay unbound.
+/// whose commands arrive later (`x` and `&` need `confirm-before`, `o`
+/// needs `+` target offsets) stay unbound.
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool| {
@@ -931,6 +931,17 @@ pub fn default_bindings() -> KeyTables {
     bind("L", &["switch-client", "-l"], false);
     bind("z", &["resize-pane", "-Z"], false);
     bind("C-b", &["send-prefix"], false);
+    bind(":", &["command-prompt"], false);
+    bind(
+        ",",
+        &["command-prompt", "-I", "#W", "rename-window \"%%\""],
+        false,
+    );
+    bind(
+        "$",
+        &["command-prompt", "-I", "#S", "rename-session \"%%\""],
+        false,
+    );
     for n in 0..=9 {
         let target = format!(":{n}");
         bind(&n.to_string(), &["select-window", "-t", &target], false);
@@ -2526,6 +2537,17 @@ mod tests {
             ("0", &["select-window", "-t", ":0"], false),
             ("9", &["select-window", "-t", ":9"], false),
             ("C-b", &["send-prefix"], false),
+            (":", &["command-prompt"], false),
+            (
+                ",",
+                &["command-prompt", "-I", "#W", "rename-window \"%%\""],
+                false,
+            ),
+            (
+                "$",
+                &["command-prompt", "-I", "#S", "rename-session \"%%\""],
+                false,
+            ),
             ("Up", &["select-pane", "-U"], true),
             ("Down", &["select-pane", "-D"], true),
             ("Left", &["select-pane", "-L"], true),
@@ -2545,7 +2567,7 @@ mod tests {
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
         // Stock keys whose commands M2 lacks stay unbound.
-        for name in ["x", "&", ",", "$", ":", "o", ";", "q", "s", "w", "[", "]"] {
+        for name in ["x", "&", "o", ";", "q", "s", "w", "[", "]"] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }
