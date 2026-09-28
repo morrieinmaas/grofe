@@ -34,11 +34,13 @@ enum Kind {
     Number {
         max: i64,
     },
-    /// Free text, stored as given. Formats, styles and key names in it are
-    /// checked where they are used (status line, key tables), not here.
+    /// Free text, stored as given. Formats and styles in it are checked
+    /// where they are used (the status line), not here.
     String,
     /// One of a fixed set of words (tmux's choice options).
     Choice(&'static [&'static str]),
+    /// A key name or `None`, stored in tmux's canonical spelling.
+    Key,
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -156,7 +158,7 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prefix",
-        kind: Kind::String,
+        kind: Kind::Key,
         scope: OptionScope::Session,
         default: "C-b",
     },
@@ -345,6 +347,8 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             _ => Err(format!("bad value: {value}")),
         },
         Kind::String => Ok(value.to_string()),
+        Kind::Key => crate::server::input::parse_prefix(value)
+            .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
         Kind::Choice(words) => words
             .contains(&value)
             .then(|| value.to_string())
@@ -788,6 +792,25 @@ mod tests {
 
     /// Each case recorded from tmux 3.7b (`set -g @t <value>; show -g @t`)
     /// on a private socket.
+    /// Recorded on tmux 3.7b (`set -g prefix X; show -gv prefix`).
+    #[test]
+    fn prefix_is_a_key_name_stored_as_tmux_spells_it() {
+        for (given, stored) in [
+            ("C-a", "C-a"),
+            ("c-B", "C-B"),
+            ("M-C-x", "C-M-x"),
+            ("^a", "C-a"),
+            ("pgup", "PPage"),
+            ("none", "None"),
+            ("C-S-a", "C-S-a"),
+            ("S-Tab", "S-Tab"),
+            ("BTab", "BTab"),
+        ] {
+            assert_eq!(validate("prefix", given), Ok(stored.to_string()), "{given}");
+        }
+        assert_eq!(validate("prefix", "foo"), Err("bad key: foo".to_string()));
+    }
+
     #[test]
     fn show_quotes_like_tmux() {
         for (value, shown) in [
