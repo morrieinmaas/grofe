@@ -9,7 +9,7 @@ use crate::protocol::ClientCtx;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
-use crate::server::model::{BASE_INDEX, DEFAULT_SIZE, Session, Window};
+use crate::server::model::{DEFAULT_SIZE, Session, Window};
 use crate::server::{State, clients};
 use crate::types::{SessionId, cap_size};
 
@@ -38,7 +38,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     let window = model.alloc_window_id();
     let pane = spawn_pane(
         state,
-        window,
+        (id, window),
         ctx.env.clone(),
         command_argv(c.command),
         cwd.clone(),
@@ -64,7 +64,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     model.insert_window(Window {
         id: window,
         session: id,
-        index: BASE_INDEX,
+        index: model.base_index(id),
         name: default_name(&cwd),
         layout: LayoutTree::new(pane),
         active: pane,

@@ -869,9 +869,8 @@ impl BindingSource {
 /// (`bind -r`), and where it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    /// Each command's argv (R12: a binding may be a sequence), stored
-    /// through `cmd::parse::escape_stored`, so a literal `;` argument
-    /// survives `parse_sequence`.
+    /// Each command's argv (R12: a binding may be a sequence), run as
+    /// already split, so a literal `;` argument stays literal.
     pub cmds: Vec<Vec<String>>,
     pub repeat: bool,
     pub source: BindingSource,
@@ -885,10 +884,7 @@ impl Binding {
     /// A default-table binding: no description or name.
     pub fn new(cmds: Vec<Vec<String>>, repeat: bool, source: BindingSource) -> Binding {
         Binding {
-            cmds: cmds
-                .into_iter()
-                .map(crate::cmd::parse::escape_stored)
-                .collect(),
+            cmds,
             repeat,
             source,
             desc: None,
@@ -945,12 +941,14 @@ impl KeyTables {
     }
 
     /// `unbind-key` at runtime: removed now and kept removed by `reload`.
+    /// A key that was not bound is not recorded, so a later config
+    /// binding of it still applies.
     pub fn unbind_runtime(&mut self, table: &str, key: &Key) {
-        self.unbind(table, key);
-        if !self
-            .runtime_unbound
-            .iter()
-            .any(|(t, k)| t == table && k == key)
+        if self.unbind(table, key)
+            && !self
+                .runtime_unbound
+                .iter()
+                .any(|(t, k)| t == table && k == key)
         {
             self.runtime_unbound.push((table.to_string(), *key));
         }
@@ -1013,8 +1011,9 @@ impl KeyTables {
     pub fn with_config_from(&self, fresh: KeyTables) -> KeyTables {
         let mut t = fresh;
         for (table, key) in &self.runtime_unbound {
-            t.unbind_runtime(table, key);
+            t.unbind(table, key);
         }
+        t.runtime_unbound = self.runtime_unbound.clone();
         for (table, bindings) in &self.tables {
             for (key, b) in bindings.iter().filter(|(_, b)| !b.source.is_config()) {
                 t.insert(table, *key, b.clone());
@@ -2815,22 +2814,6 @@ mod tests {
         assert!(
             t.exact(PREFIX_TABLE, &k("c")).is_none(),
             "runtime unbind kept"
-        );
-    }
-
-    /// A literal `;` argument is stored escaped, so the argv split of
-    /// `parse_sequence` leaves it alone (R12).
-    #[test]
-    fn a_literal_semicolon_argument_is_stored_escaped() {
-        let b = Binding::new(
-            vec![argv(&["send-keys", ";"])],
-            false,
-            BindingSource::Default,
-        );
-        assert_eq!(b.cmds, vec![argv(&["send-keys", "\\;"])]);
-        assert_eq!(
-            crate::cmd::parse::split_argv(&b.cmds[0]),
-            vec![argv(&["send-keys", ";"])]
         );
     }
 

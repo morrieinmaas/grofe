@@ -1385,7 +1385,7 @@ pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>]) {
             pane: active_pane(&state.model, c.session),
             ..c.ctx.clone()
         };
-        let result = dispatch::run(state, &ctx, argv);
+        let result = dispatch::run_split(state, &ctx, argv);
         state.deferred_reply = None;
         if let Err(e) = result {
             show_message(state, id, e.trim_end());

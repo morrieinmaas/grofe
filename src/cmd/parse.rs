@@ -1236,27 +1236,6 @@ pub fn split_argv(argv: &[String]) -> Vec<Vec<String>> {
     cmds
 }
 
-/// A stored command's argv made safe for [`parse_sequence`]: an argument
-/// that ends in `;` (a quoted `';'` in a binding string, R12) gets the
-/// `\;` that [`split_argv`] reads back as a literal, so a stored sequence
-/// splits only between its commands.
-pub fn escape_stored(argv: Vec<String>) -> Vec<String> {
-    argv.into_iter()
-        .map(|a| match a.strip_suffix(';') {
-            Some(stem) => format!("{stem}\\;"),
-            None => a,
-        })
-        .collect()
-}
-
-/// The inverse of [`escape_stored`], for printing a stored argv.
-pub fn unescape_stored(arg: &str) -> String {
-    match arg.strip_suffix("\\;") {
-        Some(stem) => format!("{stem};"),
-        None => arg.to_string(),
-    }
-}
-
 /// Resolves a handful of well-known tmux short names to the full command
 /// name `parse` matches on. `set`/`show` are load-bearing (spec §4.5);
 /// the rest are recognised where trivially table-driven.
@@ -2457,16 +2436,6 @@ mod tests {
             let want: Vec<Vec<String>> = want.iter().map(|c| argv(c)).collect();
             assert_eq!(split_argv(&argv(given)), want, "{given:?}");
         }
-    }
-
-    /// R12: a stored `';'` stays one literal argument through the split.
-    #[test]
-    fn stored_arguments_survive_the_argv_split() {
-        let words = ["send-keys", ";", "a;", "b\\;", "c"];
-        let stored = escape_stored(argv(&words));
-        assert_eq!(split_argv(&stored), vec![argv(&words)]);
-        let shown: Vec<String> = stored.iter().map(|a| unescape_stored(a)).collect();
-        assert_eq!(shown, argv(&words));
     }
 
     #[test]

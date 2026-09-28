@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
 use std::path::Path;
 
-use crate::cmd::parse::unescape_stored;
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
     OptionScope, Reload, Resolve, SetOption, ShowOptions, SourceFile, Target, UnbindKey, expand,
@@ -26,7 +25,7 @@ use crate::event::Event;
 use crate::protocol::ClientCtx;
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
-use crate::server::model::{Model, PANE_BASE_INDEX};
+use crate::server::model::Model;
 use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
@@ -57,9 +56,8 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 and M2 need. `history-limit`, `base-index`
-// and `pane-base-index` are stored and shown, but the model still uses its
-// constants for them until config (M3) wires options through.
+// ponytail: only the options M1 to M3 need. `history-limit`, `base-index`
+// and `pane-base-index` take effect through the model (T3.5).
 //
 // M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
 // tmux's except where grofe differs on purpose or M2 formats cannot yet say
@@ -753,15 +751,20 @@ fn set_global(model: &mut Model, events: &mut Events, name: &str, value: &str) {
 /// `bind-key` (R25 grown up): binds in `Registry.key_tables` as a runtime
 /// binding, which `list-keys` marks and `reload` keeps (R10). A single
 /// command argument is a command string, split like a stored one (R12);
-/// several are one command's argv. Each command must parse, as tmux
-/// checks at bind time; no command at all changes nothing, as in tmux.
+/// several are split at `;` arguments as the CLI splits argv (tmux 3.7b:
+/// `bind y split-window '\;' select-pane -L` binds both). Each command
+/// must parse, as tmux checks at bind time; no command at all changes
+/// nothing, as in tmux.
 pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
     let key = parse_key(&c.key).map_err(|_| format!("unknown key: {}", c.key))?;
     let cmds = match c.command.as_slice() {
         [one] => split_command_string(one).map_err(|e| e.to_string())?,
         [] => return Ok(String::new()),
-        argv => vec![argv.to_vec()],
+        argv => crate::cmd::parse::split_argv(argv),
     };
+    if cmds.is_empty() {
+        return Ok(String::new());
+    }
     for argv in &cmds {
         crate::cmd::parse(argv).map_err(|e| e.to_string())?;
     }
@@ -824,12 +827,7 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     let cmds: Vec<String> = b
         .cmds
         .iter()
-        .map(|argv| {
-            argv.iter()
-                .map(|a| quote(&unescape_stored(a)))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|argv| argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "))
         .collect();
     let source = match &b.source {
         BindingSource::Default => "default".to_string(),
@@ -1034,7 +1032,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
                 let pos = w.pane_ids().iter().position(|id| *id == p.id)?;
-                (pos as u32 + PANE_BASE_INDEX).to_string()
+                (pos as u32 + m.pane_base_index(w.id)).to_string()
             }
             "pane_active" => flag(w.active == p.id),
             "pane_pid" => p.handle.pid()?.to_string(),
@@ -1076,7 +1074,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::server::model::{BASE_INDEX, HISTORY_LIMIT};
+    use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
 
     #[test]
     fn same_value_set_is_a_no_op() {

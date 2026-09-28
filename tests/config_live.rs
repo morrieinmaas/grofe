@@ -513,3 +513,170 @@ fn an_empty_command_unbinds_a_stock_key() {
         keys(&srv, "prefix")
     );
 }
+
+/// Fix round 1: a binding's argv is already split, so a literal `;`
+/// argument stays literal, and `list-keys` prints a string that binds the
+/// same thing again (a round trip).
+#[test]
+fn list_keys_output_binds_the_same_sequence_again() {
+    let srv = start(&[(
+        "config.toml",
+        "[keys.prefix]\nk = \"send-keys ';' Enter ; display -p 'q;'\"\n",
+    )]);
+    let cmd_of = |key: &str| {
+        let line = key_line(&srv, "prefix", key);
+        let rest = line
+            .split_once(&format!("-T prefix {key} "))
+            .map(|(_, r)| r.to_string())
+            .unwrap_or_default();
+        rest.split_once("  # ")
+            .map(|(c, _)| c.to_string())
+            .unwrap_or_default()
+    };
+    let printed = cmd_of("k");
+    assert_eq!(printed, "send-keys \\; Enter \\; display -p \"q;\"");
+    srv.cmd(&["bind-key", "K", &printed]).expect("rebind");
+    assert_eq!(cmd_of("K"), printed);
+}
+
+/// Fix round 1: `bind-key` with several arguments splits them at `;`
+/// arguments, as tmux 3.7b does (recorded on `-L grofe-t35`:
+/// `bind y split-window '\\;' select-pane -L` binds both commands, and
+/// `bind V send-keys 'a\\;'` binds `send-keys a`).
+#[test]
+fn multi_argument_bind_key_splits_like_tmux() {
+    let srv = start(&[]);
+    srv.cmd(&[
+        "bind-key",
+        "y",
+        "split-window",
+        "-h",
+        "\\;",
+        "select-pane",
+        "-L",
+    ])
+    .expect("bind y");
+    assert_eq!(
+        key_line(&srv, "prefix", "y"),
+        "bind-key -T prefix y split-window -h \\; select-pane -L  # runtime"
+    );
+    srv.cmd(&["bind-key", "V", "send-keys", "a\\;"])
+        .expect("bind V");
+    assert_eq!(
+        key_line(&srv, "prefix", "V"),
+        "bind-key -T prefix V send-keys a  # runtime"
+    );
+    let mut a = attach(&srv);
+    a.wait_for_output(b"\x1b[2J", 0);
+    a.send("\x02y");
+    srv.wait_for(|| panes(&srv).len() == 2, Duration::from_secs(10))
+        .expect("two panes");
+    assert_left_active(&srv);
+}
+
+/// Fix round 1: commands typed at the prompt are already split, so a
+/// quoted `';'` is one literal argument.
+#[test]
+fn a_quoted_semicolon_at_the_prompt_stays_literal() {
+    let srv = start(&[]);
+    let mut a = attach(&srv);
+    a.wait_for_output(b"\x1b[2J", 0);
+    a.send("\x02:");
+    a.wait_for(":");
+    a.send("set -g @x 'q;' ; send-keys ';' Enter\r");
+    srv.wait_for(
+        || {
+            srv.capture("main")
+                .lines()
+                .filter(|l| l.trim() == ";")
+                .count()
+                == 2
+        },
+        Duration::from_secs(10),
+    )
+    .expect("`;` typed and echoed by cat");
+    assert_eq!(show(&srv, "@x"), "q;");
+}
+
+/// Fix round 1: a runtime `unbind-key` of a key that was not bound is not
+/// recorded, so a config binding of it added later still applies.
+#[test]
+fn unbinding_an_unbound_key_does_not_block_a_later_config_binding() {
+    let srv = start(&[]);
+    srv.cmd(&["unbind-key", "-T", "prefix", "F12"])
+        .expect("unbind");
+    write(&srv, "config.toml", "[keys.prefix]\nF12 = \"new-window\"\n");
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(
+        key_line(&srv, "prefix", "F12").contains("new-window"),
+        "{}",
+        keys(&srv, "prefix")
+    );
+}
+
+/// Fix round 1: `base-index` numbers new windows (tmux 3.7b: with
+/// `base-index 5`, the first window is 5 and the next 6).
+#[test]
+fn base_index_numbers_new_windows() {
+    let srv = start(&[("config.toml", "base-index = 5\n")]);
+    srv.cmd(&["new-window", "-d", "-t", "main"])
+        .expect("new-window");
+    let idx = srv
+        .cmd(&["list-windows", "-t", "main", "-F", "#{window_index}"])
+        .expect("lsw");
+    assert_eq!(idx, "5\n6\n");
+    srv.cmd(&["set", "-g", "base-index", "1"]).expect("set");
+    srv.cmd(&["new-window", "-d", "-t", "main"])
+        .expect("new-window");
+    let idx = srv
+        .cmd(&["list-windows", "-t", "main", "-F", "#{window_index}"])
+        .expect("lsw");
+    assert_eq!(idx, "1\n5\n6\n");
+}
+
+/// Fix round 1: `pane-base-index` sets `#{pane_index}` and what `.N`
+/// targets.
+#[test]
+fn pane_base_index_numbers_panes_in_formats_and_targets() {
+    let srv = start(&[]);
+    srv.cmd(&["split-window", "-t", "main"]).expect("split");
+    let fmt = ["list-panes", "-t", "main", "-F", "#{pane_index} #{pane_id}"];
+    let with_one = srv.cmd(&fmt).expect("list-panes");
+    let ids: Vec<&str> = with_one
+        .lines()
+        .filter_map(|l| l.split(' ').nth(1))
+        .collect();
+    assert!(with_one.starts_with("1 "), "{with_one}");
+    let second = srv
+        .cmd(&["display", "-p", "-t", ":.2", "#{pane_id}"])
+        .expect(":.2");
+    assert_eq!(second.trim(), ids[1]);
+
+    srv.cmd(&["set", "-g", "pane-base-index", "0"])
+        .expect("set");
+    let with_zero = srv.cmd(&fmt).expect("list-panes");
+    assert_eq!(with_zero, format!("0 {}\n1 {}\n", ids[0], ids[1]));
+    let second = srv
+        .cmd(&["display", "-p", "-t", ":.1", "#{pane_id}"])
+        .expect(":.1");
+    assert_eq!(second.trim(), ids[1]);
+}
+
+/// Fix round 1: `history-limit` is the scrollback a new pane keeps.
+#[test]
+fn history_limit_sizes_a_new_panes_scrollback() {
+    let srv = start(&[("config.toml", "history-limit = 7\n")]);
+    srv.cmd(&["new-window", "-d", "-t", "main:9", "seq 100; exec cat"])
+        .expect("new-window");
+    let capture = || {
+        srv.cmd(&["capture-pane", "-p", "-S", "-", "-t", "main:9"])
+            .unwrap_or_default()
+    };
+    srv.wait_for(|| capture().contains("100"), Duration::from_secs(10))
+        .expect("seq ran");
+    let text = capture();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    // 7 lines of history plus at most one screen of 23 rows.
+    assert!(lines.len() <= 30, "{} lines:\n{text}", lines.len());
+    assert_ne!(lines.first().copied(), Some("1"), "{text}");
+}
