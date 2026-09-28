@@ -15,8 +15,11 @@
 //!   `t3_3::focus_reports_follow_the_active_pane`.
 //! - The kitty flags checks without a config: `t2_5b::a_kitty_pane_gets_escape_as_csi_u`
 //!   and `t2_5b::a_kitty_tui_quits_on_a_bare_q`.
-//! - `kitten icat --unicode-placeholder` is T3.8's test, named here once
-//!   T3.8 merges.
+//! - `kitten icat --unicode-placeholder` (case 6):
+//!   `t3_8::kitten_icat_draws_through_grofe` and
+//!   `t3_8::kitten_icat_by_shared_memory_draws_through_grofe`, which skip
+//!   where `kitten` is absent, and the fixture replay
+//!   `t3_8::placeholder_images_reach_kitty_clients`, which always runs.
 
 #[allow(clippy::duplicate_mod)]
 #[path = "../common/mod.rs"]

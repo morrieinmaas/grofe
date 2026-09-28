@@ -42,8 +42,10 @@ hurt more than described.
   overlap its right neighbour.
 - **`grofe new-session` does not attach.** Every session is created
   detached (tmux attaches without `-d`); run `grofe attach` after it.
-- **`kitten icat --unicode-placeholder`** is checked once kitty graphics
-  (T3.8) has merged; until then image previews through grofe are untested.
+- **`kitten icat --unicode-placeholder`** runs through grofe in the
+  suite only where `kitten` is installed (T3.8's rule); the recorded
+  placeholder fixture always runs. Try one image preview by hand in each
+  terminal on day one and log what you see.
 - **XTVERSION** (`CSI > q`) from an app gets no reply (spec §8). An app that
   waits for one without a DA1 fence would hang until its own timeout.
 
