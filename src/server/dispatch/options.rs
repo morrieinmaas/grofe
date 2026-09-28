@@ -34,6 +34,11 @@ enum Kind {
     Number {
         max: i64,
     },
+    /// Free text, stored as given. Formats, styles and key names in it are
+    /// checked where they are used (status line, key tables), not here.
+    String,
+    /// One of a fixed set of words (tmux's choice options).
+    Choice(&'static [&'static str]),
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -45,9 +50,16 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 has. `history-limit`, `base-index` and
-// `pane-base-index` are stored and shown, but the model still uses its
+// ponytail: only the options M1 and M2 need. `history-limit`, `base-index`
+// and `pane-base-index` are stored and shown, but the model still uses its
 // constants for them until config (M3) wires options through.
+//
+// M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
+// tmux's except where grofe differs on purpose or M2 formats cannot yet say
+// the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
+// `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
+// title, and the window formats without `#{window_flags}` (M3.6). tmux's
+// escape-time is a server option; grofe's server scope is global.
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -75,6 +87,104 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "status",
+        kind: Kind::Choice(&["off", "on", "2", "3", "4", "5"]),
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "status-left",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "[#{session_name}] ",
+    },
+    Builtin {
+        name: "status-right",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "%H:%M %d-%b-%y",
+    },
+    Builtin {
+        name: "status-left-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "10",
+    },
+    Builtin {
+        name: "status-right-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "40",
+    },
+    Builtin {
+        name: "status-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=green,fg=black",
+    },
+    Builtin {
+        name: "status-interval",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "15",
+    },
+    Builtin {
+        name: "window-status-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name} ",
+    },
+    Builtin {
+        name: "window-status-current-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name}*",
+    },
+    Builtin {
+        name: "prefix",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "C-b",
+    },
+    Builtin {
+        name: "escape-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "25",
+    },
+    Builtin {
+        name: "repeat-time",
+        kind: Kind::Number { max: 2_000_000 },
+        scope: OptionScope::Session,
+        default: "500",
+    },
+    Builtin {
+        name: "automatic-rename",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "automatic-rename-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{b:pane_current_path}",
+    },
+    Builtin {
+        name: "allow-rename",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -230,6 +340,11 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
             _ => Err(format!("unknown value: {value}")),
         },
+        Kind::String => Ok(value.to_string()),
+        Kind::Choice(words) => words
+            .contains(&value)
+            .then(|| value.to_string())
+            .ok_or_else(|| format!("unknown value: {value}")),
         Kind::Number { max } => {
             let too_small = || format!("value is too small: {value}");
             let too_large = || format!("value is too large: {value}");
@@ -339,6 +454,16 @@ fn set_option(
         None if builtin(&c.name).is_some_and(|b| b.kind == Kind::Bool) => {
             let current = model.options.lookup(&c.name, &owner_chain(model, owner));
             bool_str(current != Some("on")).to_string()
+        }
+        // As tmux: a choice option given no value flips `off` and `on`
+        // and leaves any other word as it is.
+        None if builtin(&c.name).is_some_and(|b| matches!(b.kind, Kind::Choice(_))) => {
+            let current = model.options.lookup(&c.name, &owner_chain(model, owner));
+            match current {
+                Some("off") => "on".to_string(),
+                Some("on") => "off".to_string(),
+                other => other.unwrap_or_default().to_string(),
+            }
         }
         // An unknown name is reported before an absent value (tmux checks
         // the name first).

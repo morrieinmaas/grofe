@@ -287,21 +287,68 @@ pub enum ServerMsg { Control { ctx: ClientCtx, req: Request, reply: oneshot::Sen
                      Pane(PaneEvent), /* M2: client frames */ }
 ```
 
-### M2 seams (T2.2, T2.3, T2.5a)
+### M2 seams (T2.0; filled by T2.2, T2.3, T2.5a, T2.6)
+
+Landed by T2.0 as stubs; these names, fields and signatures are binding.
+Pane rects, borders and `FrameInputs.cursor` are window coordinates; a
+`Screen` is client coordinates.
 
 ```rust
+// types.rs
+pub struct ClientId(pub u32);
+// server/pane/mod.rs
+pub struct SnapCell { pub c: char, pub fg: Color, pub bg: Color, pub flags: CellFlags,
+                      pub zerowidth: Vec<char>, pub underline_color: Option<Color> /* SGR 58 */ }
+pub enum CursorShape { Block, Underline, Bar }
+pub struct CursorState { pub row: u16, pub col: u16, pub visible: bool, pub shape: CursorShape, pub blink: bool }
+pub struct RowsSnapshot { pub rows: Vec<Vec<SnapCell>>, pub cursor: CursorState }  // one lock
+impl PaneHandle { pub fn cursor(&self) -> CursorState; }   // panes run with kitty_keyboard on
+// protocol.rs
+pub struct Caps { pub truecolor: bool, pub styled_underline: bool, pub sync: bool,
+                  pub kitty_keys: bool, pub kitty_graphics: bool }   // serde default per field
+pub const HELLO_REPLY_ID: u64 = 0;  // attach hello -> ONE JSON Reply line (ok, or err then close), then frames
 // render.rs
-pub struct FrameInputs<'a> { pub area: Rect, pub panes: Vec<(Rect, RowsSnapshot)>, pub borders: Vec<BorderSegment>,
+pub struct Screen { pub cols: u16, pub rows: u16, pub cells: Vec<SnapCell> /* row-major */,
+                    pub cursor: Option<CursorState> }
+impl Screen { pub fn new(cols: u16, rows: u16) -> Screen; }
+pub struct FrameInputs<'a> { pub client: (u16, u16) /* cols, rows */, pub viewport: (u16, u16) /* window cell at client top-left */,
+                             pub area: Rect, pub panes: Vec<(PaneId, Rect, RowsSnapshot)>, pub borders: Vec<BorderSegment>,
                              pub active: PaneId, pub status: Option<StyledLine>, pub overlays: &'a [&'a dyn Overlay],
                              pub cursor: Option<CursorState> }
-pub fn compose(inputs: &FrameInputs) -> Frame;
-pub fn diff(prev: &Frame, next: &Frame, caps: &Caps) -> Vec<u8>;
-pub trait Overlay { fn draw(&self, frame: &mut Frame); }
+pub fn compose(inputs: &FrameInputs) -> Screen;
+pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8>;   // None = full redraw
+pub trait Overlay { fn draw(&self, screen: &mut Screen); }
+// status.rs
+pub struct Style { pub fg: Color, pub bg: Color, pub attrs: CellFlags }   // Default: terminal colours
+pub struct Span { pub text: String, pub style: Style }
+pub struct StyledLine { pub spans: Vec<Span> }   // one row, laid out for its width
 // input.rs
+pub struct Key { pub code: KeyCode, pub mods: Mods }
+pub enum KeyCode { Char(char), Enter, Tab, Backspace, Escape, Up, Down, Left, Right,
+                   Home, End, PageUp, PageDown, Insert, Delete, F(u8) }   // T2.3 may add variants
+pub struct Mods { pub ctrl: bool, pub alt: bool, pub shift: bool, pub super_: bool }
 pub enum Routed { Command(Vec<String>), ToPane(Vec<u8>), Consumed }
 pub trait InputHook { fn on_key(&mut self, key: &Key, client: ClientId) -> Option<Routed>; }
+// model.rs (MRU, no behaviour until T2.5a/T2.5b)
+Session { .., pub last_window: Option<WindowId> }
+Model { .., pub client_last_session: BTreeMap<ClientId, SessionId> }
 // server/mod.rs (T2.5a): register_overlay, register_input_hook; M3 tasks add one registration line each.
 ```
+
+M2 commands (parse and stub dispatch arms land in T2.0; T2.5a/T2.5b replace
+the "not implemented yet" arms): `AttachSession { target, detach_others /* -d */,
+nest /* --nest */ }` (alias `attach`), `DetachClient { session: Option<Target> /* -s */,
+client: Option<String> /* -t, raw */, all_others /* -a */ }`, `ListClients { format }`,
+`NextWindow`/`PreviousWindow`/`LastWindow(WindowStep { target })`,
+`RenameSession`/`RenameWindow(Rename { target, name })`, `SwitchClient { target:
+Option<Target>, last /* -l */, next /* -n */, previous /* -p */, key_table /* -T */ }`,
+`SendPrefix { target }`; `capture-pane -e` sets `CaptureOpts.escapes`.
+
+Options use tmux's names (M3's TOML `status.left` maps onto `status-left`):
+`status` (choice off/on/2-5), `status-left`, `status-right`, `status-left-length`,
+`status-right-length`, `status-style`, `status-interval`, `window-status-format`,
+`window-status-current-format`, `prefix`, `escape-time` (global), `repeat-time`,
+`automatic-rename`, `automatic-rename-format`, `allow-rename`.
 
 ### Test harness (T1.1b)
 
@@ -376,7 +423,7 @@ on macOS; CI green on both OSes.
 
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
-| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM (a panic in any thread restores the tty and exits); refuse only self-nesting attach (the target session contains the calling pane) without `-f`, and allow attach to another session from inside a pane (spec §4.6; the popup case lands with TC.6); `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs`, `tests/fixtures/probe/` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing. Unit: recorded Ghostty and WezTerm replies (DA1, XTVERSION, DECRQM 2026, kitty keyboard query, kitty graphics query) parse to the expected caps, including WezTerm without `enable_kitty_keyboard` (kitty keys off, everything else on) |
+| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM (a panic in any thread restores the tty and exits); refuse only self-nesting attach (the target session contains the calling pane) without `--nest` (`-f` is reserved for tmux's client flags, M3.6), and allow attach to another session from inside a pane (spec §4.6; the popup case lands with TC.6); `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs`, `tests/fixtures/probe/` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing. Unit: recorded Ghostty and WezTerm replies (DA1, XTVERSION, DECRQM 2026, kitty keyboard query, kitty graphics query) parse to the expected caps, including WezTerm without `enable_kitty_keyboard` (kitty keys off, everything else on) |
 | **T2.2** Renderer | `server/render.rs` per the M2 seams and spec §4.4: compose, diff, colour downgrade by caps, synchronized output, absolute cursor moves around wide cells, letterbox and crop viewport; replace `tests/term.rs`'s smulx negative test with a positive underline-style snapshot | `src/server/render.rs`, `tests/snapshots/`, `tests/render.rs` | Round-trip snapshots: single pane, splits, active border, colours in truecolor and 256 modes, emoji + VS16 + combining marks, cursor; unchanged frame diffs to nothing; one-cell change emits a short sequence |
 | **T2.3** Input and key tables | `server/input.rs`: decode client bytes (CSI, SS3, UTF-8, kitty keys, SGR mouse, paste as opaque blob), key tables with prefix and repeat, encode for a pane's `InputModes`, `InputHook` trait | `src/server/input.rs` | Table tests for decode and encode; prefix then `%` routes to the bound command; paste containing the prefix key is never matched; escape-time resolves lone ESC |
 | **T2.6** Status line | `server/status.rs` per spec §4.10: render `status.left/right`, `window-status-format` and `window-status-current-format` to a `StyledLine` with styles, expanding `#{}` inside `#[...]` and strftime sequences; add `#{==:a,b}`, `#{b:var}`, nesting and escaping to `cmd/format.rs` (contract edit: T2.6 co-owns `format.rs` for this) | `src/server/status.rs`, `src/cmd/format.rs` | Unit: formats with conditionals and user options render; `#[fg=#{@theme_blue}]` takes the option's colour; `%H:%M` expands against a fixed clock; `#{b:/a/b/c}` gives `c`; the current window uses the current format; overlong content truncates on the left side as tmux does |

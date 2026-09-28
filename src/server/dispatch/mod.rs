@@ -74,7 +74,24 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // The actor handles `subscribe` itself (`ServerMsg::Subscribe`),
         // since it needs the connection's event queue.
         Command::Subscribe(_) => Err("subscribe needs a control connection".to_string()),
+
+        // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest)
+        // replace these stubs.
+        Command::AttachSession(_) => not_yet("attach-session"),
+        Command::DetachClient(_) => not_yet("detach-client"),
+        Command::ListClients(_) => not_yet("list-clients"),
+        Command::NextWindow(_) => not_yet("next-window"),
+        Command::PreviousWindow(_) => not_yet("previous-window"),
+        Command::LastWindow(_) => not_yet("last-window"),
+        Command::RenameSession(_) => not_yet("rename-session"),
+        Command::RenameWindow(_) => not_yet("rename-window"),
+        Command::SwitchClient(_) => not_yet("switch-client"),
+        Command::SendPrefix(_) => not_yet("send-prefix"),
     }
+}
+
+fn not_yet(verb: &str) -> Result<String, String> {
+    Err(format!("{verb}: not implemented yet"))
 }
 
 /// The argv a trailing shell command runs as: a single argument goes

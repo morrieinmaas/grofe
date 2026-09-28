@@ -21,7 +21,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{self, TermMode};
-use alacritty_terminal::vte::ansi::{Color, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor};
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
 use nix::pty::{Winsize, openpty};
@@ -99,13 +99,38 @@ pub struct SnapCell {
     pub flags: CellFlags,
     /// Zero-width characters combined with `c`.
     pub zerowidth: Vec<char>,
+    /// The SGR 58 underline colour; `None` underlines in the foreground
+    /// colour.
+    pub underline_color: Option<Color>,
+}
+
+/// The cursor's shape, as DECSCUSR sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+/// Where the pane's cursor is and how it looks. `row` and `col` are 0-based
+/// in the pane's visible screen (row 0 is the top row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CursorState {
+    pub row: u16,
+    pub col: u16,
+    /// DECTCEM (`\e[?25h` / `\e[?25l`).
+    pub visible: bool,
+    pub shape: CursorShape,
+    pub blink: bool,
 }
 
 /// An owned copy of some visible rows, taken under the pane lock (M2 renderer
-/// input).
+/// input), with the cursor as it was under that same lock.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowsSnapshot {
     pub rows: Vec<Vec<SnapCell>>,
+    pub cursor: CursorState,
 }
 
 /// The emulator: `Term` and its parser, always locked together.
@@ -272,6 +297,9 @@ impl PaneHandle {
         let events = Arc::default();
         let config = term::Config {
             scrolling_history: spec.history_limit,
+            // Off by default in alacritty_terminal: push/pop/query would be
+            // ignored and a pane could never ask for kitty keys (spec §4.7).
+            kitty_keyboard: true,
             ..term::Config::default()
         };
         let emu = Arc::new(Mutex::new(Emu {
@@ -429,10 +457,16 @@ impl PaneHandle {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
+    /// The cursor's position, visibility and shape.
+    pub fn cursor(&self) -> CursorState {
+        cursor_state(&lock(&self.emu).term)
+    }
+
     /// Copy the visible rows in `rows` (0 is the top row; out-of-range rows
-    /// are skipped).
+    /// are skipped), and the cursor, under one lock.
     pub fn snapshot_rows(&self, rows: Range<u16>) -> RowsSnapshot {
         let emu = lock(&self.emu);
+        let cursor = cursor_state(&emu.term);
         let grid = emu.term.grid();
         let end = rows.end.min(grid.screen_lines() as u16);
         let rows = (rows.start..end)
@@ -447,12 +481,33 @@ impl PaneHandle {
                             bg: cell.bg,
                             flags: cell.flags,
                             zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                            underline_color: cell.underline_color(),
                         }
                     })
                     .collect()
             })
             .collect();
-        RowsSnapshot { rows }
+        RowsSnapshot { rows, cursor }
+    }
+}
+
+fn cursor_state(term: &Term<Listener>) -> CursorState {
+    let point = term.grid().cursor.point;
+    let style = term.cursor_style();
+    let shape = match style.shape {
+        VteCursorShape::Underline => CursorShape::Underline,
+        VteCursorShape::Beam => CursorShape::Bar,
+        VteCursorShape::Block | VteCursorShape::HollowBlock | VteCursorShape::Hidden => {
+            CursorShape::Block
+        }
+    };
+    CursorState {
+        row: point.line.0.max(0) as u16,
+        col: point.column.0 as u16,
+        visible: term.mode().contains(TermMode::SHOW_CURSOR)
+            && style.shape != VteCursorShape::Hidden,
+        shape,
+        blink: style.blinking,
     }
 }
 

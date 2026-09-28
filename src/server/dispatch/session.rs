@@ -54,6 +54,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cwd: cwd.clone(),
         cols: size.0,
         rows: size.1,
+        last_window: None,
     });
     model.insert_window(Window {
         id: window,

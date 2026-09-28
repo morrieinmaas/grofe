@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use grofe::server::pane::{PaneEvent, PaneEventKind, PaneHandle, PaneSpawn};
+use alacritty_terminal::vte::ansi::{Color, Rgb};
+use grofe::server::pane::{CursorShape, PaneEvent, PaneEventKind, PaneHandle, PaneSpawn};
 use grofe::types::{CaptureBound, CaptureOpts, PaneId};
 use tokio::sync::{Notify, mpsc};
 
@@ -401,4 +402,51 @@ async fn inherited_fd_without_cloexec_is_closed_in_the_child() {
 
     drop(write_fd);
     drop(read_fd);
+}
+
+/// alacritty_terminal ignores kitty keyboard push/pop/query unless its
+/// config turns the protocol on; a pane must honour what its app pushes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pane_honours_a_kitty_keyboard_push() {
+    let p = sh(1, "printf '\\033[>1uK'; sleep 5");
+    wait_screen(&p.handle, "K").await;
+    assert_eq!(p.handle.modes().kitty_flags, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cursor_reports_position_shape_and_visibility() {
+    // Row 3, column 5 (1-based CUP), blinking bar (DECSCUSR 5), then hidden.
+    let p = sh(1, "printf '\\033[3;5H\\033[5 qC'; sleep 5");
+    wait_screen(&p.handle, "C").await;
+    let c = p.handle.cursor();
+    assert_eq!((c.row, c.col), (2, 5), "{c:?}");
+    assert!(c.visible);
+    assert_eq!(c.shape, CursorShape::Bar);
+    assert!(c.blink);
+    // snapshot_rows carries the same cursor, taken under the same lock.
+    assert_eq!(p.handle.snapshot_rows(0..1).cursor, c);
+
+    let p = sh(2, "printf '\\033[4 q\\033[?25lH'; sleep 5");
+    wait_screen(&p.handle, "H").await;
+    let c = p.handle.cursor();
+    assert!(!c.visible);
+    assert_eq!(c.shape, CursorShape::Underline);
+    assert!(!c.blink);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_rows_carries_the_underline_colour() {
+    // SGR 58;2 sets an RGB underline colour (styled underline, spec §4.4).
+    let p = sh(1, "printf '\\033[4;58;2;10;20;30mU\\033[0mV'; sleep 5");
+    wait_screen(&p.handle, "UV").await;
+    let row = &p.handle.snapshot_rows(0..1).rows[0];
+    assert_eq!(
+        row[0].underline_color,
+        Some(Color::Spec(Rgb {
+            r: 10,
+            g: 20,
+            b: 30
+        }))
+    );
+    assert_eq!(row[1].underline_color, None);
 }

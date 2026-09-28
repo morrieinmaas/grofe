@@ -1,5 +1,5 @@
 //! `Command`, per-command argument shapes, and `ParseError` for the M1
-//! command set (spec §4.5). [`parse::parse`] turns argv into a `Command`;
+//! and M2 command sets (spec §4.5). [`parse::parse`] turns argv into a `Command`;
 //! `target`, `format` and `keys` hold the target grammar, `#{...}`
 //! expansion and the key-name table that a command's flags may reference.
 //!
@@ -243,7 +243,68 @@ pub struct Subscribe {
     pub events: Vec<String>,
 }
 
-/// One parsed command (spec §4.5, M1 set).
+/// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for
+/// self-nesting (spec §4.6); tmux's `-f` (client flags) is reserved for the
+/// tmux front end (M3.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachSession {
+    pub target: Target,
+    /// `-d`: detach other clients attached to the session.
+    pub detach_others: bool,
+    pub nest: bool,
+}
+
+/// `detach-client` (`-s -t -a`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachClient {
+    /// `-s`: detach every client attached to this session.
+    pub session: Option<Target>,
+    /// `-t`: the client, raw (T2.5a defines client names); `None` is the
+    /// requesting client.
+    pub client: Option<String>,
+    /// `-a`: detach every client except the target one.
+    pub all_others: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ListClients {
+    pub format: Option<String>,
+}
+
+/// `next-window`, `previous-window`, `last-window` (`-t` session).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowStep {
+    pub target: Target,
+}
+
+/// `rename-session`/`rename-window` (`-t`, new name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rename {
+    pub target: Target,
+    pub name: String,
+}
+
+/// `switch-client` (`-t -l -n -p -T`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchClient {
+    /// `-t`; `None` when not given.
+    pub target: Option<Target>,
+    /// `-l`: the client's last session.
+    pub last: bool,
+    /// `-n`: the next session.
+    pub next: bool,
+    /// `-p`: the previous session.
+    pub previous: bool,
+    /// `-T`: the key table to switch to.
+    pub key_table: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendPrefix {
+    pub target: Target,
+}
+
+/// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     NewSession(NewSession),
@@ -267,4 +328,15 @@ pub enum Command {
     DisplayMessage(DisplayMessage),
     KillServer(KillServer),
     Subscribe(Subscribe),
+    // M2 (T2.5a, T2.5b implement them).
+    AttachSession(AttachSession),
+    DetachClient(DetachClient),
+    ListClients(ListClients),
+    NextWindow(WindowStep),
+    PreviousWindow(WindowStep),
+    LastWindow(WindowStep),
+    RenameSession(Rename),
+    RenameWindow(Rename),
+    SwitchClient(SwitchClient),
+    SendPrefix(SendPrefix),
 }

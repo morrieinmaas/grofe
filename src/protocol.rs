@@ -3,6 +3,14 @@
 //! One socket, two modes, chosen by the first line the client sends (spec
 //! §4.6). Control mode is newline-delimited JSON both ways ([`Request`] /
 //! [`Reply`]); attach mode follows its JSON [`Hello`] with binary [`Frame`]s.
+//!
+//! **Attach handshake (spec §4.6).** The server answers an attach hello with
+//! exactly ONE JSON [`Reply`] line, id [`HELLO_REPLY_ID`]: `Reply::Ok` (its
+//! `out` empty) when it accepts, or `Reply::Err` for a refusal (no such
+//! session, self-nesting without `-f`) or a version mismatch, after which it
+//! closes the connection. After an ok line both sides switch to binary
+//! [`Frame`]s; bytes already buffered past the line belong to the frame
+//! stream and must not be dropped.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -77,6 +85,9 @@ mod env_map {
 #[serde(default)]
 pub struct Caps {
     pub truecolor: bool,
+    /// Styled (curly, dotted, dashed) and coloured underlines: SGR `4:x`
+    /// and SGR 58.
+    pub styled_underline: bool,
     pub sync: bool,
     pub kitty_keys: bool,
     pub kitty_graphics: bool,
@@ -107,6 +118,10 @@ pub enum Hello {
 /// line (spec §4.6). Until M6 the protocol is internal and may change
 /// between commits.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// The `id` of the one [`Reply`] line that answers an attach hello (a hello
+/// carries no request id of its own). See the module docs for the handshake.
+pub const HELLO_REPLY_ID: u64 = 0;
 
 /// Which side of a version mismatch needs to upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +422,7 @@ mod tests {
             term: "xterm-ghostty".to_string(),
             caps: Caps {
                 truecolor: true,
+                styled_underline: true,
                 sync: true,
                 kitty_keys: true,
                 kitty_graphics: true,
@@ -513,6 +529,9 @@ mod tests {
         let caps: Caps = serde_json::from_str(r#"{"truecolor":true}"#).unwrap();
         assert!(caps.truecolor);
         assert!(!caps.sync);
+        assert!(!caps.styled_underline);
+        let caps: Caps = serde_json::from_str(r#"{"styled_underline":true}"#).unwrap();
+        assert!(caps.styled_underline);
     }
 
     #[test]

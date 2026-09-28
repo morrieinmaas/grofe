@@ -22,7 +22,7 @@ use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
-use crate::types::{PaneId, Rect, SessionId, WindowId};
+use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
 // ponytail: `base-index`, `pane-base-index` and `history-limit` are fixed at
 // their spec defaults until the options store (T1.5c) and config (M3) exist.
@@ -49,6 +49,9 @@ pub struct Session {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
+    /// The window that was active before `active` (MRU, for
+    /// `last-window`). No behaviour yet: T2.5b maintains it.
+    pub last_window: Option<WindowId>,
 }
 
 pub struct Window {
@@ -112,6 +115,9 @@ pub struct Model {
     /// Every option value, scoped (spec §4.2). The global
     /// `remain-on-exit` is seeded from the server's start options.
     pub options: Options,
+    /// Each attached client's previous session (MRU, for `switch-client
+    /// -l`). No behaviour yet: T2.5a/T2.5b maintain it.
+    pub client_last_session: BTreeMap<ClientId, SessionId>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -585,6 +591,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
+            last_window: None,
         });
         id
     }
