@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::server::State;
@@ -843,19 +844,68 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 pub const ROOT_TABLE: &str = "root";
 pub const PREFIX_TABLE: &str = "prefix";
 
-/// A key binding: the commands to run, in order, and whether it repeats
-/// (`bind -r`).
+/// Where a binding came from (spec §5.4, key provenance).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingSource {
+    /// The built-in default table.
+    Default,
+    /// A config file layer (spec §5.1), at the key's line.
+    File { path: PathBuf, line: usize },
+    /// `bind-key` or `source-file` at runtime: outside the config table.
+    Runtime,
+    /// A plugin, by name (M6; unused in M3).
+    Plugin(String),
+}
+
+impl BindingSource {
+    /// Whether the binding came from the config table (defaults or a
+    /// file), which `reload` replaces (R10).
+    pub fn is_config(&self) -> bool {
+        matches!(self, BindingSource::Default | BindingSource::File { .. })
+    }
+}
+
+/// A key binding: the commands to run, in order, whether it repeats
+/// (`bind -r`), and where it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    /// Each command's argv (R12: a binding may be a sequence).
+    /// Each command's argv (R12: a binding may be a sequence), stored
+    /// through `cmd::parse::escape_stored`, so a literal `;` argument
+    /// survives `parse_sequence`.
     pub cmds: Vec<Vec<String>>,
     pub repeat: bool,
+    pub source: BindingSource,
+    /// `desc` in the config, `bind-key -N` at runtime.
+    pub desc: Option<String>,
+    /// The config's stable `name` (spec §5.2).
+    pub name: Option<String>,
+}
+
+impl Binding {
+    /// A default-table binding: no description or name.
+    pub fn new(cmds: Vec<Vec<String>>, repeat: bool, source: BindingSource) -> Binding {
+        Binding {
+            cmds: cmds
+                .into_iter()
+                .map(crate::cmd::parse::escape_stored)
+                .collect(),
+            repeat,
+            source,
+            desc: None,
+            name: None,
+        }
+    }
 }
 
 /// Bindings by table name, then key.
 #[derive(Debug, Clone, Default)]
 pub struct KeyTables {
     tables: BTreeMap<String, HashMap<Key, Binding>>,
+    /// Keys removed by a runtime `unbind-key`, which `reload` keeps
+    /// removed (R10).
+    runtime_unbound: Vec<(String, Key)>,
+    /// Built by [`KeyTables::from_config`] from at least one binding.
+    configured: bool,
 }
 
 impl KeyTables {
@@ -864,12 +914,26 @@ impl KeyTables {
         self.bind_seq(table, key, vec![argv], repeat);
     }
 
-    /// Binds a command sequence, run in order.
+    /// Binds a command sequence, run in order, as a default binding.
     pub fn bind_seq(&mut self, table: &str, key: Key, cmds: Vec<Vec<String>>, repeat: bool) {
+        self.insert(
+            table,
+            key,
+            Binding::new(cmds, repeat, BindingSource::Default),
+        );
+    }
+
+    /// Binds `b` as it is. A runtime binding ends a runtime unbind of
+    /// the same key.
+    pub fn insert(&mut self, table: &str, key: Key, b: Binding) {
+        if !b.source.is_config() {
+            self.runtime_unbound
+                .retain(|(t, k)| !(t == table && *k == key));
+        }
         self.tables
             .entry(table.to_string())
             .or_default()
-            .insert(key, Binding { cmds, repeat });
+            .insert(key, b);
     }
 
     /// Remove the binding of exactly `key` (as spelled); whether one was
@@ -878,6 +942,85 @@ impl KeyTables {
         self.tables
             .get_mut(table)
             .is_some_and(|t| t.remove(key).is_some())
+    }
+
+    /// `unbind-key` at runtime: removed now and kept removed by `reload`.
+    pub fn unbind_runtime(&mut self, table: &str, key: &Key) {
+        self.unbind(table, key);
+        if !self
+            .runtime_unbound
+            .iter()
+            .any(|(t, k)| t == table && k == key)
+        {
+            self.runtime_unbound.push((table.to_string(), *key));
+        }
+    }
+
+    /// Every key bound in `table`, sorted by name (stable output).
+    pub fn keys(&self, table: &str) -> Vec<Key> {
+        let mut keys: Vec<Key> = self
+            .tables
+            .get(table)
+            .map(|t| t.keys().copied().collect())
+            .unwrap_or_default();
+        keys.sort_by_cached_key(|k| k.to_string());
+        keys
+    }
+
+    /// Whether a config binding (or unbinding) shaped these tables.
+    pub fn is_configured(&self) -> bool {
+        self.configured
+    }
+
+    /// Every table's name, sorted.
+    pub fn table_names(&self) -> impl Iterator<Item = &str> {
+        self.tables.keys().map(String::as_str)
+    }
+
+    /// The binding of exactly `key`, with no folding.
+    pub fn exact(&self, table: &str, key: &Key) -> Option<&Binding> {
+        self.tables.get(table)?.get(key)
+    }
+
+    /// The default table with the config's bindings over it (spec §5.1):
+    /// each binding from `keys` replaces the default one, and one with no
+    /// commands unbinds the key (R11).
+    pub fn from_config(keys: &[crate::config::KeyBinding]) -> KeyTables {
+        let mut t = default_bindings();
+        t.configured = !keys.is_empty();
+        for k in keys {
+            if k.cmds.is_empty() {
+                t.unbind(&k.table, &k.key);
+                continue;
+            }
+            let source = match &k.source.file {
+                Some(path) => BindingSource::File {
+                    path: path.clone(),
+                    line: k.source.line,
+                },
+                None => BindingSource::Default,
+            };
+            let mut b = Binding::new(k.cmds.clone(), k.repeat, source);
+            b.desc = k.desc.clone();
+            b.name = k.name.clone();
+            t.insert(&k.table, k.key, b);
+        }
+        t
+    }
+
+    /// `self`'s config bindings replaced by `fresh`'s (R10): runtime and
+    /// plugin bindings, and runtime unbinds, carry over.
+    pub fn with_config_from(&self, fresh: KeyTables) -> KeyTables {
+        let mut t = fresh;
+        for (table, key) in &self.runtime_unbound {
+            t.unbind_runtime(table, key);
+        }
+        for (table, bindings) in &self.tables {
+            for (key, b) in bindings.iter().filter(|(_, b)| !b.source.is_config()) {
+                t.insert(table, *key, b.clone());
+            }
+        }
+        t
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
@@ -2608,6 +2751,87 @@ mod tests {
         );
         let b = c.tables.get(PREFIX_TABLE, &k("%")).expect("bound");
         assert_eq!(b.cmds, vec![argv(&["split-window", "-h"])]);
+    }
+
+    fn config_key(
+        table: &str,
+        key: &str,
+        cmds: &[&[&str]],
+        line: usize,
+    ) -> crate::config::KeyBinding {
+        crate::config::KeyBinding {
+            table: table.to_string(),
+            key: k(key),
+            command: String::new(),
+            cmds: cmds.iter().map(|c| argv(c)).collect(),
+            desc: None,
+            group: None,
+            name: Some(format!("n-{key}")),
+            repeat: false,
+            source: crate::config::Source {
+                layer: crate::config::Layer::Config,
+                file: Some(PathBuf::from("/c/config.toml")),
+                line,
+            },
+        }
+    }
+
+    /// The config's bindings go over the defaults; an empty one unbinds
+    /// (R11); `reload` replaces config bindings and keeps runtime ones and
+    /// runtime unbinds (R10).
+    #[test]
+    fn config_tables_layer_over_defaults_and_reload_keeps_runtime() {
+        let t = KeyTables::from_config(&[
+            config_key(PREFIX_TABLE, "x", &[&["split-window", "-h"]], 3),
+            config_key(PREFIX_TABLE, "%", &[], 4),
+        ]);
+        let x = t.exact(PREFIX_TABLE, &k("x")).expect("x");
+        assert_eq!(
+            x.source,
+            BindingSource::File {
+                path: PathBuf::from("/c/config.toml"),
+                line: 3
+            }
+        );
+        assert_eq!(x.name.as_deref(), Some("n-x"));
+        assert!(t.exact(PREFIX_TABLE, &k("%")).is_none());
+        assert_eq!(
+            t.exact(PREFIX_TABLE, &k("c")).map(|b| &b.source),
+            Some(&BindingSource::Default)
+        );
+
+        let mut live = t;
+        live.insert(
+            PREFIX_TABLE,
+            k("y"),
+            Binding::new(vec![argv(&["new-window"])], false, BindingSource::Runtime),
+        );
+        live.unbind_runtime(PREFIX_TABLE, &k("c"));
+        let fresh = KeyTables::from_config(&[]);
+        let t = live.with_config_from(fresh);
+        assert!(t.exact(PREFIX_TABLE, &k("x")).is_none(), "config x gone");
+        assert!(t.exact(PREFIX_TABLE, &k("%")).is_some(), "stock % back");
+        assert!(t.exact(PREFIX_TABLE, &k("y")).is_some(), "runtime y kept");
+        assert!(
+            t.exact(PREFIX_TABLE, &k("c")).is_none(),
+            "runtime unbind kept"
+        );
+    }
+
+    /// A literal `;` argument is stored escaped, so the argv split of
+    /// `parse_sequence` leaves it alone (R12).
+    #[test]
+    fn a_literal_semicolon_argument_is_stored_escaped() {
+        let b = Binding::new(
+            vec![argv(&["send-keys", ";"])],
+            false,
+            BindingSource::Default,
+        );
+        assert_eq!(b.cmds, vec![argv(&["send-keys", "\\;"])]);
+        assert_eq!(
+            crate::cmd::parse::split_argv(&b.cmds[0]),
+            vec![argv(&["send-keys", ";"])]
+        );
     }
 
     #[test]

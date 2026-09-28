@@ -1193,10 +1193,68 @@ fn expand_tilde(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut Stri
 
 /// Parses argv into the commands it runs, in order. Every caller that runs
 /// commands (the CLI, control mode, bindings, the prompt) goes through
-/// this, so sequences have one home.
-// ponytail: one command until T3.5 adds the CLI's `;` argv split.
+/// this, so sequences have one home. The whole sequence is parsed before
+/// anything runs, as tmux does, so a parse error anywhere runs nothing.
 pub fn parse_sequence(argv: &[String]) -> Result<Vec<Command>, ParseError> {
-    Ok(vec![parse(argv)?])
+    let cmds = split_argv(argv)
+        .iter()
+        .map(|words| parse(words))
+        .collect::<Result<Vec<_>, _>>()?;
+    if cmds.is_empty() {
+        return Err(ParseError::EmptyCommand);
+    }
+    Ok(cmds)
+}
+
+/// Splits argv into commands as tmux 3.7b's `cmd_parse_from_arguments`
+/// does (recorded on `tmux -L grofe-t35 -f /dev/null`): an argument that
+/// ends in `;` ends a command (`;` alone, or `a;`, which leaves `a`); one
+/// that ends in `\;` is a literal argument ending in `;`. Empty commands
+/// are dropped.
+pub fn split_argv(argv: &[String]) -> Vec<Vec<String>> {
+    let mut cmds = Vec::new();
+    let mut words = Vec::new();
+    for arg in argv {
+        let Some(stem) = arg.strip_suffix(';') else {
+            words.push(arg.clone());
+            continue;
+        };
+        if let Some(literal) = stem.strip_suffix('\\') {
+            words.push(format!("{literal};"));
+            continue;
+        }
+        if !stem.is_empty() {
+            words.push(stem.to_string());
+        }
+        if !words.is_empty() {
+            cmds.push(std::mem::take(&mut words));
+        }
+    }
+    if !words.is_empty() {
+        cmds.push(words);
+    }
+    cmds
+}
+
+/// A stored command's argv made safe for [`parse_sequence`]: an argument
+/// that ends in `;` (a quoted `';'` in a binding string, R12) gets the
+/// `\;` that [`split_argv`] reads back as a literal, so a stored sequence
+/// splits only between its commands.
+pub fn escape_stored(argv: Vec<String>) -> Vec<String> {
+    argv.into_iter()
+        .map(|a| match a.strip_suffix(';') {
+            Some(stem) => format!("{stem}\\;"),
+            None => a,
+        })
+        .collect()
+}
+
+/// The inverse of [`escape_stored`], for printing a stored argv.
+pub fn unescape_stored(arg: &str) -> String {
+    match arg.strip_suffix("\\;") {
+        Some(stem) => format!("{stem};"),
+        None => arg.to_string(),
+    }
 }
 
 /// Resolves a handful of well-known tmux short names to the full command
@@ -2366,12 +2424,49 @@ mod tests {
     }
 
     #[test]
-    fn parse_sequence_is_one_command_until_t3_5() {
+    fn parse_sequence_splits_at_semicolon_arguments() {
         assert_eq!(
             parse_sequence(&argv(&["kill-server"])),
             Ok(vec![Command::KillServer(KillServer)])
         );
         assert_eq!(parse_sequence(&argv(&[])), Err(ParseError::EmptyCommand));
+        assert_eq!(parse_sequence(&argv(&[";"])), Err(ParseError::EmptyCommand));
+        let two = parse_sequence(&argv(&["kill-server", ";", "kill-server"]));
+        assert_eq!(two.map(|c| c.len()), Ok(2));
+        // A parse error anywhere fails the whole sequence.
+        assert_eq!(
+            parse_sequence(&argv(&["kill-server", ";", "no-such"])),
+            Err(ParseError::UnknownCommand("no-such".to_string()))
+        );
+    }
+
+    /// Recorded on tmux 3.7b: `display -p 'a;' display -p b` prints `a`
+    /// then `b`; `display -p 'a\;'` prints `a;`.
+    #[test]
+    fn split_argv_follows_tmux() {
+        let cases: &[(&[&str], &[&[&str]])] = &[
+            (&["a", "b"], &[&["a", "b"]]),
+            (&["a", ";", "b", "-L"], &[&["a"], &["b", "-L"]]),
+            (&["a", "x;", "b"], &[&["a", "x"], &["b"]]),
+            (&["a", "x\\;"], &[&["a", "x;"]]),
+            (&["a", "\\;", "b"], &[&["a", ";", "b"]]),
+            (&[";", "a", ";", ";"], &[&["a"]]),
+            (&["a", "x;y"], &[&["a", "x;y"]]),
+        ];
+        for (given, want) in cases {
+            let want: Vec<Vec<String>> = want.iter().map(|c| argv(c)).collect();
+            assert_eq!(split_argv(&argv(given)), want, "{given:?}");
+        }
+    }
+
+    /// R12: a stored `';'` stays one literal argument through the split.
+    #[test]
+    fn stored_arguments_survive_the_argv_split() {
+        let words = ["send-keys", ";", "a;", "b\\;", "c"];
+        let stored = escape_stored(argv(&words));
+        assert_eq!(split_argv(&stored), vec![argv(&words)]);
+        let shown: Vec<String> = stored.iter().map(|a| unescape_stored(a)).collect();
+        assert_eq!(shown, argv(&words));
     }
 
     #[test]
