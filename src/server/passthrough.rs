@@ -442,8 +442,8 @@ pub fn on_active_changed(state: &mut State, id: ClientId) {
 /// gets a focus-out report and `active` a focus-in, each only if it asked
 /// for them (mode 1004). As tmux 3.7b does, nothing is sent while
 /// `focus-events` is off or while no client of the session has focus; the
-/// client's own focus-in later reaches whichever pane is active then. A
-/// session with no client forgets its pane, so an attach sends focus-in.
+/// client's own focus-in later reaches whichever pane is active then. The
+/// last client leaving is [`on_client_gone`]'s.
 // ponytail: tmux keeps a per-pane focused flag, so a terminal that also
 // reports focus-in on attach gives the pane only one; grofe may send two.
 fn move_focus(state: &mut State, session: SessionId, active: PaneId) {
@@ -457,18 +457,45 @@ fn move_focus(state: &mut State, session: SessionId, active: PaneId) {
     {
         return;
     }
-    let report = |pane: PaneId, bytes: &[u8]| {
-        if let Some(p) = state.model.panes.get(&pane)
-            && p.dead.is_none()
-            && p.handle.modes().focus
-        {
-            let _ = p.handle.enqueue_input(bytes.to_vec());
-        }
-    };
     if let Some(old) = before {
-        report(old, b"\x1b[O");
+        report_focus(state, old, b"\x1b[O");
     }
-    report(active, b"\x1b[I");
+    report_focus(state, active, b"\x1b[I");
+}
+
+/// Client `id` is about to go (detach, exit, lost connection); it is still
+/// in `state.clients`. If it is its session's last client, the pane that
+/// has focus gets a focus-out (unless the client had lost focus, which
+/// already sent one) and the session forgets it, so the next attach sends
+/// focus-in, as tmux 3.7b does.
+pub fn on_client_gone(state: &mut State, id: ClientId) {
+    state.passthrough.sent.remove(&id);
+    let Some((session, focused)) = state.clients.get(&id).map(|c| (c.session, c.focused)) else {
+        return;
+    };
+    if state
+        .clients
+        .iter()
+        .any(|(other, c)| *other != id && c.session == session)
+    {
+        return;
+    }
+    let Some(pane) = state.passthrough.focus.remove(&session) else {
+        return;
+    };
+    if focused && state.model.options.lookup("focus-events", &[]) == Some("on") {
+        report_focus(state, pane, b"\x1b[O");
+    }
+}
+
+/// Writes a focus report to `pane` if it asked for them (mode 1004).
+fn report_focus(state: &State, pane: PaneId, bytes: &[u8]) {
+    if let Some(p) = state.model.panes.get(&pane)
+        && p.dead.is_none()
+        && p.handle.modes().focus
+    {
+        let _ = p.handle.enqueue_input(bytes.to_vec());
+    }
 }
 
 /// The clients attached to `session`.

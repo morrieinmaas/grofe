@@ -465,3 +465,52 @@ fn focus_reports_follow_the_active_pane() {
     seen(p1, "^[[I^[[O^[[I");
     seen(p2, "^[[I^[[O^[[I^[[O");
 }
+
+/// Detach and reattach, as recorded on tmux 3.7b: the session's last
+/// client leaving gives the active pane a focus-out, the next attach a
+/// focus-in; a second client, or one of two leaving, sends nothing.
+#[test]
+fn focus_reports_on_detach_and_reattach() {
+    let tui = "printf '\\033[?1004h'; stty -echo -icanon; printf 'ready '; exec cat -v";
+    let srv = start(tui);
+    srv.cmd(&["split-window", "-t", "main", tui])
+        .expect("split-window");
+    let (p1, p2) = ("main:1.1", "main:1.2");
+    let seen = |target: &str, want: &str| {
+        let want = format!("ready {want}");
+        let want = want.trim_end();
+        if let Err(e) = wait_until(|| srv.capture(target).trim() == want, WAIT) {
+            panic!(
+                "{e}: {target} shows {:?}, want {want:?}",
+                srv.capture(target).trim()
+            );
+        }
+    };
+    let clients = || {
+        srv.cmd(&["list-clients"])
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    seen(p1, "");
+    seen(p2, "");
+
+    let mut a = attach(&srv);
+    seen(p2, "^[[I");
+    a.send("\x02d");
+    a.wait_exit();
+    seen(p2, "^[[I^[[O");
+
+    let mut a = attach(&srv);
+    seen(p2, "^[[I^[[O^[[I");
+    let mut b = attach(&srv);
+    wait_until(|| clients() == 2, WAIT).expect("two clients");
+    b.send("\x02d");
+    b.wait_exit();
+    wait_until(|| clients() == 1, WAIT).expect("one client");
+    // A frame for the remaining client runs the focus bookkeeping again.
+    srv.cmd(&["select-pane", "-t", p2]).expect("select-pane");
+    a.send("x");
+    seen(p2, "^[[I^[[O^[[Ix");
+    seen(p1, "");
+}

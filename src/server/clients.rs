@@ -541,6 +541,7 @@ fn detach_session(state: &mut State, session: SessionId, keep: Option<ClientId>)
 /// Removes a client; with a reason, it is told why (its connection writes
 /// what is still pending, then the `exit` frame).
 fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
+    crate::server::passthrough::on_client_gone(state, id);
     let Some(mut c) = state.clients.remove(&id) else {
         return;
     };
