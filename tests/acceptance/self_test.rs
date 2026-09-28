@@ -141,6 +141,8 @@ fn spawn_passes_grofe_args_through_untouched() {
     cmd.env_remove("GROFE")
         .env_remove("GROFE_PANE")
         .env("HOME", tmp.path())
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .arg("-S")
         .arg(&socket)
