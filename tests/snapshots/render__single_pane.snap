@@ -1,0 +1,10 @@
+---
+source: tests/render.rs
+expression: dump(&term)
+---
+|$ echo hi
+|hi
+|$
+|
+|
+cursor: row 2 col 2 shape Block blink false

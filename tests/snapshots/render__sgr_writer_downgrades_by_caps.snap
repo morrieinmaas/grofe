@@ -1,0 +1,6 @@
+---
+source: tests/render.rs
+expression: "format!(\"rich:  {}\\nplain: {}\",\nString::from_utf8_lossy(&rich).replace('\\x1b', \"ESC\"),\nString::from_utf8_lossy(&plain).replace('\\x1b', \"ESC\"))"
+---
+rich:  ESC[0;1;4:3;38;2;255;0;0;48;5;17;58;2;0;0;255m
+plain: ESC[0;1;4;38;5;196;48;5;17m

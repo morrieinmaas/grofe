@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: "round_trip(&inputs, &RICH)"
+---
+|a#c
+|
+cursor: row 0 col 3 shape Block blink false
+r0 c1-1: fg=Foreground bg=Blue
