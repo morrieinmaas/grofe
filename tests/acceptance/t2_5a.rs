@@ -12,7 +12,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::Command;
@@ -20,7 +20,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::{TestServer, wait_until};
-use grofe::protocol::{Caps, ClientCtx, Hello, encode_hello};
+use grofe::protocol::{Caps, ClientCtx, Frame, FrameCodec, Hello, encode_hello};
+use tokio_util::bytes::BytesMut;
+use tokio_util::codec::{Decoder, Encoder};
 
 use crate::harness::Harness;
 
@@ -191,36 +193,9 @@ fn a_client_that_stops_reading_does_not_delay_another() {
     ])
     .expect("new-session");
 
-    let mut stuck = UnixStream::connect(&srv.socket).expect("connect");
-    let tiny: nix::libc::c_int = 1024;
-    // SAFETY: a valid socket fd and a pointer to a live c_int of the size given.
-    let rc = unsafe {
-        nix::libc::setsockopt(
-            stuck.as_raw_fd(),
-            nix::libc::SOL_SOCKET,
-            nix::libc::SO_RCVBUF,
-            (&tiny as *const nix::libc::c_int).cast(),
-            std::mem::size_of::<nix::libc::c_int>() as nix::libc::socklen_t,
-        )
-    };
-    assert_eq!(rc, 0, "setsockopt SO_RCVBUF");
-    let hello = Hello::Attach {
-        ctx: ClientCtx {
-            cwd: srv.home.clone(),
-            pane: None,
-            env: Vec::new(),
-            client: None,
-        },
-        cols: 300,
-        rows: 100,
-        term: "xterm-256color".to_string(),
-        caps: Caps::default(),
-        target: Some("main".to_string()),
-        detach_others: false,
-        nest: false,
-    };
-    let line = encode_hello(&hello).expect("hello") + "\n";
-    stuck.write_all(line.as_bytes()).expect("send hello");
+    // A 1 KiB receive buffer: on macOS, below the send low-water mark, the
+    // server cannot write to it at all, the most stuck a client can be.
+    let stuck = raw_attach(&srv, (300, 100), Some(1024), &[]);
     // Let the flood fill the stuck client's socket.
     sleep(Duration::from_millis(1000));
 
@@ -244,6 +219,145 @@ fn a_client_that_stops_reading_does_not_delay_another() {
         );
     }
     drop(stuck);
+}
+
+/// A raw attach client that has sent its hello, followed in the same write
+/// by `typeahead` (raw frame bytes), and read nothing, not even the reply
+/// line. With `rcvbuf`, its socket receive buffer is set that small first.
+fn raw_attach(
+    srv: &TestServer,
+    (cols, rows): (u16, u16),
+    rcvbuf: Option<i32>,
+    typeahead: &[u8],
+) -> UnixStream {
+    let mut stream = UnixStream::connect(&srv.socket).expect("connect");
+    if let Some(size) = rcvbuf {
+        let size: nix::libc::c_int = size;
+        // SAFETY: a valid socket fd and a pointer to a live c_int of the size given.
+        let rc = unsafe {
+            nix::libc::setsockopt(
+                stream.as_raw_fd(),
+                nix::libc::SOL_SOCKET,
+                nix::libc::SO_RCVBUF,
+                (&size as *const nix::libc::c_int).cast(),
+                std::mem::size_of::<nix::libc::c_int>() as nix::libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt SO_RCVBUF");
+    }
+    let hello = Hello::Attach {
+        ctx: ClientCtx {
+            cwd: srv.home.clone(),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+        },
+        cols,
+        rows,
+        term: "xterm-256color".to_string(),
+        caps: Caps::default(),
+        target: Some("main".to_string()),
+        detach_others: false,
+        nest: false,
+    };
+    let mut bytes = (encode_hello(&hello).expect("hello") + "\n").into_bytes();
+    bytes.extend_from_slice(typeahead);
+    stream.write_all(&bytes).expect("send hello");
+    stream
+}
+
+/// Reads a raw client's stream (the reply line, then frames) until its
+/// output holds `needle`; false if it has not after `timeout`.
+fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> bool {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("read timeout");
+    let deadline = Instant::now() + timeout;
+    let mut buf = BytesMut::new();
+    let mut output = Vec::new();
+    let mut reply_read = false;
+    let mut chunk = [0u8; 64 * 1024];
+    while Instant::now() < deadline {
+        match stream.read(&mut chunk) {
+            Ok(0) => return false,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(e) => panic!("reading the raw client: {e}"),
+        }
+        if !reply_read {
+            let Some(end) = buf.iter().position(|b| *b == b'\n') else {
+                continue;
+            };
+            let _ = buf.split_to(end + 1);
+            reply_read = true;
+        }
+        while let Some(frame) = FrameCodec.decode(&mut buf).expect("frame") {
+            if let Frame::Output(bytes) = frame {
+                output.extend_from_slice(&bytes);
+            }
+        }
+        if String::from_utf8_lossy(&output).contains(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A client whose frame was dropped while it lagged gets the screen as it
+/// is once it reads again, even when nothing changes after that (fix round
+/// 1). A huge raw client that never reads is letterboxed by a small one,
+/// so its frame is ~600 KB, more than any socket buffer, and blocks the
+/// writer. The pane then prints `B-MARK`, whose frame waits in the one
+/// slot, and a second later `FINAL-MARK`, whose frame finds the slot full
+/// and is dropped. With no status line (no clock), no input and no
+/// command after that, only the dropped frame's own retry can deliver it.
+#[test]
+fn a_lagging_client_catches_up_with_a_pane_that_went_quiet() {
+    let srv = TestServer::start();
+    srv.cmd(&["set-option", "-g", "status", "off"])
+        .expect("status off");
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "read x; printf B-MARK; sleep 1; printf FINAL-MARK; exec sleep 100",
+    ])
+    .expect("new-session");
+    let mut big = raw_attach(&srv, (1000, 300), None, &[]);
+    sleep(Duration::from_millis(300));
+    // The small client attaches last, so it owns the size: `big`
+    // letterboxes.
+    let mut small = Harness::spawn(attach(&srv, "main"), 80, 24);
+    wait_pane_size(&srv, "80x24");
+    sleep(Duration::from_millis(500));
+    srv.cmd(&["send-keys", "-t", "main", "Enter"])
+        .expect("send-keys");
+    small.wait_for("FINAL-MARK");
+    // No command until `big` reads: every command redraws every client,
+    // which would hide a dropped frame that is never retried.
+    sleep(Duration::from_millis(500));
+    assert!(
+        read_until(&mut big, "FINAL-MARK", Duration::from_secs(10)),
+        "the lagging client never got the pane's last output"
+    );
+}
+
+/// Frames that arrive in the same read as the hello (typeahead) are
+/// decoded at once, not held until the client sends more (fix round 1).
+#[test]
+fn input_sent_with_the_hello_reaches_the_pane_without_more_input() {
+    let srv = start((80, 23));
+    let mut input = BytesMut::new();
+    FrameCodec
+        .encode(Frame::Input(b"early\r".to_vec()), &mut input)
+        .expect("encode input");
+    let _stream = raw_attach(&srv, (80, 24), None, &input);
+    let arrived = wait_until(
+        || srv.capture("main").contains("got-early"),
+        Duration::from_secs(5),
+    );
+    arrived.expect("typeahead reached the pane");
 }
 
 /// A 1-column client: the window is 1 column wide, but the pane's pty and

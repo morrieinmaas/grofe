@@ -108,23 +108,26 @@ impl Outbox {
     /// Sends the diff that turns the client's screen into `next`, as ONE
     /// frame (so a synchronized-output begin/end pair is never split). If
     /// the slot is still full the diff is dropped and the next offer is a
-    /// full redraw.
-    pub fn offer(&mut self, next: Screen, caps: &Caps) {
+    /// full redraw. Returns false for a dropped diff: the client still needs
+    /// a frame, and must be offered one again once [`Outbox::ready`].
+    pub fn offer(&mut self, next: Screen, caps: &Caps) -> bool {
         let bytes = render::diff(self.prev.as_ref(), &next, caps);
         if bytes.is_empty() {
-            return;
+            return true;
         }
         match self.tx.try_send(bytes) {
             Ok(()) => {
                 self.prev = Some(next);
                 self.blocked = false;
+                true
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.prev = None;
                 self.blocked = true;
+                false
             }
             // The connection is gone; its `ClientGone` removes the client.
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => true,
         }
     }
 }
@@ -587,7 +590,9 @@ fn render_dirty(state: &mut State) {
         if let Some((screen, viewport)) = composed {
             c.viewport = viewport;
             let caps = c.caps;
-            c.outbox.offer(screen, &caps);
+            // A dropped frame keeps the client dirty, so it is redrawn once
+            // its outbox has room even if nothing else changes.
+            c.dirty = !c.outbox.offer(screen, &caps);
         }
     }
 }
@@ -1126,10 +1131,10 @@ mod tests {
     fn a_full_outbox_drops_the_diff_and_redraws_in_full_once_free() {
         let caps = Caps::default();
         let (mut outbox, mut rx) = Outbox::new();
-        outbox.offer(screen_with('a'), &caps);
+        assert!(outbox.offer(screen_with('a'), &caps));
         assert!(outbox.ready());
         // The writer has not taken the first frame: the second is dropped.
-        outbox.offer(screen_with('b'), &caps);
+        assert!(!outbox.offer(screen_with('b'), &caps));
         assert!(!outbox.ready());
         assert!(outbox.prev.is_none());
         let first = rx.try_recv().expect("first frame");
@@ -1139,7 +1144,7 @@ mod tests {
         );
         assert!(outbox.ready());
         // The next offer is a full redraw, not a diff against 'a'.
-        outbox.offer(screen_with('b'), &caps);
+        assert!(outbox.offer(screen_with('b'), &caps));
         let next = rx.try_recv().expect("redraw");
         assert!(
             next.windows(4).any(|w| w == b"\x1b[2J"),
@@ -1147,7 +1152,7 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         // Unchanged: nothing is sent.
-        outbox.offer(screen_with('b'), &caps);
+        assert!(outbox.offer(screen_with('b'), &caps));
         assert!(rx.try_recv().is_err());
     }
 }

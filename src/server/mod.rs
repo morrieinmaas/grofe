@@ -40,7 +40,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep, sleep_until};
-use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
+use tokio_util::codec::{Framed, FramedParts, FramedWrite, LinesCodec};
 
 use crate::cmd::{self, Command};
 use crate::event::Event;
@@ -728,8 +728,12 @@ async fn attach(
     }
     let parts = lines.into_parts();
     let (read, write) = parts.io.into_split();
-    let mut frames = FramedRead::new(read, FrameCodec);
-    frames.read_buffer_mut().extend_from_slice(&parts.read_buf);
+    // `from_parts` marks a non-empty buffer readable, so frames that came in
+    // with the hello are decoded at once. (`FramedRead::new` with the bytes
+    // pushed into its buffer would wait for the next read first.)
+    let mut read_parts = FramedParts::new::<Frame>(read, FrameCodec);
+    read_parts.read_buf = parts.read_buf;
+    let mut frames = Framed::from_parts(read_parts);
     let reader = async {
         while let Some(Ok(frame)) = frames.next().await {
             let msg = ServerMsg::ClientFrame { client: id, frame };
@@ -737,13 +741,16 @@ async fn attach(
                 return;
             }
         }
-        let _ = msgs.send(ServerMsg::ClientGone(id)).await;
     };
     let writer = write_frames(FramedWrite::new(write, FrameCodec), accepted);
     tokio::select! {
         () = writer => {}
         () = reader => {}
     }
+    // Whichever side ended (the client hung up, a write failed, or the
+    // exit frame went out), the actor forgets the client; after a detach
+    // it already has, and this is a no-op.
+    let _ = msgs.send(ServerMsg::ClientGone(id)).await;
 }
 
 /// Writes an attached client's frames, one at a time as the actor leaves
@@ -763,21 +770,9 @@ async fn write_frames(
     let _ = out.send(Frame::Exit(reason)).await;
 }
 
-/// Sends a hello's error line, then waits (bounded) for the client to hang
-/// up before closing: closing first can make the client's next socket call
-/// fail (macOS gives EINVAL setting a timeout on a socket whose peer has
-/// gone), hiding the reason from it.
+/// Sends a hello's error line; the connection then closes.
 async fn refuse(mut lines: Framed<UnixStream, LinesCodec>, err: &str) {
-    if send(&mut lines, &error_reply(HELLO_REPLY_ID, err))
-        .await
-        .is_err()
-    {
-        return;
-    }
-    let _ = tokio::time::timeout(Duration::from_secs(1), async {
-        while let Some(Ok(_)) = lines.next().await {}
-    })
-    .await;
+    let _ = send(&mut lines, &error_reply(HELLO_REPLY_ID, err)).await;
 }
 
 fn error_reply(id: u64, err: &str) -> Reply {
