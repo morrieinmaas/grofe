@@ -23,7 +23,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::ClientCtx;
 use crate::server::State;
 use crate::server::model::{HISTORY_LIMIT, Model, Pane};
-use crate::server::pane::{PaneHandle, PaneSpawn};
+use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::types::{PaneId, WindowId};
 
 /// Runs one command (`argv[0]` is the verb) against the server state,
@@ -148,6 +148,7 @@ pub(crate) fn spawn_pane(
     (cols, rows): (u16, u16),
 ) -> Result<PaneId, String> {
     let id = state.model.alloc_pane_id();
+    let cwd = usable_cwd(cwd);
     let spec = PaneSpawn {
         id,
         argv: argv.clone(),
@@ -159,7 +160,6 @@ pub(crate) fn spawn_pane(
         socket: state.socket.clone(),
         term: state.inner_term,
     };
-    // Deliberately unlike tmux, a bad cwd fails here rather than falling back to $HOME.
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
     state.model.panes.insert(

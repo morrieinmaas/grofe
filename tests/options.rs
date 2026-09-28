@@ -379,34 +379,32 @@ fn bool_option_with_no_value_toggles() {
     assert!(err.contains("empty value"), "{err}");
 }
 
-/// A `-c` directory that does not exist is an error and leaves nothing
-/// behind. tmux falls back to $HOME silently; grofe deliberately fails.
+/// A missing `-c` directory falls back to `$HOME`, as in tmux 3.7b.
 #[test]
-fn dash_c_with_a_missing_directory_fails_cleanly() {
+fn dash_c_with_a_missing_directory_falls_back_to_home() {
     let srv = TestServer::start();
     new_session(&srv, "m");
     let missing = srv.home.join("no-such-dir");
-    let err = srv
-        .cmd(&[
-            "new-window",
-            "-t",
-            "m",
-            "-c",
-            missing.to_str().unwrap(),
-            "sleep",
-            "30",
-        ])
-        .unwrap_err();
-    assert!(err.contains("can't start pane in"), "{err}");
-    assert!(err.contains("no-such-dir"), "{err}");
+    srv.cmd(&[
+        "new-window",
+        "-t",
+        "m",
+        "-c",
+        missing.to_str().unwrap(),
+        "sleep",
+        "30",
+    ])
+    .unwrap();
     let windows = srv
         .cmd(&["list-windows", "-t", "m", "-F", "#{window_index}"])
         .unwrap();
-    assert_eq!(windows, "1\n");
-    let panes = srv
-        .cmd(&["list-panes", "-t", "m", "-F", "#{pane_id}"])
-        .unwrap();
-    assert_eq!(panes.lines().count(), 1, "{panes}");
+    assert_eq!(windows, "1\n2\n");
+    let home = format!("{}\n", fs::canonicalize(&srv.home).unwrap().display());
+    srv.wait_for(
+        || display(&srv, "m:2", "#{pane_current_path}") == home,
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("{e}: {}", display(&srv, "m:2", "#{pane_current_path}")));
 }
 
 /// The M2 options, by tmux name: each shows its default, takes a value at
