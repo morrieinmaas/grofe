@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::harness::{self, Harness};
 
@@ -175,9 +175,28 @@ fn resize_and_cursor() {
     h.send("stty size\r");
     h.wait_for(&format!("{ROWS} {COLS}"));
 
+    // The spike relays the new size to its inner pty from its own loop,
+    // some time after `resize` returns, so under load a `stty size` sent
+    // straight away can still report the old size. Ask again until the new
+    // one shows.
     h.resize(COLS + 10, ROWS + 5);
-    h.send("stty size\r");
-    h.wait_for(&format!("{} {}", ROWS + 5, COLS + 10));
+    let resized = format!("{} {}", ROWS + 5, COLS + 10);
+    let deadline = Instant::now() + harness::DEFAULT_TIMEOUT;
+    loop {
+        h.send("stty size\r");
+        let asked = Instant::now();
+        while !h.text().contains(&resized) && asked.elapsed() < Duration::from_millis(500) {
+            sleep(Duration::from_millis(20));
+        }
+        if h.text().contains(&resized) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {resized:?}; screen:\n{}",
+            h.text()
+        );
+    }
 
     h.send("printf foo\r");
     h.wait_for("foo");
