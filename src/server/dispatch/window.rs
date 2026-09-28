@@ -10,7 +10,7 @@ use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, Preset};
-use crate::server::model::{Model, PANE_BASE_INDEX, Window};
+use crate::server::model::{Model, Window};
 use crate::server::{State, clients};
 use crate::types::WindowId;
 
@@ -51,7 +51,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     let window = state.model.alloc_window_id();
     let pane = spawn_pane(
         state,
-        window,
+        (session, window),
         env,
         command_argv(c.command),
         cwd.clone(),
@@ -232,7 +232,7 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
     let w = &model.windows[&window];
     Ok(w.pane_ids()
         .iter()
-        .zip(PANE_BASE_INDEX..)
+        .zip(model.pane_base_index(window)..)
         .filter_map(|(id, index)| Some((index, model.panes.get(id)?)))
         .map(|(index, p)| {
             format!(

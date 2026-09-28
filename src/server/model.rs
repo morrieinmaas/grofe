@@ -25,8 +25,10 @@ use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
 use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
-// ponytail: `base-index`, `pane-base-index` and `history-limit` are fixed at
-// their spec defaults until the options store (T1.5c) and config (M3) exist.
+/// The built-in defaults of `base-index`, `pane-base-index` and
+/// `history-limit` (spec §5.3). The live values are the options, read
+/// through [`Model::base_index`], [`Model::pane_base_index`] and
+/// [`Model::history_limit`].
 pub const BASE_INDEX: u32 = 1;
 pub const PANE_BASE_INDEX: u32 = 1;
 pub const HISTORY_LIMIT: usize = 50_000;
@@ -89,7 +91,7 @@ impl Window {
     }
 
     /// Pane ids in layout order: position `i` is pane index
-    /// `i + PANE_BASE_INDEX`.
+    /// `i + pane-base-index`.
     pub fn pane_ids(&self) -> Vec<PaneId> {
         self.layout
             .compute(self.area())
@@ -221,7 +223,7 @@ impl Model {
             .map(|s| s.id)
     }
 
-    /// The lowest free window index at or above `BASE_INDEX` in `session`.
+    /// The lowest free window index at or above `base-index` in `session`.
     pub fn free_window_index(&self, session: SessionId) -> u32 {
         let used: Vec<u32> = self
             .sessions
@@ -233,9 +235,40 @@ impl Model {
                     .collect()
             })
             .unwrap_or_default();
-        (BASE_INDEX..)
-            .find(|i| !used.contains(i))
-            .unwrap_or(BASE_INDEX)
+        let base = self.base_index(session);
+        (base..).find(|i| !used.contains(i)).unwrap_or(base)
+    }
+
+    /// A number option's value along `chain` (then global), else `default`.
+    fn number_option(&self, name: &str, chain: &[options::Owner], default: u32) -> u32 {
+        self.options
+            .lookup(name, chain)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// `base-index` for `session`: where new windows start numbering.
+    pub fn base_index(&self, session: SessionId) -> u32 {
+        self.number_option(
+            "base-index",
+            &[options::Owner::Session(session)],
+            BASE_INDEX,
+        )
+    }
+
+    /// `pane-base-index` for `window`: the index of its first pane.
+    pub fn pane_base_index(&self, window: WindowId) -> u32 {
+        let mut chain = vec![options::Owner::Window(window)];
+        if let Some(w) = self.windows.get(&window) {
+            chain.push(options::Owner::Session(w.session));
+        }
+        self.number_option("pane-base-index", &chain, PANE_BASE_INDEX)
+    }
+
+    /// `history-limit` for `session`: the scrollback a new pane gets.
+    pub fn history_limit(&self, session: SessionId) -> usize {
+        let chain = [options::Owner::Session(session)];
+        self.number_option("history-limit", &chain, HISTORY_LIMIT as u32) as usize
     }
 
     pub fn window_at_index(&self, session: SessionId, index: u32) -> Option<WindowId> {
@@ -529,7 +562,7 @@ impl Model {
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
-                    .checked_sub(PANE_BASE_INDEX)
+                    .checked_sub(self.pane_base_index(w))
                     .and_then(|i| self.windows[&w].pane_ids().get(i as usize).copied())
                     .ok_or_else(|| format!("can't find pane: {index}"))
             }

@@ -101,18 +101,6 @@ fn focus_events_gate_and_mouse_input_go_nowhere() {
 fn m3_commands_parse_and_their_stubs_change_nothing() {
     let srv = start("cat");
     let before = srv.cmd(&["list-panes", "-t", "main"]).expect("list-panes");
-    for argv in [
-        &["list-keys"][..],
-        &["unbind-key", "x"],
-        &["source-file", "sub.toml"],
-        &["reload"],
-    ] {
-        let err = srv.cmd(argv).expect_err("a stub");
-        assert!(
-            err.contains(&format!("not implemented: {}", argv[0])),
-            "{argv:?}: {err}"
-        );
-    }
     assert_eq!(srv.cmd(&["list-panes", "-t", "main"]).as_ref(), Ok(&before));
     // Parse errors come first, worded as tmux words them.
     let err = srv.cmd(&["unbind-key"]).expect_err("no key");

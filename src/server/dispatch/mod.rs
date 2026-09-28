@@ -26,16 +26,17 @@ use ulid::Ulid;
 
 use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
-use crate::server::model::{HISTORY_LIMIT, Model, Pane};
+use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, clients, graphics, prompt};
-use crate::types::{PaneId, WindowId};
+use crate::types::{PaneId, SessionId, WindowId};
 
-/// Runs one command (`argv[0]` is the verb) against the server state,
-/// returning its stdout or its error message.
+/// Runs a request's argv (`argv[0]` is the verb) against the server
+/// state, returning its stdout or its error message.
 ///
-/// argv may hold several commands ([`cmd::parse_sequence`]): they run in
-/// order and the first error stops the rest.
+/// argv may hold several commands, split at `;` arguments as tmux's CLI
+/// splits them ([`cmd::parse_sequence`]): they run in order and the first
+/// error stops the rest.
 // ponytail: the reply is the output of every command, or the first error
 // alone; output of commands before a failing one is dropped.
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
@@ -43,6 +44,17 @@ pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String
         return clients::attach_check(state, ctx, &argv[1..]);
     }
     let cmds = cmd::parse_sequence(argv).map_err(|e| e.to_string())?;
+    run_commands(state, ctx, cmds)
+}
+
+/// Runs one command whose argv is already split (a binding, the prompt,
+/// the mouse): a `;` argument in it is literal, never a separator.
+pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
+    run_commands(state, ctx, vec![cmd])
+}
+
+fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them. A new name is drawn even if the command only reads.
     if window::automatic_rename(&mut state.model) {
@@ -222,7 +234,8 @@ impl cmd::FormatVars for NoVars {
 /// [`clients::cell_px`] for the window's session.
 pub(crate) fn spawn_pane(
     state: &mut State,
-    window: WindowId,
+    // The window's session, passed in: a new window is not in the model yet.
+    (session, window): (SessionId, WindowId),
     env: Vec<(String, String)>,
     argv: Option<Vec<String>>,
     cwd: PathBuf,
@@ -238,7 +251,7 @@ pub(crate) fn spawn_pane(
         env,
         cols,
         rows,
-        history_limit: HISTORY_LIMIT,
+        history_limit: state.model.history_limit(session),
         socket: state.socket.clone(),
         term: state.inner_term,
         cell_px,
