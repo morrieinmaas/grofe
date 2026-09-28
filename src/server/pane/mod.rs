@@ -81,6 +81,8 @@ pub struct PaneSpawn {
     pub history_limit: usize,
     /// The server's socket path, exported as `GROFE`.
     pub socket: PathBuf,
+    /// `TERM` for the pane, resolved once at server start ([`inner_term`]).
+    pub term: &'static str,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -474,7 +476,7 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
         };
         env.push(("LC_CTYPE".into(), utf8.into()));
     }
-    env.push(("TERM".into(), inner_term().into()));
+    env.push(("TERM".into(), spec.term.into()));
     env.push(("COLORTERM".into(), crate::term::COLORTERM.into()));
     env.push(("GROFE".into(), spec.socket.clone().into_os_string()));
     env.push(("GROFE_PANE".into(), spec.id.to_string().into()));
@@ -551,4 +553,40 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     Ok((pty.master, child))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec_with_term(term: &'static str) -> PaneSpawn {
+        PaneSpawn {
+            id: PaneId(0),
+            argv: None,
+            cwd: PathBuf::from("/"),
+            env: Vec::new(),
+            cols: 80,
+            rows: 24,
+            history_limit: 100,
+            socket: PathBuf::from("/tmp/grofe-test.sock"),
+            term,
+        }
+    }
+
+    /// `child_env` must use the spawn's own resolved `term`, not a fresh
+    /// read of the live [`inner_term`] cache: the two would happen to
+    /// agree in the real server (both trace back to the same start-time
+    /// resolution), but a `PaneSpawn` built with a different value proves
+    /// which one `child_env` actually reads from.
+    #[test]
+    fn child_env_term_comes_from_the_spawn_not_the_live_cache() {
+        let spec = spec_with_term("a-term-that-is-not-the-live-cache");
+        let env = child_env(&spec);
+        let term = env
+            .iter()
+            .find(|(k, _)| k.to_str() == Some("TERM"))
+            .map(|(_, v)| v.to_str().unwrap());
+        assert_eq!(term, Some("a-term-that-is-not-the-live-cache"));
+        assert_ne!(term, Some(inner_term()));
+    }
 }

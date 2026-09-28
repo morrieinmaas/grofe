@@ -253,6 +253,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         rows: p.rows,
         history_limit: HISTORY_LIMIT,
         socket: state.socket.clone(),
+        term: state.inner_term,
     };
     let cwd = spec.cwd.display().to_string();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())

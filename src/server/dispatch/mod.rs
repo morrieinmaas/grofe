@@ -140,6 +140,7 @@ pub(crate) fn spawn_pane(
         rows,
         history_limit: HISTORY_LIMIT,
         socket: state.socket.clone(),
+        term: state.inner_term,
     };
     // Deliberately unlike tmux, a bad cwd fails here rather than falling back to $HOME.
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())

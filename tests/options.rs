@@ -135,6 +135,17 @@ fn unknown_builtin_option_errors() {
     srv.cmd(&["set", "-g", "@anything", "1"]).unwrap();
 }
 
+/// tmux 3.7b checks the option name before the missing value: an unknown
+/// name given no value says `invalid option: <name>`, not `empty value`.
+#[test]
+fn unknown_option_with_no_value_names_the_option() {
+    let srv = TestServer::start();
+    new_session(&srv, "a");
+    let err = srv.cmd(&["set", "-g", "bogus-option"]).unwrap_err();
+    assert!(err.contains("invalid option: bogus-option"), "{err}");
+    assert!(!err.contains("empty value"), "{err}");
+}
+
 #[test]
 fn remain_on_exit_is_looked_up_per_pane() {
     let srv = TestServer::start();
@@ -256,6 +267,24 @@ fn display_message_prints_pane_variables() {
     let default = srv.cmd(&["display-message", "-p", "-t", "d"]).unwrap();
     assert!(default.starts_with("[d] 1:"), "{default}");
     assert!(default.trim_end().ends_with("current pane 1"), "{default}");
+}
+
+/// tmux silently falls back to the current pane when `-t` names nothing;
+/// per the orchestrator's ruling, native grofe errors instead, the same
+/// as every other command taking a pane target (that leniency is left to
+/// the M3.6 compat front end).
+#[test]
+fn display_message_errors_on_an_unresolvable_target() {
+    let srv = TestServer::start();
+    new_session(&srv, "d");
+    let err = srv
+        .cmd(&["display-message", "-p", "-t", "no-such-session", "hi"])
+        .unwrap_err();
+    assert!(err.contains("can't find session: no-such-session"), "{err}");
+    let err = srv
+        .cmd(&["display-message", "-p", "-t", "%999", "hi"])
+        .unwrap_err();
+    assert!(err.contains("can't find pane: %999"), "{err}");
 }
 
 #[test]

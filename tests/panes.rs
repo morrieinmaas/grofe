@@ -98,6 +98,30 @@ fn m1_scenario_split_send_keys_capture() {
     );
 }
 
+/// The sampler must never report the server's own (pre-exec) image: right
+/// after `split-window 'sleep 30'`, `#{pane_current_argv}` should either be
+/// empty (no sample yet) or already `sleep 30`, never the grofe server's
+/// own argv.
+#[test]
+fn pane_current_argv_never_shows_the_server_before_exec() {
+    let srv = TestServer::start();
+    session(&srv, "a", 80, 24);
+    srv.cmd(&["split-window", "-t", "a", "sleep", "30"])
+        .unwrap();
+    let target = "a:1.2";
+    let deadline = std::time::Instant::now() + Duration::from_millis(2000);
+    loop {
+        let argv = display(&srv, target, "#{pane_current_argv}");
+        assert!(
+            !argv.contains("__server"),
+            "pane_current_argv showed the server's own image: {argv:?}"
+        );
+        if argv == "sleep 30" || std::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+}
+
 #[test]
 fn split_window_sizes_and_list_panes_format_match_the_layout() {
     let srv = TestServer::start();

@@ -6,7 +6,7 @@
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::unix::AsyncFd;
@@ -15,6 +15,15 @@ use super::lock;
 
 /// How often the foreground process is sampled.
 const SAMPLE_EVERY: Duration = Duration::from_secs(1);
+
+/// This process's own argv, resolved once. A freshly forked pane child is,
+/// until it execs, still byte-for-byte a copy of the server's own image:
+/// [`sampler`] uses this to recognise (and discard) a sample taken of that
+/// pre-exec image, rather than report the server's own argv as the pane's.
+fn server_argv() -> &'static [String] {
+    static ARGV: OnceLock<Vec<String>> = OnceLock::new();
+    ARGV.get_or_init(|| std::env::args().collect())
+}
 
 /// The last sample of a pane's foreground process.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +44,15 @@ pub(crate) async fn sampler(master: Arc<AsyncFd<OwnedFd>>, out: Arc<Mutex<ProcSa
             continue;
         };
         let sample = sample(pgrp.as_raw());
+        // The pty's foreground process group is the child's own pid as
+        // soon as it calls setsid()+TIOCSCTTY, before it execs; on macOS
+        // the introspection APIs below can keep reporting that pre-exec
+        // image (still literally the server's own argv) for close to a
+        // second afterwards. Skip such a sample rather than store it, so a
+        // caller sees either nothing yet or the real command, never ours.
+        if sample.argv.as_deref() == Some(server_argv()) {
+            continue;
+        }
         if sample.command.is_some() || sample.argv.is_some() || sample.path.is_some() {
             *lock(&out) = sample;
         }

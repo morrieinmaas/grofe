@@ -65,7 +65,14 @@ pub fn key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
         }
         ctrl_byte(rest)?
     } else if shift {
-        return None; // S- is only supported for the modifier-aware keys above.
+        // tmux has no modified-CSI form for Tab: S-Tab collapses to plain
+        // Tab (verified on a live tmux 3.7b). `BTab`, the separate named
+        // back-tab key, is handled by named_or_char_bytes below.
+        if rest == "Tab" {
+            named_or_char_bytes(rest)?
+        } else {
+            return None; // S- is only supported for the modifier-aware keys above.
+        }
     } else {
         named_or_char_bytes(rest)?
     };
@@ -165,11 +172,17 @@ fn tilde_num(rest: &str) -> Option<u16> {
     }
 }
 
-/// `C-<x>`: the control byte for a single ASCII letter, or one of the
-/// handful of punctuation characters with a defined control code (`@ [ \
-/// ] ^ _`). `None` for anything else (multi-character, or a character
-/// with no control form).
+/// `C-<x>`: the control byte for a single ASCII letter, one of the handful
+/// of punctuation characters with a defined control code (`@ [ \ ] ^ _`,
+/// `@` giving NUL, same as `C-Space`'s own special case below), or the
+/// named `Space` key. `None` for anything else (multi-character, or a
+/// character with no control form).
 fn ctrl_byte(rest: &str) -> Option<Vec<u8>> {
+    // C-Space: no defined control code for a plain space, but tmux sends
+    // NUL, same as its C-@ alias (verified on a live tmux 3.7b).
+    if rest == "Space" {
+        return Some(vec![0]);
+    }
     let mut chars = rest.chars();
     let c = chars.next()?;
     if chars.next().is_some() {
@@ -191,6 +204,9 @@ fn named_or_char_bytes(rest: &str) -> Option<Vec<u8>> {
     let named: &[u8] = match rest {
         "Enter" => b"\r",
         "Tab" => b"\t",
+        // Back-tab, tmux's own named key for Shift-Tab (`kcbt` in
+        // `infocmp -1x xterm-256color`; verified on a live tmux 3.7b).
+        "BTab" => b"\x1b[Z",
         "BSpace" => b"\x7f",
         "Escape" => b"\x1b",
         "Space" => b" ",
@@ -434,6 +450,20 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// Verified on a live tmux 3.7b (`tmux -f /dev/null -L <private socket>`,
+    /// send-keys into a raw pty pane, `od -An -tx1` on what it received):
+    /// tmux has no modified-CSI form for Tab, so `S-Tab` collapses to plain
+    /// Tab (0x09); `BTab` is the separate named back-tab key and sends
+    /// `\x1b[Z` (matches `kcbt` in `infocmp -1x xterm-256color`); `C-Space`
+    /// and its `C-@` alias both send NUL.
+    #[test]
+    fn s_tab_and_c_space_match_real_tmux() {
+        assert_eq!(key_bytes("S-Tab", &modes(false)), Some(b"\t".to_vec()));
+        assert_eq!(key_bytes("BTab", &modes(false)), Some(b"\x1b[Z".to_vec()));
+        assert_eq!(key_bytes("C-Space", &modes(false)), Some(vec![0x00]));
+        assert_eq!(key_bytes("C-@", &modes(false)), Some(vec![0x00]));
     }
 
     #[test]
