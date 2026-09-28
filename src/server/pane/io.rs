@@ -14,6 +14,8 @@ use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
+use crate::server::graphics;
+use crate::server::passthrough::Scanner;
 use crate::types::PaneId;
 
 /// Bytes parsed per lock hold (spec §4.8).
@@ -133,6 +135,10 @@ pub(crate) struct Reader {
     pub(crate) dirty: Arc<AtomicBool>,
     pub(crate) wake: Arc<Notify>,
     pub(crate) to_actor: mpsc::Sender<PaneEvent>,
+    /// Runs over every read before the emulator (T3.3).
+    pub(crate) scanner: Scanner,
+    /// See `PaneHandle::set_graphics_ok`.
+    pub(crate) graphics_ok: Arc<AtomicBool>,
 }
 
 /// Reader task: parse output, answer the emulator's queries, drive the sync
@@ -147,6 +153,7 @@ pub(crate) async fn reader(mut r: Reader) {
 
     while !(drained && exit.is_some()) {
         let mut tapped = None;
+        let mut found = Vec::new();
         let sync = lock(&r.emu)
             .parser
             .sync_timeout()
@@ -164,7 +171,7 @@ pub(crate) async fn reader(mut r: Reader) {
                 }) {
                     Ok(Ok(0)) => drained = true,
                     Ok(Ok(n)) => {
-                        r.feed(&buf[..n]);
+                        found = r.feed(&buf[..n]);
                         quiet_since = Instant::now();
                         if OUTPUT_TAP.load(Ordering::Relaxed) {
                             tapped = Some(buf[..n].to_vec());
@@ -193,6 +200,11 @@ pub(crate) async fn reader(mut r: Reader) {
         if let Some(bytes) = tapped {
             let event = r.event(PaneEventKind::Output(bytes));
             let _ = r.to_actor.send(event).await;
+        }
+        // What the scanner found, with backpressure too: a lost graphics
+        // chunk or cwd would not come again.
+        for kind in found {
+            let _ = r.to_actor.send(r.event(kind)).await;
         }
     }
     // A child that began a synchronized update and exited before its timeout
@@ -237,13 +249,27 @@ impl Reader {
         }
     }
 
-    fn feed(&mut self, bytes: &[u8]) {
+    /// Parses one read: through the scanner, then the emulator. Returns
+    /// what the scanner found, for the caller to send on. A graphics query
+    /// the scanner framed is answered here, straight back to the pane and
+    /// ahead of the emulator's own replies (its DA1 answer, which a tool
+    /// sends after the query), never through the actor (T3.8).
+    fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
+        let (bytes, found) = self.scanner.scan(bytes);
+        for kind in &found {
+            if let PaneEventKind::Graphics(apc) = kind
+                && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
+            {
+                self.reply(answer);
+            }
+        }
         {
             let mut emu = lock(&self.emu);
             let Emu { term, parser } = &mut *emu;
-            parser.advance(term, bytes);
+            parser.advance(term, &bytes);
         }
         self.after_parse();
+        found
     }
 
     /// Handle buffered listener events, then mark the pane dirty and wake the
@@ -298,10 +324,10 @@ impl Reader {
         self.wake.notify_one();
     }
 
-    fn reply(&self, text: String) {
+    fn reply(&self, bytes: impl Into<Vec<u8>>) {
         // A reply that does not fit is dropped; the queue is only full when
         // the child has stopped reading, so it would not see it anyway.
-        let _ = self.input.push(text.into_bytes());
+        let _ = self.input.push(bytes.into());
     }
 
     /// Best effort: a full actor queue drops titles and bells rather than

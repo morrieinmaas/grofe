@@ -462,6 +462,7 @@ fn frames_flow_both_ways_after_a_probe_the_terminal_answers() {
             sync: true,
             kitty_keys: true,
             kitty_graphics: true,
+            cell_px: None,
         }
     );
     conn.reply(&ok());

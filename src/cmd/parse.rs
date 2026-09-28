@@ -9,11 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AttachSession, CapturePane, Command, DetachClient, DisplayMessage, HasSession, KillPane,
-    KillServer, KillSession, KillWindow, ListClients, ListPanes, ListSessions, ListWindows,
-    NewSession, NewWindow, OptionScope, ParseError, Rename, ResizeAction, ResizePane, RespawnPane,
-    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetOption, ShowOptions,
-    SplitWindow, Subscribe, SwitchClient, Target, WindowStep,
+    AttachSession, BindKey, CapturePane, Command, CommandPrompt, DetachClient, DisplayMessage,
+    HasSession, KillPane, KillServer, KillSession, KillWindow, ListClients, ListKeys, ListPanes,
+    ListSessions, ListWindows, NewSession, NewWindow, OptionScope, ParseError, Reload, Rename,
+    ResizeAction, ResizePane, RespawnPane, RunShell, SelectLayout, SelectPane, SelectWindow,
+    SendKeys, SendKeysItem, SendPrefix, SetOption, ShowOptions, SourceFile, SplitWindow, Subscribe,
+    SwitchClient, Target, UnbindKey, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -861,6 +862,256 @@ fn parse_send_prefix(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+/// `-T`, else `root` for `-n`, else `prefix`: tmux's key-table choice for
+/// `bind-key` and `unbind-key`.
+fn key_table(flags: &ParsedFlags) -> String {
+    match flags.values.get(&'T') {
+        Some(t) => t.clone(),
+        None if flags.present.contains(&'n') => "root".to_string(),
+        None => "prefix".to_string(),
+    }
+}
+
+const BIND_KEY_SHORT: &[(char, FlagKind)] = &[
+    ('n', FlagKind::Bool),
+    ('r', FlagKind::Bool),
+    ('T', FlagKind::Value),
+    ('N', FlagKind::Value),
+];
+
+fn parse_bind_key(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: BIND_KEY_SHORT,
+            long: &[],
+        },
+        "bind-key",
+    )?;
+    let (key, command) = flags
+        .positionals
+        .split_first()
+        .ok_or_else(|| ParseError::MissingArgument("bind-key".to_string()))?;
+    Ok(Command::BindKey(BindKey {
+        table: key_table(&flags),
+        repeat: flags.present.contains(&'r'),
+        note: flags.values.get(&'N').cloned(),
+        key: key.clone(),
+        command: command.to_vec(),
+    }))
+}
+
+const UNBIND_KEY_SHORT: &[(char, FlagKind)] = &[
+    ('n', FlagKind::Bool),
+    ('a', FlagKind::Bool),
+    ('T', FlagKind::Value),
+];
+
+fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: UNBIND_KEY_SHORT,
+            long: &[],
+        },
+        "unbind-key",
+    )?;
+    no_extra_positionals(&flags, "unbind-key", 1)?;
+    let all = flags.present.contains(&'a');
+    let key = flags.positionals.first().cloned();
+    // tmux's wording.
+    match (all, &key) {
+        (true, Some(_)) => return Err(ParseError::Other("key given with -a".to_string())),
+        (false, None) => return Err(ParseError::Other("missing key".to_string())),
+        _ => {}
+    }
+    Ok(Command::UnbindKey(UnbindKey {
+        table: key_table(&flags),
+        all,
+        key,
+    }))
+}
+
+const TABLE_ONLY_SHORT: &[(char, FlagKind)] = &[('T', FlagKind::Value)];
+
+fn parse_list_keys(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: TABLE_ONLY_SHORT,
+            long: &[],
+        },
+        "list-keys",
+    )?;
+    no_extra_positionals(&flags, "list-keys", 0)?;
+    Ok(Command::ListKeys(ListKeys {
+        table: flags.values.get(&'T').cloned(),
+    }))
+}
+
+/// The single required positional of `cmd_name`.
+fn one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<String, ParseError> {
+    no_extra_positionals(flags, cmd_name, 1)?;
+    flags
+        .positionals
+        .first()
+        .cloned()
+        .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))
+}
+
+fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[('q', FlagKind::Bool)],
+            long: &[],
+        },
+        "source-file",
+    )?;
+    Ok(Command::SourceFile(SourceFile {
+        quiet: flags.present.contains(&'q'),
+        path: one_positional(&flags, "source-file")?,
+    }))
+}
+
+fn parse_reload(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(argv, &NO_FLAGS, "reload")?;
+    no_extra_positionals(&flags, "reload", 0)?;
+    Ok(Command::Reload(Reload))
+}
+
+const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[('p', FlagKind::Value), ('I', FlagKind::Value)];
+
+fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: COMMAND_PROMPT_SHORT,
+            long: &[],
+        },
+        "command-prompt",
+    )?;
+    no_extra_positionals(&flags, "command-prompt", 1)?;
+    Ok(Command::CommandPrompt(CommandPrompt {
+        prompt: flags.values.get(&'p').cloned(),
+        initial: flags.values.get(&'I').cloned(),
+        template: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(argv, &NO_FLAGS, "run-shell")?;
+    Ok(Command::RunShell(RunShell {
+        cmd: one_positional(&flags, "run-shell")?,
+    }))
+}
+
+fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: TARGET_ONLY_SHORT,
+            long: &[],
+        },
+        "select-layout",
+    )?;
+    Ok(Command::SelectLayout(SelectLayout {
+        target: target_or_current(&flags.values, 't')?,
+        name: one_positional(&flags, "select-layout")?,
+    }))
+}
+
+/// Splits a stored command string (a binding, a prompt answer, a config
+/// value) into commands and their words (R12), as tmux 3.7b's parser reads
+/// it: whitespace separates words; single quotes keep everything literal;
+/// double quotes and bare words take a backslash as "the next character,
+/// literally"; quoted parts join with whatever touches them (`'it'"'"'s'`
+/// is one word). An unquoted `;` ends a command wherever it is, and so does
+/// a `\;` standing alone as a word (R12); a quoted or escaped `;` inside a
+/// word is literal. Empty commands are dropped.
+///
+/// An unterminated quote is an error (tmux takes it as closed at the end).
+// ponytail: no `\n`/`\t`/`\e`/octal/`\u` escapes, `$VAR`, `~` or `#`
+// comments; a backslash just keeps the next character.
+pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
+    fn end_word(word: &mut String, started: &mut bool, words: &mut Vec<String>) {
+        if *started {
+            words.push(std::mem::take(word));
+            *started = false;
+        }
+    }
+    fn end_command(words: &mut Vec<String>, cmds: &mut Vec<Vec<String>>) {
+        if !words.is_empty() {
+            cmds.push(std::mem::take(words));
+        }
+    }
+    let unterminated = || ParseError::Other(format!("unterminated quote: {s}"));
+    let mut cmds = Vec::new();
+    let mut words = Vec::new();
+    let mut word = String::new();
+    // A word has begun, even if it is still empty (`''`).
+    let mut started = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => end_word(&mut word, &mut started, &mut words),
+            ';' => {
+                end_word(&mut word, &mut started, &mut words);
+                end_command(&mut words, &mut cmds);
+            }
+            '\\' => match chars.next() {
+                Some(';') if !started && chars.peek().is_none_or(|n| n.is_whitespace()) => {
+                    end_command(&mut words, &mut cmds);
+                }
+                Some(next) => {
+                    word.push(next);
+                    started = true;
+                }
+                None => {
+                    word.push('\\');
+                    started = true;
+                }
+            },
+            '\'' => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(x) => word.push(x),
+                        None => return Err(unterminated()),
+                    }
+                }
+            }
+            '"' => {
+                started = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => word.push(chars.next().ok_or_else(unterminated)?),
+                        Some(x) => word.push(x),
+                        None => return Err(unterminated()),
+                    }
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    end_word(&mut word, &mut started, &mut words);
+    end_command(&mut words, &mut cmds);
+    Ok(cmds)
+}
+
+/// Parses argv into the commands it runs, in order. Every caller that runs
+/// commands (the CLI, control mode, bindings, the prompt) goes through
+/// this, so sequences have one home.
+// ponytail: one command until T3.5 adds the CLI's `;` argv split.
+pub fn parse_sequence(argv: &[String]) -> Result<Vec<Command>, ParseError> {
+    Ok(vec![parse(argv)?])
+}
+
 /// Resolves a handful of well-known tmux short names to the full command
 /// name `parse` matches on. `set`/`show` are load-bearing (spec §4.5);
 /// the rest are recognised where trivially table-driven.
@@ -883,6 +1134,12 @@ fn canonical_name(name: &str) -> &str {
         "display" => "display-message",
         "capturep" => "capture-pane",
         "attach" => "attach-session",
+        "bind" => "bind-key",
+        "unbind" => "unbind-key",
+        "lsk" => "list-keys",
+        "source" => "source-file",
+        "run" => "run-shell",
+        "selectl" => "select-layout",
         other => other,
     }
 }
@@ -929,6 +1186,14 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "rename-window" => Ok(Command::RenameWindow(parse_rename(rest, "rename-window")?)),
         "switch-client" => parse_switch_client(rest),
         "send-prefix" => parse_send_prefix(rest),
+        "bind-key" => parse_bind_key(rest),
+        "unbind-key" => parse_unbind_key(rest),
+        "list-keys" => parse_list_keys(rest),
+        "source-file" => parse_source_file(rest),
+        "reload" => parse_reload(rest),
+        "command-prompt" => parse_command_prompt(rest),
+        "run-shell" => parse_run_shell(rest),
+        "select-layout" => parse_select_layout(rest),
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }
@@ -1902,5 +2167,212 @@ mod tests {
         };
         assert!(c.opts.escapes);
         assert!(c.print);
+    }
+
+    // ---- M3 commands (T3.0) ----
+
+    fn words(ws: &[&[&str]]) -> Vec<Vec<String>> {
+        ws.iter().map(|w| argv(w)).collect()
+    }
+
+    /// Quotes, escapes and `;`, as tmux 3.7b's string parser reads them
+    /// (recorded with `bind X '<string>'` then `list-keys` on a private
+    /// socket), plus R12's `\;` token.
+    #[test]
+    fn split_command_string_table() {
+        let cases: &[(&str, &[&[&str]])] = &[
+            ("", &[]),
+            ("   ", &[]),
+            ("split-window -h", &[&["split-window", "-h"]]),
+            (
+                "split-window ; select-pane -L",
+                &[&["split-window"], &["select-pane", "-L"]],
+            ),
+            // tmux: a `;` ends the command even inside a word.
+            (
+                "split-window;select-pane -L",
+                &[&["split-window"], &["select-pane", "-L"]],
+            ),
+            (
+                "split-window; select-pane -L",
+                &[&["split-window"], &["select-pane", "-L"]],
+            ),
+            // R12: a `\;` token separates too.
+            (
+                "split-window \\; select-pane -L",
+                &[&["split-window"], &["select-pane", "-L"]],
+            ),
+            // Quoted or escaped inside a word, `;` is literal.
+            ("display 'a;b'", &[&["display", "a;b"]]),
+            ("display \"a;b\"", &[&["display", "a;b"]]),
+            ("display a\\;b", &[&["display", "a;b"]]),
+            ("display ';'", &[&["display", ";"]]),
+            // Empty commands vanish.
+            ("a ;; b ;", &[&["a"], &["b"]]),
+            ("; a", &[&["a"]]),
+            // Quotes group, join with what touches them, and may be empty.
+            (
+                "run-shell 'touch /tmp/x'",
+                &[&["run-shell", "touch /tmp/x"]],
+            ),
+            ("rename-window \"%%\"", &[&["rename-window", "%%"]]),
+            ("set status-right ''", &[&["set", "status-right", ""]]),
+            ("display 'it'\"'\"'s'", &[&["display", "it's"]]),
+            ("display \"say \\\"hi\\\"\"", &[&["display", "say \"hi\""]]),
+            ("display 'no \\escape'", &[&["display", "no \\escape"]]),
+            ("a\\ b\tc", &[&["a b", "c"]]),
+            ("display \"a\\\\b\"", &[&["display", "a\\b"]]),
+        ];
+        for (input, want) in cases {
+            assert_eq!(split_command_string(input), Ok(words(want)), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn split_command_string_rejects_an_unterminated_quote() {
+        for input in ["display 'a", "display \"a", "display \"a\\\""] {
+            assert!(
+                matches!(split_command_string(input), Err(ParseError::Other(_))),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_sequence_is_one_command_until_t3_5() {
+        assert_eq!(
+            parse_sequence(&argv(&["kill-server"])),
+            Ok(vec![Command::KillServer(KillServer)])
+        );
+        assert_eq!(parse_sequence(&argv(&[])), Err(ParseError::EmptyCommand));
+    }
+
+    #[test]
+    fn bind_key_flags_and_command() {
+        assert_eq!(
+            parse(&argv(&["bind-key", "X", "split-window", "-h"])),
+            Ok(Command::BindKey(BindKey {
+                table: "prefix".to_string(),
+                repeat: false,
+                note: None,
+                key: "X".to_string(),
+                command: argv(&["split-window", "-h"]),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "bind",
+                "-nr",
+                "-N",
+                "a note",
+                "M-h",
+                "select-pane"
+            ])),
+            Ok(Command::BindKey(BindKey {
+                table: "root".to_string(),
+                repeat: true,
+                note: Some("a note".to_string()),
+                key: "M-h".to_string(),
+                command: argv(&["select-pane"]),
+            }))
+        );
+        // `-T` wins over `-n`, as in tmux.
+        let Ok(Command::BindKey(c)) = parse(&argv(&["bind-key", "-n", "-T", "copy", "q", "x"]))
+        else {
+            panic!("bind-key -n -T");
+        };
+        assert_eq!(c.table, "copy");
+        assert_eq!(
+            parse(&argv(&["bind-key"])),
+            Err(ParseError::MissingArgument("bind-key".to_string()))
+        );
+    }
+
+    #[test]
+    fn unbind_key_needs_a_key_unless_all() {
+        assert_eq!(
+            parse(&argv(&["unbind", "-n", "M-h"])),
+            Ok(Command::UnbindKey(UnbindKey {
+                table: "root".to_string(),
+                all: false,
+                key: Some("M-h".to_string()),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["unbind-key", "-a", "-T", "copy"])),
+            Ok(Command::UnbindKey(UnbindKey {
+                table: "copy".to_string(),
+                all: true,
+                key: None,
+            }))
+        );
+        assert!(parse(&argv(&["unbind-key"])).is_err());
+        assert!(parse(&argv(&["unbind-key", "-a", "x"])).is_err());
+    }
+
+    #[test]
+    fn list_keys_source_file_and_reload() {
+        assert_eq!(
+            parse(&argv(&["lsk", "-T", "prefix"])),
+            Ok(Command::ListKeys(ListKeys {
+                table: Some("prefix".to_string()),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["source", "-q", "sub.toml"])),
+            Ok(Command::SourceFile(SourceFile {
+                quiet: true,
+                path: "sub.toml".to_string(),
+            }))
+        );
+        assert!(parse(&argv(&["source-file"])).is_err());
+        assert_eq!(parse(&argv(&["reload"])), Ok(Command::Reload(Reload)));
+        assert!(parse(&argv(&["reload", "x"])).is_err());
+    }
+
+    #[test]
+    fn command_prompt_and_run_shell() {
+        assert_eq!(
+            parse(&argv(&[
+                "command-prompt",
+                "-I",
+                "old",
+                "-p",
+                "name",
+                "rename-window '%%'"
+            ])),
+            Ok(Command::CommandPrompt(CommandPrompt {
+                prompt: Some("name".to_string()),
+                initial: Some("old".to_string()),
+                template: Some("rename-window '%%'".to_string()),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["command-prompt"])),
+            Ok(Command::CommandPrompt(CommandPrompt {
+                prompt: None,
+                initial: None,
+                template: None,
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["run", "echo hi; echo two"])),
+            Ok(Command::RunShell(RunShell {
+                cmd: "echo hi; echo two".to_string(),
+            }))
+        );
+        assert!(parse(&argv(&["run-shell"])).is_err());
+    }
+
+    #[test]
+    fn select_layout_takes_a_name_and_a_target() {
+        assert_eq!(
+            parse(&argv(&["selectl", "-t", "%1", "main-vertical"])),
+            Ok(Command::SelectLayout(SelectLayout {
+                target: parse_target("%1").expect("target"),
+                name: "main-vertical".to_string(),
+            }))
+        );
+        assert!(parse(&argv(&["select-layout"])).is_err());
     }
 }

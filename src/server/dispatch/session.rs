@@ -43,6 +43,8 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         command_argv(c.command),
         cwd.clone(),
         size,
+        // A new session has no client yet.
+        None,
     )?;
 
     let model = &mut state.model;
@@ -69,6 +71,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         zoomed: false,
         cols: size.0,
         rows: size.1,
+        bell_flag: false,
     });
     Ok(String::new())
 }

@@ -21,12 +21,16 @@
 //!   typing in turn do not make the window flap. A larger client
 //!   letterboxes, a smaller one crops with a viewport that follows the
 //!   active pane's cursor ([`follow`]).
-//! - **Input.** Bytes are decoded per client, each key goes to the
+//! - **Input.** Bytes are decoded per client, each input goes to the
 //!   registered input hooks first, then through the client's key table;
 //!   bound commands run with the client's context, other keys go to the
 //!   active pane encoded for its modes.
+//! - **Raw output.** [`queue_raw`] puts bytes that are not a screen change
+//!   (mouse modes, passthrough, graphics) ahead of the client's next frame,
+//!   in the same `Output` frame.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
@@ -42,10 +46,10 @@ use crate::server::input::{
 };
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
-use crate::server::render::{self, FrameInputs, Overlay, Screen};
+use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
 use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
-use crate::server::{State, dispatch};
-use crate::types::{ClientId, PaneId, SessionId, cap_size};
+use crate::server::{State, dispatch, graphics};
+use crate::types::{ClientId, PaneId, Rect, SessionId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -98,7 +102,15 @@ pub struct Outbox {
     /// Set when a diff was dropped: nothing is composed for this client
     /// until its slot is free again.
     blocked: bool,
+    /// Bytes for ahead of the next frame ([`queue_raw`]); kept across a
+    /// dropped frame.
+    raw: Vec<u8>,
 }
+
+/// Most raw bytes held for a client whose frames are being dropped.
+// ponytail: past this, newer raw bytes are dropped until the client reads
+// again; a full redraw re-sends what must survive (graphics, T3.8).
+const RAW_CAP: usize = 16 * 1024 * 1024;
 
 impl Outbox {
     /// An outbox and the receiver its connection writes from.
@@ -108,6 +120,7 @@ impl Outbox {
             tx,
             prev: None,
             blocked: false,
+            raw: Vec::new(),
         };
         (outbox, rx)
     }
@@ -117,23 +130,42 @@ impl Outbox {
         !self.blocked || self.tx.capacity() > 0
     }
 
-    /// Sends the diff that turns the client's screen into `next`, as ONE
-    /// frame (so a synchronized-output begin/end pair is never split). If
-    /// the slot is still full the diff is dropped and the next offer is a
-    /// full redraw. Returns false for a dropped diff: the client still needs
-    /// a frame, and must be offered one again once [`Outbox::ready`].
+    /// Whether the next offer is a full redraw.
+    pub fn needs_full_redraw(&self) -> bool {
+        self.prev.is_none()
+    }
+
+    /// Holds `bytes` for ahead of the next frame.
+    pub fn queue_raw(&mut self, bytes: &[u8]) {
+        if self.raw.len() + bytes.len() <= RAW_CAP {
+            self.raw.extend_from_slice(bytes);
+        }
+    }
+
+    /// Sends the queued raw bytes, then the diff that turns the client's
+    /// screen into `next`, as ONE frame (so a synchronized-output begin/end
+    /// pair is never split, and raw bytes land before it). If the slot is
+    /// still full the frame is dropped, the raw bytes stay queued, and the
+    /// next offer is a full redraw. Returns false for a dropped frame: the
+    /// client still needs one, and must be offered it again once
+    /// [`Outbox::ready`].
     pub fn offer(&mut self, next: Screen, caps: &Caps) -> bool {
-        let bytes = render::diff(self.prev.as_ref(), &next, caps);
-        if bytes.is_empty() {
+        let diff = render::diff(self.prev.as_ref(), &next, caps);
+        if diff.is_empty() && self.raw.is_empty() {
             return true;
         }
+        let mut bytes = std::mem::take(&mut self.raw);
+        let raw_len = bytes.len();
+        bytes.extend_from_slice(&diff);
         match self.tx.try_send(bytes) {
             Ok(()) => {
                 self.prev = Some(next);
                 self.blocked = false;
                 true
             }
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(mpsc::error::TrySendError::Full(mut bytes)) => {
+                bytes.truncate(raw_len);
+                self.raw = bytes;
                 self.prev = None;
                 self.blocked = true;
                 false
@@ -172,8 +204,12 @@ pub struct ClientEntry {
     /// A message shown instead of the status line until it expires or a
     /// key is pressed (a failed binding's error, as tmux shows it).
     message: Option<(String, Instant)>,
-    /// The window cell drawn at the client's top-left (crop, D6).
-    viewport: (u16, u16),
+    /// The window cell drawn at the client's top-left (crop, D6), as last
+    /// drawn.
+    pub viewport: (u16, u16),
+    /// The outer terminal's mouse modes as last written (R2); `None`
+    /// before the first write.
+    mouse_modes: Option<bool>,
     /// Needs a new frame.
     dirty: bool,
     outbox: Outbox,
@@ -229,10 +265,10 @@ pub struct Registry {
     next_id: u32,
     /// Bindings by table, starting with the default key table.
     pub key_tables: KeyTables,
-    /// See keys before the key tables, in registration order.
-    pub input_hooks: Vec<Box<dyn InputHook + Send>>,
-    /// Drawn over every client's frame, in registration order.
-    pub overlays: Vec<Box<dyn Overlay + Send>>,
+    /// See every input before the key tables, in registration order.
+    pub input_hooks: Vec<Arc<dyn InputHook + Send + Sync>>,
+    /// Drawn over every client's frame, in reverse registration order.
+    pub overlays: Vec<Arc<dyn Overlay + Send + Sync>>,
     owners: BTreeMap<SessionId, SizeOwner>,
     render_at: Option<Instant>,
     last_render: Option<Instant>,
@@ -306,6 +342,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             focused: true,
             message: None,
             viewport: (0, 0),
+            mouse_modes: None,
             dirty: true,
             outbox,
             exit: Some(exit_tx),
@@ -567,6 +604,52 @@ pub fn changed(state: &mut State) {
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
     apply_sizes(state);
+    sync_mouse_modes(state);
+    mark_all_dirty(state);
+}
+
+/// The outer terminal's mouse reporting on and off.
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+
+/// Writes each client's mouse modes where its session's `mouse` option
+/// differs from what it was last sent (R2): so on attach, and after any
+/// `set`, `reload` or switch that changes it. The client's exit reset
+/// turns them off again.
+fn sync_mouse_modes(state: &mut State) {
+    let model = &state.model;
+    for c in state.clients.values_mut() {
+        let on = model
+            .options
+            .lookup("mouse", &[Owner::Session(c.session)])
+            .is_some_and(|v| v == "on");
+        if c.mouse_modes != Some(on) {
+            c.mouse_modes = Some(on);
+            c.outbox.queue_raw(if on { MOUSE_ON } else { MOUSE_OFF });
+        }
+    }
+}
+
+/// Queues `bytes` for client `id` ahead of its next frame (inside the same
+/// `Output` frame, before the synchronized-output begin), and schedules
+/// that frame.
+pub fn queue_raw(state: &mut State, id: ClientId, bytes: &[u8]) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.outbox.queue_raw(bytes);
+    }
+    mark_dirty(state, id);
+}
+
+/// Client `id` needs a new frame.
+pub(crate) fn mark_dirty(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.dirty = true;
+        request_render(state, Instant::now());
+    }
+}
+
+/// Every client needs a new frame.
+pub(crate) fn mark_all_dirty(state: &mut State) {
     for c in state.clients.values_mut() {
         c.dirty = true;
     }
@@ -602,7 +685,9 @@ pub fn wake(state: &mut State) {
     }
 }
 
-fn request_render(state: &mut State, now: Instant) {
+/// Schedules a render of the dirty clients, at most once per
+/// [`FRAME_INTERVAL`].
+pub(crate) fn request_render(state: &mut State, now: Instant) {
     let r = &mut state.registry;
     if r.render_at.is_none() && !state.clients.is_empty() {
         let earliest = r.last_render.map_or(now, |last| last + FRAME_INTERVAL);
@@ -737,10 +822,17 @@ fn render_dirty(state: &mut State) {
         .map(|(id, _)| *id)
         .collect();
     for id in ids {
+        if state
+            .clients
+            .get(&id)
+            .is_some_and(|c| c.outbox.needs_full_redraw())
+        {
+            graphics::on_full_redraw(state, id);
+        }
         let Some(c) = state.clients.get(&id) else {
             continue;
         };
-        let composed = compose_client(state, c);
+        let composed = compose_client(state, id, c);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
@@ -770,7 +862,16 @@ fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (
     (cols.max(1), rows.saturating_sub(status).max(1))
 }
 
-/// Sizes every session that has attached clients to its owner (spec D6).
+/// One cell's size in pixels on the client `session`'s windows are sized
+/// for, if it said; what a new pane there starts with.
+pub(crate) fn cell_px(state: &State, session: SessionId) -> Option<(u16, u16)> {
+    let owner = state.registry.owners.get(&session)?;
+    state.clients.get(&owner.client)?.caps.cell_px
+}
+
+/// Sizes every session that has attached clients to its owner (spec D6),
+/// in cells and, where the owner said its cell size, in pixels. A session
+/// no client shows keeps what it had (0 pixels until a client says).
 fn apply_sizes(state: &mut State) {
     let sizes: Vec<(SessionId, (u16, u16))> = state
         .registry
@@ -783,6 +884,17 @@ fn apply_sizes(state: &mut State) {
         .collect();
     for (session, size) in sizes {
         resize_session(&mut state.model, session, size);
+        let cell_px = cell_px(state, session);
+        let model = &state.model;
+        let windows = model.sessions.get(&session).map(|s| &s.windows);
+        for w in windows.into_iter().flatten() {
+            let panes = model.panes.values().filter(|p| p.window == *w);
+            for p in panes {
+                if let Err(e) = p.handle.set_cell_px(cell_px) {
+                    eprintln!("grofe server: resizing {}: {e}", p.id);
+                }
+            }
+        }
     }
 }
 
@@ -845,18 +957,87 @@ pub fn follow(
     )
 }
 
-/// Composes client `c`'s next screen, and the viewport it was drawn with.
-fn compose_client(state: &State, c: &ClientEntry) -> Option<(Screen, (u16, u16))> {
+/// The visible panes of `w` and their rects in window coordinates (only
+/// the active pane when zoomed).
+fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
+    if w.zoomed {
+        vec![(w.active, w.area())]
+    } else {
+        w.layout.compute(w.area())
+    }
+}
+
+/// Where things are on client `c`'s screen when drawn with `viewport`.
+fn overlay_ctx_at(
+    model: &Model,
+    id: ClientId,
+    c: &ClientEntry,
+    viewport: (u16, u16),
+) -> OverlayCtx {
+    let status = status_on(model, c.session);
+    let (cols, rows) = c.size;
+    let win_rows = rows.saturating_sub(u16::from(status));
+    let window = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active));
+    let panes = window
+        .map(visible_panes)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(pane, r)| {
+            let (vx, vy) = (u32::from(viewport.0), u32::from(viewport.1));
+            let left = u32::from(r.x).max(vx);
+            let top = u32::from(r.y).max(vy);
+            let right = (u32::from(r.x) + u32::from(r.cols)).min(vx + u32::from(cols));
+            let bottom = (u32::from(r.y) + u32::from(r.rows)).min(vy + u32::from(win_rows));
+            (left < right && top < bottom).then(|| {
+                let rect = Rect {
+                    x: (left - vx) as u16,
+                    y: (top - vy) as u16,
+                    cols: (right - left) as u16,
+                    rows: (bottom - top) as u16,
+                };
+                (pane, rect)
+            })
+        })
+        .collect();
+    OverlayCtx {
+        client: id,
+        viewport,
+        status_row: (status && rows > 0).then(|| rows - 1),
+        panes,
+    }
+}
+
+/// Where things are on client `id`'s screen as last drawn, for an input
+/// hook mapping a pointer to a pane.
+pub fn overlay_ctx(state: &State, id: ClientId) -> Option<OverlayCtx> {
+    let c = state.clients.get(&id)?;
+    Some(overlay_ctx_at(&state.model, id, c, c.viewport))
+}
+
+/// A window option's style, looked up from the window's active pane.
+fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> status::Style {
+    let chain = options::chain(model, w.active);
+    status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
+}
+
+/// Composes client `c`'s next screen, and the viewport it was drawn with:
+/// the frame, then every overlay (lowest priority first), then the
+/// wide-pair fix-up.
+fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Screen, (u16, u16))> {
     let model = &state.model;
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
     let status = status_on(model, s.id);
     let visible = (c.size.0, c.size.1.saturating_sub(u16::from(status)));
     let area = w.area();
-    let (rects, borders) = if w.zoomed {
-        (vec![(w.active, area)], Vec::new())
+    let rects = visible_panes(w);
+    let borders = if w.zoomed {
+        Vec::new()
     } else {
-        (w.layout.compute(area), w.layout.borders(area))
+        w.layout.borders(area)
     };
     let mut cursor = None;
     let panes = rects
@@ -883,23 +1064,24 @@ fn compose_client(state: &State, c: &ClientEntry) -> Option<(Screen, (u16, u16))
         Some((text, _)) => Some(message_line(text, c.size.0)),
         None => status.then(|| status_line(model, c, s)),
     };
-    let overlays: Vec<&dyn Overlay> = state
-        .registry
-        .overlays
-        .iter()
-        .map(|o| o.as_ref() as &dyn Overlay)
-        .collect();
-    let screen = render::compose(&FrameInputs {
+    let mut screen = render::compose(&FrameInputs {
         client: c.size,
         viewport,
         area,
         panes,
         borders,
+        border_style: window_style(model, w, "pane-border-style"),
+        active_border_style: window_style(model, w, "pane-active-border-style"),
         active: w.active,
         status: status_line,
-        overlays: &overlays,
         cursor,
+        graphics: state.graphics.remap(),
     });
+    let cx = overlay_ctx_at(model, id, c, viewport);
+    for overlay in state.registry.overlays.iter().rev() {
+        overlay.draw(state, id, &cx, &mut screen);
+    }
+    render::fix_wide_pairs(&mut screen);
     Some((screen, viewport))
 }
 
@@ -1122,26 +1304,28 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
     }
 }
 
-/// Routes one input: input hooks first (keys only), then the client's key
-/// table, reading the active pane's modes now, since a command routed just
-/// before may have changed the active pane.
+/// Routes one input: input hooks first (every input), then the client's
+/// key table, reading the active pane's modes now, since a command routed
+/// just before may have changed the active pane. Focus reports go no
+/// further than the client's own focus flag while `focus-events` is off
+/// (R28).
 fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
-    let hooked = match &input {
-        Input::Key(key) => state
-            .registry
-            .input_hooks
-            .iter_mut()
-            .find_map(|hook| hook.on_key(key, id)),
-        _ => None,
-    };
+    if let Input::Focus(focused) = input {
+        let Some(c) = state.clients.get_mut(&id) else {
+            return;
+        };
+        c.focused = focused;
+        if state.model.options.lookup("focus-events", &[]) != Some("on") {
+            return;
+        }
+    }
+    let hooks = state.registry.input_hooks.clone();
+    let hooked = hooks
+        .iter()
+        .find_map(|hook| hook.on_input(state, id, &input, now));
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
     };
-    if let Input::Focus(focused) = input
-        && let Some(c) = state.clients.get_mut(&id)
-    {
-        c.focused = focused;
-    }
     let pane = active_pane(&state.model, session);
     let routed = match hooked {
         Some(routed) => routed,
@@ -1178,24 +1362,30 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
                 eprintln!("grofe server: input queue full for {}", p.id);
             }
         }
-        Routed::Command(argv) => run_binding(state, id, &argv),
+        Routed::Command(cmds) => run_binding(state, id, &cmds),
         Routed::Consumed => {}
     }
 }
 
-/// Runs a bound command for client `id`, with the client's context and its
-/// active pane as the current pane.
-pub fn run_binding(state: &mut State, id: ClientId, argv: &[String]) {
-    let Some(c) = state.clients.get(&id) else {
-        return;
-    };
-    let ctx = ClientCtx {
-        pane: active_pane(&state.model, c.session),
-        ..c.ctx.clone()
-    };
-    // As tmux: a binding's error shows on the client's status row.
-    if let Err(e) = dispatch::run(state, &ctx, argv) {
-        show_message(state, id, e.trim_end());
+/// Runs bound commands for client `id` in order, each with the client's
+/// context and its active pane (as it is then) as the current pane; the
+/// first error stops the rest and shows on the client's status row, as
+/// tmux shows it. Output, and any deferred answer, is dropped.
+pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>]) {
+    for argv in cmds {
+        let Some(c) = state.clients.get(&id) else {
+            break;
+        };
+        let ctx = ClientCtx {
+            pane: active_pane(&state.model, c.session),
+            ..c.ctx.clone()
+        };
+        let result = dispatch::run(state, &ctx, argv);
+        state.deferred_reply = None;
+        if let Err(e) = result {
+            show_message(state, id, e.trim_end());
+            break;
+        }
     }
     state.events.flush();
     changed(state);
@@ -1328,6 +1518,11 @@ mod tests {
             events: events::Events::default(),
             clients: BTreeMap::new(),
             registry: Registry::default(),
+            prompts: Default::default(),
+            mouse: Default::default(),
+            passthrough: Default::default(),
+            graphics: Default::default(),
+            deferred_reply: None,
             exit: false,
             exit_when_empty: false,
             connections: 0,
@@ -1357,6 +1552,7 @@ mod tests {
                 focused: true,
                 message: None,
                 viewport: (0, 0),
+                mouse_modes: None,
                 dirty: false,
                 outbox,
                 exit: None,
@@ -1381,6 +1577,147 @@ mod tests {
         input(&mut state, id, b"x", now);
         assert!(state.clients[&id].message.is_none());
         assert!(state.clients[&id].dirty);
+    }
+
+    /// R1/R2 and item 3: the M3 hooks and overlays are registered in
+    /// priority order, and until their tasks land every hook passes every
+    /// kind of input on and every overlay leaves the screen alone.
+    #[test]
+    fn the_builtin_hooks_and_overlays_are_inert() {
+        let (mut state, id) = state_with_client();
+        crate::server::register_builtins(&mut state);
+        assert_eq!(state.registry.input_hooks.len(), 2);
+        assert_eq!(state.registry.overlays.len(), 2);
+        let now = Instant::now();
+        let inputs = [
+            Input::Key(crate::server::input::parse_key("C-b").expect("key")),
+            Input::Paste {
+                data: b"x".to_vec(),
+                start: true,
+                end: true,
+            },
+            Input::Focus(false),
+            Input::Mouse(crate::server::input::Mouse {
+                kind: crate::server::input::MouseKind::WheelUp,
+                col: 3,
+                row: 4,
+                mods: Default::default(),
+            }),
+        ];
+        for hook in state.registry.input_hooks.clone() {
+            for input in &inputs {
+                assert_eq!(hook.on_input(&mut state, id, input, now), None, "{input:?}");
+            }
+        }
+        let mut screen = screen_with('a');
+        let before = screen.clone();
+        let cx = overlay_ctx(&state, id).expect("ctx");
+        for overlay in state.registry.overlays.iter().rev() {
+            overlay.draw(&state, id, &cx, &mut screen);
+        }
+        assert_eq!(screen, before);
+    }
+
+    /// Item 13: the config-load hook changes nothing until T3.5 fills it.
+    #[test]
+    fn apply_config_at_start_is_a_no_op() {
+        let (mut state, _) = state_with_client();
+        let options = |s: &State| {
+            s.model
+                .options
+                .at(Owner::Global)
+                .map(|(k, e)| (k.clone(), e.clone()))
+                .collect::<Vec<_>>()
+        };
+        let (before, keys) = (options(&state), format!("{:?}", state.registry.key_tables));
+        crate::server::dispatch::options::apply_config_at_start(&mut state);
+        assert_eq!(options(&state), before);
+        assert_eq!(format!("{:?}", state.registry.key_tables), keys);
+    }
+
+    /// Item 11: raw bytes go out ahead of the next frame, in the same
+    /// frame; with no screen change they go out alone; a dropped frame
+    /// keeps them for the next one.
+    #[test]
+    fn raw_bytes_lead_the_next_frame_and_survive_a_drop() {
+        let caps = Caps::default();
+        let (mut outbox, mut rx) = Outbox::new();
+        outbox.queue_raw(b"RAW1");
+        assert!(outbox.offer(screen_with('a'), &caps));
+        let first = rx.try_recv().expect("first frame");
+        assert!(first.starts_with(b"RAW1\x1b[r"), "{first:?}");
+        // Nothing changed on screen: the raw bytes alone.
+        outbox.queue_raw(b"RAW2");
+        assert!(outbox.offer(screen_with('a'), &caps));
+        assert_eq!(rx.try_recv().expect("raw only"), b"RAW2");
+        // The slot is full: the frame is dropped, the raw bytes are not.
+        assert!(outbox.offer(screen_with('b'), &caps));
+        outbox.queue_raw(b"RAW3");
+        assert!(!outbox.offer(screen_with('c'), &caps));
+        assert!(outbox.needs_full_redraw());
+        let _ = rx.try_recv().expect("the 'b' frame");
+        assert!(outbox.offer(screen_with('c'), &caps));
+        let next = rx.try_recv().expect("redraw");
+        assert!(next.starts_with(b"RAW3\x1b[r"), "{next:?}");
+    }
+
+    /// Item 5 (R2): mouse modes follow the client's session's `mouse`
+    /// option, written once per change, ahead of the frame.
+    #[test]
+    fn mouse_modes_follow_the_option() {
+        let (mut state, id) = state_with_client();
+        let raw =
+            |s: &mut State| std::mem::take(&mut s.clients.get_mut(&id).expect("c").outbox.raw);
+        sync_mouse_modes(&mut state);
+        assert_eq!(raw(&mut state), MOUSE_ON, "grofe's default is on");
+        sync_mouse_modes(&mut state);
+        assert_eq!(raw(&mut state), b"", "unchanged: nothing written");
+        state
+            .model
+            .options
+            .set(Owner::Global, "mouse", "off", false)
+            .expect("set");
+        sync_mouse_modes(&mut state);
+        assert_eq!(raw(&mut state), MOUSE_OFF);
+    }
+
+    /// R28: focus reports update the client's focus flag either way, but
+    /// reach hooks and panes only while `focus-events` is on.
+    #[test]
+    fn focus_events_off_stops_focus_reports() {
+        struct Seen;
+        impl InputHook for Seen {
+            fn on_input(
+                &self,
+                s: &mut State,
+                _: ClientId,
+                i: &Input,
+                _: Instant,
+            ) -> Option<Routed> {
+                if let Input::Focus(_) = i {
+                    s.exit = true;
+                }
+                None
+            }
+        }
+        let (mut state, id) = state_with_client();
+        state.registry.input_hooks.push(Arc::new(Seen));
+        state
+            .model
+            .options
+            .set(Owner::Global, "focus-events", "off", false)
+            .expect("set");
+        route(&mut state, id, Input::Focus(false), Instant::now());
+        assert!(!state.clients[&id].focused);
+        assert!(!state.exit, "no hook saw it");
+        state
+            .model
+            .options
+            .set(Owner::Global, "focus-events", "on", false)
+            .expect("set");
+        route(&mut state, id, Input::Focus(true), Instant::now());
+        assert!(state.clients[&id].focused);
+        assert!(state.exit, "a hook saw it");
     }
 
     #[test]

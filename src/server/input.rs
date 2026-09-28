@@ -20,13 +20,15 @@
 //!   legacy xterm/screen bytes (the pane's `TERM` is screen-256color), or
 //!   the kitty keyboard protocol for the flags the pane has pushed.
 //!
-//! [`InputHook`]s (M3 overlays) see keys before the tables; running them is
-//! the caller's job, since the registry lives in T2.5a's clients.
+//! [`InputHook`]s (M3: the prompt, the mouse) see every input before the
+//! tables; running them is the caller's job (`clients::route`), since the
+//! registry lives in T2.5a's clients.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use crate::server::State;
 use crate::types::{ClientId, InputModes};
 
 /// A decoded key press. T2.3 may add [`KeyCode`] variants; the field names
@@ -78,18 +80,29 @@ pub struct Mods {
 /// What a key turned into after routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Routed {
-    /// A bound command's argv, for dispatch.
-    Command(Vec<String>),
+    /// A bound command sequence, each command's argv, for dispatch in
+    /// order (R12).
+    Command(Vec<Vec<String>>),
     /// Bytes for the active pane, encoded for its `InputModes`.
     ToPane(Vec<u8>),
     /// Eaten (a prefix key, an overlay's key).
     Consumed,
 }
 
-/// A hook that sees keys before the key tables (M3 overlays and prompts
-/// register one through T2.5a's API). `None` passes the key on.
+/// A hook that sees every input of every client before the key tables
+/// (M3: the prompt, the mouse; registered in `register_builtins`). `None`
+/// passes the input on; the first hook to answer `Some` wins (R1).
+///
+/// Hooks are stateless: what they remember lives in a typed field of
+/// [`State`] owned by their module, which `state` gives them.
 pub trait InputHook {
-    fn on_key(&mut self, key: &Key, client: ClientId) -> Option<Routed>;
+    fn on_input(
+        &self,
+        state: &mut State,
+        client: ClientId,
+        input: &Input,
+        now: Instant,
+    ) -> Option<Routed>;
 }
 
 /// One decoded unit of client input.
@@ -830,10 +843,12 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 pub const ROOT_TABLE: &str = "root";
 pub const PREFIX_TABLE: &str = "prefix";
 
-/// A key binding: the command to run and whether it repeats (`bind -r`).
+/// A key binding: the commands to run, in order, and whether it repeats
+/// (`bind -r`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    pub argv: Vec<String>,
+    /// Each command's argv (R12: a binding may be a sequence).
+    pub cmds: Vec<Vec<String>>,
     pub repeat: bool,
 }
 
@@ -844,11 +859,17 @@ pub struct KeyTables {
 }
 
 impl KeyTables {
+    /// Binds one command.
     pub fn bind(&mut self, table: &str, key: Key, argv: Vec<String>, repeat: bool) {
+        self.bind_seq(table, key, vec![argv], repeat);
+    }
+
+    /// Binds a command sequence, run in order.
+    pub fn bind_seq(&mut self, table: &str, key: Key, cmds: Vec<Vec<String>>, repeat: bool) {
         self.tables
             .entry(table.to_string())
             .or_default()
-            .insert(key, Binding { argv, repeat });
+            .insert(key, Binding { cmds, repeat });
     }
 
     /// Remove the binding of exactly `key` (as spelled); whether one was
@@ -1053,7 +1074,7 @@ impl KeyState {
                 } else {
                     self.set_table(ROOT_TABLE);
                 }
-                return Routed::Command(b.argv.clone());
+                return Routed::Command(b.cmds.clone());
             }
             if self.table != ROOT_TABLE || repeating {
                 self.set_table(ROOT_TABLE);
@@ -1417,26 +1438,26 @@ mod tests {
         t.bind(ROOT_TABLE, k("C-A"), argv(&["one"]), false);
         t.bind(ROOT_TABLE, k("C-S-a"), argv(&["two"]), false);
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.cmds[0][0][..]),
             Some("one")
         );
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-S-a")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-S-a")).map(|b| &b.cmds[0][0][..]),
             Some("two")
         );
         t.bind(ROOT_TABLE, k("S-Tab"), argv(&["three"]), false);
         t.bind(ROOT_TABLE, k("BTab"), argv(&["four"]), false);
         assert_eq!(
-            t.get(ROOT_TABLE, &k("S-Tab")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("S-Tab")).map(|b| &b.cmds[0][0][..]),
             Some("three")
         );
         assert_eq!(
-            t.get(ROOT_TABLE, &k("BTab")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("BTab")).map(|b| &b.cmds[0][0][..]),
             Some("four")
         );
         assert!(t.unbind(ROOT_TABLE, &k("C-S-a")));
         assert_eq!(
-            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.cmds[0][0][..]),
             Some("one")
         );
     }
@@ -1454,7 +1475,7 @@ mod tests {
             let [Input::Key(key)] = inputs.as_slice() else {
                 panic!("{bytes:?}");
             };
-            t.get(table, key).map(|b| b.argv[0].clone())
+            t.get(table, key).map(|b| b.cmds[0][0].clone())
         };
         // kitty ctrl+shift+a (C-S-a) finds C-A.
         assert_eq!(got(ROOT_TABLE, b"\x1b[97;6u"), Some("ca".into()));
@@ -1945,7 +1966,7 @@ mod tests {
     }
 
     fn cmd(words: &[&str]) -> Routed {
-        Routed::Command(argv(words))
+        Routed::Command(vec![argv(words)])
     }
 
     fn pane(bytes: &[u8]) -> Routed {
@@ -2476,7 +2497,8 @@ mod tests {
     // ---- default key table (T2.5b) ----
 
     fn words(b: &Binding) -> Vec<&str> {
-        b.argv.iter().map(String::as_str).collect()
+        assert_eq!(b.cmds.len(), 1, "one command");
+        b.cmds[0].iter().map(String::as_str).collect()
     }
 
     /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a
@@ -2531,11 +2553,39 @@ mod tests {
     #[test]
     fn every_default_binding_parses_as_a_command() {
         let t = default_bindings();
-        for b in t.tables.values().flat_map(|t| t.values()) {
-            if let Err(e) = crate::cmd::parse(&b.argv) {
-                panic!("{:?}: {e}", b.argv);
+        for argv in t
+            .tables
+            .values()
+            .flat_map(|t| t.values())
+            .flat_map(|b| &b.cmds)
+        {
+            if let Err(e) = crate::cmd::parse(argv) {
+                panic!("{argv:?}: {e}");
             }
         }
+    }
+
+    /// R12: a binding may be a sequence; `bind` is the one-command case.
+    #[test]
+    fn a_sequence_binding_routes_every_command() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables.bind_seq(
+            PREFIX_TABLE,
+            k("Z"),
+            vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
+            false,
+        );
+        assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
+        assert_eq!(
+            c.send(b"Z", t),
+            vec![Routed::Command(vec![
+                argv(&["split-window"]),
+                argv(&["select-pane", "-L"])
+            ])]
+        );
+        let b = c.tables.get(PREFIX_TABLE, &k("%")).expect("bound");
+        assert_eq!(b.cmds, vec![argv(&["split-window", "-h"])]);
     }
 
     #[test]

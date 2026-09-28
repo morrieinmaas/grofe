@@ -3,15 +3,15 @@
 use std::path::Path;
 
 use crate::cmd::{
-    self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectWindow, Target,
-    WindowRef, WindowStep,
+    self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectLayout,
+    SelectWindow, Target, WindowRef, WindowStep,
 };
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::LayoutTree;
 use crate::server::model::{Model, PANE_BASE_INDEX, Window};
+use crate::server::{State, clients};
 use crate::types::WindowId;
 
 const AUTOMATIC_RENAME: &str = "automatic-rename";
@@ -46,6 +46,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     let target = model.windows.get(&s.active).map(|w| w.active);
     let cwd = resolve_cwd(model, ctx, target, c.cwd.as_deref(), &s.cwd);
     let size = (s.cols, s.rows);
+    let cell_px = clients::cell_px(state, session);
 
     let window = state.model.alloc_window_id();
     let pane = spawn_pane(
@@ -55,6 +56,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         command_argv(c.command),
         cwd.clone(),
         size,
+        cell_px,
     )?;
     let model = &mut state.model;
     let named = c.name.is_some();
@@ -68,6 +70,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         zoomed: false,
         cols: size.0,
         rows: size.1,
+        bell_flag: false,
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
@@ -242,4 +245,13 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
             )
         })
         .collect())
+}
+
+/// `select-layout`: T3.7 fills it in (spec §4.3, R18).
+pub fn select_layout(
+    _state: &mut State,
+    _ctx: &ClientCtx,
+    _c: SelectLayout,
+) -> Result<String, String> {
+    super::not_implemented("select-layout")
 }

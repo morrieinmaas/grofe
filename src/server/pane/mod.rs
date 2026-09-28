@@ -31,8 +31,10 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 
 pub use alacritty_terminal::term::cell::Flags as CellFlags;
+pub use alacritty_terminal::term::cell::Hyperlink;
 
 use crate::protocol::Caps;
+use crate::server::passthrough::Scanner;
 use crate::server::render::write_sgr;
 use crate::server::status::Style;
 use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
@@ -87,6 +89,9 @@ pub struct PaneSpawn {
     pub socket: PathBuf,
     /// `TERM` for the pane, resolved once at server start ([`inner_term`]).
     pub term: &'static str,
+    /// One cell's `(width, height)` in pixels, from the client the window
+    /// is sized for (`Caps::cell_px`); `None` gives the pty 0 pixels.
+    pub cell_px: Option<(u16, u16)>,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -106,6 +111,8 @@ pub struct SnapCell {
     /// The SGR 58 underline colour; `None` underlines in the foreground
     /// colour.
     pub underline_color: Option<Color>,
+    /// The OSC 8 hyperlink the cell is part of (R20; T3.3 emits it).
+    pub hyperlink: Option<Hyperlink>,
 }
 
 /// The cursor's shape, as DECSCUSR sets it.
@@ -167,12 +174,14 @@ impl Dimensions for Size {
 }
 
 impl Size {
-    fn winsize(self) -> Winsize {
+    /// The pty's size, in pixels too when the cell size is known.
+    fn winsize(self, cell_px: Option<(u16, u16)>) -> Winsize {
+        let (width, height) = cell_px.unwrap_or((0, 0));
         Winsize {
             ws_row: self.rows,
             ws_col: self.cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
+            ws_xpixel: self.cols.saturating_mul(width),
+            ws_ypixel: self.rows.saturating_mul(height),
         }
     }
 }
@@ -251,6 +260,12 @@ fn cloexec_inherited_fds(limit: u32) {
 /// separate `fcntl`, so without this a concurrent fork could inherit a master.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
+/// Held while spawning any child process (a pane, `run-shell`), so no fork
+/// inherits a pty master between its `openpty` and its `FD_CLOEXEC`.
+pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
+    lock(&SPAWN_LOCK)
+}
+
 /// Generations handed out by [`PaneHandle::spawn`]: unique per spawn in
 /// this process, so also per respawn of the same pane.
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -278,7 +293,14 @@ pub struct PaneHandle {
     emu: Arc<Mutex<Emu>>,
     input: Arc<InputQueue>,
     dirty: Arc<AtomicBool>,
+    /// Set from the server when an attached client has kitty graphics;
+    /// the reader answers the pane's graphics queries from it (T3.8).
+    graphics_ok: Arc<AtomicBool>,
+    /// One cell's size in pixels, for the pty's pixel size.
+    cell_px: Mutex<Option<(u16, u16)>>,
     sample: Arc<Mutex<ProcSample>>,
+    /// The cwd the pane itself reported (OSC 7, T3.3).
+    reported_cwd: Mutex<Option<PathBuf>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -324,6 +346,7 @@ impl PaneHandle {
             parser: Processor::new(),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
+        let graphics_ok = Arc::new(AtomicBool::new(false));
         let sample = Arc::new(Mutex::new(ProcSample::default()));
         let (input, input_rx) = InputQueue::new();
 
@@ -338,6 +361,8 @@ impl PaneHandle {
             dirty: Arc::clone(&dirty),
             wake,
             to_actor,
+            scanner: Scanner::default(),
+            graphics_ok: Arc::clone(&graphics_ok),
         }));
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
@@ -354,6 +379,9 @@ impl PaneHandle {
             input,
             dirty,
             sample,
+            graphics_ok,
+            cell_px: Mutex::new(spec.cell_px),
+            reported_cwd: Mutex::new(None),
             tasks: vec![reader, writer, sampler],
         })
     }
@@ -369,9 +397,40 @@ impl PaneHandle {
             rows: rows.max(1),
         };
         lock(&self.emu).term.resize(size);
+        self.set_winsize(size)
+    }
+
+    fn set_winsize(&self, size: Size) -> stdio::Result<()> {
+        let winsize = size.winsize(*lock(&self.cell_px));
         // SAFETY: a valid fd we hold and a pointer to a live Winsize.
-        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &size.winsize()) }?;
+        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &winsize) }?;
         Ok(())
+    }
+
+    /// One cell's size in pixels, from the client the window is now sized
+    /// for; the pty's pixel size follows when it changes.
+    pub fn set_cell_px(&self, cell_px: Option<(u16, u16)>) -> stdio::Result<()> {
+        {
+            let mut current = lock(&self.cell_px);
+            if *current == cell_px {
+                return Ok(());
+            }
+            *current = cell_px;
+        }
+        let size = {
+            let emu = lock(&self.emu);
+            Size {
+                cols: emu.term.columns() as u16,
+                rows: emu.term.screen_lines() as u16,
+            }
+        };
+        self.set_winsize(size)
+    }
+
+    /// Whether an attached client shows kitty graphics: the reader answers
+    /// the pane's graphics queries by it (T3.8), without the actor.
+    pub fn set_graphics_ok(&self, ok: bool) {
+        self.graphics_ok.store(ok, Ordering::Relaxed);
     }
 
     /// Lines per tmux's `capture-pane -p`: one line per row, trailing
@@ -462,9 +521,36 @@ impl PaneHandle {
         lock(&self.sample).argv.clone()
     }
 
-    /// The foreground process's cwd, from the last sample.
+    /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
+    /// else the foreground process's, from the last sample.
     pub fn current_path(&self) -> Option<PathBuf> {
-        lock(&self.sample).path.clone()
+        lock(&self.reported_cwd)
+            .clone()
+            .or_else(|| lock(&self.sample).path.clone())
+    }
+
+    /// The cwd the pane reported (OSC 7): preferred over the sampled one
+    /// from now on.
+    pub fn set_reported_cwd(&self, cwd: PathBuf) {
+        *lock(&self.reported_cwd) = Some(cwd);
+    }
+
+    /// Scrollback lines kept above the visible screen.
+    pub fn history_size(&self) -> usize {
+        lock(&self.emu).term.grid().history_size()
+    }
+
+    /// `rows` rows of the screen as it was scrolled back `offset` lines
+    /// (0 is the live screen; `offset` is capped at [`Self::history_size`]),
+    /// top row first, under one lock.
+    pub fn snapshot_history(&self, offset: usize, rows: u16) -> Vec<Vec<SnapCell>> {
+        let emu = lock(&self.emu);
+        let grid = emu.term.grid();
+        let offset = offset.min(grid.history_size()) as i32;
+        let rows = i32::from(rows).min(grid.screen_lines() as i32);
+        (0..rows)
+            .map(|r| snap_row(&grid[Line(r - offset)], grid.columns()))
+            .collect()
     }
 
     pub fn modes(&self) -> InputModes {
@@ -517,25 +603,30 @@ impl PaneHandle {
         let grid = emu.term.grid();
         let end = rows.end.min(grid.screen_lines() as u16);
         let rows = (rows.start..end)
-            .map(|r| {
-                let row = &grid[Line(r as i32)];
-                (0..grid.columns())
-                    .map(|c| {
-                        let cell = &row[Column(c)];
-                        SnapCell {
-                            c: cell.c,
-                            fg: cell.fg,
-                            bg: cell.bg,
-                            flags: cell.flags,
-                            zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
-                            underline_color: cell.underline_color(),
-                        }
-                    })
-                    .collect()
-            })
+            .map(|r| snap_row(&grid[Line(r as i32)], grid.columns()))
             .collect();
         RowsSnapshot { rows, cursor }
     }
+}
+
+fn snap_row(
+    row: &alacritty_terminal::grid::Row<term::cell::Cell>,
+    columns: usize,
+) -> Vec<SnapCell> {
+    (0..columns)
+        .map(|c| {
+            let cell = &row[Column(c)];
+            SnapCell {
+                c: cell.c,
+                fg: cell.fg,
+                bg: cell.bg,
+                flags: cell.flags,
+                zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                underline_color: cell.underline_color(),
+                hyperlink: cell.hyperlink(),
+            }
+        })
+        .collect()
 }
 
 fn cursor_state(term: &Term<Listener>) -> CursorState {
@@ -647,8 +738,8 @@ fn spawn_child(
     };
     cmd.current_dir(&spec.cwd).envs(child_env(spec));
 
-    let _guard = lock(&SPAWN_LOCK);
-    let pty = openpty(&size.winsize(), None)?;
+    let _guard = spawn_lock();
+    let pty = openpty(&size.winsize(spec.cell_px), None)?;
     fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
     fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
@@ -700,6 +791,7 @@ mod tests {
             history_limit: 100,
             socket: PathBuf::from("/tmp/grofe-test.sock"),
             term,
+            cell_px: None,
         }
     }
 
@@ -747,6 +839,100 @@ mod tests {
             .expect("Exited in time")
             .expect("an event");
         assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
+    }
+
+    fn row_text(row: &[SnapCell]) -> String {
+        row.iter()
+            .map(|c| c.c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// T3.0's pane seams for the scrollback view (T3.2): lines scrolled off
+    /// the top are counted and can be read back at any offset.
+    #[tokio::test]
+    async fn history_can_be_read_back_at_an_offset() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            rows: 10,
+            ..spec_for(&["seq", "1", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(ev) = rx.recv().await {
+                if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(exited.is_ok(), "seq exited");
+        // 30 lines and the empty one after them, 10 rows on screen.
+        assert_eq!(handle.history_size(), 21);
+        let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);
+        assert_eq!(top(0), "22");
+        assert_eq!(top(5), "17");
+        assert_eq!(top(21), "1");
+        assert_eq!(top(1000), "1", "the offset is capped at the history");
+        assert_eq!(handle.snapshot_history(0, 99).len(), 10);
+        let live = handle.snapshot_rows(0..10);
+        assert_eq!(handle.snapshot_history(0, 10), live.rows);
+    }
+
+    fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {
+        let mut ws = Winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: a valid fd we hold and a pointer to a live Winsize.
+        let rc = unsafe {
+            libc::ioctl(
+                handle.master.get_ref().as_raw_fd(),
+                libc::TIOCGWINSZ,
+                &mut ws,
+            )
+        };
+        assert_eq!(rc, 0, "TIOCGWINSZ");
+        (ws.ws_col, ws.ws_row, ws.ws_xpixel, ws.ws_ypixel)
+    }
+
+    /// The pty's pixel size is its cells times the client's cell size,
+    /// from the spawn on, through resizes and cell size changes; unknown
+    /// is 0.
+    #[tokio::test]
+    async fn the_pty_pixel_size_follows_the_cell_size() {
+        let (tx, _rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            cell_px: Some((10, 20)),
+            ..spec_for(&["sleep", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        assert_eq!(winsize_of(&handle), (80, 24, 800, 480));
+        handle.resize(40, 10).expect("resize");
+        assert_eq!(winsize_of(&handle), (40, 10, 400, 200));
+        handle.set_cell_px(Some((8, 16))).expect("cell size");
+        assert_eq!(winsize_of(&handle), (40, 10, 320, 160));
+        handle.set_cell_px(None).expect("unknown");
+        assert_eq!(winsize_of(&handle), (40, 10, 0, 0));
+        let (tx, _rx) = mpsc::channel(8);
+        let plain = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
+    }
+
+    /// A cwd the pane reported (OSC 7, T3.3) wins over the sampled one.
+    #[tokio::test]
+    async fn a_reported_cwd_is_preferred() {
+        let (tx, _rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        let there = PathBuf::from("/nonexistent/grofe-reported");
+        assert_ne!(handle.current_path(), Some(there.clone()));
+        handle.set_reported_cwd(there.clone());
+        assert_eq!(handle.current_path(), Some(there));
     }
 
     #[test]
