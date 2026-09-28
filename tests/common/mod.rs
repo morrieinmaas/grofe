@@ -189,6 +189,7 @@ impl TestServer {
             cwd: self.home.clone(),
             pane: None,
             env: vec![("HOME".to_string(), self.home.display().to_string())],
+            client: None,
         }
     }
 

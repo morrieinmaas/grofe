@@ -414,6 +414,13 @@ async fn pane_honours_a_kitty_keyboard_push() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pane_that_never_pushes_has_no_kitty_flags() {
+    let p = sh(1, "printf 'N'; sleep 5");
+    wait_screen(&p.handle, "N").await;
+    assert_eq!(p.handle.modes().kitty_flags, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cursor_reports_position_shape_and_visibility() {
     // Row 3, column 5 (1-based CUP), blinking bar (DECSCUSR 5), then hidden.
     let p = sh(1, "printf '\\033[3;5H\\033[5 qC'; sleep 5");

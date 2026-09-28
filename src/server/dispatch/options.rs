@@ -87,7 +87,10 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
-        kind: Kind::Bool,
+        // A choice in tmux 3.7b (`off`, `on`, `failed`), so `yes` is refused
+        // and a bad value is `unknown value`. ponytail: `failed` is not
+        // supported until something needs it.
+        kind: Kind::Choice(&["off", "on"]),
         scope: OptionScope::Window,
         default: "off",
     },
@@ -338,7 +341,8 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         Kind::Bool => match value {
             "on" | "yes" | "true" | "1" => Ok("on".to_string()),
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
-            _ => Err(format!("unknown value: {value}")),
+            // tmux's wording for a flag option; choices say `unknown value`.
+            _ => Err(format!("bad value: {value}")),
         },
         Kind::String => Ok(value.to_string()),
         Kind::Choice(words) => words
@@ -513,15 +517,50 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         .collect())
 }
 
-/// A value as `show-options` prints it, as tmux does: `''` when empty,
-/// double-quoted when it holds whitespace.
+/// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
+/// `''` when empty; double quotes when it holds any of `` #';${}%`` (with
+/// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
+/// a lone special character or `~` backslash-escaped; a leading `~`
+/// escaped; control characters C-style or octal.
 fn quote(value: &str) -> String {
+    const DOUBLE: &str = " #';${}%";
     if value.is_empty() {
-        "''".to_string()
-    } else if value.contains(char::is_whitespace) {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        return "''".to_string();
+    }
+    let quotes = if value.contains(|c| DOUBLE.contains(c)) {
+        Some('"')
+    } else if value.contains('"') {
+        Some('\'')
     } else {
-        value.to_string()
+        None
+    };
+    let mut chars = value.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && c != ' '
+        && (quotes.is_some() || c == '~')
+    {
+        return format!("\\{c}");
+    }
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            '\r' => escaped.push_str("\\r"),
+            '"' | '$' if quotes == Some('"') => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            c if c.is_ascii_control() => escaped.push_str(&format!("\\{:03o}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    let tilde = if escaped.starts_with('~') { "\\" } else { "" };
+    match quotes {
+        Some('"') => format!("\"{tilde}{escaped}\""),
+        Some(_) => format!("'{escaped}'"),
+        None => format!("{tilde}{escaped}"),
     }
 }
 
@@ -654,10 +693,10 @@ mod tests {
         assert_eq!(o.set(s, "@x", "a", false), Ok(true));
         assert_eq!(o.set(s, "@x", "a", false), Ok(false));
         assert_eq!(o.set(s, "@x", "b", false), Ok(true));
-        // A built-in normalizes before comparing: `yes` is `on`.
-        assert_eq!(o.set(Owner::Global, REMAIN_ON_EXIT, "on", false), Ok(true));
+        // A flag option normalizes before comparing: `yes` is `on`.
+        assert_eq!(o.set(Owner::Global, "allow-rename", "on", false), Ok(true));
         assert_eq!(
-            o.set(Owner::Global, REMAIN_ON_EXIT, "yes", false),
+            o.set(Owner::Global, "allow-rename", "yes", false),
             Ok(false)
         );
     }
@@ -745,5 +784,40 @@ mod tests {
         assert_eq!(quote("a"), "a");
         assert_eq!(quote("a b"), "\"a b\"");
         assert_eq!(quote(""), "''");
+    }
+
+    /// Each case recorded from tmux 3.7b (`set -g @t <value>; show -g @t`)
+    /// on a private socket.
+    #[test]
+    fn show_quotes_like_tmux() {
+        for (value, shown) in [
+            ("a#b", "\"a#b\""),
+            ("a{b", "\"a{b\""),
+            ("#{x}", "\"#{x}\""),
+            ("a}b", "\"a}b\""),
+            ("ab", "ab"),
+            ("a\"b", "'a\"b'"),
+            ("a'b", "\"a'b\""),
+            ("a$b", "\"a\\$b\""),
+            ("a;b", "\"a;b\""),
+            ("a\\b", "a\\\\b"),
+            ("~a", "\\~a"),
+            ("a~", "a~"),
+            ("#", "\\#"),
+            ("~", "\\~"),
+            (" ", "\" \""),
+            ("~a b", "\"\\~a b\""),
+            ("a \"b", "\"a \\\"b\""),
+            ("a `b", "\"a `b\""),
+            ("a\tb", "a\\tb"),
+            ("a\nb", "a\\nb"),
+            ("a\u{1}b", "a\\001b"),
+            ("a \\b", "\"a \\\\b\""),
+            ("a,b", "a,b"),
+            ("[a]", "[a]"),
+            ("a%b", "\"a%b\""),
+        ] {
+            assert_eq!(quote(value), shown, "{value:?}");
+        }
     }
 }

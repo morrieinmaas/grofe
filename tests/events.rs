@@ -315,8 +315,8 @@ fn option_changed_on_set_and_not_on_a_same_value_set() {
             value: Some("v".to_string()),
         }
     );
-    // A built-in, normalised before the comparison: `yes` on an `on` value.
-    srv.cmd(&["set", "-g", "remain-on-exit", "yes"]).unwrap();
+    // A built-in set to the value it already has changes nothing.
+    srv.cmd(&["set", "-g", "remain-on-exit", "on"]).unwrap();
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
     assert_eq!(
         next(&mut sub),

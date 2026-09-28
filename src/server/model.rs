@@ -601,6 +601,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             pane: None,
             env: Vec::new(),
+            client: None,
         }
     }
 

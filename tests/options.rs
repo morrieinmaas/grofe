@@ -433,7 +433,7 @@ fn m2_options_set_and_show_by_tmux_name() {
         ),
         (
             "window-status-current-format",
-            "#{window_index}:#{window_name}*",
+            "\"#{window_index}:#{window_name}*\"",
             "-w",
             "[#{window_index}]",
         ),
@@ -443,7 +443,7 @@ fn m2_options_set_and_show_by_tmux_name() {
         ("automatic-rename", "on", "-w", "off"),
         (
             "automatic-rename-format",
-            "#{b:pane_current_path}",
+            "\"#{b:pane_current_path}\"",
             "-w",
             "#{pane_current_command}",
         ),
@@ -467,7 +467,13 @@ fn m2_options_set_and_show_by_tmux_name() {
             get.extend(["-t", target]);
         }
         get.push(name);
-        assert_eq!(show(&get), format!("{name} {value}\n"), "{name}");
+        // As tmux 3.7b, a value holding `#` shows double-quoted.
+        let shown = if value.contains('#') {
+            format!("\"{value}\"")
+        } else {
+            value.to_string()
+        };
+        assert_eq!(show(&get), format!("{name} {shown}\n"), "{name}");
     }
     // Without a scope flag each lands at its own tmux scope.
     srv.cmd(&["set", "-t", "m", "status-left", "x"]).unwrap();
@@ -503,7 +509,8 @@ fn m2_option_values_are_checked_as_tmux_checks_them() {
             "value is too large: 2147483648",
         ),
         ("repeat-time", "2000001", "value is too large: 2000001"),
-        ("allow-rename", "maybe", "unknown value: maybe"),
+        ("allow-rename", "maybe", "bad value: maybe"),
+        ("remain-on-exit", "yes", "unknown value: yes"),
     ] {
         let err = srv.cmd(&["set", "-g", name, value]).unwrap_err();
         assert!(err.contains(want), "{name} {value}: {err}");

@@ -23,6 +23,7 @@ pub mod prompt;
 pub mod render;
 pub mod status;
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, FromRawFd, IntoRawFd, RawFd};
@@ -45,6 +46,7 @@ use crate::cmd::{self, Command};
 use crate::event::Event;
 use crate::paths::{self, Env};
 use crate::protocol::{self, ClientCtx, Hello, Reply, Request};
+use crate::types::ClientId;
 use pane::{PaneEvent, PaneEventKind};
 
 /// Logged once per server process, first thing after the log is open, as
@@ -114,6 +116,8 @@ pub struct State {
     pub wake: Arc<Notify>,
     /// Subscribers and the events commands recorded for them.
     pub events: events::Events,
+    /// Attached clients (M2; T2.5a fills [`clients::ClientEntry`]).
+    pub clients: BTreeMap<ClientId, clients::ClientEntry>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -319,6 +323,7 @@ async fn serve(
         pane_events: pane_tx,
         wake: Arc::new(Notify::new()),
         events: events::Events::default(),
+        clients: BTreeMap::new(),
         exit: false,
         exit_when_empty,
         connections: 0,

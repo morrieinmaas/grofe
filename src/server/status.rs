@@ -15,6 +15,9 @@ pub struct Style {
     pub bg: Color,
     /// Bold, dim, italic, underline, reverse, strikeout and the rest.
     pub attrs: CellFlags,
+    /// As [`crate::server::pane::SnapCell::underline_color`]: `None`
+    /// underlines in `fg`.
+    pub underline_color: Option<Color>,
 }
 
 impl Default for Style {
@@ -24,6 +27,7 @@ impl Default for Style {
             fg: Color::Named(NamedColor::Foreground),
             bg: Color::Named(NamedColor::Background),
             attrs: CellFlags::empty(),
+            underline_color: None,
         }
     }
 }

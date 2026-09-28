@@ -307,6 +307,13 @@ impl PaneHandle { pub fn cursor(&self) -> CursorState; }   // panes run with kit
 pub struct Caps { pub truecolor: bool, pub styled_underline: bool, pub sync: bool,
                   pub kitty_keys: bool, pub kitty_graphics: bool }   // serde default per field
 pub const HELLO_REPLY_ID: u64 = 0;  // attach hello -> ONE JSON Reply line (ok, or err then close), then frames
+pub struct ClientCtx { pub cwd: PathBuf, pub pane: Option<PaneId>, pub env: Vec<(String, String)>,
+                       #[serde(skip)] pub client: Option<ClientId> }  // set by the server for attached clients
+                                                                     // and their bindings' commands; None for CLI
+pub enum Hello { Control(ClientCtx),
+                 Attach { #[serde(flatten)] ctx: ClientCtx, cols: u16, rows: u16, term: String, caps: Caps,
+                          #[serde(default)] target: Option<String> /* attach -t, raw; resolved server-side */,
+                          #[serde(default)] detach_others: bool /* -d */, #[serde(default)] nest: bool /* --nest */ } }
 // render.rs
 pub struct Screen { pub cols: u16, pub rows: u16, pub cells: Vec<SnapCell> /* row-major */,
                     pub cursor: Option<CursorState> }
@@ -319,7 +326,8 @@ pub fn compose(inputs: &FrameInputs) -> Screen;
 pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8>;   // None = full redraw
 pub trait Overlay { fn draw(&self, screen: &mut Screen); }
 // status.rs
-pub struct Style { pub fg: Color, pub bg: Color, pub attrs: CellFlags }   // Default: terminal colours
+pub struct Style { pub fg: Color, pub bg: Color, pub attrs: CellFlags,
+                  pub underline_color: Option<Color> }   // Default: terminal colours, no attrs
 pub struct Span { pub text: String, pub style: Style }
 pub struct StyledLine { pub spans: Vec<Span> }   // one row, laid out for its width
 // input.rs
@@ -332,11 +340,15 @@ pub trait InputHook { fn on_key(&mut self, key: &Key, client: ClientId) -> Optio
 // model.rs (MRU, no behaviour until T2.5a/T2.5b)
 Session { .., pub last_window: Option<WindowId> }
 Model { .., pub client_last_session: BTreeMap<ClientId, SessionId> }
+// server/mod.rs
+State { .., pub clients: BTreeMap<ClientId, clients::ClientEntry> }   // registry; empty until T2.5a
+// server/clients.rs
+pub struct ClientEntry {}   // stub; T2.5a adds its fields
 // server/mod.rs (T2.5a): register_overlay, register_input_hook; M3 tasks add one registration line each.
 ```
 
-M2 commands (parse and stub dispatch arms land in T2.0; T2.5a/T2.5b replace
-the "not implemented yet" arms): `AttachSession { target, detach_others /* -d */,
+M2 commands (parse and stub dispatch arms land in T2.0; T2.5a and T2.5b each
+replace their own "not implemented yet" arm lines in `dispatch/mod.rs`): `AttachSession { target, detach_others /* -d */,
 nest /* --nest */ }` (alias `attach`), `DetachClient { session: Option<Target> /* -s */,
 client: Option<String> /* -t, raw */, all_others /* -a */ }`, `ListClients { format }`,
 `NextWindow`/`PreviousWindow`/`LastWindow(WindowStep { target })`,
@@ -345,7 +357,7 @@ Option<Target>, last /* -l */, next /* -n */, previous /* -p */, key_table /* -T
 `SendPrefix { target }`; `capture-pane -e` sets `CaptureOpts.escapes`.
 
 Options use tmux's names (M3's TOML `status.left` maps onto `status-left`):
-`status` (choice off/on/2-5), `status-left`, `status-right`, `status-left-length`,
+`status` (choice off/on/2-5; `remain-on-exit` is a choice off/on too, as tmux), `status-left`, `status-right`, `status-left-length`,
 `status-right-length`, `status-style`, `status-interval`, `window-status-format`,
 `window-status-current-format`, `prefix`, `escape-time` (global), `repeat-time`,
 `automatic-rename`, `automatic-rename-format`, `allow-rename`.
@@ -423,7 +435,7 @@ on macOS; CI green on both OSes.
 
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
-| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM (a panic in any thread restores the tty and exits); refuse only self-nesting attach (the target session contains the calling pane) without `--nest` (`-f` is reserved for tmux's client flags, M3.6), and allow attach to another session from inside a pane (spec §4.6; the popup case lands with TC.6); `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs`, `tests/fixtures/probe/` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing. Unit: recorded Ghostty and WezTerm replies (DA1, XTVERSION, DECRQM 2026, kitty keyboard query, kitty graphics query) parse to the expected caps, including WezTerm without `enable_kitty_keyboard` (kitty keys off, everything else on) |
+| **T2.1** Attach client | `client.rs`: capability probe (spec §4.4), request richest key mode, raw mode, attach hello, stdin to `input` frames, SIGWINCH to `resize`, write `output` frames, restore the tty on every exit path including panic and SIGTERM (a panic in any thread restores the tty and exits); refuse only self-nesting attach (the target session contains the calling pane) without `--nest` (`-f` is reserved for tmux's client flags, M3.6), and allow attach to another session from inside a pane (spec §4.6; the popup case lands with TC.6); the hello carries `attach -t` raw as `target` plus `detach_others` (`-d`) and `nest` (`--nest`); `attach` arm in `main.rs` | `src/client.rs`, `attach` arm in `src/main.rs`, `tests/fixtures/probe/` | pty tests against a fake server: frames flow both ways; tty restored after SIGTERM; resize frame on SIGWINCH; probe times out cleanly on a terminal that answers nothing. Unit: recorded Ghostty and WezTerm replies (DA1, XTVERSION, DECRQM 2026, kitty keyboard query, kitty graphics query) parse to the expected caps, including WezTerm without `enable_kitty_keyboard` (kitty keys off, everything else on) |
 | **T2.2** Renderer | `server/render.rs` per the M2 seams and spec §4.4: compose, diff, colour downgrade by caps, synchronized output, absolute cursor moves around wide cells, letterbox and crop viewport; replace `tests/term.rs`'s smulx negative test with a positive underline-style snapshot | `src/server/render.rs`, `tests/snapshots/`, `tests/render.rs` | Round-trip snapshots: single pane, splits, active border, colours in truecolor and 256 modes, emoji + VS16 + combining marks, cursor; unchanged frame diffs to nothing; one-cell change emits a short sequence |
 | **T2.3** Input and key tables | `server/input.rs`: decode client bytes (CSI, SS3, UTF-8, kitty keys, SGR mouse, paste as opaque blob), key tables with prefix and repeat, encode for a pane's `InputModes`, `InputHook` trait | `src/server/input.rs` | Table tests for decode and encode; prefix then `%` routes to the bound command; paste containing the prefix key is never matched; escape-time resolves lone ESC |
 | **T2.6** Status line | `server/status.rs` per spec §4.10: render `status.left/right`, `window-status-format` and `window-status-current-format` to a `StyledLine` with styles, expanding `#{}` inside `#[...]` and strftime sequences; add `#{==:a,b}`, `#{b:var}`, nesting and escaping to `cmd/format.rs` (contract edit: T2.6 co-owns `format.rs` for this) | `src/server/status.rs`, `src/cmd/format.rs` | Unit: formats with conditionals and user options render; `#[fg=#{@theme_blue}]` takes the option's colour; `%H:%M` expands against a fixed clock; `#{b:/a/b/c}` gives `c`; the current window uses the current format; overlong content truncates on the left side as tmux does |
@@ -433,8 +445,8 @@ on macOS; CI green on both OSes.
 
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
-| **T2.5a** Clients and frames | `server/clients.rs`: client registry, per-client writer task with one pending frame and full-redraw recovery, render scheduler (dirty flags, ~16 ms), D6 size policy with debounce, detach, overlay and input-hook registration API; attach handling in `server/mod.rs`; M2 commands `attach`, `detach-client`, `list-clients` | `src/server/clients.rs`, attach paths in `src/server/mod.rs`, `tests/acceptance/t2_5a.rs` | Acceptance: attach shows a prompt; detach and reattach from a smaller terminal crops with the viewport following the cursor, and from a larger one letterboxes; a client that stops reading does not delay a second client |
-| **T2.5b** Bindings and routing | Default tmux bindings (spec §5.3), input routing into dispatch, remaining M2 commands (`next/previous/last-window`, `rename-*`, `switch-client -l -p -n`, `send-prefix`, `capture-pane -e`); `automatic-rename` to `#{b:pane_current_path}`, with OSC titles never freezing the name (spec §4.5) | `src/server/dispatch/window.rs` additions (coordinated, T1.5a merged), default key table in `src/server/input.rs` (T2.3 merged), `tests/acceptance/t2_5b.rs` | Acceptance: `prefix %` and `prefix "` split, arrows move, `prefix d` detaches; Neovim, fzf and less scenarios pass; a TUI that pushed kitty keyboard flags quits on a bare `q`; `cd /tmp` renames the window to `tmp`, and still does after the pane sets an OSC title. **[owner]** the bare-`q` check inside Claude Code; note that macOS option-as-alt misbehaves in some Ghostty builds (canopy 8070a22), so a failure there is triaged against the outer terminal first |
+| **T2.5a** Clients and frames | `server/clients.rs`: client registry, per-client writer task with one pending frame and full-redraw recovery, render scheduler (dirty flags, ~16 ms), D6 size policy with debounce, detach, overlay and input-hook registration API; attach handling in `server/mod.rs`; M2 commands `attach`, `detach-client`, `list-clients` | `src/server/clients.rs` (fills the `ClientEntry` stub), attach paths in `src/server/mod.rs` (including `State.clients` use and setting `ClientCtx.client`), its own arm lines (`AttachSession`, `DetachClient`, `ListClients`) in `src/server/dispatch/mod.rs`, `tests/acceptance/t2_5a.rs` | Acceptance: attach shows a prompt; detach and reattach from a smaller terminal crops with the viewport following the cursor, and from a larger one letterboxes; a client that stops reading does not delay a second client |
+| **T2.5b** Bindings and routing | Default tmux bindings (spec §5.3), input routing into dispatch, remaining M2 commands (`next/previous/last-window`, `rename-*`, `switch-client -l -p -n`, `send-prefix`, `capture-pane -e`); `automatic-rename` to `#{b:pane_current_path}`, with OSC titles never freezing the name (spec §4.5) | `src/server/dispatch/window.rs` additions (coordinated, T1.5a merged); additions in `src/server/dispatch/session.rs` (`rename-session`, `switch-client`) and `src/server/dispatch/pane.rs` (`send-prefix`); `PaneHandle::capture` in `src/server/pane/mod.rs` (`-e` via T2.2's SGR writer); MRU upkeep in `Model::remove_window`/`remove_session` in `src/server/model.rs` (killing the active window falls back to the session's `last_window`, as tmux, else by position; stale `last_window` and `client_last_session` entries are cleared); its own arm lines in `src/server/dispatch/mod.rs`; default key table in `src/server/input.rs` (T2.3 merged); `tests/acceptance/t2_5b.rs` | Acceptance: `prefix %` and `prefix "` split, arrows move, `prefix d` detaches; Neovim, fzf and less scenarios pass; a TUI that pushed kitty keyboard flags quits on a bare `q`; `cd /tmp` renames the window to `tmp`, and still does after the pane sets an OSC title. **[owner]** the bare-`q` check inside Claude Code; note that macOS option-as-alt misbehaves in some Ghostty builds (canopy 8070a22), so a failure there is triaged against the outer terminal first |
 
 **Exit gate:** reviewer runs the acceptance suite on both OSes; **[owner]**
 30-minute hands-on session split across Ghostty and WezTerm, listing what hurt

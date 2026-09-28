@@ -364,7 +364,8 @@ resolve correctly for a CLI call made from inside a pane:
 ```json
 {"grofe": 1, "mode": "control", "dialect": "grofe", "cwd": "/home/u/src", "pane": "%3", "env": {"SSH_AUTH_SOCK": "..."}}
 {"grofe": 1, "mode": "attach", "dialect": "tmux", "cwd": "...", "pane": null, "env": {...},
- "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "sync": true, "kitty_keys": true, "kitty_graphics": true}, "session": "main"}
+ "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true},
+ "target": "main", "detach_others": false, "nest": false}
 ```
 
 `pane` is `$GROFE_PANE` when set. `dialect` is `tmux` when the CLI was invoked
