@@ -356,3 +356,17 @@ print("ok")
     [ "$output" = "scenario: guards passed, test mode" ]
     [ ! -e "$TMP/h" ]
 }
+
+@test "only the repo's container users' homes are allowed; other /home and every /Users path fail" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+home, users = "/" + "home/", "/" + "Users/"
+ok = [home + "rec/x", home + "golden/cargo", home + "golden"]
+bad = [home + "someone/x", home + "recorder/x", home + "golden2", users + "rec/x", users + "golden"]
+assert not [p for p in ok if corpus.CONTAINER_HOME_RE.search(p)], ok
+assert all(corpus.CONTAINER_HOME_RE.search(p) for p in bad), bad
+print("ok")
+' "$W/scripts"
+    [ "$output" = ok ]
+}

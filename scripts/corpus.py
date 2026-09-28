@@ -1919,9 +1919,14 @@ def cmd_coverage(args):
 # --------------------------------------------------------------------------
 
 
-# The recording container's user; its home is normalized away, but the
-# Containerfile and scenario name it.
-CONTAINER_HOME_RE = re.compile(r"/(Users|home)/(?!rec\b)[A-Za-z0-9_.-]+")
+# The users the repo's own Containerfiles create (containers/compat:
+# Containerfile makes `rec`, golden.Containerfile makes `golden`). Their homes
+# exist only inside those images, so naming them is not a machine specific.
+# Any other /home/<name>, and every /Users/<name>, is flagged.
+CONTAINER_USERS = ("rec", "golden")
+CONTAINER_HOME_RE = re.compile(
+    r"/Users/[A-Za-z0-9_.-]+|/home/(?!(?:" + "|".join(CONTAINER_USERS) + r")(?![A-Za-z0-9_.-]))[A-Za-z0-9_.-]+"
+)
 
 
 def published_files() -> list[Path]:
