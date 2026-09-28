@@ -453,16 +453,10 @@ fn an_idle_connection_without_a_hello_is_closed() {
     assert!(srv.cmd(&["list-sessions"]).is_ok());
 }
 
-/// A hello line may not run past 64 KiB; requests after it still may.
+/// Requests after the hello keep the full message cap.
 #[test]
-fn a_hello_line_is_capped_but_later_requests_are_not() {
+fn a_large_request_after_the_hello_works() {
     let srv = start();
-    let mut big = UnixStream::connect(&srv.socket).expect("connect");
-    // The server may hang up before the whole line is written.
-    let closed = big.write_all(&vec![b'x'; 100 * 1024]).is_err()
-        || closed_within(&mut big, Duration::from_secs(10)).is_some();
-    assert!(closed, "a 100 KiB hello line was kept open");
-
     let mut control = Control::connect(&srv);
     let value = "v".repeat(100 * 1024);
     control
@@ -472,4 +466,31 @@ fn a_hello_line_is_capped_but_later_requests_are_not() {
         .cmd(&["display-message", "-p", "#{@big}"])
         .expect("display");
     assert!(shown.trim_end() == value, "@big is {} bytes", shown.len());
+}
+
+/// A real-sized environment (big direnv, nix or CI envs) fits in the
+/// hello: 200 KB of variables, in two values since Linux caps one at
+/// 128 KiB.
+#[test]
+fn a_command_with_a_large_environment_works() {
+    let srv = start();
+    let mut cmd = srv.command();
+    cmd.env("GROFE_TEST_BIG_A", "a".repeat(100 * 1024))
+        .env("GROFE_TEST_BIG_B", "b".repeat(100 * 1024))
+        .args(["list-sessions", "-F", "#{session_name}"]);
+    let out = common::run_bounded(cmd, common::CMD_TIMEOUT);
+    assert!(out.status.success(), "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "main\n");
+}
+
+/// A hello past the 4 MiB cap, from a raw socket, is closed.
+#[test]
+fn an_over_cap_hello_is_closed() {
+    let srv = start();
+    let mut big = UnixStream::connect(&srv.socket).expect("connect");
+    // The server may hang up before the whole line is written.
+    let closed = big.write_all(&vec![b'x'; 5 * 1024 * 1024]).is_err()
+        || closed_within(&mut big, Duration::from_secs(10)).is_some();
+    assert!(closed, "a 5 MiB hello line was kept open");
+    assert!(srv.cmd(&["list-sessions"]).is_ok());
 }

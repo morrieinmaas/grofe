@@ -174,6 +174,9 @@ fn fail(msg: &str) -> ExitCode {
 
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
+    if let Err(e) = control_hello(socket) {
+        return fail(&e);
+    }
     let stream = if AUTO_START.contains(&argv[0].as_str()) {
         // Implicit start: that server exits if it ends up with no sessions.
         connect_or_start(socket, own_dir, true)
@@ -208,6 +211,9 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
         Ok(_) => return fail("attach-session: unexpected command"),
         Err(e) => return fail(&e.to_string()),
     };
+    if let Err(e) = control_hello(socket) {
+        return fail(&e);
+    }
     // tmux's attach starts a server, which finds no sessions; grofe's does
     // not start one and says what tmux would.
     let connect_attach = || match connect(socket) {
@@ -430,6 +436,23 @@ fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -
 /// `target` is the socket this request is being sent to, used to decide
 /// whether `$GROFE_PANE` applies (see [`client_pane`]).
 fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
+    let hello = control_hello(target)?;
+    let req = serde_json::to_string(&Request {
+        id: 1,
+        argv: argv.to_vec(),
+    })
+    .map_err(|e| e.to_string())?;
+    let mut writer = &stream;
+    writer
+        .write_all(format!("{hello}\n{req}\n").as_bytes())
+        .map_err(|e| format!("sending request: {e}"))?;
+    read_reply(&stream)
+}
+
+/// The control hello line for a request to `target`, or why it cannot be
+/// sent (an environment too large for it), so that is known before
+/// connecting.
+fn control_hello(target: &Path) -> Result<String, String> {
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: client_pane(
@@ -442,18 +465,12 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
             .collect(),
         client: None,
     };
-    let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
-    let req = serde_json::to_string(&Request {
-        id: 1,
-        argv: argv.to_vec(),
-    })
-    .map_err(|e| e.to_string())?;
-    let mut writer = &stream;
-    writer
-        .write_all(format!("{hello}\n{req}\n").as_bytes())
-        .map_err(|e| format!("sending request: {e}"))?;
+    encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
+}
 
-    let mut reader = BufReader::new(&stream);
+/// Reads until the reply to the one request sent on `stream`.
+fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
     loop {
         line.clear();

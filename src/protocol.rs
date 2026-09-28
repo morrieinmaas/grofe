@@ -36,6 +36,12 @@ use crate::types::{ClientId, PaneId};
 /// claiming (or streaming) an enormous message.
 pub const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
 
+/// The longest hello line. A hello carries the client's whole environment,
+/// so this sits above macOS's ARG_MAX (1 MiB) and Linux's default
+/// environment limit, while still bounding what a connection that has not
+/// said who it is can make the server buffer.
+pub const HELLO_MAX_LEN: usize = 4 * 1024 * 1024;
+
 /// Builds the [`LinesCodec`] used for control-mode JSON lines, capped at
 /// [`MAX_MESSAGE_LEN`].
 pub fn lines_codec() -> LinesCodec {
@@ -176,6 +182,8 @@ pub enum ProtocolError {
     },
     #[error("malformed hello: {0}")]
     Malformed(#[from] serde_json::Error),
+    #[error("environment too large: the hello is {len} bytes, over the 4 MiB limit")]
+    TooLarge { len: usize },
 }
 
 /// Encodes `hello` as the JSON hello line, embedding [`PROTOCOL_VERSION`]
@@ -185,7 +193,11 @@ pub fn encode_hello(hello: &Hello) -> Result<String, ProtocolError> {
     if let serde_json::Value::Object(map) = &mut value {
         map.insert("grofe".to_string(), PROTOCOL_VERSION.into());
     }
-    Ok(value.to_string())
+    let line = value.to_string();
+    if line.len() > HELLO_MAX_LEN {
+        return Err(ProtocolError::TooLarge { len: line.len() });
+    }
+    Ok(line)
 }
 
 /// Decodes a hello line, checking the protocol version before the shape so
@@ -427,6 +439,26 @@ mod tests {
                 .collect(),
             client: None,
         }
+    }
+
+    #[test]
+    fn an_over_cap_hello_names_the_environment() {
+        let env = [("BIG", "x".repeat(HELLO_MAX_LEN))];
+        let hello = Hello::Control(ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            client: None,
+        });
+        let err = encode_hello(&hello).unwrap_err().to_string();
+        assert!(
+            err.starts_with("environment too large: the hello is "),
+            "{err}"
+        );
+        assert!(err.ends_with("bytes, over the 4 MiB limit"), "{err}");
     }
 
     #[test]

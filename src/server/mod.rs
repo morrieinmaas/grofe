@@ -602,9 +602,6 @@ fn finish(
 /// this only bounds connections that never will.
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 
-/// The longest hello line (it carries the client's environment).
-const HELLO_MAX_LEN: usize = 64 * 1024;
-
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written.
 async fn connection(
@@ -613,7 +610,7 @@ async fn connection(
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
 ) {
-    let codec = LinesCodec::new_with_max_length(HELLO_MAX_LEN);
+    let codec = LinesCodec::new_with_max_length(protocol::HELLO_MAX_LEN);
     let mut lines = Framed::new(stream, codec);
     let hello = tokio::select! {
         line = tokio::time::timeout(HELLO_DEADLINE, lines.next()) => line,
