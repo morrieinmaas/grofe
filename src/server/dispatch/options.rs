@@ -20,9 +20,9 @@ use crate::cmd::{
 };
 use crate::event::Event;
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::events::Events;
 use crate::server::model::{Model, PANE_BASE_INDEX};
+use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
 pub const REMAIN_ON_EXIT: &str = "remain-on-exit";
@@ -420,7 +420,7 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     match cmd {
         Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
         Command::ShowOptions(c) => show_options(model, ctx, c),
-        Command::DisplayMessage(c) => display_message(model, ctx, c),
+        Command::DisplayMessage(c) => display_message(state, ctx, c),
         Command::ListSessions(c) => list_sessions(model, c),
         Command::ListWindows(c) => list_windows(model, ctx, c),
         Command::ListPanes(c) => list_panes(model, ctx, c),
@@ -573,12 +573,22 @@ fn quote(value: &str) -> String {
 const DEFAULT_MESSAGE: &str =
     "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index}";
 
-// ponytail: with no clients before M2, display-message prints its text
-// with or without `-p`; M2 shows it on the client's status line.
-fn display_message(model: &Model, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+/// `display-message`: the text expanded against the target pane and the
+/// current client (the one whose binding ran it, else the most recently
+/// active one, as tmux's `cmd_find_best_client`), so `#{client_width}`
+/// and the other `client_*` variables work.
+// ponytail: printed with or without `-p`; showing it on the client's
+// status line without `-p` is M3.6's (spec §4.5 listing row).
+fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+    let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
-    Ok(format!("{}\n", expand(text, &FormatCtx::new(model, pane))))
+    let vars = FormatCtx::new(model, pane);
+    let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => expand(text, &clients::ClientVars::new(client, Some(vars))),
+        None => expand(text, &vars),
+    };
+    Ok(format!("{out}\n"))
 }
 
 fn lines(model: &Model, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {

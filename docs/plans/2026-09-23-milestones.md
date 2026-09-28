@@ -338,7 +338,7 @@ pub struct Mods { pub ctrl: bool, pub alt: bool, pub shift: bool, pub super_: bo
 pub enum Routed { Command(Vec<String>), ToPane(Vec<u8>), Consumed }
 pub trait InputHook { fn on_key(&mut self, key: &Key, client: ClientId) -> Option<Routed>; }
 // model.rs (MRU, no behaviour until T2.5a/T2.5b)
-Session { .., pub last_window: Option<WindowId> }
+Session { .., pub last_windows: Vec<WindowId> }   // tmux's lastw stack, most recent last
 Model { .., pub client_last_session: BTreeMap<ClientId, SessionId> }
 // server/mod.rs
 State { .., pub clients: BTreeMap<ClientId, clients::ClientEntry> }   // registry; empty until T2.5a

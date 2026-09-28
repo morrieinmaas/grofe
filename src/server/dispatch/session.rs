@@ -1,11 +1,15 @@
 //! session commands.
 
-use crate::cmd::{HasSession, KillSession, ListSessions, NewSession, Resolve};
+use crate::cmd::{
+    HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
+};
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
+use crate::server::model::Model;
 use crate::server::model::{BASE_INDEX, DEFAULT_SIZE, Session, Window};
+use crate::server::{State, clients};
+use crate::types::SessionId;
 
 /// `new-session`: a session with one window holding one pane.
 // ponytail: without `-d` tmux would attach; attach arrives in M2, so every
@@ -13,12 +17,7 @@ use crate::server::model::{BASE_INDEX, DEFAULT_SIZE, Session, Window};
 pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<String, String> {
     let model = &mut state.model;
     if let Some(name) = &c.name {
-        if name.is_empty() || name.contains([':', '.']) {
-            return Err(format!("bad session name: {name}"));
-        }
-        if model.session_by_name(name).is_some() {
-            return Err(format!("duplicate session: {name}"));
-        }
+        check_name(model, name)?;
     }
     let id = model.alloc_session_id();
     let name = match c.name {
@@ -54,7 +53,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cwd: cwd.clone(),
         cols: size.0,
         rows: size.1,
-        last_window: None,
+        last_windows: Vec::new(),
     });
     model.insert_window(Window {
         id: window,
@@ -92,4 +91,86 @@ pub fn list_sessions(state: &State, _c: ListSessions) -> Result<String, String> 
         .into_iter()
         .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
         .collect())
+}
+
+/// A new session name must be usable in a target and not taken.
+// ponytail: tmux 3.7b accepts `:` and `.` (and the empty name) and makes
+// such a session hard to target; grofe refuses them, as new-session does.
+fn check_name(model: &Model, name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains([':', '.']) {
+        return Err(format!("bad session name: {name}"));
+    }
+    if model.session_by_name(name).is_some() {
+        return Err(format!("duplicate session: {name}"));
+    }
+    Ok(())
+}
+
+pub fn rename_session(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<String, String> {
+    let model = &mut state.model;
+    let id = model.resolve_session(&c.target, ctx)?;
+    if model.sessions[&id].name == c.name {
+        return Ok(String::new());
+    }
+    check_name(model, &c.name)?;
+    if let Some(s) = model.sessions.get_mut(&id) {
+        s.name = c.name;
+    }
+    Ok(String::new())
+}
+
+/// `switch-client` for the current client (the one whose binding ran it,
+/// else the most recently active one, as tmux picks): `-T` sets its key
+/// table; `-l` goes to its last session, `-n` / `-p` to the next or
+/// previous session by name (wrapping), otherwise to `-t`.
+pub fn switch_client(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SwitchClient,
+) -> Result<String, String> {
+    let id = clients::current_client(state, ctx).ok_or_else(|| "no current client".to_string())?;
+    if let Some(table) = &c.key_table {
+        if !state.registry.key_tables.exists(table) {
+            return Err(format!("table {table} doesn't exist"));
+        }
+        clients::set_key_table(state, id, table);
+        return Ok(String::new());
+    }
+    let current = state.clients[&id].session;
+    let model = &mut state.model;
+    let session = if c.last {
+        model
+            .client_last_session
+            .get(&id)
+            .copied()
+            .filter(|s| model.sessions.contains_key(s))
+            .ok_or_else(|| "can't find last session".to_string())?
+    } else if c.next || c.previous {
+        neighbour_session(model, current, c.next)
+    } else {
+        let target = c.target.unwrap_or(Target::Current);
+        clients::select_target(model, &target, ctx)?
+    };
+    clients::show_session(state, id, session);
+    Ok(String::new())
+}
+
+/// The session after (or before) `current` in name order, wrapping.
+fn neighbour_session(model: &Model, current: SessionId, next: bool) -> SessionId {
+    let mut sessions: Vec<(&str, SessionId)> = model
+        .sessions
+        .values()
+        .map(|s| (s.name.as_str(), s.id))
+        .collect();
+    sessions.sort();
+    let n = sessions.len();
+    let Some(pos) = sessions.iter().position(|(_, id)| *id == current) else {
+        return current;
+    };
+    let pos = if next {
+        (pos + 1) % n
+    } else {
+        (pos + n - 1) % n
+    };
+    sessions[pos].1
 }

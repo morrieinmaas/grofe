@@ -35,18 +35,30 @@ use tokio::sync::{mpsc, oneshot};
 use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
 use crate::protocol::{Caps, ClientCtx, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
+use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
-    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, Routed, parse_prefix,
+    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, Routed, default_bindings,
+    parse_prefix,
 };
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, Screen};
-use crate::server::status::{self, StatusInputs, StyledLine, WindowStatus};
+use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
 use crate::server::{State, dispatch};
 use crate::types::{ClientId, PaneId, SessionId};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How long a status-line message stays up (tmux's `display-time`).
+// ponytail: `display-time` and `message-style` are fixed at tmux's
+// defaults until they are options.
+pub const DISPLAY_TIME: Duration = Duration::from_millis(750);
+const MESSAGE_STYLE: &str = "bg=yellow,fg=black";
+
+/// How often window names are checked for `automatic-rename` while clients
+/// are attached (tmux's `NAME_INTERVAL`).
+pub const NAME_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long a client must stay the latest active one before the window
 /// takes its size (spec D6: ~500 ms).
@@ -148,6 +160,12 @@ pub struct ClientEntry {
     pub activity: Instant,
     pub decoder: Decoder,
     pub keys: KeyState,
+    /// Whether the outer terminal has focus, from its focus reports (the
+    /// client asks for them); a client starts focused, as in tmux.
+    pub focused: bool,
+    /// A message shown instead of the status line until it expires or a
+    /// key is pressed (a failed binding's error, as tmux shows it).
+    message: Option<(String, Instant)>,
     /// The window cell drawn at the client's top-left (crop, D6).
     viewport: (u16, u16),
     /// Needs a new frame.
@@ -203,7 +221,7 @@ impl SizeOwner {
 /// Client state that is not per client.
 pub struct Registry {
     next_id: u32,
-    /// Bindings by table (T2.5b fills the default tables).
+    /// Bindings by table, starting with the default key table.
     pub key_tables: KeyTables,
     /// See keys before the key tables, in registration order.
     pub input_hooks: Vec<Box<dyn InputHook + Send>>,
@@ -214,19 +232,22 @@ pub struct Registry {
     last_render: Option<Instant>,
     /// When the status line is next redrawn for its clock.
     status_at: Option<Instant>,
+    /// When window names are next checked (`automatic-rename`).
+    names_at: Option<Instant>,
 }
 
 impl Default for Registry {
     fn default() -> Registry {
         Registry {
             next_id: 1,
-            key_tables: KeyTables::default(),
+            key_tables: default_bindings(),
             input_hooks: Vec::new(),
             overlays: Vec::new(),
             owners: BTreeMap::new(),
             render_at: None,
             last_render: None,
             status_at: None,
+            names_at: None,
         }
     }
 }
@@ -286,6 +307,8 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             activity: now,
             decoder: Decoder::new(),
             keys: KeyState::new(),
+            focused: true,
+            message: None,
             viewport: (0, 0),
             dirty: true,
             outbox,
@@ -299,7 +322,11 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
 
 /// Resolves an attach or switch target to its session, making a window or
 /// pane target that session's current window (and pane), as tmux does.
-fn select_target(model: &mut Model, target: &Target, ctx: &ClientCtx) -> Result<SessionId, String> {
+pub(crate) fn select_target(
+    model: &mut Model,
+    target: &Target,
+    ctx: &ClientCtx,
+) -> Result<SessionId, String> {
     let session = model.resolve_session(target, ctx)?;
     if let Target::Window(..) | Target::Pane(_) = target {
         let window = model.resolve_window(target, ctx)?;
@@ -309,11 +336,45 @@ fn select_target(model: &mut Model, target: &Target, ctx: &ClientCtx) -> Result<
                 w.active = pane;
             }
         }
-        if let Some(s) = model.sessions.get_mut(&session) {
-            s.active = window;
-        }
+        model.select_window(window);
     }
     Ok(session)
+}
+
+/// Client `id` now shows `session` (attach-session and switch-client):
+/// the session it leaves becomes its last session, and it takes the new
+/// session's size at once (switching is activity, spec D6).
+pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) {
+    let Some(entry) = state.clients.get_mut(&id) else {
+        return;
+    };
+    let old = entry.session;
+    entry.activity = Instant::now();
+    if old != session {
+        entry.session = session;
+        entry.viewport = (0, 0);
+        state.model.client_last_session.insert(id, old);
+        leave_session(state, id, old);
+    }
+    state.registry.owners.insert(session, SizeOwner::new(id));
+}
+
+/// `switch-client -T`: client `id`'s key table.
+pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.keys.set_table(table);
+        c.dirty = true;
+    }
+}
+
+/// Shows `text` on client `id`'s status row for [`DISPLAY_TIME`].
+pub fn show_message(state: &mut State, id: ClientId, text: &str) {
+    let now = Instant::now();
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.message = Some((text.to_string(), now + DISPLAY_TIME));
+        c.dirty = true;
+        request_render(state, now);
+    }
 }
 
 fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
@@ -485,11 +546,14 @@ fn request_render(state: &mut State, now: Instant) {
 pub fn deadline(state: &State) -> Option<Instant> {
     let escape = escape_time(&state.model);
     let r = &state.registry;
-    let clients = state
-        .clients
-        .values()
-        .flat_map(|c| [c.decoder.deadline(escape), c.keys.deadline()]);
-    [r.render_at, r.status_at]
+    let clients = state.clients.values().flat_map(|c| {
+        [
+            c.decoder.deadline(escape),
+            c.keys.deadline(),
+            c.message.as_ref().map(|(_, until)| *until),
+        ]
+    });
+    [r.render_at, r.status_at, r.names_at]
         .into_iter()
         .chain(r.owners.values().map(SizeOwner::deadline))
         .chain(clients)
@@ -512,6 +576,14 @@ pub fn tick(state: &mut State, now: Instant) {
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
+        if c.message.as_ref().is_some_and(|(_, until)| *until <= now) {
+            c.message = None;
+            c.dirty = true;
+            request_render(state, now);
+        }
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
         if c.decoder.deadline(escape).is_some_and(|d| d <= now) {
             for input in c.decoder.flush(now, escape) {
                 route(state, id, input, now);
@@ -522,6 +594,10 @@ pub fn tick(state: &mut State, now: Instant) {
     let mut switched = false;
     for owner in state.registry.owners.values_mut() {
         switched |= owner.settle(now);
+    }
+    if state.registry.names_at.is_some_and(|at| at <= now) {
+        state.registry.names_at = None;
+        switched |= automatic_rename(&mut state.model);
     }
     if switched {
         changed(state);
@@ -546,6 +622,9 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     arm_status_clock(state, now);
+    if state.registry.names_at.is_none() && !state.clients.is_empty() {
+        state.registry.names_at = Some(now + NAME_INTERVAL);
+    }
 }
 
 /// Schedules the next status redraw for its clock, every `status-interval`
@@ -721,7 +800,10 @@ fn compose_client(state: &State, c: &ClientEntry) -> Option<(Screen, (u16, u16))
         (w.cols, w.rows),
         visible,
     );
-    let status_line = status.then(|| status_line(model, c, s));
+    let status_line = match &c.message {
+        Some((text, _)) => Some(message_line(text, c.size.0)),
+        None => status.then(|| status_line(model, c, s)),
+    };
     let overlays: Vec<&dyn Overlay> = state
         .registry
         .overlays
@@ -797,6 +879,20 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
     })
 }
 
+/// A message across the whole status row, in `message-style`.
+// ponytail: with `status off` the message still takes the last row,
+// drawn over the window's last row while it shows.
+fn message_line(text: &str, width: u16) -> StyledLine {
+    let used = unicode_width::UnicodeWidthStr::width(text);
+    let pad = usize::from(width).saturating_sub(used);
+    StyledLine {
+        spans: vec![Span {
+            text: format!("{text}{}", " ".repeat(pad)),
+            style: status::parse_style(MESSAGE_STYLE),
+        }],
+    }
+}
+
 /// The local broken-down time, for strftime sequences in the status line.
 fn local_now() -> libc::tm {
     // SAFETY: `time` with a null pointer only returns the time;
@@ -833,6 +929,12 @@ impl FormatVars for ClientVars<'_> {
             "client_name" => Some(c.name.clone()),
             "client_termname" => Some(c.term.clone()),
             "client_key_table" => Some(c.keys.table().to_string()),
+            // ponytail: grofe always speaks UTF-8 to the client.
+            "client_flags" => Some(if c.focused {
+                "attached,focused,UTF-8".to_string()
+            } else {
+                "attached,UTF-8".to_string()
+            }),
             "client_session" => self.pane.as_ref()?.get("session_name"),
             _ => self.pane.as_ref()?.get(name),
         }
@@ -886,6 +988,14 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
         owner.activity(id, now);
     }
     for input in inputs {
+        // As tmux: a key press takes a message down, and still counts.
+        if let Input::Key(_) = input
+            && let Some(c) = state.clients.get_mut(&id)
+            && c.message.take().is_some()
+        {
+            c.dirty = true;
+            request_render(state, now);
+        }
         route(state, id, input, now);
     }
 }
@@ -905,6 +1015,11 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
     };
+    if let Input::Focus(focused) = input
+        && let Some(c) = state.clients.get_mut(&id)
+    {
+        c.focused = focused;
+    }
     let pane = active_pane(&state.model, session);
     let routed = match hooked {
         Some(routed) => routed,
@@ -956,9 +1071,9 @@ pub fn run_binding(state: &mut State, id: ClientId, argv: &[String]) {
         pane: active_pane(&state.model, c.session),
         ..c.ctx.clone()
     };
+    // As tmux: a binding's error shows on the client's status row.
     if let Err(e) = dispatch::run(state, &ctx, argv) {
-        // ponytail: tmux shows a binding's error in the status line (M3).
-        eprintln!("grofe server: {}: {e}", argv.join(" "));
+        show_message(state, id, e.trim_end());
     }
     state.events.flush();
     changed(state);
@@ -967,7 +1082,7 @@ pub fn run_binding(state: &mut State, id: ClientId, argv: &[String]) {
 /// The client a command acts on: the requesting client, else the most
 /// recently active client on the request's pane's session, else the most
 /// recently active client.
-fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId> {
+pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId> {
     if let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) {
         return Some(id);
     }
@@ -1008,18 +1123,7 @@ pub fn attach_session(
     if c.detach_others {
         detach_session(state, session, Some(id));
     }
-    let Some(entry) = state.clients.get_mut(&id) else {
-        return Ok(String::new());
-    };
-    let old = entry.session;
-    entry.activity = Instant::now();
-    if old != session {
-        entry.session = session;
-        entry.viewport = (0, 0);
-        state.model.client_last_session.insert(id, old);
-        leave_session(state, id, old);
-    }
-    state.registry.owners.insert(session, SizeOwner::new(id));
+    show_session(state, id, session);
     Ok(String::new())
 }
 
@@ -1052,11 +1156,14 @@ pub fn detach_client(
 }
 
 /// `list-clients`, in client order; `-F` expands per client, with
-/// `client_*` variables over the client's current pane's.
+/// `client_*` variables over the client's current pane's. The default line
+/// is tmux 3.7b's (its `[user ...]` part only shows for another user's
+/// client, which grofe never has).
 pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
     let model = &state.model;
     let format = c.format.unwrap_or_else(|| {
-        "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}]"
+        "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}] \
+         (#{client_flags})"
             .to_string()
     });
     Ok(state
@@ -1072,7 +1179,83 @@ pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use tokio::sync::Notify;
+
     use super::*;
+    use crate::server::{StartOptions, events, pane};
+
+    /// A server state with no sessions and one client, as the actor
+    /// would hold it.
+    fn state_with_client() -> (State, ClientId) {
+        let (pane_events, _) = mpsc::channel(1);
+        let mut state = State {
+            socket: PathBuf::from("/nonexistent/grofe-test.sock"),
+            options: StartOptions {
+                restore_on_start: false,
+                remain_on_exit: false,
+            },
+            model: Model::new(false),
+            inner_term: pane::inner_term(),
+            pane_events,
+            wake: Arc::new(Notify::new()),
+            events: events::Events::default(),
+            clients: BTreeMap::new(),
+            registry: Registry::default(),
+            exit: false,
+            exit_when_empty: false,
+            connections: 0,
+            socket_id: None,
+        };
+        let id = ClientId(1);
+        let (outbox, _) = Outbox::new();
+        state.clients.insert(
+            id,
+            ClientEntry {
+                name: client_name(id),
+                session: SessionId(0),
+                ctx: ClientCtx {
+                    cwd: PathBuf::from("/"),
+                    pane: None,
+                    env: Vec::new(),
+                    client: Some(id),
+                },
+                size: (80, 24),
+                term: "xterm-256color".to_string(),
+                caps: Caps::default(),
+                activity: Instant::now(),
+                decoder: Decoder::new(),
+                keys: KeyState::new(),
+                focused: true,
+                message: None,
+                viewport: (0, 0),
+                dirty: false,
+                outbox,
+                exit: None,
+            },
+        );
+        (state, id)
+    }
+
+    #[test]
+    fn a_key_press_takes_a_message_down_before_display_time() {
+        let (mut state, id) = state_with_client();
+        show_message(&mut state, id, "no last window");
+        let shown = state.clients[&id].message.clone();
+        let (text, until) = shown.expect("message shown");
+        assert_eq!(text, "no last window");
+        // A focus report is not a key: the message stays.
+        let now = Instant::now();
+        input(&mut state, id, b"\x1b[O", now);
+        assert!(state.clients[&id].message.is_some());
+        // A key press well before the message expires takes it down.
+        assert!(now < until);
+        input(&mut state, id, b"x", now);
+        assert!(state.clients[&id].message.is_none());
+        assert!(state.clients[&id].dirty);
+    }
 
     #[test]
     fn a_new_client_takes_the_size_only_after_the_debounce() {

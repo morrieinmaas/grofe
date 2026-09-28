@@ -30,6 +30,9 @@ use crate::types::{PaneId, WindowId};
 /// returning its stdout or its error message.
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
     let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
+    // Names follow their panes (automatic-rename) before a command reads
+    // or targets them.
+    window::automatic_rename(&mut state.model);
     let result = route(state, ctx, cmd);
     if state.model.closed() {
         state.exit = true;
@@ -75,23 +78,18 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // since it needs the connection's event queue.
         Command::Subscribe(_) => Err("subscribe needs a control connection".to_string()),
 
-        // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest)
-        // replace these stubs.
+        // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest).
         Command::AttachSession(c) => clients::attach_session(state, ctx, c),
         Command::DetachClient(c) => clients::detach_client(state, ctx, c),
         Command::ListClients(c) => clients::list_clients(state, c),
-        Command::NextWindow(_) => not_yet("next-window"),
-        Command::PreviousWindow(_) => not_yet("previous-window"),
-        Command::LastWindow(_) => not_yet("last-window"),
-        Command::RenameSession(_) => not_yet("rename-session"),
-        Command::RenameWindow(_) => not_yet("rename-window"),
-        Command::SwitchClient(_) => not_yet("switch-client"),
-        Command::SendPrefix(_) => not_yet("send-prefix"),
+        Command::NextWindow(c) => window::step_window(state, ctx, c, window::Step::Next),
+        Command::PreviousWindow(c) => window::step_window(state, ctx, c, window::Step::Previous),
+        Command::LastWindow(c) => window::last_window(state, ctx, c),
+        Command::RenameSession(c) => session::rename_session(state, ctx, c),
+        Command::RenameWindow(c) => window::rename_window(state, ctx, c),
+        Command::SwitchClient(c) => session::switch_client(state, ctx, c),
+        Command::SendPrefix(c) => pane::send_prefix(state, ctx, c),
     }
-}
-
-fn not_yet(verb: &str) -> Result<String, String> {
-    Err(format!("{verb}: not implemented yet"))
 }
 
 /// The argv a trailing shell command runs as: a single argument goes

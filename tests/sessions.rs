@@ -381,31 +381,3 @@ fn grofe_pane_from_another_server_is_ignored() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout.trim(), b_pane, "a foreign GROFE_PANE was used");
 }
-
-/// The M2 verbs parse and answer with a clear stub error until T2.5a and
-/// T2.5b implement them.
-#[test]
-fn m2_verbs_answer_not_implemented_yet() {
-    let srv = TestServer::start();
-    new_session(&srv, "s");
-    // `attach` is not here: the CLI runs it as the attach client (T2.1),
-    // not as a one-shot request. `detach-client` and `list-clients` are
-    // T2.5a's (tests/acceptance/t2_5a.rs).
-    for (argv, verb) in [
-        (&["next-window", "-t", "s"][..], "next-window"),
-        (&["previous-window"][..], "previous-window"),
-        (&["last-window"][..], "last-window"),
-        (&["rename-session", "-t", "s", "t"][..], "rename-session"),
-        (&["rename-window", "w"][..], "rename-window"),
-        (&["switch-client", "-l"][..], "switch-client"),
-        (&["send-prefix"][..], "send-prefix"),
-    ] {
-        let err = srv.cmd(argv).unwrap_err();
-        assert!(
-            err.contains(&format!("{verb}: not implemented yet")),
-            "{argv:?}: {err}"
-        );
-    }
-    // A stub changed nothing.
-    assert_eq!(srv.cmd(&["has-session", "-t", "s"]), Ok(String::new()));
-}

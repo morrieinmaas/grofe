@@ -49,9 +49,10 @@ pub struct Session {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
-    /// The window that was active before `active` (MRU, for
-    /// `last-window`). No behaviour yet: T2.5b maintains it.
-    pub last_window: Option<WindowId>,
+    /// The windows that were active before `active`, most recent last
+    /// (tmux's `lastw` stack, for `last-window`), kept by
+    /// [`Model::select_window`] and [`Model::remove_window`].
+    pub last_windows: Vec<WindowId>,
 }
 
 pub struct Window {
@@ -116,7 +117,8 @@ pub struct Model {
     /// `remain-on-exit` is seeded from the server's start options.
     pub options: Options,
     /// Each attached client's previous session (MRU, for `switch-client
-    /// -l`). No behaviour yet: T2.5a/T2.5b maintain it.
+    /// -l`). Switching a client records it; removing a session drops
+    /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
     next_session: u32,
     next_window: u32,
@@ -166,6 +168,21 @@ impl Model {
             session.windows.insert(pos, window.id);
         }
         self.windows.insert(window.id, window);
+    }
+
+    /// Makes `window` its session's active window; the one it replaces
+    /// goes on top of the session's last-window stack, as in tmux.
+    pub fn select_window(&mut self, window: WindowId) {
+        let Some(session) = self.windows.get(&window).map(|w| w.session) else {
+            return;
+        };
+        if let Some(s) = self.sessions.get_mut(&session)
+            && s.active != window
+        {
+            s.last_windows.retain(|w| *w != window);
+            s.last_windows.push(s.active);
+            s.active = window;
+        }
     }
 
     /// True once every session is gone, after at least one existed: the
@@ -271,11 +288,18 @@ impl Model {
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
             self.sessions.remove(&w.session);
+            self.client_last_session
+                .retain(|_, last| *last != w.session);
             return removed;
         }
+        session.last_windows.retain(|w| *w != window);
         if session.active == window {
-            let pos = pos.unwrap_or(0).min(session.windows.len() - 1);
-            session.active = session.windows[pos];
+            // As tmux: the last window takes over, else the one at the
+            // same position.
+            session.active = match session.last_windows.pop() {
+                Some(l) => l,
+                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+            };
         }
         removed
     }
@@ -286,6 +310,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);
         }
@@ -591,7 +616,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
-            last_window: None,
+            last_windows: Vec::new(),
         });
         id
     }
