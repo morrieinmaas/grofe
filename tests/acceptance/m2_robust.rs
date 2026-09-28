@@ -310,3 +310,68 @@ fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
     let mut control = Control::connect(&srv);
     assert_eq!(client_size(&mut control), "2000x2000\n");
 }
+
+/// A burst of resizes costs one reflow, not one each: 1000 alternating
+/// Resize frames against 50k lines of history leave `list-sessions` as
+/// quick as before them, and the last size wins.
+#[test]
+fn a_resize_storm_is_coalesced() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "seq 1 50000; exec sleep 600",
+    ])
+    .expect("new-session");
+    wait_until(
+        || {
+            srv.cmd(&["capture-pane", "-p", "-t", "main"])
+                .is_ok_and(|c| c.contains("50000"))
+        },
+        Duration::from_secs(30),
+    )
+    .expect("history filled");
+    let mut control = Control::connect(&srv);
+    let mut client = raw_attach(&srv, (80, 24));
+    wait_until(
+        || client_size(&mut control) == "80x24\n",
+        Duration::from_secs(10),
+    )
+    .expect("attached");
+    let base = control.median_list();
+
+    let mut burst = BytesMut::new();
+    for i in 0..1000u16 {
+        let size = if i % 2 == 0 { (100, 30) } else { (120, 40) };
+        FrameCodec
+            .encode(Frame::Resize(size.0, size.1), &mut burst)
+            .expect("encode");
+    }
+    FrameCodec
+        .encode(Frame::Resize(90, 25), &mut burst)
+        .expect("encode");
+    client.write_all(&burst).expect("send burst");
+    let during = control.median_list();
+    let bound = (base * 5).max(Duration::from_millis(200));
+    assert!(
+        during < bound,
+        "list-sessions took {during:?} after the burst, {base:?} before"
+    );
+    wait_until(
+        || client_size(&mut control) == "90x25\n",
+        Duration::from_secs(10),
+    )
+    .expect("the last size is applied");
+    assert_eq!(
+        control.cmd(&[
+            "display-message",
+            "-p",
+            "-t",
+            "main",
+            "#{pane_width}x#{pane_height}"
+        ]),
+        Ok("90x24\n".to_string())
+    );
+}

@@ -153,6 +153,9 @@ pub struct ClientEntry {
     pub ctx: ClientCtx,
     /// The client terminal, `(cols, rows)`.
     pub size: (u16, u16),
+    /// The latest Resize frame's size, applied on the next tick so a
+    /// burst of resizes costs one reflow.
+    pending_size: Option<(u16, u16)>,
     /// `TERM` of the client's terminal.
     pub term: String,
     pub caps: Caps,
@@ -293,6 +296,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             session,
             ctx,
             size: clamp_size(req.size),
+            pending_size: None,
             term: req.term,
             caps: req.caps,
             activity: now,
@@ -454,9 +458,8 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
             let Some(c) = state.clients.get_mut(&id) else {
                 return;
             };
-            c.size = clamp_size((cols, rows));
-            c.dirty = true;
-            changed(state);
+            c.pending_size = Some(clamp_size((cols, rows)));
+            request_render(state, Instant::now());
         }
         Frame::Detach => detach(state, id),
         // Server-to-client kinds: ignored if a client sends them.
@@ -629,6 +632,16 @@ pub fn deadline(state: &State) -> Option<Instant> {
 
 /// Runs whatever is due at `now` (see [`deadline`]).
 pub fn tick(state: &mut State, now: Instant) {
+    let mut resized = false;
+    for c in state.clients.values_mut() {
+        if let Some(size) = c.pending_size.take() {
+            resized |= c.size != size;
+            c.size = size;
+        }
+    }
+    if resized {
+        changed(state);
+    }
     let escape = escape_time(&state.model);
     let ids: Vec<ClientId> = state.clients.keys().copied().collect();
     for id in ids {
@@ -1334,6 +1347,7 @@ mod tests {
                     client: Some(id),
                 },
                 size: (80, 24),
+                pending_size: None,
                 term: "xterm-256color".to_string(),
                 caps: Caps::default(),
                 activity: Instant::now(),
