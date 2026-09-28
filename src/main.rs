@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
+use grofe::client;
 use grofe::paths::{self, Env};
 use grofe::protocol::{ClientCtx, Hello, Reply, Request, encode_hello};
 use grofe::server;
@@ -62,6 +63,7 @@ fn main() -> ExitCode {
                 Err(e) => fail(&e),
             }
         }
+        "attach-session" | "attach" => attach(&globals.socket(), rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
@@ -191,6 +193,47 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         }
         Ok(Reply::Err { err, .. }) => fail(&err),
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
+        Err(e) => fail(&e),
+    }
+}
+
+/// `attach-session`: the attach client (spec §4.6), in this process. It
+/// never starts a server, as in tmux. Self-nesting is the server's call
+/// (it knows which session holds `$GROFE_PANE`); the client only sends
+/// the pane and `--nest`.
+fn attach(socket: &Path, argv: &[String]) -> ExitCode {
+    let parsed = match grofe::cmd::parse(argv) {
+        Ok(grofe::cmd::Command::AttachSession(a)) => a,
+        Ok(_) => return fail("attach-session: unexpected command"),
+        Err(e) => return fail(&e.to_string()),
+    };
+    let stream = match connect(socket) {
+        Ok(s) => s,
+        Err(e) => return fail(&e),
+    };
+    let ctx = ClientCtx {
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        pane: client_pane(
+            std::env::var_os("GROFE").as_deref(),
+            std::env::var("GROFE_PANE").ok().as_deref(),
+            socket,
+        ),
+        env: std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect(),
+        client: None,
+    };
+    let opts = client::AttachOptions {
+        target: client::raw_target(&argv[1..]),
+        detach_others: parsed.detach_others,
+        nest: parsed.nest,
+    };
+    let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
+    match client::attach(stream, ctx, opts, term) {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
         Err(e) => fail(&e),
     }
 }
