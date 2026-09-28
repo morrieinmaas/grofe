@@ -448,6 +448,19 @@ fn input_sent_with_the_hello_reaches_the_pane_without_more_input() {
 fn a_one_column_window_keeps_its_pane_two_columns_wide() {
     let srv = start((80, 23));
     let mut a = Harness::spawn(attach(&srv, "main"), 20, 6);
+    // Server side first: a miss here is the pane, not the client's redraw
+    // (a CI run once timed out below with the pane area blank).
+    if let Err(e) = srv.wait_for(
+        || srv.capture("main").contains("grofe-prompt$"),
+        Duration::from_secs(10),
+    ) {
+        panic!(
+            "the pane never printed its prompt: {e}\npane:\n{}\nclients: {:?}\nlog:\n{}",
+            srv.capture("main"),
+            srv.cmd(&["list-clients"]),
+            srv.log()
+        );
+    }
     a.wait_for("grofe-prompt$");
     a.resize(1, 6);
     wait_pane_size(&srv, "1x5");
