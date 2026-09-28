@@ -33,15 +33,35 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// replies.
 const DA1_QUERY: &[u8] = b"\x1b[c";
 
-/// Ghostty-shaped answers to the whole probe (see tests/fixtures/probe).
-const GHOSTTY_REPLIES: &[u8] =
-    b"\x1bP>|ghostty 1.1.3\x1b\\\x1b[?2026;2$y\x1b[?0u\x1b_Gi=31;OK\x1b\\\x1b[?62;22c";
+/// Ghostty's answers to the whole probe, from the SYNTHESIZED fixture
+/// tests/fixtures/probe/ghostty.txt (`#` comments, `\e` ESC, `\\` backslash).
+fn ghostty_replies() -> Vec<u8> {
+    let text = include_str!("fixtures/probe/ghostty.txt");
+    let body: String = text.lines().filter(|l| !l.starts_with('#')).collect();
+    body.replace("\\e", "\x1b")
+        .replace("\\\\", "\\")
+        .into_bytes()
+}
 
 const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 const KITTY_POP: &[u8] = b"\x1b[<u";
 const MOK_ON: &[u8] = b"\x1b[>4;1m";
 const MOK_OFF: &[u8] = b"\x1b[>4;0m";
 const ALT_SCREEN_OFF: &[u8] = b"\x1b[?1049l";
+const FOCUS_ON: &[u8] = b"\x1b[?1004h";
+const FOCUS_OFF: &[u8] = b"\x1b[?1004l";
+const PASTE_OFF: &[u8] = b"\x1b[?2004l";
+
+/// The teardown undoes what setup turned on.
+fn assert_teardown(out: &[u8]) {
+    for (seq, what) in [
+        (ALT_SCREEN_OFF, "alternate screen left"),
+        (FOCUS_OFF, "focus reporting off"),
+        (PASTE_OFF, "bracketed paste off"),
+    ] {
+        assert!(contains(out, seq), "{what}");
+    }
+}
 
 // ---------------------------------------------------------------- fake server
 
@@ -336,7 +356,7 @@ fn frames_flow_both_ways_after_a_probe_the_terminal_answers() {
     let srv = FakeServer::new();
     let mut tty = Tty::spawn(&script(ATTACH), &srv.socket, &[]);
     tty.wait_for(DA1_QUERY);
-    tty.write(GHOSTTY_REPLIES);
+    tty.write(&ghostty_replies());
 
     let mut conn = srv.accept();
     let (ctx, cols, rows, term, caps, target, nest) = attach_hello(conn.hello());
@@ -359,6 +379,7 @@ fn frames_flow_both_ways_after_a_probe_the_terminal_answers() {
 
     // The richest key mode this terminal offers: kitty flags 1.
     tty.wait_for(KITTY_PUSH);
+    assert!(contains(&tty.out, FOCUS_ON), "focus reporting on");
     conn.send(Frame::Output(b"SERVER-SAYS-HI".to_vec()));
     tty.wait_for(b"SERVER-SAYS-HI");
 
@@ -369,7 +390,7 @@ fn frames_flow_both_ways_after_a_probe_the_terminal_answers() {
     tty.wait_for(b"[detached]");
     tty.wait_for(b"STATUS=0");
     assert!(contains(&tty.out, KITTY_POP), "kitty flags popped on exit");
-    assert!(contains(&tty.out, ALT_SCREEN_OFF), "alternate screen left");
+    assert_teardown(&tty.out);
     tty.assert_restored();
 }
 
@@ -396,6 +417,17 @@ fn probe_times_out_cleanly_on_a_terminal_that_answers_nothing() {
     // No kitty keys: fall back to modifyOtherKeys.
     tty.wait_for(MOK_ON);
     assert!(!contains(&tty.out, KITTY_PUSH));
+
+    // Replies that arrive after the 300 ms are still filtered until DA1's,
+    // not forwarded as keys; a lone ESC is not held back for ever.
+    // Split across reads, within the client's wait for the rest of an ESC.
+    tty.write(b"\x1b[?0u\x1b[?2026;2$");
+    sleep(Duration::from_millis(2));
+    tty.write(b"y\x1b[?62;22cafter");
+    let got = conn.input_until(b"after");
+    assert_eq!(got, b"after", "late replies are dropped");
+    tty.write(b"\x1b");
+    assert_eq!(conn.input_until(b"\x1b"), b"\x1b");
 
     // The server going away is an exit path too.
     drop(conn);
@@ -431,7 +463,7 @@ fn sigwinch_sends_a_resize_frame() {
     let srv = FakeServer::new();
     let mut tty = Tty::spawn(&script(ATTACH), &srv.socket, &[]);
     tty.wait_for(DA1_QUERY);
-    tty.write(GHOSTTY_REPLIES);
+    tty.write(&ghostty_replies());
     let mut conn = srv.accept();
     conn.hello();
     conn.reply(&ok());
@@ -463,7 +495,7 @@ fn tty_is_restored_after_sigterm() {
     let mut tty = Tty::spawn(&script(&client), &srv.socket, &[]);
     let pid = tty.pid_line();
     tty.wait_for(DA1_QUERY);
-    tty.write(GHOSTTY_REPLIES);
+    tty.write(&ghostty_replies());
     let mut conn = srv.accept();
     conn.hello();
     conn.reply(&ok());
@@ -471,12 +503,12 @@ fn tty_is_restored_after_sigterm() {
 
     // Our own grandchild, identified by the pid its parent script printed.
     kill(pid, Signal::SIGTERM).expect("SIGTERM the client");
-    tty.wait_for(b"STATUS=");
+    tty.wait_for(b"STATUS=143");
     assert!(
         contains(&tty.out, KITTY_POP),
         "kitty flags popped on SIGTERM"
     );
-    assert!(contains(&tty.out, ALT_SCREEN_OFF), "alternate screen left");
+    assert_teardown(&tty.out);
     tty.assert_restored();
     assert_eq!(conn.next_frame(), None, "client closed its connection");
 }
@@ -490,7 +522,7 @@ fn a_panic_in_another_thread_restores_the_tty_and_exits() {
         &[("GROFE_TEST_CLIENT_PANIC", "stdin")],
     );
     tty.wait_for(DA1_QUERY);
-    tty.write(GHOSTTY_REPLIES);
+    tty.write(&ghostty_replies());
     let mut conn = srv.accept();
     conn.hello();
     conn.reply(&ok());
@@ -584,4 +616,114 @@ fn attach_without_a_terminal_fails_before_the_hello() {
         .expect("read stderr");
     assert!(!status.success());
     assert!(stderr.contains("not a terminal"), "stderr: {stderr}");
+}
+
+#[test]
+fn signals_are_handled_while_the_server_stops_reading() {
+    let srv = FakeServer::new();
+    let client = format!("{ATTACH} </dev/tty & echo \"CLIENTPID=$!\"; wait $!");
+    let mut tty = Tty::spawn(&script(&client), &srv.socket, &[]);
+    let pid = tty.pid_line();
+    tty.wait_for(DA1_QUERY);
+    tty.write(&ghostty_replies());
+    let mut conn = srv.accept();
+    conn.hello();
+    conn.reply(&ok());
+    tty.wait_for(KITTY_PUSH);
+
+    // The server never reads again. Flood the client's input until nothing
+    // more fits anywhere (socket buffers, the client, the pty).
+    let flood = tty
+        .session
+        .get_process()
+        .get_raw_handle()
+        .expect("pty handle");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    {
+        let (stop, written) = (stop.clone(), written.clone());
+        std::thread::spawn(move || flood_until(flood, &stop, &written));
+    }
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last = (0, Instant::now());
+    loop {
+        tty.pump();
+        let now = written.load(std::sync::atomic::Ordering::SeqCst);
+        if now != last.0 {
+            last = (now, Instant::now());
+        } else if now > 0 && last.1.elapsed() > Duration::from_millis(500) {
+            break; // stalled
+        }
+        assert!(
+            Instant::now() < deadline,
+            "flood never stalled ({now} bytes)"
+        );
+        sleep(Duration::from_millis(20));
+    }
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    tty.session
+        .get_process_mut()
+        .set_window_size(100, 40)
+        .expect("resize pty");
+    sleep(Duration::from_millis(100));
+    kill(pid, Signal::SIGTERM).expect("SIGTERM the client");
+    tty.wait_for(b"STATUS=143");
+    assert_teardown(&tty.out);
+    tty.assert_restored();
+    drop(conn);
+}
+
+/// Writes to the pty master until `stop`, never blocking for long: expectrl
+/// flips the shared description's O_NONBLOCK, so both EAGAIN and a
+/// POLLOUT timeout mean "full".
+fn flood_until(
+    pty: std::fs::File,
+    stop: &std::sync::atomic::AtomicBool,
+    written: &std::sync::atomic::AtomicUsize,
+) {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd;
+    let chunk = [b'x'; 64];
+    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        let mut fds = [PollFd::new(pty.as_fd(), PollFlags::POLLOUT)];
+        if !matches!(poll(&mut fds, PollTimeout::from(50u16)), Ok(n) if n > 0) {
+            continue;
+        }
+        match nix::unistd::write(&pty, &chunk) {
+            Ok(n) => {
+                written.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+            }
+            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+#[test]
+fn stdin_eof_sends_detach() {
+    // stdin is a second pty the test can hang up; output stays on the
+    // expectrl pty.
+    let pty = nix::pty::openpty(None, None).expect("openpty");
+    let slave = nix::unistd::ttyname(&pty.slave).expect("ttyname");
+    let srv = FakeServer::new();
+    let client = format!("{ATTACH} <{}", slave.display());
+    let mut tty = Tty::spawn(&script(&client), &srv.socket, &[]);
+    tty.wait_for(DA1_QUERY);
+    let mut conn = srv.accept();
+    conn.hello(); // the probe timed out: nobody answers on the stdin pty
+    conn.reply(&ok());
+    tty.wait_for(MOK_ON);
+
+    drop(pty); // closes master and slave: the client's stdin sees EOF
+    loop {
+        match conn.next_frame() {
+            Some(Frame::Detach) => break,
+            Some(Frame::Resize(..)) => {}
+            other => panic!("expected detach, got {other:?}"),
+        }
+    }
+    conn.send(Frame::Exit("detached".to_string()));
+    tty.wait_for(b"STATUS=0");
+    assert_teardown(&tty.out);
 }

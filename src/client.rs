@@ -14,19 +14,25 @@
 //! 3. Alternate screen, bracketed paste and the richest key mode: kitty
 //!    flags 1 (disambiguate) when the terminal answered the kitty query,
 //!    else modifyOtherKeys level 1.
-//! 4. Frames: stdin to `input`, SIGWINCH to `resize`, `output` to stdout,
-//!    `exit` ends the client.
+//!    Focus reporting (1004) is the client's too.
+//! 4. Frames: stdin to `input` (through the probe parser until DA1's reply
+//!    arrives, so late replies are dropped, not sent as keys), SIGWINCH to
+//!    `resize`, `output` to stdout, `exit` ends the client. One writer
+//!    thread owns the connection; the signal thread never blocks on it.
 //!
 //! The tty is restored (termios plus the teardown sequences that undo step
 //! 3) on every exit path: a clean exit, the server hanging up, SIGTERM,
 //! SIGHUP, SIGINT or SIGQUIT (taken by a `sigwait` thread, so no work runs
 //! in a signal handler) and a panic in any thread (the panic hook restores,
-//! then exits the process with status 101).
+//! then exits the process with status 101). Signals and panics wait at
+//! most [`RESTORE_BOUND`] for a stalled tty before restoring termios anyway.
 
 use std::io;
 use std::os::fd::BorrowedFd;
 use std::os::unix::net::UnixStream;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
@@ -69,9 +75,17 @@ const KITTY_POP: &[u8] = b"\x1b[<u";
 /// modifyOtherKeys level 1, tmux's `extended-keys on` request.
 const MOK_ON: &[u8] = b"\x1b[>4;1m";
 const MOK_OFF: &[u8] = b"\x1b[>4;0m";
-/// Undone on exit whatever the server drew: an unterminated synchronized
-/// update, attributes, a hidden cursor.
-const RESET_TAIL: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?25h";
+/// Focus reporting: the client owns mode 1004 on the outer terminal.
+const FOCUS_ON: &[u8] = b"\x1b[?1004h";
+/// Undone on exit whatever the server drew: focus reporting, mouse modes
+/// (1000, 1002, 1003, SGR 1006), an unterminated synchronized update,
+/// attributes, a hidden cursor, the cursor shape.
+const RESET_TAIL: &[u8] = concat!(
+    "\x1b[?1004l",
+    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
+    "\x1b[?2026l\x1b[0m\x1b[?25h\x1b[0 q",
+)
+.as_bytes();
 
 /// Set to `stdin` to make the stdin thread panic on its first read: the
 /// test hook for "a panic in any thread restores the tty".
@@ -191,10 +205,26 @@ impl ProbeParser {
         }
     }
 
+    /// The non-reply bytes so far, in arrival order; an unfinished reply
+    /// stays pending.
+    pub fn take_typeahead(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.typeahead)
+    }
+
+    /// Whether an unfinished reply (or a lone ESC) is held back.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Gives up on the held-back bytes: they become typeahead.
+    pub fn flush_pending(&mut self) {
+        self.typeahead.append(&mut self.pending);
+    }
+
     /// Ends the probe: everything that was not a reply, including an
     /// unfinished one, in arrival order.
     pub fn into_typeahead(mut self) -> Vec<u8> {
-        self.typeahead.append(&mut self.pending);
+        self.flush_pending();
         self.typeahead
     }
 }
@@ -323,18 +353,36 @@ pub fn raw_target(args: &[String]) -> Option<String> {
 
 // ------------------------------------------------------------------ tty state
 
-/// What restoring needs: the termios from before raw mode and the bytes
-/// that undo what the client turned on. `None` once restored.
-struct TtyState {
-    saved: Termios,
-    teardown: Vec<u8>,
+/// The termios from before raw mode, as plain data so any thread can reach
+/// it without a lock.
+struct Saved(nix::libc::termios);
+
+static SAVED: OnceLock<Saved> = OnceLock::new();
+
+/// The bytes that undo the setup; set once the handshake succeeds.
+static TEARDOWN: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// True while the tty is ours. Held for every tty write, so nothing lands
+/// after the teardown.
+static ACTIVE: Mutex<bool> = Mutex::new(false);
+
+/// Set by SIGWINCH; the writer thread sends one `resize` for it.
+static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// How long a signal or a panic waits for the tty lock and for the
+/// terminal to take the teardown before restoring termios regardless.
+const RESTORE_BOUND: Duration = Duration::from_millis(200);
+
+/// Frames for the writer thread. Bounded: a server that stops reading
+/// stalls the stdin thread, never the signal thread (it only `try_send`s).
+enum Out {
+    Input(Vec<u8>),
+    Detach,
+    /// Look at [`RESIZE_PENDING`].
+    Wake,
 }
 
-static TTY: Mutex<Option<TtyState>> = Mutex::new(None);
-
-/// The connection's write half, shared by the stdin and signal threads.
-/// `None` until the handshake succeeds, so no frame precedes the hello.
-static FRAMES_OUT: Mutex<Option<UnixStream>> = Mutex::new(None);
+const OUT_QUEUE: usize = 64;
 
 fn stdin_fd() -> BorrowedFd<'static> {
     // SAFETY: fd 0 stays open for the life of the process.
@@ -346,51 +394,120 @@ fn stdout_fd() -> BorrowedFd<'static> {
     unsafe { BorrowedFd::borrow_raw(1) }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Restores the tty once; later calls do nothing. Safe from any thread and
-/// from the panic hook.
-pub fn restore_tty() {
-    let state = lock(&TTY).take();
-    if let Some(state) = state {
-        let _ = write_all(stdout_fd(), &state.teardown);
-        let _ = termios::tcsetattr(stdin_fd(), SetArg::TCSANOW, &state.saved);
+/// Writes the teardown (bounded by `deadline` when given) and restores
+/// termios. The caller has made sure it runs once.
+fn undo(deadline: Option<Instant>) {
+    if let Some(teardown) = TEARDOWN.get() {
+        let _ = write_all(stdout_fd(), teardown, deadline);
+    }
+    if let Some(saved) = SAVED.get() {
+        let _ = termios::tcsetattr(stdin_fd(), SetArg::TCSANOW, &Termios::from(saved.0));
     }
 }
 
-/// Writes to the tty unless it was already restored, so nothing lands
-/// after the teardown.
+/// Restores the tty once; later calls do nothing. Waits for a tty write in
+/// progress, so it is for the client's own exit paths.
+pub fn restore_tty() {
+    let mut active = lock(&ACTIVE);
+    if *active {
+        *active = false;
+        undo(None);
+    }
+}
+
+/// [`restore_tty`] for signals and panics: never waits longer than
+/// [`RESTORE_BOUND`]. If another thread holds the tty lock (a write stuck
+/// on a stalled terminal), termios is restored anyway and the teardown is
+/// written best-effort beside it.
+fn restore_tty_bounded() {
+    let deadline = Instant::now() + RESTORE_BOUND;
+    loop {
+        match ACTIVE.try_lock() {
+            Ok(mut active) => return take_and_undo(&mut active, deadline),
+            Err(TryLockError::Poisoned(e)) => return take_and_undo(&mut e.into_inner(), deadline),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return undo(Some(Instant::now() + RESTORE_BOUND));
+            }
+        }
+    }
+}
+
+fn take_and_undo(active: &mut bool, deadline: Instant) {
+    if *active {
+        *active = false;
+        undo(Some(deadline));
+    }
+}
+
+/// Writes to the tty unless it was already restored.
 fn write_tty(bytes: &[u8]) -> io::Result<()> {
-    let guard = lock(&TTY);
-    if guard.is_some() {
-        write_all(stdout_fd(), bytes)?;
+    let active = lock(&ACTIVE);
+    if *active {
+        write_all(stdout_fd(), bytes, None)?;
     }
     Ok(())
 }
 
-fn write_all(fd: BorrowedFd<'_>, mut bytes: &[u8]) -> io::Result<()> {
+/// Writes all of `bytes`, waiting in `poll` (not spinning) when the fd is
+/// full. With a `deadline`, gives up at it and writes in small pieces so a
+/// single write cannot block for long.
+fn write_all(fd: BorrowedFd<'_>, mut bytes: &[u8], deadline: Option<Instant>) -> io::Result<()> {
     while !bytes.is_empty() {
-        match nix::unistd::write(fd, bytes) {
+        if let Some(deadline) = deadline
+            && !wait_ready(fd, PollFlags::POLLOUT, Some(deadline))?
+        {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let piece = if deadline.is_some() {
+            &bytes[..bytes.len().min(64)]
+        } else {
+            bytes
+        };
+        match nix::unistd::write(fd, piece) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
             Ok(n) => bytes = &bytes[n..],
-            Err(Errno::EINTR | Errno::EAGAIN) => {}
+            Err(Errno::EINTR) => {}
+            Err(Errno::EAGAIN) => {
+                wait_ready(fd, PollFlags::POLLOUT, deadline)?;
+            }
             Err(e) => return Err(e.into()),
         }
     }
     Ok(())
 }
 
-fn send_frame(frame: Frame) -> io::Result<()> {
-    let mut buf = BytesMut::new();
-    FrameCodec
-        .encode(frame, &mut buf)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    let mut out = lock(&FRAMES_OUT);
-    match out.as_mut() {
-        Some(stream) => io::Write::write_all(stream, &buf),
-        None => Ok(()),
+/// Polls `fd` for `events` until `deadline` (for ever with `None`). True
+/// when ready (or hung up, so the next read or write reports it).
+fn wait_ready(
+    fd: BorrowedFd<'_>,
+    events: PollFlags,
+    deadline: Option<Instant>,
+) -> io::Result<bool> {
+    loop {
+        let timeout = match deadline {
+            None => PollTimeout::NONE,
+            Some(d) => {
+                let left = d.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Ok(false);
+                }
+                PollTimeout::from(u16::try_from(left.as_millis().max(1)).unwrap_or(u16::MAX))
+            }
+        };
+        let mut fds = [PollFd::new(fd, events)];
+        match poll(&mut fds, timeout) {
+            Ok(0) => {}
+            Ok(_) => return Ok(true),
+            Err(Errno::EINTR) => {}
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 
@@ -415,12 +532,11 @@ pub fn attach(
         return Err("open terminal failed: not a terminal".to_string());
     }
     let saved = termios::tcgetattr(stdin_fd()).map_err(|e| format!("tcgetattr: {e}"))?;
-    *lock(&TTY) = Some(TtyState {
-        saved: saved.clone(),
-        teardown: Vec::new(),
-    });
+    let _ = SAVED.set(Saved(saved.clone().into()));
+    *lock(&ACTIVE) = true;
     install_panic_hook();
-    start_signal_thread()?;
+    let (out_tx, out_rx) = mpsc::sync_channel(OUT_QUEUE);
+    start_signal_thread(out_tx.clone())?;
 
     let mut raw = saved;
     termios::cfmakeraw(&mut raw);
@@ -429,7 +545,7 @@ pub fn attach(
         return Err(format!("raw mode: {e}"));
     }
 
-    let result = run(stream, ctx, opts, term);
+    let result = run(stream, ctx, opts, term, out_tx, out_rx);
     restore_tty();
     result
 }
@@ -439,10 +555,12 @@ fn run(
     ctx: ClientCtx,
     opts: AttachOptions,
     term: String,
+    out_tx: SyncSender<Out>,
+    out_rx: Receiver<Out>,
 ) -> Result<String, String> {
-    let probe = probe().map_err(|e| format!("probing the terminal: {e}"))?;
+    let mut probe = probe().map_err(|e| format!("probing the terminal: {e}"))?;
     let caps = probe.caps(std::env::var("COLORTERM").ok().as_deref());
-    let typeahead = probe.into_typeahead();
+    let typeahead = probe.take_typeahead();
 
     let (cols, rows) = tty_size();
     let hello = encode_hello(&Hello::Attach {
@@ -466,34 +584,33 @@ fn run(
         other => return Err(format!("unexpected reply to attach: {other:?}")),
     }
 
-    let (setup, teardown) = if caps.kitty_keys {
+    let (keys_on, keys_off) = if caps.kitty_keys {
         (KITTY_PUSH, KITTY_POP)
     } else {
         (MOK_ON, MOK_OFF)
     };
-    let setup = [ALT_SCREEN_ON, PASTE_ON, setup].concat();
-    let teardown = [teardown, PASTE_OFF, RESET_TAIL, ALT_SCREEN_OFF].concat();
-    if let Some(state) = lock(&TTY).as_mut() {
-        state.teardown = teardown;
-    }
-    write_tty(&setup).map_err(|e| format!("writing to the terminal: {e}"))?;
+    let _ = TEARDOWN.set([keys_off, PASTE_OFF, RESET_TAIL, ALT_SCREEN_OFF].concat());
+    write_tty(&[ALT_SCREEN_ON, PASTE_ON, FOCUS_ON, keys_on].concat())
+        .map_err(|e| format!("writing to the terminal: {e}"))?;
 
     let writer = stream
         .try_clone()
         .map_err(|e| format!("cloning the connection: {e}"))?;
-    *lock(&FRAMES_OUT) = Some(writer);
-    let io_err = |e: io::Error| format!("sending to the server: {e}");
+    // The writer starts by sending the size if a SIGWINCH landed during the
+    // handshake, and the queue is empty, so these never block.
+    RESIZE_PENDING.fetch_or(tty_size() != (cols, rows), Ordering::SeqCst);
     if !typeahead.is_empty() {
-        send_frame(Frame::Input(typeahead)).map_err(io_err)?;
-    }
-    // A SIGWINCH that landed before the writer existed.
-    let now = tty_size();
-    if now != (cols, rows) {
-        send_frame(Frame::Resize(now.0, now.1)).map_err(io_err)?;
+        let _ = out_tx.try_send(Out::Input(typeahead));
     }
     std::thread::Builder::new()
+        .name("writer".to_string())
+        .spawn(move || writer_loop(writer, out_rx))
+        .map_err(|e| format!("starting the writer thread: {e}"))?;
+    // Late probe replies are filtered until DA1's arrives.
+    let filter = (!probe.done()).then_some(probe);
+    std::thread::Builder::new()
         .name("stdin".to_string())
-        .spawn(stdin_loop)
+        .spawn(move || stdin_loop(out_tx, filter))
         .map_err(|e| format!("starting the input thread: {e}"))?;
 
     read_frames(stream)
@@ -506,16 +623,8 @@ fn probe() -> io::Result<ProbeParser> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut chunk = [0u8; 1024];
     while !parser.done() {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
+        if !wait_ready(stdin_fd(), PollFlags::POLLIN, Some(deadline))? {
             break;
-        }
-        let ms = u16::try_from(left.as_millis().max(1)).unwrap_or(u16::MAX);
-        let mut fds = [PollFd::new(stdin_fd(), PollFlags::POLLIN)];
-        match poll(&mut fds, PollTimeout::from(ms)) {
-            Ok(0) | Err(Errno::EINTR) => continue,
-            Ok(_) => {}
-            Err(e) => return Err(e.into()),
         }
         match nix::unistd::read(stdin_fd(), &mut chunk) {
             Ok(0) => break,
@@ -524,11 +633,8 @@ fn probe() -> io::Result<ProbeParser> {
             Err(e) => return Err(e.into()),
         }
     }
-    // ponytail: a reply slower than the timeout (a laggy ssh link) arrives
-    // later as input and reaches the server as keys.
     Ok(parser)
 }
-
 /// Reads the handshake's one reply line a byte at a time, so no frame
 /// bytes after it are consumed.
 fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
@@ -580,27 +686,98 @@ fn read_frames(stream: UnixStream) -> Result<String, String> {
     }
 }
 
-/// stdin to `input` frames; EOF on the tty detaches.
-fn stdin_loop() {
+/// How long a held-back ESC (a lone Escape key, or the start of a late
+/// reply) waits for the rest before it is forwarded as a key: the default
+/// escape-time. Only a lone ESC or a reply prefix at the end of a read
+/// waits, and only until DA1's reply ends the filtering.
+const PENDING_WAIT: Duration = Duration::from_millis(25);
+
+/// stdin to the writer; EOF on the tty detaches. With `filter`, bytes go
+/// through the probe parser until DA1's reply arrives, so late replies are
+/// dropped instead of reaching the server as keys.
+fn stdin_loop(out: SyncSender<Out>, mut filter: Option<ProbeParser>) {
     let test_panic = std::env::var(TEST_PANIC_ENV).is_ok_and(|v| v == "stdin");
     let mut chunk = [0u8; 4096];
     loop {
-        match nix::unistd::read(stdin_fd(), &mut chunk) {
-            Ok(0) => {
-                let _ = send_frame(Frame::Detach);
+        if let Some(p) = filter.as_mut()
+            && p.has_pending()
+            && !wait_ready(
+                stdin_fd(),
+                PollFlags::POLLIN,
+                Some(Instant::now() + PENDING_WAIT),
+            )
+            .unwrap_or(false)
+        {
+            p.flush_pending();
+            let bytes = p.take_typeahead();
+            if out.send(Out::Input(bytes)).is_err() {
                 return;
             }
-            Ok(n) => {
-                if test_panic {
-                    panic!("{TEST_PANIC_ENV}: test panic in the stdin thread");
-                }
-                if send_frame(Frame::Input(chunk[..n].to_vec())).is_err() {
-                    return; // the reader sees the hang-up and exits
-                }
+        }
+        let n = match nix::unistd::read(stdin_fd(), &mut chunk) {
+            Ok(0) => {
+                let _ = out.send(Out::Detach);
+                return;
             }
-            Err(Errno::EINTR | Errno::EAGAIN) => {}
+            Ok(n) => n,
+            Err(Errno::EINTR) => continue,
+            Err(Errno::EAGAIN) => {
+                let _ = wait_ready(stdin_fd(), PollFlags::POLLIN, None);
+                continue;
+            }
             Err(_) => {
-                let _ = send_frame(Frame::Detach);
+                let _ = out.send(Out::Detach);
+                return;
+            }
+        };
+        if test_panic {
+            panic!("{TEST_PANIC_ENV}: test panic in the stdin thread");
+        }
+        let bytes = match filter.as_mut() {
+            Some(p) => {
+                p.feed(&chunk[..n]);
+                let bytes = p.take_typeahead();
+                if p.done() {
+                    filter = None;
+                }
+                bytes
+            }
+            None => chunk[..n].to_vec(),
+        };
+        if !bytes.is_empty() && out.send(Out::Input(bytes)).is_err() {
+            return; // the writer is gone; the reader sees the hang-up
+        }
+    }
+}
+
+/// The only writer on the connection: queued frames, plus one `resize`
+/// whenever [`RESIZE_PENDING`] is set.
+fn writer_loop(stream: UnixStream, queue: Receiver<Out>) {
+    let mut buf = BytesMut::new();
+    loop {
+        let mut frames = Vec::new();
+        if RESIZE_PENDING.swap(false, Ordering::SeqCst) {
+            let (cols, rows) = tty_size();
+            frames.push(Frame::Resize(cols, rows));
+        }
+        match queue.try_recv() {
+            Ok(Out::Input(bytes)) => frames.push(Frame::Input(bytes)),
+            Ok(Out::Detach) => frames.push(Frame::Detach),
+            Ok(Out::Wake) => {}
+            Err(TryRecvError::Empty) if frames.is_empty() => match queue.recv() {
+                Ok(Out::Input(bytes)) => frames.push(Frame::Input(bytes)),
+                Ok(Out::Detach) => frames.push(Frame::Detach),
+                Ok(Out::Wake) => {}
+                Err(_) => return,
+            },
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => return,
+        }
+        for frame in frames {
+            buf.clear();
+            if FrameCodec.encode(frame, &mut buf).is_err()
+                || io::Write::write_all(&mut &stream, &buf).is_err()
+            {
                 return;
             }
         }
@@ -611,7 +788,7 @@ fn stdin_loop() {
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore_tty();
+        restore_tty_bounded();
         default(info);
         std::process::exit(101);
     }));
@@ -620,8 +797,11 @@ fn install_panic_hook() {
 extern "C" fn noop_handler(_: nix::libc::c_int) {}
 
 /// Blocks the signals the client handles in this thread (inherited by
-/// every thread spawned after) and takes them in one `sigwait` thread.
-fn start_signal_thread() -> Result<(), String> {
+/// every thread spawned after) and takes them in one `sigwait` thread,
+/// which never blocks on the connection or the tty: SIGWINCH only sets a
+/// flag and nudges the writer; the others restore within
+/// [`RESTORE_BOUND`] and exit.
+fn start_signal_thread(out: SyncSender<Out>) -> Result<(), String> {
     let mut set = SigSet::empty();
     for sig in [
         Signal::SIGWINCH,
@@ -650,11 +830,13 @@ fn start_signal_thread() -> Result<(), String> {
             loop {
                 match set.wait() {
                     Ok(Signal::SIGWINCH) => {
-                        let (cols, rows) = tty_size();
-                        let _ = send_frame(Frame::Resize(cols, rows));
+                        RESIZE_PENDING.store(true, Ordering::SeqCst);
+                        // Full means the writer has work queued and will
+                        // see the flag after it.
+                        let _ = out.try_send(Out::Wake);
                     }
                     Ok(sig) => {
-                        restore_tty();
+                        restore_tty_bounded();
                         std::process::exit(128 + sig as i32);
                     }
                     Err(_) => {}
@@ -792,6 +974,23 @@ mod tests {
         // DECRPM 4 is "permanently reset": the mode is not supported.
         assert!(!parse(b"\x1b[?2026;4$y").caps(None).sync);
         assert!(parse(b"\x1b[?2026;1$y").caps(None).sync);
+    }
+
+    #[test]
+    fn a_late_reply_is_dropped_and_input_passes_through() {
+        let mut p = ProbeParser::default();
+        p.feed(b"k\x1b[?0u\x1b[?20");
+        assert_eq!(p.take_typeahead(), b"k");
+        assert!(p.has_pending());
+        p.feed(b"26;2$y\x1b[?62cz");
+        assert!(p.done());
+        assert_eq!(p.take_typeahead(), b"z");
+        // A lone ESC held back is released by the caller's timeout.
+        let mut p = ProbeParser::default();
+        p.feed(b"\x1b");
+        assert!(p.take_typeahead().is_empty());
+        p.flush_pending();
+        assert_eq!(p.take_typeahead(), b"\x1b");
     }
 
     #[test]
