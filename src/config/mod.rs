@@ -40,6 +40,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("automatic-rename", "automatic-rename"),
     ("automatic-rename-format", "automatic-rename-format"),
     ("allow-rename", "allow-rename"),
+    ("set-titles", "set-titles"),
+    ("set-titles-string", "set-titles-string"),
     ("set-clipboard", "set-clipboard"),
     ("focus-events", "focus-events"),
     ("status.lines", "status"),
@@ -70,9 +72,8 @@ pub(crate) enum Ty {
 
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
-        "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events" => {
-            Ty::Bool
-        }
+        "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
+        | "set-titles" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

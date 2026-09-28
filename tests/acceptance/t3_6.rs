@@ -645,16 +645,21 @@ fn term_rerun_sgr_capabilities_reach_the_outer_cells() {
 }
 
 /// `tsl`/`fsl` (`\E]0;` .. `^G`) set the title and `dsl` (`\E]0;\007`)
-/// clears it; both are relayed to the client (R15).
+/// clears it; both are relayed to the client as OSC 0 while `set-titles`
+/// is on (R15).
 #[test]
 fn term_rerun_title_is_relayed() {
     let srv =
         start("read l; printf '\\033]0;t36-title\\007'; read l; printf '\\033]0;\\007'; exec cat");
+    srv.cmd(&["set", "-g", "set-titles", "on"])
+        .expect("set-titles on");
+    srv.cmd(&["set", "-g", "set-titles-string", "#{pane_title}"])
+        .expect("set-titles-string");
     let mut a = attach(&srv, RICH);
     a.send("\r");
-    let at = a.wait_for_output(b"\x1b]2;t36-title\x07", 0);
+    let at = a.wait_for_output(b"\x1b]0;t36-title\x07", 0);
     a.send("\r");
-    a.wait_for_output(b"\x1b]2;\x07", at);
+    a.wait_for_output(b"\x1b]0;\x07", at);
 }
 
 /// `Ms` (`\E]52;%p1%s;%p2%s\007`): a clipboard store reaches the client.
