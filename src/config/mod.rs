@@ -21,7 +21,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
-pub use load::{load, load_with_file};
+pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
 
 use crate::server::input::Key;
@@ -50,9 +50,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status.left-length", "status-left-length"),
     ("status.right-length", "status-right-length"),
     ("status.interval", "status-interval"),
-    ("status.window-format", "window-status-format"),
+    ("status.window.format", "window-status-format"),
     (
-        "status.window-current-format",
+        "status.window.current-format",
         "window-status-current-format",
     ),
     ("pane-border.style", "pane-border-style"),
@@ -189,6 +189,17 @@ impl Resolved {
     /// The value of an option by TOML key, in tmux's form.
     pub fn get(&self, toml_key: &str) -> Option<&str> {
         self.options.get(toml_key).map(String::as_str)
+    }
+
+    /// `(tmux name, value, source)` for every option a file set, leaving
+    /// out the built-in defaults: what a server applies at start or on
+    /// `reload`, so values seeded at server start survive.
+    pub fn configured(&self) -> impl Iterator<Item = (&'static str, &str, &Source)> {
+        self.options.iter().filter_map(|(k, v)| {
+            let src = self.provenance.get(k)?;
+            let name = tmux_name(k)?;
+            (src.layer != Layer::Defaults).then_some((name, v.as_str(), src))
+        })
     }
 
     /// `(tmux name, value)` for every option, ready for the option store.

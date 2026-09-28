@@ -461,9 +461,10 @@ fn source_file_resolves_beside_the_including_file() {
     let s = Setup::new();
     s.write(
         "conf.d/10-a.toml",
-        "source-file = [\"sub.toml\"]\nstatus.right = \"own\"\nstatus.left = \"own\"\n",
+        "source-file = [\"parts/sub.toml\"]\nstatus.right = \"own\"\nstatus.left = \"own\"\n",
     );
-    let sub = s.write("conf.d/sub.toml", "status.right = \"sub\"\n");
+    // In a subdirectory, so the conf.d glob cannot load it by itself.
+    let sub = s.write("conf.d/parts/sub.toml", "status.right = \"sub\"\n");
     let r = resolved(s.load());
     // Includes apply after the including file's own keys.
     assert_eq!(r.get("status.right"), Some("sub"));
@@ -471,6 +472,27 @@ fn source_file_resolves_beside_the_including_file() {
     let src = r.provenance.get("status.right").expect("provenance");
     assert_eq!(src.file.as_deref(), Some(sub.as_path()));
     assert_eq!(src.layer, Layer::ConfD);
+}
+
+#[test]
+fn an_unreferenced_file_in_a_conf_d_subdirectory_is_not_loaded() {
+    let s = Setup::new();
+    s.write("conf.d/parts/sub.toml", "status.right = \"sub\"\n");
+    let r = resolved(s.load());
+    assert_ne!(r.get("status.right"), Some("sub"));
+}
+
+#[test]
+fn an_included_file_loads_exactly_once() {
+    let s = Setup::new();
+    s.write("conf.d/10-a.toml", "source-file = \"parts/new.toml\"\n");
+    s.write(
+        "conf.d/parts/new.toml",
+        "requires = \"grofe >= 99.0\"\nbogus = 1\n",
+    );
+    let r = resolved(s.load());
+    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+    assert!(r.warnings[0].contains("new.toml"), "{:?}", r.warnings);
 }
 
 #[test]
@@ -653,16 +675,129 @@ fn show_config_unknown_key_suggests() {
 #[test]
 fn show_config_include_ignores_the_process_cwd() {
     let s = Setup::new();
-    s.write("conf.d/10-a.toml", "source-file = [\"sub.toml\"]\n");
-    s.write("conf.d/sub.toml", "status.right = \"sub\"\n");
-    // A decoy `sub.toml` in the cwd must not be the one loaded.
+    s.write("conf.d/10-a.toml", "source-file = [\"parts/sub.toml\"]\n");
+    s.write("conf.d/parts/sub.toml", "status.right = \"sub\"\n");
+    // A decoy at the same relative path from the cwd must not be loaded.
     let elsewhere = s.tmp.path().join("elsewhere");
-    fs::create_dir_all(&elsewhere).expect("mkdir");
-    fs::write(elsewhere.join("sub.toml"), "status.right = \"decoy\"\n").expect("write");
-    let out = s.show_config(&["status.right", "--explain"], &elsewhere);
-    assert!(out.status.success(), "{}", out.stderr);
-    assert_eq!(
-        out.stdout,
-        "status.right = \"sub\"\n  set by ~/.config/grofe/conf.d/sub.toml\n"
+    fs::create_dir_all(elsewhere.join("parts")).expect("mkdir");
+    fs::write(
+        elsewhere.join("parts").join("sub.toml"),
+        "status.right = \"decoy\"\n",
+    )
+    .expect("write");
+    for cwd in [elsewhere.clone(), s.dir(), s.home()] {
+        let out = s.show_config(&["status.right", "--explain"], &cwd);
+        assert!(out.status.success(), "{}", out.stderr);
+        assert_eq!(
+            out.stdout,
+            "status.right = \"sub\"\n  set by ~/.config/grofe/conf.d/parts/sub.toml\n",
+            "cwd {}",
+            cwd.display()
+        );
+    }
+}
+
+// ---- fix round 1: requires placement and skew, names, configured, load_one ----
+
+#[test]
+fn requires_after_another_key_is_an_error() {
+    let s = Setup::new();
+    let path = s.write("config.toml", "mouse = true\nrequires = \"grofe >= 0.1\"\n");
+    let errs = errors(s.load());
+    assert_eq!(errs.len(), 1, "{}", joined(&errs));
+    assert_eq!(errs[0].file, path);
+    assert_eq!(errs[0].line, 2);
+    assert_eq!(errs[0].key, "requires");
+    assert!(errs[0].message.contains("top"), "{}", errs[0]);
+}
+
+#[test]
+fn an_unmet_leading_requires_skips_a_file_that_does_not_parse() {
+    let s = Setup::new();
+    let path = s.write(
+        "conf.d/50-new.toml",
+        "# from a newer grofe\n\nrequires = \"grofe >= 99.0\" # skew\nnew syntax {{ here\n",
     );
+    let r = resolved(s.load());
+    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+    assert!(
+        r.warnings[0].contains(&path.display().to_string()),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
+fn a_parse_error_under_a_met_or_missing_requires_is_still_an_error() {
+    for text in [
+        "requires = \"grofe >= 0.1\"\nnew syntax {{ here\n",
+        "new syntax {{ here\n",
+        "mouse = true\nrequires = \"grofe >= 99.0\"\nnew syntax {{ here\n",
+    ] {
+        let s = Setup::new();
+        s.write("config.toml", text);
+        let errs = errors(s.load());
+        assert_eq!(errs.len(), 1, "{text}: {}", joined(&errs));
+    }
+}
+
+#[test]
+fn window_status_formats_live_under_status_window() {
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "[status.window]\nformat = \"#I\"\ncurrent-format = \"#I*\"\n",
+    );
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("window-status-format"), Some(&"#I"));
+    assert_eq!(tmux.get("window-status-current-format"), Some(&"#I*"));
+}
+
+#[test]
+fn configured_skips_the_built_in_defaults() {
+    let s = Setup::new();
+    let user = s.write("user.toml", "history-limit = 7\n");
+    let r = resolved(s.load());
+    let configured: Vec<_> = r.configured().collect();
+    assert_eq!(configured.len(), 1, "{configured:?}");
+    let (name, value, src) = configured[0];
+    assert_eq!((name, value), ("history-limit", "7"));
+    assert_eq!(src.file.as_deref(), Some(user.as_path()));
+}
+
+#[test]
+fn load_one_returns_only_that_file_and_its_includes() {
+    let s = Setup::new();
+    s.write("config.toml", "status.left = \"config\"\n");
+    s.write("user.toml", "status.right = \"user\"\n");
+    let one = s.write(
+        "../elsewhere/one.toml",
+        "source-file = \"parts/sub.toml\"\nhistory-limit = 9\n[keys.root]\n\"M-h\" = \"select-pane -L\"\n",
+    );
+    let sub = s.write("../elsewhere/parts/sub.toml", "mouse = false\n");
+    let r = resolved(config::load_one(&one, &s.env));
+    let configured: std::collections::BTreeMap<&str, (&str, Option<PathBuf>)> = r
+        .configured()
+        .map(|(n, v, src)| (n, (v, src.file.clone())))
+        .collect();
+    assert_eq!(configured.len(), 2, "{configured:?}");
+    assert_eq!(
+        configured.get("history-limit"),
+        Some(&("9", Some(one.clone())))
+    );
+    assert_eq!(configured.get("mouse"), Some(&("off", Some(sub))));
+    assert_eq!(r.get("status.left"), None);
+    assert_eq!(r.keys.len(), 1);
+}
+
+#[test]
+fn load_one_reports_errors_and_a_missing_file() {
+    let s = Setup::new();
+    let bad = s.write("../x.toml", "history-limit = \"lots\"\n");
+    let errs = errors(config::load_one(&bad, &s.env));
+    assert_eq!(errs[0].line, 1);
+    let gone = s.dir().join("gone.toml");
+    let errs = errors(config::load_one(&gone, &s.env));
+    assert_eq!(errs[0].file, gone);
 }

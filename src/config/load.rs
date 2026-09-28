@@ -32,8 +32,19 @@ pub fn load_with_file(env: &Env, files: &[PathBuf]) -> Result<Resolved, Vec<Conf
     load_layers(env, Some(files))
 }
 
+/// One file and its includes, for runtime `source-file`: only the values
+/// and bindings that file sets, without the defaults or the other layers.
+/// Includes resolve against the file's own directory. The values count as
+/// [`Layer::Config`]; the caller knows the layer it is loading at.
+pub fn load_one(path: &Path, env: &Env) -> Result<Resolved, Vec<ConfigError>> {
+    let mut l = Loader::new(env, false);
+    l.load_path(path, Layer::Config, false);
+    l.check_names();
+    l.finish()
+}
+
 fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<ConfigError>> {
-    let mut l = Loader::new(env);
+    let mut l = Loader::new(env, true);
     let dir = env.config_dir.as_deref();
     match files {
         None => {
@@ -119,11 +130,12 @@ fn entries<'i>(t: &'i DeTable<'i>) -> Vec<Entry<'i>> {
 }
 
 impl Loader {
-    fn new(env: &Env) -> Loader {
+    /// A loader; `defaults` seeds every option with its built-in value.
+    fn new(env: &Env, defaults: bool) -> Loader {
         let store = Options::new(false);
         let mut options = BTreeMap::new();
         let mut provenance = Provenance::default();
-        for (toml, tmux) in OPTION_NAMES {
+        for (toml, tmux) in OPTION_NAMES.iter().filter(|_| defaults) {
             if let Some(e) = store.get(Owner::Global, tmux) {
                 options.insert(*toml, e.value.clone());
                 provenance.set(toml, Source::defaults());
@@ -198,6 +210,14 @@ impl Loader {
         let root = match DeTable::parse(text) {
             Ok(root) => root,
             Err(e) => {
+                // A fragment for a newer grofe may use syntax this one
+                // cannot parse; its leading header still lets it be skipped.
+                if let Some((req, _)) = leading_requires(text)
+                    && let Ok(r) = Requires::parse(req)
+                    && !r.met(env!("CARGO_PKG_VERSION"))
+                {
+                    return self.skip(path, req);
+                }
                 let line = e.span().map_or(0, |s| f.line(s.start));
                 return self.error(path, line, "", e.message().to_string());
             }
@@ -227,10 +247,16 @@ impl Loader {
     /// skips the file with a warning; a malformed one is an error and the
     /// file is still checked.
     fn requires_met(&mut self, f: &FileCtx, entries: &[Entry]) -> bool {
-        let Some((k, v)) = entries.iter().find(|(k, _)| k.get_ref() == "requires") else {
+        let Some(at) = entries.iter().position(|(k, _)| k.get_ref() == "requires") else {
             return true;
         };
+        let (k, v) = entries[at];
         let line = f.line(k.span().start);
+        if at > 0 {
+            let msg = "must be at the top of the file, before any other key".to_string();
+            self.error(f.path, line, "requires", msg);
+            return true;
+        }
         let Some(req) = v.get_ref().as_str() else {
             let found = v.get_ref().type_str();
             self.error(
@@ -248,14 +274,19 @@ impl Loader {
             }
             Ok(r) if r.met(env!("CARGO_PKG_VERSION")) => true,
             Ok(_) => {
-                self.warnings.push(format!(
-                    "{}: skipped: requires {req} (this is grofe {})",
-                    f.path.display(),
-                    env!("CARGO_PKG_VERSION")
-                ));
+                self.skip(f.path, req);
                 false
             }
         }
+    }
+
+    /// Skips `path` for an unmet `requires`, with a warning.
+    fn skip(&mut self, path: &Path, req: &str) {
+        self.warnings.push(format!(
+            "{}: skipped: requires {req} (this is grofe {})",
+            path.display(),
+            env!("CARGO_PKG_VERSION")
+        ));
     }
 
     /// `source-file = "x.toml"` or `source-file = ["a.toml", "b.toml"]`.
@@ -588,6 +619,23 @@ fn commands(s: &str) -> Result<Vec<Vec<String>>, String> {
     Ok(cmds)
 }
 
+/// The value of a `requires = "..."` line that comes before anything but
+/// blank lines and comments, read without a TOML parser, and its line.
+/// Only a plain double-quoted value counts.
+fn leading_requires(text: &str) -> Option<(&str, usize)> {
+    let (i, line) = text
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i, l.trim()))
+        .find(|(_, l)| !l.is_empty() && !l.starts_with('#'))?;
+    let rest = line.strip_prefix("requires")?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let (value, tail) = rest.split_once('"')?;
+    let tail = tail.trim_start();
+    (tail.is_empty() || tail.starts_with('#')).then_some((value, i + 1))
+}
+
 /// A parsed `requires = "grofe <op> X.Y[.Z]"` header (R7).
 struct Requires {
     op: &'static str,
@@ -646,6 +694,20 @@ fn parse_version(s: &str, min: usize) -> Option<[u64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leading_requires_reads_only_the_first_real_line() {
+        assert_eq!(
+            leading_requires("# c\n\n  requires = \"grofe >= 2.0\" # x\nmore"),
+            Some(("grofe >= 2.0", 3))
+        );
+        assert_eq!(
+            leading_requires("mouse = true\nrequires = \"grofe >= 2.0\""),
+            None
+        );
+        assert_eq!(leading_requires("requires = 'grofe >= 2.0'"), None);
+        assert_eq!(leading_requires("requires = \"grofe >= 2.0\" junk"), None);
+    }
 
     #[test]
     fn requires_grammar() {
