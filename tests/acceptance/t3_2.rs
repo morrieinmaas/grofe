@@ -225,6 +225,11 @@ fn mouse_off_ignores_the_wheel_and_keys_leave_the_view() {
 
     a.send(sgr(WHEEL_UP, 10, 5, false));
     a.wait_until("the view again", WAIT, |t| indicator(t).is_some());
+    a.send("\x1b");
+    a.wait_until("Escape closed the view", WAIT, |t| indicator(t).is_none());
+
+    a.send(sgr(WHEEL_UP, 10, 5, false));
+    a.wait_until("the view again", WAIT, |t| indicator(t).is_some());
     a.send("x");
     a.wait_until("x closed the view", WAIT, |t| indicator(t).is_none());
     a.send("\r");
@@ -236,6 +241,7 @@ fn mouse_off_ignores_the_wheel_and_keys_leave_the_view() {
         !pane.lines().any(|l| l.contains('q')),
         "q reached the pane:\n{pane}"
     );
+    assert!(!pane.contains("^["), "Escape reached the pane:\n{pane}");
 }
 
 /// Case 6: a client smaller than the window crops (D6); a click maps
@@ -287,4 +293,90 @@ fn a_click_on_a_cropped_client_maps_through_the_viewport() {
         Duration::from_secs(1),
     )
     .unwrap_or_else(|e| panic!("the click did not reach {right}: {e}"));
+}
+
+/// Plain `less` is on the alternate screen and did not ask for the mouse:
+/// as tmux 3.7b, the wheel does nothing there (no view, no bytes).
+#[test]
+fn wheel_in_plain_less_does_nothing() {
+    if !require_tool("less") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("lines.txt");
+    let body: String = (1..=200).map(|n| format!("{n}\n")).collect();
+    std::fs::write(&file, body).expect("write lines");
+    let srv = start(&format!(
+        "exec env -u LESS -u LESSOPEN less '{}'",
+        file.display()
+    ));
+    let mut a = attach(&srv, 80, 24);
+    a.wait_until("less showing line 1", WAIT, |t| {
+        top_line(t).trim_end() == "1" && t.lines().any(|l| l.trim_end() == "22")
+    });
+    for _ in 0..3 {
+        a.send(sgr(WHEEL_DOWN, 10, 5, false));
+    }
+    a.send(sgr(WHEEL_UP, 10, 5, false));
+    // `=` reports the lines shown: still the first page.
+    a.send("=");
+    a.wait_until("less's file report", WAIT, |t| t.contains("lines 1-"));
+    // A long report wraps and scrolls the screen, so the report itself is
+    // the check.
+    let text = a.text();
+    assert!(text.contains("lines 1-22"), "{text}");
+    assert_eq!(indicator(&text), None, "{text}");
+}
+
+/// A click inside an open view focuses its pane and leaves the view where
+/// it was, as tmux 3.7b's copy mode (recorded: position and mode kept);
+/// the pane gets no bytes.
+#[test]
+fn a_click_inside_the_view_focuses_and_keeps_it() {
+    let (srv, left, right) = side_by_side(HISTORY, "cat");
+    let mut a = attach(&srv, 80, 24);
+    a.wait_until("both panes drawn", WAIT, |t| t.contains('│'));
+    wait_until(|| srv.capture(&left).contains("200"), WAIT).expect("history");
+    a.send(sgr(WHEEL_UP, 5, 5, false));
+    a.wait_until("the view on the left", WAIT, |t| {
+        indicator(t).is_some_and(|i| i.starts_with("[5/"))
+    });
+    // The first tick opens the view without focusing, as tmux.
+    assert_eq!(pane_var(&srv, &right, "#{pane_active}"), "1");
+    let before = indicator(&a.text());
+
+    a.send(sgr(0, 5, 5, false));
+    a.send(sgr(0, 5, 5, true));
+    wait_until(
+        || pane_var(&srv, &left, "#{pane_active}") == "1",
+        Duration::from_secs(1),
+    )
+    .unwrap_or_else(|e| panic!("the click did not focus {left}: {e}"));
+    let text = a.text();
+    assert_eq!(indicator(&text), before, "{text}");
+    assert!(!srv.capture(&left).contains("^["), "{}", srv.capture(&left));
+}
+
+/// Output arriving while the view is open (history below its limit) does
+/// not move it: the same lines stay on screen and the offset grows.
+#[test]
+fn the_view_stays_on_its_lines_while_output_arrives() {
+    let srv = start(HISTORY);
+    let mut a = attach(&srv, 80, 24);
+    a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
+    a.send(sgr(WHEEL_UP, 10, 5, false));
+    a.wait_until("the view at 5", WAIT, |t| {
+        indicator(t).as_deref() == Some("[5/178]")
+    });
+
+    for word in ["one", "two", "three"] {
+        srv.cmd(&["send-keys", "-t", "main", word, "Enter"])
+            .expect("send-keys");
+    }
+    a.wait_until("the offset following the output", WAIT, |t| {
+        indicator(t).as_deref() == Some("[8/181]")
+    });
+    let text = a.text();
+    assert!(top_line(&text).starts_with("174"), "{text}");
+    assert!(!text.contains("three"), "{text}");
 }

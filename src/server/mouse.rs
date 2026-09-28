@@ -98,12 +98,12 @@ impl InputHook for MouseHook {
         state: &mut State,
         client: ClientId,
         input: &Input,
-        now: Instant,
+        _now: Instant,
     ) -> Option<Routed> {
         let model = &state.model;
         state.mouse.views.retain(|p, _| model.panes.contains_key(p));
         match input {
-            Input::Mouse(m) => on_mouse(state, client, m, now),
+            Input::Mouse(m) => on_mouse(state, client, m),
             Input::Key(key) => {
                 let pane = active_pane(state, client)?;
                 if !state.mouse.close(pane) {
@@ -169,7 +169,7 @@ fn pane_at(
     })
 }
 
-fn on_mouse(state: &mut State, client: ClientId, m: &Mouse, now: Instant) -> Option<Routed> {
+fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     let session = state.clients.get(&client)?.session;
     let on = state.model.options.lookup(
         "mouse",
@@ -192,13 +192,8 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse, now: Instant) -> Opt
     let history = p.handle.history_size();
     let in_view = state.mouse.is_open(pane);
     let wants = modes.mouse != MouseMode::Off && !in_view;
-    let select = || {
-        Routed::Command(vec![vec![
-            "select-pane".into(),
-            "-t".into(),
-            pane.to_string(),
-        ]])
-    };
+    let focus = vec![vec!["select-pane".into(), "-t".into(), pane.to_string()]];
+    let select = || Routed::Command(focus.clone());
     let wheel = match m.kind {
         MouseKind::WheelUp => Some(WHEEL_LINES as isize),
         MouseKind::WheelDown => Some(-(WHEEL_LINES as isize)),
@@ -210,31 +205,35 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse, now: Instant) -> Opt
         if in_view {
             state.mouse.scroll(pane, history, lines);
             clients::mark_all_dirty(state);
-            clients::request_render(state, now);
             return Some(select());
         }
         if lines > 0 && !modes.alt_screen && history > 0 {
             state.mouse.scroll(pane, history, lines);
             clients::mark_all_dirty(state);
-            clients::request_render(state, now);
         }
         return Some(Routed::Consumed);
     }
-    if wants && let Some(bytes) = encode(m, x, y, &modes) {
-        let p = state.model.panes.get(&pane)?;
-        if p.handle.enqueue_input(bytes).is_err() {
-            eprintln!("grofe server: input queue full for {pane}");
-        }
+    let pressed = matches!(m.kind, MouseKind::Down(_));
+    let Some(bytes) = encode(m, x, y, &modes).filter(|_| wants) else {
+        return Some(if pressed { select() } else { Routed::Consumed });
+    };
+    // As tmux (`select-pane -t = \; send-keys -M`): the pane is active
+    // before its click arrives.
+    if pressed {
+        clients::run_binding(state, client, &focus);
     }
-    Some(match m.kind {
-        MouseKind::Down(_) => select(),
-        _ => Routed::Consumed,
-    })
+    let p = state.model.panes.get(&pane)?;
+    if p.handle.enqueue_input(bytes).is_err() {
+        eprintln!("grofe server: input queue full for {pane}");
+    }
+    Some(Routed::Consumed)
 }
 
 /// Encodes `m` at 0-based pane cell `(x, y)` for a pane with `modes`, as
 /// tmux's `input_key_mouse`: `None` when the pane's mouse mode does not
-/// report this kind of event, or X10 cannot carry the position.
+/// report this kind of event, or the encoding cannot carry it. X10 clamps
+/// a position past its reach to 255 and drops only a button byte that
+/// overflows; UTF-8 drops a value past U+07FF.
 pub fn encode(m: &Mouse, x: u16, y: u16, modes: &InputModes) -> Option<Vec<u8>> {
     let reported = match m.kind {
         MouseKind::Drag(_) => matches!(modes.mouse, MouseMode::Drag | MouseMode::Motion),
@@ -283,8 +282,9 @@ pub fn encode(m: &Mouse, x: u16, y: u16, modes: &InputModes) -> Option<Vec<u8>> 
             Some(format!("\x1b[<{b};{x};{y}{end}").into_bytes())
         }
         MouseEncoding::X10 => {
-            let byte = |v: u32| u8::try_from(v + 32).ok();
-            Some(vec![0x1b, b'[', b'M', byte(b)?, byte(x)?, byte(y)?])
+            let clamp = |v: u32| u8::try_from(v + 32).unwrap_or(u8::MAX);
+            let button = u8::try_from(b + 32).ok()?;
+            Some(vec![0x1b, b'[', b'M', button, clamp(x), clamp(y)])
         }
         MouseEncoding::Utf8 => {
             let mut out = b"\x1b[M".to_vec();
@@ -430,8 +430,17 @@ mod tests {
             enc(MouseKind::Up(LEFT), 2, 3, &utf8).as_deref(),
             Some(&b"\x1b[M##$"[..])
         );
-        // Past X10's reach: dropped; UTF-8 carries it in two bytes.
-        assert_eq!(enc(MouseKind::Down(LEFT), 300, 3, &x10), None);
+        // Past X10's reach the position clamps to 255 (recorded: a press
+        // and release at client column 260); UTF-8 carries it in two bytes.
+        assert_eq!(
+            enc(MouseKind::Down(LEFT), 259, 4, &x10).as_deref(),
+            Some(&b"\x1b[M \xff%"[..])
+        );
+        assert_eq!(
+            enc(MouseKind::Up(LEFT), 259, 4, &x10).as_deref(),
+            Some(&b"\x1b[M#\xff%"[..])
+        );
+        assert_eq!(enc(MouseKind::Down(LEFT), 2100, 3, &utf8), None);
         assert_eq!(
             enc(MouseKind::Down(LEFT), 200, 3, &utf8).as_deref(),
             Some(&b"\x1b[M \xc3\xa9$"[..])
