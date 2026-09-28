@@ -306,18 +306,29 @@ fn wheel_in_plain_less_does_nothing() {
     let file = dir.path().join("lines.txt");
     let body: String = (1..=200).map(|n| format!("{n}\n")).collect();
     std::fs::write(&file, body).expect("write lines");
+    // History first, as a real shell would have. The alternate screen keeps
+    // no scrollback of its own, so the view also finds nothing to show; this
+    // checks the behaviour, not which of the two guards gives it.
     let srv = start(&format!(
-        "exec env -u LESS -u LESSOPEN less '{}'",
+        "seq 1 100; exec env -u LESS -u LESSOPEN less '{}'",
         file.display()
     ));
     let mut a = attach(&srv, 80, 24);
     a.wait_until("less showing line 1", WAIT, |t| {
         top_line(t).trim_end() == "1" && t.lines().any(|l| l.trim_end() == "22")
     });
+    a.send(sgr(WHEEL_UP, 10, 5, false));
+    // Nothing to wait for when nothing happens: watch for a second that no
+    // view opens (any key would close it again).
+    let quiet = std::time::Instant::now() + Duration::from_secs(1);
+    while std::time::Instant::now() < quiet {
+        let text = a.text();
+        assert_eq!(indicator(&text), None, "a view opened:\n{text}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     for _ in 0..3 {
         a.send(sgr(WHEEL_DOWN, 10, 5, false));
     }
-    a.send(sgr(WHEEL_UP, 10, 5, false));
     // `=` reports the lines shown: still the first page.
     a.send("=");
     a.wait_until("less's file report", WAIT, |t| t.contains("lines 1-"));
@@ -344,6 +355,7 @@ fn a_click_inside_the_view_focuses_and_keeps_it() {
     // The first tick opens the view without focusing, as tmux.
     assert_eq!(pane_var(&srv, &right, "#{pane_active}"), "1");
     let before = indicator(&a.text());
+    let drawn = a.output().len();
 
     a.send(sgr(0, 5, 5, false));
     a.send(sgr(0, 5, 5, true));
@@ -352,8 +364,11 @@ fn a_click_inside_the_view_focuses_and_keeps_it() {
         Duration::from_secs(1),
     )
     .unwrap_or_else(|e| panic!("the click did not focus {left}: {e}"));
+    // The focus change redraws the borders: judge that frame, not the old.
+    wait_until(|| a.output().len() > drawn, WAIT).expect("a frame after the click");
+    a.wait_until("the view kept", WAIT, |t| indicator(t) == before);
     let text = a.text();
-    assert_eq!(indicator(&text), before, "{text}");
+    assert!(text.contains('│'), "{text}");
     assert!(!srv.capture(&left).contains("^["), "{}", srv.capture(&left));
 }
 
