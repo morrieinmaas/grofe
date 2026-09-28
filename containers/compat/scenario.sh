@@ -31,6 +31,12 @@ if [ -n "${TMUX:-}" ]; then
   echo "scenario: refusing to run inside tmux (TMUX is set)" >&2
   exit 1
 fi
+if [ -n "${GROFE_TC0_CONTAINER_MARKER:-}" ]; then
+  # the test override never reaches tmux or the filesystem, whatever the
+  # environment
+  echo "scenario: guards passed, test mode"
+  exit 0
+fi
 export TMUX_TMPDIR="$HOME/.tmux-tmp"
 mkdir -p "$TMUX_TMPDIR"
 

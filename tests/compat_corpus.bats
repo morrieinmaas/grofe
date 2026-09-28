@@ -345,3 +345,14 @@ print("ok")
     [ "$status" -ne 0 ]
     [[ "$output" == *"without a private TMUX_TMPDIR"* ]]
 }
+
+@test "with the test marker and every guard passing, the drivers exit 0 without running anything" {
+    touch "$TMP/marker"
+    GROFE_TC0_CONTAINER_MARKER="$TMP/marker" run env -u TMUX TMUX_TMPDIR="$TMP" python3 "$REPO/containers/compat/drive.py" --out "$TMP" --real /nonexistent
+    [ "$status" -eq 0 ]
+    [ "$output" = "drive: guards passed, test mode" ]
+    GROFE_TC0_CONTAINER_MARKER="$TMP/marker" HOME="$TMP/h" run env -u TMUX TMUX_TMPDIR="$TMP" bash "$REPO/containers/compat/scenario.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scenario: guards passed, test mode" ]
+    [ ! -e "$TMP/h" ]
+}
