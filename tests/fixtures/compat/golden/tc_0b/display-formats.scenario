@@ -7,3 +7,5 @@ $ display -p '#{socket_path} #{pid}'
 # Times go through the ctime and epoch rules.
 $ display -p -t main '#{t:session_created} #{session_created}'
 $ display -p -t main '#{=5:session_name}|#{l:#{session_name}}|#{s/a/A/:session_name}'
+# The root key table: the user rule must not touch it.
+$ list-keys -T root

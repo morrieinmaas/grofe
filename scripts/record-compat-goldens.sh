@@ -14,9 +14,11 @@
 #
 # Recording happens only inside the container built from
 # containers/compat/golden.Containerfile, never against the host's tmux, and
-# the test refuses unless the tmux prints `tmux 3.7b`. As a guard the script
-# lists the host's real tmux and grofe socket directories before and after
-# and fails if they changed.
+# the test refuses unless the tmux prints `tmux 3.7b`. Crates are fetched in
+# a first container run; the recording run has no network, sees the repo
+# read-only, and hands the goldens back as a tar on stdout. As a guard the
+# script lists the host's real tmux and grofe socket directories before and
+# after and fails if they changed.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,7 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) check=1 ;;
     --tmux) tmux_path=$2; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) scenarios+=("$1") ;;
   esac
   shift
@@ -38,43 +40,46 @@ done
 # DOCKER_HOST may name a socket that does not exist; podman is used directly.
 unset DOCKER_HOST
 
+# Inode and name of every socket in the user's tmux and grofe directories.
+# `grofe-*` entries are skipped: other agents' private scratch servers
+# (`tmux -L grofe-<task>`) come and go on their own.
 socket_dirs() {
-  local uid
+  local uid d
   uid=$(id -u)
   for d in "${TMUX_TMPDIR:-/tmp}/tmux-$uid" \
            "${XDG_RUNTIME_DIR:-/nonexistent}/grofe" \
            "${TMPDIR:-/tmp}/grofe-$uid"; do
-    [ -d "$d" ] && ls -1ia "$d"
+    [ -d "$d" ] || continue
+    echo "$d"
+    ls -1ia "$d" | awk '$2 !~ /^grofe-/'
   done
-  return 0
 }
 before=$(socket_dirs)
 
 podman build -q -t "$image" -f "$repo/containers/compat/golden.Containerfile" \
   "$repo/containers/compat" >/dev/null
 
-out_mount=()
-out_env=()
-if [ "$check" = 1 ]; then
-  scratch=$(mktemp -d)
-  trap 'rm -rf "$scratch"' EXIT
-  out_mount=(-v "$scratch:/out:Z")
-  out_env=(-e GROFE_COMPAT_OUT=/out)
-fi
+run=(podman run --rm
+  -v "$repo:/src:ro"
+  -v grofe-compat-golden-target-v2:/target
+  -v grofe-compat-golden-cargo-v2:/home/golden/cargo)
+
+"${run[@]}" "$image" cargo fetch --locked >&2
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
 
 # A fixed hostname keeps pane titles (and so the status line) stable; the
 # normalizer still replaces it, for the grofe side.
-podman run --rm --hostname grofe-golden \
-  -v "$repo:/src:Z" \
-  -v grofe-compat-golden-target:/target \
-  -v grofe-compat-golden-cargo:/usr/local/cargo/registry \
-  ${out_mount[@]+"${out_mount[@]}"} \
-  -e CARGO_TARGET_DIR=/target \
+"${run[@]}" --network none --hostname grofe-golden \
+  -e CARGO_NET_OFFLINE=true \
   -e GROFE_COMPAT_TMUX="$tmux_path" \
   -e GROFE_COMPAT_SCENARIOS="${scenarios[*]:-}" \
-  ${out_env[@]+"${out_env[@]}"} \
-  "$image" \
-  cargo test --quiet --test compat -- --ignored --exact record::record_goldens --nocapture
+  -e GROFE_COMPAT_OUT=/tmp/out \
+  "$image" sh -c '
+    cargo test --locked --quiet --test compat -- \
+      --ignored --exact record::record_goldens --nocapture >&2 &&
+    tar -C /tmp/out -cf - .' | tar -C "$scratch" -xf -
 
 after=$(socket_dirs)
 if [ "$before" != "$after" ]; then
@@ -83,15 +88,17 @@ if [ "$before" != "$after" ]; then
   exit 1
 fi
 
-if [ "$check" = 1 ]; then
-  golden=$repo/tests/fixtures/compat/golden
-  status=0
-  while IFS= read -r -d '' f; do
-    rel=${f#"$scratch"/}
-    if ! diff -u "$golden/$rel" "$f"; then
-      status=1
-    fi
-  done < <(find "$scratch" -type f -print0)
-  [ "$status" = 0 ] && echo "goldens reproduce byte for byte"
-  exit "$status"
+golden=$repo/tests/fixtures/compat/golden
+if [ "$check" = 0 ]; then
+  cp -R "$scratch/." "$golden/"
+  exit 0
 fi
+status=0
+while IFS= read -r -d '' f; do
+  rel=${f#"$scratch"/}
+  if ! diff -u "$golden/$rel" "$f"; then
+    status=1
+  fi
+done < <(find "$scratch" -type f -print0)
+[ "$status" = 0 ] && echo "goldens reproduce byte for byte"
+exit "$status"

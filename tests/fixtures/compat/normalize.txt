@@ -9,11 +9,19 @@
 #   tty    <prefix>  <prefix> followed by digits (a tty name)
 #   ctime  -         an asctime-style date: "Mon Sep 28 10:00:00 2026"
 #   epoch  -         a 10-digit number within the run's time window
-#   pid    -         a whole number within the run's pid window
+#   pid    -         a whole number within the run's pid window, or one of
+#                    the run's exact pids
+#
+# The epoch and pid windows can mask bugs: a wrong pid or a wrong time that
+# falls inside the window still normalizes to the placeholder. A suite that
+# knows its pids (grofe's own server and panes) should pass them exactly and
+# drop the window. The recorder uses a window because it cannot know every
+# pid tmux forks.
 #
 # Vars the runner supplies: socket (the private -L socket's path), tmpdir
-# (the run's tempdir, holding TMUX_TMPDIR and HOME), host, user. A var the
-# runner leaves unset or empty skips its rule. Longer values go first, so
+# (the run's tempdir, holding TMUX_TMPDIR and HOME), host, user. The
+# recorder runs as the user `golden`, so the user rule never meets tmux's
+# `root` key table. A var the runner leaves unset or empty skips its rule. Longer values go first, so
 # the socket path is replaced before the tempdir it sits in.
 
 sub    socket     <SOCKET>

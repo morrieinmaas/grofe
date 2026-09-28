@@ -1,7 +1,10 @@
 # A pty-attached client, for scenarios that need one (status line, popups).
 # Panes run cat, not a shell, so no prompt (which differs by user) is drawn.
 $ new-session -d -s main -n first -x 80 -y 24 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
 $ new-window -t main -n second cat
 client 80x24 attach -t main
 screen
+# The client is in tmux's root key table; the user rule must not touch it.
+$ display -p -c {client} '#{client_key_table}'
 $ list-clients -F '#{client_width}x#{client_height} #{client_session} #{client_tty}'

@@ -18,9 +18,15 @@ pub fn fixtures_dir() -> PathBuf {
 pub struct Context {
     /// `socket`, `tmpdir`, `host`, `user`: the values for `sub` and `word`.
     pub vars: HashMap<String, String>,
-    /// Every pid the run could have produced (the `pid` rule).
+    /// Every pid the run could have produced (the `pid` rule). A window,
+    /// because the recorder cannot know every pid tmux forks.
     pub pids: Option<RangeInclusive<u64>>,
-    /// Unix seconds the run spanned, with slack (the `epoch` rule).
+    /// Pids known exactly (the `pid` rule, besides the window). A window can
+    /// mask a wrong-pid bug (any in-window number passes as `<PID>`), so a
+    /// suite that knows its pids should set `pids = None` and list them here.
+    pub exact_pids: Vec<u64>,
+    /// Unix seconds the run spanned, with slack (the `epoch` rule). The same
+    /// masking caveat applies: any in-window time passes as `<EPOCH>`.
     pub epochs: Option<RangeInclusive<u64>>,
 }
 
@@ -93,12 +99,18 @@ impl Normalizer {
                     }),
                     None => out,
                 },
-                Rule::Pid { to } => match &ctx.pids {
-                    Some(range) => replace_numbers(&out, to, |s| {
-                        s.parse().is_ok_and(|n: u64| range.contains(&n))
-                    }),
-                    None => out,
-                },
+                Rule::Pid { to } => {
+                    if ctx.pids.is_none() && ctx.exact_pids.is_empty() {
+                        out
+                    } else {
+                        replace_numbers(&out, to, |s| {
+                            s.parse().is_ok_and(|n: u64| {
+                                ctx.pids.as_ref().is_some_and(|r| r.contains(&n))
+                                    || ctx.exact_pids.contains(&n)
+                            })
+                        })
+                    }
+                }
             };
         }
         out
@@ -235,10 +247,11 @@ mod tests {
         vars.insert("socket".into(), "/tmp/.tmpAB12/tmux-0/golden".into());
         vars.insert("tmpdir".into(), "/tmp/.tmpAB12".into());
         vars.insert("host".into(), "box".into());
-        vars.insert("user".into(), "root".into());
+        vars.insert("user".into(), "golden".into());
         Context {
             vars,
             pids: Some(20000..=20500),
+            exact_pids: Vec::new(),
             epochs: Some(1_790_000_000..=1_790_000_100),
         }
     }
@@ -260,13 +273,13 @@ mod tests {
         let n = Normalizer::load();
         let raw = "TMUX=/tmp/.tmpAB12/tmux-0/golden,20017,0\n\
                    HOME=/tmp/.tmpAB12/home\n\
-                   box boxer root rooted\n\
+                   box boxer golden goldens\n\
                    /dev/pts/3 /dev/ttys012 /dev/ptsx\n\
                    main: 1 windows (created Mon Sep  8 10:00:00 2026)\n\
                    1790000042 1790009999 20499 50000 200\n";
         let want = "TMUX=<SOCKET>,<PID>,0\n\
                     HOME=<TMPDIR>/home\n\
-                    <HOST> boxer <USER> rooted\n\
+                    <HOST> boxer <USER> goldens\n\
                     <TTY> <TTY> /dev/ptsx\n\
                     main: 1 windows (created <TIME>)\n\
                     <EPOCH> 1790009999 <PID> 50000 200\n";
@@ -276,8 +289,27 @@ mod tests {
     #[test]
     fn unset_vars_and_windows_skip_their_rules() {
         let n = Normalizer::load();
-        let raw = "root 20017 1790000042";
+        let raw = "golden 20017 1790000042";
         assert_eq!(n.apply(&Context::default(), raw), raw);
+    }
+
+    /// The recorder runs as the user `golden`, never root: as root the user
+    /// rule would rewrite tmux's `root` key table.
+    #[test]
+    fn the_root_key_table_survives() {
+        let n = Normalizer::load();
+        let raw = "bind-key -T root MouseDown1Pane select-pane -t =\nroot\n";
+        assert_eq!(n.apply(&ctx(), raw), raw);
+    }
+
+    #[test]
+    fn exact_pids_replace_without_a_window() {
+        let n = Normalizer::load();
+        let ctx = Context {
+            exact_pids: vec![4242],
+            ..Context::default()
+        };
+        assert_eq!(n.apply(&ctx, "4242 4243"), "<PID> 4243");
     }
 
     #[test]

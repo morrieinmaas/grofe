@@ -1,10 +1,16 @@
-//! tmux compatibility: the golden recorder (TC.0b) and the shared
-//! normalization list. Nothing here runs real tmux except the ignored
+//! tmux compatibility: the golden recorder (TC.0b), the shared scenario
+//! replayer and normalization list, and the compat tests that compare grofe
+//! with the goldens. Nothing here runs real tmux except the ignored
 //! `record::record_goldens`, which `scripts/record-compat-goldens.sh` runs
 //! inside a container.
+//!
+//! FE tasks add their golden tests as modules here, next to
+//! `grofe_example`, which shows the pattern.
 
+mod grofe_example;
 mod normalize;
 mod record;
+mod replay;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -12,7 +18,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use normalize::fixtures_dir;
-use record::{Step, check_version, parse_scenario, split_words};
+use record::check_version;
+use replay::{Step, find_scenarios, parse_scenario, split_words};
 
 fn fake_tmux(dir: &Path, prints: &str) -> PathBuf {
     let path = dir.join("tmux");
@@ -73,21 +80,10 @@ fn scenarios_parse() {
     assert!(parse_scenario("client 80 attach\n").is_err());
 }
 
-fn scenario_files(dir: &Path, found: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            scenario_files(&path, found);
-        } else if path.extension().is_some_and(|e| e == "scenario") {
-            found.push(path);
-        }
-    }
-}
-
 #[test]
 fn every_scenario_parses_and_has_its_golden() {
     let mut found = Vec::new();
-    scenario_files(&fixtures_dir().join("golden"), &mut found);
+    find_scenarios(&fixtures_dir().join("golden"), &mut found);
     assert!(!found.is_empty());
     for path in found {
         let text = fs::read_to_string(&path).unwrap();
@@ -106,7 +102,7 @@ fn every_scenario_parses_and_has_its_golden() {
 #[test]
 fn fixtures_hold_no_strftime() {
     let mut files = vec![fixtures_dir().join("tmux-defaults.conf")];
-    scenario_files(&fixtures_dir().join("golden"), &mut files);
+    find_scenarios(&fixtures_dir().join("golden"), &mut files);
     for path in files {
         let text = fs::read_to_string(&path).unwrap();
         let bytes = text.as_bytes();
@@ -156,4 +152,14 @@ fn recorded_pane_env_is_hermetic() {
             "pane env has {key}, which is neither fixed nor tmux's own"
         );
     }
+}
+
+/// Recorded as the user `golden`, so tmux's `root` key table reaches the
+/// goldens intact instead of as `<USER>`.
+#[test]
+fn root_key_table_survives_normalization_in_goldens() {
+    let golden =
+        |name: &str| fs::read_to_string(fixtures_dir().join("golden/tc_0b").join(name)).unwrap();
+    assert!(golden("display-formats.golden").contains("bind-key  -T root MouseDown1Pane"));
+    assert!(golden("status-line.golden").contains("'#{client_key_table}'\nroot\n? 0\n"));
 }
