@@ -6,6 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 linux() {
+  # A DOCKER_HOST pointing at a socket that does not exist is as good as unset.
+  if [ -n "${DOCKER_HOST:-}" ] && [ ! -S "${DOCKER_HOST#unix://}" ]; then
+    unset DOCKER_HOST
+  fi
   if [ -z "${DOCKER_HOST:-}" ] && command -v podman >/dev/null; then
     DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
     export DOCKER_HOST

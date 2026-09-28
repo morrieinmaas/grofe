@@ -27,6 +27,15 @@ Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones
 - Integration tests start a server on a unique `-S` socket; use the harness in
   `tests/common`.
 
+## Real tmux
+
+Never run `tmux` against the default server. Your shell is inside the user's live
+tmux session, and `tmux kill-session` with no target kills it along with every agent
+running there. To compare against real tmux, always pass a private socket,
+`tmux -L grofe-<task> ...`, and clean up with `tmux -L grofe-<task> kill-server`. A
+global hook blocks `tmux kill-*` without `-L`/`-S`, but `set-option`, `new-session`
+and the rest would still change the live server.
+
 ## Code
 
 - No `unwrap()`/`expect()` on socket or pty paths in non-test code.
