@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::protocol::ClientCtx;
@@ -53,6 +54,12 @@ pub struct Session {
     /// (tmux's `lastw` stack, for `last-window`), kept by
     /// [`Model::select_window`] and [`Model::remove_window`].
     pub last_windows: Vec<WindowId>,
+    /// When the session was created, attached, switched to or typed in:
+    /// tmux's `activity_time`, which picks the session a command with no
+    /// pane and no target runs against.
+    pub activity: Instant,
+    /// How many clients show the session (`session_attached`).
+    pub attached: usize,
 }
 
 pub struct Window {
@@ -346,7 +353,9 @@ impl Model {
     }
 
     /// Gives every pane in `window` its layout size, resizing the ptys whose
-    /// size changed.
+    /// size changed. A window too small for its panes squeezes some to
+    /// nothing in the layout; the pane itself keeps at least one cell each
+    /// way (tmux's `PANE_MINIMUM`).
     pub fn relayout(&mut self, window: WindowId) {
         let Some(w) = self.windows.get(&window) else {
             return;
@@ -355,10 +364,11 @@ impl Model {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
-            if (p.cols, p.rows) != (rect.cols, rect.rows) {
-                p.cols = rect.cols;
-                p.rows = rect.rows;
-                if let Err(e) = p.handle.resize(rect.cols, rect.rows) {
+            let (cols, rows) = (rect.cols.max(1), rect.rows.max(1));
+            if (p.cols, p.rows) != (cols, rows) {
+                p.cols = cols;
+                p.rows = rows;
+                if let Err(e) = p.handle.resize(cols, rows) {
                     eprintln!("grofe server: resizing {id}: {e}");
                 }
             }
@@ -366,18 +376,23 @@ impl Model {
     }
 
     /// The session a request with no target acts on: the one holding the
-    /// request's pane, else the newest session.
+    /// request's pane, else the most recently active session (tmux's
+    /// `cmd_find_best_session`; the first in name order on a tie).
     fn current_session(&self, ctx: &ClientCtx) -> Result<SessionId, String> {
         if ctx.pane.is_some() {
             let pane = self.current_pane(ctx)?;
             return Ok(self.session_of_pane(pane));
         }
-        // ponytail: tmux picks the most recently used session; with no
-        // clients before M2, the newest one stands in.
-        self.sessions
-            .keys()
-            .next_back()
-            .copied()
+        let mut best: Option<&Session> = None;
+        for s in self.sessions.values() {
+            let better = best.is_none_or(|b| {
+                s.activity > b.activity || (s.activity == b.activity && s.name < b.name)
+            });
+            if better {
+                best = Some(s);
+            }
+        }
+        best.map(|s| s.id)
             .ok_or_else(|| "no current session".to_string())
     }
 
@@ -617,6 +632,8 @@ mod tests {
             cols: 80,
             rows: 24,
             last_windows: Vec::new(),
+            activity: Instant::now(),
+            attached: 0,
         });
         id
     }

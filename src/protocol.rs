@@ -11,6 +11,13 @@
 //! closes the connection. After an ok line both sides switch to binary
 //! [`Frame`]s; bytes already buffered past the line belong to the frame
 //! stream and must not be dropped.
+//!
+//! **Attach check.** Before it touches the terminal, `grofe attach` sends
+//! [`ATTACH_CHECK`] with its `attach-session` arguments as a control
+//! request: the server resolves the target and refuses self-nesting as the
+//! attach hello would, without changing anything. Only on an `Ok` does the
+//! client probe the terminal and send the hello, so a bad target never
+//! costs a probe (tmux resolves the target before it opens the terminal).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -28,6 +35,12 @@ use crate::types::{ClientId, PaneId};
 /// payload, so a bad peer can't make the server allocate unboundedly by
 /// claiming (or streaming) an enormous message.
 pub const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
+
+/// The longest hello line. A hello carries the client's whole environment,
+/// so this sits above macOS's ARG_MAX (1 MiB) and Linux's default
+/// environment limit, while still bounding what a connection that has not
+/// said who it is can make the server buffer.
+pub const HELLO_MAX_LEN: usize = 4 * 1024 * 1024;
 
 /// Builds the [`LinesCodec`] used for control-mode JSON lines, capped at
 /// [`MAX_MESSAGE_LEN`].
@@ -134,6 +147,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// carries no request id of its own). See the module docs for the handshake.
 pub const HELLO_REPLY_ID: u64 = 0;
 
+/// The control verb of the attach check (module docs): `argv[1..]` are
+/// `attach-session`'s arguments.
+pub const ATTACH_CHECK: &str = "__attach-check";
+
 /// Which side of a version mismatch needs to upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -165,6 +182,8 @@ pub enum ProtocolError {
     },
     #[error("malformed hello: {0}")]
     Malformed(#[from] serde_json::Error),
+    #[error("environment too large: the hello is {len} bytes, over the 4 MiB limit")]
+    TooLarge { len: usize },
 }
 
 /// Encodes `hello` as the JSON hello line, embedding [`PROTOCOL_VERSION`]
@@ -174,7 +193,11 @@ pub fn encode_hello(hello: &Hello) -> Result<String, ProtocolError> {
     if let serde_json::Value::Object(map) = &mut value {
         map.insert("grofe".to_string(), PROTOCOL_VERSION.into());
     }
-    Ok(value.to_string())
+    let line = value.to_string();
+    if line.len() > HELLO_MAX_LEN {
+        return Err(ProtocolError::TooLarge { len: line.len() });
+    }
+    Ok(line)
 }
 
 /// Decodes a hello line, checking the protocol version before the shape so
@@ -416,6 +439,26 @@ mod tests {
                 .collect(),
             client: None,
         }
+    }
+
+    #[test]
+    fn an_over_cap_hello_names_the_environment() {
+        let env = [("BIG", "x".repeat(HELLO_MAX_LEN))];
+        let hello = Hello::Control(ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            client: None,
+        });
+        let err = encode_hello(&hello).unwrap_err().to_string();
+        assert!(
+            err.starts_with("environment too large: the hello is "),
+            "{err}"
+        );
+        assert!(err.ends_with("bytes, over the 4 MiB limit"), "{err}");
     }
 
     #[test]

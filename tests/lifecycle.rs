@@ -433,3 +433,79 @@ fn an_auto_started_server_nobody_connects_to_exits() {
     assert!(status.success(), "{status:?}");
     assert!(!exists(&srv.socket), "socket left behind");
 }
+
+/// tmux 3.7b's attach starts a server, which then has no sessions: every
+/// spelling and target says so, with or without a terminal.
+#[test]
+fn attach_without_a_server_says_no_sessions() {
+    let srv = TestServer::unstarted();
+    for args in [
+        &["attach"][..],
+        &["attach", "-t", "nope"],
+        &["attach-session", "-t", "nope:1"],
+        &["attach", "-d"],
+    ] {
+        let out = srv.run(args);
+        assert!(!out.status.success(), "{args:?}");
+        assert_eq!(out.stderr, "no sessions\n", "{args:?}");
+    }
+    assert!(!srv.is_running());
+    assert_eq!(srv.server_starts(), 0);
+}
+
+/// tmux 3.7b resolves the target before it opens the terminal: a bad
+/// target is reported even without one.
+#[test]
+fn attach_checks_its_target_before_the_terminal() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "alpha"])
+        .expect("new-session");
+    let out = srv.run(&["attach", "-t", "nope"]);
+    assert!(!out.status.success());
+    assert_eq!(out.stderr, "can't find session: nope\n");
+    let out = srv.run(&["attach", "-t", "alpha"]);
+    assert!(!out.status.success());
+    assert_eq!(out.stderr, "open terminal failed: not a terminal\n");
+    assert_eq!(
+        srv.cmd(&["list-clients"]).expect("list-clients"),
+        "",
+        "a check attaches nothing"
+    );
+}
+
+/// The server's pid, from its log's start line.
+fn server_pid(srv: &TestServer) -> nix::unistd::Pid {
+    let log = srv.log();
+    let pid = log
+        .split("pid ")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no pid in the log:\n{log}"));
+    nix::unistd::Pid::from_raw(pid)
+}
+
+/// tmux 3.7b's server ignores SIGHUP and exits on SIGINT, as on SIGTERM.
+#[test]
+fn sighup_is_ignored_and_sigint_stops_the_server() {
+    use nix::sys::signal::{Signal, kill};
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "a"])
+        .expect("new-session");
+    let pid = server_pid(&srv);
+    kill(pid, Signal::SIGHUP).expect("SIGHUP");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!process_gone(pid), "SIGHUP stopped the server");
+    assert!(
+        srv.cmd(&["list-sessions"])
+            .is_ok_and(|o| o.starts_with("a:"))
+    );
+    kill(pid, Signal::SIGINT).expect("SIGINT");
+    // The server is the harness's unreaped child, so its exit shows in the
+    // log and on the socket rather than as a vanished pid.
+    wait_until(
+        || !srv.is_running() && srv.log().contains("grofe server exiting"),
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("SIGINT did not stop the server: {e}; log:\n{}", srv.log()));
+}

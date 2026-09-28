@@ -14,7 +14,9 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread::sleep;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
 use expectrl::Session;
@@ -65,14 +67,29 @@ fn assert_teardown(out: &[u8]) {
 
 // ---------------------------------------------------------------- fake server
 
+/// The attach client first checks its target on a control connection
+/// (`__attach-check`), then attaches on a second one. A thread answers the
+/// checks (`Ok`, or the configured refusal) and hands attach connections,
+/// with the hello line still unread, to [`FakeServer::accept`].
 struct FakeServer {
     _dir: TempDir,
     socket: PathBuf,
-    listener: UnixListener,
+    attaches: mpsc::Receiver<(UnixStream, Vec<u8>)>,
+    checks: Arc<Mutex<Vec<Vec<String>>>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl FakeServer {
     fn new() -> FakeServer {
+        FakeServer::answering(None)
+    }
+
+    /// A server whose attach check fails with `err`.
+    fn refusing(err: &str) -> FakeServer {
+        FakeServer::answering(Some(err.to_string()))
+    }
+
+    fn answering(refusal: Option<String>) -> FakeServer {
         let dir = tempfile::Builder::new()
             .prefix("grofe-client")
             .tempdir()
@@ -82,32 +99,104 @@ impl FakeServer {
         listener
             .set_nonblocking(true)
             .expect("nonblocking listener");
+        let (tx, attaches) = mpsc::channel();
+        let checks = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen, done) = (Arc::clone(&checks), Arc::clone(&stop));
+        thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(false).expect("blocking stream");
+                        match answer_check(&stream, refusal.as_deref()) {
+                            Ok(argv) => seen.lock().expect("checks lock").push(argv),
+                            Err(first) => {
+                                if tx.send((stream, first)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            }
+        });
         FakeServer {
             _dir: dir,
             socket,
-            listener,
+            attaches,
+            checks,
+            stop,
         }
     }
 
     fn accept(&self) -> Conn {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => {
-                    stream.set_nonblocking(false).expect("blocking stream");
-                    return Conn {
-                        stream,
-                        buf: BytesMut::new(),
-                    };
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "client never connected");
-                    sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("accept: {e}"),
-            }
+        let (stream, first) = self
+            .attaches
+            .recv_timeout(TIMEOUT)
+            .expect("client never connected to attach");
+        Conn {
+            stream,
+            buf: BytesMut::from(&first[..]),
         }
     }
+
+    /// The argv of every attach check so far.
+    fn checks(&self) -> Vec<Vec<String>> {
+        self.checks.lock().expect("checks lock").clone()
+    }
+
+    /// Whether an attach connection arrived within `wait`.
+    fn attach_arrives(&self, wait: Duration) -> bool {
+        self.attaches.recv_timeout(wait).is_ok()
+    }
+}
+
+impl Drop for FakeServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Reads a new connection's first line: a control hello is the attach
+/// check, answered here (`Ok(argv)`); any other line is handed back to go
+/// with the stream.
+fn answer_check(stream: &UnixStream, refusal: Option<&str>) -> Result<Vec<String>, Vec<u8>> {
+    let _ = stream.set_read_timeout(Some(TIMEOUT));
+    let read_line = || {
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        while let Ok(1) = (&*stream).read(&mut byte) {
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        line
+    };
+    let first = read_line();
+    let text = String::from_utf8_lossy(&first).into_owned();
+    let Ok(Hello::Control(_)) = decode_hello(text.trim_end()) else {
+        return Err(first);
+    };
+    let req: grofe::protocol::Request =
+        serde_json::from_slice(&read_line()).expect("attach check request");
+    let reply = match refusal {
+        None => Reply::Ok {
+            id: req.id,
+            out: String::new(),
+        },
+        Some(err) => Reply::Err {
+            id: req.id,
+            err: err.to_string(),
+        },
+    };
+    let line = serde_json::to_string(&reply).expect("encode reply");
+    let _ = (&*stream).write_all(format!("{line}\n").as_bytes());
+    Ok(req.argv)
 }
 
 struct Conn {
@@ -557,6 +646,29 @@ fn attach_from_inside_a_pane_sends_the_pane_and_prints_a_refusal() {
     assert!(
         !contains(&tty.out, b"\x1b[?1049h"),
         "a refused attach never switches screens"
+    );
+    tty.assert_restored();
+}
+
+/// The target is checked before the terminal is touched: a refusal is
+/// printed without any probe query (the kitty graphics APC among them) and
+/// no attach connection follows.
+#[test]
+fn a_refused_target_is_reported_before_any_probe() {
+    let srv = FakeServer::refusing("can't find session: nope");
+    let attach = "\"$0\" -S \"$1\" attach -t nope --nest";
+    let mut tty = Tty::spawn(&script(attach), &srv.socket, &[]);
+    tty.wait_for(b"can't find session: nope");
+    tty.wait_for(b"STATUS=1");
+    assert!(!contains(&tty.out, b"\x1b[>0q"), "XTVERSION was sent");
+    assert!(
+        !contains(&tty.out, b"\x1b_G"),
+        "the kitty graphics query was sent"
+    );
+    assert!(!srv.attach_arrives(Duration::from_millis(200)));
+    assert_eq!(
+        srv.checks(),
+        vec![vec!["__attach-check", "-t", "nope", "--nest"]]
     );
     tty.assert_restored();
 }

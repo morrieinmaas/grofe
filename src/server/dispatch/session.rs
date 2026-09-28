@@ -1,5 +1,7 @@
 //! session commands.
 
+use std::time::Instant;
+
 use crate::cmd::{
     HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
 };
@@ -9,7 +11,7 @@ use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
 use crate::server::model::{BASE_INDEX, DEFAULT_SIZE, Session, Window};
 use crate::server::{State, clients};
-use crate::types::SessionId;
+use crate::types::{SessionId, cap_size};
 
 /// `new-session`: a session with one window holding one pane.
 // ponytail: without `-d` tmux would attach; attach arrives in M2, so every
@@ -29,9 +31,9 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     };
     let here = ctx.pane.filter(|p| model.panes.contains_key(p));
     let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
-    let size = (
-        c.width.unwrap_or(DEFAULT_SIZE.0).max(1),
-        c.height.unwrap_or(DEFAULT_SIZE.1).max(1),
+    let size = cap_size(
+        c.width.unwrap_or(DEFAULT_SIZE.0),
+        c.height.unwrap_or(DEFAULT_SIZE.1),
     );
     let window = model.alloc_window_id();
     let pane = spawn_pane(
@@ -54,6 +56,8 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cols: size.0,
         rows: size.1,
         last_windows: Vec::new(),
+        activity: Instant::now(),
+        attached: 0,
     });
     model.insert_window(Window {
         id: window,

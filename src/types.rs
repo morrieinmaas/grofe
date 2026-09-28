@@ -72,6 +72,27 @@ runtime_id!(PaneId, "%", "pane");
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClientId(pub u32);
 
+/// The largest window or client dimension (tmux's `WINDOW_MAXIMUM`):
+/// larger sizes are capped to it, so no peer can make a pane allocate
+/// without bound.
+pub const WINDOW_MAXIMUM: u16 = 10_000;
+
+/// The most cells a client or window may have.
+// ponytail: tmux has no such cap (its grid lines are allocated as they are
+// used), but a grofe pane and every frame hold all their cells, so a
+// 10000x10000 client would cost gigabytes and seconds per frame. 4M cells
+// (2000x2000) is far past any real terminal; past it, rows give way.
+pub const MAX_CELLS: u32 = 4_000_000;
+
+/// `(cols, rows)` within 1..=[`WINDOW_MAXIMUM`] each and [`MAX_CELLS`] in
+/// all, keeping the width.
+pub fn cap_size(cols: u16, rows: u16) -> (u16, u16) {
+    let cols = cols.clamp(1, WINDOW_MAXIMUM);
+    let rows = rows.clamp(1, WINDOW_MAXIMUM);
+    let max_rows = (MAX_CELLS / u32::from(cols)).min(u32::from(WINDOW_MAXIMUM)) as u16;
+    (cols, rows.min(max_rows))
+}
+
 /// A rectangular region of the client's screen, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -247,6 +268,16 @@ mod tests {
     #[test]
     fn mouse_encoding_defaults_to_x10() {
         assert_eq!(MouseEncoding::default(), MouseEncoding::X10);
+    }
+
+    #[test]
+    fn sizes_are_capped_per_dimension_and_in_area() {
+        assert_eq!(cap_size(0, 0), (1, 1));
+        assert_eq!(cap_size(80, 24), (80, 24));
+        assert_eq!(cap_size(2000, 2000), (2000, 2000));
+        assert_eq!(cap_size(65535, 65535), (10_000, 400));
+        assert_eq!(cap_size(65535, 30), (10_000, 30));
+        assert_eq!(cap_size(1, 65535), (1, 10_000));
     }
 
     #[test]

@@ -27,7 +27,7 @@
 //!   active pane encoded for its modes.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
 use tokio::sync::{mpsc, oneshot};
@@ -37,15 +37,15 @@ use crate::protocol::{Caps, ClientCtx, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
-    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, Routed, default_bindings,
-    parse_prefix,
+    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, ROOT_TABLE, Routed,
+    default_bindings, parse_prefix,
 };
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, Screen};
 use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
 use crate::server::{State, dispatch};
-use crate::types::{ClientId, PaneId, SessionId};
+use crate::types::{ClientId, PaneId, SessionId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -153,11 +153,17 @@ pub struct ClientEntry {
     pub ctx: ClientCtx,
     /// The client terminal, `(cols, rows)`.
     pub size: (u16, u16),
+    /// The latest Resize frame's size, applied on the next tick so a
+    /// burst of resizes costs one reflow.
+    pending_size: Option<(u16, u16)>,
     /// `TERM` of the client's terminal.
     pub term: String,
     pub caps: Caps,
     /// Last input (or the attach itself).
     pub activity: Instant,
+    /// Wall-clock last input or attach (`client_activity`; unlike
+    /// `activity`, a switch does not count, as in tmux).
+    pub activity_time: SystemTime,
     pub decoder: Decoder,
     pub keys: KeyState,
     /// Whether the outer terminal has focus, from its focus reports (the
@@ -265,24 +271,12 @@ pub fn client_name(id: ClientId) -> String {
 /// activity).
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
-    if state.model.sessions.is_empty() {
-        return Err("no sessions".to_string());
-    }
     let target = match &req.target {
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
+    check_target(&state.model, &target, &req.ctx, req.nest)?;
     let session = select_target(&mut state.model, &target, &req.ctx)?;
-    if !req.nest
-        && let Some(pane) = req.ctx.pane
-        && let Some(p) = state.model.panes.get(&pane)
-        && state.model.windows.get(&p.window).map(|w| w.session) == Some(session)
-    {
-        return Err(format!(
-            "refusing to attach session {} from inside itself (use --nest to force)",
-            state.model.sessions[&session].name
-        ));
-    }
     if req.detach_others {
         detach_session(state, session, None);
     }
@@ -302,9 +296,11 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             session,
             ctx,
             size: clamp_size(req.size),
+            pending_size: None,
             term: req.term,
             caps: req.caps,
             activity: now,
+            activity_time: SystemTime::now(),
             decoder: Decoder::new(),
             keys: KeyState::new(),
             focused: true,
@@ -316,8 +312,57 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         },
     );
     state.registry.owners.insert(session, SizeOwner::new(id));
+    touch_session(&mut state.model, session);
+    sync_attached(state);
     changed(state);
     Ok(Accepted { id, output, exit })
+}
+
+/// Everything attach refuses before it changes anything, in tmux's order:
+/// no sessions, then the target (session, window, pane), then self-nesting
+/// without `--nest`.
+fn check_target(
+    model: &Model,
+    target: &Target,
+    ctx: &ClientCtx,
+    nest: bool,
+) -> Result<SessionId, String> {
+    if model.sessions.is_empty() {
+        return Err("no sessions".to_string());
+    }
+    let session = model.resolve_session(target, ctx)?;
+    if let Target::Window(..) | Target::Pane(_) = target {
+        model.resolve_window(target, ctx)?;
+    }
+    if let Target::Pane(_) = target {
+        model.resolve_pane(target, ctx)?;
+    }
+    if !nest
+        && let Some(pane) = ctx.pane
+        && let Some(p) = model.panes.get(&pane)
+        && model.windows.get(&p.window).map(|w| w.session) == Some(session)
+    {
+        return Err(format!(
+            "refusing to attach session {} from inside itself (use --nest to force)",
+            model.sessions[&session].name
+        ));
+    }
+    Ok(session)
+}
+
+/// The attach check (`protocol::ATTACH_CHECK`): `args` are
+/// `attach-session`'s, checked as the attach hello will be, changing
+/// nothing.
+pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<String, String> {
+    let argv: Vec<String> = std::iter::once("attach-session".to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    match cmd::parse(&argv).map_err(|e| e.to_string())? {
+        cmd::Command::AttachSession(c) => {
+            check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
+        }
+        _ => Err("attach-session: unexpected command".to_string()),
+    }
 }
 
 /// Resolves an attach or switch target to its session, making a window or
@@ -357,6 +402,28 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
         leave_session(state, id, old);
     }
     state.registry.owners.insert(session, SizeOwner::new(id));
+    touch_session(&mut state.model, session);
+    sync_attached(state);
+}
+
+/// Session activity (tmux's `session_update_activity`): what makes it the
+/// session a command without a pane or target runs against.
+fn touch_session(model: &mut Model, session: SessionId) {
+    if let Some(s) = model.sessions.get_mut(&session) {
+        s.activity = Instant::now();
+    }
+}
+
+/// Recounts `session_attached` for every session.
+fn sync_attached(state: &mut State) {
+    for s in state.model.sessions.values_mut() {
+        s.attached = 0;
+    }
+    for c in state.clients.values() {
+        if let Some(s) = state.model.sessions.get_mut(&c.session) {
+            s.attached += 1;
+        }
+    }
 }
 
 /// `switch-client -T`: client `id`'s key table.
@@ -377,8 +444,10 @@ pub fn show_message(state: &mut State, id: ClientId, text: &str) {
     }
 }
 
+/// A client size within tmux's bounds and grofe's cell cap
+/// ([`crate::types::cap_size`]).
 fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
-    (cols.max(1), rows.max(1))
+    cap_size(cols, rows)
 }
 
 /// A frame from client `id`.
@@ -389,9 +458,8 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
             let Some(c) = state.clients.get_mut(&id) else {
                 return;
             };
-            c.size = clamp_size((cols, rows));
-            c.dirty = true;
-            changed(state);
+            c.pending_size = Some(clamp_size((cols, rows)));
+            request_render(state, Instant::now());
         }
         Frame::Detach => detach(state, id),
         // Server-to-client kinds: ignored if a client sends them.
@@ -443,6 +511,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
         let _ = tx.send(reason);
     }
     state.model.client_last_session.remove(&id);
+    sync_attached(state);
     leave_session(state, id, c.session);
 }
 
@@ -563,6 +632,16 @@ pub fn deadline(state: &State) -> Option<Instant> {
 
 /// Runs whatever is due at `now` (see [`deadline`]).
 pub fn tick(state: &mut State, now: Instant) {
+    let mut resized = false;
+    for c in state.clients.values_mut() {
+        if let Some(size) = c.pending_size.take() {
+            resized |= c.size != size;
+            c.size = size;
+        }
+    }
+    if resized {
+        changed(state);
+    }
     let escape = escape_time(&state.model);
     let ids: Vec<ClientId> = state.clients.keys().copied().collect();
     for id in ids {
@@ -837,7 +916,7 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
     };
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let length = |name: &str| opt(name).parse::<u16>().unwrap_or(0);
-    let vars = ClientVars::new(c, active.map(|p| FormatCtx::new(model, p)));
+    let vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
     let windows: Vec<(String, ClientVars)> = s
         .windows
         .iter()
@@ -855,7 +934,7 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
                 .to_string();
             Some((
                 format,
-                ClientVars::new(c, Some(FormatCtx::new(model, w.active))),
+                ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))),
             ))
         })
         .collect();
@@ -910,13 +989,30 @@ fn local_now() -> libc::tm {
 /// `client_width`/`client_height`), falling through to the pane's
 /// [`FormatCtx`].
 pub struct ClientVars<'a> {
+    model: &'a Model,
     client: &'a ClientEntry,
     pane: Option<FormatCtx<'a>>,
 }
 
 impl<'a> ClientVars<'a> {
-    pub fn new(client: &'a ClientEntry, pane: Option<FormatCtx<'a>>) -> ClientVars<'a> {
-        ClientVars { client, pane }
+    pub fn new(
+        model: &'a Model,
+        client: &'a ClientEntry,
+        pane: Option<FormatCtx<'a>>,
+    ) -> ClientVars<'a> {
+        ClientVars {
+            model,
+            client,
+            pane,
+        }
+    }
+
+    fn session_name(&self, session: SessionId) -> String {
+        self.model
+            .sessions
+            .get(&session)
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -935,7 +1031,30 @@ impl FormatVars for ClientVars<'_> {
             } else {
                 "attached,UTF-8".to_string()
             }),
-            "client_session" => self.pane.as_ref()?.get("session_name"),
+            // tmux: 1 while the client is in any table but its session's
+            // `key-table` (always `root` here).
+            "client_prefix" => Some(
+                if c.keys.table() == ROOT_TABLE {
+                    "0"
+                } else {
+                    "1"
+                }
+                .to_string(),
+            ),
+            "client_activity" => Some(
+                c.activity_time
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs())
+                    .to_string(),
+            ),
+            "client_session" => Some(self.session_name(c.session)),
+            "client_last_session" => Some(
+                self.model
+                    .client_last_session
+                    .get(&c.ctx.client?)
+                    .map(|s| self.session_name(*s))
+                    .unwrap_or_default(),
+            ),
             _ => self.pane.as_ref()?.get(name),
         }
     }
@@ -983,10 +1102,13 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
         return;
     };
     c.activity = now;
+    c.activity_time = SystemTime::now();
+    let session = c.session;
     let inputs = c.decoder.feed(bytes, now, escape);
-    if let Some(owner) = state.registry.owners.get_mut(&c.session) {
+    if let Some(owner) = state.registry.owners.get_mut(&session) {
         owner.activity(id, now);
     }
+    touch_session(&mut state.model, session);
     for input in inputs {
         // As tmux: a key press takes a message down, and still counts.
         if let Input::Key(_) = input
@@ -1117,6 +1239,8 @@ pub fn attach_session(
     c: AttachSession,
 ) -> Result<String, String> {
     let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) else {
+        // tmux resolves the target before it finds there is no terminal.
+        check_target(&state.model, &c.target, ctx, c.nest)?;
         return Err("open terminal failed: not a terminal".to_string());
     };
     let session = select_target(&mut state.model, &c.target, ctx)?;
@@ -1171,7 +1295,7 @@ pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
         .values()
         .map(|client| {
             let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
-            let vars = ClientVars::new(client, pane);
+            let vars = ClientVars::new(model, client, pane);
             format!("{}\n", cmd::expand(&format, &vars))
         })
         .collect())
@@ -1223,9 +1347,11 @@ mod tests {
                     client: Some(id),
                 },
                 size: (80, 24),
+                pending_size: None,
                 term: "xterm-256color".to_string(),
                 caps: Caps::default(),
                 activity: Instant::now(),
+                activity_time: SystemTime::now(),
                 decoder: Decoder::new(),
                 keys: KeyState::new(),
                 focused: true,

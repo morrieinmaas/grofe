@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
 use crate::cmd::{self, Command};
-use crate::protocol::ClientCtx;
+use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{HISTORY_LIMIT, Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, clients};
@@ -29,6 +29,9 @@ use crate::types::{PaneId, WindowId};
 /// Runs one command (`argv[0]` is the verb) against the server state,
 /// returning its stdout or its error message.
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
+        return clients::attach_check(state, ctx, &argv[1..]);
+    }
     let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them.
