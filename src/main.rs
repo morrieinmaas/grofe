@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use grofe::client;
 use grofe::paths::{self, Env};
-use grofe::protocol::{ClientCtx, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{ATTACH_CHECK, ClientCtx, Hello, Reply, Request, encode_hello};
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -198,7 +198,8 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 }
 
 /// `attach-session`: the attach client (spec §4.6), in this process. It
-/// never starts a server, as in tmux. Self-nesting is the server's call
+/// never starts a server (tmux's does, only to find no sessions, which is
+/// what grofe then says). Self-nesting is the server's call
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
@@ -207,7 +208,24 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
         Ok(_) => return fail("attach-session: unexpected command"),
         Err(e) => return fail(&e.to_string()),
     };
-    let stream = match connect(socket) {
+    // tmux's attach starts a server, which finds no sessions; grofe's does
+    // not start one and says what tmux would.
+    let connect_attach = || match connect(socket) {
+        Err(e) if e.starts_with("no server running") => Err("no sessions".to_string()),
+        other => other,
+    };
+    // The target first (protocol::ATTACH_CHECK): a refusal never probes
+    // the terminal.
+    let check: Vec<String> = std::iter::once(ATTACH_CHECK.to_string())
+        .chain(argv[1..].iter().cloned())
+        .collect();
+    match connect_attach().and_then(|s| request(s, socket, &check)) {
+        Ok(Reply::Ok { .. }) => {}
+        Ok(Reply::Err { err, .. }) => return fail(&err),
+        Ok(Reply::Event(_)) => return fail("unexpected event reply"),
+        Err(e) => return fail(&e),
+    }
+    let stream = match connect_attach() {
         Ok(s) => s,
         Err(e) => return fail(&e),
     };

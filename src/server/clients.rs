@@ -268,24 +268,12 @@ pub fn client_name(id: ClientId) -> String {
 /// activity).
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
-    if state.model.sessions.is_empty() {
-        return Err("no sessions".to_string());
-    }
     let target = match &req.target {
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
+    check_target(&state.model, &target, &req.ctx, req.nest)?;
     let session = select_target(&mut state.model, &target, &req.ctx)?;
-    if !req.nest
-        && let Some(pane) = req.ctx.pane
-        && let Some(p) = state.model.panes.get(&pane)
-        && state.model.windows.get(&p.window).map(|w| w.session) == Some(session)
-    {
-        return Err(format!(
-            "refusing to attach session {} from inside itself (use --nest to force)",
-            state.model.sessions[&session].name
-        ));
-    }
     if req.detach_others {
         detach_session(state, session, None);
     }
@@ -324,6 +312,53 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     sync_attached(state);
     changed(state);
     Ok(Accepted { id, output, exit })
+}
+
+/// Everything attach refuses before it changes anything, in tmux's order:
+/// no sessions, then the target (session, window, pane), then self-nesting
+/// without `--nest`.
+fn check_target(
+    model: &Model,
+    target: &Target,
+    ctx: &ClientCtx,
+    nest: bool,
+) -> Result<SessionId, String> {
+    if model.sessions.is_empty() {
+        return Err("no sessions".to_string());
+    }
+    let session = model.resolve_session(target, ctx)?;
+    if let Target::Window(..) | Target::Pane(_) = target {
+        model.resolve_window(target, ctx)?;
+    }
+    if let Target::Pane(_) = target {
+        model.resolve_pane(target, ctx)?;
+    }
+    if !nest
+        && let Some(pane) = ctx.pane
+        && let Some(p) = model.panes.get(&pane)
+        && model.windows.get(&p.window).map(|w| w.session) == Some(session)
+    {
+        return Err(format!(
+            "refusing to attach session {} from inside itself (use --nest to force)",
+            model.sessions[&session].name
+        ));
+    }
+    Ok(session)
+}
+
+/// The attach check (`protocol::ATTACH_CHECK`): `args` are
+/// `attach-session`'s, checked as the attach hello will be, changing
+/// nothing.
+pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<String, String> {
+    let argv: Vec<String> = std::iter::once("attach-session".to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    match cmd::parse(&argv).map_err(|e| e.to_string())? {
+        cmd::Command::AttachSession(c) => {
+            check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
+        }
+        _ => Err("attach-session: unexpected command".to_string()),
+    }
 }
 
 /// Resolves an attach or switch target to its session, making a window or
@@ -1189,6 +1224,8 @@ pub fn attach_session(
     c: AttachSession,
 ) -> Result<String, String> {
     let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) else {
+        // tmux resolves the target before it finds there is no terminal.
+        check_target(&state.model, &c.target, ctx, c.nest)?;
         return Err("open terminal failed: not a terminal".to_string());
     };
     let session = select_target(&mut state.model, &c.target, ctx)?;

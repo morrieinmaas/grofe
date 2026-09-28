@@ -11,6 +11,13 @@
 //! closes the connection. After an ok line both sides switch to binary
 //! [`Frame`]s; bytes already buffered past the line belong to the frame
 //! stream and must not be dropped.
+//!
+//! **Attach check.** Before it touches the terminal, `grofe attach` sends
+//! [`ATTACH_CHECK`] with its `attach-session` arguments as a control
+//! request: the server resolves the target and refuses self-nesting as the
+//! attach hello would, without changing anything. Only on an `Ok` does the
+//! client probe the terminal and send the hello, so a bad target never
+//! costs a probe (tmux resolves the target before it opens the terminal).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -133,6 +140,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// The `id` of the one [`Reply`] line that answers an attach hello (a hello
 /// carries no request id of its own). See the module docs for the handshake.
 pub const HELLO_REPLY_ID: u64 = 0;
+
+/// The control verb of the attach check (module docs): `argv[1..]` are
+/// `attach-session`'s arguments.
+pub const ATTACH_CHECK: &str = "__attach-check";
 
 /// Which side of a version mismatch needs to upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
