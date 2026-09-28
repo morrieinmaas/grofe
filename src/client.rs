@@ -85,6 +85,8 @@ const RESET_TAIL: &[u8] = concat!(
     "\x1b[?1004l",
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
     "\x1b[?2026l\x1b[0m\x1b[?25h\x1b[0 q",
+    // The cursor colour a pane set (R16) goes back to the terminal's own.
+    "\x1b]112\x07",
 )
 .as_bytes();
 
@@ -1122,6 +1124,12 @@ mod tests {
             p.feed(&b"\x1b[O"[head.len()..]);
             assert_eq!(p.take_typeahead(), b"\x1b[O");
         }
+    }
+
+    /// R16: detaching resets the cursor colour a pane passed through.
+    #[test]
+    fn the_detach_tail_resets_the_cursor_colour() {
+        assert!(RESET_TAIL.ends_with(b"\x1b]112\x07"));
     }
 
     #[test]
