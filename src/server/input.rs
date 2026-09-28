@@ -32,10 +32,10 @@ use crate::types::{ClientId, InputModes};
 /// A decoded key press. T2.3 may add [`KeyCode`] variants; the field names
 /// are the contract.
 ///
-/// Keys are kept in one canonical form (see [`Key::normalized`]) so a
-/// binding matches however the outer terminal spelled the key: an ASCII
-/// letter typed with shift is `Char('A')` without `shift`, and back-tab is
-/// `Tab` with `shift`.
+/// A key keeps the spelling it was parsed or decoded with, as tmux does
+/// (`C-A`, `C-S-a`, `S-a`, `S-Tab` and `BTab` are distinct keys). Matching
+/// against bindings and the prefix also tries the [`Key::folded`] form, so
+/// a binding matches however the outer terminal spelled the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Key {
     pub code: KeyCode,
@@ -48,6 +48,8 @@ pub enum KeyCode {
     Char(char),
     Enter,
     Tab,
+    /// tmux's `BTab` (`CSI Z`), a key of its own, not `S-Tab`.
+    BackTab,
     Backspace,
     Escape,
     Up,
@@ -137,7 +139,7 @@ pub enum MouseButton {
 
 impl Key {
     pub fn new(code: KeyCode, mods: Mods) -> Key {
-        Key { code, mods }.normalized()
+        Key { code, mods }
     }
 
     /// A key with no modifiers.
@@ -145,19 +147,29 @@ impl Key {
         Key::new(code, Mods::default())
     }
 
-    /// The canonical form: shift is folded into an ASCII letter
-    /// (`S-a` is `A`), and dropped from an uppercase one.
+    /// The form used only for matching: shift folded into an ASCII letter
+    /// (`S-a` and `A` fold alike, as do `C-S-a` and `C-A`), and `S-Tab`
+    /// folded into `BTab`.
     // ponytail: ASCII letters only; other scripts keep an explicit shift.
-    pub fn normalized(mut self) -> Key {
-        if let KeyCode::Char(c) = self.code {
-            if c.is_ascii_lowercase() && self.mods.shift {
+    pub fn folded(mut self) -> Key {
+        match self.code {
+            KeyCode::Char(c) if c.is_ascii_lowercase() && self.mods.shift => {
                 self.code = KeyCode::Char(c.to_ascii_uppercase());
                 self.mods.shift = false;
-            } else if c.is_ascii_uppercase() {
+            }
+            KeyCode::Char(c) if c.is_ascii_uppercase() => self.mods.shift = false,
+            KeyCode::Tab | KeyCode::BackTab if self.mods.shift => {
+                self.code = KeyCode::BackTab;
                 self.mods.shift = false;
             }
+            _ => {}
         }
         self
+    }
+
+    /// Whether `self` and `other` are the same key once folded.
+    pub fn matches(&self, other: &Key) -> bool {
+        self == other || self.folded() == other.folded()
     }
 }
 
@@ -177,6 +189,7 @@ const NAMES: &[(&str, KeyCode)] = &[
     ("Escape", KeyCode::Escape),
     ("Space", KeyCode::Char(' ')),
     ("Tab", KeyCode::Tab),
+    ("BTab", KeyCode::BackTab),
     ("BSpace", KeyCode::Backspace),
     ("Up", KeyCode::Up),
     ("Down", KeyCode::Down),
@@ -222,10 +235,7 @@ pub fn parse_key(name: &str) -> Result<Key, String> {
             break;
         }
     }
-    let code = if rest.eq_ignore_ascii_case("BTab") {
-        mods.shift = true;
-        KeyCode::Tab
-    } else if let Some(&(_, code)) = NAMES.iter().find(|(n, _)| n.eq_ignore_ascii_case(rest)) {
+    let code = if let Some(&(_, code)) = NAMES.iter().find(|(n, _)| n.eq_ignore_ascii_case(rest)) {
         code
     } else if let Some(n) = function_key_number(rest) {
         KeyCode::F(n)
@@ -236,7 +246,7 @@ pub fn parse_key(name: &str) -> Result<Key, String> {
             _ => return Err(bad()),
         }
     };
-    Ok(Key::new(code, mods))
+    Ok(Key { code, mods })
 }
 
 /// `F1` to `F12` (tmux has no F13 and up).
@@ -262,18 +272,16 @@ impl fmt::Display for Key {
     /// tmux's canonical name (`C-M-x`, `BTab`, `PPage`, `IC`, `Space`).
     // ponytail: tmux has no super modifier; it is not shown.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let back_tab = self.code == KeyCode::Tab && self.mods.shift;
         if self.mods.ctrl {
             f.write_str("C-")?;
         }
         if self.mods.alt {
             f.write_str("M-")?;
         }
-        if self.mods.shift && !back_tab {
+        if self.mods.shift {
             f.write_str("S-")?;
         }
         match self.code {
-            KeyCode::Tab if back_tab => f.write_str("BTab"),
             KeyCode::Char(' ') => f.write_str("Space"),
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "F{n}"),
@@ -293,14 +301,22 @@ impl fmt::Display for Key {
 #[derive(Debug, Default)]
 pub struct Decoder {
     buf: Vec<u8>,
-    /// When the bytes now in `buf` started waiting.
+    /// When the bytes now in `buf` started waiting; inside a paste, when
+    /// the last paste bytes arrived.
     since: Option<Instant>,
     /// Inside a bracketed paste: `buf` is paste content.
     in_paste: bool,
+    /// Paste bytes at the front of `buf` already searched for the end
+    /// marker, so a long paste is scanned once.
+    paste_scanned: usize,
 }
 
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
+/// Paste content held before it is passed on in chunks.
+const PASTE_CAP: usize = 1 << 20;
+/// A paste with no data for this long ends, marker or not.
+const PASTE_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Decoder {
     pub fn new() -> Decoder {
@@ -317,7 +333,9 @@ impl Decoder {
         if escape_time.is_zero() {
             self.drain(true, &mut out);
         }
-        if self.buf.is_empty() || self.in_paste {
+        if self.in_paste {
+            self.since = Some(now);
+        } else if self.buf.is_empty() {
             self.since = None;
         } else if used >= waiting || self.since.is_none() {
             self.since = Some(now);
@@ -325,25 +343,36 @@ impl Decoder {
         out
     }
 
-    /// Resolve waiting bytes if `escape_time` has passed by `now`. The
-    /// caller runs this when [`Decoder::deadline`] is reached.
+    /// Resolve waiting bytes if their deadline has passed by `now`: an
+    /// incomplete sequence after `escape_time`, an unterminated paste after
+    /// 5 s without data. The caller runs this when [`Decoder::deadline`] is
+    /// reached.
     pub fn flush(&mut self, now: Instant, escape_time: Duration) -> Vec<Input> {
         let mut out = Vec::new();
-        if self.deadline(escape_time).is_some_and(|d| now >= d) {
-            self.drain(true, &mut out);
-            self.since = None;
+        if !self.deadline(escape_time).is_some_and(|d| now >= d) {
+            return out;
         }
+        if self.in_paste {
+            if !self.buf.is_empty() {
+                out.push(Input::Paste(std::mem::take(&mut self.buf)));
+            }
+            self.in_paste = false;
+            self.paste_scanned = 0;
+        } else {
+            self.drain(true, &mut out);
+        }
+        self.since = None;
         out
     }
 
-    /// When waiting bytes must be resolved, if any are waiting. A paste
-    /// waits for its end marker and has no deadline.
-    // ponytail: a paste whose end marker never comes is held until it does.
+    /// When waiting bytes must be resolved, if any are waiting.
     pub fn deadline(&self, escape_time: Duration) -> Option<Instant> {
-        if self.in_paste {
-            return None;
-        }
-        self.since.map(|t| t + escape_time)
+        let wait = if self.in_paste {
+            PASTE_TIMEOUT
+        } else {
+            escape_time
+        };
+        self.since.map(|t| t + wait)
     }
 
     /// Decode what `buf` holds; with `force`, an incomplete tail resolves
@@ -353,13 +382,25 @@ impl Decoder {
         loop {
             if self.in_paste {
                 let rest = &self.buf[pos..];
-                let Some(end) = find(rest, PASTE_END) else {
-                    break;
-                };
-                out.push(Input::Paste(rest[..end].to_vec()));
-                pos += end + PASTE_END.len();
-                self.in_paste = false;
-                continue;
+                let from = self.paste_scanned.saturating_sub(PASTE_END.len() - 1);
+                if let Some(end) = find(&rest[from..], PASTE_END).map(|i| i + from) {
+                    out.push(Input::Paste(rest[..end].to_vec()));
+                    pos += end + PASTE_END.len();
+                    self.in_paste = false;
+                    self.paste_scanned = 0;
+                    continue;
+                }
+                self.paste_scanned = rest.len();
+                if rest.len() > PASTE_CAP {
+                    // Pass the content on, keeping only what could be the
+                    // start of the end marker.
+                    let keep = PASTE_END.len() - 1;
+                    let n = rest.len() - keep;
+                    out.push(Input::Paste(rest[..n].to_vec()));
+                    pos += n;
+                    self.paste_scanned = keep;
+                }
+                break;
             }
             if pos == self.buf.len() {
                 break;
@@ -370,7 +411,10 @@ impl Decoder {
                     pos += n;
                     match tok {
                         Tok::Input(i) => out.push(i),
-                        Tok::PasteStart => self.in_paste = true,
+                        Tok::PasteStart => {
+                            self.in_paste = true;
+                            self.paste_scanned = 0;
+                        }
                         Tok::Ignore => {}
                     }
                 }
@@ -433,7 +477,8 @@ fn step(buf: &[u8], force: bool) -> Step {
         b'O' => match buf.get(2) {
             Some(&b) => match ss3(b) {
                 Some(code) => Step::Done(3, key_tok(code, Mods::default())),
-                None => Step::Done(3, Tok::Ignore),
+                // Not SS3: M-O, and the next byte is a key of its own.
+                None => Step::Done(2, meta('O')),
             },
             None if force => Step::Done(2, meta('O')),
             None => Step::Need,
@@ -473,8 +518,15 @@ fn plain(buf: &[u8], force: bool) -> Step {
         0xf0..=0xf4 => 4,
         _ => return Step::Done(1, Tok::Ignore),
     };
+    let avail = buf.len().min(len);
+    if !buf[1..avail].iter().all(|b| (0x80..=0xbf).contains(b)) {
+        // A broken character: drop the lead byte only, so the byte that
+        // broke it is decoded as itself.
+        return Step::Done(1, Tok::Ignore);
+    }
     if buf.len() < len {
-        // An incomplete character at the deadline is dropped.
+        // An incomplete character at the deadline is dropped (the lead and
+        // its continuation bytes, all that is there).
         return if force {
             Step::Done(buf.len(), Tok::Ignore)
         } else {
@@ -585,6 +637,10 @@ fn csi_meaning(params: &[u8], fin: u8) -> Tok {
         return Tok::Ignore;
     }
     let f = fields(params);
+    if f.get(1).and_then(|sub| sub.get(1).copied().flatten()) == Some(3) {
+        // A kitty release event (flag 2), whatever the final byte.
+        return Tok::Ignore;
+    }
     let field = |n: usize| f.get(n).and_then(|sub| sub.first().copied().flatten());
     let mods = mods_from(f.get(1).and_then(|sub| sub.first().copied().flatten()));
     let letter = |code| key_tok(code, mods);
@@ -599,13 +655,7 @@ fn csi_meaning(params: &[u8], fin: u8) -> Tok {
         b'P' => letter(KeyCode::F(1)),
         b'Q' => letter(KeyCode::F(2)),
         b'S' => letter(KeyCode::F(4)),
-        b'Z' => key_tok(
-            KeyCode::Tab,
-            Mods {
-                shift: true,
-                ..mods
-            },
-        ),
+        b'Z' => letter(KeyCode::BackTab),
         b'I' if params.is_empty() => Tok::Input(Input::Focus(true)),
         b'O' if params.is_empty() => Tok::Input(Input::Focus(false)),
         b'~' => match field(0) {
@@ -648,9 +698,6 @@ fn kitty_key(f: &[Vec<Option<u32>>]) -> Tok {
     let shifted = key_field.get(1).copied().flatten();
     let mod_field = f.get(1).map(Vec::as_slice).unwrap_or(&[]);
     let mods = mods_from(mod_field.first().copied().flatten());
-    if mod_field.get(1).copied().flatten() == Some(3) {
-        return Tok::Ignore; // release
-    }
     if code == 0 {
         // A pure text event: the key is the text.
         let text = f.get(2).and_then(|t| t.first().copied().flatten());
@@ -778,18 +825,32 @@ impl KeyTables {
         self.tables
             .entry(table.to_string())
             .or_default()
-            .insert(key.normalized(), Binding { argv, repeat });
+            .insert(key, Binding { argv, repeat });
     }
 
-    /// Remove a binding; whether one was there.
+    /// Remove the binding of exactly `key` (as spelled); whether one was
+    /// there.
     pub fn unbind(&mut self, table: &str, key: &Key) -> bool {
         self.tables
             .get_mut(table)
-            .is_some_and(|t| t.remove(&key.normalized()).is_some())
+            .is_some_and(|t| t.remove(key).is_some())
     }
 
+    /// The binding for `key`: the one spelled exactly as `key`, else the
+    /// one spelled as its folded form, else any whose folded form matches
+    /// (the first by name, so the choice is stable).
     pub fn get(&self, table: &str, key: &Key) -> Option<&Binding> {
-        self.tables.get(table)?.get(&key.normalized())
+        let t = self.tables.get(table)?;
+        if let Some(b) = t.get(key) {
+            return Some(b);
+        }
+        let folded = key.folded();
+        t.get(&folded).or_else(|| {
+            t.iter()
+                .filter(|(k, _)| k.folded() == folded)
+                .min_by_key(|(k, _)| k.to_string())
+                .map(|(_, b)| b)
+        })
     }
 }
 
@@ -870,7 +931,13 @@ impl KeyState {
     ) -> Routed {
         match input {
             Input::Key(key) => self.route_key(key, now, tables, settings, modes),
-            Input::Paste(data) => Routed::ToPane(encode_paste(data, modes)),
+            // Never matched; like tmux 3.7b, a paste also ends a pending
+            // prefix or repeat (recorded: prefix, then a paste, leaves the
+            // client in root).
+            Input::Paste(data) => {
+                self.set_table(ROOT_TABLE);
+                Routed::ToPane(encode_paste(data, modes))
+            }
             // ponytail: mouse routing (bindable mouse keys, pane forwarding)
             // is M3's (TC.10); M2 decodes and drops it.
             Input::Mouse(_) => Routed::Consumed,
@@ -889,13 +956,13 @@ impl KeyState {
         settings: &KeySettings,
         modes: &InputModes,
     ) -> Routed {
-        let key = key.normalized();
+        let key = *key;
         self.expire(now);
         let mut repeating = self.repeat_until.is_some();
         let mut first = self.table.clone();
         loop {
             // The prefix always wins, unless already in the prefix table.
-            if settings.prefix == Some(key) && self.table != PREFIX_TABLE {
+            if settings.prefix.is_some_and(|p| p.matches(&key)) && self.table != PREFIX_TABLE {
                 self.set_table(PREFIX_TABLE);
                 return Routed::Consumed;
             }
@@ -940,12 +1007,11 @@ impl KeyState {
 /// The bytes a terminal would send for `key` to a program with `modes`.
 /// Empty when the key has no encoding there.
 pub fn encode(key: &Key, modes: &InputModes) -> Vec<u8> {
-    let key = key.normalized();
     let flags = modes.kitty_flags;
     if flags & (1 | 8) != 0 {
-        kitty_encode(&key, modes, flags)
+        kitty_encode(key, modes, flags)
     } else {
-        legacy_encode(&key, modes)
+        legacy_encode(key, modes)
     }
 }
 
@@ -1026,7 +1092,9 @@ fn utf8(c: char) -> Vec<u8> {
 }
 
 /// What screen-256color panes expect, as tmux 3.7b sends it: modifiers a
-/// legacy form cannot carry are dropped (`C-Enter` is `\r`).
+/// legacy form cannot carry are dropped (`C-Enter` is `\r`, `S-a` is `a`,
+/// `S-Tab` is `\t`), and keys tmux cannot send at all (`C-BSpace`,
+/// `C-Escape`: its send-keys types them as text) send nothing.
 // ponytail: no modifyOtherKeys or tmux `extended-keys` encodings; a pane
 // that wants richer keys pushes kitty flags.
 fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
@@ -1038,10 +1106,11 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
             None => out.extend(utf8(c)),
         },
         KeyCode::Enter => out.push(b'\r'),
+        KeyCode::Escape | KeyCode::Backspace if m.ctrl => return Vec::new(),
         KeyCode::Escape => out.push(ESC),
-        KeyCode::Backspace => out.push(if m.ctrl { 0x08 } else { 0x7f }),
-        // tmux sends back-tab without the meta prefix.
-        KeyCode::Tab if m.shift => return b"\x1b[Z".to_vec(),
+        KeyCode::Backspace => out.push(0x7f),
+        // tmux sends back-tab with no meta prefix, whatever the modifiers.
+        KeyCode::BackTab => return b"\x1b[Z".to_vec(),
         KeyCode::Tab => out.push(b'\t'),
         code => {
             let Some(f) = functional(code, false) else {
@@ -1080,25 +1149,30 @@ fn kitty_encode(key: &Key, modes: &InputModes, flags: u8) -> Vec<u8> {
     };
     match key.code {
         KeyCode::Char(c) => {
+            // The key code is the unshifted key; shift is a modifier.
             let (base, shifted) = if c.is_ascii_uppercase() {
                 mods.shift = true;
                 (c.to_ascii_lowercase(), Some(c))
+            } else if c.is_ascii_lowercase() && mods.shift {
+                (c, Some(c.to_ascii_uppercase()))
             } else {
                 (c, None)
             };
+            // The text a kitty terminal would type: `S-a` types `A`.
+            let typed = shifted.unwrap_or(c);
             let makes_text = !mods.ctrl && !mods.alt && !mods.super_;
             if makes_text && !all {
-                return utf8(c);
+                return utf8(typed);
             }
             // ponytail: the shifted key is known only for ASCII letters
-            // (the canonical Key keeps no base layout key), so `!` goes as
-            // 33 rather than kitty's 49 with shift.
+            // (a Key keeps no base layout key), so `!` goes as 33 rather
+            // than kitty's 49 with shift.
             let mut s = format!("\x1b[{}", base as u32);
             if let (true, Some(sh)) = (flags & 4 != 0, shifted) {
                 s.push_str(&format!(":{}", sh as u32));
             }
             let m = kitty_mod(mods);
-            let text = (all && flags & 16 != 0 && makes_text).then_some(c as u32);
+            let text = (all && flags & 16 != 0 && makes_text).then_some(typed as u32);
             match (m, text) {
                 (1, None) => {}
                 (m, None) => s.push_str(&format!(";{m}")),
@@ -1120,6 +1194,14 @@ fn kitty_encode(key: &Key, modes: &InputModes, flags: u8) -> Vec<u8> {
             };
             csi_u(n, mods)
         }
+        // Back-tab is shift+Tab to kitty.
+        KeyCode::BackTab => csi_u(
+            9,
+            Mods {
+                shift: true,
+                ..mods
+            },
+        ),
         KeyCode::F(n @ 13..=35) => csi_u(57376 + u32::from(n) - 13, mods),
         code => {
             let param = kitty_mod(mods);
@@ -1202,6 +1284,14 @@ mod tests {
             ("C-Space", "C-Space"),
             ("M-Enter", "M-Enter"),
             ("é", "é"),
+            // tmux keeps shift as written: these are keys of their own.
+            ("C-S-a", "C-S-a"),
+            ("S-a", "S-a"),
+            ("M-S-a", "M-S-a"),
+            ("S-Tab", "S-Tab"),
+            ("C-S-A", "C-S-A"),
+            ("S-BTab", "S-BTab"),
+            ("C-BSpace", "C-BSpace"),
         ];
         for (input, shown) in cases {
             assert_eq!(k(input).to_string(), shown, "{input}");
@@ -1224,13 +1314,74 @@ mod tests {
         assert_eq!(parse_prefix("foo"), Err("bad key: foo".to_string()));
     }
 
+    /// tmux 3.7b lists C-A, C-S-a, S-a and A as four bindings, and S-Tab
+    /// and BTab as two, so they stay distinct keys; only matching folds.
     #[test]
-    fn shift_folds_into_ascii_letters() {
-        assert_eq!(k("S-a"), k("A"));
-        assert_eq!(k("C-S-a"), k("C-A"));
-        assert_eq!(k("S-A"), k("A"));
-        assert_eq!(k("BTab"), k("S-Tab"));
-        assert_ne!(k("S-Up"), k("Up"));
+    fn shift_spellings_are_distinct_keys_that_fold_alike() {
+        let distinct = [
+            ("C-A", "C-S-a"),
+            ("S-a", "A"),
+            ("M-S-a", "M-A"),
+            ("S-Tab", "BTab"),
+        ];
+        for (x, y) in distinct {
+            assert_ne!(k(x), k(y), "{x} vs {y}");
+            assert_eq!(k(x).folded(), k(y).folded(), "{x} folds like {y}");
+            assert!(k(x).matches(&k(y)));
+        }
+        assert!(!k("S-Up").matches(&k("Up")));
+        assert!(!k("a").matches(&k("A")));
+
+        let mut t = KeyTables::default();
+        t.bind(ROOT_TABLE, k("C-A"), argv(&["one"]), false);
+        t.bind(ROOT_TABLE, k("C-S-a"), argv(&["two"]), false);
+        assert_eq!(
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            Some("one")
+        );
+        assert_eq!(
+            t.get(ROOT_TABLE, &k("C-S-a")).map(|b| &b.argv[0][..]),
+            Some("two")
+        );
+        t.bind(ROOT_TABLE, k("S-Tab"), argv(&["three"]), false);
+        t.bind(ROOT_TABLE, k("BTab"), argv(&["four"]), false);
+        assert_eq!(
+            t.get(ROOT_TABLE, &k("S-Tab")).map(|b| &b.argv[0][..]),
+            Some("three")
+        );
+        assert_eq!(
+            t.get(ROOT_TABLE, &k("BTab")).map(|b| &b.argv[0][..]),
+            Some("four")
+        );
+        assert!(t.unbind(ROOT_TABLE, &k("C-S-a")));
+        assert_eq!(
+            t.get(ROOT_TABLE, &k("C-A")).map(|b| &b.argv[0][..]),
+            Some("one")
+        );
+    }
+
+    /// A binding matches whichever spelling the terminal sends.
+    #[test]
+    fn bindings_match_the_folded_spelling() {
+        let mut t = KeyTables::default();
+        t.bind(ROOT_TABLE, k("C-A"), argv(&["ca"]), false);
+        t.bind(ROOT_TABLE, k("S-Tab"), argv(&["stab"]), false);
+        t.bind(ROOT_TABLE, k("M-S-a"), argv(&["msa"]), false);
+        t.bind(PREFIX_TABLE, k("BTab"), argv(&["btab"]), false);
+        let got = |table, bytes: &[u8]| {
+            let inputs = decode(bytes);
+            let [Input::Key(key)] = inputs.as_slice() else {
+                panic!("{bytes:?}");
+            };
+            t.get(table, key).map(|b| b.argv[0].clone())
+        };
+        // kitty ctrl+shift+a (C-S-a) finds C-A.
+        assert_eq!(got(ROOT_TABLE, b"\x1b[97;6u"), Some("ca".into()));
+        // legacy back-tab (BTab) finds S-Tab; kitty shift+Tab finds BTab.
+        assert_eq!(got(ROOT_TABLE, b"\x1b[Z"), Some("stab".into()));
+        assert_eq!(got(PREFIX_TABLE, b"\x1b[9;2u"), Some("btab".into()));
+        // legacy meta-A (M-A) finds M-S-a.
+        assert_eq!(got(ROOT_TABLE, b"\x1bA"), Some("msa".into()));
     }
 
     // ---- decoding ----
@@ -1340,11 +1491,11 @@ mod tests {
             (b"\x1b[98;5u", "C-b"),
             (b"\x1b[97;3u", "M-a"),
             (b"\x1b[97;7u", "C-M-a"),
-            (b"\x1b[97;4u", "M-A"),
-            (b"\x1b[97;6u", "C-A"),
+            (b"\x1b[97;4u", "M-S-a"),
+            (b"\x1b[97;6u", "C-S-a"),
             (b"\x1b[13;2u", "S-Enter"),
             (b"\x1b[13;5u", "C-Enter"),
-            (b"\x1b[9;2u", "BTab"),
+            (b"\x1b[9;2u", "S-Tab"),
             (b"\x1b[27;3u", "M-Escape"),
             (b"\x1b[32;5u", "C-Space"),
             (b"\x1b[37;5u", "C-%"),
@@ -1353,7 +1504,7 @@ mod tests {
             (b"\x1b[49:33;2u", "!"),
             (b"\x1b[113u", "q"),
             (b"\x1b[97;;97u", "a"),
-            (b"\x1b[97;2;65u", "A"),
+            (b"\x1b[97;2;65u", "S-a"),
             (b"\x1b[0;;229u", "å"),
             // flag 2: press and repeat are presses.
             (b"\x1b[97;5:1u", "C-a"),
@@ -1378,6 +1529,11 @@ mod tests {
     #[test]
     fn kitty_releases_and_modifier_keys_are_dropped() {
         assert_eq!(decode(b"\x1b[97;5:3u"), vec![]);
+        // Releases of functional keys use the legacy finals.
+        assert_eq!(decode(b"\x1b[1;5:3A"), vec![]);
+        assert_eq!(decode(b"\x1b[3;1:3~"), vec![]);
+        assert_eq!(decode(b"\x1b[1;1:3P"), vec![]);
+        assert_eq!(decode(b"\x1b[1;5:2A"), vec![key("C-Up")]);
         assert_eq!(decode(b"\x1b[57441;2u"), vec![]); // left shift
         assert_eq!(decode(b"\x1b[57358u"), vec![]); // caps lock
     }
@@ -1452,6 +1608,22 @@ mod tests {
     }
 
     #[test]
+    fn unknown_ss3_is_meta_o_and_the_next_byte_stays_a_key() {
+        assert_eq!(decode(b"\x1bOz"), vec![key("M-O"), key("z")]);
+        assert_eq!(decode(b"\x1bO\x1b[A"), vec![key("M-O"), key("Up")]);
+    }
+
+    #[test]
+    fn broken_utf8_never_swallows_the_next_key() {
+        assert_eq!(decode(b"\xc3a"), vec![key("a")]);
+        assert_eq!(decode(b"\xe2\x82a"), vec![key("a")]);
+        assert_eq!(decode(b"\xf0\x9f\x1b[A"), vec![key("Up")]);
+        assert_eq!(decode(b"\xc3\xa9\xff\x01"), vec![key("é"), key("C-a")]);
+        // Incomplete at the deadline: the lead and its continuations go.
+        assert_eq!(decode(b"\xe2\x82"), vec![]);
+    }
+
+    #[test]
     fn paste_is_one_opaque_blob() {
         let got = decode(b"a\x1b[200~\x02%\x1b[A\x1b\x1b[201~b");
         assert_eq!(
@@ -1469,13 +1641,64 @@ mod tests {
         let t = Instant::now();
         let mut d = Decoder::new();
         assert_eq!(d.feed(b"\x1b[200~hello \x1b[20", t, ET), vec![]);
-        // A paste never times out, however long the gap.
-        assert_eq!(d.deadline(ET), None);
-        assert_eq!(d.flush(t + Duration::from_secs(5), ET), vec![]);
+        // A paste does not end at escape-time; it waits 5 s for data.
+        assert_eq!(d.deadline(ET), Some(t + PASTE_TIMEOUT));
+        assert_eq!(d.flush(t + Duration::from_secs(1), ET), vec![]);
+        let t1 = t + Duration::from_secs(4);
         assert_eq!(
-            d.feed(b"1~x", t + Duration::from_secs(6), ET),
+            d.feed(b"1~x", t1, ET),
             vec![Input::Paste(b"hello ".to_vec()), key("x")]
         );
+    }
+
+    #[test]
+    fn a_paste_without_its_end_marker_ends_after_5s_without_data() {
+        let t = Instant::now();
+        let mut d = Decoder::new();
+        assert_eq!(d.feed(b"\x1b[200~abc", t, ET), vec![]);
+        let t1 = t + Duration::from_secs(3);
+        assert_eq!(d.feed(b"def", t1, ET), vec![]);
+        // Each read restarts the wait.
+        assert_eq!(d.deadline(ET), Some(t1 + PASTE_TIMEOUT));
+        assert_eq!(d.flush(t + PASTE_TIMEOUT, ET), vec![]);
+        assert_eq!(
+            d.flush(t1 + PASTE_TIMEOUT, ET),
+            vec![Input::Paste(b"abcdef".to_vec())]
+        );
+        assert_eq!(d.deadline(ET), None);
+        // Keys are keys again.
+        assert_eq!(d.feed(b"\x02", t1 + PASTE_TIMEOUT, ET), vec![key("C-b")]);
+    }
+
+    #[test]
+    fn a_long_unterminated_paste_is_passed_on_in_bounded_chunks() {
+        let t = Instant::now();
+        let mut d = Decoder::new();
+        let mut delivered = Vec::new();
+        let mut take = |out: Vec<Input>| {
+            for i in out {
+                let Input::Paste(p) = i else {
+                    panic!("{i:?}");
+                };
+                delivered.extend(p);
+            }
+        };
+        take(d.feed(PASTE_START, t, ET));
+        let chunk: Vec<u8> = (0..64 * 1024).map(|i| b'a' + (i % 26) as u8).collect();
+        let mut sent = Vec::new();
+        for _ in 0..40 {
+            take(d.feed(&chunk, t, ET));
+            sent.extend_from_slice(&chunk);
+            assert!(d.buf.len() <= PASTE_CAP + chunk.len(), "{}", d.buf.len());
+        }
+        // An end marker split across the chunk boundary is still found.
+        take(d.feed(b"tail\x1b[2", t, ET));
+        sent.extend_from_slice(b"tail");
+        take(d.feed(b"01~", t, ET));
+        assert!(!d.in_paste);
+        assert!(d.buf.is_empty());
+        assert_eq!(delivered.len(), sent.len());
+        assert!(delivered == sent);
     }
 
     #[test]
@@ -1675,6 +1898,30 @@ mod tests {
             c.send(b"\x02\x1b[200~%\x1b[201~", t),
             vec![Routed::Consumed, pane(b"%")]
         );
+        // tmux 3.7b (recorded through an attached client on a private
+        // socket): the paste goes to the pane and the client is back in
+        // root, so the next key is typing.
+        assert_eq!(c.state.table(), ROOT_TABLE);
+        assert_eq!(c.send(b"%", t), vec![pane(b"%")]);
+        // A paste also ends a repeat.
+        c.send(b"\x02\x1b[A", t);
+        assert!(c.state.deadline().is_some());
+        c.send(b"\x1b[200~x\x1b[201~", t);
+        assert_eq!(c.state.deadline(), None);
+        assert_eq!(c.send(b"\x1b[A", t), vec![pane(b"\x1b[A")]);
+    }
+
+    #[test]
+    fn kitty_ctrl_shift_letter_hits_a_prefix_written_c_s() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.settings.prefix = Some(k("C-S-a"));
+        assert_eq!(
+            c.send(b"\x1b[97;6u%", t),
+            vec![Routed::Consumed, cmd(&["split-window", "-h"])]
+        );
+        c.settings.prefix = Some(k("C-A"));
+        assert_eq!(c.send(b"\x1b[97;6u", t), vec![Routed::Consumed]);
     }
 
     #[test]
@@ -1899,9 +2146,28 @@ mod tests {
             ("F5", b"\x1b[15~"),
             ("M-F5", b"\x1b[15;3~"),
             ("F12", b"\x1b[24~"),
+            // Shift spellings, recorded the same way.
+            ("S-a", b"a"),
+            ("S-A", b"A"),
+            ("M-S-a", b"\x1ba"),
+            ("C-S-a", b"\x01"),
+            ("C-S-A", b"\x01"),
+            ("S-1", b"1"),
+            ("S-Tab", b"\t"),
+            ("C-S-Tab", b"\t"),
+            ("M-S-Tab", b"\x1b\t"),
+            ("S-BTab", b"\x1b[Z"),
+            ("C-BTab", b"\x1b[Z"),
+            ("S-BSpace", b"\x7f"),
+            ("S-Escape", b"\x1b"),
+            ("C-S-Enter", b"\r"),
         ];
         for (name, want) in cases {
             assert_eq!(enc(name, &m), want.to_vec(), "{name}");
+        }
+        // tmux cannot send these (its send-keys types them as text).
+        for name in ["C-BSpace", "C-Escape", "C-M-BSpace", "C-M-Escape"] {
+            assert_eq!(enc(name, &m), Vec::<u8>::new(), "{name}");
         }
         // Keys with no legacy form send nothing.
         assert_eq!(encode(&Key::plain(KeyCode::F(13)), &m), Vec::<u8>::new());
@@ -1948,6 +2214,10 @@ mod tests {
             ("C-Enter", b"\x1b[13;5u"),
             ("M-Enter", b"\x1b[13;3u"),
             ("BTab", b"\x1b[9;2u"),
+            ("S-Tab", b"\x1b[9;2u"),
+            ("S-a", b"A"),
+            ("C-S-a", b"\x1b[97;6u"),
+            ("M-S-a", b"\x1b[97;4u"),
             ("C-BSpace", b"\x1b[127;5u"),
             ("Up", b"\x1b[A"),
             ("C-Up", b"\x1b[1;5A"),
@@ -1986,6 +2256,7 @@ mod tests {
         let cases: &[(&str, &[u8])] = &[
             ("q", b"\x1b[113u"),
             ("A", b"\x1b[97;2u"),
+            ("S-a", b"\x1b[97;2u"),
             ("!", b"\x1b[33u"),
             ("Space", b"\x1b[32u"),
             ("Enter", b"\x1b[13u"),
@@ -2021,6 +2292,7 @@ mod tests {
         assert_eq!(enc("a", &modes(8 | 16)), b"\x1b[97;;97u");
         assert_eq!(enc("A", &modes(8 | 16)), b"\x1b[97;2;65u");
         assert_eq!(enc("A", &modes(8 | 4 | 16)), b"\x1b[97:65;2;65u");
+        assert_eq!(enc("S-a", &modes(8 | 4 | 16)), b"\x1b[97:65;2;65u");
         // Keys that make no text carry none.
         assert_eq!(enc("C-a", &modes(8 | 16)), b"\x1b[97;5u");
         assert_eq!(enc("Enter", &modes(8 | 16)), b"\x1b[13u");
