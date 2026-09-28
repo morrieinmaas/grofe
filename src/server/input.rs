@@ -877,6 +877,50 @@ impl KeyTables {
     }
 }
 
+/// The default key table (spec §5.3): tmux 3.7b's stock `prefix` bindings
+/// for the commands grofe has so far, with repeat where tmux has `-r`. New
+/// panes and windows open in the active pane's cwd (spec §5.3), which tmux
+/// leaves to a `-c '#{pane_current_path}'` in the user's config. Stock keys
+/// whose commands arrive later (`x` and `&` need `confirm-before`, `,` and
+/// `$` need `command-prompt`, `o` needs `+` target offsets) stay unbound.
+pub fn default_bindings() -> KeyTables {
+    let mut t = KeyTables::default();
+    let mut bind = |key: &str, argv: &[&str], repeat: bool| {
+        let argv = argv.iter().map(|s| s.to_string()).collect();
+        if let Ok(key) = parse_key(key) {
+            t.bind(PREFIX_TABLE, key, argv, repeat);
+        }
+    };
+    let here = "#{pane_current_path}";
+    bind("%", &["split-window", "-h", "-c", here], false);
+    bind("\"", &["split-window", "-c", here], false);
+    bind("c", &["new-window", "-c", here], false);
+    bind("d", &["detach-client"], false);
+    bind("n", &["next-window"], false);
+    bind("p", &["previous-window"], false);
+    bind("l", &["last-window"], false);
+    bind("(", &["switch-client", "-p"], false);
+    bind(")", &["switch-client", "-n"], false);
+    bind("L", &["switch-client", "-l"], false);
+    bind("z", &["resize-pane", "-Z"], false);
+    bind("C-b", &["send-prefix"], false);
+    for n in 0..=9 {
+        let target = format!(":{n}");
+        bind(&n.to_string(), &["select-window", "-t", &target], false);
+    }
+    for (key, flag) in [
+        ("Up", "-U"),
+        ("Down", "-D"),
+        ("Left", "-L"),
+        ("Right", "-R"),
+    ] {
+        bind(key, &["select-pane", flag], true);
+        bind(&format!("M-{key}"), &["resize-pane", flag, "5"], true);
+        bind(&format!("C-{key}"), &["resize-pane", flag], true);
+    }
+    t
+}
+
 /// The session options routing depends on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeySettings {
@@ -2421,5 +2465,83 @@ mod tests {
         assert_eq!(encode_paste(b"hi", true, false, &bracketed), b"\x1b[200~hi");
         assert_eq!(encode_paste(b"hi", false, false, &bracketed), b"hi");
         assert_eq!(encode_paste(b"hi", false, true, &bracketed), b"hi\x1b[201~");
+    }
+
+    // ---- default key table (T2.5b) ----
+
+    fn words(b: &Binding) -> Vec<&str> {
+        b.argv.iter().map(String::as_str).collect()
+    }
+
+    /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a
+    /// private server) for the commands M2 has, with new panes and windows
+    /// in the active pane's cwd (spec §5.3).
+    #[test]
+    fn default_bindings_are_tmux_stock_for_the_m2_commands() {
+        let t = default_bindings();
+        let cases: &[(&str, &[&str], bool)] = &[
+            (
+                "%",
+                &["split-window", "-h", "-c", "#{pane_current_path}"],
+                false,
+            ),
+            ("\"", &["split-window", "-c", "#{pane_current_path}"], false),
+            ("c", &["new-window", "-c", "#{pane_current_path}"], false),
+            ("d", &["detach-client"], false),
+            ("n", &["next-window"], false),
+            ("p", &["previous-window"], false),
+            ("l", &["last-window"], false),
+            ("(", &["switch-client", "-p"], false),
+            (")", &["switch-client", "-n"], false),
+            ("L", &["switch-client", "-l"], false),
+            ("z", &["resize-pane", "-Z"], false),
+            ("0", &["select-window", "-t", ":0"], false),
+            ("9", &["select-window", "-t", ":9"], false),
+            ("C-b", &["send-prefix"], false),
+            ("Up", &["select-pane", "-U"], true),
+            ("Down", &["select-pane", "-D"], true),
+            ("Left", &["select-pane", "-L"], true),
+            ("Right", &["select-pane", "-R"], true),
+            ("M-Up", &["resize-pane", "-U", "5"], true),
+            ("M-Right", &["resize-pane", "-R", "5"], true),
+            ("C-Down", &["resize-pane", "-D"], true),
+            ("C-Left", &["resize-pane", "-L"], true),
+        ];
+        for (name, argv, repeat) in cases {
+            let b = t
+                .get(PREFIX_TABLE, &k(name))
+                .unwrap_or_else(|| panic!("{name} unbound"));
+            assert_eq!(words(b), *argv, "{name}");
+            assert_eq!(b.repeat, *repeat, "{name} repeat");
+        }
+        // Nothing in root: every key there goes to the pane.
+        assert!(t.get(ROOT_TABLE, &k("q")).is_none());
+        // Stock keys whose commands M2 lacks stay unbound.
+        for name in ["x", "&", ",", "$", ":", "o", ";", "q", "s", "w", "[", "]"] {
+            assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn every_default_binding_parses_as_a_command() {
+        let t = default_bindings();
+        for b in t.tables.values().flat_map(|t| t.values()) {
+            if let Err(e) = crate::cmd::parse(&b.argv) {
+                panic!("{:?}: {e}", b.argv);
+            }
+        }
+    }
+
+    #[test]
+    fn default_arrows_repeat_without_the_prefix() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables = default_bindings();
+        assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
+        assert_eq!(c.send(b"\x1b[D", t), vec![cmd(&["select-pane", "-L"])]);
+        // Within repeat-time, another arrow needs no prefix.
+        assert_eq!(c.send(b"\x1b[A", t), vec![cmd(&["select-pane", "-U"])]);
+        // A key that does not repeat ends the repeat and goes to the pane.
+        assert_eq!(c.send(b"x", t), vec![pane(b"x")]);
     }
 }

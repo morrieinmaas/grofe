@@ -12,3 +12,4 @@
 mod harness;
 mod self_test;
 mod t2_5a;
+mod t2_5b;

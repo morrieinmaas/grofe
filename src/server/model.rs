@@ -50,7 +50,7 @@ pub struct Session {
     pub cols: u16,
     pub rows: u16,
     /// The window that was active before `active` (MRU, for
-    /// `last-window`). No behaviour yet: T2.5b maintains it.
+    /// `last-window`), kept by [`Model::select_window`].
     pub last_window: Option<WindowId>,
 }
 
@@ -116,7 +116,8 @@ pub struct Model {
     /// `remain-on-exit` is seeded from the server's start options.
     pub options: Options,
     /// Each attached client's previous session (MRU, for `switch-client
-    /// -l`). No behaviour yet: T2.5a/T2.5b maintain it.
+    /// -l`). Switching a client records it; removing a session drops
+    /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
     next_session: u32,
     next_window: u32,
@@ -166,6 +167,20 @@ impl Model {
             session.windows.insert(pos, window.id);
         }
         self.windows.insert(window.id, window);
+    }
+
+    /// Makes `window` its session's active window; the one it replaces
+    /// becomes the session's last window (`last-window`), as in tmux.
+    pub fn select_window(&mut self, window: WindowId) {
+        let Some(session) = self.windows.get(&window).map(|w| w.session) else {
+            return;
+        };
+        if let Some(s) = self.sessions.get_mut(&session)
+            && s.active != window
+        {
+            s.last_window = Some(s.active);
+            s.active = window;
+        }
     }
 
     /// True once every session is gone, after at least one existed: the
@@ -271,11 +286,22 @@ impl Model {
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
             self.sessions.remove(&w.session);
+            self.client_last_session
+                .retain(|_, last| *last != w.session);
             return removed;
         }
+        let last = session.last_window.take().filter(|l| *l != window);
         if session.active == window {
-            let pos = pos.unwrap_or(0).min(session.windows.len() - 1);
-            session.active = session.windows[pos];
+            // As tmux: the last window takes over, else the one at the
+            // same position.
+            // ponytail: tmux keeps a stack of previous windows, so after
+            // this it still has a last window; grofe's single slot is empty.
+            session.active = match last {
+                Some(l) if session.windows.contains(&l) => l,
+                _ => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+            };
+        } else {
+            session.last_window = last;
         }
         removed
     }
@@ -286,6 +312,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);
         }

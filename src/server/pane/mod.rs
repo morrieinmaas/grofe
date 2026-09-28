@@ -32,6 +32,9 @@ use tokio::task::JoinHandle;
 
 pub use alacritty_terminal::term::cell::Flags as CellFlags;
 
+use crate::protocol::Caps;
+use crate::server::render::write_sgr;
+use crate::server::status::Style;
 use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
 use io::{InputQueue, Listener};
 use procinfo::ProcSample;
@@ -371,10 +374,26 @@ impl PaneHandle {
         Ok(())
     }
 
-    /// Plain-text lines per tmux's `capture-pane -p`: one line per row,
-    /// trailing blanks trimmed, each ending in `\n`.
+    /// Lines per tmux's `capture-pane -p`: one line per row, trailing
+    /// blanks trimmed, each ending in `\n`. With `escapes` (`-e`), an SGR
+    /// sequence from the renderer's `write_sgr` goes wherever the style
+    /// changes, carried across lines as tmux does.
     pub fn capture(&self, opts: &CaptureOpts) -> String {
-        // ponytail: `escapes` (-e) is ignored until the M2 renderer can emit SGR.
+        // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
+        // a style change.
+        let sgr_flags = CellFlags::BOLD
+            | CellFlags::DIM
+            | CellFlags::ITALIC
+            | CellFlags::ALL_UNDERLINES
+            | CellFlags::INVERSE
+            | CellFlags::HIDDEN
+            | CellFlags::STRIKEOUT;
+        let caps = Caps {
+            truecolor: true,
+            styled_underline: true,
+            ..Caps::default()
+        };
+        let mut pen = Style::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size() as i32;
@@ -394,6 +413,20 @@ impl PaneHandle {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
                     continue;
+                }
+                if opts.escapes {
+                    let style = Style {
+                        fg: cell.fg,
+                        bg: cell.bg,
+                        attrs: cell.flags & sgr_flags,
+                        underline_color: cell.underline_color(),
+                    };
+                    if style != pen {
+                        let mut sgr = Vec::new();
+                        write_sgr(&mut sgr, &style, &caps);
+                        text.push_str(&String::from_utf8_lossy(&sgr));
+                        pen = style;
+                    }
                 }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
                     text.push(' ');
