@@ -388,9 +388,9 @@ fn grofe_pane_from_another_server_is_ignored() {
 fn m2_verbs_answer_not_implemented_yet() {
     let srv = TestServer::start();
     new_session(&srv, "s");
+    // `attach` is not here: the CLI runs it as the attach client (T2.1),
+    // not as a one-shot request.
     for (argv, verb) in [
-        (&["attach", "-t", "s"][..], "attach-session"),
-        (&["attach-session", "--nest"][..], "attach-session"),
         (&["detach-client", "-a"][..], "detach-client"),
         (
             &["list-clients", "-F", "#{client_width}"][..],
