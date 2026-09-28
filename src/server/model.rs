@@ -49,9 +49,10 @@ pub struct Session {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
-    /// The window that was active before `active` (MRU, for
-    /// `last-window`), kept by [`Model::select_window`].
-    pub last_window: Option<WindowId>,
+    /// The windows that were active before `active`, most recent last
+    /// (tmux's `lastw` stack, for `last-window`), kept by
+    /// [`Model::select_window`] and [`Model::remove_window`].
+    pub last_windows: Vec<WindowId>,
 }
 
 pub struct Window {
@@ -170,7 +171,7 @@ impl Model {
     }
 
     /// Makes `window` its session's active window; the one it replaces
-    /// becomes the session's last window (`last-window`), as in tmux.
+    /// goes on top of the session's last-window stack, as in tmux.
     pub fn select_window(&mut self, window: WindowId) {
         let Some(session) = self.windows.get(&window).map(|w| w.session) else {
             return;
@@ -178,7 +179,8 @@ impl Model {
         if let Some(s) = self.sessions.get_mut(&session)
             && s.active != window
         {
-            s.last_window = Some(s.active);
+            s.last_windows.retain(|w| *w != window);
+            s.last_windows.push(s.active);
             s.active = window;
         }
     }
@@ -290,18 +292,14 @@ impl Model {
                 .retain(|_, last| *last != w.session);
             return removed;
         }
-        let last = session.last_window.take().filter(|l| *l != window);
+        session.last_windows.retain(|w| *w != window);
         if session.active == window {
             // As tmux: the last window takes over, else the one at the
             // same position.
-            // ponytail: tmux keeps a stack of previous windows, so after
-            // this it still has a last window; grofe's single slot is empty.
-            session.active = match last {
-                Some(l) if session.windows.contains(&l) => l,
-                _ => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+            session.active = match session.last_windows.pop() {
+                Some(l) => l,
+                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
             };
-        } else {
-            session.last_window = last;
         }
         removed
     }
@@ -618,7 +616,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
-            last_window: None,
+            last_windows: Vec::new(),
         });
         id
     }

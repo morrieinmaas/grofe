@@ -859,6 +859,12 @@ impl KeyTables {
             .is_some_and(|t| t.remove(key).is_some())
     }
 
+    /// Whether `table` exists: `root` always does, as in tmux; any other
+    /// once something was bound in it.
+    pub fn exists(&self, table: &str) -> bool {
+        table == ROOT_TABLE || self.tables.contains_key(table)
+    }
+
     /// The binding for `key`: the one spelled exactly as `key`, else the
     /// one spelled as its folded form, else any whose folded form matches
     /// (the first by name, so the choice is stable).

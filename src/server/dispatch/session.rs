@@ -53,7 +53,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cwd: cwd.clone(),
         cols: size.0,
         rows: size.1,
-        last_window: None,
+        last_windows: Vec::new(),
     });
     model.insert_window(Window {
         id: window,
@@ -130,6 +130,9 @@ pub fn switch_client(
 ) -> Result<String, String> {
     let id = clients::current_client(state, ctx).ok_or_else(|| "no current client".to_string())?;
     if let Some(table) = &c.key_table {
+        if !state.registry.key_tables.exists(table) {
+            return Err(format!("table {table} doesn't exist"));
+        }
         clients::set_key_table(state, id, table);
         return Ok(String::new());
     }

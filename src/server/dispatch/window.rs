@@ -171,9 +171,9 @@ pub fn last_window(state: &mut State, ctx: &ClientCtx, c: WindowStep) -> Result<
     let model = &mut state.model;
     let session = model.resolve_session(&c.target, ctx)?;
     let s = &model.sessions[&session];
-    let last = s
-        .last_window
-        .filter(|l| s.windows.contains(l))
+    let last = *s
+        .last_windows
+        .last()
         .ok_or_else(|| "no last window".to_string())?;
     model.select_window(last);
     Ok(String::new())

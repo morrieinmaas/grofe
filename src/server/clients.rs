@@ -880,8 +880,8 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
 }
 
 /// A message across the whole status row, in `message-style`.
-// ponytail: with `status off` the message still takes the last row, and
-// the window is cropped by one row while it shows.
+// ponytail: with `status off` the message still takes the last row,
+// drawn over the window's last row while it shows.
 fn message_line(text: &str, width: u16) -> StyledLine {
     let used = unicode_width::UnicodeWidthStr::width(text);
     let pad = usize::from(width).saturating_sub(used);
@@ -1179,7 +1179,83 @@ pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use tokio::sync::Notify;
+
     use super::*;
+    use crate::server::{StartOptions, events, pane};
+
+    /// A server state with no sessions and one client, as the actor
+    /// would hold it.
+    fn state_with_client() -> (State, ClientId) {
+        let (pane_events, _) = mpsc::channel(1);
+        let mut state = State {
+            socket: PathBuf::from("/nonexistent/grofe-test.sock"),
+            options: StartOptions {
+                restore_on_start: false,
+                remain_on_exit: false,
+            },
+            model: Model::new(false),
+            inner_term: pane::inner_term(),
+            pane_events,
+            wake: Arc::new(Notify::new()),
+            events: events::Events::default(),
+            clients: BTreeMap::new(),
+            registry: Registry::default(),
+            exit: false,
+            exit_when_empty: false,
+            connections: 0,
+            socket_id: None,
+        };
+        let id = ClientId(1);
+        let (outbox, _) = Outbox::new();
+        state.clients.insert(
+            id,
+            ClientEntry {
+                name: client_name(id),
+                session: SessionId(0),
+                ctx: ClientCtx {
+                    cwd: PathBuf::from("/"),
+                    pane: None,
+                    env: Vec::new(),
+                    client: Some(id),
+                },
+                size: (80, 24),
+                term: "xterm-256color".to_string(),
+                caps: Caps::default(),
+                activity: Instant::now(),
+                decoder: Decoder::new(),
+                keys: KeyState::new(),
+                focused: true,
+                message: None,
+                viewport: (0, 0),
+                dirty: false,
+                outbox,
+                exit: None,
+            },
+        );
+        (state, id)
+    }
+
+    #[test]
+    fn a_key_press_takes_a_message_down_before_display_time() {
+        let (mut state, id) = state_with_client();
+        show_message(&mut state, id, "no last window");
+        let shown = state.clients[&id].message.clone();
+        let (text, until) = shown.expect("message shown");
+        assert_eq!(text, "no last window");
+        // A focus report is not a key: the message stays.
+        let now = Instant::now();
+        input(&mut state, id, b"\x1b[O", now);
+        assert!(state.clients[&id].message.is_some());
+        // A key press well before the message expires takes it down.
+        assert!(now < until);
+        input(&mut state, id, b"x", now);
+        assert!(state.clients[&id].message.is_none());
+        assert!(state.clients[&id].dirty);
+    }
 
     #[test]
     fn a_new_client_takes_the_size_only_after_the_debounce() {

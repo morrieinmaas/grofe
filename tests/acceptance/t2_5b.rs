@@ -108,6 +108,9 @@ fn wait_client_session(srv: &TestServer, want: &str) {
 fn prefix_splits_arrows_move_and_prefix_d_detaches() {
     let srv = TestServer::start();
     new_session(&srv, "main", IDLE);
+    // Long enough that polling the CLI below never outlasts a repeat.
+    srv.cmd(&["set-option", "-t", "main", "repeat-time", "2000"])
+        .expect("repeat-time");
     let mut a = Harness::spawn(attach(&srv, "main"), 80, 24);
     a.wait_for("idle-pane");
 
@@ -121,15 +124,14 @@ fn prefix_splits_arrows_move_and_prefix_d_detaches() {
     a.send("\x1b[C");
     // Within repeat-time the arrow repeats without the prefix.
     wait_display(&srv, "main", "#{pane_index}", "2");
-    // Let the repeat run out, or the next prefix would be `send-prefix`.
-    sleep(Duration::from_millis(700));
 
+    // Still repeating: the prefix drops out of the repeat and is read
+    // again as a fresh prefix, so `"` splits.
     a.send(format!("{PREFIX}\""));
     wait_panes(&srv, "main", 3);
     wait_display(&srv, "main", "#{pane_index}", "3");
     a.send(format!("{PREFIX}\x1b[A"));
     wait_display(&srv, "main", "#{pane_index}", "2");
-    sleep(Duration::from_millis(700));
 
     a.send(format!("{PREFIX}d"));
     a.wait_for("[detached (from session main)]");
@@ -454,6 +456,48 @@ fn killing_the_active_window_falls_back_to_the_last_window() {
     assert_eq!(display(&srv, "main:", "#{window_index}"), "1");
 }
 
+/// The last window is a stack, as in tmux: with windows 1, 2 and 3,
+/// selecting 1 then 3 and killing 1 leaves 2 as the last window.
+#[test]
+fn the_last_window_is_a_stack() {
+    let srv = TestServer::start();
+    new_session(&srv, "main", IDLE);
+    srv.cmd(&["new-window", "-t", "main", IDLE]).expect("neww");
+    srv.cmd(&["new-window", "-t", "main", IDLE]).expect("neww");
+    srv.cmd(&["select-window", "-t", "main:1"]).expect("select");
+    srv.cmd(&["select-window", "-t", "main:3"]).expect("select");
+    srv.cmd(&["kill-window", "-t", "main:1"]).expect("kill");
+    srv.cmd(&["last-window", "-t", "main"]).expect("last");
+    assert_eq!(display(&srv, "main:", "#{window_index}"), "2");
+}
+
+/// When the active window's shell exits, the last window takes over and
+/// the one before it is still the last window.
+#[test]
+fn the_last_window_survives_the_active_windows_shell_exiting() {
+    let srv = TestServer::start();
+    srv.cmd(&["set-option", "-g", "remain-on-exit", "off"])
+        .expect("remain-on-exit");
+    new_session(&srv, "main", IDLE);
+    srv.cmd(&["new-window", "-t", "main", IDLE]).expect("neww");
+    srv.cmd(&["new-window", "-t", "main", "exec sh"])
+        .expect("neww");
+    srv.cmd(&["select-window", "-t", "main:1"]).expect("select");
+    srv.cmd(&["select-window", "-t", "main:3"]).expect("select");
+    srv.cmd(&["send-keys", "-t", "main:3", "exit", "Enter"])
+        .expect("send-keys");
+    if let Err(e) = wait_until(
+        || window_names(&srv, "main").lines().count() == 2,
+        Duration::from_secs(10),
+    ) {
+        panic!("{e}: {:?}", window_names(&srv, "main"));
+    }
+    // By position it would be window 2; the stack gives 1.
+    assert_eq!(display(&srv, "main:", "#{window_index}"), "1");
+    srv.cmd(&["last-window", "-t", "main"]).expect("last");
+    assert_eq!(display(&srv, "main:", "#{window_index}"), "2");
+}
+
 #[test]
 fn rename_session_checks_the_name_like_new_session() {
     let srv = TestServer::start();
@@ -501,6 +545,10 @@ fn switch_client_moves_the_current_client_between_sessions() {
     srv.cmd(&["switch-client", "-t", "b"]).expect("-t");
     wait_client_session(&srv, "b");
     a.wait_for("[b]");
+    assert_eq!(
+        srv.cmd(&["switch-client", "-T", "nosuch"]),
+        Err("table nosuch doesn't exist\n".to_string())
+    );
     srv.cmd(&["switch-client", "-T", "prefix"]).expect("-T");
     assert_eq!(
         srv.cmd(&["list-clients", "-F", "#{client_key_table}"])
@@ -556,6 +604,34 @@ fn capture_pane_e_keeps_colours_and_attributes() {
         styled,
         "plain \x1b[0;31mred\x1b[0m \x1b[0;1;4mbu\x1b[0m end\n\x1b[0;7minv\x1b[0m\n"
     );
+}
+
+/// A coloured cell in the last column, recorded on tmux 3.7b: trailing
+/// blanks go, the SGR before the last cell stays (tmux trims the blank
+/// even when it is coloured), and the pen carries into the next line.
+#[test]
+fn capture_pane_e_with_a_coloured_cell_in_the_last_column() {
+    let srv = TestServer::start();
+    new_session(
+        &srv,
+        "main",
+        "printf 'ab\\033[80G\\033[41m \\033[0m\\ncd\\033[80G\\033[31mX\\033[0m\\nef'; \
+         exec sleep 600",
+    );
+    srv.wait_for(
+        || srv.capture("main").contains("ef"),
+        Duration::from_secs(10),
+    )
+    .expect("pane output");
+    let styled = srv
+        .cmd(&["capture-pane", "-p", "-e", "-t", "main", "-E", "2"])
+        .expect("capture -e");
+    let want = format!(
+        "ab{}\x1b[0;41m\n\x1b[0mcd{}\x1b[0;31mX\n\x1b[0mef\n",
+        " ".repeat(77),
+        " ".repeat(77)
+    );
+    assert_eq!(styled, want);
 }
 
 #[test]
