@@ -585,7 +585,7 @@ fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
     let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
-        Some(client) => expand(text, &clients::ClientVars::new(client, Some(vars))),
+        Some(client) => expand(text, &clients::ClientVars::new(model, client, Some(vars))),
         None => expand(text, &vars),
     };
     Ok(format!("{out}\n"))
@@ -667,6 +667,11 @@ impl FormatVars for FormatCtx<'_> {
             "window_id" => w.id.to_string(),
             "window_active" => flag(s.active == w.id),
             "window_zoomed_flag" => flag(w.zoomed),
+            "window_width" => w.cols.to_string(),
+            "window_height" => w.rows.to_string(),
+            "window_panes" => w.layout.compute(w.area()).len().to_string(),
+            "session_windows" => s.windows.len().to_string(),
+            "session_attached" => s.attached.to_string(),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
             "pane_index" => {

@@ -1,5 +1,7 @@
 //! session commands.
 
+use std::time::Instant;
+
 use crate::cmd::{
     HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
 };
@@ -54,6 +56,8 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cols: size.0,
         rows: size.1,
         last_windows: Vec::new(),
+        activity: Instant::now(),
+        attached: 0,
     });
     model.insert_window(Window {
         id: window,

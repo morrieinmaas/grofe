@@ -10,6 +10,7 @@
 //! `env!("CARGO_BIN_EXE_grofe")`).
 
 mod harness;
+mod m2_gate;
 mod self_test;
 mod t2_5a;
 mod t2_5b;

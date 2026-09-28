@@ -27,7 +27,7 @@
 //!   active pane encoded for its modes.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::libc;
 use tokio::sync::{mpsc, oneshot};
@@ -37,8 +37,8 @@ use crate::protocol::{Caps, ClientCtx, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
-    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, Routed, default_bindings,
-    parse_prefix,
+    Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, ROOT_TABLE, Routed,
+    default_bindings, parse_prefix,
 };
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
@@ -158,6 +158,9 @@ pub struct ClientEntry {
     pub caps: Caps,
     /// Last input (or the attach itself).
     pub activity: Instant,
+    /// Wall-clock last input or attach (`client_activity`; unlike
+    /// `activity`, a switch does not count, as in tmux).
+    pub activity_time: SystemTime,
     pub decoder: Decoder,
     pub keys: KeyState,
     /// Whether the outer terminal has focus, from its focus reports (the
@@ -305,6 +308,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             term: req.term,
             caps: req.caps,
             activity: now,
+            activity_time: SystemTime::now(),
             decoder: Decoder::new(),
             keys: KeyState::new(),
             focused: true,
@@ -316,6 +320,8 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         },
     );
     state.registry.owners.insert(session, SizeOwner::new(id));
+    touch_session(&mut state.model, session);
+    sync_attached(state);
     changed(state);
     Ok(Accepted { id, output, exit })
 }
@@ -357,6 +363,28 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
         leave_session(state, id, old);
     }
     state.registry.owners.insert(session, SizeOwner::new(id));
+    touch_session(&mut state.model, session);
+    sync_attached(state);
+}
+
+/// Session activity (tmux's `session_update_activity`): what makes it the
+/// session a command without a pane or target runs against.
+fn touch_session(model: &mut Model, session: SessionId) {
+    if let Some(s) = model.sessions.get_mut(&session) {
+        s.activity = Instant::now();
+    }
+}
+
+/// Recounts `session_attached` for every session.
+fn sync_attached(state: &mut State) {
+    for s in state.model.sessions.values_mut() {
+        s.attached = 0;
+    }
+    for c in state.clients.values() {
+        if let Some(s) = state.model.sessions.get_mut(&c.session) {
+            s.attached += 1;
+        }
+    }
 }
 
 /// `switch-client -T`: client `id`'s key table.
@@ -443,6 +471,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
         let _ = tx.send(reason);
     }
     state.model.client_last_session.remove(&id);
+    sync_attached(state);
     leave_session(state, id, c.session);
 }
 
@@ -837,7 +866,7 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
     };
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let length = |name: &str| opt(name).parse::<u16>().unwrap_or(0);
-    let vars = ClientVars::new(c, active.map(|p| FormatCtx::new(model, p)));
+    let vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
     let windows: Vec<(String, ClientVars)> = s
         .windows
         .iter()
@@ -855,7 +884,7 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
                 .to_string();
             Some((
                 format,
-                ClientVars::new(c, Some(FormatCtx::new(model, w.active))),
+                ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))),
             ))
         })
         .collect();
@@ -910,13 +939,30 @@ fn local_now() -> libc::tm {
 /// `client_width`/`client_height`), falling through to the pane's
 /// [`FormatCtx`].
 pub struct ClientVars<'a> {
+    model: &'a Model,
     client: &'a ClientEntry,
     pane: Option<FormatCtx<'a>>,
 }
 
 impl<'a> ClientVars<'a> {
-    pub fn new(client: &'a ClientEntry, pane: Option<FormatCtx<'a>>) -> ClientVars<'a> {
-        ClientVars { client, pane }
+    pub fn new(
+        model: &'a Model,
+        client: &'a ClientEntry,
+        pane: Option<FormatCtx<'a>>,
+    ) -> ClientVars<'a> {
+        ClientVars {
+            model,
+            client,
+            pane,
+        }
+    }
+
+    fn session_name(&self, session: SessionId) -> String {
+        self.model
+            .sessions
+            .get(&session)
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -935,7 +981,30 @@ impl FormatVars for ClientVars<'_> {
             } else {
                 "attached,UTF-8".to_string()
             }),
-            "client_session" => self.pane.as_ref()?.get("session_name"),
+            // tmux: 1 while the client is in any table but its session's
+            // `key-table` (always `root` here).
+            "client_prefix" => Some(
+                if c.keys.table() == ROOT_TABLE {
+                    "0"
+                } else {
+                    "1"
+                }
+                .to_string(),
+            ),
+            "client_activity" => Some(
+                c.activity_time
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs())
+                    .to_string(),
+            ),
+            "client_session" => Some(self.session_name(c.session)),
+            "client_last_session" => Some(
+                self.model
+                    .client_last_session
+                    .get(&c.ctx.client?)
+                    .map(|s| self.session_name(*s))
+                    .unwrap_or_default(),
+            ),
             _ => self.pane.as_ref()?.get(name),
         }
     }
@@ -983,10 +1052,13 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
         return;
     };
     c.activity = now;
+    c.activity_time = SystemTime::now();
+    let session = c.session;
     let inputs = c.decoder.feed(bytes, now, escape);
-    if let Some(owner) = state.registry.owners.get_mut(&c.session) {
+    if let Some(owner) = state.registry.owners.get_mut(&session) {
         owner.activity(id, now);
     }
+    touch_session(&mut state.model, session);
     for input in inputs {
         // As tmux: a key press takes a message down, and still counts.
         if let Input::Key(_) = input
@@ -1171,7 +1243,7 @@ pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
         .values()
         .map(|client| {
             let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
-            let vars = ClientVars::new(client, pane);
+            let vars = ClientVars::new(model, client, pane);
             format!("{}\n", cmd::expand(&format, &vars))
         })
         .collect())
@@ -1226,6 +1298,7 @@ mod tests {
                 term: "xterm-256color".to_string(),
                 caps: Caps::default(),
                 activity: Instant::now(),
+                activity_time: SystemTime::now(),
                 decoder: Decoder::new(),
                 keys: KeyState::new(),
                 focused: true,
