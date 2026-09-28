@@ -332,6 +332,8 @@ async fn serve(
     let signals = (
         signal(SignalKind::terminate()).context("installing SIGTERM handler")?,
         signal(SignalKind::interrupt()).context("installing SIGINT handler")?,
+        // A handler, not SIG_IGN, which panes would inherit across exec.
+        signal(SignalKind::hangup()).context("installing SIGHUP handler")?,
     );
     let listener = match UnixListener::bind(&socket) {
         Ok(l) => l,
@@ -428,7 +430,11 @@ async fn actor(
     conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
-    (mut sigterm, mut sigint): (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
+    (mut sigterm, mut sigint, mut sighup): (
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+    ),
 ) -> State {
     // Set after an accept error: accepting pauses, commands and pane events
     // keep flowing.
@@ -472,6 +478,8 @@ async fn actor(
                 eprintln!("grofe server: SIGINT");
                 break;
             }
+            // As tmux's server: SIGHUP (its terminal going away) is ignored.
+            _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
         exit_if_empty(&mut state, &listener);
         if state.exit {
