@@ -64,6 +64,8 @@ fn main() -> ExitCode {
             }
         }
         "attach-session" | "attach" => attach(&globals.socket(), rest),
+        // File layers only: never starts or contacts a server (R8).
+        "show-config" => grofe::config::show_config(&rest[1..]),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
