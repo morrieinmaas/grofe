@@ -748,7 +748,7 @@ fn a_subscriber_keeps_an_empty_auto_started_server_until_it_closes() {
     let mut sub = srv.subscribe(&["option-changed"]).unwrap();
 
     // A first request that leaves no session arms the exit-when-empty rule.
-    let out = srv.run(&["new-session", "-d", "-c", "/nonexistent/grofe-t16"]);
+    let out = srv.run(&["new-session", "-d", "-x", "not-a-width"]);
     assert!(!out.status.success(), "{out:?}");
     thread::sleep(QUIET);
     assert!(

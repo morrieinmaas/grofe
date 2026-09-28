@@ -25,6 +25,7 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Proces
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
 use nix::pty::{Winsize, openpty};
+use nix::unistd::{AccessFlags, access};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -298,7 +299,7 @@ impl PaneHandle {
             rows: spec.rows.max(1),
         };
         let (master, child) = spawn_child(&spec, size)?;
-        let pid = child.id();
+        let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
 
@@ -547,7 +548,8 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
 }
 
 /// The shell for a pane with no argv: `SHELL` from the spawn env, then the
-/// server's, then `/bin/sh`.
+/// server's; `/bin/sh` when neither is set or the one found is not an
+/// executable absolute path (tmux's `checkshell`).
 fn default_shell(spec: &PaneSpawn) -> String {
     spec.env
         .iter()
@@ -555,13 +557,36 @@ fn default_shell(spec: &PaneSpawn) -> String {
         .find(|(k, _)| k == "SHELL")
         .map(|(_, v)| v.clone())
         .or_else(|| std::env::var("SHELL").ok())
-        .filter(|s| !s.is_empty())
+        .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
+/// The directory a pane starts in: `cwd` if it is one, else `$HOME`, else
+/// `/`, as tmux falls back when it cannot `chdir`.
+pub fn usable_cwd(cwd: PathBuf) -> PathBuf {
+    if cwd.is_dir() {
+        return cwd;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Whether a spawn error came from `fork` itself rather than from the
+/// child's setup or `exec`: only those fail the command, as in tmux.
+fn is_fork_error(e: &stdio::Error) -> bool {
+    matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ENOMEM))
+}
+
 /// Open a pty and spawn the child on it (spec §4.8). Returns the master,
-/// non-blocking and close-on-exec.
-fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::process::Child)> {
+/// non-blocking and close-on-exec, and the child, or `None` when the
+/// program could not be started (it failed to exec): like tmux, that
+/// pane is born dead rather than failing the command.
+fn spawn_child(
+    spec: &PaneSpawn,
+    size: Size,
+) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>)> {
     let mut cmd = match &spec.argv {
         Some(argv) => {
             let (prog, args) = argv
@@ -609,7 +634,11 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
             Ok(())
         });
     }
-    let child = cmd.spawn()?;
+    let child = match cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) if is_fork_error(&e) => return Err(e),
+        Err(_) => None,
+    };
     drop(pty.slave);
     drop(_guard);
 
@@ -663,25 +692,59 @@ mod tests {
     /// std learns whether `exec` worked from a close-on-exec pipe; the
     /// child must keep it open until `exec`, or a failed `exec` reads as
     /// success (and `spawn` returns before the child has exec'd at all).
+    /// A program that fails to exec gives a pane born dead with status 1,
+    /// as tmux does, and no pid.
     #[tokio::test]
-    async fn spawn_reports_a_failed_exec() {
-        let (tx, _rx) = mpsc::channel(8);
-        let res = PaneHandle::spawn(
+    async fn a_failed_exec_gives_a_dead_pane_with_status_1() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(
             spec_for(&["/nonexistent/grofe-no-such-program"]),
             tx,
             Arc::new(Notify::new()),
-        );
-        assert!(res.is_err(), "spawn of a missing program succeeded");
+        )
+        .expect("a failed exec is not a spawn error");
+        assert_eq!(handle.pid(), None);
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("Exited in time")
+            .expect("an event");
+        assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
+    }
+
+    #[test]
+    fn a_stale_shell_falls_back_to_bin_sh() {
+        let spec = |shell: &str| PaneSpawn {
+            env: vec![("SHELL".to_string(), shell.to_string())],
+            ..spec_with_term("xterm-256color")
+        };
+        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), "/bin/sh");
+        assert_eq!(default_shell(&spec("sh")), "/bin/sh");
+        assert_eq!(default_shell(&spec("/etc/hosts")), "/bin/sh");
+        assert_eq!(default_shell(&spec("/bin/sh")), "/bin/sh");
+        let sh = std::fs::canonicalize("/bin/sh")
+            .unwrap()
+            .display()
+            .to_string();
+        assert_eq!(default_shell(&spec(&sh)), sh);
+    }
+
+    #[test]
+    fn a_missing_cwd_falls_back_to_home() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        assert_eq!(usable_cwd(PathBuf::from("/nonexistent/grofe-dir")), home);
+        assert_eq!(usable_cwd(PathBuf::from("/")), PathBuf::from("/"));
     }
 
     /// The server catches SIGTERM. A pid handed out while the child was
     /// still the forked server (before `exec`) would have a SIGTERM sent to
     /// it run the server's handler and vanish, leaving the child running.
-    /// So once `spawn` returns, a SIGTERM must always end the child.
+    /// So once `spawn` returns, a caught signal must always reach the
+    /// child. SIGUSR1 stands in for SIGTERM, so this test binary keeps
+    /// SIGTERM's default action (a CI timeout must still end it).
     #[tokio::test(flavor = "multi_thread")]
-    async fn sigterm_right_after_spawn_ends_the_child() {
-        let _catch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
+    async fn a_caught_signal_right_after_spawn_ends_the_child() {
+        let _catch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+            .expect("install SIGUSR1 handler");
         for i in 0..50 {
             let (tx, mut rx) = mpsc::channel(8);
             let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
@@ -689,7 +752,7 @@ mod tests {
             let pid = handle.pid().expect("pid") as i32;
             nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid),
-                nix::sys::signal::Signal::SIGTERM,
+                nix::sys::signal::Signal::SIGUSR1,
             )
             .expect("kill");
             let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -701,7 +764,7 @@ mod tests {
                 false
             })
             .await;
-            assert_eq!(exited, Ok(true), "iteration {i}: SIGTERM to {pid} was lost");
+            assert_eq!(exited, Ok(true), "iteration {i}: SIGUSR1 to {pid} was lost");
         }
     }
 }

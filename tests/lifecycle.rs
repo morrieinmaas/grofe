@@ -295,12 +295,15 @@ fn assert_server_gone(srv: &TestServer, pid: nix::unistd::Pid) {
     assert!(!exists(&srv.socket), "socket left behind");
 }
 
-const MISSING_DIR: &str = "/nonexistent/grofe-c9";
+/// A `new-session` that fails in the server, as in tmux 3.7b ("width
+/// invalid"). A missing `-c` directory no longer fails: it falls back to
+/// `$HOME`.
+const FAILING_NEW_SESSION: &[&str] = &["new-session", "-d", "-x", "not-a-width"];
 
 #[test]
 fn a_failed_first_new_session_leaves_no_server() {
     let srv = TestServer::unstarted();
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(srv.server_starts(), 1, "log:\n{}", srv.log());
     assert_server_gone(&srv, logged_server_pid(&srv));
@@ -319,7 +322,7 @@ fn a_successful_first_new_session_keeps_the_server() {
 #[test]
 fn explicit_start_server_stays_up_after_a_failed_new_session() {
     let srv = TestServer::start();
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert!(srv.is_running(), "log:\n{}", srv.log());
@@ -354,7 +357,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
     let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(srv.ctx())).unwrap();
     writeln!(idle, "{hello}").unwrap();
 
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert!(
@@ -373,7 +376,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
 fn concurrent_auto_starts_survive_one_failing_new_session() {
     let srv = TestServer::unstarted();
     let (bad, good): (common::CmdOutput, Vec<common::CmdOutput>) = std::thread::scope(|s| {
-        let bad = s.spawn(|| srv.run(&["new-session", "-d", "-c", MISSING_DIR]));
+        let bad = s.spawn(|| srv.run(FAILING_NEW_SESSION));
         let good: Vec<_> = (0..6)
             .map(|_| s.spawn(|| srv.run(&["new-session", "-d", "sleep", "30"])))
             .collect();
