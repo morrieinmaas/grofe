@@ -84,6 +84,10 @@ pub struct FrameInputs<'a> {
 
 /// Something drawn over the composed frame (M3: popups, menus, prompts).
 pub trait Overlay {
+    /// Draws onto the composed screen. An overlay may overwrite half of a
+    /// wide pair; after all overlays have drawn, [`compose`] turns any wide
+    /// char left without its spacer, and any spacer left without its wide
+    /// char, into a space keeping its colours.
     fn draw(&self, screen: &mut Screen);
 }
 
@@ -183,7 +187,35 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
     for overlay in inputs.overlays {
         overlay.draw(&mut screen);
     }
+    if !inputs.overlays.is_empty() {
+        fix_wide_pairs(&mut screen);
+    }
     screen
+}
+
+/// Makes every wide pair whole again: a `WIDE_CHAR` without its spacer, or
+/// a spacer without its wide char, becomes a space keeping its colours.
+fn fix_wide_pairs(screen: &mut Screen) {
+    let cols = screen.cols as usize;
+    if cols == 0 {
+        return;
+    }
+    for row in screen.cells.chunks_mut(cols) {
+        let mut x = 0;
+        while x < cols {
+            let wide = row[x].flags.contains(CellFlags::WIDE_CHAR);
+            let spacer_next =
+                x + 1 < cols && row[x + 1].flags.contains(CellFlags::WIDE_CHAR_SPACER);
+            if wide && spacer_next {
+                x += 2;
+                continue;
+            }
+            if wide || row[x].flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                row[x] = blank_like(&row[x]);
+            }
+            x += 1;
+        }
+    }
 }
 
 /// The whole window, in window coordinates, sized to `inputs.area`.
@@ -352,8 +384,10 @@ pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
         caps,
     };
     if full {
-        // Reset the pen, then clear to default blanks: exactly `blank`.
-        w.out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
+        // Reset the scroll region, origin mode and pen, then clear to
+        // default blanks: exactly `blank`, whatever state the terminal was in.
+        w.out
+            .extend_from_slice(b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J");
     }
     let cols = next.cols as usize;
     let mut changed = vec![false; cols];
@@ -614,6 +648,60 @@ mod tests {
         assert_eq!(rgb_to_256(128, 128, 128), 244);
         assert_eq!(rgb_to_256(0x87, 0xaf, 0xd7), 16 + 36 * 2 + 6 * 3 + 4);
         assert_eq!(rgb_to_256(1, 2, 3), 16);
+    }
+
+    #[test]
+    fn overlays_that_split_a_wide_pair_leave_spaces() {
+        struct Stomp;
+        impl Overlay for Stomp {
+            fn draw(&self, screen: &mut Screen) {
+                // Overwrite the spacer of the first pair and the wide char
+                // of the second.
+                screen.cells[1].c = 'x';
+                screen.cells[1].flags = CellFlags::empty();
+                screen.cells[2].c = 'y';
+                screen.cells[2].flags = CellFlags::empty();
+            }
+        }
+        let red = Color::Named(NamedColor::Red);
+        let mut snap = RowsSnapshot::default();
+        let mut row = Screen::new(6, 1).cells;
+        for x in [0, 2] {
+            row[x].c = '\u{6F22}';
+            row[x].flags = CellFlags::WIDE_CHAR;
+            row[x].bg = red;
+            row[x + 1].flags = CellFlags::WIDE_CHAR_SPACER;
+            row[x + 1].bg = red;
+        }
+        snap.rows.push(row);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 6,
+            rows: 1,
+        };
+        let overlays: [&dyn Overlay; 1] = [&Stomp];
+        let screen = compose(&FrameInputs {
+            client: (6, 1),
+            viewport: (0, 0),
+            area,
+            panes: vec![(PaneId(1), area, snap)],
+            borders: Vec::new(),
+            active: PaneId(1),
+            status: None,
+            overlays: &overlays,
+            cursor: None,
+        });
+        let cells = &screen.cells;
+        assert_eq!(
+            (cells[0].c, cells[0].flags, cells[0].bg),
+            (' ', CellFlags::empty(), red)
+        );
+        assert_eq!((cells[1].c, cells[2].c), ('x', 'y'));
+        assert_eq!(
+            (cells[3].c, cells[3].flags, cells[3].bg),
+            (' ', CellFlags::empty(), red)
+        );
     }
 
     #[test]

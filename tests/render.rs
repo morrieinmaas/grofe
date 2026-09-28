@@ -629,3 +629,417 @@ fn border_segments_join_into_box_drawing() {
     inputs.cursor = None;
     insta::assert_snapshot!(round_trip(&inputs, &RICH));
 }
+
+// ---- randomized round trips ----------------------------------------------
+
+/// Property tests: random screens through sequences of diffs, and random
+/// pane text through compose with crop, letterbox, splits and a status row.
+/// Case count defaults to 64 (debug builds are slow); set PROPTEST_CASES.
+mod randomized {
+    use alacritty_terminal::Term;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::test::TermSize;
+    use alacritty_terminal::term::{Config, TermMode};
+    use alacritty_terminal::vte::ansi::{
+        Color, CursorShape as VteShape, NamedColor, Processor, Rgb,
+    };
+    use grofe::protocol::Caps;
+    use grofe::server::pane::{CellFlags, CursorShape, CursorState, SnapCell};
+    use grofe::server::render::{Screen, diff};
+    use proptest::prelude::*;
+
+    const RICH: Caps = Caps {
+        truecolor: true,
+        styled_underline: true,
+        sync: true,
+        kitty_keys: false,
+        kitty_graphics: false,
+    };
+
+    const KEEP: CellFlags = CellFlags::BOLD
+        .union(CellFlags::DIM)
+        .union(CellFlags::ITALIC)
+        .union(CellFlags::ALL_UNDERLINES)
+        .union(CellFlags::INVERSE)
+        .union(CellFlags::HIDDEN)
+        .union(CellFlags::STRIKEOUT)
+        .union(CellFlags::WIDE_CHAR)
+        .union(CellFlags::WIDE_CHAR_SPACER);
+
+    fn color() -> impl Strategy<Value = Color> {
+        prop_oneof![
+            Just(Color::Named(NamedColor::Foreground)),
+            Just(Color::Named(NamedColor::Background)),
+            (0usize..16).prop_map(|i| Color::Named(match i {
+                0 => NamedColor::Black,
+                1 => NamedColor::Red,
+                2 => NamedColor::Green,
+                3 => NamedColor::Yellow,
+                4 => NamedColor::Blue,
+                5 => NamedColor::Magenta,
+                6 => NamedColor::Cyan,
+                7 => NamedColor::White,
+                8 => NamedColor::BrightBlack,
+                9 => NamedColor::BrightRed,
+                10 => NamedColor::BrightGreen,
+                11 => NamedColor::BrightYellow,
+                12 => NamedColor::BrightBlue,
+                13 => NamedColor::BrightMagenta,
+                14 => NamedColor::BrightCyan,
+                _ => NamedColor::BrightWhite,
+            })),
+            (16u8..=255).prop_map(Color::Indexed),
+            any::<(u8, u8, u8)>().prop_map(|(r, g, b)| Color::Spec(Rgb { r, g, b })),
+        ]
+    }
+
+    #[derive(Debug, Clone)]
+    struct Proto {
+        kind: u8,
+        fg: Color,
+        bg: Color,
+        flags: u8,
+        ul: Option<(u8, u8, u8)>,
+    }
+
+    fn proto() -> impl Strategy<Value = Proto> {
+        (
+            0u8..8,
+            color(),
+            color(),
+            any::<u8>(),
+            proptest::option::of(any::<(u8, u8, u8)>()),
+        )
+            .prop_map(|(kind, fg, bg, flags, ul)| Proto {
+                kind,
+                fg,
+                bg,
+                flags,
+                ul,
+            })
+    }
+
+    fn flags_of(bits: u8) -> CellFlags {
+        let mut f = CellFlags::empty();
+        let table = [
+            CellFlags::BOLD,
+            CellFlags::DIM,
+            CellFlags::ITALIC,
+            CellFlags::UNDERLINE,
+            CellFlags::UNDERCURL,
+            CellFlags::INVERSE,
+            CellFlags::HIDDEN,
+            CellFlags::STRIKEOUT,
+        ];
+        if bits & 0x80 == 0 {
+            return f;
+        }
+        for (i, fl) in table.iter().enumerate().take(7) {
+            if bits & (1 << i) != 0 {
+                f |= *fl;
+            }
+        }
+        if f.contains(CellFlags::UNDERLINE) && f.contains(CellFlags::UNDERCURL) {
+            f.remove(CellFlags::UNDERLINE);
+        }
+        f
+    }
+
+    fn build(
+        cols: u16,
+        rows: u16,
+        protos: &[Proto],
+        cursor: Option<(u16, u16, u8, bool)>,
+    ) -> Screen {
+        let mut s = Screen::new(cols, rows);
+        let mut i = 0;
+        for y in 0..rows as usize {
+            let mut x = 0usize;
+            while x < cols as usize {
+                let p = &protos[i % protos.len()];
+                i += 1;
+                let base = y * cols as usize;
+                let flags = flags_of(p.flags);
+                let ul =
+                    p.ul.filter(|_| flags.intersects(CellFlags::ALL_UNDERLINES))
+                        .map(|(r, g, b)| Color::Spec(Rgb { r, g, b }));
+                let mut cell = SnapCell {
+                    c: ' ',
+                    fg: if p.fg == Color::Named(NamedColor::Background) {
+                        Color::Named(NamedColor::Foreground)
+                    } else {
+                        p.fg
+                    },
+                    bg: if p.bg == Color::Named(NamedColor::Foreground) {
+                        Color::Named(NamedColor::Background)
+                    } else {
+                        p.bg
+                    },
+                    flags,
+                    zerowidth: Vec::new(),
+                    underline_color: ul,
+                };
+                match p.kind {
+                    0 => {
+                        x += 1;
+                        continue;
+                    }
+                    1 | 2 => cell.c = (b'a' + (p.flags % 26)) as char,
+                    3 => cell.c = ' ',
+                    4 => {
+                        cell.c = 'e';
+                        cell.zerowidth = vec!['\u{301}'];
+                    }
+                    5 => {
+                        cell.c = '\u{2764}';
+                        cell.zerowidth = vec!['\u{FE0F}'];
+                    }
+                    _ => {
+                        if x + 1 < cols as usize {
+                            cell.c = if p.kind == 6 { '\u{6F22}' } else { '\u{1F44D}' };
+                            cell.flags |= CellFlags::WIDE_CHAR;
+                            let mut sp = cell.clone();
+                            sp.c = ' ';
+                            sp.flags =
+                                (sp.flags - CellFlags::WIDE_CHAR) | CellFlags::WIDE_CHAR_SPACER;
+                            s.cells[base + x] = cell;
+                            s.cells[base + x + 1] = sp;
+                            x += 2;
+                            continue;
+                        }
+                        cell.c = 'w';
+                    }
+                }
+                s.cells[base + x] = cell;
+                x += 1;
+            }
+        }
+        s.cursor = cursor.map(|(r, c, sh, blink)| CursorState {
+            row: r % rows,
+            col: c % cols,
+            visible: true,
+            shape: match sh % 3 {
+                0 => CursorShape::Block,
+                1 => CursorShape::Underline,
+                _ => CursorShape::Bar,
+            },
+            blink,
+        });
+        s
+    }
+
+    fn check(term: &Term<VoidListener>, screen: &Screen) -> Result<(), String> {
+        let grid = term.grid();
+        for r in 0..screen.rows as usize {
+            for c in 0..screen.cols as usize {
+                let got = &grid[Line(r as i32)][Column(c)];
+                let want = &screen.cells[r * screen.cols as usize + c];
+                let g = (
+                    got.c,
+                    got.fg,
+                    got.bg,
+                    got.flags & KEEP,
+                    got.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                    got.underline_color(),
+                );
+                let w = (
+                    want.c,
+                    want.fg,
+                    want.bg,
+                    want.flags & KEEP,
+                    want.zerowidth.clone(),
+                    want.underline_color,
+                );
+                if g != w {
+                    return Err(format!("cell r{r} c{c}: got {g:?} want {w:?}"));
+                }
+            }
+        }
+        let visible = term.mode().contains(TermMode::SHOW_CURSOR);
+        match screen.cursor {
+            Some(cur) => {
+                if !visible {
+                    return Err("cursor hidden".into());
+                }
+                let p = grid.cursor.point;
+                if (p.line.0 as u16, p.column.0 as u16) != (cur.row, cur.col) {
+                    return Err(format!("cursor at {:?} want {:?}", p, (cur.row, cur.col)));
+                }
+                let st = term.cursor_style();
+                let shape = match st.shape {
+                    VteShape::Beam => CursorShape::Bar,
+                    VteShape::Underline => CursorShape::Underline,
+                    _ => CursorShape::Block,
+                };
+                if (shape, st.blinking) != (cur.shape, cur.blink) {
+                    return Err(format!(
+                        "shape {:?} {} want {:?} {}",
+                        shape, st.blinking, cur.shape, cur.blink
+                    ));
+                }
+            }
+            None => {
+                if visible {
+                    return Err("cursor visible".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Cursor as (row, col, shape, blink), reduced modulo the screen size.
+    type CursorSeed = Option<(u16, u16, u8, bool)>;
+
+    fn frame() -> impl Strategy<Value = (Vec<Proto>, CursorSeed)> {
+        (
+            proptest::collection::vec(proto(), 1..40),
+            proptest::option::of((any::<u16>(), any::<u16>(), any::<u8>(), any::<bool>())),
+        )
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+        #[test]
+        fn diff_sequence_reconstructs(
+            cols in 1u16..14, rows in 1u16..6,
+            frames in proptest::collection::vec(frame(), 1..6),
+            sync in any::<bool>(),
+        ) {
+            let caps = Caps { sync, ..RICH };
+            let mut term = Term::new(Config::default(), &TermSize::new(cols as usize, rows as usize), VoidListener);
+            let mut parser: Processor = Processor::new();
+            let mut prev: Option<Screen> = None;
+            for (i, (protos, cur)) in frames.iter().enumerate() {
+                let next = build(cols, rows, protos, *cur);
+                let bytes = diff(prev.as_ref(), &next, &caps);
+                if prev.as_ref() == Some(&next) {
+                    prop_assert!(bytes.is_empty());
+                }
+                parser.advance(&mut term, &bytes);
+                if let Err(e) = check(&term, &next) {
+                    return Err(TestCaseError::fail(format!("frame {i}: {e}\nbytes {:?}", String::from_utf8_lossy(&bytes))));
+                }
+                prop_assert!(diff(Some(&next), &next, &caps).is_empty());
+                prev = Some(next);
+            }
+        }
+    }
+
+    mod compose_prop {
+        use super::*;
+        use grofe::server::layout::LayoutTree;
+        use grofe::server::pane::RowsSnapshot;
+        use grofe::server::render::{FrameInputs, compose};
+        use grofe::server::status::{Span, Style, StyledLine};
+        use grofe::types::{Dir, PaneId, Rect, SplitSize};
+
+        fn pane(cols: u16, rows: u16, bytes: &str) -> RowsSnapshot {
+            let mut term = Term::new(
+                Config::default(),
+                &TermSize::new(cols as usize, rows as usize),
+                VoidListener,
+            );
+            let mut parser: Processor = Processor::new();
+            parser.advance(&mut term, bytes.as_bytes());
+            let grid = term.grid();
+            let rows_out = (0..grid.screen_lines())
+                .map(|r| {
+                    (0..grid.columns())
+                        .map(|c| {
+                            let cell = &grid[Line(r as i32)][Column(c)];
+                            SnapCell {
+                                c: cell.c,
+                                fg: cell.fg,
+                                bg: cell.bg,
+                                flags: cell.flags,
+                                zerowidth: cell
+                                    .zerowidth()
+                                    .map(<[char]>::to_vec)
+                                    .unwrap_or_default(),
+                                underline_color: cell.underline_color(),
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let p = grid.cursor.point;
+            RowsSnapshot {
+                rows: rows_out,
+                cursor: CursorState {
+                    row: p.line.0 as u16,
+                    col: p.column.0 as u16,
+                    visible: term.mode().contains(TermMode::SHOW_CURSOR),
+                    shape: CursorShape::Block,
+                    blink: false,
+                },
+            }
+        }
+
+        fn text() -> impl Strategy<Value = String> {
+            proptest::collection::vec(
+                prop_oneof![
+                    Just("a".to_string()),
+                    Just("\u{6F22}".to_string()),
+                    Just("\u{1F44D}".to_string()),
+                    Just("e\u{301}".to_string()),
+                    Just("\u{2764}\u{FE0F}".to_string()),
+                    Just("\r\n".to_string()),
+                    Just("\x1b[31m".to_string()),
+                    Just("\x1b[0m".to_string()),
+                    Just("\x1b[48;2;1;2;3m".to_string()),
+                    Just(" ".to_string()),
+                ],
+                0..80,
+            )
+            .prop_map(|v| v.concat())
+        }
+
+        proptest! {
+            #![proptest_config(config())]
+            #[test]
+            fn compose_then_diff(
+                wc in 5u16..24, wr in 2u16..8, cc in 1u16..24, cr in 1u16..9,
+                vx in 0u16..12, vy in 0u16..6, split in any::<bool>(), status in any::<bool>(),
+                t1 in text(), t2 in text(), t3 in text(), st in text(),
+            ) {
+                let area = Rect { x: 0, y: 0, cols: wc, rows: wr };
+                let mut tree = LayoutTree::new(PaneId(1));
+                if split { let _ = tree.split(area, PaneId(1), Dir::Horizontal, PaneId(2), SplitSize::Half); }
+                let texts = [t1.clone(), t2.clone()];
+                let panes: Vec<_> = tree.compute(area).into_iter().enumerate()
+                    .map(|(i, (id, r))| (id, r, pane(r.cols.max(2), r.rows.max(1), &texts[i % 2]))).collect();
+                let cursor = panes.first().map(|(_, r, s)| CursorState { row: s.cursor.row + r.y, col: s.cursor.col + r.x, ..s.cursor });
+                let vx = if cc < wc { vx.min(wc - cc) } else { 0 };
+                let vy = if cr < wr { vy.min(wr - cr) } else { 0 };
+                let status_line = status.then(|| StyledLine { spans: vec![Span { text: st.replace("\r\n", "x").replace('\x1b', "E"), style: Style::default() }, Span { text: t3.replace("\r\n","y").replace('\x1b', "E"), style: Style { fg: Color::Named(NamedColor::Red), ..Style::default() } }] });
+                let inputs = FrameInputs { client: (cc, cr), viewport: (vx, vy), area, borders: tree.borders(area),
+                    panes, active: PaneId(1), status: status_line, overlays: &[], cursor };
+                let screen = compose(&inputs);
+                for y in 0..cr as usize { for x in 0..cc as usize {
+                    let c = &screen.cells[y * cc as usize + x];
+                    if c.flags.contains(CellFlags::WIDE_CHAR) {
+                        prop_assert!(x + 1 < cc as usize, "wide at last col r{y} c{x}");
+                        prop_assert!(screen.cells[y * cc as usize + x + 1].flags.contains(CellFlags::WIDE_CHAR_SPACER), "wide without spacer r{y} c{x}");
+                    }
+                    if c.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                        prop_assert!(x > 0 && screen.cells[y * cc as usize + x - 1].flags.contains(CellFlags::WIDE_CHAR), "orphan spacer r{y} c{x}");
+                    }
+                }}
+                let mut term = Term::new(Config::default(), &TermSize::new(cc as usize, cr as usize), VoidListener);
+                let mut parser: Processor = Processor::new();
+                parser.advance(&mut term, &diff(None, &screen, &RICH));
+                if let Err(e) = check(&term, &screen) { return Err(TestCaseError::fail(e)); }
+            }
+        }
+    }
+
+    fn config() -> ProptestConfig {
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64);
+        ProptestConfig::with_cases(cases)
+    }
+}
