@@ -19,10 +19,11 @@ parallel worktrees without conflicts.
 | **M3.5** | Minimal `grofe import-tmux` (spec §5.5) | A fixture tmux.conf converts to golden TOML that loads in grofe with no errors; every unconvertible line is reported | ~3 days, during the dogfood week |
 | **M3.6** | tmux compatibility for the owner's workflow (spec D1, D12, §4.5): the `tmux` name and server identity, CLI/target/format/option breadth, cached `#()` status sources, hooks and server environment, popups and menus (moved from M5), multi-row status, all reached through a table-driven tmux front end (`src/compat/`), the owner's daily config ported (canopy, `user.conf`, navigator), compat suite | **Alias day.** The compat suite is green in CI against goldens recorded from tmux 3.7b; **[owner]** `tmux` on PATH resolves to grofe with the ported config for a week of normal work, real tmux kept as `env -u TMUX <absolute path>` as the fallback | ~6.5 weeks |
 | **M3.7** | Port the remaining TPM plugins once to grofe-native equivalents | Key parity passes for every table; each plugin row's acceptance passes; **[owner]** each daily binding used once | ~1.5 weeks alongside M4; closes with M5 (TP.5 yank and TP.9's copy-mode rows need copy mode) |
-| **M4** | Native persistence and pane identity | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it. Then across a real reboot (owner-verified) | 1 week |
-| **M5** | Copy mode, buffers, `copy-pipe*` (popups and menus moved to M3.6) | Scope doc approved first; vi selection over wrapped lines, regex search, OSC 52 copy, `copy-pipe-and-cancel`; then the yank port (TP.5). **No-difference parity** for the owner's workflow | 2 weeks |
-| **M6** | Events and plugin API, Lua | Spec §7 rewritten from dogfood notes; protocol v1 frozen; one out-of-process and one Lua plugin in-tree | planned after M5 |
-| **M7** | agents plugin; canopy on grofe (spec §7.1) | canopy's four adapters report through grofe; a reboot returns every agent pane to its conversation | planned after M6 |
+| **M4** | Native persistence and pane identity (spec §6): snapshot, restore, resume, `reboot-check` | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it; the container reboot scenario (T4.6) green; **[owner]** the same across a real reboot on each OS | ~3 weeks, beside M3.7 |
+| **M5** | Copy mode, buffers, `copy-pipe*`, OSC 52 (popups and menus moved to M3.6) | Scope doc approved first (written during M4); the 93 `copy-mode-vi` bindings match tmux 3.7b's goldens (TM.7); then the yank port (TP.5) and TP.9's copy rows. **No-difference parity**, **[owner]** confirmed | ~5 weeks |
+| **M6** | Events and plugin API, Lua | Spec §7's plugin part rewritten from the dogfood log (T6.0, during M5); event catalog and protocol v1 frozen with fixtures; supervised plugins; sandboxed Lua with format functions; one out-of-process and one Lua plugin in-tree | ~2.5 weeks |
+| **M7** | agents plugin; canopy on grofe (spec §7, §7.1) | canopy's four adapters report through grofe; rollups and attention render with formats only; after a container reboot each fake agent is back in its own conversation (T7.8); **[owner]** a real reboot returns every Claude Code pane to its conversation | ~3.5 weeks (T7.1 and T7.5 during M6) |
+| **E2E** | Release gate: every suite from a clean clone, in containers; rollback drill | `scripts/release-gate.sh` green; **[owner]** alias day for good, then a week with no open `compat` or `copy` entry: **fully done** | ~1 week + the owner's week |
 | **M8** | Compatibility extras (optional) | Decided after M7: tmux `-CC` subset | unscheduled |
 
 **Critical path to dogfood start:** T0.3 → T1.1b → T1.5a → T1.5b → T2.5a → T2.5b →
@@ -50,6 +51,11 @@ runs alongside the dogfood week; it does not move dogfood start.
 - **Rejected alternative:** M4 before M3.6 brings persistence about six weeks
   earlier, but the owner would still be working in tmux, so nothing would
   exercise it.
+- **Then M6, M7 and the release gate, in that order.** M7's agents plugin is
+  M6's first real user, so M6 cannot follow it. Each milestone's first,
+  docs-only or disjoint tasks start in the previous one's tail: TM.0 during
+  M4, T6.0 during M5, T7.1 and T7.5 during M6, TE.1 and TE.2 once their suites
+  exist.
 
 **Critical path to alias day:** the dogfood-start path above, then (with TC.0
 and TC.0b already done during M1 to M3) the M3.6 stub edit → TC.2 → TC.2b →
@@ -69,8 +75,28 @@ about 69 task-days (the one-lane sum in the M3.6 section), roughly 18 weeks
 with the buffer, and alias day moves to about week 26 (splitting the front end
 saves nothing in one lane).
 
-M0 to M3.7 are planned to task level. M4 onward are planned at milestone level and
-broken into tasks when the previous milestone closes, shaped by dogfooding.
+**Critical path from alias day to fully done** (review cycles included; each
+milestone's own path is in its section): M4 (stub edit → T4.3 → T4.4 → T4.6,
+11 days) → M5 (TM.1 → TM.2 → TM.5 → TM.6 → TM.7 → TP.5 → TP.9's copy rows, 20
+days; TM.0 and its approval run during M4) → M6 (T6.4 → T6.5 → T6.6, 9 days;
+T6.0 during M5) → M7 (T7.2 → T7.4 → T7.7 → T7.8, 14 days; T7.1 and T7.5 during
+M6) → TE.3 (3 days; TE.1 and TE.2 run earlier), about 57 working days.
+**Estimate, honestly, with the same three lanes:** M4 ends about week 17.5
+(M3.7's parallel tasks end inside it, about week 16), M5 about week 22.5, M6
+about week 25, M7 about week 28.5, the release gate about week 29.5, and
+**fully done**, after the owner's alias day for good and a week of work, about
+**week 30.5**. The milestone-level plan had M4 at 1 week and M5 at 2; the task
+breakdown found the rest: M4's restore engine, resume binding and container
+reboot harness, and M5's 93 parity scenarios and the mouse model's move into
+copy mode. With one lane, M4 to the release gate is about 102 task-days (M4
+20, M5 28 with TP.5 and TP.9's copy rows, M6 20, M7 26, E2E 8), roughly 26.5
+weeks with the buffer, so fully done moves from the one-lane alias day at
+about week 26, plus M3.7's 1.5 weeks, to about week 55.
+
+M0 to M7 and the release gate are planned to task level; M8 stays at milestone
+level and is decided after M7. Rows from M4 on name files M1 built or that
+their milestone's stub edit creates; when dogfooding reshapes one, it changes
+through rule 9.
 
 ---
 
@@ -155,9 +181,17 @@ src/
     popup.rs         # M3.6: display-popup (TC.6)
     menu.rs          # M3.6: display-menu (TC.7)
     tree.rs          # M3.6: choose-tree, choose-client, find-window (TC.9)
+    snapshot.rs      # M4: snapshot schema and writer (T4.1)
+    restore.rs       # M4: restore, stagger, respawn to a shell (T4.3, T4.4)
+    resume.rs        # M4: pane-set-resume binding and clearing (T4.2)
+    copy/            # M5: mod.rs (TM.1), select.rs (TM.2), search.rs (TM.3), pipe.rs (TM.5)
+    buffers.rs       # M5: paste buffers (TM.4)
+    plugins.rs       # M6: plugin supervision (T6.3)
     dispatch/        # M3.6 stub handlers, one file per owning task:
                      #   hooks.rs (TC.5), structure.rs (TC.8), client.rs (TC.9),
-                     #   menu.rs (TC.7), popup.rs (TC.6), bindings.rs (TC.10)
+                     #   menu.rs (TC.7), popup.rs (TC.6), bindings.rs (TC.10);
+                     # M4: persist.rs (T4.2, T4.5); M5: copy.rs (TM.1), buffers.rs (TM.4);
+                     # M6: plugins.rs (T6.3)
   client.rs          # M2: attach client + capability probe
   compat/
     mod.rs           # M3.6: argv0, identity, dialect, TMUX value, compat-miss log (TC.1)
@@ -167,6 +201,9 @@ src/
       formats.rs     # M3.6: format rewriting, #() to sources, option, status and hook rows (FE.3)
       bindings.rs    # M3.6: if-shell, command-alias, popup and menu flags, list-keys (FE.4)
       structure.rs   # M3.6: structure and client verbs, layout codec, list-* output (FE.2)
+      copy.rs        # M5: copy-mode and buffer rows (TM.7)
+  lua/               # M6: mod.rs (runtime, T6.4), api.rs (T6.4, T6.5)
+  agents/            # M7: mod.rs, manifest.rs (T7.1), state.rs (T7.2), identity.rs (T7.3), adopt.rs (T7.4)
   config/
     mod.rs           # M3
     provenance.rs
@@ -178,14 +215,22 @@ tests/
   compat/            # M3.6: recorder and harness (TC.0b), scenarios (TC.13)
   compat_frontend*.rs # M3.6: front-end row goldens (FE.*)
   fixtures/          # probe replies (T2.1), tmux.conf inputs and golden TOML (TI.1),
-                     # compat corpus and tmux 3.7b goldens (TC.0, TC.13)
+                     # compat corpus and tmux 3.7b goldens (TC.0, TC.13), canopy's
+                     # fake-agent (M4), protocol v1 messages (T6.2), adapter manifests (T7.1)
+  e2e/               # M4+: Containerfiles and scenarios run by scripts/e2e.sh (T4.6, T7.8, TE.*)
+plugins/event-log/   # M6: in-tree sh plugin (T6.6)
+examples/lua/        # M6: in-tree Lua plugin (T6.6)
+scripts/             # ci-local.sh; e2e.sh (T4.6); release-gate.sh (TE.3); compat recorders (TC.0, TC.0b)
+docs/                # copy-mode.md (TM.0), protocol-v1.md (T6.2)
 ```
 
 T0.2's skeleton predates `graphics.rs` and `import_tmux.rs`. Adding their empty
 files and `mod` lines is the orchestrator's stub edit on `main` before T3.8 and
 TI.1 start (rule 4). The same holds for the M3.6 files above, stubbed before
 M3.6 starts, together with any dependency M3.6 needs that T0.2 did not add
-(`regex` for `#{m/r:}`), by the orchestrator on `main` (rule 3).
+(`regex` for `#{m/r:}`), by the orchestrator on `main` (rule 3). From M4 on,
+each milestone's section opens with its own stub edit, which creates that
+milestone's files and adds its dependencies (`mlua` for M6).
 
 ---
 
@@ -440,7 +485,8 @@ once on their own tmux.conf and reads the report.
 Spec D1, D12, §4.5. Goal: with `tmux` on PATH resolving to grofe and the
 owner's daily config ported (Wave C), the owner's scripts, tools and daily
 bindings behave as they do under tmux 3.7b. Starts when M3.5 closes. Real tmux
-stays installed as the fallback until M5 closes, run as
+stays installed as the fallback until the release gate's alias-day week ends
+(E2E and release), run as
 `env -u TMUX <absolute path to tmux>` because `$TMUX` inside a grofe pane
 points at grofe (spec D12).
 
@@ -628,53 +674,356 @@ so M3.7 closes with M5.
 
 ---
 
-## M4 to M8 (milestone level)
+## Rules for M4 onward
 
-**M4 Persistence and pane identity** (spec §6). Snapshot writer with version
-(no attached client needed), restore into an empty server, `pane-set-resume`
-with client-side `argv[0]` resolution and binding to the setter's process,
-respawn to a shell with the same `uid` when a resumed process exits,
-`--persist` options, `restore-on-start` (default on), deterministic stagger,
-`reboot-check` verdicts and exit codes, env on first attach. Tests adopt
-canopy's fake-agent fixture and reboot scenarios (spec §9), each proven able to
-fail by mutating the snapshot. Tests that pin the canopy lessons:
+These hold for every task from M4 to the release gate, on top of "How subagents
+execute this".
 
-- a server started under `env -i PATH=/usr/bin:/bin` still runs a resume whose
-  command lives elsewhere on the caller's `PATH`;
-- a resume set from a foreground agent is cleared when the agent exits and the
-  shell stays, so a restore starts a shell, not the closed conversation;
-- a resumed process that exits leaves a shell in `cwd` with the same `uid`;
-- stagger is identical across two runs for the same `uid`s, `0` spawns with no
-  delay, and panes without a resume are not delayed;
-- `reboot-check` exits 0, 1 and 2 in the three spec §6 cases, reading the
-  snapshot on disk (a snapshot edited behind the server's back changes the
-  verdict).
+- **Never touch the owner's live tmux or canopy.** Integration tests run
+  through `TestServer` (temp `HOME` and XDG dirs, a unique `-S`); real tmux is
+  reached only through TC.0b's recorder (a private `-L` socket in a tempdir,
+  `env -u TMUX <absolute path>`); every end-to-end scenario runs in a container
+  through `scripts/e2e.sh` (T4.6), which gets a copy of the tree and never
+  mounts the host's home, sockets or runtime dir. Any suite that runs on the
+  host checks, before and after, that the owner's tmux socket directory
+  (`${TMUX_TMPDIR:-/tmp}/tmux-$UID`), grofe's socket and state directories,
+  `~/.config/canopy` and canopy's store directory are byte-identical, and fails
+  otherwise.
+- **CI means `scripts/ci-local.sh`.** GitHub Actions is disabled; the script
+  runs the workflow with `act` on podman (`linux`) and natively (`macos`). T4.6
+  adds an `e2e` leg. "Green" in an exit gate means every leg the gate names.
+- **Owner steps have substitutes.** Each **[owner]** step (a real reboot, a
+  week of use) is paired with a container scenario an agent can run. The
+  substitute is the task's gate; the owner step is the milestone's.
 
-Done: kill the server, restore, every `uid` unchanged and every pane with
-`resume` runs it; **[owner]** the same across a real reboot. Under the alias
-this is also the replacement for resurrect and continuum (TP.8), so M4 runs
-right after M3.6, beside M3.7.
+---
 
-**M5 Copy mode and buffers** (also closes M3.7). First a one-page scope doc (keymap, selection
-model across wrapped lines, search, copy targets), **[owner]** approved, built
-around the owner's `copy-mode-vi` table (93 bindings, spec §4.5 buffers row).
-Then copy mode, `command-prompt -T search`, buffers (`set-buffer`,
-`paste-buffer -p`, `choose-buffer`), `copy-pipe`, `copy-pipe-and-cancel`,
-`copy-pipe-no-clear`, wheel-into-copy-mode and double/triple-click selection,
-`#{copy_cursor_word}`; then TP.5 (yank) and TP.9's `copy-mode-vi` rows.
-`display-popup` and `display-menu` moved to M3.6. Done adds: **no-difference
-parity** for the owner's workflow, **[owner]** confirmed.
+## M4: persistence and pane identity
 
-**M6 Events and plugins.** Rewrite spec §7 from the dogfood log and the events
-actually needed. Freeze protocol v1. Plugin supervision, Lua runtime, format
-functions.
+Spec §6. Goal: the server's state survives a kill, a crash and a reboot, with
+every pane's `uid` intact and every pane that has a `resume` running it. Under
+the alias this replaces resurrect and continuum (TP.8), so M4 starts right
+after M3.6's exit gate, beside M3.7. It builds on TC.8's layout geometry export
+and import and on TC.5's internal events.
 
-**M7 agents plugin and canopy on grofe** (spec §7, §7.1). Port canopy's
-adapters to the spec §7 adapter contract (manifest keys, id validation on entry
-and use, hooks that always exit 0, `pane-set-resume` on every session id
-change), the "restored/unknown" state after a restore, `adopt` (no respawn,
-dry-run default, idempotent), canopy's grofe backend. Done: **[owner]** a
-real reboot returns every Claude Code pane to its own conversation.
+**Before Wave A starts:**
+
+- **Stub edit** by the orchestrator on `main` (rules 3, 4 and 6): the files
+  `src/server/{snapshot,restore,resume}.rs` and `src/server/dispatch/persist.rs`
+  with their `mod` lines; `Command` variants `PaneSetResume` and `RebootCheck`
+  with empty flag structs, routed in `dispatch/mod.rs` to stubs in
+  `dispatch/persist.rs`; the snapshot schema below, as types with serde derives
+  and no logic; `paths::snapshot_path(env, socket)` (the instance directory
+  beside the log, spec §6); the config keys `restore-on-start` (default `true`)
+  and `restore-stagger-ms` (default `1000`); canopy's fake-agent fixture,
+  vendored as `tests/fixtures/fake-agent` with a header naming its canopy SHA;
+  and the harness extension below (a contract edit to the frozen
+  `tests/common/`).
+- M3.6's exit gate has passed (TC.8's geometry and TC.5's events are merged).
+
+**Contract: the snapshot (stub edit; names binding).**
+
+```rust
+// server/snapshot.rs
+pub const SNAPSHOT_VERSION: u32 = 1;
+pub struct Snapshot   { pub version: u32, pub written_at: String /* RFC 3339 */, pub grofe_version: String,
+                        pub options: Vec<OptionSnap> /* global, --persist only */, pub sessions: Vec<SessionSnap> }
+pub struct SessionSnap { pub name: String, pub cwd: PathBuf, /* no environment: spec §6 */
+                         pub active_window: u32 /* index */, pub options: Vec<OptionSnap>, pub windows: Vec<WindowSnap> }
+pub struct WindowSnap  { pub index: u32, pub name: String, pub automatic_rename: bool, pub cols: u16, pub rows: u16,
+                         pub layout: LayoutGeometry /* TC.8, cells keyed by pane uid */, pub active_pane: String /* uid */,
+                         pub zoomed: bool, pub options: Vec<OptionSnap>, pub panes: Vec<PaneSnap> }
+pub struct PaneSnap    { pub uid: String, pub cwd: PathBuf, pub argv: Option<Vec<String>>,
+                         pub resume: Option<Vec<String>>, pub options: Vec<OptionSnap> /* --persist only */ }
+pub struct OptionSnap  { pub name: String, pub value: String }
+pub fn read(path: &Path) -> Result<Snapshot, SnapshotError>;                      // T4.1
+pub fn write_atomic(path: &Path, snap: &Snapshot) -> io::Result<()>;               // T4.1
+// server/restore.rs
+pub fn restore(state: &mut State, snap: Snapshot) -> Result<RestoreReport, RestoreError>;  // T4.3, T4.4
+```
+
+**Contract: the harness extension (stub edit).**
+
+```rust
+let srv = TestServer::builder().restore_on_start(true).path_env("/usr/bin:/bin").start();
+srv.snapshot_path();                          // this server's state.json, under its temp XDG_STATE_HOME
+srv.edit_snapshot(|v: &mut serde_json::Value| { /* mutation proofs */ });
+srv.kill_hard();                              // SIGKILL the server and its process group, as a crash or reboot would
+let srv = srv.restart();                      // same socket and state dir; restore as configured
+```
+
+**Wave A (parallel after the stub edit; merge order T4.1, T4.2, T4.3).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T4.1** Snapshot writer | Spec §6: build a `Snapshot` from the model with no client involved; a writer registered on the internal event stream (TC.5's events, cwd changes, T4.2's `resume-changed`, `option-changed` for `--persist` options): at most once a second, if anything arrived, build the snapshot and write it only when its bytes differ from the last write; `kill-server` and SIGTERM write the pre-teardown state synchronously before exit; a server whose last session closed writes the empty state; `write_atomic`: temp file in the same directory, `fsync`, `rename`, `fsync` of the directory, file mode `0600`; `read`: an unknown `version` renames the file to `state.json.v<N>` before this server's first write, an unparsable file to `state.json.corrupt-<unix time>`, each with one log line | `src/server/snapshot.rs` (logic, beside the stub types), one registration line in `src/server/mod.rs`, `tests/snapshot.rs` | stub edit | With no client attached: after `split-window` the new pane's `uid`, `cwd` and `argv` are in `state.json` within 2 s; after `cd /tmp` in a pane its `cwd` follows within 2 s of the next sample; with nothing changing, the file's mtime and inode stay the same for 5 s; `set -p --persist @agent_session x` is saved and `set -p @agent_state working` never is; `kill-server` leaves the pre-kill sessions in the file; the last pane exiting leaves `"sessions": []`; 200 seeded structural changes with the server SIGKILLed at a seeded random point leave a file that parses and equals one of the states written before; a `"version": 2` file becomes `state.json.v2` and a fresh version 1 file is written; a garbage file becomes `state.json.corrupt-*`; the file is at `srv.snapshot_path()` with mode `0600`; every M1 test unchanged and green |
+| **T4.2** Resume | Spec §6: `pane-set-resume [-t pane] [-u] [--expect <reason>] [-- argv...]` in native form (contract edit: T4.2 co-owns `cmd/parse.rs` for this verb, as TC.2 did); `argv[0]` without a `/` is resolved against the `PATH` in the request's `ClientCtx.env`, never the server's, and an unresolvable name errors and leaves the old resume; the binding: the pane's foreground process group leader at set time (via `tcgetpgrp` on the master), recorded as pid plus start time (`/proc/<pid>/stat` on Linux, `libproc` on macOS) so a reused pid does not match; the resume is cleared when that process no longer exists, checked on the procinfo sampling timer and on pane exit, and a stopped process keeps it; a resume from a spawn command (`new-session`, `new-window`, `split-window` with a command) or from `respawn-pane <cmd>` binds to the pane's root process; `--expect <reason>` records an expectation with no argv, bound the same way and never saved; `#{pane_resume}` (the argv shell-quoted, empty when unset) and `#{pane_resume_expected}` (the expectation's reason); the internal `resume-changed` event | `src/server/resume.rs`, `pane-set-resume` in `src/server/dispatch/persist.rs`, the verb in `src/cmd/parse.rs`, start-time sampling in `src/server/pane/procinfo.rs`, `pane_resume` and `pane_resume_expected` in the `FormatVars` impl in `src/server/dispatch/options.rs`, `tests/resume.rs` | stub edit | A server started under `env -i PATH=/usr/bin:/bin`, and a CLI whose `PATH` adds a temp dir holding `fake-agent`: `pane-set-resume -- fake-agent --resume a` stores the absolute path in `#{pane_resume}`, and `respawn-pane -k` then runs it (the transcript gains `resume a`); a `fake-agent --session-id a` started in a pane's shell and bound from outside with `pane-set-resume -t %N`, then stopped with C-c, leaves `#{pane_resume}` empty within one sample plus 1 s while the shell stays; `kill -STOP` on the agent keeps it; a resume set while the shell is in the foreground survives running and exiting `ls`; `--expect "no id"` leaves `#{pane_resume}` empty, shows in `#{pane_resume_expected}` and clears with its process; `-u` clears; `pane-set-resume` with no server exits nonzero and starts nothing; every M1 test unchanged and green |
+| **T4.3** Restore core | Spec §6: `restore()` into an empty server only (otherwise `server not empty: restore needs an empty server`, exit 1, nothing changes); `restore-on-start` read from config, with `GROFE_RESTORE_ON_START=0` still forcing it off (the harness); a restoring server restores before it signals readiness, so the starting CLI's own command runs against the restored sessions; `start-server --restore` forces a restore whatever the config says and reports when there is no snapshot; sessions by name, windows by index with name, `automatic-rename` state, size, layout geometry through TC.8's import keyed by `uid`, active window and pane, zoom; `--persist` options at every scope; `uid`s preserved, runtime ids fresh; every pane gets a shell in its `cwd` here (resumes are T4.4), the home directory with one log line when `cwd` is gone; a restored session takes the restoring server's environment (the snapshot holds none), its `update-environment` variables start unset and the first attach fills them; `#{pane_restored}` (1 for panes from the snapshot); the internal `restore-done` event with counts | `src/server/restore.rs` (without resumes), the `--restore` flag in the `start-server` arm of `src/main.rs`, one call at server start in `src/server/mod.rs`, the first-attach environment fill in `src/server/clients.rs`, the `restore-*` keys' reading in `src/config/`, `tests/restore.rs` | stub edit | Build two sessions, three windows and six panes with splits, a zoomed window, renamed windows, persisted options and `cd`s; `kill-server`; `start-server --restore`: `list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_uid} #{pane_current_path} #{pane_width}x#{pane_height}'` equals the pre-kill output line for line, and so does `list-windows -a -F '#{window_name} #{window_zoomed_flag} #{window_active}'`; persisted `@agent_session` is back and `@agent_state` is empty; `--restore` into a server with a session errors and `list-sessions` is unchanged; with restore-on-start on, `new-session -A -s main` after a kill attaches the restored `main` and `list-sessions` shows one `main`; under the default harness (forced off) a present snapshot restores nothing; a missing `cwd` gives the home directory and one log line; with the server started from an environment without `SSH_AUTH_SOCK`, before any attach `show-environment -t main SSH_AUTH_SOCK` is unset, after an attach whose client has `SSH_AUTH_SOCK=/tmp/x` it is `/tmp/x` and a new pane in `main` sees it; mutation proof: `edit_snapshot` changing one pane's `uid` turns the uid comparison red (the test runs the mutation and asserts the failure) |
+
+**Wave B (after Wave A; merge order T4.4, T4.5).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T4.4** Resumes at restore | Spec §6: a restored pane with a `resume` runs it directly (no shell); its pty is allocated at restore and its child spawned after a deterministic delay, `paths::fnv1a64(uid) mod restore-stagger-ms`, applied by a server timer and never written into the argv (contract edit: T4.4 adds `PaneSpawn.delay` to T1.4's contract); `0` means no delay at all, and panes without a resume are never delayed; input sent to a pane inside its delay waits in the pty and reaches the process when it starts; when a process started from a resume at restore exits, or cannot be started, the pane respawns a shell in its `cwd` with the same `uid` (its resume cleared with its process, T4.2), one log line, and the usual `pane-exited` event; panes that did not come from a resume follow `remain-on-exit` | the resume and stagger path in `src/server/restore.rs` (T4.3 merged), `PaneSpawn.delay` in `src/server/pane/mod.rs`, `tests/restore_resume.rs` | T4.2, T4.3 | **The M4 done-means:** three panes in two windows run `fake-agent --session-id a`, `b` and `c`, each bound with `pane-set-resume -- fake-agent --resume <id>`; `kill_hard()`, `restart()`: every transcript reads `launch <id>` then `resume <id>`, each pane is in the window it was in, and every `uid` is unchanged; the server was started under `env -i PATH=/usr/bin:/bin` and the resumes still run although `fake-agent` sits only on the setter's `PATH`; the delay function returns the checked-in values for a fixed list of uids, and two restores of the same snapshot spawn the resumes in the same order and at the same offsets within 50 ms (from the log's monotonic timestamps); with `restore-stagger-ms 0` every resume starts within 100 ms of the restore, and at 1000 a pane without a resume has its shell within 100 ms; killing a restored `fake-agent` leaves a shell in its `cwd` with the same `uid` within 1 s and the `list-panes -F` geometry unchanged; a resume whose binary was deleted after the snapshot gives a shell with the same `uid` and a log line naming the argv; `send-keys` to a pane inside its delay reaches its process; mutation proof: `edit_snapshot` changing one pane's resume to `fake-agent --resume zz` turns that pane's transcript check red |
+| **T4.5** `reboot-check` | Spec §6: `grofe reboot-check [--json]`, a CLI arm that asks the server's `reboot-check` verb, which reads the snapshot **on disk** (never the writer's memory) and compares it per pane with the live model. A pane expects a resume when it has a live resume or expectation (T4.2). Verdicts: `will resume`, `will restart without its conversation` (with its reason: the expectation's text, or "the snapshot holds an older resume"), `not saved yet`, and, for every pane when restore is off, `will not be restored`; a pane that expects nothing is listed as `restores as a shell` and never changes the status. Exit 0 when every pane that expects a resume will resume, or no server runs; 1 when any will not; 2 when persistence is misconfigured: `restore-on-start` off in the resolved config and no autostart unit (a systemd user unit in `~/.config/systemd/user/` or a launchd agent in `~/Library/LaunchAgents/` whose command runs `start-server --restore`), or the state directory is not writable. One line per pane, `<session>:<window>.<pane> <uid> <verdict> [(<reason>)]`; `--json` gives an array | the `reboot-check` arm in `src/main.rs`, `reboot-check` in `src/server/dispatch/persist.rs`, `tests/reboot_check.rs` | T4.1, T4.2 | Every resumed pane saved: exit 0; a resume set less than a second ago: that pane `not saved yet` and exit 1, then exit 0 two seconds later; `edit_snapshot` changing one pane's saved resume while the server runs: that pane `will restart without its conversation` and exit 1 (proof it reads the disk); an expectation "no session id reported": the verdict carries that reason, exit 1; only plain shells: every pane `restores as a shell`, exit 0; `restore-on-start = false` in the temp config and no unit in the temp `HOME`: exit 2 and every pane `will not be restored`; the same with a temp systemd unit running `tmux start-server --restore`: the status follows the panes again; no server: exit 0 with a message; a read-only state directory: exit 2; `--json` parses and has one entry per pane |
+
+**Wave C.**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T4.6** Container reboot | The e2e harness every later container task uses: `scripts/e2e.sh <scenario> [image...]` (`${CONTAINER:-podman}`, rootless; builds grofe inside the image from a copy of the tree at `HEAD`; mounts nothing from the host but that copy; refuses to run a scenario phase outside a container, checked by `/run/.containerenv`); `tests/e2e/Containerfile.{debian,arch}` (Arch is the owner's Linux; its image is amd64 only, so on an arm64 host `e2e.sh` runs it with `--platform linux/amd64`, emulated); the `e2e` leg in `scripts/ci-local.sh`. Scenario `tests/e2e/scenarios/reboot.sh`, in two phases around `podman restart`, which kills every process, empties `/run/user/<uid>` (a tmpfs `e2e.sh` mounts) and keeps the container's disk: phase 1, as a test user, starts grofe through a `tmux` symlink, opens two sessions with three `fake-agent` panes pinned at launch and bound with `pane-set-resume` from their own shells (as an adapter would), a pane whose agent was then closed, and a plain shell after `cd`, and waits for `reboot-check`; phase 2 "boots" with `env -i HOME=<home> PATH=/usr/bin:/bin FAKE_AGENT_HOME=<dir> tmux start-server --restore`, as a login unit would (its environment set by the unit, not the snapshot), then checks | `scripts/e2e.sh`, `tests/e2e/Containerfile.{debian,arch}`, `tests/e2e/scenarios/reboot.sh`, the `e2e` leg in `scripts/ci-local.sh` | T4.4, T4.5 | On both images: phase 1's `reboot-check` exits 0 and names every pane; after the restart each transcript is `launch <id>` then `resume <id>` in the window that held it; every `uid` equals phase 1's; the closed-agent pane and the `cd` pane come back as shells in their directories; a mutation run (phase 1 edits one pane's resume in `state.json` before the restart) fails on that pane only; `scripts/e2e.sh` exits nonzero when a scenario fails and when the host-state check of "Rules for M4 onward" finds a difference |
+
+**Critical path inside M4** (review cycles included): stub edit → T4.3 (4 d)
+→ T4.4 (3 d) → T4.6 (4 d), about 11 working days. T4.1 (3 d) and T4.2 (3 d)
+run beside T4.3; T4.5 (3 d) runs beside T4.4. **One-lane sum:** T4.1 3, T4.2
+3, T4.3 4, T4.4 3, T4.5 3, T4.6 4: 20 task-days.
+
+**Exit gate:** reviewer runs `scripts/ci-local.sh` (`macos`, `linux`, `e2e`)
+from a clean clone; **[owner]** a real reboot on each OS returns every
+session with its `uid`s and every pane with a resume runs it, logged in
+`docs/dogfood.md` (substitute: T4.6 green on both images). Only after this
+gate does the owner's machine drop resurrect and continuum (TP.8).
+
+---
+
+## M5: copy mode and buffers
+
+Spec §4.11 and §4.5's buffers row. Goal: copy mode, buffers and copy targets
+behave as the owner's `copy-mode-vi` table does under tmux 3.7b, so the
+shift-drag fallback (spec §10) retires. **Overlays:** `display-popup`,
+`display-menu`, `display-panes` and `choose-tree` moved to M3.6 (TC.6, TC.7,
+TC.9) and are done there; M5's only overlays are copy mode's own view and
+`choose-buffer`, which reuses TC.9's chooser. M5 also closes M3.7: TP.5 (yank)
+and TP.9's `copy-mode-vi` rows run at its end. The wheel's read-only scrollback
+view from T3.2 is replaced by copy mode, as the owner's root `WheelUpPane`
+binding asks.
+
+**Before Wave A starts:**
+
+- TM.0's scope doc is **[owner]** approved (TM.0 itself runs during M4).
+- **Stub edit** by the orchestrator on `main`: `src/server/copy/{mod,select,search,pipe}.rs`
+  (one file per task, so TM.2, TM.3 and TM.5 never share one),
+  `src/server/buffers.rs`, `src/server/dispatch/{copy,buffers}.rs` and `src/compat/tmux/copy.rs` (an
+  empty row-set function, registered in `src/compat/tmux/mod.rs`, the one line
+  there no task owns); `Command` variants `CopyMode`, `SetBuffer`,
+  `ShowBuffer`, `ListBuffers`, `DeleteBuffer`, `PasteBuffer`, `ChooseBuffer`
+  with empty flag structs, routed to stubs; the `-X`, `-N` and `-F` fields on
+  `SendKeys` (TM.1 fills them).
+
+**Wave 0 (during M4).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.0** Scope doc | `docs/copy-mode.md`, one page plus the keymap table. The keymap: tmux 3.7b's `list-keys -T copy-mode-vi`, recorded with TC.0b under `tmux-defaults.conf` plus `tests/fixtures/compat/copy-mode.conf` (`mode-keys vi` and the copy-mode bindings canopy and tmux-yank add, `y`, `Y` and `MouseDragEnd1Pane` to `copy-pipe-and-cancel`, reproduced from their sources, never from the owner's live server), into `tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.txt`; one row per binding: key, tmux command, the grofe copy-mode command, the task that builds it, the parity scenario id. Then, per spec §4.11: the selection model over wrapped lines, the search dialect and its differences from tmux's POSIX regex, the copy targets, the mouse, and what stays out (the emacs table, `copy-mode -M`) | `docs/copy-mode.md`, `tests/fixtures/compat/copy-mode.conf`, `tests/fixtures/compat/golden/tm_0/`, `scripts/check-copy-scope.sh` | TC.0b | The check script exits 0: every line of the recorded golden has exactly one row in the doc and every row one line, every row names an M5 task and a scenario id; the golden's count equals the inventory's 93, or the doc names each difference and its cause; **[owner]** approves the doc |
+
+**Wave A (after the stub edit; parallel; merge order TM.4, TM.1).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.1** Copy-mode core | Spec §4.11: per-pane copy mode entered with `copy-mode` (`-u`, `-e`, `-t`), stock `prefix [` and `prefix PageUp`; a view over history and screen that keeps its offset while output continues; the `[offset/size]` indicator in `mode-style`; the `copy-mode-vi` key table, entered and left with the mode; `send-keys -X <command>` with `-N <count>` and `-F`, erroring outside copy mode as tmux does; every motion, scroll and cancel command whose TM.0 row names TM.1; `pane_in_mode`, `pane_mode`, `copy_cursor_x`, `copy_cursor_y`, `scroll_position`, `copy_cursor_word`; drawn through T2.5a's overlay API | `src/server/copy/mod.rs`, `src/server/dispatch/copy.rs`, the `-X` route in the `send-keys` handler in `src/server/dispatch/pane.rs`, one registration line in `src/server/mod.rs`, `tests/fixtures/copy/`, `tests/acceptance/tm_1.rs`, `tests/fixtures/compat/golden/tm_1/` | stub edit, TM.0 | For each TM.1 row, over a fixed fixture printed into an 80x24 pane with 500 lines of history: the keys, then `display -p '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'`, equal the golden recorded from tmux 3.7b with TC.0b; output arriving in copy mode does not move the view; `q` returns to the live pane; `send -X cursor-up` outside copy mode fails with tmux's text; `#{pane_in_mode}` is 1 only in the mode |
+| **TM.4** Buffers | Named and automatic buffers (`buffer0`, newest first) with `buffer-limit` (50) evicting the oldest automatic one; `set-buffer [-a] [-b] [-n] <data>`, `show-buffer [-b]`, `list-buffers [-F]` with tmux's default format, `delete-buffer [-b]`, `paste-buffer [-p] [-b] [-d] [-r] [-s] [-t]`, with bracketed-paste markers only under `-p` and only for a pane that set mode 2004; `choose-buffer [-Z]` on TC.9's chooser (Enter pastes, `d` deletes); stock `]` (`paste-buffer -p`) and `=` (`choose-buffer -Z`); `buffer_name`, `buffer_size`, `buffer_sample`, `buffer_created` | `src/server/buffers.rs`, `src/server/dispatch/buffers.rs`, the `]` and `=` default bindings in `src/server/input.rs`, `tests/buffers.rs`, `tests/fixtures/compat/golden/tm_4/` | stub edit | `list-buffers` after three `set-buffer`s equals tmux 3.7b's golden; `paste-buffer -p` into `cat -v` with bracketed paste on shows `^[[200~` around the text, and without it shows none; `-d` deletes after pasting; the 51st automatic buffer evicts the oldest; `set-buffer -a` appends; `choose-buffer` then Enter pastes the chosen buffer |
+
+**Wave B (TM.2 and TM.3 in parallel after TM.1; TM.5 after TM.2; TM.6 after
+TM.5; merge order TM.2, TM.3, TM.5, TM.6).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.2** Selection | `begin-selection`, `select-line`, `rectangle-toggle`, `select-word` (with `word-separators`), `other-end`, `clear-selection`, `copy-selection` and its `-and-cancel` and `-no-clear` forms, `copy-end-of-line`, `append-selection` and its `-and-cancel` form; extraction per spec §4.11: soft-wrapped rows (alacritty's `WRAPLINE`) join into one logical line, hard newlines stay, trailing blanks are trimmed, wide cells whole, combining marks kept, rectangles per row; selections survive a reflowing resize | `src/server/copy/select.rs`, `tests/acceptance/tm_2.rs`, `tests/fixtures/compat/golden/tm_2/` | TM.1, TM.4 | `show-buffer` equals tmux 3.7b's golden byte for byte for: a selection over a line wrapped three times at 80 columns (one line); the same after resizing to 50 columns; a rectangle over rows mixing CJK, emoji and ASCII; `select-word` on `foo/bar-baz.rs` with the default separators; `append-selection` onto an existing buffer |
+| **TM.3** Search and jumps | `search-forward`, `search-backward` (regex, spec §4.11) and their `-text` forms, `search-again`, `search-reverse`, `#`/`*` through `-FX` with `#{copy_cursor_word}`, `/` and `?` through `command-prompt -T search` (TC.7's prompt type), `wrap-search`, `copy-mode-match-style` and `copy-mode-current-match-style`, matches across soft wraps as tmux finds them; jumps `f F t T ; ,` through `command-prompt -1`; a search scans a copy of the grid off the actor | `src/server/copy/search.rs`, `tests/acceptance/tm_3.rs`, `tests/fixtures/compat/golden/tm_3/` | TM.1 | Cursor positions equal tmux 3.7b's goldens for a regex `fo+[0-9]`, a `-text` search for `a.b`, `n` past the last match with `wrap-search` on and off, a match split by a soft wrap, and each jump key; every regex difference TM.0 lists has a test showing grofe's documented behaviour; a search over a full 50 000-line history never delays a second client's frames by more than 50 ms |
+| **TM.5** Copy targets | `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` with a command or the `copy-command` option; the command runs off the actor under the spawn lock with the server environment and the selection on stdin, and each also stores a buffer; `set-clipboard` `on`, `external` and `off`: a copy sends OSC 52 to attached clients under `on` and `external`, and a pane's own OSC 52 creates a buffer only under `on` (T3.3 already forwards it) | `src/server/copy/pipe.rs`, the OSC 52 send in `src/server/passthrough.rs` (T3.3 merged), `tests/acceptance/tm_5.rs` | TM.2 | `y` bound to `copy-pipe-and-cancel 'cat > $TMPDIR/clip'` writes the selection to the file and leaves copy mode; the outer pty stream carries OSC 52 with the selection's base64 under `on` and none under `off`; a `copy-pipe` whose command sleeps 10 s delays neither the next key nor a frame; an app's OSC 52 appears in `list-buffers` under `on` and not under `external`; with no argument the `copy-command` runs |
+| **TM.6** Mouse in copy mode | The wheel in a pane without mouse mode enters copy mode with `-e` and scrolls (`send -X -N 5 scroll-up` as tmux's stock binding), leaving at the bottom; a drag enters copy mode and selects; `MouseDragEnd1Pane` runs its binding; double and triple click select a word and a line as tmux's stock root bindings do; a click in copy mode moves the cursor; panes in mouse mode still get the wheel; T3.2's scrollback overlay is removed | additions to `src/server/mouse.rs` (T3.2, TC.10 merged), the mouse defaults in the `root` and `copy-mode-vi` tables in `src/server/input.rs`, `tests/acceptance/tm_6.rs` | TM.2, TM.5 | Through SGR mouse reports in the acceptance harness: the wheel in a shell shows the indicator and history text; the wheel in Neovim scrolls Neovim; a drag from (2,3) to (20,5) and release puts that text in the newest buffer and runs the `MouseDragEnd1Pane` binding (a stub copy command gets it); a double click's buffer equals tmux 3.7b's golden for the same fixture; T3.2's and TC.10's tests change only where the overlay became copy mode, and the diff lists each |
+
+**Wave C.**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.7** Front-end rows and parity | Rows in `src/compat/tmux/copy.rs`, with FE.1's rules (mapping kind, cosmetic or semantic marks, goldens): `copy-mode -u -e`, `send -X`, `send -FX`, `send -X -N`, `copy-pipe*` strings inside `bind -T copy-mode-vi`, `command-prompt -T search`, the buffer verbs and their output formats, and the options `mode-keys`, `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`, `buffer-limit`; the parity suite `tests/compat/scenarios/copy_mode/`: one scenario per TM.0 row (the same fixture, keys and a final `show-buffer` or cursor readout) recorded on tmux 3.7b with TC.0b and run on grofe through the `tmux` symlink | `src/compat/tmux/copy.rs`, `tests/compat/scenarios/copy_mode/`, `tests/fixtures/compat/golden/tm_7/` | TM.1 to TM.6, FE.1, TC.0b | All 93 scenarios are byte-identical to their goldens after normalization; `tmux list-keys -T copy-mode-vi` equals TM.0's golden; editing one golden turns the suite red; `compat-miss.log` is empty after the suite; the sockets check of "Rules for M4 onward" passes |
+
+**Then (M3.7 tasks, run here):** TP.5 (yank) on top of TM.5 and TM.6, and
+TP.9's `copy-mode-vi` rows (93) on top of TM.7. Their rows in M3.7 hold as
+written.
+
+**Critical path inside M5** (review cycles included): TM.0 (2 d) and its
+approval (about 1 d) during M4; then stub edit → TM.1 (4 d) → TM.2 (3 d) → TM.5
+(2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) → TP.9's copy rows (1 d), about 20
+working days after M4. TM.4 (3 d) runs beside TM.1 and TM.3 (3 d) beside TM.2
+and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
+TM.6 3, TM.7 5, TP.5 2, TP.9's copy rows 1: 28 task-days.
+
+**Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
+TM.7's suite; TP.9 exits 0 for every table; **[owner]** a week under the
+alias using copy mode instead of shift-drag, every `copy` entry in
+`docs/dogfood.md` closed (substitute: TM.7's 93 scenarios and TP.9 green).
+M3.7 closes here.
+
+---
+
+## M6: events and plugins
+
+Spec D9 and §7. Goal: a frozen control protocol and event catalog, supervised
+out-of-process plugins, and sandboxed Lua, shaped by what M3.6 and M3.7 turned
+out to need rather than by the candidate list in spec §4.6. The known
+consumers today: TC.5's event hooks and the twelve tmux hook names behind them
+(FE.3), which opensessions (TP.6) uses; the agents plugin (M7), which needs
+option changes on pane options, pane focus, pane creation and exit, session
+and window closing, `restore-done` and `resume-changed`; and nothing in the
+status line, which stays formats over options (D8). An event with no consumer
+does not enter v1.
+
+**Before Wave A starts:** T6.0 approved; **stub edit** by the orchestrator on
+`main`: `mlua` 0.12 in `Cargo.toml` with the features T6.0 names (`lua54`,
+`vendored`, `serde` at least); `src/lua/{mod,api}.rs`, `src/server/plugins.rs`
+and `src/server/dispatch/plugins.rs` with their `mod` lines; `Command` variants
+`ListPlugins` and `PluginRestart`, routed to stubs; a `control` arm stub in
+`src/main.rs`.
+
+**Wave 0 (during M5).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and M7's needs (spec §7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema, the Lua API surface with its budgets, and the format-function syntax (placeholder `#{lua:name,args}`); pick the in-tree Lua plugin from the dogfood log (default: a format function rendering the agent-state pill M7's canopy fragment uses) | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | M4's exit gate | Every catalog event names at least one consumer (a hook name row, the agents plugin, or a test) and no event is listed without one; every M7 need in spec §7 maps to a catalog event or a command; **[owner]** approves the rewrite |
+
+**Wave A (after the stub edit; parallel; merge order T6.1, T6.4).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T6.1** Event catalog | T6.0's catalog on the `subscribe` stream: typed variants in `event.rs`, emitted from the internal events TC.5 already raises (one emission site per event); `pane-focus` (a pane becomes the active pane of the current window of an attached client, or that client's terminal regains focus while it is); `restore-done` and `resume-changed` from M4; `subscribe <event>... [-t target]` filters; per-pane events arrive in the order of their actions; `events-dropped` unchanged | `src/event.rs`, `src/server/events.rs`, the emission sites in `src/server/mod.rs` and `src/server/hooks.rs` (TC.5 merged), `tests/events_v1.rs` | T6.0 | Each catalog event fires exactly once per triggering action with the catalog's payload (one JSON golden per event); `pane-focus` fires on `select-pane`, on switching window, on a click, and never for a session with no attached client; a `-t %3` subscription receives only `%3`'s events; T1.6's tests unchanged and green |
+| **T6.4** Lua runtime | `~/.config/grofe/init.lua` as layer 5 (spec §5.1), after `user.toml`; values it sets record provenance `init.lua:<line>`; `reload` runs it in a fresh Lua state inside reload's all-or-nothing (spec §5.4); a sandbox with `base`, `string`, `table`, `math`, `utf8`, `os.time` and `os.date` only, so no subprocess and no file I/O (D8); every callback under a budget (instruction-count hook plus wall clock, defaults from T6.0), an overrun errors with file and line and a callback that overruns three times is disabled; the state lives on the actor, callbacks are synchronous; API: `grofe.get`, `grofe.set` (option, value, scope, target), `grofe.cmd` (argv, queued after the current command, never re-entrant), `grofe.bind` (table, key, function, `desc`, `name`), `grofe.on` (catalog events, after the action) | `src/lua/mod.rs`, `src/lua/api.rs`, layer-5 loading in `src/config/`, `tests/lua.rs` | T6.0 | An `init.lua` setting `status.left` shows as `init.lua:3` in `show-config status.left --explain`; a syntax error fails `reload` with file and line and changes nothing; `while true do end` in a bound callback returns within its budget, logs, and a second client's frames keep their cadence; `io`, `os.execute`, `io.popen` and `require` of a C module are absent; a third overrun disables the callback and `list-keys` marks it; `grofe.cmd{'split-window'}` from a callback splits once |
+
+**Wave B (T6.2 and T6.3 after T6.1, T6.5 after T6.4 and T6.1; merge order
+T6.2, T6.3, T6.5).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T6.2** Protocol v1 freeze | `docs/protocol-v1.md`: both hellos (`grofe: 1`, `dialect`), requests, replies, the event catalog, attach frames, errors; the rules: v1 is additive only (new optional fields, new events delivered only to subscribers that name them, new verbs), and a hello with another version gets a clean error naming the side to upgrade (spec §4.6); `tests/fixtures/protocol/v1/`, one JSON line per message and event kind; `grofe control`: a stdio bridge, JSON lines in and out, so a plugin in any language needs no socket code | `docs/protocol-v1.md`, additions to `src/protocol.rs`, the `control` arm in `src/main.rs`, `tests/protocol_v1.rs`, `tests/fixtures/protocol/v1/` | T6.1 | Every fixture parses and re-serializes byte-identically; every `Event` variant has a fixture (a test enumerates them); removing a field from one struct turns the suite red (proved once by a mutation the test applies); an unknown field in a request is ignored and an unknown verb errors; `printf '{"id":1,"argv":["list-sessions"]}\n' \| grofe control` prints one reply line; a `grofe control` subscription over 10 000 events drops only when its reader stalls, with an `events-dropped` notice |
+| **T6.3** Plugin supervision | `[plugins.<name>]` with `cmd` (argv), `env`, `enabled` and `restart` (`always` default, `on-failure`, `never`); plugins start after config load and after any restore, with the server environment plus `GROFE` and `GROFE_PLUGIN=<name>`, stdin from `/dev/null`, stdout and stderr to `<state>/plugins/<name>.log` (rotated at 1 MiB), spawned off the actor under the spawn lock; restarts back off from 1 s, doubling to 60 s, reset after 60 s alive; five crashes within 60 s disable a plugin with a log line; on server exit SIGTERM, then SIGKILL after 2 s; `reload` starts, stops or restarts plugins whose config changed; `list-plugins` (name, pid, state, restarts, since) and `plugin-restart <name>` | `src/server/plugins.rs`, `src/server/dispatch/plugins.rs`, one registration line in `src/server/mod.rs`, the `[plugins]` schema in `src/config/`, `tests/plugins.rs` | T6.1 | A test plugin starts with the server and sees `GROFE`; after SIGKILL it is back within 1.5 s, and repeated kills space its restarts 1, 2 and 4 s apart; the fifth crash within 60 s leaves it `disabled` in `list-plugins` and spawns nothing more (counted); `kill-server` leaves no plugin process; a plugin that never reads its socket does not delay `new-session`; its stderr lands in its log; `reload` without its config stops it |
+| **T6.5** Format functions | T6.0's syntax (`#{lua:name,args}`) in `cmd/format.rs` (contract edit: T6.5 co-owns `format.rs` for this), calling functions registered with `grofe.format`; each call under a per-call budget, results cached per frame per name, arguments and pane; an error or overrun renders empty and logs at most once a minute; Lua bindings listed by `list-keys` with source `init.lua:<line>` and marked outside the config table (spec §5.4) | the format hook in `src/cmd/format.rs`, additions to `src/lua/api.rs` (T6.4 merged), `tests/lua_formats.rs` | T6.1, T6.4 | `#{lua:upper,#{session_name}}` renders the upper-cased name; a looping function is cut at its budget, its segment is empty, and every frame interval stays under 50 ms with two attached clients forced to 60 Hz (TC.4's method); `list-keys` shows a Lua binding with its source line; T2.6's and TC.3's format tests unchanged and green |
+
+**Wave C.**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T6.6** In-tree plugins | `plugins/event-log/event-log.sh`, an out-of-process plugin in POSIX sh over `grofe control` that appends the catalog's events to `<state>/events.log` (a dogfooding aid; events while it is down are not replayed, and its README says so); `examples/lua/init.lua`, the Lua plugin T6.0 picked; README's plugin section with both | `plugins/event-log/`, `examples/lua/`, README's plugin section, `tests/plugins_intree.rs` | T6.2, T6.3, T6.5 | With `[plugins.event-log]` configured, a split and a `select-pane` append their events in order within 1 s; the plugin passes `shellcheck`; the Lua example loads through `show-config --file` and its function renders the goldens for each input T6.0 lists (by default the five agent states and `restored`) |
+
+**Critical path inside M6** (review cycles included): T6.0 (2 d) and its
+approval during M5; then stub edit → T6.4 (4 d) → T6.5 (3 d) → T6.6 (2 d),
+about 9 working days. T6.1 (3 d) then T6.2 and T6.3 (3 d each, parallel) end
+on day 6. **One-lane sum:** T6.0 2, T6.1 3, T6.2 3, T6.3 3, T6.4 4, T6.5 3,
+T6.6 2: 20 task-days.
+
+**Exit gate:** reviewer runs `scripts/ci-local.sh`; `docs/protocol-v1.md` and
+its fixtures are tagged as v1 in the same merge; the owner's step was T6.0's
+approval, so nothing else here needs the owner.
+
+---
+
+## M7: agents plugin and canopy on grofe
+
+Spec §7, §7.1. Goal: canopy's agent layer runs on grofe with nothing
+polled and nothing forked per report, and a reboot returns every agent pane
+to its own conversation. canopy's `docs/adapters/contract.md` is the
+authority on adapter manifests; grofe reads the same files. The agents plugin
+ships in the grofe binary: `grofe __agents` is the supervised daemon (M6),
+configured by canopy's fragment, and `grofe agents <adopt|next>` is a CLI arm,
+a control client that needs no daemon. Tasks that own canopy files run in
+canopy with its bats and have a grofe-side check.
+
+**Before Wave A starts:** M6's exit gate has passed (T7.1 and T7.5 may start
+during M6); **stub edit** by the orchestrator on `main`:
+`src/agents/{mod,manifest,state,identity,adopt}.rs` with the `mod agents`
+line; the `__agents` and `agents` arms stubbed in `src/main.rs`; the `[agents]`
+schema in `src/config/`: `adapter-dirs` (list, first wins), `option-prefix`
+(default `@agent_`), `enabled`.
+
+**Wave A (parallel; may start during M6).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T7.1** Manifest reader | canopy's contract exactly: `key=value` lines, comments and blank lines, all six keys required, every rejection the contract lists (unknown or duplicate key, a malformed line, `id` differing from the directory, `can_pin_at_launch` neither `yes` nor `no`, a template without `{id}`, `launch_template` with `{id}` required exactly when pinnable), full validation on every read; `adapter-dirs` precedence with a shadowed id listed once; ids validated against `[A-Za-z0-9._:-]` on entry and again on use; literal substitution, then split on spaces into an argv, rejecting a template with shell quoting or metacharacters (spec §7); `detect_draft` run through `/bin/sh -c` with stdin from `/dev/null` | `src/agents/manifest.rs`, `tests/agents_manifest.rs`, `tests/fixtures/agents/manifests/` | stub edit | Over a corpus of valid and invalid manifests (every rejection, plus canopy's shipped `claude-code` and fake-agent manifests), each verdict equals the one canopy's `lib/adapter.sh` gives on the same file: live when `GROFE_COMPAT_CANOPY` is set, and against a checked-in golden of canopy's verdicts otherwise; a config-dir adapter shadows the store's and is listed once; id `a b` is refused and `abc-1.2:x_y` accepted |
+| **T7.5** The four adapters (canopy) | canopy ships `adapters/{opencode,pi,codex}/` beside `claude-code`, each with a manifest per the contract and, where the agent reports, its reporter and installer per canopy §6.5's mappings (opencode TS plugin, pi TS extension, codex `notify` and hooks through an sh bridge); each adapter's tier recorded in canopy's docs, and an agent that cannot resume by id gets no adapter and says so (tier 3); adapters call `canopy agent report` and hold nothing grofe-specific | canopy `adapters/{opencode,pi,codex}/`, canopy's manifest and agent-report bats with recorded hook-payload fixtures, canopy design §6.5's table | none in grofe | canopy's bats: every manifest validates, and each reporter fed its recorded payloads produces §6.5's states; T7.1's corpus includes all four manifests and accepts them; T7.3's argv test recognises each agent's launch argv from fixtures; **[owner]** runs each real agent once in a grofe pane and sees its state and resume set (substitute: the payload fixtures) |
+
+**Wave B (after T7.1; parallel; merge order T7.2, T7.3).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T7.2** State, rollups, attention | `grofe __agents` subscribes to option changes on `<prefix>state`, `<prefix>source` and `<prefix>session`, and to `pane-focus`, `pane-created`, `pane-exited`, window and session closing and `restore-done`; states outside the five (and `restored`) are logged as adapter bugs and left out of rollups; rollups as window and session `<prefix>rollup` in spec §7's urgency order, written only on change and cleared when no agent pane remains; attention: entering `blocked` or `completed` sets `<prefix>unseen` (the transition time) unless an attached client is looking at the pane, and `pane-focus` clears it; after a restore, panes with a persisted `<prefix>source` and no report yet get `<prefix>state restored`; on connect it recomputes everything from one `list-panes -a -F`; it forks nothing; `grofe agents next` selects the pane with the oldest unseen time, switching the client's session and window | `src/agents/{mod,state}.rs`, the `__agents` and `agents next` arms in `src/main.rs`, `tests/agents_state.rs` | T7.1 | With the plugin at prefix `@canopy_agent_` and states set through the `tmux` symlink as canopy's report does (`set -p ... \; set -p ...`): a table of about 15 report sequences gives the expected window and session rollups; a repeated `working` writes nothing (the `option-changed` count is unchanged); `blocked` on an unfocused pane sets unseen and on the focused pane does not; `select-pane` to it clears it; `agents next` lands on the oldest unseen pane; after a restore (T4.4's harness) persisted panes read `restored` until their first report; an invalid state logs once and leaves rollups unchanged; the daemon's child count stays 0 over 1000 reports; SIGKILLed, it is restarted (T6.3) and its first recompute matches the rollups before |
+| **T7.3** Identity and resume | Spec §7: the plugin calls `pane-set-resume` for the adapter whenever a pane's `<prefix>session` changes (a `/clear`-style new id with an unchanged state included) and `<prefix>source` names an installed adapter, using its `resume_template`; for panes that never report, identity from `pane_current_argv` (never the command name) on `pane-created`, `restore-done` and plugin start: interpreters (`sh`, `bash`, `zsh`, `env`), options and `VAR=value` skipped, the program matched against each adapter's `command`, the id read back through `resume_template` first and `launch_template` second (canopy 5aaac53, §6.6); it sets `<prefix>source` and `<prefix>session` with `--persist`, never `<prefix>state`; an agent pane with no id gets `pane-set-resume --expect "no session id reported"` | `src/agents/identity.rs`, `tests/agents_identity.rs`, `tests/fixtures/agents/fake-agent-adapter/` (canopy's, vendored) | T7.1, T4.2 | With canopy's fake-agent adapter: a pane running `fake-agent --session-id a` that never reports has `#{pane_resume}` equal to `<abs>/fake-agent --resume a` within 1 s of plugin start; reports of session `b` and then `c` with the same state leave `--resume c`; `env FOO=1 fake-agent --session-id d`, `sh -c 'exec fake-agent --session-id e'` and one started with `exec -a 2.1.245` are all recognised; `fake-agent --anonymous` gets the expectation and `reboot-check` exits 1 naming it, and closing it brings exit 0; a reported id with a space is refused with a log line and sets no resume; after `kill_hard()` and `restart()` every pane with an id resumes its own conversation (transcripts), `source` and `session` are back, `state` is not |
+
+**Wave C (T7.4 and T7.6 after Wave B, parallel; T7.7 after T7.4; merge order
+T7.4, T7.6, T7.7).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T7.4** Adopt | Spec §7.1: `grofe agents adopt [--yes] [-t target]`; for each pane whose foreground argv is an adapter's command with an id recoverable from its report or argv, and whose resume is not already that adapter's resume for that id: a dry run (the default) prints `would adopt <pane> <adapter> <id>`, and `--yes` calls `pane-set-resume`; nothing is respawned, so `detect_draft` is not needed and the output says so; it never invents an id (a pane without one is named and left alone), validates ids on use, and a pane already carrying its resume counts as adopted; exit 0, or 1 when any agent pane was left alone | `src/agents/adopt.rs`, the `agents adopt` arm in `src/main.rs`, `tests/agents_adopt.rs` | T7.2, T7.3 | The dry run changes nothing (`#{pane_resume}` and `state.json` unchanged); `--yes` sets each resume, and a second `--yes` reports every pane adopted and emits no `resume-changed`; an anonymous pane is named, skipped, and gives exit 1; a pane whose `source` names a missing adapter is named with that reason; no `pane_pid` changes; after adopting, `reboot-check` exits 0 for those panes |
+| **T7.6** canopy's agents fragment (canopy) | TP.1's generator gets a `40-agents` template: `[plugins.agents]` running `grofe __agents`, `[agents]` with `adapter-dirs` (`$CANOPY_CONFIG/adapters`, then `$CANOPY_STORE/adapters`) and `option-prefix = "@canopy_agent_"`; pane borders from the pane state, window status from the window rollup, status-right from the session rollup, an unseen marker, all pure formats with no `#()` (canopy §6.3); a binding for `grofe agents next` and canopy's `agent next` calling it on the grofe backend | canopy's `40-agents` template and its bats; `tests/acceptance/t7_6.rs` in grofe | T7.2 | `grofe show-config --file` on the generated tree loads with no errors; with states set by `canopy agent report` through the `tmux` symlink, the reconstructed border and status show each of the six states (screen goldens); redraws at 60 Hz spawn no process beyond the named sources (counted, TC.4's method); `canopy restore --all` removes the fragment |
+| **T7.7** Autostart, doctor and wrappers (canopy) | canopy installs a login unit through its transaction (owned before written, restored by `canopy restore`): a systemd user unit on Linux and a launchd agent on macOS, each running `tmux start-server --restore` through the `tmux` symlink (tmux identity, D12) with the login `PATH`; `canopy doctor` on grofe checks `restore-on-start` or the unit, a writable state dir, `grofe reboot-check` not exiting 2, and prints the tier matrix; `canopy reboot-check` on grofe prints `grofe reboot-check` and exits with its status; `canopy adopt` runs `grofe agents adopt` with the same flags; the grofe backend carries no resurrect or continuum path | canopy's grofe-backend `bin/` wrappers, the unit templates, the doctor checks, and their bats | T7.4, T4.5 | canopy's bats against a scripted grofe server on a private `-S`: doctor passes with the unit and fails naming each missing piece; `canopy reboot-check` exits as `grofe reboot-check` does in the three cases; `canopy adopt`'s dry-run output equals grofe's; with `restore-on-start` off, the installed unit keeps `grofe reboot-check` from exiting 2; `canopy restore --all` removes the unit and returns the home byte-identical |
+
+**Wave D.**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **T7.8** Container: canopy on grofe | `tests/e2e/Containerfile.systemd` (Debian with systemd as PID 1, `--systemd=always`, a test user with lingering) and `tests/e2e/scenarios/canopy.sh`, run through T4.6's `scripts/e2e.sh`: canopy copied in at the SHA pinned for TC.13 (`GROFE_COMPAT_CANOPY`), never the owner's install; grofe installed, the `tmux` symlink first on the user's `PATH`; `canopy install` with the grofe backend and the login unit enabled; canopy's fake-agent adapter installed from `test/fixtures/fake-agent-adapter`. Phase 1: four agent panes over two sessions: two pinned at launch, one started anonymously that later reports an id through `canopy agent report --session-id` (the tier 2 path), one anonymous that never reports; states driven by `canopy agent report` from inside each pane, as adapter hooks do. `podman restart`: systemd boots and the unit starts grofe with restore. Phase 2 checks | `tests/e2e/Containerfile.systemd`, `tests/e2e/scenarios/canopy.sh` | T7.6, T7.7, T4.6 | Phase 1: rollups and unseen follow the reports; `canopy reboot-check` names the never-reporting pane and exits 1. Phase 2: each fake agent's transcript is `launch <id>` then `resume <id>`, in the window that held it (canopy scenario 7), the tier 2 pane included; the never-reporting pane is a shell in its directory and costs no other pane (scenario 8); every `uid` equals phase 1's; states read `restored` until the next report; `canopy doctor` passes. A mutation run (phase 1 edits one resume in `state.json`) fails on that pane only; the host-state check passes |
+
+**Critical path inside M7** (review cycles included): T7.1 (2 d) and T7.5
+(4 d) during M6; then stub edit → T7.2 (4 d) → T7.4 (3 d) → T7.7 (3 d) → T7.8
+(4 d), about 14 working days. T7.3 (3 d) runs beside T7.2, T7.6 (3 d) beside
+T7.4. **One-lane sum:** T7.1 2, T7.2 4, T7.3 3, T7.4 3, T7.5 4, T7.6 3, T7.7 3,
+T7.8 4: 26 task-days.
+
+**Exit gate:** reviewer runs `scripts/ci-local.sh` with the `e2e` leg (T4.6
+and T7.8 scenarios); **[owner]** on each machine, a real reboot returns every
+Claude Code pane to its own conversation and `canopy reboot-check` said so
+beforehand, logged in `docs/dogfood.md` (substitute: T7.8 green).
+
+---
+
+## E2E and release
+
+The gate between M7 and "fully done": every suite runs from a clean clone, in
+containers where the owner's machines are Linux and natively (private
+sockets) on macOS, then the owner switches for good. TE.1 and TE.2 may start
+as soon as their suites exist (T4.6 and TM.7); TE.3 runs last.
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TE.1** Acceptance in containers | `tests/e2e/scenarios/acceptance.sh`: the spec §8 acceptance suite (`cargo test` acceptance targets and bats) inside the Debian and Arch images, with neovim, fzf, less, htop, git, kitten where packaged, and tmux 3.7b built at a pinned tag for the nested-tmux item; the macOS leg stays `scripts/ci-local.sh macos` | `tests/e2e/scenarios/acceptance.sh`, the tool lines in `tests/e2e/Containerfile.{debian,arch}` | T4.6 | Green on both images; the images' `tmux -V` prints `tmux 3.7b` (the scenario checks); a tool missing from an image fails the scenario naming it rather than skipping |
+| **TE.2** Compat in containers | `tests/e2e/scenarios/compat.sh`: TC.13's suite and TM.7's copy-mode parity inside the Debian image, with canopy and athome copied in at their pinned SHAs; the goldens' re-record path (TC.0b) also runs in the image | `tests/e2e/scenarios/compat.sh` | TE.1, TM.7 | Both suites green; re-recording in the image gives byte-identical goldens; `compat-miss.log` empty |
+| **TE.3** Release gate | `scripts/release-gate.sh`: `ci-local.sh macos` and `linux`, then the `e2e` scenarios `acceptance` (TE.1), `compat` (TE.2), `reboot` (T4.6) and `canopy` (T7.8), then `tests/e2e/scenarios/rollback.sh`: with canopy on grofe installed in the systemd image, remove the `tmux` symlink and switch canopy back to its tmux backend; real tmux and canopy work as before and `canopy restore --all` returns the home byte-identical; README's "alias day" section with the owner's steps below | `scripts/release-gate.sh`, `tests/e2e/scenarios/rollback.sh`, README's alias-day section | TE.1, TE.2, T7.8 | Exits 0 only when every leg is green, and prints one line per leg; forcing one leg red (`GROFE_GATE_FAIL=<leg>`) makes it exit nonzero naming that leg; the README steps run in a clean container |
+
+**Critical path:** TE.3 (3 d) after M7; TE.1 (3 d) and TE.2 (2 d) run
+earlier. **One-lane sum:** TE.1 3, TE.2 2, TE.3 3: 8 task-days.
+
+**Alias day, for good.** M3.6's alias day was a trial with real tmux as the
+fallback. This one makes grofe the owner's multiplexer, on the release tag
+and after TE.3 is green. Each step is **[owner]**; each has its substitute in
+TE.3's legs.
+
+1. Pin grofe and canopy to the release tag and SHA in athome, and apply athome
+   the way its `AGENTS.md` says: `chezmoi diff`, capture anything precious,
+   then apply. The change puts the `tmux` symlink first on `PATH`, installs
+   grofe's config, and switches canopy to its grofe backend. (Substitute:
+   T7.8's install and TE.3's README run.)
+2. `canopy install` with the grofe backend installs the login unit; `canopy
+   doctor` passes; `grofe reboot-check` exits 0. (Substitute: T7.7 and T7.8's
+   phase 1.)
+3. Reboot for real, on each machine: every session is back with its `uid`s,
+   and every Claude Code pane is back in its own conversation. (Substitute:
+   T4.6 and T7.8.)
+4. A week of normal work under the alias. Each difference goes in
+   `docs/dogfood.md` tagged `compat` or `copy`, becomes a scenario, then gets
+   fixed; `compat-miss.log` is read each day. (Substitute: TC.13, TM.7, TP.9.)
+5. Real tmux stays installed, reachable as `env -u TMUX <absolute path>`, until
+   that week ends with no open entry; removing it is the owner's call.
+   **Rollback** at any point is TE.3's drill: revert the athome change (the
+   symlink goes), `canopy install` with the tmux backend; grofe's state stays in
+   its own directory and touches nothing of tmux's.
+
+**Fully done** means M7's exit gate, TE.3 green, and step 4's week ending
+with no open `compat` or `copy` entry.
+
+---
+
+## M8 (milestone level)
 
 **M8 Compatibility extras.** Decide after M7 whether a tmux `-CC` subset earns
 its keep. (`import-tmux` moved to M3.5.)
