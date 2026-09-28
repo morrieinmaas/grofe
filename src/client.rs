@@ -375,6 +375,8 @@ const RESTORE_BOUND: Duration = Duration::from_millis(200);
 
 /// Frames for the writer thread. Bounded: a server that stops reading
 /// stalls the stdin thread, never the signal thread (it only `try_send`s).
+/// Input still queued when the client exits (detach, signal, panic) is
+/// dropped by design.
 enum Out {
     Input(Vec<u8>),
     Detach,
@@ -597,15 +599,16 @@ fn run(
         .try_clone()
         .map_err(|e| format!("cloning the connection: {e}"))?;
     // The writer starts by sending the size if a SIGWINCH landed during the
-    // handshake, and the queue is empty, so these never block.
+    // handshake (the signal thread queued at most one Wake meanwhile).
     RESIZE_PENDING.fetch_or(tty_size() != (cols, rows), Ordering::SeqCst);
-    if !typeahead.is_empty() {
-        let _ = out_tx.try_send(Out::Input(typeahead));
-    }
     std::thread::Builder::new()
         .name("writer".to_string())
         .spawn(move || writer_loop(writer, out_rx))
         .map_err(|e| format!("starting the writer thread: {e}"))?;
+    // Blocking, and ahead of any input the stdin thread reads.
+    if !typeahead.is_empty() && out_tx.send(Out::Input(typeahead)).is_err() {
+        return Err("lost server".to_string());
+    }
     // Late probe replies are filtered until DA1's arrives.
     let filter = (!probe.done()).then_some(probe);
     std::thread::Builder::new()
@@ -830,10 +833,13 @@ fn start_signal_thread(out: SyncSender<Out>) -> Result<(), String> {
             loop {
                 match set.wait() {
                     Ok(Signal::SIGWINCH) => {
-                        RESIZE_PENDING.store(true, Ordering::SeqCst);
-                        // Full means the writer has work queued and will
-                        // see the flag after it.
-                        let _ = out.try_send(Out::Wake);
+                        // One Wake per pending resize, so a resize storm
+                        // (before the writer runs, too) never fills the
+                        // queue. Full means the writer has work queued and
+                        // will see the flag after it.
+                        if !RESIZE_PENDING.swap(true, Ordering::SeqCst) {
+                            let _ = out.try_send(Out::Wake);
+                        }
                     }
                     Ok(sig) => {
                         restore_tty_bounded();

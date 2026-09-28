@@ -727,3 +727,35 @@ fn stdin_eof_sends_detach() {
     tty.wait_for(b"STATUS=0");
     assert_teardown(&tty.out);
 }
+
+#[test]
+fn resize_storms_during_the_handshake_never_lose_typeahead() {
+    let srv = FakeServer::new();
+    let mut tty = Tty::spawn(&script(ATTACH), &srv.socket, &[]);
+    tty.wait_for(DA1_QUERY);
+    tty.write(b"early"); // the probe times out: this is typeahead
+    let mut conn = srv.accept();
+    conn.hello();
+    // More SIGWINCHs than the client's frame queue holds, before the
+    // writer exists; paced so the kernel does not merge them.
+    for i in 0..100u16 {
+        tty.session
+            .get_process_mut()
+            .set_window_size(80 + i % 2, 24)
+            .expect("resize pty");
+        sleep(Duration::from_millis(2));
+    }
+    conn.reply(&ok());
+    loop {
+        match conn.next_frame() {
+            Some(Frame::Resize(..)) => {}
+            Some(Frame::Input(bytes)) => {
+                assert_eq!(bytes, b"early", "typeahead is the first input");
+                break;
+            }
+            other => panic!("expected the typeahead, got {other:?}"),
+        }
+    }
+    conn.send(Frame::Exit("detached".to_string()));
+    tty.wait_for(b"STATUS=0");
+}
