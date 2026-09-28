@@ -506,9 +506,9 @@ struct Writer<'a> {
     out: Vec<u8>,
     /// Where the outer cursor is, when known.
     pos: Option<(u16, u16)>,
-    /// The SGR state last written in this diff, and whether it was
-    /// written as truecolor; `None` until the first.
-    pen: Option<(Style, bool)>,
+    /// The SGR state last written in this diff, and the caps it was
+    /// written for; `None` until the first.
+    pen: Option<(Style, Caps)>,
     /// The OSC 8 hyperlink open on the outer terminal (R20).
     link: Option<Hyperlink>,
     cols: u16,
@@ -524,16 +524,19 @@ impl Writer<'_> {
         }
         self.link_to(cell.hyperlink.as_ref());
         let style = cell_style(cell);
-        // A placeholder's colour is its image id: never downgraded.
+        // A placeholder's colour is its image id and its underline colour
+        // the placement id: never downgraded or dropped for a terminal
+        // that shows kitty graphics.
         let caps = if cell.c == graphics::PLACEHOLDER {
             Caps {
                 truecolor: true,
+                styled_underline: self.caps.styled_underline || self.caps.kitty_graphics,
                 ..*self.caps
             }
         } else {
             *self.caps
         };
-        let pen = (style, caps.truecolor);
+        let pen = (style, caps);
         if self.pen != Some(pen) {
             write_sgr(&mut self.out, &style, &caps);
             self.pen = Some(pen);

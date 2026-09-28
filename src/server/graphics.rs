@@ -24,7 +24,7 @@ use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,6 +64,8 @@ pub struct Graphics {
     cap: usize,
     /// A chunked transmit (`m=1`) still arriving, per pane.
     pending: HashMap<PaneId, Pending>,
+    /// Clients the cache was re-sent to.
+    sent: HashSet<ClientId>,
 }
 
 impl Default for Graphics {
@@ -100,13 +102,36 @@ impl Image {
     }
 }
 
+/// A transmit being put together. Its outer id is allocated only once it
+/// is whole, so a transmit that fails leaks none.
 #[derive(Debug)]
 struct Pending {
     /// False for a transmit being dropped: its chunks are swallowed.
     forward: bool,
     local: u32,
     q: u32,
-    bytes: Vec<u8>,
+    /// The first chunk's keys (`i=` set on `finish`) and payload.
+    head: Vec<(u8, String)>,
+    first: Vec<u8>,
+    /// The later chunks, as forwarded.
+    rest: Vec<u8>,
+}
+
+impl Pending {
+    fn dropped() -> Pending {
+        Pending {
+            forward: false,
+            local: 0,
+            q: 2,
+            head: Vec::new(),
+            first: Vec::new(),
+            rest: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.first.len() + self.rest.len()
+    }
 }
 
 /// What one command from a pane leads to.
@@ -131,6 +156,7 @@ impl Graphics {
             cached: 0,
             cap,
             pending: HashMap::new(),
+            sent: HashSet::new(),
         }
     }
 
@@ -146,6 +172,11 @@ impl Graphics {
         let Some(cmd) = Cmd::parse(apc) else {
             return out;
         };
+        // Answered by the pane's reader (`answer_query`), never part of a
+        // chunked transmit.
+        if cmd.ch(b'a') == Some(b'q') {
+            return out;
+        }
         if let Some(p) = self.pending.remove(&pane) {
             self.continue_transmit(pane, p, &cmd, &mut out);
             return out;
@@ -154,8 +185,6 @@ impl Graphics {
             b't' | b'T' => self.transmit(pane, &cmd, &mut out),
             b'p' => self.place(pane, &cmd, &mut out),
             b'd' => self.delete(pane, &cmd, &mut out),
-            // Answered by the pane's reader (`answer_query`).
-            b'q' => {}
             // ponytail: animation (`a=f`, `a=a`, `a=c`) is dropped.
             _ => self.swallow(pane, &cmd),
         }
@@ -165,15 +194,7 @@ impl Graphics {
     /// Drops the rest of a chunked command that is not forwarded.
     fn swallow(&mut self, pane: PaneId, cmd: &Cmd) {
         if cmd.num(b'm') == Some(1) {
-            self.pending.insert(
-                pane,
-                Pending {
-                    forward: false,
-                    local: 0,
-                    q: 2,
-                    bytes: Vec::new(),
-                },
-            );
+            self.pending.insert(pane, Pending::dropped());
         }
     }
 
@@ -189,14 +210,19 @@ impl Graphics {
         let q = cmd.num(b'q').unwrap_or(0);
         match cmd.ch(b't').unwrap_or(b'd') {
             b'd' => {
-                let outer = self.outer_id(pane, local, out);
-                let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
                 let p = Pending {
                     forward: true,
                     local,
                     q,
-                    bytes: encode(&keys, cmd.payload),
+                    head: cmd.rewritten(&[(b'i', String::new()), (b'q', "2".into())], &[]),
+                    first: cmd.payload.to_vec(),
+                    rest: Vec::new(),
                 };
+                if p.len() > self.cap {
+                    out.reply = reply(local, q, Err("EFBIG:image too large".into()));
+                    self.swallow(pane, cmd);
+                    return;
+                }
                 if cmd.num(b'm') == Some(1) {
                     self.pending.insert(pane, p);
                 } else {
@@ -212,13 +238,15 @@ impl Graphics {
                         return;
                     }
                 };
-                let outer = self.outer_id(pane, local, out);
-                let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], b"tSOm");
+                let keys = cmd.rewritten(&[(b'i', String::new()), (b'q', "2".into())], b"tSOm");
+                let (head, first, rest) = inline_chunks(keys, &data);
                 let p = Pending {
                     forward: true,
                     local,
                     q,
-                    bytes: inline_chunks(keys, &data),
+                    head,
+                    first,
+                    rest,
                 };
                 self.finish(pane, p, out);
             }
@@ -231,11 +259,10 @@ impl Graphics {
         if p.forward {
             let m = if more { "1" } else { "0" };
             let keys = vec![(b'm', m.to_string()), (b'q', "2".to_string())];
-            p.bytes.extend_from_slice(&encode(&keys, cmd.payload));
-            if p.bytes.len() > self.cap {
+            p.rest.extend_from_slice(&encode(&keys, cmd.payload));
+            if p.len() > self.cap {
                 out.reply = reply(p.local, p.q, Err("EFBIG:image too large".into()));
-                p.forward = false;
-                p.bytes = Vec::new();
+                p = Pending::dropped();
             }
         }
         if more {
@@ -246,15 +273,20 @@ impl Graphics {
     }
 
     /// A whole transmit: forward it, cache it, answer the pane.
-    fn finish(&mut self, pane: PaneId, p: Pending, out: &mut Outcome) {
-        let Some(outer) = self.remap.get(pane, p.local) else {
-            return;
-        };
-        out.forward.extend_from_slice(&p.bytes);
+    fn finish(&mut self, pane: PaneId, mut p: Pending, out: &mut Outcome) {
+        let outer = self.outer_id(pane, p.local, out);
+        for (k, v) in &mut p.head {
+            if *k == b'i' {
+                *v = outer.to_string();
+            }
+        }
+        let mut bytes = encode(&p.head, &p.first);
+        bytes.extend_from_slice(&p.rest);
+        out.forward.extend_from_slice(&bytes);
         self.uncache(outer);
         let image = Image {
             id: outer,
-            data: p.bytes.into(),
+            data: bytes.into(),
             placements: Vec::new(),
         };
         self.cached += image.size();
@@ -496,6 +528,12 @@ pub fn answer_query(apc: &[u8], graphics_ok: &AtomicBool) -> Option<Vec<u8>> {
     reply(id, q, result)
 }
 
+/// Whether a framed APC `_G` is a query (`a=q`), which only the pane's
+/// reader answers.
+pub fn is_query(apc: &[u8]) -> bool {
+    Cmd::parse(apc).is_some_and(|c| c.ch(b'a') == Some(b'q'))
+}
+
 /// Kitty's reply to the pane for command `id`, as its `q` allows.
 fn reply(id: u32, q: u32, result: Result<(), String>) -> Option<Vec<u8>> {
     let msg = match result {
@@ -521,11 +559,19 @@ pub fn on_clients_changed(state: &mut State) {
     for p in state.model.panes.values() {
         p.handle.set_graphics_ok(ok);
     }
+    let clients = &state.clients;
+    state.graphics.sent.retain(|c| clients.contains_key(c));
     prune(state);
 }
 
 /// Client `id` is about to get a full redraw (attach, or after a dropped
-/// frame): the cached images go out ahead of it.
+/// frame): on its first, the cached images go out ahead of it. Later full
+/// redraws send nothing: the terminal keeps virtual placements and their
+/// data across the redraw's `ESC [2J` (kitty's `clear_filter_func` and
+/// Ghostty's ED2 both skip them), and the images forwarded since went out
+/// to this client as they came.
+// ponytail: forwarded bytes that `clients::RAW_CAP` dropped for a client
+// that stopped reading are not recovered until it attaches again.
 pub fn on_full_redraw(state: &mut State, id: ClientId) {
     prune(state);
     if !state
@@ -533,6 +579,9 @@ pub fn on_full_redraw(state: &mut State, id: ClientId) {
         .get(&id)
         .is_some_and(|c| c.caps.kitty_graphics)
     {
+        return;
+    }
+    if !state.graphics.sent.insert(id) {
         return;
     }
     let bytes = state.graphics.resend();
@@ -556,13 +605,30 @@ impl<'a> Cmd<'a> {
             Some(i) => (&body[..i], &body[i + 1..]),
             None => (body, &b""[..]),
         };
+        // Only what kitty's grammar allows ever reaches an outer APC: a
+        // key is one letter, a value letters, digits, `_` and `-`, the
+        // payload base64. Anything else (C0 bytes above all) drops the
+        // command.
         let keys = head
             .split(|b| *b == b',')
-            .filter_map(|kv| match kv {
-                [k, b'=', v @ ..] => Some((*k, v)),
+            .filter(|kv| !kv.is_empty())
+            .map(|kv| match kv {
+                [k, b'=', v @ ..]
+                    if k.is_ascii_alphabetic()
+                        && v.iter()
+                            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(b)) =>
+                {
+                    Some((*k, v))
+                }
                 _ => None,
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
+        if !payload
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(b))
+        {
+            return None;
+        }
         Some(Cmd { keys, payload })
     }
 
@@ -623,25 +689,26 @@ fn encode(keys: &[(u8, String)], payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `data` as inline (`t=d`) chunks: `keys` on the first, `m=1` on every
-/// one but the last.
-fn inline_chunks(mut keys: Vec<(u8, String)>, data: &[u8]) -> Vec<u8> {
+/// `data` as inline (`t=d`) chunks: the first chunk's keys (`keys`, plus
+/// `m=1` when more follow) and payload, then the later chunks encoded.
+fn inline_chunks(
+    mut keys: Vec<(u8, String)>,
+    data: &[u8],
+) -> (Vec<(u8, String)>, Vec<u8>, Vec<u8>) {
     let b64 = STANDARD.encode(data);
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(CHUNK).collect();
-    let mut out = Vec::new();
-    if chunks.len() <= 1 {
-        return encode(&keys, &b64.into_bytes());
+    let Some((first, later)) = chunks.split_first() else {
+        return (keys, Vec::new(), Vec::new());
+    };
+    if !later.is_empty() {
+        keys.push((b'm', "1".to_string()));
     }
-    for (i, chunk) in chunks.iter().enumerate() {
-        let more = if i + 1 < chunks.len() { "1" } else { "0" };
-        if i == 0 {
-            keys.push((b'm', more.to_string()));
-            out.extend_from_slice(&encode(&keys, chunk));
-        } else {
-            out.extend_from_slice(&encode(&[(b'm', more.to_string())], chunk));
-        }
+    let mut rest = Vec::new();
+    for (i, chunk) in later.iter().enumerate() {
+        let more = if i + 1 < later.len() { "1" } else { "0" };
+        rest.extend_from_slice(&encode(&[(b'm', more.to_string())], chunk));
     }
-    out
+    (keys, first.to_vec(), rest)
 }
 
 // ---- media ----
@@ -666,14 +733,10 @@ fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err("EINVAL:path is not absolute".into());
     }
-    let meta = fs::symlink_metadata(path).map_err(|e| format!("ENOENT:{e}"))?;
-    let kind = meta.file_type();
-    if kind.is_dir()
-        || kind.is_fifo()
-        || kind.is_socket()
-        || kind.is_char_device()
-        || kind.is_block_device()
-    {
+    // Refused before opening, so that opening a device or fifo never
+    // happens; `metadata` follows symlinks.
+    let meta = fs::metadata(path).map_err(|e| format!("ENOENT:{e}"))?;
+    if !meta.is_file() {
         return Err("EINVAL:not a regular file".into());
     }
     let mut file = fs::OpenOptions::new()
@@ -1625,6 +1688,110 @@ mod tests {
         // The actor ignores a query.
         let mut g = Graphics::default();
         assert_eq!(g.handle(A, &apc("i=31,a=q,t=d;AAAA")), Outcome::default());
+    }
+
+    /// Fix round 2: only kitty's grammar is forwarded. A key is one
+    /// letter, a value `[0-9a-zA-Z_-]*`, the payload base64; a command
+    /// with anything else (C0 bytes above all) is dropped whole.
+    #[test]
+    fn malformed_commands_are_dropped() {
+        let yes = AtomicBool::new(true);
+        for body in [
+            "a=T,U=1,i=1,c=2\r,q=2;AAAA",
+            "a=T,U=1,i=1,c=2\n,q=2;AAAA",
+            "a=T,U=1,i=1,c=\x082,q=2;AAAA",
+            "a=T,U=1,i=1,q=2;AA\rAA",
+            "a=T,U=1,i=1,q=2;AA\x1bAA",
+            "a=T,U=1,i=1,q=2;AA AA",
+            "a=T,U=1,i=1,xy=2,q=2;AAAA",
+            "a=T,U=1,i=1,1=2,q=2;AAAA",
+            "a=T,U=1,i=1,c:2,q=2;AAAA",
+            "a=T,U=1,i=1,c=2.5,q=2;AAAA",
+        ] {
+            let mut g = Graphics::default();
+            assert_eq!(g.handle(A, &apc(body)), Outcome::default(), "{body:?}");
+            assert!(g.remap().is_none(), "{body:?}");
+            let query = body.replacen("a=T", "a=q", 1);
+            assert_eq!(answer_query(&apc(&query), &yes), None, "{query:?}");
+        }
+        let mut g = Graphics::default();
+        let ok = g.handle(A, &apc("a=T,U=1,i=1,c=2,X=-1,z=_3,q=2;AA+/AA=="));
+        assert_eq!(apcs(&ok.forward).len(), 1, "a valid command still goes");
+        // A bad chunk drops only itself; the transmit stays pending.
+        let mut g = Graphics::default();
+        g.handle(A, &apc("a=T,U=1,i=1,q=2,m=1;AAAA"));
+        assert_eq!(g.handle(A, &apc("m=0;AA\nAA")), Outcome::default());
+        assert!(g.pending.contains_key(&A));
+    }
+
+    /// Fix round 2: an outer id is allocated only for a transmit that
+    /// completes; one that fails or never ends leaks none.
+    #[test]
+    fn failed_transmits_leak_no_outer_id() {
+        let mut g = Graphics::with_cap(16);
+        g.handle(A, &apc("a=T,U=1,i=1,q=2,m=1;AAAA"));
+        assert!(g.remap().is_none(), "nothing while chunks arrive");
+        let out = g.handle(A, &apc("m=1;BBBBBBBBBBBBBBBB"));
+        assert!(out.forward.is_empty() && !out.remapped);
+        g.handle(A, &apc("m=0;CCCC"));
+        assert!(g.remap().is_none(), "a transmit over the cap");
+        assert!(g.taken.is_empty());
+
+        let mut g = Graphics::default();
+        g.handle(A, &apc("a=T,U=1,i=1,q=2,m=1;AAAA"));
+        g.prune(|p| p != A);
+        assert!(g.remap().is_none() && g.taken.is_empty() && g.pending.is_empty());
+
+        let mut g = Graphics::default();
+        let name = STANDARD.encode(b"/nonexistent/grofe-t38.png");
+        g.handle(A, &apc(&format!("a=T,U=1,t=f,i=1,q=2;{name}")));
+        assert!(g.remap().is_none() && g.taken.is_empty());
+    }
+
+    /// Fix round 2: a query that arrives while a chunked transmit is
+    /// pending is neither folded into it nor ends it.
+    #[test]
+    fn a_query_between_chunks_leaves_the_transmit_alone() {
+        let mut g = Graphics::default();
+        g.handle(A, &apc("a=T,U=1,i=1,q=2,m=1;AAAA"));
+        assert_eq!(
+            g.handle(A, &apc("a=q,i=31,t=d,f=24;AAAA")),
+            Outcome::default()
+        );
+        let out = g.handle(A, &apc("m=0;BBBB"));
+        let o = g.remap.get(A, 1).unwrap_or(0);
+        assert_eq!(
+            apcs(&out.forward),
+            [
+                format!("a=T,U=1,i={o},q=2,m=1;AAAA"),
+                "m=0,q=2;BBBB".to_string()
+            ]
+        );
+        assert!(is_query(&apc("a=q,i=31;AAAA")));
+        assert!(!is_query(&apc("a=T,i=31;AAAA")));
+    }
+
+    /// Fix round 2: a placeholder's underline colour (the placement id)
+    /// reaches a kitty terminal even when it lacks styled underlines.
+    #[test]
+    fn the_placement_id_is_kept_for_kitty_terminals() {
+        let ph = PLACEHOLDER.to_string();
+        let bytes = format!("\x1b[38;5;1;58:2::0:0:7m{ph}{}x", marks(&[0, 0]));
+        let row = row_of(bytes.as_bytes());
+        let remap = remap_of(&[(A, 1, 1)]);
+        let screen = compose_two(row.clone(), row, &remap);
+        let kitty = Caps {
+            kitty_graphics: true,
+            ..Caps::default()
+        };
+        let out = text(&render::diff(None, &screen, &kitty));
+        assert!(out.contains(";58;2;0;0;7m"), "{out:?}");
+        // Other cells keep the client's caps: no underline colour there.
+        let x = out.find('x').unwrap_or(0);
+        let sgr = out[..x].rfind("\x1b[").unwrap_or(0);
+        assert!(!out[sgr..x].contains("58;"), "{out:?}");
+        let plain = text(&render::diff(None, &screen, &Caps::default()));
+        assert!(!plain.contains("58;"), "{plain:?}");
     }
 
     // ---- placeholder cells ----

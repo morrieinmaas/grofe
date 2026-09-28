@@ -255,7 +255,7 @@ impl Reader {
     /// ahead of the emulator's own replies (its DA1 answer, which a tool
     /// sends after the query), never through the actor (T3.8).
     fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
-        let (bytes, found) = self.scanner.scan(bytes);
+        let (bytes, mut found) = self.scanner.scan(bytes);
         for kind in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
@@ -263,6 +263,8 @@ impl Reader {
                 self.reply(answer);
             }
         }
+        // A query is answered here only; the actor never sees it.
+        found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
         {
             let mut emu = lock(&self.emu);
             let Emu { term, parser } = &mut *emu;

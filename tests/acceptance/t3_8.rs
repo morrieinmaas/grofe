@@ -106,6 +106,21 @@ fn transmit_id(bytes: &[u8]) -> Option<u32> {
         .and_then(|i| i.parse().ok())
 }
 
+/// The ids of every forwarded transmit in `bytes`.
+fn transmit_ids(bytes: &[u8]) -> Vec<u32> {
+    apcs(bytes)
+        .iter()
+        .filter(|a| a.starts_with("a=T,"))
+        .filter_map(|a| {
+            let keys = a.split(';').next()?;
+            keys.split(',')
+                .find_map(|k| k.strip_prefix("i="))?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
 /// A placeholder cell on the reconstructed screen: where, the id its
 /// colour gives, and its diacritics.
 #[derive(Debug)]
@@ -193,13 +208,26 @@ fn placeholder_images_reach_kitty_clients() {
         wait_flag(&scroll),
     );
     new_session(&srv, &script);
+    // Another session's pane sends the same image id first, so `main`'s
+    // image gets a different outer id: the remap shows.
+    let fix = shell_quote(&fixture("icat-placeholder-2x2.bin").to_string_lossy());
+    let other = format!(
+        "sh -c {}",
+        shell_quote(&format!("cat {fix}; exec sleep 600"))
+    );
+    srv.cmd(&["new-session", "-d", "-s", "other", &other])
+        .expect("new-session other");
 
     let mut a = attach(&srv, KITTY);
+    let first = a.wait_for_output(b"\x1b_Ga=T,", 0);
+    let theirs = transmit_id(&a.output()[first - 7..]).expect("the other image");
     let mark = a.output().len();
     touch(&show);
     a.wait_for_output(b"\x1b_Ga=T,", mark);
     let found = wait_placeholders(&mut a, 4);
     let id = transmit_id(&a.output()[mark..]).expect("a forwarded transmit");
+    assert_ne!(id, 1, "the fixture's own id");
+    assert_ne!(id, theirs, "the other pane's image");
     assert_grid(&found, id, 0);
 
     // A split halves the pane; a scroll moves the image up one row.
@@ -220,7 +248,11 @@ fn placeholder_images_reach_kitty_clients() {
         t.is_some_and(|t| frame.is_some_and(|f| t < f)),
         "transmit at {t:?}, first frame at {frame:?}"
     );
-    assert_eq!(transmit_id(&out), Some(id));
+    assert!(
+        transmit_ids(&out[..frame.unwrap_or(0)]).contains(&id),
+        "{:?}",
+        apcs(&out)
+    );
     assert_grid(&wait_placeholders(&mut b, 2), id, 1);
 
     // Case 3: a client without kitty graphics gets no image bytes (only
@@ -232,6 +264,44 @@ fn placeholder_images_reach_kitty_clients() {
         .filter(|a| !a.starts_with("i=31,"))
         .collect();
     assert!(sent.is_empty(), "{sent:?}");
+}
+
+/// Fix round 2: a client that stops reading, so its frames are dropped,
+/// and then resumes gets each image's data once, not once per full
+/// redraw.
+#[test]
+fn a_stalled_client_gets_each_image_once() {
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let script = format!(
+        "cat {}; {}; i=0; while [ $i -lt 300 ]; do printf '%070d\\n' $i; i=$((i+1)); \
+         sleep 0.01; done; echo END; exec sleep 600",
+        shell_quote(&fixture("icat-placeholder-2x2.bin").to_string_lossy()),
+        wait_flag(&go),
+    );
+    new_session(&srv, &script);
+    let mut a = attach(&srv, KITTY);
+    a.wait_for_output(b"\x1b_Ga=T,", 0);
+    // Stop the client (this test's own `grofe attach`) while the pane
+    // prints: its socket fills and the server drops frames for it.
+    let pattern = format!("{} attach", srv.socket.display());
+    let pgrep = std::process::Command::new("pgrep")
+        .args(["-f", &pattern])
+        .output()
+        .expect("pgrep");
+    let pids: Vec<i32> = String::from_utf8_lossy(&pgrep.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    assert_eq!(pids.len(), 1, "the attach client: {pids:?}");
+    let pid = nix::unistd::Pid::from_raw(pids[0]);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).expect("SIGSTOP");
+    touch(&go);
+    std::thread::sleep(Duration::from_secs(3));
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).expect("SIGCONT");
+    a.wait_for("END");
+    let ids = transmit_ids(a.output());
+    assert_eq!(ids.len(), 1, "{ids:?}");
 }
 
 /// Runs a pane script that sends `query` then DA1 and prints, with `od`,
