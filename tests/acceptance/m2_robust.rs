@@ -375,3 +375,51 @@ fn a_resize_storm_is_coalesced() {
         Ok("90x24\n".to_string())
     );
 }
+
+/// Eleven panes in a 1x1 client: none drops below tmux's PANE_MINIMUM of
+/// one cell each way.
+#[test]
+fn panes_never_shrink_below_one_cell() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "300",
+        "-y",
+        "100",
+        IDLE,
+    ])
+    .expect("new-session");
+    for i in 0..10 {
+        let dir = if i % 2 == 0 { "-h" } else { "-v" };
+        srv.cmd(&["split-window", dir, "-t", "main", IDLE])
+            .unwrap_or_else(|e| panic!("split {i}: {e}"));
+    }
+    let mut control = Control::connect(&srv);
+    let _client = raw_attach(&srv, (1, 1));
+    wait_until(
+        || client_size(&mut control) == "1x1\n",
+        Duration::from_secs(10),
+    )
+    .expect("attached");
+    let sizes = control
+        .cmd(&[
+            "list-panes",
+            "-t",
+            "main",
+            "-F",
+            "#{pane_width}x#{pane_height}",
+        ])
+        .expect("list-panes");
+    assert_eq!(sizes.lines().count(), 11, "{sizes}");
+    for size in sizes.lines() {
+        let (w, h) = size.split_once('x').expect("WxH");
+        assert!(
+            w.parse::<u16>().expect("width") >= 1 && h.parse::<u16>().expect("height") >= 1,
+            "a pane is {size}:\n{sizes}"
+        );
+    }
+}

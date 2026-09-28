@@ -353,7 +353,9 @@ impl Model {
     }
 
     /// Gives every pane in `window` its layout size, resizing the ptys whose
-    /// size changed.
+    /// size changed. A window too small for its panes squeezes some to
+    /// nothing in the layout; the pane itself keeps at least one cell each
+    /// way (tmux's `PANE_MINIMUM`).
     pub fn relayout(&mut self, window: WindowId) {
         let Some(w) = self.windows.get(&window) else {
             return;
@@ -362,10 +364,11 @@ impl Model {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
-            if (p.cols, p.rows) != (rect.cols, rect.rows) {
-                p.cols = rect.cols;
-                p.rows = rect.rows;
-                if let Err(e) = p.handle.resize(rect.cols, rect.rows) {
+            let (cols, rows) = (rect.cols.max(1), rect.rows.max(1));
+            if (p.cols, p.rows) != (cols, rows) {
+                p.cols = cols;
+                p.rows = rows;
+                if let Err(e) = p.handle.resize(cols, rows) {
                     eprintln!("grofe server: resizing {id}: {e}");
                 }
             }
