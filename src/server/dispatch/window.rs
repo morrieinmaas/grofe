@@ -9,7 +9,7 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
-use crate::server::layout::LayoutTree;
+use crate::server::layout::{LayoutTree, Preset};
 use crate::server::model::{Model, PANE_BASE_INDEX, Window};
 use crate::server::{State, clients};
 use crate::types::WindowId;
@@ -247,11 +247,24 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
         .collect())
 }
 
-/// `select-layout`: T3.7 fills it in (spec §4.3, R18).
+/// `select-layout` (spec §4.3, R18): rebuilds the window's layout as a
+/// preset over its panes in index order, the first pane being main. A
+/// zoomed window is unzoomed first and the active pane stays, as tmux
+/// 3.7b does.
 pub fn select_layout(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: SelectLayout,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SelectLayout,
 ) -> Result<String, String> {
-    super::not_implemented("select-layout")
+    let model = &mut state.model;
+    let window = model.resolve_window(&c.target, ctx)?;
+    let preset = Preset::from_name(&c.name).ok_or_else(|| format!("invalid layout: {}", c.name))?;
+    let Some(w) = model.windows.get_mut(&window) else {
+        return Err(format!("can't find window: {window}"));
+    };
+    w.zoomed = false;
+    let (area, panes) = (w.area(), w.pane_ids());
+    w.layout.preset(area, preset, &panes);
+    model.relayout(window);
+    Ok(String::new())
 }
