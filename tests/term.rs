@@ -1,8 +1,7 @@
-//! Tests for inner-`TERM` resolution (D7 / T0.4): the terminfo-dir lookup in
-//! isolation. See the module doc on `grofe::term` and docs/spike-notes.md's
-//! "TERM decision" section; the expectrl evidence for staying on
-//! `screen-256color` moved to `tests/render.rs` as a positive underline-style
-//! snapshot (M2 addendum).
+//! Tests for inner-`TERM` resolution (D7, T0.4, T3.6): the terminfo-dir
+//! lookup in isolation. See the module doc on `grofe::term` and
+//! docs/spike-notes.md's "TERM decision" and "T3.6 re-run" sections; the
+//! end-to-end evidence for `tmux-256color` is `tests/acceptance/t3_6.rs`.
 
 use std::fs;
 
@@ -37,10 +36,32 @@ fn entry_found_in_hex_layout() {
 }
 
 #[test]
+fn tmux_256color_is_the_default_when_present() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fake_entry(tmp.path(), "s", "screen-256color");
+    fake_entry(tmp.path(), "t", "tmux-256color");
+    assert_eq!(
+        term::resolve_from(&[tmp.path().to_path_buf()]),
+        "tmux-256color"
+    );
+}
+
+#[test]
+fn a_host_without_tmux_256color_gets_screen_256color() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fake_entry(tmp.path(), "73", "screen-256color");
+    fake_entry(tmp.path(), "x", "xterm-256color");
+    assert_eq!(
+        term::resolve_from(&[tmp.path().to_path_buf()]),
+        "screen-256color"
+    );
+}
+
+#[test]
 fn missing_default_falls_back() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // No screen-256color entry anywhere in the candidate dirs: resolution
-    // must skip straight to the last resort.
+    // Neither tmux-256color nor screen-256color anywhere in the candidate
+    // dirs: resolution must skip straight to the last resort.
     fake_entry(tmp.path(), "x", "xterm-256color");
     assert_eq!(
         term::resolve_from(&[tmp.path().to_path_buf()]),
@@ -50,17 +71,17 @@ fn missing_default_falls_back() {
 
 #[test]
 fn resolves_on_real_host() {
-    // Both CI hosts ship screen-256color; a regression in the search list
-    // (a dropped or mistyped dir) must fail here rather than silently fall
-    // through to the xterm-256color last resort.
+    // Both CI hosts ship tmux-256color (macOS's system ncurses and Debian's
+    // ncurses-base); a regression in the search list (a dropped or mistyped
+    // dir) must fail here rather than silently fall through.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         assert!(
-            term::entry_exists(&term::search_dirs(), "screen-256color"),
-            "screen-256color not found in {:?}",
+            term::entry_exists(&term::search_dirs(), "tmux-256color"),
+            "tmux-256color not found in {:?}",
             term::search_dirs()
         );
-        assert_eq!(term::resolve_term(), "screen-256color");
+        assert_eq!(term::resolve_term(), "tmux-256color");
     }
     assert_eq!(term::COLORTERM, "truecolor");
 }

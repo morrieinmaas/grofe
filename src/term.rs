@@ -1,41 +1,36 @@
-//! Inner `TERM` resolution for spawned panes (spec D7, decided in T0.4).
+//! Inner `TERM` resolution for spawned panes (spec D7).
 //!
-//! Default is `screen-256color`, not `tmux-256color`. `tmux-256color`'s
-//! terminfo entry adds real capabilities over `screen-256color` (italics,
-//! strikeout, invisible text, the `Smulx` extended underline styles, OSC 52
-//! clipboard, focus reporting, cursor colour, window-title relay via
-//! `tsl`/`fsl`/`dsl`), and `alacritty_terminal` 0.26 parses every one of
-//! them into `Term` state. But D7's bar for switching is that every extra
-//! capability works *end to end*, through the M0 single-pane spike's own
-//! render path, and it does not: the spike's `render()` collapses every
-//! underline style (`Flags::ALL_UNDERLINES`) to plain SGR `4`, so a curly or
-//! dashed underline drawn via `Smulx` reaches the outer terminal as a
-//! regular underline. Several non-SGR extras (window title, OSC 52 paste,
-//! cursor colour, focus events) are not forwarded to the outer terminal at
-//! all yet: the M2 renderer (T2.2) emits underline styles and M3 passthrough
-//! (T3.3) forwards title, OSC 52, cursor colour and focus.
-//! Since the bar is not met, grofe keeps advertising the smaller, honest
-//! `screen-256color`. See docs/spike-notes.md's "TERM decision" section for
-//! the full capability-by-capability evidence.
+//! Default is `tmux-256color`. T0.4 kept `screen-256color` because not every
+//! capability `tmux-256color`'s terminfo entry adds (italics, strikeout,
+//! invisible text, the `Smulx` extended underline styles, OSC 52
+//! clipboard, focus reporting, cursor colour and style, window-title relay
+//! via `tsl`/`fsl`/`dsl`) survived the M0 spike's render path. T3.6 re-ran
+//! every one of them through grofe's real render path (pane, server,
+//! attach client, reconstructed outer terminal) on macOS and Linux, and
+//! all pass (`tests/acceptance/t3_6.rs`, the `term_rerun_*` tests), so
+//! D7's bar is met. See docs/spike-notes.md, "TERM decision" and "T3.6
+//! re-run", for the evidence.
 
 use std::path::PathBuf;
 
 /// Panes get truecolor support regardless of the base terminfo entry.
 pub const COLORTERM: &str = "truecolor";
 
-/// D7's chosen default. Also the "safe fallback" a three-tier scheme would
-/// name separately; here they are the same entry, so resolution only has
-/// two real tiers (see [`resolve_from`]).
-const DEFAULT_TERM: &str = "screen-256color";
+/// D7's chosen default (T3.6).
+const DEFAULT_TERM: &str = "tmux-256color";
 
-/// Used when even `DEFAULT_TERM`'s terminfo entry is missing on this host.
-/// It advertises more than `screen-256color` does and exists only for hosts
-/// lacking both `screen-256color` and `tmux-256color` (only the former is
-/// checked; ncurses ships the two together).
+/// The safe fallback when this host has no `tmux-256color` entry (an older
+/// ncurses, or a minimal image): smaller, but everything it advertises
+/// works.
+const FALLBACK_TERM: &str = "screen-256color";
+
+/// Used when neither entry exists on this host. It advertises more than
+/// `screen-256color` does and exists only for hosts lacking both.
 const LAST_RESORT_TERM: &str = "xterm-256color";
 
-/// `TERM` grofe should export to a freshly spawned pane: `DEFAULT_TERM` if
-/// its compiled terminfo entry exists on this host, else `LAST_RESORT_TERM`.
+/// `TERM` grofe should export to a freshly spawned pane: the first of
+/// `DEFAULT_TERM`, `FALLBACK_TERM` whose compiled terminfo entry exists on
+/// this host, else `LAST_RESORT_TERM`.
 /// It walks the filesystem, so callers should resolve once at server start
 /// and reuse the result for every spawn.
 pub fn resolve_term() -> &'static str {
@@ -45,11 +40,10 @@ pub fn resolve_term() -> &'static str {
 /// [`resolve_term`]'s logic over an explicit candidate dir list, so it is
 /// testable without touching the real host's terminfo database.
 pub fn resolve_from(dirs: &[PathBuf]) -> &'static str {
-    if entry_exists(dirs, DEFAULT_TERM) {
-        DEFAULT_TERM
-    } else {
-        LAST_RESORT_TERM
-    }
+    [DEFAULT_TERM, FALLBACK_TERM]
+        .into_iter()
+        .find(|term| entry_exists(dirs, term))
+        .unwrap_or(LAST_RESORT_TERM)
 }
 
 /// Whether a compiled terminfo entry for `term` exists under any of `dirs`,
