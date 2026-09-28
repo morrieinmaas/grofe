@@ -542,6 +542,9 @@ impl Writer<'_> {
 
     /// Opens `link` (OSC 8 with its id, so a link cut by a move or a row
     /// end stays one link), or closes the open one for `None`.
+    // ponytail: sent to every client; tmux sends OSC 8 only to terminals
+    // with its `hyperlinks` feature. A `Caps` flag for it is the M3.6
+    // upgrade.
     fn link_to(&mut self, link: Option<&Hyperlink>) {
         if self.link.as_ref() == link {
             return;

@@ -45,14 +45,27 @@ const BEL: u8 = 0x07;
 const CAN: u8 = 0x18;
 const SUB: u8 = 0x1a;
 
-/// What the server keeps for passthrough: cursor colours, the one item a
-/// client must be re-sent when it shows another pane.
+/// What the server keeps for passthrough: what a client must be re-sent
+/// when it shows another pane (title, cursor colour), and which pane each
+/// session last gave focus to.
 #[derive(Debug, Default)]
 pub struct Passthrough {
     /// Each pane's cursor colour (its OSC 12 body), while it has set one.
     cursor: BTreeMap<PaneId, Vec<u8>>,
-    /// The cursor colour each client was last sent; absent is its default.
-    sent: BTreeMap<ClientId, Vec<u8>>,
+    /// Each pane's title, once it has set one.
+    titles: BTreeMap<PaneId, String>,
+    /// What each client was last sent.
+    sent: BTreeMap<ClientId, Shown>,
+    /// The pane each session with a client last gave focus to (mode 1004).
+    focus: BTreeMap<SessionId, PaneId>,
+}
+
+/// A client's title and cursor colour as last sent; the defaults are the
+/// outer terminal's own (no colour set, no title set).
+#[derive(Debug, Default)]
+struct Shown {
+    cursor: Option<Vec<u8>>,
+    title: String,
 }
 
 /// Scans a pane's output ahead of the emulator for what `vte` does not
@@ -69,6 +82,10 @@ pub struct Scanner {
     buf: Vec<u8>,
     /// The sequence in `buf` outgrew its bound; it is dropped at its end.
     overlong: bool,
+    /// The held `ESC` left an OSC the emulator has seen open: if it starts
+    /// an APC `_G`, which the emulator never sees, the OSC must be closed
+    /// for it some other way.
+    osc_open: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +145,11 @@ impl Scanner {
             ApcIntro => {
                 if b == b'G' {
                     self.held.clear();
+                    if std::mem::take(&mut self.osc_open) {
+                        // CAN aborts the OSC in the emulator, which would
+                        // otherwise swallow the output after the APC.
+                        out.push(CAN);
+                    }
                     self.begin(Apc);
                     self.buf.extend_from_slice(b"\x1b_G");
                 } else {
@@ -188,6 +210,7 @@ impl Scanner {
                 } else {
                     // The held ESC starts a new sequence.
                     self.state = Esc;
+                    self.osc_open = true;
                     self.step(b, out, found);
                 }
             }
@@ -209,6 +232,7 @@ impl Scanner {
     /// The held bytes turned out not to start an APC `_G`.
     fn release(&mut self, out: &mut Vec<u8>) {
         out.append(&mut self.held);
+        self.osc_open = false;
     }
 
     fn begin(&mut self, state: ScanState) {
@@ -258,7 +282,11 @@ fn osc7_path(uri: &[u8]) -> Option<PathBuf> {
     if !(host.is_empty() || host.eq_ignore_ascii_case("localhost") || is_this_host(host)) {
         return None;
     }
-    Some(PathBuf::from(OsStr::from_bytes(&percent_decode(path))))
+    let path = percent_decode(path);
+    if path.contains(&0) {
+        return None;
+    }
+    Some(PathBuf::from(OsStr::from_bytes(&path)))
 }
 
 /// Whether passthrough re-emits this OSC body: a notification (9, 777)
@@ -295,14 +323,13 @@ fn percent_decode(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Whether `host` names this machine, by its full or short hostname.
+/// Whether `host` is exactly this machine's hostname or its short form
+/// (up to the first dot). A longer name that only shares the short form
+/// is another machine.
 fn is_this_host(host: &str) -> bool {
     let me = hostname();
-    let short = |h: &str| h.split('.').next().unwrap_or(h).to_string();
-    !me.is_empty()
-        && (host.eq_ignore_ascii_case(me)
-            || host.eq_ignore_ascii_case(&short(me))
-            || me.eq_ignore_ascii_case(&short(host)))
+    let short = me.split('.').next().unwrap_or(me);
+    !me.is_empty() && (host.eq_ignore_ascii_case(me) || host.eq_ignore_ascii_case(short))
 }
 
 fn hostname() -> &'static str {
@@ -319,7 +346,8 @@ fn hostname() -> &'static str {
     })
 }
 
-/// A `Title`, `Bell`, `Clipboard` or `Cwd` event from `pane`.
+/// A `Title`, `Bell`, `Clipboard`, `Cwd` or `Osc` (notification or cursor
+/// colour) event from `pane`.
 pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
     let Some(p) = state.model.panes.get(&pane) else {
         return;
@@ -345,10 +373,9 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         {
             send(state, clients_on(state, session), &osc52(&text));
         }
-        // Every client on a session shows its current window, so they all
-        // have the same active pane.
-        PaneEventKind::Title(title) if active_pane(state, session) == Some(pane) => {
-            send(state, clients_on(state, session), &osc2(&title));
+        PaneEventKind::Title(title) => {
+            state.passthrough.titles.insert(pane, title);
+            refresh_session(state, session);
         }
         PaneEventKind::Osc(body) if body.starts_with(b"12;") || body.starts_with(b"112") => {
             if body.starts_with(b"12;") {
@@ -356,42 +383,92 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             } else {
                 state.passthrough.cursor.remove(&pane);
             }
-            for id in clients_on(state, session) {
-                on_active_changed(state, id);
-            }
+            refresh_session(state, session);
         }
         PaneEventKind::Osc(body) => send(state, clients_on(state, session), &osc(&body)),
         _ => {}
     }
 }
 
-/// Client `id` is about to be drawn: if its active pane's cursor colour
-/// is not the one it was last sent (another pane, or the pane changed
-/// it), send it, or reset to the default for a pane that set none (R16).
+fn refresh_session(state: &mut State, session: SessionId) {
+    for id in clients_on(state, session) {
+        on_active_changed(state, id);
+    }
+}
+
+/// Client `id` is about to be drawn. Its active pane's title (R15) and
+/// cursor colour (R16) are sent if they are not what it was last sent
+/// (another pane is active, or the pane changed them): a pane that set no
+/// colour resets it with OSC 112, one that set no title clears it. When
+/// the session's active pane moved, focus reports follow it
+/// ([`move_focus`]).
 pub fn on_active_changed(state: &mut State, id: ClientId) {
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
     };
     let active = active_pane(state, session);
     let pt = &mut state.passthrough;
-    pt.cursor.retain(|p, _| state.model.panes.contains_key(p));
-    pt.sent.retain(|c, _| state.clients.contains_key(c));
-    let want = active.and_then(|p| pt.cursor.get(&p)).cloned();
-    if want.as_ref() == pt.sent.get(&id) {
+    let panes = &state.model.panes;
+    let clients = &state.clients;
+    pt.cursor.retain(|p, _| panes.contains_key(p));
+    pt.titles.retain(|p, _| panes.contains_key(p));
+    pt.sent.retain(|c, _| clients.contains_key(c));
+    pt.focus
+        .retain(|s, _| clients.values().any(|c| c.session == *s));
+    let cursor = active.and_then(|p| pt.cursor.get(&p)).cloned();
+    let title = active
+        .and_then(|p| pt.titles.get(&p))
+        .cloned()
+        .unwrap_or_default();
+    let shown = pt.sent.entry(id).or_default();
+    let mut out = Vec::new();
+    if shown.cursor != cursor {
+        out.extend(osc(cursor.as_deref().unwrap_or(b"112")));
+        shown.cursor = cursor;
+    }
+    if shown.title != title {
+        out.extend(osc2(&title));
+        shown.title = title;
+    }
+    if !out.is_empty() {
+        clients::queue_raw(state, id, &out);
+    }
+    if let Some(active) = active {
+        move_focus(state, session, active);
+    }
+}
+
+/// `session`'s active pane is `active`: if it was another pane, that one
+/// gets a focus-out report and `active` a focus-in, each only if it asked
+/// for them (mode 1004). As tmux 3.7b does, nothing is sent while
+/// `focus-events` is off or while no client of the session has focus; the
+/// client's own focus-in later reaches whichever pane is active then. A
+/// session with no client forgets its pane, so an attach sends focus-in.
+// ponytail: tmux keeps a per-pane focused flag, so a terminal that also
+// reports focus-in on attach gives the pane only one; grofe may send two.
+fn move_focus(state: &mut State, session: SessionId, active: PaneId) {
+    let before = state.passthrough.focus.insert(session, active);
+    if before == Some(active)
+        || state.model.options.lookup("focus-events", &[]) != Some("on")
+        || !state
+            .clients
+            .values()
+            .any(|c| c.session == session && c.focused)
+    {
         return;
     }
-    let seq = match want {
-        Some(body) => {
-            let seq = osc(&body);
-            pt.sent.insert(id, body);
-            seq
-        }
-        None => {
-            pt.sent.remove(&id);
-            osc(b"112")
+    let report = |pane: PaneId, bytes: &[u8]| {
+        if let Some(p) = state.model.panes.get(&pane)
+            && p.dead.is_none()
+            && p.handle.modes().focus
+        {
+            let _ = p.handle.enqueue_input(bytes.to_vec());
         }
     };
-    clients::queue_raw(state, id, &seq);
+    if let Some(old) = before {
+        report(old, b"\x1b[O");
+    }
+    report(active, b"\x1b[I");
 }
 
 /// The clients attached to `session`.
@@ -416,12 +493,20 @@ fn send(state: &mut State, to: Vec<ClientId>, bytes: &[u8]) {
     }
 }
 
-/// An OSC with `body`, terminated by BEL, control characters dropped.
+/// Pane-supplied text made safe to write inside an OSC: decoded as UTF-8
+/// (invalid bytes become U+FFFD), with every control character dropped,
+/// C1 included (a UTF-8 ST or CSI would otherwise end the OSC and inject
+/// a sequence into the outer terminal).
+fn clean(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect()
+}
+
+/// An OSC with `body` ([`clean`]ed), terminated by BEL.
 fn osc(body: &[u8]) -> Vec<u8> {
-    let mut out = b"\x1b]".to_vec();
-    out.extend(body.iter().filter(|b| !b.is_ascii_control()));
-    out.push(BEL);
-    out
+    format!("\x1b]{}\x07", clean(body)).into_bytes()
 }
 
 /// OSC 52 storing `text` in the clipboard, as tmux writes it (`Ms`).
@@ -432,8 +517,7 @@ fn osc52(text: &str) -> Vec<u8> {
 
 /// OSC 2 setting the title, control characters dropped.
 fn osc2(title: &str) -> Vec<u8> {
-    let title: String = title.chars().filter(|c| !c.is_control()).collect();
-    format!("\x1b]2;{title}\x07").into_bytes()
+    format!("\x1b]2;{}\x07", clean(title.as_bytes())).into_bytes()
 }
 
 #[cfg(test)]
@@ -616,6 +700,73 @@ mod tests {
         assert_eq!(osc(b"9;a\x01b"), b"\x1b]9;ab\x07");
     }
 
+    /// A pane cannot end a relayed OSC early and inject a sequence: C1 ST
+    /// and CSI, in UTF-8 or as raw bytes, never reach the outer terminal.
+    #[test]
+    fn relayed_text_drops_c1_controls() {
+        let c1 = |out: &[u8]| {
+            out.windows(2).any(|w| w == b"\xc2\x9c" || w == b"\xc2\x9b")
+                || out.contains(&0x9c)
+                || out.contains(&0x9b)
+        };
+        for body in [
+            &b"9;x\xc2\x9c\xc2\x9b6n"[..],
+            b"9;x\x9c\x9b6n",
+            b"777;notify;\xc2\x9cT;B",
+            b"12;red\xc2\x9b6n",
+        ] {
+            let out = osc(body);
+            assert!(!c1(&out), "{body:?} gave {out:?}");
+            assert_eq!(out.iter().filter(|&&b| b == ESC).count(), 1, "{out:?}");
+            assert!(out.ends_with(&[BEL]));
+        }
+        let out = osc2("t\u{9c}\u{9b}6n");
+        assert_eq!(out, b"\x1b]2;t6n\x07");
+    }
+
+    /// An APC that begins where an OSC's ESC was, closes that OSC for the
+    /// emulator with CAN, which it would otherwise never see closed.
+    #[test]
+    fn an_apc_that_cuts_an_osc_short_closes_it_with_can() {
+        let mut input = b"\x1b]2;t".to_vec();
+        input.extend_from_slice(APC);
+        input.extend_from_slice(b"x");
+        for cut in 0..=input.len() {
+            let (a, b) = input.split_at(cut);
+            let (out, events) = scan_all(&[a, b]);
+            assert_eq!(out, b"\x1b]2;t\x18x", "split at {cut}");
+            assert_eq!(
+                events,
+                vec![PaneEventKind::Graphics(APC.to_vec())],
+                "split at {cut}"
+            );
+        }
+        // An APC after an OSC that was closed needs no CAN.
+        let mut input = b"\x1b]2;t\x07".to_vec();
+        input.extend_from_slice(APC);
+        let (out, _) = scan_all(&[&input]);
+        assert_eq!(out, b"\x1b]2;t\x07");
+    }
+
+    #[test]
+    fn osc_7_hosts_must_match_exactly() {
+        let me = hostname();
+        if me.is_empty() {
+            return;
+        }
+        let short = me.split('.').next().unwrap_or(me);
+        assert!(is_this_host(me));
+        assert!(is_this_host(short));
+        assert!(!is_this_host(&format!("{short}.elsewhere.example.com")));
+        assert!(!is_this_host(&format!("{me}x")));
+    }
+
+    #[test]
+    fn osc_7_with_a_nul_in_the_path_is_ignored() {
+        let (_, events) = scan_all(&[b"\x1b]7;file:///tmp/a%00b\x07"]);
+        assert!(events.is_empty(), "{events:?}");
+    }
+
     /// Notifications and cursor colours become `Osc` with their bare body,
     /// split anywhere; colour queries and other OSCs do not.
     #[test]
@@ -680,7 +831,8 @@ mod tests {
                     _ => 0,
                 })
                 .sum();
-            prop_assert!(out.len() + framed <= input.len());
+            // Each APC that cut an OSC short adds one CAN.
+            prop_assert!(out.len() + framed <= input.len() + events.len());
             for e in &events {
                 if let PaneEventKind::Graphics(b) = e {
                     prop_assert!(b.starts_with(b"\x1b_G") && b.ends_with(b"\x1b\\"));

@@ -10,7 +10,6 @@ mod common;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::thread::sleep;
 use std::time::Duration;
 
 use common::{TestServer, wait_until};
@@ -185,8 +184,9 @@ fn a_paste_into_neovim_keeps_its_lines() {
     a.send("\x1b[200~  one\n  two\n\x1b[201~");
     a.wait_for("  two");
     a.send("\x1b");
-    // Past escape-time and nvim's own ttimeout, so `:` is not Meta-:.
-    sleep(Duration::from_millis(300));
+    // nvim leaves insert mode once it has taken the ESC as Escape, not
+    // as the start of Meta-:.
+    a.wait_until("normal mode", WAIT, |t| !t.contains("-- INSERT --"));
     a.send(":wq\r");
     if let Err(e) = wait_until(
         || fs::read_to_string(&file).is_ok_and(|s| s.starts_with("  one\n  two\n")),
@@ -197,8 +197,8 @@ fn a_paste_into_neovim_keeps_its_lines() {
 }
 
 /// Case 3 and R28: focus reports from the outer terminal reach a pane
-/// with mode 1004, whole, split across reads, and right after a late
-/// probe reply (the harness never answers the probe, so the client's
+/// with mode 1004, whole and right after a late probe reply (splits are
+/// covered by the client's unit test) (the harness never answers the probe, so the client's
 /// late-reply filter is active throughout).
 #[test]
 fn focus_reports_reach_a_pane_that_asked() {
@@ -206,10 +206,6 @@ fn focus_reports_reach_a_pane_that_asked() {
     let mut a = attach(&srv);
     a.send("\x1b[Ia\r");
     a.wait_for("^[[Ia");
-    a.send("\x1b");
-    sleep(Duration::from_millis(5));
-    a.send("[Ob\r");
-    a.wait_for("^[[Ob");
     a.send("\x1b[?62;22c\x1b[Ic\r");
     a.wait_for("^[[Ic");
     assert!(!a.text().contains("62;22c"), "{}", a.text());
@@ -257,7 +253,8 @@ fn bells_set_the_window_flag_as_tmux_does() {
 // ---- title ----
 
 /// Case 5 (R15): the active pane's title reaches the clients showing it,
-/// a pane in another window's does not, and neither renames the window.
+/// a pane in another window's does not until that window is shown, and
+/// neither renames the window.
 #[test]
 fn titles_reach_the_clients_showing_the_pane() {
     let srv = start("while read l; do printf '\\033]2;hi\\007'; echo sent-hi; done");
@@ -281,6 +278,15 @@ fn titles_reach_the_clients_showing_the_pane() {
     a.send("\r");
     a.wait_for_output(b"\x1b]2;yo", 0);
     assert_eq!(count(a.output(), b"\x1b]2;hi"), 0);
+
+    // Showing window 1 re-sends its pane's title, and back again.
+    let mark = a.output().len();
+    srv.cmd(&["select-window", "-t", "main:1"])
+        .expect("select-window");
+    let mark = a.wait_for_output(b"\x1b]2;hi\x07", mark);
+    srv.cmd(&["select-window", "-t", "main:2"])
+        .expect("select-window");
+    a.wait_for_output(b"\x1b]2;yo\x07", mark);
 
     let now =
         display(&srv, "main:1", "#{window_name}") + &display(&srv, "main:2", "#{window_name}");
@@ -400,4 +406,62 @@ fn cursor_colour_follows_the_active_pane() {
     let at = a.wait_for_output(set, at);
     a.send("\r");
     a.wait_for_output(reset, at);
+}
+
+// ---- pane focus ----
+
+/// Focus reports follow the active pane, as recorded on tmux 3.7b
+/// (`-f /dev/null`, `focus-events on`, two panes in mode 1004): attaching
+/// gives the active pane a focus-in; `select-pane` gives the old pane a
+/// focus-out and the new one a focus-in; while the client itself is
+/// unfocused a `select-pane` sends nothing, and its focus-in then reaches
+/// the pane that is active.
+#[test]
+fn focus_reports_follow_the_active_pane() {
+    let tui = "printf '\\033[?1004h'; stty -echo -icanon; printf 'ready '; exec cat -v";
+    let srv = start(tui);
+    srv.cmd(&["split-window", "-t", "main", tui])
+        .expect("split-window");
+    let (p1, p2) = ("main:1.1", "main:1.2");
+    let seen = |target: &str, want: &str| {
+        let want = format!("ready {want}");
+        let want = want.trim_end();
+        if let Err(e) = wait_until(|| srv.capture(target).trim() == want, WAIT) {
+            panic!(
+                "{e}: {target} shows {:?}, want {want:?}",
+                srv.capture(target).trim()
+            );
+        }
+    };
+    // Both panes asked for mode 1004 before the client attaches.
+    seen(p1, "");
+    seen(p2, "");
+
+    let mut a = attach(&srv);
+    seen(p2, "^[[I");
+    seen(p1, "");
+
+    srv.cmd(&["select-pane", "-t", p1]).expect("select-pane");
+    seen(p1, "^[[I");
+    seen(p2, "^[[I^[[O");
+    srv.cmd(&["select-pane", "-t", p2]).expect("select-pane");
+    seen(p1, "^[[I^[[O");
+    seen(p2, "^[[I^[[O^[[I");
+
+    a.send("\x1b[O");
+    seen(p2, "^[[I^[[O^[[I^[[O");
+    srv.cmd(&["select-pane", "-t", p1]).expect("select-pane");
+    // Focus follows the active pane when the client is next drawn: let
+    // that frame, which moves the cursor up into pane 1, go out first.
+    let deadline = std::time::Instant::now() + WAIT;
+    while a.cursor().1 >= 11 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the cursor stayed in pane 2"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    a.send("\x1b[I");
+    seen(p1, "^[[I^[[O^[[I");
+    seen(p2, "^[[I^[[O^[[I^[[O");
 }
