@@ -237,6 +237,19 @@ not the outer terminal's) and `XR` (`\E[>0q`, XTVERSION): the pane gets no
 reply (spec §8), so an app waiting for one without a DA1 fence times out;
 logged in docs/dogfood.md.
 
+**macOS's own entry is older.** The table was read from ncurses 6.6's
+`tmux-256color`. macOS ships ncurses 6.0 (`/usr/bin/infocmp -V`:
+6.0.20150808), and its system `tmux-256color` lacks `smxx`, `Smulx`, `Ms`
+and `fe`/`fd`; it has `sitm`, `Cs`, `Ss` and `tsl`. grofe resolves `TERM`
+against the system terminfo dirs only (`src/term.rs::search_dirs`, no
+Homebrew keg), so the entry a pane gets is the one the system's tools read.
+An app that trusts that entry does not emit strikethrough, styled
+underlines, OSC 52 or focus reporting on macOS, which is no loss against
+`screen-256color` (which has none of them either). Neovim does not depend
+on the entry for these: it adds the underline-style and focus sequences
+itself for a `tmux` terminal and sends OSC 52 from its own clipboard
+provider, which is how the owner's Neovim gets them.
+
 **Decision.** Every capability on D7's list passes on both OSes, so the
 default flips: `src/term.rs::resolve_term()` now picks `tmux-256color`,
 falls back to `screen-256color` on a host without that entry, and to

@@ -63,7 +63,8 @@ pub fn entry_exists(dirs: &[PathBuf], term: &str) -> bool {
 
 /// Standard terminfo search locations, most to least specific: `$TERMINFO`,
 /// `~/.terminfo`, each `$TERMINFO_DIRS` entry, then the usual compiled-in
-/// system locations (including Homebrew's keg-only ncurses on macOS).
+/// system locations. Homebrew's keg-only ncurses is not searched: a pane
+/// must get a `TERM` the system's own ncurses tools resolve.
 pub fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("TERMINFO") {
@@ -82,7 +83,6 @@ pub fn search_dirs() -> Vec<PathBuf> {
             "/usr/share/terminfo",
             "/usr/lib/terminfo",
             "/usr/local/share/terminfo",
-            "/opt/homebrew/opt/ncurses/share/terminfo",
         ]
         .map(PathBuf::from),
     );

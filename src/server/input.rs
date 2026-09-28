@@ -17,7 +17,8 @@
 //!   an unbound key after the prefix is dropped, and an unbound key in
 //!   `root` goes to the pane.
 //! - [`encode`] writes a key the way a terminal would for the pane's modes:
-//!   legacy xterm/screen bytes (the pane's `TERM` is screen-256color), or
+//!   legacy xterm/screen bytes (the pane's `TERM` is tmux-256color, whose
+//!   unmodified keys are screen-256color's), or
 //!   the kitty keyboard protocol for the flags the pane has pushed.
 //!
 //! [`InputHook`]s (M3: the prompt, the mouse) see every input before the
@@ -1338,7 +1339,7 @@ fn utf8(c: char) -> Vec<u8> {
     c.encode_utf8(&mut b).as_bytes().to_vec()
 }
 
-/// What screen-256color panes expect, as tmux 3.7b sends it: modifiers a
+/// What tmux-256color panes expect, as tmux 3.7b sends it: modifiers a
 /// legacy form cannot carry are dropped (`C-Enter` is `\r`, `S-a` is `a`,
 /// `S-Tab` is `\t`), and keys tmux cannot send at all (`C-BSpace`,
 /// `C-Escape`: its send-keys types them as text) send nothing.
@@ -1374,7 +1375,7 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
                     vec![ESC, b'O', l]
                 }
                 (None, KeyCode::F(n @ 1..=4)) => vec![ESC, b'O', b"PQRS"[n as usize - 1]],
-                // screen-256color's khome and kend.
+                // tmux-256color's (and screen-256color's) khome and kend.
                 (None, KeyCode::Home) => b"\x1b[1~".to_vec(),
                 (None, KeyCode::End) => b"\x1b[4~".to_vec(),
                 _ => functional_bytes(f, param),
@@ -2390,7 +2391,8 @@ mod tests {
 
     /// Legacy bytes, as tmux 3.7b sends them into a pane (recorded with
     /// `send-keys` into a raw pty on `tmux -L grofe-t23 -f /dev/null`), and
-    /// screen-256color's terminfo (`infocmp -1x`: kcuu1 `\EOA` in keypad
+    /// tmux-256color's terminfo, the same as screen-256color's for these
+    /// (`infocmp -1x`: kcuu1 `\EOA` in keypad
     /// transmit mode, khome `\E[1~`, kend `\E[4~`, kf1 `\EOP`, kcbt `\E[Z`).
     #[test]
     fn legacy_encoding_matches_tmux() {
