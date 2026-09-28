@@ -12,7 +12,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::io::{ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::Command;
@@ -20,7 +20,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::{TestServer, wait_until};
-use grofe::protocol::{Caps, ClientCtx, Frame, FrameCodec, Hello, encode_hello};
+use grofe::protocol::{Caps, ClientCtx, Frame, FrameCodec, Hello, Reply, Request, encode_hello};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -177,6 +177,16 @@ fn two_clients_letterbox_and_crop_with_a_debounced_owner() {
 /// A client that stops reading (a raw socket with a tiny receive buffer,
 /// never read) while a pane floods must not delay a second client or the
 /// actor (M2 addendum).
+///
+/// Requests go over one control connection, so what is timed is the actor
+/// and the second client's frame path, not spawning a CLI (a fork and exec
+/// of the debug binary alone can take seconds on a loaded machine). The
+/// timings are compared with a baseline taken the same way, under the same
+/// flood, before the stuck client attaches. Each timing is the best of
+/// three status updates, and the median of five `list-sessions`. A delay
+/// the stuck client causes lasts as long as it stays stuck, so it slows
+/// every sample. A scheduling hiccup on a loaded machine (seen at 2 to 4 s
+/// in one debug run in eight) slows one.
 #[test]
 fn a_client_that_stops_reading_does_not_delay_another() {
     let srv = TestServer::start();
@@ -192,33 +202,104 @@ fn a_client_that_stops_reading_does_not_delay_another() {
         "exec seq 1 1000000000",
     ])
     .expect("new-session");
+    let mut b = Harness::spawn(attach(&srv, "main"), 80, 24);
+    b.wait_for("[main]");
+    let mut control = Control::connect(&srv);
+    let (base_status, base_list) = latencies(&mut control, &mut b, "B");
 
     // A 1 KiB receive buffer: on macOS, below the send low-water mark, the
     // server cannot write to it at all, the most stuck a client can be.
     let stuck = raw_attach(&srv, (300, 100), Some(1024), &[]);
-    // Let the flood fill the stuck client's socket.
-    sleep(Duration::from_millis(1000));
-
-    let mut b = Harness::spawn(attach(&srv, "main"), 80, 24);
-    b.wait_for("[main]");
-
-    let asked = Instant::now();
-    srv.cmd(&["set-option", "-g", "status-left", "MARK-1 "])
-        .expect("set status-left");
-    b.wait_for_timeout("MARK-1", Duration::from_secs(1));
-    assert!(asked.elapsed() < Duration::from_secs(1));
-
-    for _ in 0..5 {
-        let asked = Instant::now();
-        let sessions = srv.cmd(&["list-sessions"]).expect("list-sessions");
-        let took = asked.elapsed();
-        assert!(sessions.starts_with("main:"), "{sessions}");
-        assert!(
-            took < Duration::from_millis(200),
-            "list-sessions took {took:?}"
-        );
+    // Let the flood fill the stuck client's socket. `b` keeps reading
+    // meanwhile: an unread pty would make it a lagging client too.
+    let settle = Instant::now() + Duration::from_millis(1000);
+    while Instant::now() < settle {
+        b.text();
+        sleep(Duration::from_millis(20));
     }
+    let (status, list) = latencies(&mut control, &mut b, "S");
+
+    let status_bound = (base_status * 5).max(Duration::from_secs(1));
+    assert!(
+        status < status_bound,
+        "status update took {status:?} with a stuck client, {base_status:?} without"
+    );
+    let list_bound = (base_list * 5).max(Duration::from_millis(200));
+    assert!(
+        list < list_bound,
+        "list-sessions took {list:?} with a stuck client, {base_list:?} without"
+    );
     drop(stuck);
+}
+
+/// One control connection to the server, for timing requests without a
+/// CLI spawn each.
+struct Control {
+    reader: BufReader<UnixStream>,
+    writer: UnixStream,
+    next_id: u64,
+}
+
+impl Control {
+    fn connect(srv: &TestServer) -> Control {
+        let writer = UnixStream::connect(&srv.socket).expect("connect");
+        writer
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("read timeout");
+        let reader = BufReader::new(writer.try_clone().expect("clone"));
+        let mut control = Control {
+            reader,
+            writer,
+            next_id: 1,
+        };
+        let hello = encode_hello(&Hello::Control(srv.ctx())).expect("hello");
+        writeln!(control.writer, "{hello}").expect("send hello");
+        control
+    }
+
+    /// Runs one command: its output, or its error.
+    fn cmd(&mut self, argv: &[&str]) -> Result<String, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let argv = argv.iter().map(|a| a.to_string()).collect();
+        let req = serde_json::to_string(&Request { id, argv }).expect("request");
+        writeln!(self.writer, "{req}").expect("send request");
+        let mut line = String::new();
+        self.reader.read_line(&mut line).expect("read reply");
+        match serde_json::from_str(&line).expect("reply") {
+            Reply::Ok { out, .. } => Ok(out),
+            Reply::Err { err, .. } => Err(err),
+            Reply::Event(e) => Err(format!("unexpected event {e:?}")),
+        }
+    }
+}
+
+/// The fastest of three times client `b` takes to show a new
+/// `status-left` (`<tag>N-MARK`, within `status-left-length`'s default
+/// 10 columns), and the median of five `list-sessions` round trips.
+fn latencies(control: &mut Control, b: &mut Harness, tag: &str) -> (Duration, Duration) {
+    let status = (0..3)
+        .map(|n| {
+            let marker = format!("{tag}{n}-MARK ");
+            let asked = Instant::now();
+            control
+                .cmd(&["set-option", "-g", "status-left", &marker])
+                .expect("set status-left");
+            b.wait_for_timeout(marker.trim_end(), Duration::from_secs(10));
+            asked.elapsed()
+        })
+        .min()
+        .unwrap_or_default();
+    let mut list: Vec<Duration> = (0..5)
+        .map(|_| {
+            let asked = Instant::now();
+            let sessions = control.cmd(&["list-sessions"]).expect("list-sessions");
+            assert!(sessions.starts_with("main:"), "{sessions}");
+            asked.elapsed()
+        })
+        .collect();
+    list.sort();
+    (status, list[2])
 }
 
 /// A raw attach client that has sent its hello, followed in the same write
