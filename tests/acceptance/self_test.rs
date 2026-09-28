@@ -122,6 +122,47 @@ fn nvim_exit_restores_primary_screen() {
     h.wait_exit();
 }
 
+/// Regression for M2 fix round 1: `Harness::spawn`'s pty wrapper must hand
+/// `cmd`'s own args to the target untouched. It used to run
+/// `exec "$0" -- "$@"`, which put a literal `--` in front of them; grofe's
+/// global parser (`src/main.rs::parse_globals`) treats a leading `--` as
+/// end-of-globals, so `grofe -S <sock> list-sessions` spawned that way
+/// silently fell back to the default socket instead of failing on the one
+/// it was told to use.
+#[test]
+fn spawn_passes_grofe_args_through_untouched() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = tmp.path().join("run");
+    std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+    let socket = runtime_dir.join("custom.sock");
+    let default_socket = runtime_dir.join("grofe").join("default.sock");
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+    cmd.env_remove("GROFE")
+        .env_remove("GROFE_PANE")
+        .env("HOME", tmp.path())
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .arg("-S")
+        .arg(&socket)
+        .arg("list-sessions");
+
+    // Wide enough that a (long, on macOS) tempdir path never auto-wraps the
+    // pty line the error prints on: a wrapped line would split the path
+    // across two reconstructed rows and break the `contains` checks below.
+    let mut h = Harness::spawn(cmd, 500, 10);
+    h.wait_for("no server running on");
+    let text = h.text();
+    assert!(
+        text.contains(&socket.display().to_string()),
+        "error should name the -S socket; screen:\n{text}"
+    );
+    assert!(
+        !text.contains(&default_socket.display().to_string()),
+        "error should not silently fall back to the default socket; screen:\n{text}"
+    );
+    h.wait_exit();
+}
+
 /// Self-test for [`Harness::resize`] and [`Harness::cursor`]: the spike's
 /// `render()` path already exercises them isn't proven elsewhere, so cover
 /// them directly against the shell's own reporting (`stty size`, a cursor

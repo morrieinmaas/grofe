@@ -44,10 +44,16 @@ impl Harness {
     /// sees the right size. Env vars and the working directory set on `cmd`
     /// are carried through the wrapper; `env_clear` is not; the wrapper
     /// shell otherwise inherits this process's environment as usual.
+    ///
+    /// `cmd`'s own args reach the target exactly as given, with no extra
+    /// `--` inserted ahead of them: grofe's global parser treats a leading
+    /// `--` as end-of-globals, so `grofe -S <sock> attach` spawned through a
+    /// wrapper that added one would silently fall back to the default
+    /// socket (M2 fix round 1).
     pub fn spawn(cmd: Command, cols: u16, rows: u16) -> Harness {
         let mut wrapper = Command::new("/bin/sh");
         wrapper.arg("-c").arg(format!(
-            "stty cols {cols} rows {rows} && exec \"$0\" -- \"$@\""
+            "stty cols {cols} rows {rows} && exec \"$0\" \"$@\""
         ));
         wrapper.arg(cmd.get_program());
         wrapper.args(cmd.get_args());
