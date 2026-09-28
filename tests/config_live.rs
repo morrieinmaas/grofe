@@ -515,10 +515,11 @@ fn an_empty_command_unbinds_a_stock_key() {
 }
 
 /// Fix round 1: a binding's argv is already split, so a literal `;`
-/// argument stays literal, and `list-keys` prints a string that binds the
-/// same thing again (a round trip).
+/// argument stays literal. `list-keys` prints a literal `;` and a command
+/// separator both as `\;`, as tmux does, so the printed text is ambiguous:
+/// this checks only that rebinding from it prints the same text again.
 #[test]
-fn list_keys_output_binds_the_same_sequence_again() {
+fn list_keys_output_prints_the_same_text_after_rebinding() {
     let srv = start(&[(
         "config.toml",
         "[keys.prefix]\nk = \"send-keys ';' Enter ; display -p 'q;'\"\n",
