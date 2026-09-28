@@ -591,13 +591,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
             let result = dispatch(state, &ctx, &req.argv);
-            match state.deferred_reply.take() {
-                Some(later) => {
-                    state.events.flush();
-                    reply_later(req.id, later, reply);
-                }
-                None => finish(state, req.id, result, reply),
-            }
+            finish(state, req.id, result, reply);
             clients::changed(state);
         }
         ServerMsg::Subscribe { req, reply, tx } => {
@@ -609,6 +603,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
             };
+            state.deferred_reply = None;
             finish(state, req.id, result, reply);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
@@ -622,7 +617,10 @@ fn handle(state: &mut State, msg: ServerMsg) {
 }
 
 /// Sends a command's reply, then the events it caused, so a connection
-/// writes its reply before those events.
+/// writes its reply before those events. A command that succeeded after
+/// deferring its answer ([`dispatch::defer_reply`]) is answered when its
+/// handler sends it, without the actor waiting; one that failed is
+/// answered with its error now, the deferred answer dropped.
 fn finish(
     state: &mut State,
     id: u64,
@@ -633,11 +631,15 @@ fn finish(
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }
-    let reply_msg = match result {
-        Ok(out) => Reply::Ok { id, out },
-        Err(err) => Reply::Err { id, err },
-    };
-    let _ = reply.send(reply_msg);
+    match (state.deferred_reply.take(), result) {
+        (Some(later), Ok(_)) => reply_later(id, later, reply),
+        (_, Ok(out)) => {
+            let _ = reply.send(Reply::Ok { id, out });
+        }
+        (_, Err(err)) => {
+            let _ = reply.send(Reply::Err { id, err });
+        }
+    }
     state.events.flush();
 }
 
@@ -871,6 +873,78 @@ async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server state with nothing in it, as the actor starts, on `socket`.
+    fn state_at(socket: PathBuf) -> State {
+        let (pane_events, _) = mpsc::channel(1);
+        let socket_id = fs::symlink_metadata(&socket)
+            .ok()
+            .map(|m| (m.dev(), m.ino()));
+        State {
+            socket,
+            options: StartOptions {
+                restore_on_start: false,
+                remain_on_exit: false,
+            },
+            model: model::Model::new(false),
+            inner_term: pane::inner_term(),
+            pane_events,
+            wake: Arc::new(Notify::new()),
+            events: events::Events::default(),
+            clients: BTreeMap::new(),
+            registry: clients::Registry::default(),
+            prompts: prompt::Prompts::default(),
+            mouse: mouse::MouseState::default(),
+            passthrough: passthrough::Passthrough::default(),
+            graphics: graphics::Graphics::default(),
+            deferred_reply: None,
+            exit: false,
+            exit_when_empty: false,
+            connections: 0,
+            socket_id,
+        }
+    }
+
+    /// Fix round 1: a handler that deferred its answer and then failed is
+    /// answered with its own error, at once.
+    #[tokio::test]
+    async fn a_handler_that_defers_then_fails_answers_with_its_error() {
+        let mut state = state_at(PathBuf::from("/nonexistent/grofe-t30.sock"));
+        let answer = dispatch::defer_reply(&mut state);
+        let (reply, mut reply_rx) = oneshot::channel();
+        finish(&mut state, 3, Err("spawn failed: boom".to_string()), reply);
+        let got = reply_rx.try_recv().expect("answered now");
+        assert!(
+            matches!(got, Reply::Err { id: 3, ref err } if err == "spawn failed: boom"),
+            "{got:?}"
+        );
+        assert!(state.deferred_reply.is_none());
+        assert!(answer.is_closed(), "the deferred answer was dropped");
+    }
+
+    /// Fix round 1: a deferred answer still goes through `finish`, so a
+    /// command that ends the server removes the socket before any reply.
+    #[tokio::test]
+    async fn a_deferred_answer_still_removes_the_socket_on_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("s.sock");
+        fs::write(&socket, b"").expect("stand-in socket");
+        let mut state = state_at(socket.clone());
+        state.exit = true;
+        let answer = dispatch::defer_reply(&mut state);
+        let (reply, reply_rx) = oneshot::channel();
+        finish(&mut state, 4, Ok(String::new()), reply);
+        assert!(!socket.exists(), "socket removed before the reply");
+        let _ = answer.send(Ok("later\n".to_string()));
+        let got = tokio::time::timeout(Duration::from_secs(5), reply_rx)
+            .await
+            .expect("in time")
+            .expect("a reply");
+        assert!(
+            matches!(got, Reply::Ok { id: 4, ref out } if out == "later\n"),
+            "{got:?}"
+        );
+    }
 
     /// Item 8: a deferred answer reaches the request's reply once the
     /// handler sends it; the actor never waits for it.

@@ -550,6 +550,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     state.model.client_last_session.remove(&id);
     sync_attached(state);
     leave_session(state, id, c.session);
+    graphics::on_clients_changed(state);
 }
 
 /// `id` no longer shows `session`: if it owned the size, the session's
@@ -604,6 +605,7 @@ pub fn changed(state: &mut State) {
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
     apply_sizes(state);
+    graphics::on_clients_changed(state);
     sync_mouse_modes(state);
     mark_all_dirty(state);
 }
@@ -1718,6 +1720,45 @@ mod tests {
         route(&mut state, id, Input::Focus(true), Instant::now());
         assert!(state.clients[&id].focused);
         assert!(state.exit, "a hook saw it");
+    }
+
+    /// Fix round 1: every pane's graphics flag follows whether an
+    /// attached client shows kitty graphics (as `GROFE_TEST_CAPS` makes a
+    /// client claim it in its hello): on when one attaches, set on a pane
+    /// spawned meanwhile, off once it leaves.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn graphics_ok_follows_the_attached_clients() {
+        let (mut state, id) = state_with_client();
+        let ctx = ClientCtx {
+            cwd: std::env::temp_dir(),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+        };
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            dispatch::run(state, &ctx, &argv).expect("command");
+        };
+        let flags = |state: &State| {
+            state
+                .model
+                .panes
+                .values()
+                .map(|p| p.handle.graphics_ok())
+                .collect::<Vec<_>>()
+        };
+        run(&mut state, &["new-session", "-d", "-s", "g", "sleep 30"]);
+        changed(&mut state);
+        assert_eq!(flags(&state), [false], "a client without kitty graphics");
+        if let Some(c) = state.clients.get_mut(&id) {
+            c.caps.kitty_graphics = true;
+        }
+        changed(&mut state);
+        assert_eq!(flags(&state), [true]);
+        run(&mut state, &["split-window", "-t", "g", "sleep 30"]);
+        assert_eq!(flags(&state), [true, true], "a new pane starts on");
+        gone(&mut state, id);
+        assert_eq!(flags(&state), [false, false], "the client left");
     }
 
     #[test]

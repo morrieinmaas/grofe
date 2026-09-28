@@ -11,7 +11,7 @@ use crate::server::input::{self, parse_prefix};
 use crate::server::layout::LayoutError;
 use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients};
+use crate::server::{State, clients, graphics};
 use crate::types::{Edge, PaneId, Rect, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -266,6 +266,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         socket: state.socket.clone(),
         term: state.inner_term,
         cell_px: clients::cell_px(state, model.windows[&p.window].session),
+        graphics_ok: graphics::panes_graphics_ok(state),
     };
     let cwd = spec.cwd.display().to_string();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())

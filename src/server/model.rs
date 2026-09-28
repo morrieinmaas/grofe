@@ -609,6 +609,7 @@ mod tests {
             socket: std::env::temp_dir().join("grofe-model-test.sock"),
             term: crate::server::pane::inner_term(),
             cell_px: None,
+            graphics_ok: false,
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(

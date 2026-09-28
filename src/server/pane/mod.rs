@@ -92,6 +92,9 @@ pub struct PaneSpawn {
     /// One cell's `(width, height)` in pixels, from the client the window
     /// is sized for (`Caps::cell_px`); `None` gives the pty 0 pixels.
     pub cell_px: Option<(u16, u16)>,
+    /// Whether the pane's graphics queries are answered from the start
+    /// (`graphics::panes_graphics_ok`).
+    pub graphics_ok: bool,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -346,7 +349,7 @@ impl PaneHandle {
             parser: Processor::new(),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
-        let graphics_ok = Arc::new(AtomicBool::new(false));
+        let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
         let sample = Arc::new(Mutex::new(ProcSample::default()));
         let (input, input_rx) = InputQueue::new();
 
@@ -431,6 +434,11 @@ impl PaneHandle {
     /// the pane's graphics queries by it (T3.8), without the actor.
     pub fn set_graphics_ok(&self, ok: bool) {
         self.graphics_ok.store(ok, Ordering::Relaxed);
+    }
+
+    /// See [`Self::set_graphics_ok`].
+    pub fn graphics_ok(&self) -> bool {
+        self.graphics_ok.load(Ordering::Relaxed)
     }
 
     /// Lines per tmux's `capture-pane -p`: one line per row, trailing
@@ -792,6 +800,7 @@ mod tests {
             socket: PathBuf::from("/tmp/grofe-test.sock"),
             term,
             cell_px: None,
+            graphics_ok: false,
         }
     }
 

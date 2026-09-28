@@ -28,7 +28,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{HISTORY_LIMIT, Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients, prompt};
+use crate::server::{State, clients, graphics, prompt};
 use crate::types::{PaneId, WindowId};
 
 /// Runs one command (`argv[0]` is the verb) against the server state,
@@ -211,6 +211,7 @@ pub(crate) fn spawn_pane(
         socket: state.socket.clone(),
         term: state.inner_term,
         cell_px,
+        graphics_ok: graphics::panes_graphics_ok(state),
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;

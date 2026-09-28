@@ -30,6 +30,7 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         socket: PathBuf::from("/tmp/grofe-test.sock"),
         term: grofe::server::pane::inner_term(),
         cell_px: None,
+        graphics_ok: false,
     }
 }
 

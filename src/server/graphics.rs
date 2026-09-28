@@ -36,6 +36,22 @@ pub fn answer_query(_apc: &[u8], _graphics_ok: &AtomicBool) -> Option<Vec<u8>> {
     None
 }
 
+/// Whether a pane's graphics queries are answered: whether any attached
+/// client shows kitty graphics. New panes start with it (`PaneSpawn`).
+pub fn panes_graphics_ok(state: &State) -> bool {
+    state.clients.values().any(|c| c.caps.kitty_graphics)
+}
+
+/// The set of attached clients (or their sessions) changed: attach,
+/// detach, switch. Tells every pane's reader whether to answer graphics
+/// queries (`PaneHandle::set_graphics_ok`); T3.8 may narrow it per pane.
+pub fn on_clients_changed(state: &mut State) {
+    let ok = panes_graphics_ok(state);
+    for p in state.model.panes.values() {
+        p.handle.set_graphics_ok(ok);
+    }
+}
+
 /// Client `id` is about to get a full redraw (attach, or after a dropped
 /// frame): what it needs re-sent goes through `clients::queue_raw` now.
 pub fn on_full_redraw(_state: &mut State, _id: ClientId) {}

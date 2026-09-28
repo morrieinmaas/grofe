@@ -1022,76 +1022,92 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 /// Splits a stored command string (a binding, a prompt answer, a config
-/// value) into commands and their words (R12), as tmux 3.7b's parser reads
-/// it: whitespace separates words; single quotes keep everything literal;
-/// double quotes and bare words take a backslash as "the next character,
-/// literally"; quoted parts join with whatever touches them (`'it'"'"'s'`
-/// is one word). An unquoted `;` ends a command wherever it is, and so does
-/// a `\;` standing alone as a word (R12); a quoted or escaped `;` inside a
-/// word is literal. Empty commands are dropped.
+/// value) into commands and their words, as tmux 3.7b's parser reads it
+/// (recorded on a private socket):
 ///
-/// An unterminated quote is an error (tmux takes it as closed at the end).
-// ponytail: no `\n`/`\t`/`\e`/octal/`\u` escapes, `$VAR`, `~` or `#`
-// comments; a backslash just keeps the next character.
+/// - whitespace separates words; quoted parts join with whatever touches
+///   them (`'it'"'"'s'` is one word) and may be empty (`''`);
+/// - single quotes keep everything literal;
+/// - in double quotes and bare words a backslash keeps the next character
+///   literally, `$VAR` and `${VAR}` expand (unset is empty), and a `~` or
+///   `~user` that starts the word is that home directory;
+/// - an unquoted `;` ends a command wherever it is; a `\;` word is a
+///   literal `;` argument, except a trailing one, which is dropped;
+/// - an unterminated quote is closed at the end of the string.
+///
+/// Empty commands are dropped. Never fails today; the `Result` is the
+/// contract for a stricter grammar.
+// ponytail: no `\n`/`\e`/octal/`\u` escapes, `#` comments or `%if`.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
-    fn end_word(word: &mut String, started: &mut bool, words: &mut Vec<String>) {
+    let mut cmds = Vec::new();
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    // A word has begun, even if it is still empty (`''`).
+    let mut started = false;
+    // The word so far is exactly one `\;`.
+    let mut escaped_semicolon = false;
+    let mut chars = s.chars().peekable();
+
+    let end_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
         if *started {
             words.push(std::mem::take(word));
             *started = false;
         }
-    }
-    fn end_command(words: &mut Vec<String>, cmds: &mut Vec<Vec<String>>) {
+    };
+    let end_command = |words: &mut Vec<String>, cmds: &mut Vec<Vec<String>>| {
         if !words.is_empty() {
             cmds.push(std::mem::take(words));
         }
-    }
-    let unterminated = || ParseError::Other(format!("unterminated quote: {s}"));
-    let mut cmds = Vec::new();
-    let mut words = Vec::new();
-    let mut word = String::new();
-    // A word has begun, even if it is still empty (`''`).
-    let mut started = false;
-    let mut chars = s.chars().peekable();
+    };
+
     while let Some(c) = chars.next() {
+        let fresh = !started;
+        if !c.is_whitespace() && !(c == '\\' && fresh) {
+            escaped_semicolon = false;
+        }
         match c {
             c if c.is_whitespace() => end_word(&mut word, &mut started, &mut words),
             ';' => {
                 end_word(&mut word, &mut started, &mut words);
                 end_command(&mut words, &mut cmds);
             }
-            '\\' => match chars.next() {
-                Some(';') if !started && chars.peek().is_none_or(|n| n.is_whitespace()) => {
-                    end_command(&mut words, &mut cmds);
-                }
-                Some(next) => {
-                    word.push(next);
-                    started = true;
-                }
-                None => {
-                    word.push('\\');
-                    started = true;
-                }
-            },
+            '\\' => {
+                started = true;
+                let next = chars.next().unwrap_or('\\');
+                escaped_semicolon = fresh && next == ';';
+                word.push(next);
+            }
             '\'' => {
                 started = true;
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(x) => word.push(x),
-                        None => return Err(unterminated()),
+                for x in chars.by_ref() {
+                    if x == '\'' {
+                        break;
                     }
+                    word.push(x);
                 }
             }
             '"' => {
                 started = true;
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') => word.push(chars.next().ok_or_else(unterminated)?),
-                        Some(x) => word.push(x),
-                        None => return Err(unterminated()),
+                if fresh && chars.peek() == Some(&'~') {
+                    chars.next();
+                    expand_tilde(&mut chars, &mut word);
+                }
+                while let Some(x) = chars.next() {
+                    match x {
+                        '"' => break,
+                        '\\' => word.push(chars.next().unwrap_or('\\')),
+                        '$' => expand_var(&mut chars, &mut word),
+                        x => word.push(x),
                     }
                 }
+            }
+            '$' => {
+                started = true;
+                expand_var(&mut chars, &mut word);
+            }
+            '~' if fresh => {
+                started = true;
+                expand_tilde(&mut chars, &mut word);
             }
             c => {
                 word.push(c);
@@ -1100,8 +1116,79 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
         }
     }
     end_word(&mut word, &mut started, &mut words);
+    // A trailing `\;` word is dropped, as tmux drops it.
+    if escaped_semicolon {
+        words.pop();
+    }
     end_command(&mut words, &mut cmds);
     Ok(cmds)
+}
+
+/// A variable's value for [`split_command_string`], empty when unset.
+// ponytail: the server process's environment; TC.5's global environment
+// (`set-environment -g`) replaces it.
+fn env_var(name: &str) -> String {
+    std::env::var(name).unwrap_or_default()
+}
+
+/// After a `$`: `${NAME}` or `NAME` (letters, digits, `_`), expanded into
+/// `out`; a `$` before anything else is literal.
+fn expand_var(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String) {
+    let is_name = |c: &char| c.is_ascii_alphanumeric() || *c == '_';
+    let mut name = String::new();
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        for c in chars.by_ref() {
+            if c == '}' {
+                break;
+            }
+            name.push(c);
+        }
+    } else if chars
+        .peek()
+        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+    {
+        while let Some(c) = chars.next_if(is_name) {
+            name.push(c);
+        }
+    } else {
+        out.push('$');
+        return;
+    }
+    out.push_str(&env_var(&name));
+}
+
+/// After a word-initial `~`: `~` is `$HOME` (else the user's passwd home),
+/// `~user` that user's home; an unknown user stays as written.
+fn expand_tilde(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String) {
+    let mut user = String::new();
+    while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        user.push(c);
+    }
+    let home = if user.is_empty() {
+        std::env::var("HOME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .or_else(|| {
+                nix::unistd::User::from_uid(nix::unistd::getuid())
+                    .ok()
+                    .flatten()
+                    .map(|u| u.dir.display().to_string())
+            })
+    } else {
+        nix::unistd::User::from_name(&user)
+            .ok()
+            .flatten()
+            .map(|u| u.dir.display().to_string())
+    };
+    match home {
+        Some(home) => out.push_str(&home),
+        None => {
+            out.push('~');
+            out.push_str(&user);
+        }
+    }
 }
 
 /// Parses argv into the commands it runs, in order. Every caller that runs
@@ -2171,70 +2258,110 @@ mod tests {
 
     // ---- M3 commands (T3.0) ----
 
-    fn words(ws: &[&[&str]]) -> Vec<Vec<String>> {
-        ws.iter().map(|w| argv(w)).collect()
-    }
-
-    /// Quotes, escapes and `;`, as tmux 3.7b's string parser reads them
-    /// (recorded with `bind X '<string>'` then `list-keys` on a private
-    /// socket), plus R12's `\;` token.
+    /// Quotes, escapes, `;` and expansion, as tmux 3.7b's string parser
+    /// reads them (recorded with `bind X '<string>'` then `list-keys` on
+    /// `tmux -L grofe-t30 -f /dev/null`).
     #[test]
     fn split_command_string_table() {
-        let cases: &[(&str, &[&[&str]])] = &[
-            ("", &[]),
-            ("   ", &[]),
-            ("split-window -h", &[&["split-window", "-h"]]),
+        let home = std::env::var("HOME").expect("HOME");
+        let path = std::env::var("PATH").expect("PATH");
+        let root = nix::unistd::User::from_name("root")
+            .ok()
+            .flatten()
+            .map(|u| u.dir.display().to_string())
+            .expect("root's home");
+        let cases: Vec<(&str, Vec<Vec<String>>)> = vec![
+            ("", vec![]),
+            ("   ", vec![]),
+            ("split-window -h", vec![argv(&["split-window", "-h"])]),
             (
                 "split-window ; select-pane -L",
-                &[&["split-window"], &["select-pane", "-L"]],
+                vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
             ),
-            // tmux: a `;` ends the command even inside a word.
+            // A `;` ends the command even inside a word.
             (
                 "split-window;select-pane -L",
-                &[&["split-window"], &["select-pane", "-L"]],
+                vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
             ),
             (
                 "split-window; select-pane -L",
-                &[&["split-window"], &["select-pane", "-L"]],
+                vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
             ),
-            // R12: a `\;` token separates too.
+            // A `\;` word is a literal `;` argument; a trailing one is
+            // dropped.
             (
-                "split-window \\; select-pane -L",
-                &[&["split-window"], &["select-pane", "-L"]],
+                "display a \\; display b",
+                vec![argv(&["display", "a", ";", "display", "b"])],
             ),
+            ("display a \\;", vec![argv(&["display", "a"])]),
+            ("display a \\;  ", vec![argv(&["display", "a"])]),
+            ("display \\;b", vec![argv(&["display", ";b"])]),
             // Quoted or escaped inside a word, `;` is literal.
-            ("display 'a;b'", &[&["display", "a;b"]]),
-            ("display \"a;b\"", &[&["display", "a;b"]]),
-            ("display a\\;b", &[&["display", "a;b"]]),
-            ("display ';'", &[&["display", ";"]]),
+            ("display 'a;b'", vec![argv(&["display", "a;b"])]),
+            ("display \"a;b\"", vec![argv(&["display", "a;b"])]),
+            ("display a\\;b", vec![argv(&["display", "a;b"])]),
+            ("display ';'", vec![argv(&["display", ";"])]),
             // Empty commands vanish.
-            ("a ;; b ;", &[&["a"], &["b"]]),
-            ("; a", &[&["a"]]),
+            ("a ;; b ;", vec![argv(&["a"]), argv(&["b"])]),
+            ("; a", vec![argv(&["a"])]),
             // Quotes group, join with what touches them, and may be empty.
             (
                 "run-shell 'touch /tmp/x'",
-                &[&["run-shell", "touch /tmp/x"]],
+                vec![argv(&["run-shell", "touch /tmp/x"])],
             ),
-            ("rename-window \"%%\"", &[&["rename-window", "%%"]]),
-            ("set status-right ''", &[&["set", "status-right", ""]]),
-            ("display 'it'\"'\"'s'", &[&["display", "it's"]]),
-            ("display \"say \\\"hi\\\"\"", &[&["display", "say \"hi\""]]),
-            ("display 'no \\escape'", &[&["display", "no \\escape"]]),
-            ("a\\ b\tc", &[&["a b", "c"]]),
-            ("display \"a\\\\b\"", &[&["display", "a\\b"]]),
+            ("rename-window \"%%\"", vec![argv(&["rename-window", "%%"])]),
+            (
+                "set status-right ''",
+                vec![argv(&["set", "status-right", ""])],
+            ),
+            ("display 'it'\"'\"'s'", vec![argv(&["display", "it's"])]),
+            (
+                "display \"say \\\"hi\\\"\"",
+                vec![argv(&["display", "say \"hi\""])],
+            ),
+            (
+                "display 'no \\escape'",
+                vec![argv(&["display", "no \\escape"])],
+            ),
+            ("a\\ b\tc", vec![argv(&["a b", "c"])]),
+            ("display \"a\\\\b\"", vec![argv(&["display", "a\\b"])]),
+            // An unterminated quote closes at the end.
+            (
+                "display 'unterminated",
+                vec![argv(&["display", "unterminated"])],
+            ),
+            (
+                "display \"unterminated",
+                vec![argv(&["display", "unterminated"])],
+            ),
+            // Expansion: variables and a leading `~`, not in single quotes.
+            ("display \"$HOME\"", vec![argv(&["display", &home])]),
+            ("display '$HOME'", vec![argv(&["display", "$HOME"])]),
+            ("display \\$HOME", vec![argv(&["display", "$HOME"])]),
+            ("display ~", vec![argv(&["display", &home])]),
+            (
+                "display \"${HOME}x\"",
+                vec![argv(&["display", &format!("{home}x")])],
+            ),
+            (
+                "display $PATH/x",
+                vec![argv(&["display", &format!("{path}/x")])],
+            ),
+            (
+                "display \"$GROFE_T30_UNSET\"y",
+                vec![argv(&["display", "y"])],
+            ),
+            (
+                "display ~/a",
+                vec![argv(&["display", &format!("{home}/a")])],
+            ),
+            ("display \"~\"", vec![argv(&["display", &home])]),
+            ("display a~ '~'", vec![argv(&["display", "a~", "~"])]),
+            ("display ~root", vec![argv(&["display", &root])]),
+            ("display $ a$", vec![argv(&["display", "$", "a$"])]),
         ];
         for (input, want) in cases {
-            assert_eq!(split_command_string(input), Ok(words(want)), "{input:?}");
-        }
-    }
-
-    #[test]
-    fn split_command_string_rejects_an_unterminated_quote() {
-        for input in ["display 'a", "display \"a", "display \"a\\\""] {
-            assert!(
-                matches!(split_command_string(input), Err(ParseError::Other(_))),
-                "{input:?}"
-            );
+            assert_eq!(split_command_string(input), Ok(want), "{input:?}");
         }
     }
 
