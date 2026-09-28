@@ -597,6 +597,14 @@ fn finish(
     state.events.flush();
 }
 
+/// How long a new connection may take to send its hello before it is
+/// closed. Clients send it at once (attach after at most its probe), so
+/// this only bounds connections that never will.
+const HELLO_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The longest hello line (it carries the client's environment).
+const HELLO_MAX_LEN: usize = 64 * 1024;
+
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written.
 async fn connection(
@@ -605,12 +613,15 @@ async fn connection(
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
 ) {
-    let mut lines = Framed::new(stream, protocol::lines_codec());
+    let codec = LinesCodec::new_with_max_length(HELLO_MAX_LEN);
+    let mut lines = Framed::new(stream, codec);
     let hello = tokio::select! {
-        line = lines.next() => line,
+        line = tokio::time::timeout(HELLO_DEADLINE, lines.next()) => line,
         _ = shutdown.changed() => return,
     };
-    let Some(Ok(hello)) = hello else { return };
+    let Ok(Some(Ok(hello))) = hello else { return };
+    // Past the hello, requests may be as large as any message.
+    *lines.codec_mut() = protocol::lines_codec();
     let ctx = match protocol::decode_hello(&hello) {
         Ok(Hello::Control(ctx)) => ctx,
         Ok(Hello::Attach {

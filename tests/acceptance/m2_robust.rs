@@ -423,3 +423,53 @@ fn panes_never_shrink_below_one_cell() {
         );
     }
 }
+
+/// Reads from `stream` until EOF; how long that took, or `None` if it
+/// stayed open for `timeout`.
+fn closed_within(stream: &mut UnixStream, timeout: Duration) -> Option<Duration> {
+    let start = Instant::now();
+    stream
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("read timeout");
+    let mut chunk = [0u8; 4096];
+    while start.elapsed() < timeout {
+        match stream.read(&mut chunk) {
+            Ok(0) => return Some(start.elapsed()),
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(_) => return Some(start.elapsed()),
+        }
+    }
+    None
+}
+
+/// A connection that never sends its hello is closed after a few seconds.
+#[test]
+fn an_idle_connection_without_a_hello_is_closed() {
+    let srv = start();
+    let mut idle = UnixStream::connect(&srv.socket).expect("connect");
+    let took = closed_within(&mut idle, Duration::from_secs(15)).expect("never closed");
+    assert!(took >= Duration::from_secs(3), "closed after only {took:?}");
+    assert!(srv.cmd(&["list-sessions"]).is_ok());
+}
+
+/// A hello line may not run past 64 KiB; requests after it still may.
+#[test]
+fn a_hello_line_is_capped_but_later_requests_are_not() {
+    let srv = start();
+    let mut big = UnixStream::connect(&srv.socket).expect("connect");
+    // The server may hang up before the whole line is written.
+    let closed = big.write_all(&vec![b'x'; 100 * 1024]).is_err()
+        || closed_within(&mut big, Duration::from_secs(10)).is_some();
+    assert!(closed, "a 100 KiB hello line was kept open");
+
+    let mut control = Control::connect(&srv);
+    let value = "v".repeat(100 * 1024);
+    control
+        .cmd(&["set-option", "-g", "@big", &value])
+        .expect("a 100 KiB request after the hello");
+    let shown = control
+        .cmd(&["display-message", "-p", "#{@big}"])
+        .expect("display");
+    assert!(shown.trim_end() == value, "@big is {} bytes", shown.len());
+}
