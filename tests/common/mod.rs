@@ -52,6 +52,8 @@ pub struct CmdOutput {
 
 pub struct TestServer {
     dir: TempDir,
+    /// The server [`Self::start`] spawned, when this harness is its parent.
+    server: Option<Child>,
     pub socket: PathBuf,
     pub home: PathBuf,
     pub config_home: PathBuf,
@@ -78,6 +80,7 @@ impl TestServer {
         TestServer {
             socket: runtime_dir.join("test.sock"),
             dir,
+            server: None,
             home,
             config_home,
             state_home,
@@ -85,16 +88,19 @@ impl TestServer {
         }
     }
 
-    /// A running server on a unique `-S` socket (via `start-server`).
-    /// Panics, with the server log, if it does not come up.
+    /// A running server on a unique `-S` socket, spawned as this process's
+    /// own child so teardown can kill and reap it by pid. Panics, with the
+    /// server log, if it does not come up.
     pub fn start() -> TestServer {
-        let srv = TestServer::unstarted();
-        let out = srv.run(&["start-server"]);
-        if !out.status.success() || !srv.is_running() {
-            panic!(
-                "test server failed to start: {out:?}\nserver log:\n{}",
-                srv.log()
-            );
+        let mut srv = TestServer::unstarted();
+        let mut cmd = srv.command();
+        cmd.arg("__server")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        srv.server = Some(cmd.spawn().expect("spawn test server"));
+        if wait_until(|| srv.is_running(), CMD_TIMEOUT).is_err() {
+            panic!("test server failed to start; server log:\n{}", srv.log());
         }
         srv
     }
@@ -216,52 +222,89 @@ impl TestServer {
     }
 }
 
+/// How long teardown waits for a killed server to be gone.
+const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
+
+/// Kills every server this harness started, whether or not it still
+/// answers on its socket: a server unlinks its socket as the first step of
+/// shutting down, so a live process can have none.
 impl Drop for TestServer {
     fn drop(&mut self) {
-        if !self.is_running() {
-            return;
+        let own = self.server.as_ref().map(|c| c.id() as i32);
+        let others: Vec<_> = self
+            .logged_pids()
+            .into_iter()
+            .filter(|&pid| Some(pid) != own && is_this_grofe(pid))
+            .map(nix::unistd::Pid::from_raw)
+            .collect();
+        if let Some(child) = self.server.as_mut() {
+            let _ = child.kill();
         }
-        // The socket answers, so the latest logged pid is the live server.
-        let pid = last_logged_pid(&self.log()).map(nix::unistd::Pid::from_raw);
-        let _ = self.run_quiet_kill();
-        if wait_until(|| !self.is_running(), Duration::from_secs(3)).is_err() {
-            // Fallback for a hung server.
-            if let Some(pid) = pid {
-                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-            }
-            let _ = fs::remove_file(&self.socket);
+        for &pid in &others {
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
         }
-        // Wait for the process itself to go, so a `pgrep` right after the
-        // test finds nothing. Bounded: a zombie nobody reaps still counts
-        // as alive to kill(pid, 0).
-        if let Some(pid) = pid {
-            let _ = wait_until(|| process_gone(pid), Duration::from_secs(3));
+        // Reap our own child, bounded, so it does not linger as a zombie.
+        if let Some(mut child) = self.server.take() {
+            let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
         }
+        let _ = wait_until(|| others.iter().all(|&p| process_gone(p)), TEARDOWN_WAIT);
+        let _ = fs::remove_file(&self.socket);
     }
 }
 
 impl TestServer {
-    fn run_quiet_kill(&self) -> Option<ExitStatus> {
-        let mut cmd = self.command();
-        cmd.arg("kill-server");
-        let child = cmd
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        wait_child(child, Duration::from_secs(3)).ok()
+    /// The pid of every server that logged a start under this harness's
+    /// state dir: its `-S` server and any other (`-L`) one a test started.
+    fn logged_pids(&self) -> Vec<i32> {
+        let Some(dir) = self.log_path().parent().map(Path::to_path_buf) else {
+            return Vec::new();
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|e| fs::read_to_string(e.ok()?.path()).ok())
+            .flat_map(|log| {
+                log.lines()
+                    .filter(|l| l.contains(START_MARKER))
+                    .filter_map(logged_pid)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 }
 
-/// The pid from the last start marker line, `grofe server starting: pid N, ...`.
-fn last_logged_pid(log: &str) -> Option<i32> {
-    let line = log.lines().rev().find(|l| l.contains(START_MARKER))?;
+/// The pid from a start marker line, `grofe server starting: pid N, ...`.
+fn logged_pid(line: &str) -> Option<i32> {
     let rest = line.split("pid ").nth(1)?;
     rest.split(|c: char| !c.is_ascii_digit())
         .next()?
         .parse()
         .ok()
+}
+
+/// Whether `pid` runs this build's grofe binary, so a logged pid that has
+/// since been reused by some other process is never signalled.
+fn is_this_grofe(pid: i32) -> bool {
+    let ours = fs::canonicalize(env!("CARGO_BIN_EXE_grofe")).ok();
+    ours.is_some() && exe_of(pid) == ours
+}
+
+#[cfg(target_os = "linux")]
+fn exe_of(pid: i32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn exe_of(pid: i32) -> Option<PathBuf> {
+    use nix::libc;
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is writable for the length passed.
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    let len = usize::try_from(n).ok().filter(|&n| n > 0)?;
+    let path = std::ffi::OsStr::from_bytes(&buf[..len]);
+    fs::canonicalize(path).ok()
 }
 
 /// A control connection with an accepted subscription.

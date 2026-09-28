@@ -183,6 +183,21 @@ fn dropping_the_harness_stops_the_server_even_on_panic() {
         .expect("server still running after the harness dropped");
 }
 
+/// A server that no longer accepts on its socket but still runs (it unlinks
+/// the socket first when it shuts down, so a stalled shutdown looks like
+/// this) is still killed when the harness drops.
+#[test]
+fn dropping_the_harness_stops_a_server_whose_socket_is_gone() {
+    let srv = TestServer::start();
+    let pid = logged_server_pid(&srv);
+    std::fs::remove_file(&srv.socket).expect("remove the socket");
+    assert!(!srv.is_running());
+    assert!(!process_gone(pid));
+
+    drop(srv);
+    wait_until(|| process_gone(pid), WAIT).expect("server outlived its harness");
+}
+
 #[test]
 fn subscribe_reports_the_servers_answer() {
     let srv = TestServer::start();
