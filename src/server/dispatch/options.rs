@@ -71,6 +71,8 @@ struct Builtin {
 // external), `focus-events` on (tmux off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
 // synchronized panes). `status-position` takes only `bottom` until TC.11.
+// `set-titles` (off) and `set-titles-string` match tmux's own defaults,
+// the string translated into grofe's `#{...}`-only expander (R15).
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -202,6 +204,22 @@ const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
+    },
+    Builtin {
+        name: "set-titles",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "set-titles-string",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        // tmux's default, `#S:#I:#W - "#T" #{session_alerts}`, translated
+        // into grofe's `#{...}`-only expander (R15); `session_alerts`
+        // isn't implemented and expands empty, matching tmux with no
+        // alerts set.
+        default: "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}",
     },
     Builtin {
         name: "mouse",
@@ -1197,6 +1215,34 @@ mod tests {
             Err("unknown value: top".to_string())
         );
         assert_eq!(builtin_names().count(), BUILTINS.len());
+    }
+
+    /// `set-titles`/`set-titles-string` (R15): tmux's own names, scope and
+    /// `set-titles` default; `set-titles-string`'s default is tmux's own
+    /// translated into `#{...}` form.
+    #[test]
+    fn set_titles_rows_are_session_scoped_and_off_by_default() {
+        let o = Options::new(false);
+        assert_eq!(o.lookup("set-titles", &[]), Some("off"));
+        assert_eq!(
+            builtin("set-titles").map(|b| b.scope),
+            Some(OptionScope::Session)
+        );
+        assert_eq!(
+            o.lookup("set-titles-string", &[]),
+            Some(
+                "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}"
+            )
+        );
+        assert_eq!(
+            builtin("set-titles-string").map(|b| b.scope),
+            Some(OptionScope::Session)
+        );
+        assert_eq!(validate("set-titles", "yes"), Ok("on".into()));
+        assert_eq!(
+            validate("set-titles", "maybe"),
+            Err("bad value: maybe".to_string())
+        );
     }
 
     #[test]

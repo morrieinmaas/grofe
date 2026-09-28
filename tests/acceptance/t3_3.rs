@@ -252,41 +252,60 @@ fn bells_set_the_window_flag_as_tmux_does() {
 
 // ---- title ----
 
-/// Case 5 (R15): the active pane's title reaches the clients showing it,
-/// a pane in another window's does not until that window is shown, and
-/// neither renames the window.
+/// Case 5 (R15): `set-titles` off (the default, matching tmux 3.7b) sends
+/// no title to the outer stream at all, even once the shell has processed
+/// it; on, the client's current pane's `set-titles-string` reaches the
+/// outer stream as OSC 0, following the active window and pane; neither
+/// renames the window (`allow-rename` off, tmux's default too).
 #[test]
-fn titles_reach_the_clients_showing_the_pane() {
+fn titles_follow_set_titles() {
     let srv = start("while read l; do printf '\\033]2;hi\\007'; echo sent-hi; done");
     srv.cmd(&[
         "new-window",
         "-t",
         "main",
-        "while read l; do printf '\\033]2;yo\\007'; done",
+        "while read l; do printf '\\033]2;yo\\007'; echo sent-yo; done",
     ])
     .expect("new-window");
     let mut a = attach(&srv);
     let names =
         display(&srv, "main:1", "#{window_name}") + &display(&srv, "main:2", "#{window_name}");
 
-    // Window 1 is not shown: its title stays in grofe.
+    // Off: neither pane's title reaches the outer stream, shown or not,
+    // even once each shell has processed it (the `sent-*` echoes, which
+    // follow the printf in the same command line, are the sync point).
     srv.cmd(&["send-keys", "-t", "main:1", "Enter"])
         .expect("send-keys");
     wait_until(|| srv.capture("main:1").contains("sent-hi"), WAIT).expect("hi sent");
-    // The shown pane's title, sent after, is relayed; pane events are
-    // handled in order, so window 1's was handled first.
     a.send("\r");
-    a.wait_for_output(b"\x1b]2;yo", 0);
-    assert_eq!(count(a.output(), b"\x1b]2;hi"), 0);
+    wait_until(|| srv.capture("main:2").contains("sent-yo"), WAIT).expect("yo sent");
+    assert_eq!(count(a.output(), b"\x1b]0;"), 0, "a title leaked while off");
+    assert_eq!(
+        count(a.output(), b"\x1b]2;"),
+        0,
+        "an OSC 2 title leaked while off"
+    );
+
+    // On: the shown pane's `set-titles-string` (kept to just the pane
+    // title here, to isolate it from `automatic-rename`) is relayed as
+    // OSC 0; the other window's stays in grofe until shown.
+    srv.cmd(&["set", "-g", "set-titles", "on"])
+        .expect("set-titles on");
+    srv.cmd(&["set", "-g", "set-titles-string", "#{pane_title}"])
+        .expect("set-titles-string");
+    let mark = a.output().len();
+    a.send("\r");
+    a.wait_for_output(b"\x1b]0;yo\x07", mark);
+    assert_eq!(count(a.output(), b"\x1b]0;hi"), 0);
 
     // Showing window 1 re-sends its pane's title, and back again.
     let mark = a.output().len();
     srv.cmd(&["select-window", "-t", "main:1"])
         .expect("select-window");
-    let mark = a.wait_for_output(b"\x1b]2;hi\x07", mark);
+    let mark = a.wait_for_output(b"\x1b]0;hi\x07", mark);
     srv.cmd(&["select-window", "-t", "main:2"])
         .expect("select-window");
-    a.wait_for_output(b"\x1b]2;yo\x07", mark);
+    a.wait_for_output(b"\x1b]0;yo\x07", mark);
 
     let now =
         display(&srv, "main:1", "#{window_name}") + &display(&srv, "main:2", "#{window_name}");

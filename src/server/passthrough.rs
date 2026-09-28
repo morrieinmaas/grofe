@@ -5,7 +5,9 @@
 //! - OSC 52 clipboard stores (the emulator decodes them into
 //!   `PaneEventKind::Clipboard`), to the session's clients while
 //!   `set-clipboard` is `on` (R14); reads are never forwarded;
-//! - the title (OSC 0/2), to the clients whose active pane set it (R15);
+//! - the outer terminal's title (OSC 0), the client's current pane's
+//!   `set-titles-string` expanded, while `set-titles` is on (R15; off,
+//!   tmux's default, sends nothing);
 //! - BEL, to the session's clients, also setting `window_bell_flag` (R13);
 //! - OSC 8 hyperlinks, re-emitted by `render::diff` from the cells (R20);
 //! - OSC 7, read by the [`Scanner`] into `PaneEventKind::Cwd`;
@@ -27,6 +29,9 @@ use std::sync::OnceLock;
 
 use base64::Engine as _;
 
+use crate::cmd::{FormatVars, expand};
+use crate::server::dispatch::options::{self, FormatCtx};
+use crate::server::model::Model;
 use crate::server::pane::PaneEventKind;
 use crate::server::{State, clients};
 use crate::types::{ClientId, PaneId, SessionId};
@@ -398,10 +403,11 @@ fn refresh_session(state: &mut State, session: SessionId) {
 
 /// Client `id` is about to be drawn. Its active pane's title (R15) and
 /// cursor colour (R16) are sent if they are not what it was last sent
-/// (another pane is active, or the pane changed them): a pane that set no
-/// colour resets it with OSC 112, one that set no title clears it. When
-/// the session's active pane moved, focus reports follow it
-/// ([`move_focus`]).
+/// (another pane is active, the pane changed them, or `set-titles`/
+/// `set-titles-string` changed): a pane that set no colour resets it with
+/// OSC 112. While `set-titles` is off, no title is sent at all, even a
+/// clearing one, and nothing already shown is touched. When the session's
+/// active pane moved, focus reports follow it ([`move_focus`]).
 pub fn on_active_changed(state: &mut State, id: ClientId) {
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
@@ -416,18 +422,17 @@ pub fn on_active_changed(state: &mut State, id: ClientId) {
     pt.focus
         .retain(|s, _| clients.values().any(|c| c.session == *s));
     let cursor = active.and_then(|p| pt.cursor.get(&p)).cloned();
-    let title = active
-        .and_then(|p| pt.titles.get(&p))
-        .cloned()
-        .unwrap_or_default();
+    let title = active.and_then(|p| outer_title(&state.model, &pt.titles, p));
     let shown = pt.sent.entry(id).or_default();
     let mut out = Vec::new();
     if shown.cursor != cursor {
         out.extend(osc(cursor.as_deref().unwrap_or(b"112")));
         shown.cursor = cursor;
     }
-    if shown.title != title {
-        out.extend(osc2(&title));
+    if let Some(title) = title
+        && shown.title != title
+    {
+        out.extend(osc0(&title));
         shown.title = title;
     }
     if !out.is_empty() {
@@ -514,6 +519,44 @@ fn active_pane(state: &State, session: SessionId) -> Option<PaneId> {
     state.model.windows.get(&s.active).map(|w| w.active)
 }
 
+/// `pane`'s outer title (R15): `set-titles-string` expanded against it,
+/// with `pane_title` (`#T`) layered on top of the ordinary format
+/// variables from `titles` (which `FormatCtx` cannot reach, since it
+/// lives in `Passthrough`, not the model). `None` while `set-titles` is
+/// off, so the caller sends nothing at all.
+fn outer_title(model: &Model, titles: &BTreeMap<PaneId, String>, pane: PaneId) -> Option<String> {
+    let chain = options::chain(model, pane);
+    if model.options.lookup("set-titles", &chain) != Some("on") {
+        return None;
+    }
+    let fmt = model
+        .options
+        .lookup("set-titles-string", &chain)
+        .unwrap_or_default();
+    let title = titles.get(&pane).cloned().unwrap_or_default();
+    let vars = TitleVars {
+        base: FormatCtx::new(model, pane),
+        title: &title,
+    };
+    Some(expand(fmt, &vars))
+}
+
+/// [`FormatVars`] for `set-titles-string`: `pane_title` (`#T`) from the
+/// pane's stored OSC title, everything else from `FormatCtx`.
+struct TitleVars<'a> {
+    base: FormatCtx<'a>,
+    title: &'a str,
+}
+
+impl FormatVars for TitleVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        if name == "pane_title" {
+            return Some(self.title.to_string());
+        }
+        self.base.get(name)
+    }
+}
+
 fn send(state: &mut State, to: Vec<ClientId>, bytes: &[u8]) {
     for id in to {
         clients::queue_raw(state, id, bytes);
@@ -542,9 +585,10 @@ fn osc52(text: &str) -> Vec<u8> {
     format!("\x1b]52;c;{data}\x07").into_bytes()
 }
 
-/// OSC 2 setting the title, control characters dropped.
-fn osc2(title: &str) -> Vec<u8> {
-    format!("\x1b]2;{}\x07", clean(title.as_bytes())).into_bytes()
+/// OSC 0 setting the outer terminal's title (R15, tmux's own choice:
+/// `tsl`/`fsl`), control characters dropped.
+fn osc0(title: &str) -> Vec<u8> {
+    format!("\x1b]0;{}\x07", clean(title.as_bytes())).into_bytes()
 }
 
 #[cfg(test)]
@@ -723,7 +767,7 @@ mod tests {
     #[test]
     fn relayed_sequences() {
         assert_eq!(osc52("hello\n"), b"\x1b]52;c;aGVsbG8K\x07");
-        assert_eq!(osc2("a\x1bb\x07c"), b"\x1b]2;abc\x07");
+        assert_eq!(osc0("a\x1bb\x07c"), b"\x1b]0;abc\x07");
         assert_eq!(osc(b"9;a\x01b"), b"\x1b]9;ab\x07");
     }
 
@@ -747,8 +791,8 @@ mod tests {
             assert_eq!(out.iter().filter(|&&b| b == ESC).count(), 1, "{out:?}");
             assert!(out.ends_with(&[BEL]));
         }
-        let out = osc2("t\u{9c}\u{9b}6n");
-        assert_eq!(out, b"\x1b]2;t6n\x07");
+        let out = osc0("t\u{9c}\u{9b}6n");
+        assert_eq!(out, b"\x1b]0;t6n\x07");
     }
 
     /// An APC that begins where an OSC's ESC was, closes that OSC for the
