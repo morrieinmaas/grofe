@@ -1,0 +1,27 @@
+# The one normalization list (spec §9), shared by the golden recorder
+# (tests/compat/record.rs) and the compat suite. Rules apply top to bottom
+# to every recorded output; tests/compat/normalize.rs implements them.
+#
+# <rule>  <argument>  <placeholder>
+#
+#   sub    <var>     replace each occurrence of the run's value for <var>
+#   word   <var>     same, but only where it stands as a whole word
+#   tty    <prefix>  <prefix> followed by digits (a tty name)
+#   ctime  -         an asctime-style date: "Mon Sep 28 10:00:00 2026"
+#   epoch  -         a 10-digit number within the run's time window
+#   pid    -         a whole number within the run's pid window
+#
+# Vars the runner supplies: socket (the private -L socket's path), tmpdir
+# (the run's tempdir, holding TMUX_TMPDIR and HOME), host, user. A var the
+# runner leaves unset or empty skips its rule. Longer values go first, so
+# the socket path is replaced before the tempdir it sits in.
+
+sub    socket     <SOCKET>
+sub    tmpdir     <TMPDIR>
+word   host       <HOST>
+word   user       <USER>
+tty    /dev/pts/  <TTY>
+tty    /dev/ttys  <TTY>
+ctime  -          <TIME>
+epoch  -          <EPOCH>
+pid    -          <PID>

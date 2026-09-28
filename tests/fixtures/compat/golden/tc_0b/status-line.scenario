@@ -1,0 +1,7 @@
+# A pty-attached client, for scenarios that need one (status line, popups).
+# Panes run cat, not a shell, so no prompt (which differs by user) is drawn.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -t main -n second cat
+client 80x24 attach -t main
+screen
+$ list-clients -F '#{client_width}x#{client_height} #{client_session} #{client_tty}'

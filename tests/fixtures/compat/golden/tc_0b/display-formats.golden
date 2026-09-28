@@ -1,0 +1,20 @@
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ display -p -t main '#{session_name}:#{window_index}.#{pane_index} #{window_width}x#{window_height}'
+main:1.1 200x50
+? 0
+$ display -p -t main '#{session_id} #{window_id} #{pane_id}'
+$0 @0 %0
+? 0
+$ display -p '#{version} #{history_limit} #{?mouse,mouse on,mouse off}'
+3.7b 50000 mouse on
+? 0
+$ display -p '#{socket_path} #{pid}'
+<SOCKET> <PID>
+? 0
+$ display -p -t main '#{t:session_created} #{session_created}'
+<TIME> <EPOCH>
+? 0
+$ display -p -t main '#{=5:session_name}|#{l:#{session_name}}|#{s/a/A/:session_name}'
+main|#{session_name}|mAin
+? 0

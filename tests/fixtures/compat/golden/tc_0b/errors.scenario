@@ -1,0 +1,10 @@
+# tmux's error texts and exit statuses.
+$ list-sessions
+$ new-session -d -s main -x 200 -y 50
+$ kill-window -t nope
+$ select-window -t main:9
+$ frobnicate
+$ has-session -t nope
+$ has-session -t =mai
+$ switch-client -t main
+$ new-session -d -s main

@@ -1,0 +1,9 @@
+# display -p formats on a detached session sized like grofe's test default.
+$ new-session -d -s main -x 200 -y 50
+$ display -p -t main '#{session_name}:#{window_index}.#{pane_index} #{window_width}x#{window_height}'
+$ display -p -t main '#{session_id} #{window_id} #{pane_id}'
+$ display -p '#{version} #{history_limit} #{?mouse,mouse on,mouse off}'
+$ display -p '#{socket_path} #{pid}'
+# Times go through the ctime and epoch rules.
+$ display -p -t main '#{t:session_created} #{session_created}'
+$ display -p -t main '#{=5:session_name}|#{l:#{session_name}}|#{s/a/A/:session_name}'

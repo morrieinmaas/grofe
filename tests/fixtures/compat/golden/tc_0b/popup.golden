@@ -1,0 +1,20 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+client 60x15 attach -t main
+$& display-popup -c {client} -w 30 -h 5 -T title "echo in-popup; exec cat"
+screen in-popup
+|
+|
+|
+|
+|               ┌─title──────────────────────┐
+|               │in-popup                    │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+|
+| [main] 1:first*                               "<HOST>"

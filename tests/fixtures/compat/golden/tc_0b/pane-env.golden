@@ -1,0 +1,56 @@
+$ new-session -d -s env -x 200 -y 50 "env | LC_ALL=C sort; tmux wait-for -S env-done; exec cat"
+? 0
+$ wait-for env-done
+? 0
+$ capture-pane -pJ -t env
+COLORTERM=truecolor
+HOME=<TMPDIR>/home
+LANG=C.UTF-8
+PATH=/usr/local/bin:/usr/bin:/bin
+PWD=<TMPDIR>/home
+SHELL=/bin/sh
+TERM=tmux-256color
+TERM_PROGRAM=tmux
+TERM_PROGRAM_VERSION=3.7b
+TMUX=<SOCKET>,<PID>,0
+TMUX_PANE=%0
+TMUX_TMPDIR=<TMPDIR>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0

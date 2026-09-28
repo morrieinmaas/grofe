@@ -1,0 +1,33 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -t main -n second cat
+? 0
+client 80x24 attach -t main
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first- 2:second*                                         "<HOST>"
+$ list-clients -F '#{client_width}x#{client_height} #{client_session} #{client_tty}'
+80x24 main <TTY>
+? 0
