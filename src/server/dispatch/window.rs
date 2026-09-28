@@ -249,8 +249,8 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
 
 /// `select-layout` (spec §4.3, R18): rebuilds the window's layout as a
 /// preset over its panes in index order, the first pane being main. A
-/// zoomed window is unzoomed first and the active pane stays, as tmux
-/// 3.7b does.
+/// zoomed window is unzoomed first, even for an unknown name, and the
+/// active pane stays, as tmux 3.7b does.
 pub fn select_layout(
     state: &mut State,
     ctx: &ClientCtx,
@@ -258,11 +258,14 @@ pub fn select_layout(
 ) -> Result<String, String> {
     let model = &mut state.model;
     let window = model.resolve_window(&c.target, ctx)?;
-    let preset = Preset::from_name(&c.name).ok_or_else(|| format!("invalid layout: {}", c.name))?;
     let Some(w) = model.windows.get_mut(&window) else {
         return Err(format!("can't find window: {window}"));
     };
     w.zoomed = false;
+    let Some(preset) = Preset::from_name(&c.name) else {
+        model.relayout(window);
+        return Err(format!("invalid layout: {}", c.name));
+    };
     let (area, panes) = (w.area(), w.pane_ids());
     w.layout.preset(area, preset, &panes);
     model.relayout(window);

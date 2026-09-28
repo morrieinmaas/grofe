@@ -484,6 +484,8 @@ fn main_vertical(area: Rect, main: MainSize, panes: &[PaneId]) -> Option<Node> {
         MainSize::Cells(c) => c,
         MainSize::Percent(p) => (u32::from(avail) * u32::from(p.min(100)) / 100) as u16,
     };
+    // ponytail: `main-pane-width 0` or `0%` gives 1 cell here; tmux 3.7b gives a
+    // degenerate 0-cell main pane, which a tree of >= 1-cell weights cannot hold.
     let main_cols = want.clamp(1, avail - 1);
     let right = match rest {
         [only] => Node::Leaf(*only),

@@ -224,3 +224,26 @@ fn a_split_after_a_preset_tiles_the_window() {
     }
     assert!(grid.iter().all(|&c| c <= 1), "overlap: {rects:?}");
 }
+
+/// tmux 3.7b unzooms before it looks at the name, so a bad name still
+/// leaves the window unzoomed (and fails).
+#[test]
+fn an_unknown_layout_still_unzooms() {
+    let srv = TestServer::start();
+    four_panes(&srv, "b", 200, 50, "sleep 30");
+    let before = panes(&srv, "b");
+    srv.cmd(&["resize-pane", "-Z", "-t", "b:1.2"])
+        .expect("zoom");
+    assert_eq!(display(&srv, "b", "#{window_zoomed_flag}"), "1");
+
+    let out = srv.run(&["select-layout", "-t", "b", "nope"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stderr.contains("invalid layout: nope"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(display(&srv, "b", "#{window_zoomed_flag}"), "0");
+    assert_eq!(panes(&srv, "b"), before);
+}
