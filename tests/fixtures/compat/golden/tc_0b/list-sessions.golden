@@ -1,0 +1,23 @@
+$ new-session -d -s alpha -n one -x 200 -y 50
+? 0
+$ new-session -d -s beta -n one -x 200 -y 50
+? 0
+$ new-window -t beta -n two
+? 0
+$ list-sessions
+alpha: 1 windows (created <TIME>)
+beta: 2 windows (created <TIME>)
+? 0
+$ ls
+alpha: 1 windows (created <TIME>)
+beta: 2 windows (created <TIME>)
+? 0
+$ list-windows -a
+alpha:1: one* (1 panes) [200x50] 
+beta:1: one- (1 panes) [200x50] 
+beta:2: two* (1 panes) [200x50] 
+? 0
+$ list-sessions -F '#{session_name} #{session_windows}'
+alpha 1
+beta 2
+? 0

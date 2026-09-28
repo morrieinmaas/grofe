@@ -1,0 +1,9 @@
+# A popup drawn over an attached client. display-popup needs a client, so
+# this scenario attaches one first and names it with {client}. The popup
+# blocks until it closes, so it runs in the background ($&), and the screen
+# step waits for its text.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& display-popup -c {client} -w 30 -h 5 -T title "echo in-popup; exec cat"
+screen in-popup

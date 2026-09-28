@@ -1,0 +1,10 @@
+# list-sessions and list-windows default output (no -F).
+# Name every window: an automatic name is whatever the pane runs at that
+# instant (tmux itself before the shell execs), so it races.
+$ new-session -d -s alpha -n one -x 200 -y 50
+$ new-session -d -s beta -n one -x 200 -y 50
+$ new-window -t beta -n two
+$ list-sessions
+$ ls
+$ list-windows -a
+$ list-sessions -F '#{session_name} #{session_windows}'
