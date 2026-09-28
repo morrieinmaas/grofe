@@ -188,7 +188,7 @@ fn client_size(control: &mut Control) -> String {
 }
 
 /// A 65535x65535 resize is capped at tmux's WINDOW_MAXIMUM (10000) wide
-/// and grofe's 4M-cell area (400 rows at that width), and the actor keeps
+/// and grofe's 1M-cell area (100 rows at that width), and the actor keeps
 /// answering once the resized frame is out.
 #[test]
 fn a_huge_resize_frame_is_capped_and_the_server_keeps_answering() {
@@ -208,8 +208,9 @@ fn a_huge_resize_frame_is_capped_and_the_server_keeps_answering() {
         contains(&got.output, b"idle-pane"),
         "no frame at the new size"
     );
-    assert_eq!(client_size(&mut control), "10000x400\n");
+    assert_eq!(client_size(&mut control), "10000x100\n");
     let took = control.median_list();
+    eprintln!("list-sessions after the capped size: {took:?}");
     assert!(took < Duration::from_secs(1), "list-sessions took {took:?}");
 }
 
@@ -223,8 +224,9 @@ fn a_huge_size_in_the_hello_is_capped() {
         contains(&r.output, b"idle-pane")
     });
     assert!(contains(&got.output, b"idle-pane"), "no first frame");
-    assert_eq!(client_size(&mut control), "10000x400\n");
+    assert_eq!(client_size(&mut control), "10000x100\n");
     let took = control.median_list();
+    eprintln!("list-sessions after the capped size: {took:?}");
     assert!(took < Duration::from_secs(1), "list-sessions took {took:?}");
 }
 
@@ -259,9 +261,9 @@ fn new_session_sizes_are_range_checked_and_capped() {
     );
 }
 
-/// A 2000x2000 client's first frame goes over the 16 MiB frame cap: a
-/// screen of wide characters costs a cursor move after each one, some
-/// 28 MB. It arrives split across frames, and the client stays attached.
+/// A 1000x1000 client's first frame goes over the 16 MiB frame cap: a
+/// screen of wide characters in two alternating many-attribute styles
+/// costs a full SGR and a cursor move for each one, some 23 MB. It arrives split across frames, and the client stays attached.
 #[test]
 fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
     let srv = TestServer::start();
@@ -273,10 +275,11 @@ fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
         "-s",
         "main",
         "-x",
-        "2000",
+        "1000",
         "-y",
-        "2000",
-        "awk 'BEGIN { for (i = 0; i < 1999000; i++) printf \"\\344\\270\\255\" }'; \
+        "1000",
+        "awk 'BEGIN { for (i = 0; i < 249750; i++) \
+         printf \"\\033[1;2;3;4;7;9;38;5;196;48;5;21m\\344\\270\\255\\033[1;2;3;4;7;9;38;5;46;48;5;19m\\344\\270\\255\" }'; \
          printf END-MARK; exec sleep 600",
     ])
     .expect("new-session");
@@ -295,7 +298,7 @@ fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
         Duration::from_secs(120),
     )
     .expect("the pane drew its screen");
-    let mut client = raw_attach(&srv, (2000, 2000));
+    let mut client = raw_attach(&srv, (1000, 1000));
     let got = Reader::new().read(&mut client, Duration::from_secs(60), |r| {
         contains(&r.output, b"END-MARK")
     });
@@ -308,7 +311,7 @@ fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
     );
     assert!(got.frames >= 2, "{} bytes in one frame", got.output.len());
     let mut control = Control::connect(&srv);
-    assert_eq!(client_size(&mut control), "2000x2000\n");
+    assert_eq!(client_size(&mut control), "1000x1000\n");
 }
 
 /// A burst of resizes costs one reflow, not one each: 1000 alternating

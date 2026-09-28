@@ -79,10 +79,11 @@ pub const WINDOW_MAXIMUM: u16 = 10_000;
 
 /// The most cells a client or window may have.
 // ponytail: tmux has no such cap (its grid lines are allocated as they are
-// used), but a grofe pane and every frame hold all their cells, so a
-// 10000x10000 client would cost gigabytes and seconds per frame. 4M cells
-// (2000x2000) is far past any real terminal; past it, rows give way.
-pub const MAX_CELLS: u32 = 4_000_000;
+// used). A grofe pane and every frame hold all their cells, and resize and
+// compose run on the actor, so a client's area is capped at 1M cells (a
+// 4K display at a small font is about 200k); past it, rows give way. The
+// upgrade path is to move resize and compose off the actor, then raise it.
+pub const MAX_CELLS: u32 = 1_000_000;
 
 /// `(cols, rows)` within 1..=[`WINDOW_MAXIMUM`] each and [`MAX_CELLS`] in
 /// all, keeping the width.
@@ -274,8 +275,9 @@ mod tests {
     fn sizes_are_capped_per_dimension_and_in_area() {
         assert_eq!(cap_size(0, 0), (1, 1));
         assert_eq!(cap_size(80, 24), (80, 24));
-        assert_eq!(cap_size(2000, 2000), (2000, 2000));
-        assert_eq!(cap_size(65535, 65535), (10_000, 400));
+        assert_eq!(cap_size(1000, 1000), (1000, 1000));
+        assert_eq!(cap_size(2000, 2000), (2000, 500));
+        assert_eq!(cap_size(65535, 65535), (10_000, 100));
         assert_eq!(cap_size(65535, 30), (10_000, 30));
         assert_eq!(cap_size(1, 65535), (1, 10_000));
     }
