@@ -301,8 +301,11 @@ struct Tty {
 
 impl Tty {
     /// Runs `script` under `sh -c` in a fresh pty, with `$0` the grofe
-    /// binary and `$1` the fake server's socket.
+    /// binary and `$1` the fake server's socket. State and config dirs are
+    /// beside the socket, in the fake server's tempdir, so a panic report
+    /// never reaches the real state dir.
     fn spawn(script: &str, socket: &Path, env: &[(&str, &str)]) -> Tty {
+        let dir = socket.parent().expect("socket dir");
         let mut cmd = Command::new("/bin/sh");
         cmd.arg("-c")
             .arg(script)
@@ -312,6 +315,8 @@ impl Tty {
             .env_remove("GROFE_PANE")
             .env_remove("COLORTERM")
             .env_remove("GROFE_TEST_CLIENT_PANIC")
+            .env("XDG_STATE_HOME", dir.join("state"))
+            .env("XDG_CONFIG_HOME", dir.join("config"))
             .env("TERM", "xterm-256color");
         for (k, v) in env {
             cmd.env(k, v);
@@ -619,10 +624,34 @@ fn a_panic_in_another_thread_restores_the_tty_and_exits() {
     tty.wait_for(KITTY_PUSH);
 
     // The stdin thread panics on its first read.
+    let real_before = real_state_files();
     tty.write(b"x");
     tty.wait_for(b"STATUS=101");
     assert!(contains(&tty.out, KITTY_POP), "kitty flags popped on panic");
     tty.assert_restored();
+    // The panic report lands in the test's own state dir, never the real one.
+    let state = srv.socket.parent().expect("socket dir").join("state/grofe");
+    let reports: Vec<_> = std::fs::read_dir(&state)
+        .map(|d| d.filter_map(|e| e.ok()).collect())
+        .unwrap_or_default();
+    assert_eq!(reports.len(), 1, "{reports:?} in {}", state.display());
+    assert_eq!(
+        real_state_files(),
+        real_before,
+        "the real state dir changed"
+    );
+}
+
+/// File names in the real state dir (from this process's own environment),
+/// read only, for guards that nothing a test runs writes there.
+fn real_state_files() -> std::collections::BTreeSet<String> {
+    let dir = grofe::paths::state_dir(&grofe::paths::Env::from_process());
+    std::fs::read_dir(dir)
+        .map(|d| {
+            d.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
@@ -703,7 +732,10 @@ fn nest_flag_reaches_the_hello() {
 #[test]
 fn attach_without_a_terminal_fails_before_the_hello() {
     let srv = FakeServer::new();
+    let dir = srv.socket.parent().expect("socket dir");
     let mut child = Command::new(env!("CARGO_BIN_EXE_grofe"))
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
         .arg("-S")
         .arg(&srv.socket)
         .arg("attach")

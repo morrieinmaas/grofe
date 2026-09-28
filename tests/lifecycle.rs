@@ -216,6 +216,7 @@ fn run_without_s(srv: &TestServer, args: &[&str]) -> common::CmdOutput {
         .env_remove("GROFE")
         .env_remove("GROFE_PANE")
         .env("HOME", &srv.home)
+        .env("XDG_CONFIG_HOME", &srv.config_home)
         .env("XDG_STATE_HOME", &srv.state_home)
         .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
     common::run_bounded(cmd, common::CMD_TIMEOUT)
