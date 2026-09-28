@@ -2,14 +2,16 @@
 
 use crate::cmd::{
     self, CapturePane, Command, KillPane, ResizeAction, ResizePane, Resolve, RespawnPane,
-    SelectPane, SendKeys, SendKeysItem, SplitWindow,
+    SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
-use crate::server::State;
+use crate::server::dispatch::options;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::input::{self, parse_prefix};
 use crate::server::layout::LayoutError;
-use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
-use crate::server::pane::{PaneHandle, PaneSpawn};
+use crate::server::model::Model;
+use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
+use crate::server::{State, clients, graphics};
 use crate::types::{Edge, PaneId, Rect, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -37,6 +39,8 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     let s = &model.sessions[&model.windows[&window].session];
     let env = s.env.clone();
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
+    let session = s.id;
+    let cell_px = clients::cell_px(state, session);
 
     // Check for room on a copy first, so a command is never started for a
     // pane that cannot be placed.
@@ -51,7 +55,15 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         })?;
 
     unzoom(&mut state.model, window);
-    let new = spawn_pane(state, window, env, command_argv(c.command), cwd, size)?;
+    let new = spawn_pane(
+        state,
+        (session, window),
+        env,
+        command_argv(c.command),
+        cwd,
+        size,
+        cell_px,
+    )?;
     let model = &mut state.model;
     let Some(w) = model.windows.get_mut(&window) else {
         model.panes.remove(&new);
@@ -235,7 +247,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         return Err(format!(
             "respawn pane failed: pane {session}:{}.{} still active",
             w.index,
-            index + PANE_BASE_INDEX
+            index + model.pane_base_index(w.id)
         ));
     }
     let argv = match c.command {
@@ -245,15 +257,17 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     let spec = PaneSpawn {
         id: pane,
         argv: argv.clone(),
-        cwd: p.cwd.clone(),
+        cwd: usable_cwd(p.cwd.clone()),
         env: model.sessions[&model.windows[&p.window].session]
             .env
             .clone(),
         cols: p.cols,
         rows: p.rows,
-        history_limit: HISTORY_LIMIT,
+        history_limit: model.history_limit(model.windows[&p.window].session),
         socket: state.socket.clone(),
         term: state.inner_term,
+        cell_px: clients::cell_px(state, model.windows[&p.window].session),
+        graphics_ok: graphics::panes_graphics_ok(state),
     };
     let cwd = spec.cwd.display().to_string();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
@@ -295,6 +309,30 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     handle
         .enqueue_input(bytes)
         .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+    Ok(String::new())
+}
+
+/// `send-prefix`: the target pane's session `prefix` key, typed into the
+/// pane as encoded for its input modes. No prefix (`None`) sends nothing.
+pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<String, String> {
+    let model = &state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let prefix = model
+        .options
+        .lookup("prefix", &options::chain(model, pane))
+        .and_then(|v| parse_prefix(v).ok())
+        .flatten();
+    let Some(key) = prefix else {
+        return Ok(String::new());
+    };
+    let handle = &model.panes[&pane].handle;
+    let bytes = input::encode(&key, &handle.modes());
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+    handle
+        .enqueue_input(bytes)
+        .map_err(|e| format!("send-prefix: {pane}: {e}"))?;
     Ok(String::new())
 }
 

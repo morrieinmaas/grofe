@@ -60,7 +60,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y neovim fzf htop tmux bats
+          sudo apt-get install -y neovim fzf htop tmux bats less
 
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
@@ -73,6 +73,7 @@ jobs:
           htop --version
           tmux -V
           bats --version
+          less --version | head -1
 
       - name: cargo test (integration)
         run: cargo test --test '*'

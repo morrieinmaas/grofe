@@ -1,0 +1,11 @@
+---
+source: tests/render.rs
+expression: "round_trip(&inputs, &PLAIN)"
+---
+|curl dbl dot plain
+|
+cursor: row 0 col 18 shape Block blink false
+r0 c0-3: fg=Foreground bg=Background Flags(UNDERLINE)
+r0 c5-7: fg=Foreground bg=Background Flags(UNDERLINE)
+r0 c9-11: fg=Foreground bg=Background Flags(UNDERLINE)
+r0 c13-17: fg=Foreground bg=Background Flags(UNDERLINE)

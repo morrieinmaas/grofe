@@ -1,0 +1,15 @@
+---
+source: tests/render.rs
+expression: "round_trip(&inputs, &RICH)"
+---
+|hi        ····
+|$         ····
+|          ····
+|··············
+|··············
+cursor: row 1 col 2 shape Block blink false
+r0 c10-13: fg=Foreground bg=Background Flags(DIM)
+r1 c10-13: fg=Foreground bg=Background Flags(DIM)
+r2 c10-13: fg=Foreground bg=Background Flags(DIM)
+r3 c0-13: fg=Foreground bg=Background Flags(DIM)
+r4 c0-13: fg=Foreground bg=Background Flags(DIM)

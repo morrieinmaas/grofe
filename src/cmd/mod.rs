@@ -1,5 +1,5 @@
-//! `Command`, per-command argument shapes, and `ParseError` for the M1
-//! command set (spec §4.5). [`parse::parse`] turns argv into a `Command`;
+//! `Command`, per-command argument shapes, and `ParseError` for the M1,
+//! M2 and M3 command sets (spec §4.5). [`parse::parse`] turns argv into a `Command`;
 //! `target`, `format` and `keys` hold the target grammar, `#{...}`
 //! expansion and the key-name table that a command's flags may reference.
 //!
@@ -14,7 +14,7 @@ pub mod target;
 
 pub use format::{FormatVars, expand};
 pub use keys::{is_key_name, key_bytes};
-pub use parse::parse;
+pub use parse::{parse, parse_sequence, split_command_string};
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
 use crate::types::{CaptureOpts, Dir, Edge, SplitSize};
@@ -243,7 +243,134 @@ pub struct Subscribe {
     pub events: Vec<String>,
 }
 
-/// One parsed command (spec §4.5, M1 set).
+/// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for
+/// self-nesting (spec §4.6); tmux's `-f` (client flags) is reserved for the
+/// tmux front end (M3.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachSession {
+    pub target: Target,
+    /// `-d`: detach other clients attached to the session.
+    pub detach_others: bool,
+    pub nest: bool,
+}
+
+/// `detach-client` (`-s -t -a`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachClient {
+    /// `-s`: detach every client attached to this session.
+    pub session: Option<Target>,
+    /// `-t`: the client, raw (T2.5a defines client names); `None` is the
+    /// requesting client.
+    pub client: Option<String>,
+    /// `-a`: detach every client except the target one.
+    pub all_others: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ListClients {
+    pub format: Option<String>,
+}
+
+/// `next-window`, `previous-window`, `last-window` (`-t` session).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowStep {
+    pub target: Target,
+}
+
+/// `rename-session`/`rename-window` (`-t`, new name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rename {
+    pub target: Target,
+    pub name: String,
+}
+
+/// `switch-client` (`-t -l -n -p -T`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchClient {
+    /// `-t`; `None` when not given.
+    pub target: Option<Target>,
+    /// `-l`: the client's last session.
+    pub last: bool,
+    /// `-n`: the next session.
+    pub next: bool,
+    /// `-p`: the previous session.
+    pub previous: bool,
+    /// `-T`: the key table to switch to.
+    pub key_table: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendPrefix {
+    pub target: Target,
+}
+
+/// `bind-key` (`-n -r -T -N`, then a key and its command).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindKey {
+    /// `-T`, else `root` for `-n`, else `prefix` (tmux's order).
+    pub table: String,
+    /// `-r`.
+    pub repeat: bool,
+    /// `-N`: the binding's description.
+    pub note: Option<String>,
+    /// The key name, raw (parsed by the handler, which words the error).
+    pub key: String,
+    /// Everything after the key. One element is a command string (split
+    /// with [`split_command_string`]); several are one command's argv.
+    pub command: Vec<String>,
+}
+
+/// `unbind-key` (`-n -T -a`, then a key unless `-a`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnbindKey {
+    pub table: String,
+    /// `-a`: every binding in the table.
+    pub all: bool,
+    pub key: Option<String>,
+}
+
+/// `list-keys` (`-T`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ListKeys {
+    pub table: Option<String>,
+}
+
+/// `source-file` (`-q`, a path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFile {
+    pub quiet: bool,
+    pub path: String,
+}
+
+/// `reload` (grofe's own): re-read the config chain (spec §5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Reload;
+
+/// `command-prompt` (`-p -I`, then a template; R24).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommandPrompt {
+    /// `-p`: the prompt text.
+    pub prompt: Option<String>,
+    /// `-I`: the text the prompt starts with.
+    pub initial: Option<String>,
+    /// The command the answer is put into at `%%`.
+    pub template: Option<String>,
+}
+
+/// `run-shell` (a shell command).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunShell {
+    pub cmd: String,
+}
+
+/// `select-layout` (`-t`, a layout name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectLayout {
+    pub target: Target,
+    pub name: String,
+}
+
+/// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     NewSession(NewSession),
@@ -267,4 +394,24 @@ pub enum Command {
     DisplayMessage(DisplayMessage),
     KillServer(KillServer),
     Subscribe(Subscribe),
+    // M2 (T2.5a, T2.5b implement them).
+    AttachSession(AttachSession),
+    DetachClient(DetachClient),
+    ListClients(ListClients),
+    NextWindow(WindowStep),
+    PreviousWindow(WindowStep),
+    LastWindow(WindowStep),
+    RenameSession(Rename),
+    RenameWindow(Rename),
+    SwitchClient(SwitchClient),
+    SendPrefix(SendPrefix),
+    // M3 (T3.0 parses them; T3.4, T3.5 and T3.7 implement them).
+    BindKey(BindKey),
+    UnbindKey(UnbindKey),
+    ListKeys(ListKeys),
+    SourceFile(SourceFile),
+    Reload(Reload),
+    CommandPrompt(CommandPrompt),
+    RunShell(RunShell),
+    SelectLayout(SelectLayout),
 }

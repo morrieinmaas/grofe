@@ -10,15 +10,16 @@ changes is the part you keep fighting: sessions that die with the machine, a
 config language nobody can debug, and a status line that forks a shell on every
 redraw.
 
-> grofe is in early development and not usable day to day yet. If you want to
-> follow along or help, read on.
+> grofe is in early development and not ready for daily use yet. If you want
+> to try it, follow along or help, read on.
 
 ## What's different
 
 **Your work survives a reboot.** In grofe a pane knows what it is running and
 how to bring it back. After a crash or a restart, your panes return in the same
-layout, in the same directories, running the same programs: your editor
-session, your REPL, the coding agent halfway through a conversation. No
+layout and the same directories. Panes that know how to resume come back
+running their program: your editor session, the coding agent halfway through
+a conversation. Every other pane comes back as a shell in its directory. No
 resurrect, no continuum, no list of process names to whitelist. Before you
 reboot, `grofe reboot-check` tells you exactly what will come back.
 
@@ -97,11 +98,96 @@ there points at grofe.
 
 ## Terminals
 
-grofe works in any modern terminal and is built and tested against
-[Ghostty](https://ghostty.org) and [WezTerm](https://wezterm.org), where every
-feature above is available. In WezTerm, set `enable_kitty_keyboard = true` so
-keys reach your programs unmangled. Other terminals get the same grofe with
-older key encoding and without inline images.
+grofe works in any modern terminal and is built and tested against two:
+[Ghostty](https://ghostty.org) and [WezTerm](https://wezterm.org). Every
+feature above is available in both.
+
+- **Ghostty** needs no setup.
+- **WezTerm** speaks the kitty keyboard protocol only when asked. Add this
+  line to your `wezterm.lua`, or keys like `Ctrl-Enter` and a bare `q` reach
+  your programs in the older, lossy encoding:
+
+  ```lua
+  config.enable_kitty_keyboard = true
+  ```
+
+Other terminals get the same grofe with the older key encoding and without
+the features they don't support (inline images above all). Nothing breaks:
+grofe asks the terminal what it supports when you attach.
+
+## Install
+
+grofe runs on macOS and Linux and builds with Rust 1.88 or newer (get Rust
+from [rustup](https://rustup.rs)). There are no releases yet, so build it from
+a checkout of this repository:
+
+<!-- readme-test: begin -->
+```sh
+cargo install --locked --path .
+```
+<!-- readme-test: end -->
+
+That puts `grofe` in `~/.cargo/bin`, which needs to be on your `PATH`.
+
+## First steps
+
+Start a session in the background and check that it is there:
+
+<!-- readme-test: begin -->
+```sh
+grofe new-session -d -s demo
+grofe list-sessions
+```
+<!-- readme-test: end -->
+
+Then attach to it:
+
+```sh
+grofe attach -t demo
+```
+
+Inside, the keys are tmux's. The prefix is `Ctrl-b`; after it, `%` splits
+side by side, `"` splits top and bottom, `c` opens a window, the arrows move
+between panes, `:` opens the command prompt and `d` detaches. The session
+keeps running after you detach, and `grofe attach -t demo` brings it back.
+
+Configuration lives in `~/.config/grofe/` (or `$XDG_CONFIG_HOME/grofe/`).
+`config.toml` loads first, then every `conf.d/*.toml` in name order, then
+`user.toml`, and each one overrides the ones before. Write a small config,
+check what grofe makes of it, and apply it to the running server:
+
+<!-- readme-test: begin -->
+```sh
+mkdir -p ~/.config/grofe
+cat > ~/.config/grofe/config.toml <<'TOML'
+history-limit = 100000
+
+[keys.prefix]
+"|" = "split-window -h -c '#{pane_current_path}'"
+"-" = "split-window -v -c '#{pane_current_path}'"
+"r" = { cmd = "reload", desc = "reload the config" }
+TOML
+grofe show-config --file ~/.config/grofe/config.toml
+grofe reload
+grofe list-keys -T prefix
+```
+<!-- readme-test: end -->
+
+`show-config` needs no server. It prints every setting, and with a setting's
+name and `--explain` it tells you which file set it. `reload` checks every
+file first. If any has an error it changes nothing and lists every error with
+its file and line. `list-keys` shows where each binding came from: `default`,
+a file and line, or `runtime` for one made with `bind-key` since the server
+started. A command string can run several commands in a row, separated by
+`;`, and so can the command line: `grofe split-window -h ';' select-pane -L`.
+
+When you are done, stop the server and every session in it:
+
+<!-- readme-test: begin -->
+```sh
+grofe kill-server
+```
+<!-- readme-test: end -->
 
 ## What it isn't
 
@@ -122,21 +208,13 @@ so if it crashes your panes don't notice.
 
 ## Status
 
-The foundation is in place: the crate, the shared types, and a working
-single-pane prototype that runs a shell and Neovim through the emulator. You
-can try the prototype from a checkout:
-
-```sh
-cargo run --example spike      # quit with Ctrl-]
-```
-
-The next steps are the headless server, then attaching and drawing multiple
-panes, then configuration, at which point grofe becomes usable as a daily
-driver. The [roadmap](docs/plans/2026-09-23-milestones.md) has the details and
-the [design document](docs/specs/2026-09-23-grofe-design.md) explains the
+Sessions, windows and panes, the status line, the mouse, the command prompt,
+clipboard and title passthrough, and the config described above work today.
+Restoring sessions after a reboot, copy mode, the tmux compatibility layer,
+`import-tmux` and plugins are still to come. The
+[roadmap](docs/plans/2026-09-23-milestones.md) has the details and the
+[design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.
-
-grofe runs on macOS and Linux.
 
 ## Contributing
 

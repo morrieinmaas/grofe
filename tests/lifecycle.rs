@@ -183,6 +183,21 @@ fn dropping_the_harness_stops_the_server_even_on_panic() {
         .expect("server still running after the harness dropped");
 }
 
+/// A server that no longer accepts on its socket but still runs (it unlinks
+/// the socket first when it shuts down, so a stalled shutdown looks like
+/// this) is still killed when the harness drops.
+#[test]
+fn dropping_the_harness_stops_a_server_whose_socket_is_gone() {
+    let srv = TestServer::start();
+    let pid = logged_server_pid(&srv);
+    std::fs::remove_file(&srv.socket).expect("remove the socket");
+    assert!(!srv.is_running());
+    assert!(!process_gone(pid));
+
+    drop(srv);
+    wait_until(|| process_gone(pid), WAIT).expect("server outlived its harness");
+}
+
 #[test]
 fn subscribe_reports_the_servers_answer() {
     let srv = TestServer::start();
@@ -201,6 +216,7 @@ fn run_without_s(srv: &TestServer, args: &[&str]) -> common::CmdOutput {
         .env_remove("GROFE")
         .env_remove("GROFE_PANE")
         .env("HOME", &srv.home)
+        .env("XDG_CONFIG_HOME", &srv.config_home)
         .env("XDG_STATE_HOME", &srv.state_home)
         .env("XDG_RUNTIME_DIR", &srv.runtime_dir);
     common::run_bounded(cmd, common::CMD_TIMEOUT)
@@ -295,12 +311,15 @@ fn assert_server_gone(srv: &TestServer, pid: nix::unistd::Pid) {
     assert!(!exists(&srv.socket), "socket left behind");
 }
 
-const MISSING_DIR: &str = "/nonexistent/grofe-c9";
+/// A `new-session` that fails in the server, as in tmux 3.7b ("width
+/// invalid"). A missing `-c` directory no longer fails: it falls back to
+/// `$HOME`.
+const FAILING_NEW_SESSION: &[&str] = &["new-session", "-d", "-x", "not-a-width"];
 
 #[test]
 fn a_failed_first_new_session_leaves_no_server() {
     let srv = TestServer::unstarted();
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(srv.server_starts(), 1, "log:\n{}", srv.log());
     assert_server_gone(&srv, logged_server_pid(&srv));
@@ -319,7 +338,7 @@ fn a_successful_first_new_session_keeps_the_server() {
 #[test]
 fn explicit_start_server_stays_up_after_a_failed_new_session() {
     let srv = TestServer::start();
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert!(srv.is_running(), "log:\n{}", srv.log());
@@ -348,13 +367,13 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let server = cmd.spawn().expect("spawn server");
-    wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+    srv.wait_listening(WAIT).expect("server comes up");
 
     let mut idle = UnixStream::connect(&srv.socket).expect("connect");
     let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(srv.ctx())).unwrap();
     writeln!(idle, "{hello}").unwrap();
 
-    let out = srv.run(&["new-session", "-d", "-c", MISSING_DIR]);
+    let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert!(
@@ -373,7 +392,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
 fn concurrent_auto_starts_survive_one_failing_new_session() {
     let srv = TestServer::unstarted();
     let (bad, good): (common::CmdOutput, Vec<common::CmdOutput>) = std::thread::scope(|s| {
-        let bad = s.spawn(|| srv.run(&["new-session", "-d", "-c", MISSING_DIR]));
+        let bad = s.spawn(|| srv.run(FAILING_NEW_SESSION));
         let good: Vec<_> = (0..6)
             .map(|_| s.spawn(|| srv.run(&["new-session", "-d", "sleep", "30"])))
             .collect();
@@ -414,4 +433,80 @@ fn an_auto_started_server_nobody_connects_to_exits() {
         .unwrap_or_else(|e| panic!("idle server did not exit: {e}\nlog:\n{}", srv.log()));
     assert!(status.success(), "{status:?}");
     assert!(!exists(&srv.socket), "socket left behind");
+}
+
+/// tmux 3.7b's attach starts a server, which then has no sessions: every
+/// spelling and target says so, with or without a terminal.
+#[test]
+fn attach_without_a_server_says_no_sessions() {
+    let srv = TestServer::unstarted();
+    for args in [
+        &["attach"][..],
+        &["attach", "-t", "nope"],
+        &["attach-session", "-t", "nope:1"],
+        &["attach", "-d"],
+    ] {
+        let out = srv.run(args);
+        assert!(!out.status.success(), "{args:?}");
+        assert_eq!(out.stderr, "no sessions\n", "{args:?}");
+    }
+    assert!(!srv.is_running());
+    assert_eq!(srv.server_starts(), 0);
+}
+
+/// tmux 3.7b resolves the target before it opens the terminal: a bad
+/// target is reported even without one.
+#[test]
+fn attach_checks_its_target_before_the_terminal() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "alpha"])
+        .expect("new-session");
+    let out = srv.run(&["attach", "-t", "nope"]);
+    assert!(!out.status.success());
+    assert_eq!(out.stderr, "can't find session: nope\n");
+    let out = srv.run(&["attach", "-t", "alpha"]);
+    assert!(!out.status.success());
+    assert_eq!(out.stderr, "open terminal failed: not a terminal\n");
+    assert_eq!(
+        srv.cmd(&["list-clients"]).expect("list-clients"),
+        "",
+        "a check attaches nothing"
+    );
+}
+
+/// The server's pid, from its log's start line.
+fn server_pid(srv: &TestServer) -> nix::unistd::Pid {
+    let log = srv.log();
+    let pid = log
+        .split("pid ")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no pid in the log:\n{log}"));
+    nix::unistd::Pid::from_raw(pid)
+}
+
+/// tmux 3.7b's server ignores SIGHUP and exits on SIGINT, as on SIGTERM.
+#[test]
+fn sighup_is_ignored_and_sigint_stops_the_server() {
+    use nix::sys::signal::{Signal, kill};
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "a"])
+        .expect("new-session");
+    let pid = server_pid(&srv);
+    kill(pid, Signal::SIGHUP).expect("SIGHUP");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!process_gone(pid), "SIGHUP stopped the server");
+    assert!(
+        srv.cmd(&["list-sessions"])
+            .is_ok_and(|o| o.starts_with("a:"))
+    );
+    kill(pid, Signal::SIGINT).expect("SIGINT");
+    // The server is the harness's unreaped child, so its exit shows in the
+    // log and on the socket rather than as a vanished pid.
+    wait_until(
+        || !srv.is_running() && srv.log().contains("grofe server exiting"),
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("SIGINT did not stop the server: {e}; log:\n{}", srv.log()));
 }

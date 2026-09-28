@@ -14,6 +14,8 @@ use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
+use crate::server::graphics;
+use crate::server::passthrough::Scanner;
 use crate::types::PaneId;
 
 /// Bytes parsed per lock hold (spec §4.8).
@@ -125,13 +127,18 @@ pub(crate) struct Reader {
     pub(crate) id: PaneId,
     pub(crate) generation: u64,
     pub(crate) master: Arc<AsyncFd<OwnedFd>>,
-    pub(crate) child: tokio::process::Child,
+    /// `None` when the program failed to exec: the pane is born dead.
+    pub(crate) child: Option<tokio::process::Child>,
     pub(crate) emu: Arc<Mutex<Emu>>,
     pub(crate) events: EventBuf,
     pub(crate) input: Arc<InputQueue>,
     pub(crate) dirty: Arc<AtomicBool>,
     pub(crate) wake: Arc<Notify>,
     pub(crate) to_actor: mpsc::Sender<PaneEvent>,
+    /// Runs over every read before the emulator (T3.3).
+    pub(crate) scanner: Scanner,
+    /// See `PaneHandle::set_graphics_ok`.
+    pub(crate) graphics_ok: Arc<AtomicBool>,
 }
 
 /// Reader task: parse output, answer the emulator's queries, drive the sync
@@ -139,12 +146,14 @@ pub(crate) struct Reader {
 /// drained (EOF/EIO, or `EXIT_GRACE` of quiet).
 pub(crate) async fn reader(mut r: Reader) {
     let mut buf = vec![0u8; READ_CHUNK];
-    let mut drained = false;
+    // A pane whose program never ran has no output to drain.
+    let mut drained = r.child.is_none();
     let mut exit: Option<Option<i32>> = None;
     let mut quiet_since = Instant::now();
 
     while !(drained && exit.is_some()) {
         let mut tapped = None;
+        let mut found = Vec::new();
         let sync = lock(&r.emu)
             .parser
             .sync_timeout()
@@ -162,7 +171,7 @@ pub(crate) async fn reader(mut r: Reader) {
                 }) {
                     Ok(Ok(0)) => drained = true,
                     Ok(Ok(n)) => {
-                        r.feed(&buf[..n]);
+                        found = r.feed(&buf[..n]);
                         quiet_since = Instant::now();
                         if OUTPUT_TAP.load(Ordering::Relaxed) {
                             tapped = Some(buf[..n].to_vec());
@@ -174,8 +183,8 @@ pub(crate) async fn reader(mut r: Reader) {
                     Err(_would_block) => {}
                 }
             }
-            status = r.child.wait(), if exit.is_none() => {
-                exit = Some(status.ok().and_then(|s| s.code()));
+            status = wait_exit(&mut r.child), if exit.is_none() => {
+                exit = Some(status);
                 quiet_since = quiet_since.max(Instant::now());
             }
             _ = tokio::time::sleep_until(sync.unwrap_or(grace)), if sync.is_some() => {
@@ -192,12 +201,26 @@ pub(crate) async fn reader(mut r: Reader) {
             let event = r.event(PaneEventKind::Output(bytes));
             let _ = r.to_actor.send(event).await;
         }
+        // What the scanner found, with backpressure too: a lost graphics
+        // chunk or cwd would not come again.
+        for kind in found {
+            let _ = r.to_actor.send(r.event(kind)).await;
+        }
     }
     // A child that began a synchronized update and exited before its timeout
     // leaves text in the parser's sync buffer; show it before reporting exit.
     r.flush_sync();
     let event = r.event(PaneEventKind::Exited(exit.flatten()));
     let _ = r.to_actor.send(event).await;
+}
+
+/// The child's exit code; 1 for a program that failed to exec, as tmux
+/// reports it.
+async fn wait_exit(child: &mut Option<tokio::process::Child>) -> Option<i32> {
+    match child {
+        Some(child) => child.wait().await.ok().and_then(|s| s.code()),
+        None => Some(1),
+    }
 }
 
 impl Reader {
@@ -226,13 +249,29 @@ impl Reader {
         }
     }
 
-    fn feed(&mut self, bytes: &[u8]) {
+    /// Parses one read: through the scanner, then the emulator. Returns
+    /// what the scanner found, for the caller to send on. A graphics query
+    /// the scanner framed is answered here, straight back to the pane and
+    /// ahead of the emulator's own replies (its DA1 answer, which a tool
+    /// sends after the query), never through the actor (T3.8).
+    fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
+        let (bytes, mut found) = self.scanner.scan(bytes);
+        for kind in &found {
+            if let PaneEventKind::Graphics(apc) = kind
+                && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
+            {
+                self.reply(answer);
+            }
+        }
+        // A query is answered here only; the actor never sees it.
+        found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
         {
             let mut emu = lock(&self.emu);
             let Emu { term, parser } = &mut *emu;
-            parser.advance(term, bytes);
+            parser.advance(term, &bytes);
         }
         self.after_parse();
+        found
     }
 
     /// Handle buffered listener events, then mark the pane dirty and wake the
@@ -242,6 +281,9 @@ impl Reader {
         let mut bell = false;
         for event in events {
             match event {
+                // DA1 as tmux 3.7b answers it: kitty's tools refuse
+                // alacritty's shorter `ESC[?6c` as an end marker.
+                Event::PtyWrite(text) if text == "\x1b[?6c" => self.reply("\x1b[?1;2;4c"),
                 Event::PtyWrite(text) => self.reply(text),
                 Event::ColorRequest(index, format) => {
                     // ponytail: answers fg/bg/cursor from a fixed palette until
@@ -287,10 +329,10 @@ impl Reader {
         self.wake.notify_one();
     }
 
-    fn reply(&self, text: String) {
+    fn reply(&self, bytes: impl Into<Vec<u8>>) {
         // A reply that does not fit is dropped; the queue is only full when
         // the child has stopped reading, so it would not see it anyway.
-        let _ = self.input.push(text.into_bytes());
+        let _ = self.input.push(bytes.into());
     }
 
     /// Best effort: a full actor queue drops titles and bells rather than

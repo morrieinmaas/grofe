@@ -1,0 +1,6 @@
+# WezTerm replies to grofe's capability probe with its default config, where
+# `enable_kitty_keyboard` is off: the kitty keyboard query gets no answer.
+# SYNTHESIZED from WezTerm's docs and source, not recorded from a live terminal
+# (a real recording is an owner task). `\e` is ESC and `\\` is a backslash.
+# Order as answered: XTVERSION, DECRPM 2026, kitty graphics query, DA1.
+\eP>|WezTerm 20240203-110809-5046fc22\e\\\e[?2026;2$y\e_Gi=31;OK\e\\\e[?65;4;6;18;22c

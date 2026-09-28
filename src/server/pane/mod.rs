@@ -21,16 +21,22 @@ use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{self, TermMode};
-use alacritty_terminal::vte::ansi::{Color, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor};
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
 use nix::pty::{Winsize, openpty};
+use nix::unistd::{AccessFlags, access};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 
 pub use alacritty_terminal::term::cell::Flags as CellFlags;
+pub use alacritty_terminal::term::cell::Hyperlink;
 
+use crate::protocol::Caps;
+use crate::server::passthrough::Scanner;
+use crate::server::render::write_sgr;
+use crate::server::status::Style;
 use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
 use io::{InputQueue, Listener};
 use procinfo::ProcSample;
@@ -63,6 +69,9 @@ pub enum PaneEventKind {
     Cwd(PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
+    /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
+    /// the `ESC ]` and terminator.
+    Osc(Vec<u8>),
 }
 
 /// What to spawn in a new pane.
@@ -83,6 +92,12 @@ pub struct PaneSpawn {
     pub socket: PathBuf,
     /// `TERM` for the pane, resolved once at server start ([`inner_term`]).
     pub term: &'static str,
+    /// One cell's `(width, height)` in pixels, from the client the window
+    /// is sized for (`Caps::cell_px`); `None` gives the pty 0 pixels.
+    pub cell_px: Option<(u16, u16)>,
+    /// Whether the pane's graphics queries are answered from the start
+    /// (`graphics::panes_graphics_ok`).
+    pub graphics_ok: bool,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -99,13 +114,40 @@ pub struct SnapCell {
     pub flags: CellFlags,
     /// Zero-width characters combined with `c`.
     pub zerowidth: Vec<char>,
+    /// The SGR 58 underline colour; `None` underlines in the foreground
+    /// colour.
+    pub underline_color: Option<Color>,
+    /// The OSC 8 hyperlink the cell is part of (R20; T3.3 emits it).
+    pub hyperlink: Option<Hyperlink>,
+}
+
+/// The cursor's shape, as DECSCUSR sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+/// Where the pane's cursor is and how it looks. `row` and `col` are 0-based
+/// in the pane's visible screen (row 0 is the top row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CursorState {
+    pub row: u16,
+    pub col: u16,
+    /// DECTCEM (`\e[?25h` / `\e[?25l`).
+    pub visible: bool,
+    pub shape: CursorShape,
+    pub blink: bool,
 }
 
 /// An owned copy of some visible rows, taken under the pane lock (M2 renderer
-/// input).
+/// input), with the cursor as it was under that same lock.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowsSnapshot {
     pub rows: Vec<Vec<SnapCell>>,
+    pub cursor: CursorState,
 }
 
 /// The emulator: `Term` and its parser, always locked together.
@@ -113,6 +155,11 @@ pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
 }
+
+/// The narrowest a pane's pty and emulator ever get: alacritty_terminal
+/// 0.26 panics writing a wide character into a 1-column terminal. A
+/// 1-column layout cell still renders; its pane is just 2 wide inside.
+const MIN_COLS: u16 = 2;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Size {
@@ -133,20 +180,22 @@ impl Dimensions for Size {
 }
 
 impl Size {
-    fn winsize(self) -> Winsize {
+    /// The pty's size, in pixels too when the cell size is known.
+    fn winsize(self, cell_px: Option<(u16, u16)>) -> Winsize {
+        let (width, height) = cell_px.unwrap_or((0, 0));
         Winsize {
             ws_row: self.rows,
             ws_col: self.cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
+            ws_xpixel: self.cols.saturating_mul(width),
+            ws_ypixel: self.rows.saturating_mul(height),
         }
     }
 }
 
 nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, Winsize);
 
-/// Ceiling on how many fds the fallback close-loop scans (macOS, or a Linux
-/// kernel too old for `close_range`, i.e. before 5.9). `getrlimit`'s current
+/// Ceiling on how many fds the fallback cloexec loop scans (macOS, or a Linux
+/// kernel too old for `CLOSE_RANGE_CLOEXEC`, i.e. before 5.11). `getrlimit`'s current
 /// soft limit is normally in the low thousands; a runaway or `RLIM_INFINITY`
 /// value is capped here rather than scanned one fd at a time.
 // ponytail: 65536 fds is the scan ceiling; a pane's child never legitimately
@@ -171,36 +220,44 @@ fn nofile_limit() -> u32 {
     u32::try_from(cur).unwrap_or(MAX_FD_SCAN).min(MAX_FD_SCAN)
 }
 
-/// Close every fd above 2 in the child (spec §4.8). macOS has no
-/// `accept4`/`SOCK_CLOEXEC`, so tokio (and std, for some other fds) sets
+/// Mark every fd above 2 in the child close-on-exec (spec §4.8). macOS has
+/// no `accept4`/`SOCK_CLOEXEC`, so tokio (and std, for some other fds) sets
 /// `FD_CLOEXEC` on an accepted socket with a separate, non-atomic `fcntl`
 /// after `accept()`. A pane forked while another thread is between those two
 /// calls would otherwise inherit that live client connection, or any other
-/// transient fd, into the child. Async-signal-safe: no allocation, no locks,
-/// and never reads `/dev/fd` or `/proc` (`opendir` allocates).
-fn close_inherited_fds(limit: u32) {
+/// transient fd, into the child.
+///
+/// They are marked, not closed: std reports the `exec` result to the parent
+/// over a close-on-exec pipe, and `spawn` returns when that pipe closes.
+/// Closing it here made `spawn` return while the child was still the forked
+/// server, whose SIGTERM handler would then swallow a signal sent to the
+/// pane's pid, and made a failed `exec` look like success.
+///
+/// Async-signal-safe: no allocation, no locks, and never reads `/dev/fd` or
+/// `/proc` (`opendir` allocates).
+fn cloexec_inherited_fds(limit: u32) {
     #[cfg(target_os = "linux")]
     {
-        // SAFETY: a bare syscall, no allocation. `close_range` closes every
-        // fd in [3, u32::MAX] that is actually open; fds that are not open
-        // are skipped, not an error.
+        // SAFETY: a bare syscall, no allocation. Marks every fd in
+        // [3, u32::MAX] that is actually open; others are skipped.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_close_range,
                 3 as libc::c_uint,
                 u32::MAX as libc::c_uint,
-                0 as libc::c_int,
+                libc::CLOSE_RANGE_CLOEXEC as libc::c_int,
             )
         };
         if ret == 0 {
             return;
         }
-        // Falls through to the loop below on ENOSYS (kernel older than 5.9).
+        // Falls through to the loop below on ENOSYS or EINVAL (kernel older
+        // than 5.11).
     }
     for fd in 3..limit as i32 {
-        // SAFETY: closing a possibly-unopened fd is safe; EBADF is ignored.
+        // SAFETY: fcntl on a possibly-unopened fd is safe; EBADF is ignored.
         unsafe {
-            libc::close(fd);
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         }
     }
 }
@@ -208,6 +265,12 @@ fn close_inherited_fds(limit: u32) {
 /// Serialises spawns from `openpty` to `spawn`: `FD_CLOEXEC` is set by a
 /// separate `fcntl`, so without this a concurrent fork could inherit a master.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+/// Held while spawning any child process (a pane, `run-shell`), so no fork
+/// inherits a pty master between its `openpty` and its `FD_CLOEXEC`.
+pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
+    lock(&SPAWN_LOCK)
+}
 
 /// Generations handed out by [`PaneHandle::spawn`]: unique per spawn in
 /// this process, so also per respawn of the same pane.
@@ -236,7 +299,14 @@ pub struct PaneHandle {
     emu: Arc<Mutex<Emu>>,
     input: Arc<InputQueue>,
     dirty: Arc<AtomicBool>,
+    /// Set from the server when an attached client has kitty graphics;
+    /// the reader answers the pane's graphics queries from it (T3.8).
+    graphics_ok: Arc<AtomicBool>,
+    /// One cell's size in pixels, for the pty's pixel size.
+    cell_px: Mutex<Option<(u16, u16)>>,
     sample: Arc<Mutex<ProcSample>>,
+    /// The cwd the pane itself reported (OSC 7, T3.3).
+    reported_cwd: Mutex<Option<PathBuf>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -261,17 +331,20 @@ impl PaneHandle {
         wake: Arc<Notify>,
     ) -> stdio::Result<Self> {
         let size = Size {
-            cols: spec.cols.max(1),
+            cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
         let (master, child) = spawn_child(&spec, size)?;
-        let pid = child.id();
+        let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
 
         let events = Arc::default();
         let config = term::Config {
             scrolling_history: spec.history_limit,
+            // Off by default in alacritty_terminal: push/pop/query would be
+            // ignored and a pane could never ask for kitty keys (spec §4.7).
+            kitty_keyboard: true,
             ..term::Config::default()
         };
         let emu = Arc::new(Mutex::new(Emu {
@@ -279,6 +352,7 @@ impl PaneHandle {
             parser: Processor::new(),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
+        let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
         let sample = Arc::new(Mutex::new(ProcSample::default()));
         let (input, input_rx) = InputQueue::new();
 
@@ -293,6 +367,8 @@ impl PaneHandle {
             dirty: Arc::clone(&dirty),
             wake,
             to_actor,
+            scanner: Scanner::default(),
+            graphics_ok: Arc::clone(&graphics_ok),
         }));
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
@@ -309,6 +385,9 @@ impl PaneHandle {
             input,
             dirty,
             sample,
+            graphics_ok,
+            cell_px: Mutex::new(spec.cell_px),
+            reported_cwd: Mutex::new(None),
             tasks: vec![reader, writer, sampler],
         })
     }
@@ -320,19 +399,71 @@ impl PaneHandle {
 
     pub fn resize(&self, cols: u16, rows: u16) -> stdio::Result<()> {
         let size = Size {
-            cols: cols.max(1),
+            cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
         lock(&self.emu).term.resize(size);
+        self.set_winsize(size)
+    }
+
+    fn set_winsize(&self, size: Size) -> stdio::Result<()> {
+        let winsize = size.winsize(*lock(&self.cell_px));
         // SAFETY: a valid fd we hold and a pointer to a live Winsize.
-        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &size.winsize()) }?;
+        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &winsize) }?;
         Ok(())
     }
 
-    /// Plain-text lines per tmux's `capture-pane -p`: one line per row,
-    /// trailing blanks trimmed, each ending in `\n`.
+    /// One cell's size in pixels, from the client the window is now sized
+    /// for; the pty's pixel size follows when it changes.
+    pub fn set_cell_px(&self, cell_px: Option<(u16, u16)>) -> stdio::Result<()> {
+        {
+            let mut current = lock(&self.cell_px);
+            if *current == cell_px {
+                return Ok(());
+            }
+            *current = cell_px;
+        }
+        let size = {
+            let emu = lock(&self.emu);
+            Size {
+                cols: emu.term.columns() as u16,
+                rows: emu.term.screen_lines() as u16,
+            }
+        };
+        self.set_winsize(size)
+    }
+
+    /// Whether an attached client shows kitty graphics: the reader answers
+    /// the pane's graphics queries by it (T3.8), without the actor.
+    pub fn set_graphics_ok(&self, ok: bool) {
+        self.graphics_ok.store(ok, Ordering::Relaxed);
+    }
+
+    /// See [`Self::set_graphics_ok`].
+    pub fn graphics_ok(&self) -> bool {
+        self.graphics_ok.load(Ordering::Relaxed)
+    }
+
+    /// Lines per tmux's `capture-pane -p`: one line per row, trailing
+    /// blanks trimmed, each ending in `\n`. With `escapes` (`-e`), an SGR
+    /// sequence from the renderer's `write_sgr` goes wherever the style
+    /// changes, carried across lines as tmux does.
     pub fn capture(&self, opts: &CaptureOpts) -> String {
-        // ponytail: `escapes` (-e) is ignored until the M2 renderer can emit SGR.
+        // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
+        // a style change.
+        let sgr_flags = CellFlags::BOLD
+            | CellFlags::DIM
+            | CellFlags::ITALIC
+            | CellFlags::ALL_UNDERLINES
+            | CellFlags::INVERSE
+            | CellFlags::HIDDEN
+            | CellFlags::STRIKEOUT;
+        let caps = Caps {
+            truecolor: true,
+            styled_underline: true,
+            ..Caps::default()
+        };
+        let mut pen = Style::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size() as i32;
@@ -352,6 +483,20 @@ impl PaneHandle {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
                     continue;
+                }
+                if opts.escapes {
+                    let style = Style {
+                        fg: cell.fg,
+                        bg: cell.bg,
+                        attrs: cell.flags & sgr_flags,
+                        underline_color: cell.underline_color(),
+                    };
+                    if style != pen {
+                        let mut sgr = Vec::new();
+                        write_sgr(&mut sgr, &style, &caps);
+                        text.push_str(&String::from_utf8_lossy(&sgr));
+                        pen = style;
+                    }
                 }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
                     text.push(' ');
@@ -387,9 +532,36 @@ impl PaneHandle {
         lock(&self.sample).argv.clone()
     }
 
-    /// The foreground process's cwd, from the last sample.
+    /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
+    /// else the foreground process's, from the last sample.
     pub fn current_path(&self) -> Option<PathBuf> {
-        lock(&self.sample).path.clone()
+        lock(&self.reported_cwd)
+            .clone()
+            .or_else(|| lock(&self.sample).path.clone())
+    }
+
+    /// The cwd the pane reported (OSC 7): preferred over the sampled one
+    /// from now on.
+    pub fn set_reported_cwd(&self, cwd: PathBuf) {
+        *lock(&self.reported_cwd) = Some(cwd);
+    }
+
+    /// Scrollback lines kept above the visible screen.
+    pub fn history_size(&self) -> usize {
+        lock(&self.emu).term.grid().history_size()
+    }
+
+    /// `rows` rows of the screen as it was scrolled back `offset` lines
+    /// (0 is the live screen; `offset` is capped at [`Self::history_size`]),
+    /// top row first, under one lock.
+    pub fn snapshot_history(&self, offset: usize, rows: u16) -> Vec<Vec<SnapCell>> {
+        let emu = lock(&self.emu);
+        let grid = emu.term.grid();
+        let offset = offset.min(grid.history_size()) as i32;
+        let rows = i32::from(rows).min(grid.screen_lines() as i32);
+        (0..rows)
+            .map(|r| snap_row(&grid[Line(r - offset)], grid.columns()))
+            .collect()
     }
 
     pub fn modes(&self) -> InputModes {
@@ -429,30 +601,62 @@ impl PaneHandle {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
+    /// The cursor's position, visibility and shape.
+    pub fn cursor(&self) -> CursorState {
+        cursor_state(&lock(&self.emu).term)
+    }
+
     /// Copy the visible rows in `rows` (0 is the top row; out-of-range rows
-    /// are skipped).
+    /// are skipped), and the cursor, under one lock.
     pub fn snapshot_rows(&self, rows: Range<u16>) -> RowsSnapshot {
         let emu = lock(&self.emu);
+        let cursor = cursor_state(&emu.term);
         let grid = emu.term.grid();
         let end = rows.end.min(grid.screen_lines() as u16);
         let rows = (rows.start..end)
-            .map(|r| {
-                let row = &grid[Line(r as i32)];
-                (0..grid.columns())
-                    .map(|c| {
-                        let cell = &row[Column(c)];
-                        SnapCell {
-                            c: cell.c,
-                            fg: cell.fg,
-                            bg: cell.bg,
-                            flags: cell.flags,
-                            zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
-                        }
-                    })
-                    .collect()
-            })
+            .map(|r| snap_row(&grid[Line(r as i32)], grid.columns()))
             .collect();
-        RowsSnapshot { rows }
+        RowsSnapshot { rows, cursor }
+    }
+}
+
+fn snap_row(
+    row: &alacritty_terminal::grid::Row<term::cell::Cell>,
+    columns: usize,
+) -> Vec<SnapCell> {
+    (0..columns)
+        .map(|c| {
+            let cell = &row[Column(c)];
+            SnapCell {
+                c: cell.c,
+                fg: cell.fg,
+                bg: cell.bg,
+                flags: cell.flags,
+                zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                underline_color: cell.underline_color(),
+                hyperlink: cell.hyperlink(),
+            }
+        })
+        .collect()
+}
+
+fn cursor_state(term: &Term<Listener>) -> CursorState {
+    let point = term.grid().cursor.point;
+    let style = term.cursor_style();
+    let shape = match style.shape {
+        VteCursorShape::Underline => CursorShape::Underline,
+        VteCursorShape::Beam => CursorShape::Bar,
+        VteCursorShape::Block | VteCursorShape::HollowBlock | VteCursorShape::Hidden => {
+            CursorShape::Block
+        }
+    };
+    CursorState {
+        row: point.line.0.max(0) as u16,
+        col: point.column.0 as u16,
+        visible: term.mode().contains(TermMode::SHOW_CURSOR)
+            && style.shape != VteCursorShape::Hidden,
+        shape,
+        blink: style.blinking,
     }
 }
 
@@ -484,7 +688,8 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
 }
 
 /// The shell for a pane with no argv: `SHELL` from the spawn env, then the
-/// server's, then `/bin/sh`.
+/// server's; `/bin/sh` when neither is set or the one found is not an
+/// executable absolute path (tmux's `checkshell`).
 fn default_shell(spec: &PaneSpawn) -> String {
     spec.env
         .iter()
@@ -492,13 +697,36 @@ fn default_shell(spec: &PaneSpawn) -> String {
         .find(|(k, _)| k == "SHELL")
         .map(|(_, v)| v.clone())
         .or_else(|| std::env::var("SHELL").ok())
-        .filter(|s| !s.is_empty())
+        .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
+/// The directory a pane starts in: `cwd` if it is one, else `$HOME`, else
+/// `/`, as tmux falls back when it cannot `chdir`.
+pub fn usable_cwd(cwd: PathBuf) -> PathBuf {
+    if cwd.is_dir() {
+        return cwd;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Whether a spawn error came from `fork` itself rather than from the
+/// child's setup or `exec`: only those fail the command, as in tmux.
+fn is_fork_error(e: &stdio::Error) -> bool {
+    matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ENOMEM))
+}
+
 /// Open a pty and spawn the child on it (spec §4.8). Returns the master,
-/// non-blocking and close-on-exec.
-fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::process::Child)> {
+/// non-blocking and close-on-exec, and the child, or `None` when the
+/// program could not be started (it failed to exec): like tmux, that
+/// pane is born dead rather than failing the command.
+fn spawn_child(
+    spec: &PaneSpawn,
+    size: Size,
+) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>)> {
     let mut cmd = match &spec.argv {
         Some(argv) => {
             let (prog, args) = argv
@@ -521,8 +749,8 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
     };
     cmd.current_dir(&spec.cwd).envs(child_env(spec));
 
-    let _guard = lock(&SPAWN_LOCK);
-    let pty = openpty(&size.winsize(), None)?;
+    let _guard = spawn_lock();
+    let pty = openpty(&size.winsize(spec.cell_px), None)?;
     fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
     fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
@@ -542,11 +770,15 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(OwnedFd, tokio::p
                     return Err(stdio::Error::last_os_error());
                 }
             }
-            close_inherited_fds(fd_limit);
+            cloexec_inherited_fds(fd_limit);
             Ok(())
         });
     }
-    let child = cmd.spawn()?;
+    let child = match cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) if is_fork_error(&e) => return Err(e),
+        Err(_) => None,
+    };
     drop(pty.slave);
     drop(_guard);
 
@@ -570,6 +802,8 @@ mod tests {
             history_limit: 100,
             socket: PathBuf::from("/tmp/grofe-test.sock"),
             term,
+            cell_px: None,
+            graphics_ok: false,
         }
     }
 
@@ -588,5 +822,185 @@ mod tests {
             .map(|(_, v)| v.to_str().unwrap());
         assert_eq!(term, Some("a-term-that-is-not-the-live-cache"));
         assert_ne!(term, Some(inner_term()));
+    }
+
+    fn spec_for(argv: &[&str]) -> PaneSpawn {
+        PaneSpawn {
+            argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            ..spec_with_term("xterm-256color")
+        }
+    }
+
+    /// std learns whether `exec` worked from a close-on-exec pipe; the
+    /// child must keep it open until `exec`, or a failed `exec` reads as
+    /// success (and `spawn` returns before the child has exec'd at all).
+    /// A program that fails to exec gives a pane born dead with status 1,
+    /// as tmux does, and no pid.
+    #[tokio::test]
+    async fn a_failed_exec_gives_a_dead_pane_with_status_1() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(
+            spec_for(&["/nonexistent/grofe-no-such-program"]),
+            tx,
+            Arc::new(Notify::new()),
+        )
+        .expect("a failed exec is not a spawn error");
+        assert_eq!(handle.pid(), None);
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("Exited in time")
+            .expect("an event");
+        assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
+    }
+
+    fn row_text(row: &[SnapCell]) -> String {
+        row.iter()
+            .map(|c| c.c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// T3.0's pane seams for the scrollback view (T3.2): lines scrolled off
+    /// the top are counted and can be read back at any offset.
+    #[tokio::test]
+    async fn history_can_be_read_back_at_an_offset() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            rows: 10,
+            ..spec_for(&["seq", "1", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(ev) = rx.recv().await {
+                if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(exited.is_ok(), "seq exited");
+        // 30 lines and the empty one after them, 10 rows on screen.
+        assert_eq!(handle.history_size(), 21);
+        let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);
+        assert_eq!(top(0), "22");
+        assert_eq!(top(5), "17");
+        assert_eq!(top(21), "1");
+        assert_eq!(top(1000), "1", "the offset is capped at the history");
+        assert_eq!(handle.snapshot_history(0, 99).len(), 10);
+        let live = handle.snapshot_rows(0..10);
+        assert_eq!(handle.snapshot_history(0, 10), live.rows);
+    }
+
+    fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {
+        let mut ws = Winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: a valid fd we hold and a pointer to a live Winsize.
+        let rc = unsafe {
+            libc::ioctl(
+                handle.master.get_ref().as_raw_fd(),
+                libc::TIOCGWINSZ,
+                &mut ws,
+            )
+        };
+        assert_eq!(rc, 0, "TIOCGWINSZ");
+        (ws.ws_col, ws.ws_row, ws.ws_xpixel, ws.ws_ypixel)
+    }
+
+    /// The pty's pixel size is its cells times the client's cell size,
+    /// from the spawn on, through resizes and cell size changes; unknown
+    /// is 0.
+    #[tokio::test]
+    async fn the_pty_pixel_size_follows_the_cell_size() {
+        let (tx, _rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            cell_px: Some((10, 20)),
+            ..spec_for(&["sleep", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        assert_eq!(winsize_of(&handle), (80, 24, 800, 480));
+        handle.resize(40, 10).expect("resize");
+        assert_eq!(winsize_of(&handle), (40, 10, 400, 200));
+        handle.set_cell_px(Some((8, 16))).expect("cell size");
+        assert_eq!(winsize_of(&handle), (40, 10, 320, 160));
+        handle.set_cell_px(None).expect("unknown");
+        assert_eq!(winsize_of(&handle), (40, 10, 0, 0));
+        let (tx, _rx) = mpsc::channel(8);
+        let plain = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
+    }
+
+    /// A cwd the pane reported (OSC 7, T3.3) wins over the sampled one.
+    #[tokio::test]
+    async fn a_reported_cwd_is_preferred() {
+        let (tx, _rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        let there = PathBuf::from("/nonexistent/grofe-reported");
+        assert_ne!(handle.current_path(), Some(there.clone()));
+        handle.set_reported_cwd(there.clone());
+        assert_eq!(handle.current_path(), Some(there));
+    }
+
+    #[test]
+    fn a_stale_shell_falls_back_to_bin_sh() {
+        let spec = |shell: &str| PaneSpawn {
+            env: vec![("SHELL".to_string(), shell.to_string())],
+            ..spec_with_term("xterm-256color")
+        };
+        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), "/bin/sh");
+        assert_eq!(default_shell(&spec("sh")), "/bin/sh");
+        assert_eq!(default_shell(&spec("/etc/hosts")), "/bin/sh");
+        assert_eq!(default_shell(&spec("/bin/sh")), "/bin/sh");
+        let sh = std::fs::canonicalize("/bin/sh")
+            .unwrap()
+            .display()
+            .to_string();
+        assert_eq!(default_shell(&spec(&sh)), sh);
+    }
+
+    #[test]
+    fn a_missing_cwd_falls_back_to_home() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        assert_eq!(usable_cwd(PathBuf::from("/nonexistent/grofe-dir")), home);
+        assert_eq!(usable_cwd(PathBuf::from("/")), PathBuf::from("/"));
+    }
+
+    /// The server catches SIGTERM. A pid handed out while the child was
+    /// still the forked server (before `exec`) would have a SIGTERM sent to
+    /// it run the server's handler and vanish, leaving the child running.
+    /// So once `spawn` returns, a caught signal must always reach the
+    /// child. SIGUSR1 stands in for SIGTERM, so this test binary keeps
+    /// SIGTERM's default action (a CI timeout must still end it).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_caught_signal_right_after_spawn_ends_the_child() {
+        let _catch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+            .expect("install SIGUSR1 handler");
+        for i in 0..50 {
+            let (tx, mut rx) = mpsc::channel(8);
+            let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+                .expect("spawn");
+            let pid = handle.pid().expect("pid") as i32;
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGUSR1,
+            )
+            .expect("kill");
+            let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(ev) = rx.recv().await {
+                    if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await;
+            assert_eq!(exited, Ok(true), "iteration {i}: SIGUSR1 to {pid} was lost");
+        }
     }
 }

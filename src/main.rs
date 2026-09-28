@@ -6,17 +6,19 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use grofe::client;
 use grofe::paths::{self, Env};
-use grofe::protocol::{ClientCtx, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{ATTACH_CHECK, ClientCtx, Hello, Reply, Request, encode_hello};
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -35,6 +37,7 @@ const CONNECT_RETRY: Duration = Duration::from_millis(5);
 const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
 
 fn main() -> ExitCode {
+    install_panic_report();
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
@@ -54,6 +57,11 @@ fn main() -> ExitCode {
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
     match verb.as_str() {
+        "__server" => {}
+        "attach-session" | "attach" => report_panics_for(&globals.socket(), "client"),
+        _ => report_panics_for(&globals.socket(), "cli"),
+    }
+    match verb.as_str() {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
@@ -62,11 +70,124 @@ fn main() -> ExitCode {
                 Err(e) => fail(&e),
             }
         }
+        "attach-session" | "attach" => attach(&globals.socket(), rest),
+        // File layers only: never starts or contacts a server (R8).
+        "show-config" => grofe::config::show_config(&rest[1..]),
+        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
         }
     }
+}
+
+/// The instance a panic report is written for, and the process's role
+/// (`server`, the attach `client`, or a one-shot `cli` call), once the socket is known.
+static PANIC_TARGET: OnceLock<(PathBuf, &'static str)> = OnceLock::new();
+
+fn report_panics_for(socket: &Path, role: &'static str) {
+    let _ = PANIC_TARGET.set((socket.to_path_buf(), role));
+}
+
+/// Installed first thing: a panic writes a report beside the instance's
+/// server log (R22), then runs the previous hook. The attach client installs
+/// its own hook later (T2.1), which restores the tty and then calls this one.
+fn install_panic_report() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some((socket, role)) = PANIC_TARGET.get() {
+            match write_panic_report(socket, role, info) {
+                Ok(path) => eprintln!("grofe: panic report written to {}", path.display()),
+                Err(e) => eprintln!("grofe: cannot write a panic report: {e}"),
+            }
+        }
+        previous(info);
+    }));
+}
+
+/// `<state dir>/grofe/<instance>.panic.<unix-ms>.log`, derived from the
+/// server log's path so a test's `-S` socket keeps it in the test's state
+/// dir.
+fn panic_report_path(log: &Path, unix_ms: u128) -> PathBuf {
+    let instance = log
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "grofe".to_string());
+    log.with_file_name(format!("{instance}.panic.{unix_ms}.log"))
+}
+
+fn write_panic_report(
+    socket: &Path,
+    role: &str,
+    info: &std::panic::PanicHookInfo<'_>,
+) -> io::Result<PathBuf> {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let log = paths::log_path(&Env::from_process(), socket);
+    if let Some(dir) = log.parent() {
+        paths::ensure_private_dir(dir)?;
+    }
+    let payload = info.payload();
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("(non-string panic payload)");
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let thread = std::thread::current();
+    let report = format!(
+        "grofe panic report\n\
+         version: {}\n\
+         os: {} {}\n\
+         role: {role}\n\
+         pid: {}\n\
+         socket: {}\n\
+         thread: {}\n\
+         location: {location}\n\
+         message: {message}\n\
+         backtrace:\n{}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::process::id(),
+        socket.display(),
+        thread.name().unwrap_or("<unnamed>"),
+        std::backtrace::Backtrace::force_capture(),
+    );
+    let (mut file, path) = create_report(&log, unix_ms)?;
+    file.write_all(report.as_bytes())?;
+    Ok(path)
+}
+
+/// How many later milliseconds [`create_report`] tries when the name is
+/// taken.
+const REPORT_NAME_TRIES: u128 = 1000;
+
+/// Creates a new report file, never reusing one: when two panics (two
+/// threads, or a server and a client of the same instance) land in the
+/// same millisecond, the later one takes the next free millisecond, so the
+/// name keeps R22's `<instance>.panic.<unix-ms>.log` shape.
+fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
+    let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
+    for ms in unix_ms..unix_ms + REPORT_NAME_TRIES {
+        let path = panic_report_path(log, ms);
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(file) => return Ok((file, path)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
 }
 
 /// `-L` / `-S`, which come before the command, as in tmux.
@@ -159,6 +280,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
         }
     }
     let socket = socket.unwrap_or_else(|| globals.socket());
+    report_panics_for(&socket, "server");
     match server::run_daemon(&socket, ready_fd, exit_when_empty) {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
@@ -170,8 +292,77 @@ fn fail(msg: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Whether `argv` is a `new-session` that attaches (no `-d`). One that does
+/// not parse goes to the server as usual, which reports the error.
+fn attaches(argv: &[String]) -> bool {
+    matches!(
+        grofe::cmd::parse(argv),
+        Ok(grofe::cmd::Command::NewSession(c)) if !c.detached
+    )
+}
+
+/// `new-session` without `-d`, as tmux 3.7b: without a terminal it fails
+/// before creating anything; otherwise the session is created detached,
+/// its id read back in the same request, and the client attaches to it
+/// through [`attach`] (which refuses self-nesting and restores the tty).
+///
+/// The request carries no pane, even from inside one of this server's
+/// panes, so the trailing `display-message` names the session just made
+/// (the one with the latest activity) rather than the pane's; the new
+/// session's cwd is then the CLI's own, as in tmux.
+fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
+    if !io::stdin().is_terminal() {
+        return fail("open terminal failed: not a terminal");
+    }
+    let (socket, own_dir) = globals.resolve();
+    let mut create = vec![argv[0].clone(), "-d".to_string()];
+    create.extend(argv[1..].iter().cloned());
+    create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
+    let hello = match hello_for(&socket, false) {
+        Ok(h) => h,
+        Err(e) => return fail(&e),
+    };
+    let id = match connect_or_start(&socket, own_dir, true)
+        .and_then(|stream| request_with(stream, &hello, &create))
+    {
+        Ok(Reply::Ok { out, .. }) => out.trim().to_string(),
+        Ok(Reply::Err { err, .. }) => return fail(&err),
+        Ok(Reply::Event(_)) => return fail("unexpected event reply"),
+        Err(e) => return fail(&e),
+    };
+    let argv = ["attach-session".to_string(), "-t".to_string(), id];
+    match attach_to(&socket, &argv) {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
+        // The session was made and is already gone (its command exited at
+        // once, and an auto-started server with it): tmux 3.7b says
+        // `[exited]` and exits 0.
+        Err(e) if session_gone(&e) => {
+            println!("[exited]");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// Whether an attach error means the session (or its server) went away
+/// between being created and being attached to.
+fn session_gone(err: &str) -> bool {
+    err == "no sessions"
+        || err.starts_with("no server running")
+        || err.starts_with("can't find session")
+        || err.contains("Broken pipe")
+        || err.contains("Connection reset")
+        || err.starts_with("server closed the connection")
+}
+
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
+    if let Err(e) = control_hello(socket) {
+        return fail(&e);
+    }
     let stream = if AUTO_START.contains(&argv[0].as_str()) {
         // Implicit start: that server exits if it ends up with no sessions.
         connect_or_start(socket, own_dir, true)
@@ -193,6 +384,68 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
     }
+}
+
+/// `attach-session`: the attach client (spec §4.6), in this process. It
+/// never starts a server (tmux's does, only to find no sessions, which is
+/// what grofe then says). Self-nesting is the server's call
+/// (it knows which session holds `$GROFE_PANE`); the client only sends
+/// the pane and `--nest`.
+fn attach(socket: &Path, argv: &[String]) -> ExitCode {
+    match attach_to(socket, argv) {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// [`attach`]'s work: the reason the client was let go, or the error.
+fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
+    let parsed = match grofe::cmd::parse(argv) {
+        Ok(grofe::cmd::Command::AttachSession(a)) => a,
+        Ok(_) => return Err("attach-session: unexpected command".to_string()),
+        Err(e) => return Err(e.to_string()),
+    };
+    control_hello(socket)?;
+    // tmux's attach starts a server, which finds no sessions; grofe's does
+    // not start one and says what tmux would.
+    let connect_attach = || match connect(socket) {
+        Err(e) if e.starts_with("no server running") => Err("no sessions".to_string()),
+        other => other,
+    };
+    // The target first (protocol::ATTACH_CHECK): a refusal never probes
+    // the terminal.
+    let check: Vec<String> = std::iter::once(ATTACH_CHECK.to_string())
+        .chain(argv[1..].iter().cloned())
+        .collect();
+    match connect_attach().and_then(|s| request(s, socket, &check)) {
+        Ok(Reply::Ok { .. }) => {}
+        Ok(Reply::Err { err, .. }) => return Err(err),
+        Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
+        Err(e) => return Err(e),
+    }
+    let stream = connect_attach()?;
+    let ctx = ClientCtx {
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        pane: client_pane(
+            std::env::var_os("GROFE").as_deref(),
+            std::env::var("GROFE_PANE").ok().as_deref(),
+            socket,
+        ),
+        env: std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect(),
+        client: None,
+    };
+    let opts = client::AttachOptions {
+        target: client::raw_target(&argv[1..]),
+        detach_others: parsed.detach_others,
+        nest: parsed.nest,
+    };
+    let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
+    client::attach(stream, ctx, opts, term)
 }
 
 /// Connects to a running server, or explains that there is none.
@@ -369,18 +622,11 @@ fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -
 /// `target` is the socket this request is being sent to, used to decide
 /// whether `$GROFE_PANE` applies (see [`client_pane`]).
 fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
-    let ctx = ClientCtx {
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        pane: client_pane(
-            std::env::var_os("GROFE").as_deref(),
-            std::env::var("GROFE_PANE").ok().as_deref(),
-            target,
-        ),
-        env: std::env::vars_os()
-            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
-            .collect(),
-    };
-    let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
+    request_with(stream, &control_hello(target)?, argv)
+}
+
+/// Sends `hello` and one request, and reads until its reply.
+fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Reply, String> {
     let req = serde_json::to_string(&Request {
         id: 1,
         argv: argv.to_vec(),
@@ -390,8 +636,37 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
     writer
         .write_all(format!("{hello}\n{req}\n").as_bytes())
         .map_err(|e| format!("sending request: {e}"))?;
+    read_reply(&stream)
+}
 
-    let mut reader = BufReader::new(&stream);
+/// The control hello line for a request to `target`, or why it cannot be
+/// sent (an environment too large for it), so that is known before
+/// connecting.
+fn control_hello(target: &Path) -> Result<String, String> {
+    hello_for(target, true)
+}
+
+/// [`control_hello`], sending this CLI's pane only when `with_pane`.
+fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
+    let pane = client_pane(
+        std::env::var_os("GROFE").as_deref(),
+        std::env::var("GROFE_PANE").ok().as_deref(),
+        target,
+    );
+    let ctx = ClientCtx {
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        pane: pane.filter(|_| with_pane),
+        env: std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect(),
+        client: None,
+    };
+    encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
+}
+
+/// Reads until the reply to the one request sent on `stream`.
+fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
     loop {
         line.clear();
@@ -411,6 +686,16 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_taken_report_name_moves_to_the_next_millisecond() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("t.log");
+        let (_, first) = create_report(&log, 42).unwrap();
+        let (_, second) = create_report(&log, 42).unwrap();
+        assert_eq!(first, tmp.path().join("t.panic.42.log"));
+        assert_eq!(second, tmp.path().join("t.panic.43.log"));
+    }
 
     #[test]
     fn client_pane_matches_the_same_socket() {

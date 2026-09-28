@@ -204,3 +204,55 @@ switching is not met. `src/term.rs::resolve_term()` keeps `screen-256color`
 as the default (falling back to `xterm-256color` if even that entry is
 missing on the host), with `COLORTERM=truecolor` unconditionally. Revisit
 once the M2 renderer (T2.2) emits underline styles and M3 passthrough (T3.3) forwards title, OSC 52, cursor colour and focus; T3.6 re-runs this table against the real render path.
+
+## T3.6 re-run
+
+D7 asked for T0.4's table to be re-run against grofe's real render path once
+the M2 renderer (T2.2) and M3 passthrough (T3.3) had landed. Each extra
+capability is sent by a pane exactly as `tmux-256color`'s entry spells it
+(`infocmp -1x -d screen-256color tmux-256color`, ncurses 6.6), goes through
+the pane's emulator, the server's compositor and diff, and a real `grofe
+attach` client, and is checked in the outer screen rebuilt from the
+client's output (a second `alacritty_terminal`) or in the raw outer stream.
+The client claims true colour and styled underlines, as Ghostty and WezTerm
+do. Tests: `tests/acceptance/t3_6.rs`, the `term_rerun_*` functions.
+
+| Capability | Escape | Check | macOS | Linux (Debian bookworm container) |
+|---|---|---|---|---|
+| `sitm` | `\E[3m` | outer cell has `ITALIC` | pass | pass |
+| `smxx` | `\E[9m` | outer cell has `STRIKEOUT` | pass | pass |
+| `invis` | `\E[8m` | outer cell has `HIDDEN` | pass | pass |
+| `Smulx` 2 to 5 | `\E[4:2m` .. `\E[4:5m` | outer cells have `DOUBLE_UNDERLINE`, `UNDERCURL`, `DOTTED_UNDERLINE`, `DASHED_UNDERLINE` | pass | pass |
+| `tsl`/`fsl`, `dsl` | `\E]0;` .. `^G`, `\E]0;\007` | title relayed as `\E]2;t36-title\007`, cleared as `\E]2;\007` | pass | pass |
+| `Ms` | `\E]52;%p1%s;%p2%s\007` | store reaches the outer stream (`set-clipboard on`) | pass | pass |
+| `Cs`/`Cr` | `\E]12;%p1%s\007`, `\E]112\007` | set and reset reach the outer stream | pass | pass |
+| `fe`/`fd`, `kxIN` | `\E[?1004h`/`l`, `\E[I` | the pane gets the outer focus report while on, none once off | pass | pass |
+| `Ss`/`Se` | `\E[%p1%d q`, `\E[2 q` | outer cursor becomes a blinking bar, then a steady block | pass | pass |
+| `kLFT`, `kf13`, `kDC5` (the modified-key set) | `\E[1;2D`, `\E[1;2P`, `\E[3;5~` | the pane receives the bytes the entry names | pass | pass |
+| `RV` | `\E[>c` | the pane gets a DA2 reply | pass | pass |
+
+Not re-run, as in T0.4: `hs`/`XF` (they describe the entry, not an escape a
+pane sends), `E3` (erasing scrollback is the pane emulator's own business,
+not the outer terminal's) and `XR` (`\E[>0q`, XTVERSION): the pane gets no
+reply (spec §8), so an app waiting for one without a DA1 fence times out;
+logged in docs/dogfood.md.
+
+**macOS's own entry is older.** The table was read from ncurses 6.6's
+`tmux-256color`. macOS ships ncurses 6.0 (`/usr/bin/infocmp -V`:
+6.0.20150808), and its system `tmux-256color` lacks `smxx`, `Smulx`, `Ms`
+and `fe`/`fd`; it has `sitm`, `Cs`, `Ss` and `tsl`. grofe resolves `TERM`
+against the system terminfo dirs only (`src/term.rs::search_dirs`, no
+Homebrew keg), so the entry a pane gets is the one the system's tools read.
+An app that trusts that entry does not emit strikethrough, styled
+underlines, OSC 52 or focus reporting on macOS, which is no loss against
+`screen-256color` (which has none of them either). Neovim does not depend
+on the entry for these: it adds the underline-style and focus sequences
+itself for a `tmux` terminal and sends OSC 52 from its own clipboard
+provider, which is how the owner's Neovim gets them.
+
+**Decision.** Every capability on D7's list passes on both OSes, so the
+default flips: `src/term.rs::resolve_term()` now picks `tmux-256color`,
+falls back to `screen-256color` on a host without that entry, and to
+`xterm-256color` without either. The whole acceptance suite (Neovim, fzf,
+less, htop, `git log`, nested tmux and nested grofe among it) passes with
+panes on `tmux-256color`. No gap blocks alias day on this item.

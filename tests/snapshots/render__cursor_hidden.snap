@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: "round_trip(&hidden, &RICH)"
+---
+|ab
+|
+|
+cursor: hidden

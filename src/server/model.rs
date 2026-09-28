@@ -16,16 +16,19 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
-use crate::types::{PaneId, Rect, SessionId, WindowId};
+use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
-// ponytail: `base-index`, `pane-base-index` and `history-limit` are fixed at
-// their spec defaults until the options store (T1.5c) and config (M3) exist.
+/// The built-in defaults of `base-index`, `pane-base-index` and
+/// `history-limit` (spec §5.3). The live values are the options, read
+/// through [`Model::base_index`], [`Model::pane_base_index`] and
+/// [`Model::history_limit`].
 pub const BASE_INDEX: u32 = 1;
 pub const PANE_BASE_INDEX: u32 = 1;
 pub const HISTORY_LIMIT: usize = 50_000;
@@ -49,6 +52,16 @@ pub struct Session {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
+    /// The windows that were active before `active`, most recent last
+    /// (tmux's `lastw` stack, for `last-window`), kept by
+    /// [`Model::select_window`] and [`Model::remove_window`].
+    pub last_windows: Vec<WindowId>,
+    /// When the session was created, attached, switched to or typed in:
+    /// tmux's `activity_time`, which picks the session a command with no
+    /// pane and no target runs against.
+    pub activity: Instant,
+    /// How many clients show the session (`session_attached`).
+    pub attached: usize,
 }
 
 pub struct Window {
@@ -61,6 +74,9 @@ pub struct Window {
     pub zoomed: bool,
     pub cols: u16,
     pub rows: u16,
+    /// tmux's `window_bell_flag` (R13): set by a bell (T3.3), cleared when
+    /// the window becomes its session's current window.
+    pub bell_flag: bool,
 }
 
 impl Window {
@@ -75,7 +91,7 @@ impl Window {
     }
 
     /// Pane ids in layout order: position `i` is pane index
-    /// `i + PANE_BASE_INDEX`.
+    /// `i + pane-base-index`.
     pub fn pane_ids(&self) -> Vec<PaneId> {
         self.layout
             .compute(self.area())
@@ -112,6 +128,10 @@ pub struct Model {
     /// Every option value, scoped (spec §4.2). The global
     /// `remain-on-exit` is seeded from the server's start options.
     pub options: Options,
+    /// Each attached client's previous session (MRU, for `switch-client
+    /// -l`). Switching a client records it; removing a session drops
+    /// entries naming it.
+    pub client_last_session: BTreeMap<ClientId, SessionId>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -162,6 +182,26 @@ impl Model {
         self.windows.insert(window.id, window);
     }
 
+    /// Makes `window` its session's active window; the one it replaces
+    /// goes on top of the session's last-window stack, as in tmux. A window
+    /// that becomes current loses its bell flag (tmux's
+    /// `winlink_clear_flags`); reselecting the current one changes nothing.
+    pub fn select_window(&mut self, window: WindowId) {
+        let Some(session) = self.windows.get(&window).map(|w| w.session) else {
+            return;
+        };
+        if let Some(s) = self.sessions.get_mut(&session)
+            && s.active != window
+        {
+            s.last_windows.retain(|w| *w != window);
+            s.last_windows.push(s.active);
+            s.active = window;
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.bell_flag = false;
+            }
+        }
+    }
+
     /// True once every session is gone, after at least one existed: the
     /// server should exit.
     pub fn closed(&self) -> bool {
@@ -183,7 +223,7 @@ impl Model {
             .map(|s| s.id)
     }
 
-    /// The lowest free window index at or above `BASE_INDEX` in `session`.
+    /// The lowest free window index at or above `base-index` in `session`.
     pub fn free_window_index(&self, session: SessionId) -> u32 {
         let used: Vec<u32> = self
             .sessions
@@ -195,9 +235,40 @@ impl Model {
                     .collect()
             })
             .unwrap_or_default();
-        (BASE_INDEX..)
-            .find(|i| !used.contains(i))
-            .unwrap_or(BASE_INDEX)
+        let base = self.base_index(session);
+        (base..).find(|i| !used.contains(i)).unwrap_or(base)
+    }
+
+    /// A number option's value along `chain` (then global), else `default`.
+    fn number_option(&self, name: &str, chain: &[options::Owner], default: u32) -> u32 {
+        self.options
+            .lookup(name, chain)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// `base-index` for `session`: where new windows start numbering.
+    pub fn base_index(&self, session: SessionId) -> u32 {
+        self.number_option(
+            "base-index",
+            &[options::Owner::Session(session)],
+            BASE_INDEX,
+        )
+    }
+
+    /// `pane-base-index` for `window`: the index of its first pane.
+    pub fn pane_base_index(&self, window: WindowId) -> u32 {
+        let mut chain = vec![options::Owner::Window(window)];
+        if let Some(w) = self.windows.get(&window) {
+            chain.push(options::Owner::Session(w.session));
+        }
+        self.number_option("pane-base-index", &chain, PANE_BASE_INDEX)
+    }
+
+    /// `history-limit` for `session`: the scrollback a new pane gets.
+    pub fn history_limit(&self, session: SessionId) -> usize {
+        let chain = [options::Owner::Session(session)];
+        self.number_option("history-limit", &chain, HISTORY_LIMIT as u32) as usize
     }
 
     pub fn window_at_index(&self, session: SessionId, index: u32) -> Option<WindowId> {
@@ -265,11 +336,18 @@ impl Model {
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
             self.sessions.remove(&w.session);
+            self.client_last_session
+                .retain(|_, last| *last != w.session);
             return removed;
         }
+        session.last_windows.retain(|w| *w != window);
         if session.active == window {
-            let pos = pos.unwrap_or(0).min(session.windows.len() - 1);
-            session.active = session.windows[pos];
+            // As tmux: the last window takes over, else the one at the
+            // same position.
+            session.active = match session.last_windows.pop() {
+                Some(l) => l,
+                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+            };
         }
         removed
     }
@@ -280,6 +358,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);
         }
@@ -315,7 +394,9 @@ impl Model {
     }
 
     /// Gives every pane in `window` its layout size, resizing the ptys whose
-    /// size changed.
+    /// size changed. A window too small for its panes squeezes some to
+    /// nothing in the layout; the pane itself keeps at least one cell each
+    /// way (tmux's `PANE_MINIMUM`).
     pub fn relayout(&mut self, window: WindowId) {
         let Some(w) = self.windows.get(&window) else {
             return;
@@ -324,10 +405,11 @@ impl Model {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
-            if (p.cols, p.rows) != (rect.cols, rect.rows) {
-                p.cols = rect.cols;
-                p.rows = rect.rows;
-                if let Err(e) = p.handle.resize(rect.cols, rect.rows) {
+            let (cols, rows) = (rect.cols.max(1), rect.rows.max(1));
+            if (p.cols, p.rows) != (cols, rows) {
+                p.cols = cols;
+                p.rows = rows;
+                if let Err(e) = p.handle.resize(cols, rows) {
                     eprintln!("grofe server: resizing {id}: {e}");
                 }
             }
@@ -335,18 +417,23 @@ impl Model {
     }
 
     /// The session a request with no target acts on: the one holding the
-    /// request's pane, else the newest session.
+    /// request's pane, else the most recently active session (tmux's
+    /// `cmd_find_best_session`; the first in name order on a tie).
     fn current_session(&self, ctx: &ClientCtx) -> Result<SessionId, String> {
         if ctx.pane.is_some() {
             let pane = self.current_pane(ctx)?;
             return Ok(self.session_of_pane(pane));
         }
-        // ponytail: tmux picks the most recently used session; with no
-        // clients before M2, the newest one stands in.
-        self.sessions
-            .keys()
-            .next_back()
-            .copied()
+        let mut best: Option<&Session> = None;
+        for s in self.sessions.values() {
+            let better = best.is_none_or(|b| {
+                s.activity > b.activity || (s.activity == b.activity && s.name < b.name)
+            });
+            if better {
+                best = Some(s);
+            }
+        }
+        best.map(|s| s.id)
             .ok_or_else(|| "no current session".to_string())
     }
 
@@ -475,7 +562,7 @@ impl Model {
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
-                    .checked_sub(PANE_BASE_INDEX)
+                    .checked_sub(self.pane_base_index(w))
                     .and_then(|i| self.windows[&w].pane_ids().get(i as usize).copied())
                     .ok_or_else(|| format!("can't find pane: {index}"))
             }
@@ -554,6 +641,8 @@ mod tests {
             history_limit: 1000,
             socket: std::env::temp_dir().join("grofe-model-test.sock"),
             term: crate::server::pane::inner_term(),
+            cell_px: None,
+            graphics_ok: false,
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
@@ -585,6 +674,9 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
+            last_windows: Vec::new(),
+            activity: Instant::now(),
+            attached: 0,
         });
         id
     }
@@ -594,6 +686,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             pane: None,
             env: Vec::new(),
+            client: None,
         }
     }
 
@@ -617,6 +710,7 @@ mod tests {
             zoomed: false,
             cols: 80,
             rows: 24,
+            bell_flag: false,
         });
         model.insert_window(Window {
             id: w2,
@@ -628,6 +722,7 @@ mod tests {
             zoomed: false,
             cols: 80,
             rows: 24,
+            bell_flag: false,
         });
 
         // A second session, owning nothing of "a"'s.
@@ -655,5 +750,38 @@ mod tests {
         });
         let err = model.resolve_pane(&target, &ctx).unwrap_err();
         assert!(err.contains(&format!("can't find pane: {p2}")), "{err}");
+    }
+
+    /// R13, as tmux 3.7b does it (recorded on a private socket): selecting
+    /// a window clears its bell flag, reselecting the current window does
+    /// not, and neither does anything to another window's flag.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn becoming_current_clears_the_bell_flag() {
+        let mut model = Model::new(true);
+        let (w1, w2) = (model.alloc_window_id(), model.alloc_window_id());
+        let (p1, p2) = (spawn_pane(&mut model, w1), spawn_pane(&mut model, w2));
+        let s = add_session(&mut model, "a", w1);
+        for (id, index, pane) in [(w1, 1, p1), (w2, 2, p2)] {
+            model.insert_window(Window {
+                id,
+                session: s,
+                index,
+                name: index.to_string(),
+                layout: LayoutTree::new(pane),
+                active: pane,
+                zoomed: false,
+                cols: 80,
+                rows: 24,
+                bell_flag: true,
+            });
+        }
+        let flag = |m: &Model, w| m.windows[&w].bell_flag;
+        model.select_window(w1);
+        assert!(flag(&model, w1), "reselecting the current window keeps it");
+        model.select_window(w2);
+        assert!(!flag(&model, w2));
+        assert!(flag(&model, w1), "the window left keeps its flag");
+        model.select_window(w1);
+        assert!(!flag(&model, w1));
     }
 }

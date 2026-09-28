@@ -1,0 +1,21 @@
+---
+source: tests/render.rs
+expression: "round_trip(&top, &RICH)"
+---
+|one            │two
+|               │
+|               │
+|               │
+|               │
+|               ├──────────────
+|               │three
+|               │
+|               │
+|               │
+cursor: row 0 col 19 shape Block blink false
+r0 c15-15: fg=Green bg=Background
+r1 c15-15: fg=Green bg=Background
+r2 c15-15: fg=Green bg=Background
+r3 c15-15: fg=Green bg=Background
+r4 c15-15: fg=Green bg=Background
+r5 c15-29: fg=Green bg=Background

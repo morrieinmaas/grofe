@@ -315,8 +315,8 @@ fn option_changed_on_set_and_not_on_a_same_value_set() {
             value: Some("v".to_string()),
         }
     );
-    // A built-in, normalised before the comparison: `yes` on an `on` value.
-    srv.cmd(&["set", "-g", "remain-on-exit", "yes"]).unwrap();
+    // A built-in set to the value it already has changes nothing.
+    srv.cmd(&["set", "-g", "remain-on-exit", "on"]).unwrap();
     srv.cmd(&["set", "-g", "remain-on-exit", "off"]).unwrap();
     assert_eq!(
         next(&mut sub),
@@ -744,11 +744,11 @@ fn a_subscriber_keeps_an_empty_auto_started_server_until_it_closes() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let server = cmd.spawn().expect("spawn server");
-    common::wait_until(|| srv.is_running(), WAIT).expect("server comes up");
+    srv.wait_listening(WAIT).expect("server comes up");
     let mut sub = srv.subscribe(&["option-changed"]).unwrap();
 
     // A first request that leaves no session arms the exit-when-empty rule.
-    let out = srv.run(&["new-session", "-d", "-c", "/nonexistent/grofe-t16"]);
+    let out = srv.run(&["new-session", "-d", "-x", "not-a-width"]);
     assert!(!out.status.success(), "{out:?}");
     thread::sleep(QUIET);
     assert!(

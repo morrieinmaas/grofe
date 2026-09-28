@@ -1,0 +1,6 @@
+# Ghostty 1.x replies to grofe's capability probe.
+# SYNTHESIZED from Ghostty's docs and source, not recorded from a live terminal
+# (a real recording is an owner task). `\e` is ESC and `\\` is a backslash.
+# Order as answered: XTVERSION, DECRPM 2026, kitty keyboard flags,
+# kitty graphics query, DA1 (the probe's end marker).
+\eP>|ghostty 1.1.3\e\\\e[?2026;2$y\e[?0u\e_Gi=31;OK\e\\\e[?62;22c

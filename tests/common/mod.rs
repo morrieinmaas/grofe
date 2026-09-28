@@ -52,6 +52,8 @@ pub struct CmdOutput {
 
 pub struct TestServer {
     dir: TempDir,
+    /// The server [`Self::start`] spawned, when this harness is its parent.
+    server: Option<Child>,
     pub socket: PathBuf,
     pub home: PathBuf,
     pub config_home: PathBuf,
@@ -78,6 +80,7 @@ impl TestServer {
         TestServer {
             socket: runtime_dir.join("test.sock"),
             dir,
+            server: None,
             home,
             config_home,
             state_home,
@@ -85,16 +88,19 @@ impl TestServer {
         }
     }
 
-    /// A running server on a unique `-S` socket (via `start-server`).
-    /// Panics, with the server log, if it does not come up.
+    /// A running server on a unique `-S` socket, spawned as this process's
+    /// own child so teardown can kill and reap it by pid. Panics, with the
+    /// server log, if it does not come up.
     pub fn start() -> TestServer {
-        let srv = TestServer::unstarted();
-        let out = srv.run(&["start-server"]);
-        if !out.status.success() || !srv.is_running() {
-            panic!(
-                "test server failed to start: {out:?}\nserver log:\n{}",
-                srv.log()
-            );
+        let mut srv = TestServer::unstarted();
+        let mut cmd = srv.command();
+        cmd.arg("__server")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        srv.server = Some(cmd.spawn().expect("spawn test server"));
+        if wait_until(|| srv.is_running(), CMD_TIMEOUT).is_err() {
+            panic!("test server failed to start; server log:\n{}", srv.log());
         }
         srv
     }
@@ -152,6 +158,16 @@ impl TestServer {
         UnixStream::connect(&self.socket).is_ok()
     }
 
+    /// Waits, without connecting, until a server logs that it is listening
+    /// on the socket. Use this for an `--exit-when-empty` server: a probe
+    /// connection is a client, and its close lets that server exit before
+    /// the test's real connection arrives.
+    pub fn wait_listening(&self, timeout: Duration) -> Result<(), String> {
+        // The line `grofe::server::serve` logs once bind and listen are done.
+        let line = format!("grofe server listening on {}", self.socket.display());
+        wait_until(|| self.log().contains(&line), timeout)
+    }
+
     /// The path-derivation env the server sees, for `grofe::paths`.
     pub fn paths_env(&self) -> Env {
         let s = |p: &Path| Some(p.display().to_string());
@@ -189,6 +205,7 @@ impl TestServer {
             cwd: self.home.clone(),
             pane: None,
             env: vec![("HOME".to_string(), self.home.display().to_string())],
+            client: None,
         }
     }
 
@@ -215,52 +232,72 @@ impl TestServer {
     }
 }
 
+/// How long teardown waits for a server to go.
+const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
+
+/// Stops the servers this harness started. The one [`Self::start`] spawned
+/// is this process's child: it is killed by pid and reaped, whether or not
+/// it still answers on its socket (a server unlinks its socket as the first
+/// step of shutting down, so a live process can have none).
 impl Drop for TestServer {
     fn drop(&mut self) {
-        if !self.is_running() {
-            return;
+        if let Some(mut child) = self.server.take() {
+            let _ = child.kill();
+            // Bounded, so a server that will not die cannot hang the test;
+            // reaping it keeps it from lingering as a zombie.
+            let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
         }
-        // The socket answers, so the latest logged pid is the live server.
-        let pid = last_logged_pid(&self.log()).map(nix::unistd::Pid::from_raw);
-        let _ = self.run_quiet_kill();
-        if wait_until(|| !self.is_running(), Duration::from_secs(3)).is_err() {
-            // Fallback for a hung server.
-            if let Some(pid) = pid {
-                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        // ponytail: servers a test started some other way (auto-start, `-L`)
+        // are not our children, so they only get a polite `kill-server` over
+        // their socket. One whose socket is already gone leaks. The upgrade
+        // path is to have the harness spawn those as children too.
+        for socket in self.sockets() {
+            if kill_server_over(&socket, &self.ctx()) {
+                let _ = wait_until(|| UnixStream::connect(&socket).is_err(), TEARDOWN_WAIT);
             }
-            let _ = fs::remove_file(&self.socket);
         }
-        // Wait for the process itself to go, so a `pgrep` right after the
-        // test finds nothing. Bounded: a zombie nobody reaps still counts
-        // as alive to kill(pid, 0).
-        if let Some(pid) = pid {
-            let _ = wait_until(|| process_gone(pid), Duration::from_secs(3));
-        }
+        let _ = fs::remove_file(&self.socket);
     }
 }
 
 impl TestServer {
-    fn run_quiet_kill(&self) -> Option<ExitStatus> {
-        let mut cmd = self.command();
-        cmd.arg("kill-server");
-        let child = cmd
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        wait_child(child, Duration::from_secs(3)).ok()
+    /// The `-S` socket plus any `-L` ones under this harness's runtime dir.
+    fn sockets(&self) -> Vec<PathBuf> {
+        let mut sockets = vec![self.socket.clone()];
+        if let Ok(entries) = fs::read_dir(self.runtime_dir.join("grofe")) {
+            sockets.extend(
+                entries
+                    .filter_map(|e| Some(e.ok()?.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "sock")),
+            );
+        }
+        sockets
     }
 }
 
-/// The pid from the last start marker line, `grofe server starting: pid N, ...`.
-fn last_logged_pid(log: &str) -> Option<i32> {
-    let line = log.lines().rev().find(|l| l.contains(START_MARKER))?;
-    let rest = line.split("pid ").nth(1)?;
-    rest.split(|c: char| !c.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()
+/// Sends `kill-server` over a control connection to `socket`, waiting a
+/// bounded time for the reply. Whether a server took the request.
+fn kill_server_over(socket: &Path, ctx: &ClientCtx) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return false;
+    };
+    let Ok(hello) = encode_hello(&Hello::Control(ctx.clone())) else {
+        return false;
+    };
+    let req = Request {
+        id: 1,
+        argv: vec!["kill-server".to_string()],
+    };
+    let Ok(req) = serde_json::to_string(&req) else {
+        return false;
+    };
+    if writeln!(stream, "{hello}\n{req}").is_err() {
+        return false;
+    }
+    let _ = stream.set_read_timeout(Some(TEARDOWN_WAIT));
+    let mut line = String::new();
+    let _ = BufReader::new(stream).read_line(&mut line);
+    true
 }
 
 /// A control connection with an accepted subscription.
