@@ -166,7 +166,11 @@ def main():
     args = ap.parse_args()
     # This starts and drives a tmux server: only inside the recording
     # container, never inside (or next to) a live tmux.
-    if not (os.path.exists("/run/.containerenv") or os.path.exists("/.dockerenv")):
+    # GROFE_TC0_CONTAINER_MARKER exists for tests/compat_corpus.bats only: it
+    # replaces the marker files this checks, so the refusal can be tested
+    marker = os.environ.get("GROFE_TC0_CONTAINER_MARKER")
+    markers = [marker] if marker else ["/run/.containerenv", "/.dockerenv"]
+    if not any(os.path.exists(m) for m in markers):
         sys.exit("drive: refusing to run outside a container")
     if os.environ.get("TMUX"):
         sys.exit("drive: refusing to run inside tmux (TMUX is set)")

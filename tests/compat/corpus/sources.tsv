@@ -3,7 +3,6 @@ container-cli.argv	-V	container:cli
 container-cli.argv	attach -d -t <session>:<window>	container:cli
 container-cli.argv	attach-session -t <session>	container:cli
 container-cli.argv	display-message 'Tmux environment saved!'	container:cli
-container-cli.argv	display-message 'Tmux restore complete!'	container:cli
 container-cli.argv	display-message 'Tmux resurrect file not found!'	container:cli
 container-cli.argv	display-message -c <client> -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'	container:cli
 container-cli.argv	display-message -p #{client_tty}	container:cli
@@ -20,7 +19,7 @@ container-cli.argv	list-panes -a -F '#{pane_id}\t#{session_name}\t#{window_id}\t
 container-cli.argv	list-panes -a -F 'pane\t#{session_name}\t#{window_index}\t#{window_active}\t:#{window_flags}\t#{pane_index}\t#{pane_title}\t:#{pane_current_path}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{history_size}'	container:cli
 container-cli.argv	list-panes -a -f #{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_current_path}'	container:cli
 container-cli.argv	list-panes -s -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'	container:cli
-container-cli.argv	list-panes -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'	container:cli
+container-cli.argv	list-panes -t @N -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'	container:cli
 container-cli.argv	list-sessions	container:cli
 container-cli.argv	list-sessions -F #{session_name}	container:cli
 container-cli.argv	list-sessions -F '#{session_grouped}\t#{session_group}\t#{session_id}\t#{session_name}'	container:cli
@@ -33,12 +32,12 @@ container-cli.argv	new-session -A -s <name> -d	container:cli
 container-cli.argv	new-session -d -s <name> -x 200 -y 50	container:cli
 container-cli.argv	neww -P -d -t <session>: -c <dir> -F #{window_id} -n <name>	container:cli
 container-cli.argv	resize-pane -t %N -x 26	container:cli
-container-cli.argv	select-layout -t <name> main-vertical	container:cli
-container-cli.argv	select-layout -t <name> tiled	container:cli
+container-cli.argv	select-layout -t @N main-vertical	container:cli
+container-cli.argv	select-layout -t @N tiled	container:cli
 container-cli.argv	select-pane -t %N -T opensessions-sidebar	container:cli
 container-cli.argv	set-option -g -q display-time 5000	container:cli
 container-cli.argv	set-option -g -q display-time 750	container:cli
-container-cli.argv	set-window-option -t <name> remain-on-exit on	container:cli
+container-cli.argv	set-window-option -t @N remain-on-exit on	container:cli
 container-cli.argv	setenv -t <session> SMUG_SESSION <value>	container:cli
 container-cli.argv	setenv -t <session> SMUG_SESSION_CONFIG_PATH <value>	container:cli
 container-cli.argv	show -g -q -v @canopy_resume_stagger_ms	container:cli
@@ -59,7 +58,7 @@ container-cli.argv	show-window-options -v -t <session>:1 automatic-rename	contai
 container-cli.argv	show-window-options -v -t <session>:2 automatic-rename	container:cli
 container-cli.argv	show-window-options -v -t <session>:3 automatic-rename	container:cli
 container-cli.argv	show-window-options -v -t <session>:4 automatic-rename	container:cli
-container-cli.argv	split-window -P -d -t <name> -c <dir> -F #{pane_id}	container:cli
+container-cli.argv	split-window -P -d -t @N -c <dir> -F #{pane_id}	container:cli
 container-cli.argv	split-window -h -b -f -l 26 -t %N -P -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}' 'OPENSESSIONS_SESSION_NAME=main OPENSESSIONS_WINDOW_ID=@N REFOCUS_WINDOW=@N exec "${OPENSESSIONS_DIR:-.}"/apps/tui/scripts/start.sh'	container:cli
 container-cli.argv	switch-client -c <client> -t <session>	container:cli
 container-job.argv	-S <socket-path> kill-pane -t %N	container:job
@@ -67,7 +66,6 @@ container-job.argv	-S <socket-path> list-panes -a -F '#{session_name}\t#{window_
 container-job.argv	-S <socket-path> list-panes -a -f #{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_id}\t#{session_windows}'	container:job
 container-job.argv	-S <socket-path> list-panes -a -f #{&&:#{>:#{window_panes},1},#{&&:#{==:#{pane_title},opensessions-sidebar},#{!=:#{pane_width},#{@opensessions_width}}}} -F #{pane_id}	container:job
 container-job.argv	-S <socket-path> list-panes -a -f #{==:#{pane_dead},1} -F #{pane_id}	container:job
-container-job.argv	-S <socket-path> resize-pane -t %N -x 26	container:job
 container-job.argv	-S <socket-path> show-option -g -q -v @opensessions_width	container:job
 container-job.argv	-V	container:job
 container-job.argv	bind C-l send-keys C-l	container:job
@@ -151,12 +149,12 @@ container-job.argv	display-message -p -F #{start_time}	container:job
 container-job.argv	display-message -p -t %N #{pane_pid}	container:job
 container-job.argv	display-message -p -t %N #{pane_start_command}	container:job
 container-job.argv	display-message -p -t %N #{pane_width}	container:job
-container-job.argv	display-popup -E -d <dir> -B -x C -y C -w 70% -h 68% sh /tmp/fzf-temp-XXXXXX	container:job
-container-job.argv	display-popup -E -d <dir> -B -x C -y C -w 80% -h 80% sh /tmp/fzf-temp-XXXXXX	container:job
+container-job.argv	display-popup -E -d <dir> -B -x C -y C -w 70% -h 68% sh /tmp/fzf-temp-<n>	container:job
+container-job.argv	display-popup -E -d <dir> -B -x C -y C -w 80% -h 80% sh /tmp/fzf-temp-<n>	container:job
 container-job.argv	display-popup -c <client> -w 90% -h 90% -E ~/.config/tmux/plugins/tmux-claude-session-manager/scripts/picker.sh	container:job
 container-job.argv	display-popup -w 90% -h 90% -E 'tmux attach-session -t claude-0360ea16'	container:job
 container-job.argv	has-session -t <session>	container:job
-container-job.argv	join-pane -d -s %N -t <name>	container:job
+container-job.argv	join-pane -d -s %N -t @N	container:job
 container-job.argv	join-pane -h -b -d -f -l 26 -s %N -t %N	container:job
 container-job.argv	list-clients	container:job
 container-job.argv	list-clients -F '#{client_name} #{session_name}'	container:job
@@ -167,13 +165,13 @@ container-job.argv	list-panes -a -F '#{pane_id}\t#{session_name}\t#{window_id}\t
 container-job.argv	list-panes -a -F 'pane\t#{session_name}\t#{window_index}\t#{window_active}\t:#{window_flags}\t#{pane_index}\t#{pane_title}\t:#{pane_current_path}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{history_size}'	container:job
 container-job.argv	list-panes -a -f #{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_current_path}'	container:job
 container-job.argv	list-panes -s -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'	container:job
-container-job.argv	list-panes -t <name> -F #{pane_id}|#{pane_left}|#{pane_right}	container:job
-container-job.argv	list-panes -t <name> -F #{pane_id}|#{pane_title}|#{pane_width}|#{pane_left}|#{pane_right}|#{pane_active}	container:job
-container-job.argv	list-panes -t <name> -F '#{pane_id} #{pane_title}'	container:job
 container-job.argv	list-panes -t <session>:1 -F #{pane_index}	container:job
 container-job.argv	list-panes -t <session>:2 -F #{pane_index}	container:job
 container-job.argv	list-panes -t <session>:3 -F #{pane_index}	container:job
 container-job.argv	list-panes -t <session>:4 -F #{pane_index}	container:job
+container-job.argv	list-panes -t @N -F #{pane_id}|#{pane_left}|#{pane_right}	container:job
+container-job.argv	list-panes -t @N -F #{pane_id}|#{pane_title}|#{pane_width}|#{pane_left}|#{pane_right}|#{pane_active}	container:job
+container-job.argv	list-panes -t @N -F '#{pane_id} #{pane_title}'	container:job
 container-job.argv	list-sessions	container:job
 container-job.argv	list-sessions -F #S	container:job
 container-job.argv	list-sessions -F '#{session_grouped}\t#{session_group}\t#{session_id}\t#{session_name}'	container:job
@@ -190,25 +188,25 @@ container-job.argv	rename-window -t <session>:2 <name>	container:job
 container-job.argv	rename-window -t <session>:3 <name>	container:job
 container-job.argv	rename-window -t <session>:4 <name>	container:job
 container-job.argv	resize-pane -t %N -x 26	container:job
-container-job.argv	resize-window -t <name> -x 200 -y 200	container:job
-container-job.argv	select-layout -t <name> even-horizontal	container:job
+container-job.argv	resize-window -t @N -x 200 -y 200	container:job
 container-job.argv	select-layout -t <session>:1 41f3,200x200,0,0,14	container:job
 container-job.argv	select-layout -t <session>:1 c145,200x48,0,0[200x24,0,0,0,200x23,0,25{100x23,0,25,1,99x23,101,25,2}]	container:job
 container-job.argv	select-layout -t <session>:1 d960,80x24,0,0,21	container:job
 container-job.argv	select-layout -t <session>:2 caa0,200x48,0,0,3	container:job
 container-job.argv	select-layout -t <session>:3 7fa5,200x48,0,0{70x48,0,0,7,42x48,71,0,10,42x48,114,0,8,43x48,157,0,9}	container:job
 container-job.argv	select-layout -t <session>:4 6584,200x48,0,0,15	container:job
+container-job.argv	select-layout -t @N even-horizontal	container:job
 container-job.argv	select-pane -t %N	container:job
 container-job.argv	select-pane -t 1	container:job
-container-job.argv	select-pane -t <session>:1.1 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:1.2 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:1.3 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:2.1 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:3.1 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:3.2 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:3.3 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:3.4 -T 42080da90278	container:job
-container-job.argv	select-pane -t <session>:4.1 -T 42080da90278	container:job
+container-job.argv	select-pane -t <session>:1.1 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:1.2 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:1.3 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:2.1 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:3.1 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:3.2 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:3.3 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:3.4 -T 3737b9dbe049	container:job
+container-job.argv	select-pane -t <session>:4.1 -T 3737b9dbe049	container:job
 container-job.argv	set -g @resurrect-processes <value>	container:job
 container-job.argv	set-environment -g -u OPENSESSIONS_WIDTH	container:job
 container-job.argv	set-environment -g OPENSESSIONS_DIR <value>	container:job
@@ -412,11 +410,11 @@ container-pane.argv	display-message -p -t %N #{pane_start_command}	container:pan
 container-pane.argv	display-message -p -t %N '#{window_width} #{window_height}' \; list-commands new-pane	container:pane
 container-pane.argv	has-session -t %N	container:pane
 container-pane.argv	has-session -t =<session>	container:pane
-container-pane.argv	if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t <name>' \; new-pane -P -F #{pane_id} -t %N -c <dir> -x 138 -y 30 -X 31 -Y 9 sh -c 'tmux set-option -p -t "$TMUX_PANE" remain-on-exit off 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" @fzf-border-label '"'"' tsess — prefix K '"'"' 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" pane-border-format '"'"'#{@fzf-border-label}'"'"' 2> /dev/null; export __FZF_INTERNAL_TMUX_LABEL_PANE="$TMUX_PANE"; '"'"'sh'"'"' '"'"'/tmp/fzf-temp-XXXXXX'"'"'; echo $? > '"'"'/tmp/fzf-temp-XXXXXX.code'"'"'; tmux wait-for -S '"'"'fzf-fzf-temp-<n>'"'"''	container:pane
+container-pane.argv	if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t %N' \; new-pane -P -F #{pane_id} -t %N -c <dir> -x 138 -y 30 -X 31 -Y 9 sh -c 'tmux set-option -p -t "$TMUX_PANE" remain-on-exit off 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" @fzf-border-label '"'"' tsess — prefix K '"'"' 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" pane-border-format '"'"'#{@fzf-border-label}'"'"' 2> /dev/null; export __FZF_INTERNAL_TMUX_LABEL_PANE="$TMUX_PANE"; '"'"'sh'"'"' '"'"'/tmp/fzf-temp-<n>'"'"'; echo $? > '"'"'/tmp/fzf-temp-<n>.code'"'"'; tmux wait-for -S '"'"'fzf-fzf-temp-<n>'"'"''	container:pane
 container-pane.argv	info	container:pane
 container-pane.argv	list-clients	container:pane
 container-pane.argv	list-panes -a -F #{pane_id}	container:pane
-container-pane.argv	list-panes -t <name> -F '#{pane_id} #{pane_title}'	container:pane
+container-pane.argv	list-panes -t @N -F '#{pane_id} #{pane_title}'	container:pane
 container-pane.argv	list-sessions	container:pane
 container-pane.argv	list-sessions -F #S	container:pane
 container-pane.argv	list-windows -t <session> -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'	container:pane

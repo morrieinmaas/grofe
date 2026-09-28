@@ -219,11 +219,11 @@ coverage`; do not edit them by hand.
 |---|---|
 | `tests/compat/corpus/static-cli.argv` | 481 |
 | `tests/compat/corpus/static-conf.argv` | 154 |
-| `tests/compat/corpus/container-cli.argv` | 63 |
+| `tests/compat/corpus/container-cli.argv` | 62 |
 | `tests/compat/corpus/container-pane.argv` | 47 |
-| `tests/compat/corpus/container-job.argv` | 333 |
+| `tests/compat/corpus/container-job.argv` | 332 |
 | `tests/compat/corpus/container-stored.argv` | 343 |
-| total | 1421 |
+| total | 1419 |
 
 Distinct forms (verb plus flag set, stored commands included): **286**.
 
@@ -285,7 +285,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `display-menu -t[=] -T -x[M] -y[M]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[M] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[W] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
-| `display-message` | 32 | 3 | cc3 cj13 cp1 cs2 sc10 sf3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/check_tmux_version.sh, canopy:plugins/tmux-resurrect/scripts/helpers.sh, canopy:plugins/tmux-resurrect/scripts/tmux_spinner.sh (+14) |
+| `display-message` | 31 | 3 | cc2 cj13 cp1 cs2 sc10 sf3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/check_tmux_version.sh, canopy:plugins/tmux-resurrect/scripts/helpers.sh, canopy:plugins/tmux-resurrect/scripts/tmux_spinner.sh (+14) |
 | `display-message -F -p` | 3 | 0 | cj1 sc2 | area:Listing and inspection | yes |  | canopy:plugins/tmux-continuum/continuum.tmux, container:job, plugin:tmux-yank/scripts/copy_pane_pwd.sh |
 | `display-message -F -p -t` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh |
 | `display-message -c -p` | 2 | 0 | cc1 sc1 | area:Listing and inspection | yes | `-c` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
@@ -396,7 +396,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `resize-pane -Z` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `resize-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `resize-pane -t -Z` | 3 | 1 | cp1 sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh, container:pane |
-| `resize-pane -t -x` | 6 | 0 | cc1 cj2 sc3 | area:Windows and panes | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
+| `resize-pane -t -x` | 5 | 0 | cc1 cj1 sc3 | area:Windows and panes | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
 | `resize-window -t -x -y` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `respawn-pane -c -k` | 1 | 1 | sf1 | area:Windows and panes | yes | `-c` | plugin:tmux-which-key/plugin/init.tmux |
 | `respawn-pane -k` | 3 | 3 | cs3 | area:Windows and panes | yes |  | container:list-keys |
@@ -510,7 +510,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `tmux (bare)` | 1 | 0 | sc1 | area:Invocation |  |  | canopy:bin/canopy-reboot-check, nvim:snacks.nvim/lua/snacks/image/terminal.lua, nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+8) |
 | `tmux -L` | 4 | 0 | cp2 sc2 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
 | `tmux -L -f` | 2 | 0 | cp1 sc1 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
-| `tmux -S` | 28 | 0 | cj7 sc21 | area:Invocation |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+1) |
+| `tmux -S` | 27 | 0 | cj6 sc21 | area:Invocation |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+1) |
 | `tmux -V` | 4 | 0 | cc1 cj1 cp1 sc1 | area:Invocation |  |  | canopy:bin/canopy-caps, canopy:bin/canopy-doctor, canopy:lib/tmux.sh (+10) |
 | `tmux -c` | 1 | 0 | sc1 | area:Invocation |  | `-c` | plugin:tmux-fzf/scripts/menu.sh |
 | `unbind-key` | 6 | 0 | sc5 sf1 | cmd:M3 | yes |  | canopy:tmux/conf.d/00-core.conf, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:tmux-sensible/sensible.tmux |

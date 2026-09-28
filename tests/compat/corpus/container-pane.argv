@@ -15,11 +15,11 @@ display-message -p -t %N #{pane_start_command}
 display-message -p -t %N '#{window_width} #{window_height}' \; list-commands new-pane
 has-session -t %N
 has-session -t =<session>
-if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t <name>' \; new-pane -P -F #{pane_id} -t %N -c <dir> -x 138 -y 30 -X 31 -Y 9 sh -c 'tmux set-option -p -t "$TMUX_PANE" remain-on-exit off 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" @fzf-border-label '"'"' tsess — prefix K '"'"' 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" pane-border-format '"'"'#{@fzf-border-label}'"'"' 2> /dev/null; export __FZF_INTERNAL_TMUX_LABEL_PANE="$TMUX_PANE"; '"'"'sh'"'"' '"'"'/tmp/fzf-temp-XXXXXX'"'"'; echo $? > '"'"'/tmp/fzf-temp-XXXXXX.code'"'"'; tmux wait-for -S '"'"'fzf-fzf-temp-<n>'"'"''
+if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t %N' \; new-pane -P -F #{pane_id} -t %N -c <dir> -x 138 -y 30 -X 31 -Y 9 sh -c 'tmux set-option -p -t "$TMUX_PANE" remain-on-exit off 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" @fzf-border-label '"'"' tsess — prefix K '"'"' 2> /dev/null; tmux set-option -p -t "$TMUX_PANE" pane-border-format '"'"'#{@fzf-border-label}'"'"' 2> /dev/null; export __FZF_INTERNAL_TMUX_LABEL_PANE="$TMUX_PANE"; '"'"'sh'"'"' '"'"'/tmp/fzf-temp-<n>'"'"'; echo $? > '"'"'/tmp/fzf-temp-<n>.code'"'"'; tmux wait-for -S '"'"'fzf-fzf-temp-<n>'"'"''
 info
 list-clients
 list-panes -a -F #{pane_id}
-list-panes -t <name> -F '#{pane_id} #{pane_title}'
+list-panes -t @N -F '#{pane_id} #{pane_title}'
 list-sessions
 list-sessions -F #S
 list-windows -t <session> -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'

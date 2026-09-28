@@ -8,6 +8,12 @@
 
 REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
+# This file is itself scanned by the publishability check, so the planted
+# probes are assembled at run time rather than written out whole.
+AT=@
+HOMEDIR=/home
+PROBE_EMAIL="tc0-probe${AT}example.invalid"
+
 setup() {
     TMP="$(mktemp -d "${TMPDIR:-/tmp}/grofe-corpus.XXXXXX")"
     W="$TMP/repo"
@@ -58,7 +64,7 @@ for p in pathlib.Path(sys.argv[1]).glob("*.argv"):
 }
 
 @test "an absolute /Users or /home path fails the check" {
-    add_line static-cli.argv "source-file /home/someone/.tmux.conf"
+    add_line static-cli.argv "source-file $HOMEDIR/someone/.tmux.conf"
     uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
     check
     [ "$status" -ne 0 ]
@@ -86,8 +92,8 @@ for p in pathlib.Path(sys.argv[1]).glob("*.argv"):
 }
 
 @test "the git email is denylisted" {
-    printf '[user]\n\temail = tc0-probe@example.invalid\n' >"$TMP/gitconfig"
-    add_line static-cli.argv "display-message tc0-probe@example.invalid"
+    printf '[user]\n\temail = %s\n' "$PROBE_EMAIL" >"$TMP/gitconfig"
+    add_line static-cli.argv "display-message $PROBE_EMAIL"
     cd "$TMP"
     GIT_CONFIG_GLOBAL="$TMP/gitconfig" uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
     GIT_CONFIG_GLOBAL="$TMP/gitconfig" run uv run --quiet "$W/scripts/corpus.py" check
@@ -142,7 +148,7 @@ print("ok")
 }
 
 @test "a line holding an email address fails the check" {
-    add_line static-cli.argv "display-message someone@example.org"
+    add_line static-cli.argv "display-message someone${AT}example.org"
     uv run --quiet "$W/scripts/corpus.py" coverage >/dev/null
     check
     [ "$status" -ne 0 ]
@@ -258,4 +264,84 @@ print(corpus.parse_q_line(line))
     # the static files and their sources are left alone
     cmp "$C/static-cli.argv" "$REPO/tests/compat/corpus/static-cli.argv"
     grep -q '^static-cli.argv' "$C/sources.tsv"
+}
+
+@test "a nested pane id stays %N, and a nested window id @N" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+ctx = corpus.ScrubContext([], [], [], [])
+out = corpus.normalize_argv(["if", "-F", "-t", "%3", "#{window_zoomed_flag}", "resize-pane -Z -t %12", "select-window -t @7"], ctx)
+print(corpus.to_line(out))
+' "$W/scripts"
+    [ "$status" -eq 0 ]
+    [ "$output" = "if -F -t %N #{window_zoomed_flag} 'resize-pane -Z -t %N' 'select-window -t @N'" ]
+}
+
+@test "normalize is idempotent over every committed corpus file" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+ctx = corpus.ScrubContext([], [], [], [])
+bad = 0
+for name, lines in corpus.read_corpus().items():
+    conf = name in ("static-conf.argv", "container-stored.argv")
+    for line in lines:
+        again = corpus.to_line(corpus.normalize_argv(corpus.from_line(line), ctx, conf=conf))
+        if again != line:
+            bad += 1
+            print(f"{name}: {line}\n  -> {again}")
+print(f"changed {bad}")
+sys.exit(1 if bad else 0)
+' "$W/scripts"
+    [ "$status" -eq 0 ]
+}
+
+@test "mktemp suffixes are normalized, ordinary words under /tmp are not" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+ctx = corpus.ScrubContext([], [], [], [])
+for s in ("/tmp/fzf-tmux-noGkZt", "/tmp/fzf-tmux-am1Eyv", "/tmp/sessionx-Preview", "/tmp/opensessions-install.log"):
+    print(corpus.scrub(s, ctx))
+' "$W/scripts"
+    [ "$status" -eq 0 ]
+    [ "$output" = $'/tmp/fzf-tmux-XXXXXX\n/tmp/fzf-tmux-XXXXXX\n/tmp/sessionx-Preview\n/tmp/opensessions-install.log' ]
+}
+
+@test "a denylisted name after a dash is caught" {
+    run uv run --quiet python -c '
+import sys; sys.path.insert(0, sys.argv[1])
+import corpus
+dl = corpus.Denylist([], [("someuser", "user name")])
+assert corpus.deny_hits("/tmp/x-someuser.sock", dl)
+assert not corpus.deny_hits("/tmp/x-someuserz", dl)
+print("ok")
+' "$W/scripts"
+    [ "$output" = ok ]
+}
+
+# The drivers start and drive a tmux server, so they must refuse to run on a
+# host. GROFE_TC0_CONTAINER_MARKER (tests only) replaces the container marker
+# files; every case below stops at a guard before any tmux is run.
+@test "drive.py and scenario.sh refuse to run outside a container" {
+    GROFE_TC0_CONTAINER_MARKER="$TMP/absent" run env -u TMUX TMUX_TMPDIR="$TMP" python3 "$REPO/containers/compat/drive.py" --out "$TMP" --real /nonexistent
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to run outside a container"* ]]
+    GROFE_TC0_CONTAINER_MARKER="$TMP/absent" run env -u TMUX bash "$REPO/containers/compat/scenario.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to run outside a container"* ]]
+}
+
+@test "drive.py and scenario.sh refuse to run inside tmux, and drive.py without TMUX_TMPDIR" {
+    touch "$TMP/marker"
+    GROFE_TC0_CONTAINER_MARKER="$TMP/marker" TMUX=/tmp/fake,1,0 TMUX_TMPDIR="$TMP" run python3 "$REPO/containers/compat/drive.py" --out "$TMP" --real /nonexistent
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to run inside tmux"* ]]
+    GROFE_TC0_CONTAINER_MARKER="$TMP/marker" TMUX=/tmp/fake,1,0 run bash "$REPO/containers/compat/scenario.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to run inside tmux"* ]]
+    GROFE_TC0_CONTAINER_MARKER="$TMP/marker" run env -u TMUX -u TMUX_TMPDIR python3 "$REPO/containers/compat/drive.py" --out "$TMP" --real /nonexistent
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"without a private TMUX_TMPDIR"* ]]
 }

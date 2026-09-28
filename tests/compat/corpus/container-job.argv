@@ -3,7 +3,6 @@
 -S <socket-path> list-panes -a -f #{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_id}\t#{session_windows}'
 -S <socket-path> list-panes -a -f #{&&:#{>:#{window_panes},1},#{&&:#{==:#{pane_title},opensessions-sidebar},#{!=:#{pane_width},#{@opensessions_width}}}} -F #{pane_id}
 -S <socket-path> list-panes -a -f #{==:#{pane_dead},1} -F #{pane_id}
--S <socket-path> resize-pane -t %N -x 26
 -S <socket-path> show-option -g -q -v @opensessions_width
 -V
 bind C-l send-keys C-l
@@ -87,12 +86,12 @@ display-message -p -F #{start_time}
 display-message -p -t %N #{pane_pid}
 display-message -p -t %N #{pane_start_command}
 display-message -p -t %N #{pane_width}
-display-popup -E -d <dir> -B -x C -y C -w 70% -h 68% sh /tmp/fzf-temp-XXXXXX
-display-popup -E -d <dir> -B -x C -y C -w 80% -h 80% sh /tmp/fzf-temp-XXXXXX
+display-popup -E -d <dir> -B -x C -y C -w 70% -h 68% sh /tmp/fzf-temp-<n>
+display-popup -E -d <dir> -B -x C -y C -w 80% -h 80% sh /tmp/fzf-temp-<n>
 display-popup -c <client> -w 90% -h 90% -E ~/.config/tmux/plugins/tmux-claude-session-manager/scripts/picker.sh
 display-popup -w 90% -h 90% -E 'tmux attach-session -t claude-0360ea16'
 has-session -t <session>
-join-pane -d -s %N -t <name>
+join-pane -d -s %N -t @N
 join-pane -h -b -d -f -l 26 -s %N -t %N
 list-clients
 list-clients -F '#{client_name} #{session_name}'
@@ -103,13 +102,13 @@ list-panes -a -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{
 list-panes -a -F 'pane\t#{session_name}\t#{window_index}\t#{window_active}\t:#{window_flags}\t#{pane_index}\t#{pane_title}\t:#{pane_current_path}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{history_size}'
 list-panes -a -f #{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_current_path}'
 list-panes -s -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
-list-panes -t <name> -F #{pane_id}|#{pane_left}|#{pane_right}
-list-panes -t <name> -F #{pane_id}|#{pane_title}|#{pane_width}|#{pane_left}|#{pane_right}|#{pane_active}
-list-panes -t <name> -F '#{pane_id} #{pane_title}'
 list-panes -t <session>:1 -F #{pane_index}
 list-panes -t <session>:2 -F #{pane_index}
 list-panes -t <session>:3 -F #{pane_index}
 list-panes -t <session>:4 -F #{pane_index}
+list-panes -t @N -F #{pane_id}|#{pane_left}|#{pane_right}
+list-panes -t @N -F #{pane_id}|#{pane_title}|#{pane_width}|#{pane_left}|#{pane_right}|#{pane_active}
+list-panes -t @N -F '#{pane_id} #{pane_title}'
 list-sessions
 list-sessions -F #S
 list-sessions -F '#{session_grouped}\t#{session_group}\t#{session_id}\t#{session_name}'
@@ -126,25 +125,25 @@ rename-window -t <session>:2 <name>
 rename-window -t <session>:3 <name>
 rename-window -t <session>:4 <name>
 resize-pane -t %N -x 26
-resize-window -t <name> -x 200 -y 200
-select-layout -t <name> even-horizontal
+resize-window -t @N -x 200 -y 200
 select-layout -t <session>:1 41f3,200x200,0,0,14
 select-layout -t <session>:1 c145,200x48,0,0[200x24,0,0,0,200x23,0,25{100x23,0,25,1,99x23,101,25,2}]
 select-layout -t <session>:1 d960,80x24,0,0,21
 select-layout -t <session>:2 caa0,200x48,0,0,3
 select-layout -t <session>:3 7fa5,200x48,0,0{70x48,0,0,7,42x48,71,0,10,42x48,114,0,8,43x48,157,0,9}
 select-layout -t <session>:4 6584,200x48,0,0,15
+select-layout -t @N even-horizontal
 select-pane -t %N
 select-pane -t 1
-select-pane -t <session>:1.1 -T 42080da90278
-select-pane -t <session>:1.2 -T 42080da90278
-select-pane -t <session>:1.3 -T 42080da90278
-select-pane -t <session>:2.1 -T 42080da90278
-select-pane -t <session>:3.1 -T 42080da90278
-select-pane -t <session>:3.2 -T 42080da90278
-select-pane -t <session>:3.3 -T 42080da90278
-select-pane -t <session>:3.4 -T 42080da90278
-select-pane -t <session>:4.1 -T 42080da90278
+select-pane -t <session>:1.1 -T 3737b9dbe049
+select-pane -t <session>:1.2 -T 3737b9dbe049
+select-pane -t <session>:1.3 -T 3737b9dbe049
+select-pane -t <session>:2.1 -T 3737b9dbe049
+select-pane -t <session>:3.1 -T 3737b9dbe049
+select-pane -t <session>:3.2 -T 3737b9dbe049
+select-pane -t <session>:3.3 -T 3737b9dbe049
+select-pane -t <session>:3.4 -T 3737b9dbe049
+select-pane -t <session>:4.1 -T 3737b9dbe049
 set -g @resurrect-processes <value>
 set-environment -g -u OPENSESSIONS_WIDTH
 set-environment -g OPENSESSIONS_DIR <value>

@@ -1236,7 +1236,8 @@ def build_denylist() -> Denylist:
 
 
 def word_re(term: str) -> re.Pattern:
-    return re.compile(rf"(?<![\w.-]){re.escape(term)}(?![\w-])", re.IGNORECASE)
+    # a leading `-` still counts as a boundary, so `x-<user>` is caught
+    return re.compile(rf"(?<![\w.]){re.escape(term)}(?![\w-])", re.IGNORECASE)
 
 
 def deny_hits(text: str, dl: Denylist) -> list[tuple[str, str]]:
@@ -1255,8 +1256,12 @@ def scrub_context(extra_home: str | None) -> ScrubContext:
 
 
 def _looks_random(s: str) -> bool:
-    """A mktemp suffix: has a digit, or mixes upper and lower case."""
-    return bool(re.search(r"\d", s)) or (s != s.lower() and s != s.upper())
+    """A mktemp suffix (`XXXXXX`): letters and a digit, or exactly six letters
+    with a capital after the first, like `noGkZt`. Ordinary words such as
+    `Preview` or `install` are not."""
+    if re.search(r"\d", s) and re.search(r"[A-Za-z]", s):
+        return True
+    return len(s) == 6 and s.isalpha() and bool(re.search(r"[A-Z]", s[1:])) and bool(re.search(r"[a-z]", s))
 
 
 def scrub(s: str, ctx: ScrubContext) -> str:
@@ -1287,7 +1292,7 @@ def scrub(s: str, ctx: ScrubContext) -> str:
 def is_opaque(v: str) -> bool:
     """A value that already names nothing of the owner's: a placeholder, a
     format, a pure id."""
-    return bool(re.fullmatch(r"(<[^<>]*>)+", v)) or "#{" in v or v.startswith("<$")
+    return bool(re.fullmatch(r"(<[^<>]*>)+|[%@$]N", v)) or "#{" in v or v.startswith("<$")
 
 
 def norm_target(v: str | None, kind: str) -> str | None:
@@ -1318,7 +1323,9 @@ def norm_target(v: str | None, kind: str) -> str | None:
         parts = [("session" if kind == "target-session" else "name", body)]
     comps = []
     for role, x in parts:
-        if re.fullmatch(r"%\d+", x):
+        if re.fullmatch(r"[%@$]N", x):
+            comps.append(x)  # already normalized: normalize is idempotent
+        elif re.fullmatch(r"%\d+", x):
             comps.append("%N")
         elif re.fullmatch(r"@\d+", x):
             comps.append("@N")
@@ -1920,7 +1927,8 @@ CONTAINER_HOME_RE = re.compile(r"/(Users|home)/(?!rec\b)[A-Za-z0-9_.-]+")
 def published_files() -> list[Path]:
     """Every committed file TC.0 writes or that feeds the container."""
     files = [p for p in sorted(CORPUS.rglob("*")) if p.is_file()]
-    files += [ROWS_FILE, MANUAL_FILE, DOC]
+    files += [ROWS_FILE, MANUAL_FILE, DOC, REPO / "tests" / "compat_corpus.bats"]
+    files += sorted((REPO / "scripts").glob("*.sh")) + [REPO / "scripts" / "corpus.py"]
     files += [p for p in sorted((REPO / "containers" / "compat").rglob("*")) if p.is_file()]
     return [p for p in files if p.exists()]
 

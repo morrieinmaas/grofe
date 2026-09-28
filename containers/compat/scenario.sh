@@ -16,7 +16,14 @@ set -euo pipefail
 
 # Only ever inside the recording container, never next to a live tmux: this
 # script starts, drives and kills a tmux server.
-if [ ! -e /run/.containerenv ] && [ ! -e /.dockerenv ]; then
+# GROFE_TC0_CONTAINER_MARKER is for tests/compat_corpus.bats only: it
+# replaces the marker files checked here, so the refusal can be tested.
+if [ -n "${GROFE_TC0_CONTAINER_MARKER:-}" ]; then
+  in_container() { [ -e "$GROFE_TC0_CONTAINER_MARKER" ]; }
+else
+  in_container() { [ -e /run/.containerenv ] || [ -e /.dockerenv ]; }
+fi
+if ! in_container; then
   echo "scenario: refusing to run outside a container" >&2
   exit 1
 fi
