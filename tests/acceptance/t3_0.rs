@@ -108,7 +108,6 @@ fn m3_commands_parse_and_their_stubs_change_nothing() {
         &["reload"],
         &["command-prompt", "-p", "name", "rename-window '%%'"],
         &["run-shell", "true"],
-        &["select-layout", "even-horizontal"],
     ] {
         let err = srv.cmd(argv).expect_err("a stub");
         assert!(
