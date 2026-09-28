@@ -11,6 +11,7 @@
 
 mod harness;
 mod m2_gate;
+mod m2_robust;
 mod self_test;
 mod t2_5a;
 mod t2_5b;

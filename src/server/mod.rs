@@ -760,8 +760,12 @@ async fn write_frames(
     mut accepted: clients::Accepted,
 ) {
     while let Some(bytes) = accepted.output.recv().await {
-        if out.send(Frame::Output(bytes)).await.is_err() {
-            return;
+        // A redraw of a huge client can pass the frame cap: it goes out as
+        // consecutive frames, which the client just writes in order.
+        for chunk in bytes.chunks(protocol::MAX_MESSAGE_LEN) {
+            if out.send(Frame::Output(chunk.to_vec())).await.is_err() {
+                return;
+            }
         }
     }
     let reason = (&mut accepted.exit)

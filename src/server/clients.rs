@@ -45,7 +45,7 @@ use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, Screen};
 use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
 use crate::server::{State, dispatch};
-use crate::types::{ClientId, PaneId, SessionId};
+use crate::types::{ClientId, PaneId, SessionId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -440,8 +440,10 @@ pub fn show_message(state: &mut State, id: ClientId, text: &str) {
     }
 }
 
+/// A client size within tmux's bounds and grofe's cell cap
+/// ([`crate::types::cap_size`]).
 fn clamp_size((cols, rows): (u16, u16)) -> (u16, u16) {
-    (cols.max(1), rows.max(1))
+    cap_size(cols, rows)
 }
 
 /// A frame from client `id`.

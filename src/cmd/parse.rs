@@ -15,7 +15,7 @@ use super::{
     SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetOption, ShowOptions,
     SplitWindow, Subscribe, SwitchClient, Target, WindowStep,
 };
-use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize};
+use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
 /// Whether a short/long flag takes a value, and if so whether it's
 /// required.
@@ -155,6 +155,24 @@ fn parse_u16(s: &str, what: &str) -> Result<u16, ParseError> {
         .map_err(|_| ParseError::Other(format!("invalid {what}: {s}")))
 }
 
+/// `new-session -x/-y`, as tmux 3.7b reads them: `strtonum(1, USHRT_MAX)`
+/// with its `too small` / `too large` / `invalid` wording, then capped at
+/// [`WINDOW_MAXIMUM`].
+fn parse_window_size(s: &str, what: &str) -> Result<u16, ParseError> {
+    let err = |why: &str| ParseError::Other(format!("{what} {why}"));
+    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(err("invalid"));
+    }
+    match s.parse::<i64>() {
+        Ok(n) if n < 1 => Err(err("too small")),
+        Ok(n) if n > i64::from(u16::MAX) => Err(err("too large")),
+        Ok(n) => Ok((n as u16).min(WINDOW_MAXIMUM)),
+        Err(_) if s.starts_with('-') => Err(err("too small")),
+        Err(_) => Err(err("too large")),
+    }
+}
+
 /// Rejects positionals beyond `max`, worded like tmux's own CLI:
 /// `command <cmd_name>: too many arguments (need at most <max>)`.
 fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Result<(), ParseError> {
@@ -185,12 +203,12 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
     let width = flags
         .values
         .get(&'x')
-        .map(|s| parse_u16(s, "width"))
+        .map(|s| parse_window_size(s, "width"))
         .transpose()?;
     let height = flags
         .values
         .get(&'y')
-        .map(|s| parse_u16(s, "height"))
+        .map(|s| parse_window_size(s, "height"))
         .transpose()?;
     Ok(Command::NewSession(NewSession {
         detached: flags.present.contains(&'d'),
