@@ -222,89 +222,72 @@ impl TestServer {
     }
 }
 
-/// How long teardown waits for a killed server to be gone.
+/// How long teardown waits for a server to go.
 const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 
-/// Kills every server this harness started, whether or not it still
-/// answers on its socket: a server unlinks its socket as the first step of
-/// shutting down, so a live process can have none.
+/// Stops the servers this harness started. The one [`Self::start`] spawned
+/// is this process's child: it is killed by pid and reaped, whether or not
+/// it still answers on its socket (a server unlinks its socket as the first
+/// step of shutting down, so a live process can have none).
 impl Drop for TestServer {
     fn drop(&mut self) {
-        let own = self.server.as_ref().map(|c| c.id() as i32);
-        let others: Vec<_> = self
-            .logged_pids()
-            .into_iter()
-            .filter(|&pid| Some(pid) != own && is_this_grofe(pid))
-            .map(nix::unistd::Pid::from_raw)
-            .collect();
-        if let Some(child) = self.server.as_mut() {
-            let _ = child.kill();
-        }
-        for &pid in &others {
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-        // Reap our own child, bounded, so it does not linger as a zombie.
         if let Some(mut child) = self.server.take() {
+            let _ = child.kill();
+            // Bounded, so a server that will not die cannot hang the test;
+            // reaping it keeps it from lingering as a zombie.
             let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
         }
-        let _ = wait_until(|| others.iter().all(|&p| process_gone(p)), TEARDOWN_WAIT);
+        // ponytail: servers a test started some other way (auto-start, `-L`)
+        // are not our children, so they only get a polite `kill-server` over
+        // their socket. One whose socket is already gone leaks. The upgrade
+        // path is to have the harness spawn those as children too.
+        for socket in self.sockets() {
+            if kill_server_over(&socket, &self.ctx()) {
+                let _ = wait_until(|| UnixStream::connect(&socket).is_err(), TEARDOWN_WAIT);
+            }
+        }
         let _ = fs::remove_file(&self.socket);
     }
 }
 
 impl TestServer {
-    /// The pid of every server that logged a start under this harness's
-    /// state dir: its `-S` server and any other (`-L`) one a test started.
-    fn logged_pids(&self) -> Vec<i32> {
-        let Some(dir) = self.log_path().parent().map(Path::to_path_buf) else {
-            return Vec::new();
-        };
-        let Ok(entries) = fs::read_dir(dir) else {
-            return Vec::new();
-        };
-        entries
-            .filter_map(|e| fs::read_to_string(e.ok()?.path()).ok())
-            .flat_map(|log| {
-                log.lines()
-                    .filter(|l| l.contains(START_MARKER))
-                    .filter_map(logged_pid)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+    /// The `-S` socket plus any `-L` ones under this harness's runtime dir.
+    fn sockets(&self) -> Vec<PathBuf> {
+        let mut sockets = vec![self.socket.clone()];
+        if let Ok(entries) = fs::read_dir(self.runtime_dir.join("grofe")) {
+            sockets.extend(
+                entries
+                    .filter_map(|e| Some(e.ok()?.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "sock")),
+            );
+        }
+        sockets
     }
 }
 
-/// The pid from a start marker line, `grofe server starting: pid N, ...`.
-fn logged_pid(line: &str) -> Option<i32> {
-    let rest = line.split("pid ").nth(1)?;
-    rest.split(|c: char| !c.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()
-}
-
-/// Whether `pid` runs this build's grofe binary, so a logged pid that has
-/// since been reused by some other process is never signalled.
-fn is_this_grofe(pid: i32) -> bool {
-    let ours = fs::canonicalize(env!("CARGO_BIN_EXE_grofe")).ok();
-    ours.is_some() && exe_of(pid) == ours
-}
-
-#[cfg(target_os = "linux")]
-fn exe_of(pid: i32) -> Option<PathBuf> {
-    fs::read_link(format!("/proc/{pid}/exe")).ok()
-}
-
-#[cfg(target_os = "macos")]
-fn exe_of(pid: i32) -> Option<PathBuf> {
-    use nix::libc;
-    use std::os::unix::ffi::OsStrExt;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: `buf` is writable for the length passed.
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    let len = usize::try_from(n).ok().filter(|&n| n > 0)?;
-    let path = std::ffi::OsStr::from_bytes(&buf[..len]);
-    fs::canonicalize(path).ok()
+/// Sends `kill-server` over a control connection to `socket`, waiting a
+/// bounded time for the reply. Whether a server took the request.
+fn kill_server_over(socket: &Path, ctx: &ClientCtx) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return false;
+    };
+    let Ok(hello) = encode_hello(&Hello::Control(ctx.clone())) else {
+        return false;
+    };
+    let req = Request {
+        id: 1,
+        argv: vec!["kill-server".to_string()],
+    };
+    let Ok(req) = serde_json::to_string(&req) else {
+        return false;
+    };
+    if writeln!(stream, "{hello}\n{req}").is_err() {
+        return false;
+    }
+    let _ = stream.set_read_timeout(Some(TEARDOWN_WAIT));
+    let mut line = String::new();
+    let _ = BufReader::new(stream).read_line(&mut line);
+    true
 }
 
 /// A control connection with an accepted subscription.
