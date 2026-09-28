@@ -1,0 +1,154 @@
+%endif
+%if '"#{==:#{@canopy_core_appended},}"'
+%if '"#{>=:#{version},3.5}"'
+bind - split-window -v -c #{pane_current_path}
+bind -n MouseDown1Status if -F #{m:*net*,#{mouse_status_range}} 'display-popup -E -b rounded -T " network " -w 66 -h 26 "$HOME/.config/tmux/net-popup.sh #{mouse_status_range}"' 'switch-client -t ='
+bind -r ( switch-client -p
+bind -r ) switch-client -n
+bind -r H resize-pane -L 5
+bind -r J resize-pane -D 3
+bind -r K resize-pane -U 3
+bind -r L resize-pane -R 5
+bind ? run-shell $HOME/.config/tmux/keys-popup.sh
+bind B run-shell $HOME/.local/bin/cockpit
+bind C new-window -c #{pane_current_path}
+bind C-s send-prefix
+bind G display-popup -E -w 95% -h 90% -d #{pane_current_path} $HOME/.config/tmux/enhance-pr.sh
+bind K run-shell $HOME/.local/bin/tsess
+bind M new-window -n <name> '$HOME/.config/themes/apply-slk.sh 2>/dev/null; exec $HOME/.local/share/mise/shims/slk'
+bind M-r run-shell <$CANOPY_STORE>/plugins/tmux-resurrect/scripts/restore.sh
+bind M-s run-shell <$CANOPY_STORE>/plugins/tmux-resurrect/scripts/save.sh
+bind N new-window -n <name> $HOME/.local/bin/matterhorn
+bind P display-popup -E -b none -w 60% -h 80% $HOME/.config/tmux/pet-pick.sh
+bind T display-popup -E -b none -w 50% -h 55% 'THEME_POPUP=1 $HOME/.local/bin/theme'
+bind V select-layout main-vertical
+bind W display-popup -E -b rounded -T ' network ' -w 66 -h 26 $HOME/.config/tmux/net-popup.sh
+bind c new-window -c #{pane_current_path} \; split-window -h -c #{pane_current_path} \; split-window -v -c #{pane_current_path} \; select-layout main-vertical \; select-pane -t 1
+bind g display-popup -E -w 95% -h 90% '$HOME/.config/themes/apply-ghdash.sh 2>/dev/null; exec $HOME/.local/share/mise/shims/gh-dash'
+bind h select-pane -L
+bind j select-pane -D
+bind k select-pane -U
+bind l select-pane -R
+bind r source-file <$CANOPY_STORE>/tmux/tmux.conf \; display-message 'canopy: reloaded'
+bind t switch-client -l
+bind | split-window -h -c #{pane_current_path}
+display -p '[tmux-which-key] Binding prefix table key to #{@wk_cfg_key_prefix_table} ...'
+display -p '[tmux-which-key] Done'
+display -p '[tmux-which-key] Loading plugin ...'
+if 'test ! -d ~/.config/tmux/plugins/tpm' 'run '"'"'git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm         && ~/.config/tmux/plugins/tpm/bin/install_plugins'"'"''
+if-shell '[ -r ~/.config/themes/active ]' 'run-shell "~/.config/themes/apply-tmux.sh"'
+if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'
+if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux"'
+if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-resurrect/resurrect.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/resurrect.tmux"'
+run ~/.config/tmux/plugins/tpm/tpm
+run-shell 'tmux bind-key -Tprefix #{@wk_cfg_key_prefix_table} show-wk-menu-root'
+run-shell -b $HOME/.config/tmux/wk-keys-fix.sh
+set -a -s terminal-features ,ghostty:RGB
+set -a -s terminal-features ,xterm-256color:RGB
+set -a -s terminal-features ,xterm-ghostty:RGB
+set -a -s terminal-features xterm*:extkeys
+set -g -F @wk_cmd_show <value>
+set -g -F command-alias[200] show-wk-menu=#{@wk_cmd_show}
+set -g -F command-alias[201] 'show-wk-menu-root=#{@wk_cmd_show} #{@wk_menu_root}'
+set -g -F command-alias[202] 'reload-config=display "#{log_info} Loading config... " ; \\nsource-file $HOME/.tmux.conf ; \\ndisplay -p "\n\n... Press ENTER to continue"'
+set -g -F command-alias[203] 'restart-pane=display "#{log_info} Restarting pane" ; \\nrespawnp -k -c #{pane_current_path}'
+set -g -a update-environment TERM
+set -g -a update-environment TERM_PROGRAM
+set -g @batt <value>
+set -g @canopy_core_appended <value>
+set -g @canopy_status_battery <value>
+set -g @canopy_status_net <value>
+set -g @canopy_test_marker <value>
+set -g @claude_launch_key <value>
+set -g @claude_list_key <value>
+set -g @continuum-restore <value>
+set -g @continuum-save-interval <value>
+set -g @fzf-url-history-limit <value>
+set -g @net <value>
+set -g @pet <value>
+set -g @pill_l <value>
+set -g @pill_r <value>
+set -g @resurrect-dir <value>
+set -g @resurrect-restore <value>
+set -g @resurrect-save <value>
+set -g @resurrect-save-command-strategy <value>
+set -g @resurrect-strategy-nvim <value>
+set -g @sessionx-bind <value>
+set -g @sessionx-window-mode <value>
+set -g @sessionx-zoxide-mode <value>
+set -g @theme_bg <value>
+set -g @theme_blue <value>
+set -g @theme_fg <value>
+set -g @theme_green <value>
+set -g @theme_grey <value>
+set -g @theme_muted <value>
+set -g @theme_red <value>
+set -g @theme_yellow <value>
+set -g @tpm_plugins <value>
+set -g @wk_cfg_key_prefix_table <value>
+set -g @wk_cfg_pos_x <value>
+set -g @wk_cfg_pos_y <value>
+set -g @wk_cfg_title_prefix <value>
+set -g @wk_cfg_title_prefix_style <value>
+set -g @wk_cfg_title_style <value>
+set -g @wk_menu_buffers <value>
+set -g @wk_menu_client <value>
+set -g @wk_menu_copy <value>
+set -g @wk_menu_layout <value>
+set -g @wk_menu_panes <value>
+set -g @wk_menu_plugins <value>
+set -g @wk_menu_resize <value>
+set -g @wk_menu_root <value>
+set -g @wk_menu_sessions <value>
+set -g @wk_menu_windows <value>
+set -g allow-passthrough on
+set -g allow-rename off
+set -g base-index 1
+set -g default-shell <template>
+set -g default-terminal tmux-256color
+set -g escape-time 0
+set -g extended-keys always
+set -g extended-keys-format csi-u
+set -g focus-events on
+set -g history-limit 100000
+set -g mouse on
+set -g pane-base-index 1
+set -g prefix C-s
+set -g renumber-windows on
+set -g set-clipboard on
+set -g status 2
+set -g status-format[1] ''
+set -g status-interval 5
+set -g status-justify left
+set -g status-left '#[fg=#{@theme_blue},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_blue},bold] #S #[fg=#{@theme_blue},bg=default,nobold]#{@pill_r} '
+set -g status-left '#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey},bold] #h #[fg=#{@theme_grey},bg=default,nobold]#{@pill_r} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bold] #S #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default,nobold]#{@pill_r}  '
+set -g status-left-length 100
+set -g status-left-length 40
+set -g status-position top
+set -g status-right #(<$CANOPY_STORE>/bin/canopy-status)
+set -g status-right '#{?@pet,#[bg=default] #(~/.config/tmux/pet.sh)  ,}#{?@net,#[bg=default]#[range=user|net]#(~/.config/tmux/net.sh)#[norange]  ,}#{?@batt,#[bg=default]#(~/.config/tmux/battery.sh)  ,}#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_grey}] %a %d %b #[fg=#{@theme_grey},bg=default]#{@pill_r}  #[fg=#{@theme_green},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_green},bold] %H:%M #[fg=#{@theme_green},bg=default,nobold]#{@pill_r} #(~/.local/share/canopy/plugins/tmux-continuum/scripts/continuum_save.sh)'
+set -g status-right-length 120
+set -g status-right-length 200
+set -g status-style bg=default,fg=#{@theme_fg}
+set -g window-status-current-format '#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #I #W#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} '
+set -g window-status-current-format '#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_yellow},bold] #I#{?#W, #W,}#{?window_zoomed_flag, #{@pill_zoom},} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r}'
+set -g window-status-format '#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #I #W #[fg=#{@theme_grey},bg=default]#{@pill_r} '
+set -g window-status-format '#[fg=#{@theme_muted},bg=default] #I#{?#W, #W,} '
+set -g window-status-separator ' '
+set -g window-status-separator ''
+set-environment -g CANOPY_CONFIG <value>
+set-environment -g CANOPY_STATE <value>
+set-environment -g CANOPY_STORE <value>
+set-environment -g TMUX_PLUGIN_MANAGER_PATH <value>
+setenv -h log_info <value>
+setw -g automatic-rename on
+setw -g automatic-rename-format #{b:pane_current_path}
+setw -g main-pane-width 50%
+setw -g mode-keys vi
+source-file -q <$CANOPY_CONFIG>/user.conf
+source-file -q <$CANOPY_STATE>/05-caps.conf
+source-file -q <$CANOPY_STATE>/10-keys.conf
+source-file -q <$CANOPY_STORE>/tmux/conf.d/[1-9]*.conf
+source-file -q <file>
+source-file <$CANOPY_STORE>/tmux/conf.d/00-core.conf
+unbind C-b
