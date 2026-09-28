@@ -279,6 +279,9 @@ impl Reader {
         let mut bell = false;
         for event in events {
             match event {
+                // DA1 as tmux 3.7b answers it: kitty's tools refuse
+                // alacritty's shorter `ESC[?6c` as an end marker.
+                Event::PtyWrite(text) if text == "\x1b[?6c" => self.reply("\x1b[?1;2;4c"),
                 Event::PtyWrite(text) => self.reply(text),
                 Event::ColorRequest(index, format) => {
                     // ponytail: answers fg/bg/cursor from a fixed palette until

@@ -266,6 +266,9 @@ fn queries_are_answered_before_da1() {
     let got = query_replies(q, KITTY);
     let (ok, da1) = (got.find("i=31;OK"), got.find("[?"));
     assert!(ok.is_some_and(|o| da1.is_some_and(|d| o < d)), "{got:?}");
+    // DA1 as tmux 3.7b answers it; kitty's tools refuse alacritty's
+    // shorter `ESC[?6c`.
+    assert!(got.ends_with("033[?1;2;4c"), "{got:?}");
 
     let got = query_replies(q, &[]);
     let (err, da1) = (got.find("i=31;EINVAL"), got.find("[?"));
