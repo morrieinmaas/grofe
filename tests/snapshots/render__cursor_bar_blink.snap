@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: "round_trip(&bar, &RICH)"
+---
+|ab
+|
+|
+cursor: row 0 col 2 shape Beam blink true

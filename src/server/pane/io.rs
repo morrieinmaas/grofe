@@ -125,7 +125,8 @@ pub(crate) struct Reader {
     pub(crate) id: PaneId,
     pub(crate) generation: u64,
     pub(crate) master: Arc<AsyncFd<OwnedFd>>,
-    pub(crate) child: tokio::process::Child,
+    /// `None` when the program failed to exec: the pane is born dead.
+    pub(crate) child: Option<tokio::process::Child>,
     pub(crate) emu: Arc<Mutex<Emu>>,
     pub(crate) events: EventBuf,
     pub(crate) input: Arc<InputQueue>,
@@ -139,7 +140,8 @@ pub(crate) struct Reader {
 /// drained (EOF/EIO, or `EXIT_GRACE` of quiet).
 pub(crate) async fn reader(mut r: Reader) {
     let mut buf = vec![0u8; READ_CHUNK];
-    let mut drained = false;
+    // A pane whose program never ran has no output to drain.
+    let mut drained = r.child.is_none();
     let mut exit: Option<Option<i32>> = None;
     let mut quiet_since = Instant::now();
 
@@ -174,8 +176,8 @@ pub(crate) async fn reader(mut r: Reader) {
                     Err(_would_block) => {}
                 }
             }
-            status = r.child.wait(), if exit.is_none() => {
-                exit = Some(status.ok().and_then(|s| s.code()));
+            status = wait_exit(&mut r.child), if exit.is_none() => {
+                exit = Some(status);
                 quiet_since = quiet_since.max(Instant::now());
             }
             _ = tokio::time::sleep_until(sync.unwrap_or(grace)), if sync.is_some() => {
@@ -198,6 +200,15 @@ pub(crate) async fn reader(mut r: Reader) {
     r.flush_sync();
     let event = r.event(PaneEventKind::Exited(exit.flatten()));
     let _ = r.to_actor.send(event).await;
+}
+
+/// The child's exit code; 1 for a program that failed to exec, as tmux
+/// reports it.
+async fn wait_exit(child: &mut Option<tokio::process::Child>) -> Option<i32> {
+    match child {
+        Some(child) => child.wait().await.ok().and_then(|s| s.code()),
+        None => Some(1),
+    }
 }
 
 impl Reader {

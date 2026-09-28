@@ -16,13 +16,14 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
-use crate::types::{PaneId, Rect, SessionId, WindowId};
+use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
 // ponytail: `base-index`, `pane-base-index` and `history-limit` are fixed at
 // their spec defaults until the options store (T1.5c) and config (M3) exist.
@@ -49,6 +50,16 @@ pub struct Session {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
+    /// The windows that were active before `active`, most recent last
+    /// (tmux's `lastw` stack, for `last-window`), kept by
+    /// [`Model::select_window`] and [`Model::remove_window`].
+    pub last_windows: Vec<WindowId>,
+    /// When the session was created, attached, switched to or typed in:
+    /// tmux's `activity_time`, which picks the session a command with no
+    /// pane and no target runs against.
+    pub activity: Instant,
+    /// How many clients show the session (`session_attached`).
+    pub attached: usize,
 }
 
 pub struct Window {
@@ -112,6 +123,10 @@ pub struct Model {
     /// Every option value, scoped (spec §4.2). The global
     /// `remain-on-exit` is seeded from the server's start options.
     pub options: Options,
+    /// Each attached client's previous session (MRU, for `switch-client
+    /// -l`). Switching a client records it; removing a session drops
+    /// entries naming it.
+    pub client_last_session: BTreeMap<ClientId, SessionId>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -160,6 +175,21 @@ impl Model {
             session.windows.insert(pos, window.id);
         }
         self.windows.insert(window.id, window);
+    }
+
+    /// Makes `window` its session's active window; the one it replaces
+    /// goes on top of the session's last-window stack, as in tmux.
+    pub fn select_window(&mut self, window: WindowId) {
+        let Some(session) = self.windows.get(&window).map(|w| w.session) else {
+            return;
+        };
+        if let Some(s) = self.sessions.get_mut(&session)
+            && s.active != window
+        {
+            s.last_windows.retain(|w| *w != window);
+            s.last_windows.push(s.active);
+            s.active = window;
+        }
     }
 
     /// True once every session is gone, after at least one existed: the
@@ -265,11 +295,18 @@ impl Model {
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
             self.sessions.remove(&w.session);
+            self.client_last_session
+                .retain(|_, last| *last != w.session);
             return removed;
         }
+        session.last_windows.retain(|w| *w != window);
         if session.active == window {
-            let pos = pos.unwrap_or(0).min(session.windows.len() - 1);
-            session.active = session.windows[pos];
+            // As tmux: the last window takes over, else the one at the
+            // same position.
+            session.active = match session.last_windows.pop() {
+                Some(l) => l,
+                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+            };
         }
         removed
     }
@@ -280,6 +317,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);
         }
@@ -315,7 +353,9 @@ impl Model {
     }
 
     /// Gives every pane in `window` its layout size, resizing the ptys whose
-    /// size changed.
+    /// size changed. A window too small for its panes squeezes some to
+    /// nothing in the layout; the pane itself keeps at least one cell each
+    /// way (tmux's `PANE_MINIMUM`).
     pub fn relayout(&mut self, window: WindowId) {
         let Some(w) = self.windows.get(&window) else {
             return;
@@ -324,10 +364,11 @@ impl Model {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
-            if (p.cols, p.rows) != (rect.cols, rect.rows) {
-                p.cols = rect.cols;
-                p.rows = rect.rows;
-                if let Err(e) = p.handle.resize(rect.cols, rect.rows) {
+            let (cols, rows) = (rect.cols.max(1), rect.rows.max(1));
+            if (p.cols, p.rows) != (cols, rows) {
+                p.cols = cols;
+                p.rows = rows;
+                if let Err(e) = p.handle.resize(cols, rows) {
                     eprintln!("grofe server: resizing {id}: {e}");
                 }
             }
@@ -335,18 +376,23 @@ impl Model {
     }
 
     /// The session a request with no target acts on: the one holding the
-    /// request's pane, else the newest session.
+    /// request's pane, else the most recently active session (tmux's
+    /// `cmd_find_best_session`; the first in name order on a tie).
     fn current_session(&self, ctx: &ClientCtx) -> Result<SessionId, String> {
         if ctx.pane.is_some() {
             let pane = self.current_pane(ctx)?;
             return Ok(self.session_of_pane(pane));
         }
-        // ponytail: tmux picks the most recently used session; with no
-        // clients before M2, the newest one stands in.
-        self.sessions
-            .keys()
-            .next_back()
-            .copied()
+        let mut best: Option<&Session> = None;
+        for s in self.sessions.values() {
+            let better = best.is_none_or(|b| {
+                s.activity > b.activity || (s.activity == b.activity && s.name < b.name)
+            });
+            if better {
+                best = Some(s);
+            }
+        }
+        best.map(|s| s.id)
             .ok_or_else(|| "no current session".to_string())
     }
 
@@ -585,6 +631,9 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
+            last_windows: Vec::new(),
+            activity: Instant::now(),
+            attached: 0,
         });
         id
     }
@@ -594,6 +643,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             pane: None,
             env: Vec::new(),
+            client: None,
         }
     }
 

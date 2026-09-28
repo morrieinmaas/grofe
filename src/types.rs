@@ -1,5 +1,5 @@
-//! ids, Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts, MouseEncoding,
-//! InputModes.
+//! ids (including ClientId), Rect, Dir, Edge, SplitSize, CaptureBound, CaptureOpts,
+//! MouseEncoding, InputModes.
 
 use std::fmt;
 use std::str::FromStr;
@@ -65,6 +65,34 @@ macro_rules! runtime_id {
 runtime_id!(SessionId, "$", "session");
 runtime_id!(WindowId, "@", "window");
 runtime_id!(PaneId, "%", "pane");
+
+/// An attached client, numbered by the server as it attaches (M2). Never
+/// reused within a server. It has no sigil or wire form yet: tmux names
+/// clients by tty, and `list-clients` output is T2.5a's to define.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ClientId(pub u32);
+
+/// The largest window or client dimension (tmux's `WINDOW_MAXIMUM`):
+/// larger sizes are capped to it, so no peer can make a pane allocate
+/// without bound.
+pub const WINDOW_MAXIMUM: u16 = 10_000;
+
+/// The most cells a client or window may have.
+// ponytail: tmux has no such cap (its grid lines are allocated as they are
+// used). A grofe pane and every frame hold all their cells, and resize and
+// compose run on the actor, so a client's area is capped at 1M cells (a
+// 4K display at a small font is about 200k); past it, rows give way. The
+// upgrade path is to move resize and compose off the actor, then raise it.
+pub const MAX_CELLS: u32 = 1_000_000;
+
+/// `(cols, rows)` within 1..=[`WINDOW_MAXIMUM`] each and [`MAX_CELLS`] in
+/// all, keeping the width.
+pub fn cap_size(cols: u16, rows: u16) -> (u16, u16) {
+    let cols = cols.clamp(1, WINDOW_MAXIMUM);
+    let rows = rows.clamp(1, WINDOW_MAXIMUM);
+    let max_rows = (MAX_CELLS / u32::from(cols)).min(u32::from(WINDOW_MAXIMUM)) as u16;
+    (cols, rows.min(max_rows))
+}
 
 /// A rectangular region of the client's screen, in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +269,17 @@ mod tests {
     #[test]
     fn mouse_encoding_defaults_to_x10() {
         assert_eq!(MouseEncoding::default(), MouseEncoding::X10);
+    }
+
+    #[test]
+    fn sizes_are_capped_per_dimension_and_in_area() {
+        assert_eq!(cap_size(0, 0), (1, 1));
+        assert_eq!(cap_size(80, 24), (80, 24));
+        assert_eq!(cap_size(1000, 1000), (1000, 1000));
+        assert_eq!(cap_size(2000, 2000), (2000, 500));
+        assert_eq!(cap_size(65535, 65535), (10_000, 100));
+        assert_eq!(cap_size(65535, 30), (10_000, 30));
+        assert_eq!(cap_size(1, 65535), (1, 10_000));
     }
 
     #[test]

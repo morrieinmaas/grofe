@@ -379,32 +379,162 @@ fn bool_option_with_no_value_toggles() {
     assert!(err.contains("empty value"), "{err}");
 }
 
-/// A `-c` directory that does not exist is an error and leaves nothing
-/// behind. tmux falls back to $HOME silently; grofe deliberately fails.
+/// A missing `-c` directory falls back to `$HOME`, as in tmux 3.7b.
 #[test]
-fn dash_c_with_a_missing_directory_fails_cleanly() {
+fn dash_c_with_a_missing_directory_falls_back_to_home() {
     let srv = TestServer::start();
     new_session(&srv, "m");
     let missing = srv.home.join("no-such-dir");
-    let err = srv
-        .cmd(&[
-            "new-window",
-            "-t",
-            "m",
-            "-c",
-            missing.to_str().unwrap(),
-            "sleep",
-            "30",
-        ])
-        .unwrap_err();
-    assert!(err.contains("can't start pane in"), "{err}");
-    assert!(err.contains("no-such-dir"), "{err}");
+    srv.cmd(&[
+        "new-window",
+        "-t",
+        "m",
+        "-c",
+        missing.to_str().unwrap(),
+        "sleep",
+        "30",
+    ])
+    .unwrap();
     let windows = srv
         .cmd(&["list-windows", "-t", "m", "-F", "#{window_index}"])
         .unwrap();
-    assert_eq!(windows, "1\n");
-    let panes = srv
-        .cmd(&["list-panes", "-t", "m", "-F", "#{pane_id}"])
+    assert_eq!(windows, "1\n2\n");
+    let home = format!("{}\n", fs::canonicalize(&srv.home).unwrap().display());
+    srv.wait_for(
+        || display(&srv, "m:2", "#{pane_current_path}") == home,
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("{e}: {}", display(&srv, "m:2", "#{pane_current_path}")));
+}
+
+/// The M2 options, by tmux name: each shows its default, takes a value at
+/// its own scope and shows it back (tmux 3.7b bounds and choice words).
+#[test]
+fn m2_options_set_and_show_by_tmux_name() {
+    let srv = TestServer::start();
+    new_session(&srv, "m");
+    let show = |args: &[&str]| srv.cmd(args).unwrap();
+    // (name, default as `show` prints it, scope flag, new value)
+    let rows: &[(&str, &str, &str, &str)] = &[
+        ("status", "on", "-s", "off"),
+        ("status-left", "\"[#{session_name}] \"", "-s", "L"),
+        ("status-right", "\"%H:%M %d-%b-%y\"", "-s", "R"),
+        ("status-left-length", "10", "-s", "32767"),
+        ("status-right-length", "40", "-s", "0"),
+        ("status-style", "bg=green,fg=black", "-s", "fg=red"),
+        ("status-interval", "15", "-s", "2147483647"),
+        (
+            "window-status-format",
+            "\"#{window_index}:#{window_name} \"",
+            "-w",
+            "#{window_index}",
+        ),
+        (
+            "window-status-current-format",
+            "\"#{window_index}:#{window_name}*\"",
+            "-w",
+            "[#{window_index}]",
+        ),
+        ("prefix", "C-b", "-s", "C-a"),
+        ("escape-time", "25", "-g", "0"),
+        ("repeat-time", "500", "-s", "2000000"),
+        ("automatic-rename", "on", "-w", "off"),
+        (
+            "automatic-rename-format",
+            "\"#{b:pane_current_path}\"",
+            "-w",
+            "#{pane_current_command}",
+        ),
+        ("allow-rename", "off", "-w", "on"),
+    ];
+    for (name, default, flag, value) in rows {
+        assert_eq!(
+            show(&["show", "-g", name]),
+            format!("{name} {default}\n"),
+            "default of {name}"
+        );
+        let target = if *flag == "-w" { "m:1" } else { "m" };
+        let mut set = vec!["set", *flag];
+        if *flag != "-g" {
+            set.extend(["-t", target]);
+        }
+        set.extend([*name, *value]);
+        srv.cmd(&set).unwrap_or_else(|e| panic!("set {name}: {e}"));
+        let mut get = vec!["show", *flag];
+        if *flag != "-g" {
+            get.extend(["-t", target]);
+        }
+        get.push(name);
+        // As tmux 3.7b, a value holding `#` shows double-quoted.
+        let shown = if value.contains('#') {
+            format!("\"{value}\"")
+        } else {
+            value.to_string()
+        };
+        assert_eq!(show(&get), format!("{name} {shown}\n"), "{name}");
+    }
+    // Without a scope flag each lands at its own tmux scope.
+    srv.cmd(&["set", "-t", "m", "status-left", "x"]).unwrap();
+    assert_eq!(
+        show(&["show", "-s", "-t", "m", "status-left"]),
+        "status-left x\n"
+    );
+    srv.cmd(&["set", "-t", "m:1", "window-status-format", "y"])
         .unwrap();
-    assert_eq!(panes.lines().count(), 1, "{panes}");
+    assert_eq!(
+        show(&["show", "-w", "-t", "m:1", "window-status-format"]),
+        "window-status-format y\n"
+    );
+    srv.cmd(&["set", "escape-time", "7"]).unwrap();
+    assert_eq!(show(&["show", "-g", "escape-time"]), "escape-time 7\n");
+}
+
+#[test]
+fn m2_option_values_are_checked_as_tmux_checks_them() {
+    let srv = TestServer::start();
+    for (name, value, want) in [
+        ("status", "yes", "unknown value: yes"),
+        ("status", "6", "unknown value: 6"),
+        ("status-left-length", "32768", "value is too large: 32768"),
+        (
+            "status-interval",
+            "2147483648",
+            "value is too large: 2147483648",
+        ),
+        (
+            "escape-time",
+            "2147483648",
+            "value is too large: 2147483648",
+        ),
+        ("repeat-time", "2000001", "value is too large: 2000001"),
+        ("allow-rename", "maybe", "bad value: maybe"),
+        ("remain-on-exit", "yes", "unknown value: yes"),
+    ] {
+        let err = srv.cmd(&["set", "-g", name, value]).unwrap_err();
+        assert!(err.contains(want), "{name} {value}: {err}");
+    }
+    // A string option still needs a value.
+    let err = srv.cmd(&["set", "-g", "status-left"]).unwrap_err();
+    assert!(err.contains("empty value"), "{err}");
+    // An empty string is a value.
+    srv.cmd(&["set", "-g", "status-left", ""]).unwrap();
+    assert_eq!(
+        srv.cmd(&["show", "-g", "status-left"]).unwrap(),
+        "status-left ''\n"
+    );
+}
+
+/// As tmux: `set status` with no value flips off and on and leaves a row
+/// count as it is.
+#[test]
+fn status_with_no_value_toggles_off_and_on() {
+    let srv = TestServer::start();
+    let status = || srv.cmd(&["show", "-g", "status"]).unwrap();
+    srv.cmd(&["set", "-g", "status"]).unwrap();
+    assert_eq!(status(), "status off\n");
+    srv.cmd(&["set", "-g", "status"]).unwrap();
+    assert_eq!(status(), "status on\n");
+    srv.cmd(&["set", "-g", "status", "2"]).unwrap();
+    srv.cmd(&["set", "-g", "status"]).unwrap();
+    assert_eq!(status(), "status 2\n");
 }

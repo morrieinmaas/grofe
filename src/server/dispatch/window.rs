@@ -3,16 +3,21 @@
 use std::path::Path;
 
 use crate::cmd::{
-    KillWindow, ListPanes, ListWindows, NewWindow, Resolve, SelectWindow, Target, WindowRef,
+    self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectWindow, Target,
+    WindowRef, WindowStep,
 };
 use crate::protocol::ClientCtx;
 use crate::server::State;
+use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::LayoutTree;
-use crate::server::model::{PANE_BASE_INDEX, Window};
+use crate::server::model::{Model, PANE_BASE_INDEX, Window};
+use crate::types::WindowId;
 
-/// A new window's name when `-n` is not given: the basename of its cwd.
-// ponytail: M2's `automatic-rename` keeps this following the pane's cwd.
+const AUTOMATIC_RENAME: &str = "automatic-rename";
+
+/// A new window's name when `-n` is not given: the basename of its cwd,
+/// until [`automatic_rename`] names it from its pane.
 pub fn default_name(cwd: &Path) -> String {
     cwd.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -52,6 +57,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         size,
     )?;
     let model = &mut state.model;
+    let named = c.name.is_some();
     model.insert_window(Window {
         id: window,
         session,
@@ -63,11 +69,113 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         cols: size.0,
         rows: size.1,
     });
-    if !c.detached
-        && let Some(s) = model.sessions.get_mut(&session)
-    {
-        s.active = window;
+    // As tmux: a window named by `-n` keeps that name.
+    if named {
+        stop_automatic_rename(model, window)?;
     }
+    if !c.detached {
+        model.select_window(window);
+    }
+    Ok(String::new())
+}
+
+fn stop_automatic_rename(model: &mut Model, window: WindowId) -> Result<(), String> {
+    model
+        .options
+        .set(Owner::Window(window), AUTOMATIC_RENAME, "off", false)
+        .map(|_| ())
+}
+
+/// `automatic-rename` (spec §4.5): every window with the option on is
+/// named by its `automatic-rename-format` (default
+/// `#{b:pane_current_path}`), expanded against its active pane. Pane
+/// titles play no part, so an OSC title never freezes the name; only
+/// `rename-window` (or `new-window -n`) turns the option off. An empty
+/// expansion leaves the name alone. Returns whether any name changed.
+pub fn automatic_rename(model: &mut Model) -> bool {
+    let names: Vec<(WindowId, String)> = model
+        .windows
+        .values()
+        .filter_map(|w| {
+            let chain = options::chain(model, w.active);
+            if model.options.lookup(AUTOMATIC_RENAME, &chain) != Some("on") {
+                return None;
+            }
+            let format = model
+                .options
+                .lookup("automatic-rename-format", &chain)
+                .unwrap_or_default();
+            let name = cmd::expand(format, &FormatCtx::new(model, w.active));
+            (!name.is_empty() && name != w.name).then_some((w.id, name))
+        })
+        .collect();
+    let changed = !names.is_empty();
+    for (id, name) in names {
+        if let Some(w) = model.windows.get_mut(&id) {
+            w.name = name;
+        }
+    }
+    changed
+}
+
+/// `rename-window`: the name sticks, since it turns `automatic-rename`
+/// off for the window, as tmux does.
+pub fn rename_window(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<String, String> {
+    let model = &mut state.model;
+    let window = model.resolve_window(&c.target, ctx)?;
+    stop_automatic_rename(model, window)?;
+    if let Some(w) = model.windows.get_mut(&window) {
+        w.name = c.name;
+    }
+    Ok(String::new())
+}
+
+/// Which way `next-window` / `previous-window` steps.
+#[derive(Clone, Copy)]
+pub enum Step {
+    Next,
+    Previous,
+}
+
+/// `next-window` / `previous-window`: the target session's next or
+/// previous window by index, wrapping around as tmux does.
+pub fn step_window(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: WindowStep,
+    step: Step,
+) -> Result<String, String> {
+    let model = &mut state.model;
+    let session = model.resolve_session(&c.target, ctx)?;
+    let s = &model.sessions[&session];
+    let n = s.windows.len();
+    if n < 2 {
+        return Err(match step {
+            Step::Next => "no next window",
+            Step::Previous => "no previous window",
+        }
+        .to_string());
+    }
+    let pos = s.windows.iter().position(|w| *w == s.active).unwrap_or(0);
+    let pos = match step {
+        Step::Next => (pos + 1) % n,
+        Step::Previous => (pos + n - 1) % n,
+    };
+    let window = s.windows[pos];
+    model.select_window(window);
+    Ok(String::new())
+}
+
+/// `last-window`: back to the target session's previous window.
+pub fn last_window(state: &mut State, ctx: &ClientCtx, c: WindowStep) -> Result<String, String> {
+    let model = &mut state.model;
+    let session = model.resolve_session(&c.target, ctx)?;
+    let s = &model.sessions[&session];
+    let last = *s
+        .last_windows
+        .last()
+        .ok_or_else(|| "no last window".to_string())?;
+    model.select_window(last);
     Ok(String::new())
 }
 
@@ -85,10 +193,7 @@ pub fn select_window(
 ) -> Result<String, String> {
     let model = &mut state.model;
     let window = model.resolve_window(&c.target, ctx)?;
-    let session = model.windows[&window].session;
-    if let Some(s) = model.sessions.get_mut(&session) {
-        s.active = window;
-    }
+    model.select_window(window);
     Ok(String::new())
 }
 

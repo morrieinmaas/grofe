@@ -370,7 +370,8 @@ resolve correctly for a CLI call made from inside a pane:
 ```json
 {"grofe": 1, "mode": "control", "dialect": "grofe", "cwd": "/home/u/src", "pane": "%3", "env": {"SSH_AUTH_SOCK": "..."}}
 {"grofe": 1, "mode": "attach", "dialect": "tmux", "cwd": "...", "pane": null, "env": {...},
- "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "sync": true, "kitty_keys": true, "kitty_graphics": true}, "session": "main"}
+ "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true},
+ "target": "main", "detach_others": false, "nest": false}
 ```
 
 `pane` is `$GROFE_PANE` when set. `dialect` is `tmux` when the CLI was invoked
@@ -379,7 +380,9 @@ as `tmux` (D12), as in the attach example from `tmux attach`, and defaults to
 grofe pane or popup is allowed when the target session is a different one;
 the owner's claude-session-manager binding runs `tmux attach-session -t <agent
 session>` inside a popup, and detaching returns to the popup's caller. Only
-true self-nesting is refused unless `-f` is given: attaching to the session
+true self-nesting is refused unless `--nest` is given (grofe's own long
+flag; `-f` stays tmux's client-flags option, for the tmux front end):
+attaching to the session
 that contains the calling pane (for a popup, the session of the client that
 opened it), which would draw the session inside itself. The refusal uses
 tmux's message for a tmux-dialect request, grofe's otherwise (D12).
@@ -399,6 +402,7 @@ status. Subscribers have a bounded queue; on overflow events are dropped and an
 `events-dropped` notice is sent.
 
 **Attach mode:** after the JSON hello, binary frames `[u8 kind][u32 BE len][payload]`.
+The server answers the attach hello with exactly one JSON reply line (`{"id": 0, "ok": true, "out": ""}`, or `ok: false` with `err` for a refusal or a version mismatch, after which it closes), and only after an ok line do both sides switch to binary frames.
 
 | Direction | Kind | Payload |
 |---|---|---|

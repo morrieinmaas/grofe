@@ -1,0 +1,15 @@
+---
+source: tests/render.rs
+expression: "round_trip(&single((30, 3), COLOURS), &caps)"
+---
+|red idx rgb gry
+|biv ds bright
+|
+cursor: row 1 col 13 shape Block blink false
+r0 c0-2: fg=Red bg=Background
+r0 c4-6: fg=idx208 bg=Background
+r0 c8-10: fg=idx40 bg=Background
+r0 c12-14: fg=Foreground bg=idx244
+r1 c0-2: fg=Foreground bg=Background Flags(INVERSE | BOLD | ITALIC)
+r1 c4-5: fg=Foreground bg=Background Flags(DIM | STRIKEOUT)
+r1 c7-12: fg=BrightBlue bg=BrightRed

@@ -23,6 +23,7 @@ pub mod prompt;
 pub mod render;
 pub mod status;
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, FromRawFd, IntoRawFd, RawFd};
@@ -39,12 +40,15 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep, sleep_until};
-use tokio_util::codec::{Framed, LinesCodec};
+use tokio_util::codec::{Framed, FramedParts, FramedWrite, LinesCodec};
 
 use crate::cmd::{self, Command};
 use crate::event::Event;
 use crate::paths::{self, Env};
-use crate::protocol::{self, ClientCtx, Hello, Reply, Request};
+use crate::protocol::{self, ClientCtx, Frame, FrameCodec, HELLO_REPLY_ID, Hello, Reply, Request};
+use crate::server::input::InputHook;
+use crate::server::render::Overlay;
+use crate::types::ClientId;
 use pane::{PaneEvent, PaneEventKind};
 
 /// Logged once per server process, first thing after the log is open, as
@@ -71,7 +75,19 @@ pub enum ServerMsg {
     Pane(PaneEvent),
     /// A client connection ended.
     Closed,
-    // M2: client frames.
+    /// An attach hello; the actor accepts it (the connection then sends
+    /// the ok line and switches to frames) or refuses it.
+    Attach {
+        req: clients::AttachRequest,
+        reply: oneshot::Sender<Result<clients::Accepted, String>>,
+    },
+    /// A frame from an attached client.
+    ClientFrame {
+        client: ClientId,
+        frame: Frame,
+    },
+    /// An attached client's connection ended.
+    ClientGone(ClientId),
 }
 
 /// Settings read from the server's environment at start. They stand in for
@@ -114,6 +130,11 @@ pub struct State {
     pub wake: Arc<Notify>,
     /// Subscribers and the events commands recorded for them.
     pub events: events::Events,
+    /// Attached clients.
+    pub clients: BTreeMap<ClientId, clients::ClientEntry>,
+    /// Key tables, input hooks, overlays, window-size owners and the render
+    /// schedule: client state that is not per client.
+    pub registry: clients::Registry,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -147,6 +168,22 @@ pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<S
     dispatch::run(state, ctx, argv)
 }
 
+/// Adds an overlay drawn over every client's frame, after those registered
+/// before it.
+pub fn register_overlay(state: &mut State, overlay: Box<dyn Overlay + Send>) {
+    state.registry.overlays.push(overlay);
+}
+
+/// Adds a hook that sees every client's keys before the key tables, after
+/// those registered before it.
+pub fn register_input_hook(state: &mut State, hook: Box<dyn InputHook + Send>) {
+    state.registry.input_hooks.push(hook);
+}
+
+/// The server's own overlays and input hooks. M3 tasks (prompt, popups,
+/// menus) add one registration line each here.
+fn register_builtins(_state: &mut State) {}
+
 /// Handles one pane event. Events from a process `respawn-pane` already
 /// replaced (an older generation) or from a pane that is gone are ignored.
 /// A dead pane is reported (`pane-exited`, with its status) and removed
@@ -172,6 +209,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             if state.model.closed() {
                 state.exit = true;
             }
+            clients::changed(state);
         }
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
         _ => {}
@@ -294,6 +332,8 @@ async fn serve(
     let signals = (
         signal(SignalKind::terminate()).context("installing SIGTERM handler")?,
         signal(SignalKind::interrupt()).context("installing SIGINT handler")?,
+        // A handler, not SIG_IGN, which panes would inherit across exec.
+        signal(SignalKind::hangup()).context("installing SIGHUP handler")?,
     );
     let listener = match UnixListener::bind(&socket) {
         Ok(l) => l,
@@ -311,7 +351,7 @@ async fn serve(
     eprintln!("grofe server listening on {}", socket.display());
 
     let (pane_tx, pane_rx) = mpsc::channel(256);
-    let state = State {
+    let mut state = State {
         socket,
         model: model::Model::new(options.remain_on_exit),
         inner_term: pane::inner_term(),
@@ -319,6 +359,8 @@ async fn serve(
         pane_events: pane_tx,
         wake: Arc::new(Notify::new()),
         events: events::Events::default(),
+        clients: BTreeMap::new(),
+        registry: clients::Registry::default(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -333,12 +375,14 @@ async fn serve(
         shutdown: shutdown_rx,
         alive: alive_tx,
     };
+    register_builtins(&mut state);
     signal_ready(&mut ready, "ok");
 
     // The actor owns the listener (dropped when it returns: no more
     // accepts) and `conns`, the last `alive` sender outside connections.
-    let state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
+    let mut state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
     state.remove_socket();
+    clients::shutdown(&mut state, "server exited");
     // Hang up the panes and let go of the subscribers' queues before the
     // connections drain them.
     drop(state);
@@ -386,14 +430,20 @@ async fn actor(
     conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
-    (mut sigterm, mut sigint): (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
+    (mut sigterm, mut sigint, mut sighup): (
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+    ),
 ) -> State {
     // Set after an accept error: accepting pauses, commands and pane events
     // keep flowing.
     let mut accept_paused_until: Option<Instant> = None;
+    let wake = Arc::clone(&state.wake);
     loop {
         let idle =
             state.exit_when_empty && state.connections == 0 && state.model.sessions.is_empty();
+        let due = clients::deadline(&state).map(Instant::from_std);
         tokio::select! {
             msg = msgs.recv() => match msg {
                 Some(msg) => handle(&mut state, msg),
@@ -415,6 +465,11 @@ async fn actor(
                 if accept_paused_until.is_some() => accept_paused_until = None,
             // Falls through to the exit_if_empty below.
             _ = sleep(EMPTY_RECHECK), if idle => {}
+            // Pane output: redraw the clients showing it.
+            _ = wake.notified() => clients::wake(&mut state),
+            _ = sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                clients::tick(&mut state, std::time::Instant::now());
+            }
             _ = sigterm.recv() => {
                 eprintln!("grofe server: SIGTERM");
                 break;
@@ -423,6 +478,8 @@ async fn actor(
                 eprintln!("grofe server: SIGINT");
                 break;
             }
+            // As tmux's server: SIGHUP (its terminal going away) is ignored.
+            _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
         exit_if_empty(&mut state, &listener);
         if state.exit {
@@ -497,6 +554,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
         ServerMsg::Control { ctx, req, reply } => {
             let result = dispatch(state, &ctx, &req.argv);
             finish(state, req.id, result, reply);
+            clients::changed(state);
         }
         ServerMsg::Subscribe { req, reply, tx } => {
             let result = match cmd::parse(&req.argv) {
@@ -511,6 +569,11 @@ fn handle(state: &mut State, msg: ServerMsg) {
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
         ServerMsg::Closed => state.connections = state.connections.saturating_sub(1),
+        ServerMsg::Attach { req, reply } => {
+            let _ = reply.send(clients::attach(state, req));
+        }
+        ServerMsg::ClientFrame { client, frame } => clients::frame(state, client, frame),
+        ServerMsg::ClientGone(client) => clients::gone(state, client),
     }
 }
 
@@ -534,6 +597,11 @@ fn finish(
     state.events.flush();
 }
 
+/// How long a new connection may take to send its hello before it is
+/// closed. Clients send it at once (attach after at most its probe), so
+/// this only bounds connections that never will.
+const HELLO_DEADLINE: Duration = Duration::from_secs(5);
+
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written.
 async fn connection(
@@ -542,20 +610,41 @@ async fn connection(
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
 ) {
-    let mut lines = Framed::new(stream, protocol::lines_codec());
+    let codec = LinesCodec::new_with_max_length(protocol::HELLO_MAX_LEN);
+    let mut lines = Framed::new(stream, codec);
     let hello = tokio::select! {
-        line = lines.next() => line,
+        line = tokio::time::timeout(HELLO_DEADLINE, lines.next()) => line,
         _ = shutdown.changed() => return,
     };
-    let Some(Ok(hello)) = hello else { return };
+    let Ok(Some(Ok(hello))) = hello else { return };
+    // Past the hello, requests may be as large as any message.
+    *lines.codec_mut() = protocol::lines_codec();
     let ctx = match protocol::decode_hello(&hello) {
         Ok(Hello::Control(ctx)) => ctx,
-        Ok(Hello::Attach { .. }) => {
-            let _ = send(&mut lines, &error_reply(0, "attach is not supported yet")).await;
+        Ok(Hello::Attach {
+            ctx,
+            cols,
+            rows,
+            term,
+            caps,
+            target,
+            detach_others,
+            nest,
+        }) => {
+            let req = clients::AttachRequest {
+                ctx,
+                size: (cols, rows),
+                term,
+                caps,
+                target,
+                detach_others,
+                nest,
+            };
+            attach(lines, req, msgs).await;
             return;
         }
         Err(e) => {
-            let _ = send(&mut lines, &error_reply(0, &e.to_string())).await;
+            refuse(lines, &e.to_string()).await;
             return;
         }
     };
@@ -617,6 +706,93 @@ async fn connection(
             break;
         }
     }
+}
+
+/// An attach connection: the actor accepts or refuses the hello; on
+/// accept the ok line goes out and the connection switches to binary
+/// frames, keeping any bytes already read past the hello (typeahead).
+///
+/// The stream is split so a client that stops reading can block only its
+/// own writes: input and `detach` keep flowing to the actor, and the actor
+/// only ever leaves one pending frame for the writer ([`clients::Outbox`]).
+async fn attach(
+    mut lines: Framed<UnixStream, LinesCodec>,
+    req: clients::AttachRequest,
+    msgs: mpsc::Sender<ServerMsg>,
+) {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let msg = ServerMsg::Attach {
+        req,
+        reply: reply_tx,
+    };
+    if msgs.send(msg).await.is_err() {
+        return;
+    }
+    let accepted = match reply_rx.await {
+        Ok(Ok(accepted)) => accepted,
+        Ok(Err(e)) => return refuse(lines, &e).await,
+        Err(_) => return,
+    };
+    let id = accepted.id;
+    let ok = Reply::Ok {
+        id: HELLO_REPLY_ID,
+        out: String::new(),
+    };
+    if send(&mut lines, &ok).await.is_err() {
+        let _ = msgs.send(ServerMsg::ClientGone(id)).await;
+        return;
+    }
+    let parts = lines.into_parts();
+    let (read, write) = parts.io.into_split();
+    // `from_parts` marks a non-empty buffer readable, so frames that came in
+    // with the hello are decoded at once. (`FramedRead::new` with the bytes
+    // pushed into its buffer would wait for the next read first.)
+    let mut read_parts = FramedParts::new::<Frame>(read, FrameCodec);
+    read_parts.read_buf = parts.read_buf;
+    let mut frames = Framed::from_parts(read_parts);
+    let reader = async {
+        while let Some(Ok(frame)) = frames.next().await {
+            let msg = ServerMsg::ClientFrame { client: id, frame };
+            if msgs.send(msg).await.is_err() {
+                return;
+            }
+        }
+    };
+    let writer = write_frames(FramedWrite::new(write, FrameCodec), accepted);
+    tokio::select! {
+        () = writer => {}
+        () = reader => {}
+    }
+    // Whichever side ended (the client hung up, a write failed, or the
+    // exit frame went out), the actor forgets the client; after a detach
+    // it already has, and this is a no-op.
+    let _ = msgs.send(ServerMsg::ClientGone(id)).await;
+}
+
+/// Writes an attached client's frames, one at a time as the actor leaves
+/// them, then the `exit` frame once the actor let go of the client.
+async fn write_frames(
+    mut out: FramedWrite<tokio::net::unix::OwnedWriteHalf, FrameCodec>,
+    mut accepted: clients::Accepted,
+) {
+    while let Some(bytes) = accepted.output.recv().await {
+        // A redraw of a huge client can pass the frame cap: it goes out as
+        // consecutive frames, which the client just writes in order.
+        for chunk in bytes.chunks(protocol::MAX_MESSAGE_LEN) {
+            if out.send(Frame::Output(chunk.to_vec())).await.is_err() {
+                return;
+            }
+        }
+    }
+    let reason = (&mut accepted.exit)
+        .await
+        .unwrap_or_else(|_| "server exited".to_string());
+    let _ = out.send(Frame::Exit(reason)).await;
+}
+
+/// Sends a hello's error line; the connection then closes.
+async fn refuse(mut lines: Framed<UnixStream, LinesCodec>, err: &str) {
+    let _ = send(&mut lines, &error_reply(HELLO_REPLY_ID, err)).await;
 }
 
 fn error_reply(id: u64, err: &str) -> Reply {

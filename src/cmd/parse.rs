@@ -9,12 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    CapturePane, Command, DisplayMessage, HasSession, KillPane, KillServer, KillSession,
-    KillWindow, ListPanes, ListSessions, ListWindows, NewSession, NewWindow, OptionScope,
-    ParseError, ResizeAction, ResizePane, RespawnPane, SelectPane, SelectWindow, SendKeys,
-    SendKeysItem, SetOption, ShowOptions, SplitWindow, Subscribe, Target,
+    AttachSession, CapturePane, Command, DetachClient, DisplayMessage, HasSession, KillPane,
+    KillServer, KillSession, KillWindow, ListClients, ListPanes, ListSessions, ListWindows,
+    NewSession, NewWindow, OptionScope, ParseError, Rename, ResizeAction, ResizePane, RespawnPane,
+    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetOption, ShowOptions,
+    SplitWindow, Subscribe, SwitchClient, Target, WindowStep,
 };
-use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize};
+use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
 /// Whether a short/long flag takes a value, and if so whether it's
 /// required.
@@ -91,7 +92,7 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
                 Some((canonical, FlagKind::Bool)) => {
                     flags.long_present.insert(canonical);
                 }
-                // No M1 long flag currently takes a value; if one is
+                // No long flag currently takes a value; if one is
                 // added, wire attached/separate value handling in here.
                 _ => return Err(ParseError::UnknownLongFlag(cmd_name.to_string())),
             }
@@ -154,6 +155,24 @@ fn parse_u16(s: &str, what: &str) -> Result<u16, ParseError> {
         .map_err(|_| ParseError::Other(format!("invalid {what}: {s}")))
 }
 
+/// `new-session -x/-y`, as tmux 3.7b reads them: `strtonum(1, USHRT_MAX)`
+/// with its `too small` / `too large` / `invalid` wording, then capped at
+/// [`WINDOW_MAXIMUM`].
+fn parse_window_size(s: &str, what: &str) -> Result<u16, ParseError> {
+    let err = |why: &str| ParseError::Other(format!("{what} {why}"));
+    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(err("invalid"));
+    }
+    match s.parse::<i64>() {
+        Ok(n) if n < 1 => Err(err("too small")),
+        Ok(n) if n > i64::from(u16::MAX) => Err(err("too large")),
+        Ok(n) => Ok((n as u16).min(WINDOW_MAXIMUM)),
+        Err(_) if s.starts_with('-') => Err(err("too small")),
+        Err(_) => Err(err("too large")),
+    }
+}
+
 /// Rejects positionals beyond `max`, worded like tmux's own CLI:
 /// `command <cmd_name>: too many arguments (need at most <max>)`.
 fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Result<(), ParseError> {
@@ -184,12 +203,12 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
     let width = flags
         .values
         .get(&'x')
-        .map(|s| parse_u16(s, "width"))
+        .map(|s| parse_window_size(s, "width"))
         .transpose()?;
     let height = flags
         .values
         .get(&'y')
-        .map(|s| parse_u16(s, "height"))
+        .map(|s| parse_window_size(s, "height"))
         .transpose()?;
     Ok(Command::NewSession(NewSession {
         detached: flags.present.contains(&'d'),
@@ -537,6 +556,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
 
 const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
+    ('e', FlagKind::Bool),
     ('S', FlagKind::Value),
     ('E', FlagKind::Value),
     ('t', FlagKind::Value),
@@ -574,7 +594,7 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
         opts: CaptureOpts {
             start,
             end,
-            escapes: false, // -e is M2 (spec §4.5).
+            escapes: flags.present.contains(&'e'),
         },
     }))
 }
@@ -715,6 +735,132 @@ fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+const ATTACH_SESSION_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('d', FlagKind::Bool)];
+const ATTACH_SESSION_LONG: &[(&str, FlagKind)] = &[("nest", FlagKind::Bool)];
+
+fn parse_attach_session(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: ATTACH_SESSION_SHORT,
+            long: ATTACH_SESSION_LONG,
+        },
+        "attach-session",
+    )?;
+    no_extra_positionals(&flags, "attach-session", 0)?;
+    Ok(Command::AttachSession(AttachSession {
+        target: target_or_current(&flags.values, 't')?,
+        detach_others: flags.present.contains(&'d'),
+        nest: flags.long_present.contains("nest"),
+    }))
+}
+
+const DETACH_CLIENT_SHORT: &[(char, FlagKind)] = &[
+    ('s', FlagKind::Value),
+    ('t', FlagKind::Value),
+    ('a', FlagKind::Bool),
+];
+
+fn parse_detach_client(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: DETACH_CLIENT_SHORT,
+            long: &[],
+        },
+        "detach-client",
+    )?;
+    no_extra_positionals(&flags, "detach-client", 0)?;
+    Ok(Command::DetachClient(DetachClient {
+        session: flags
+            .values
+            .get(&'s')
+            .map(|s| parse_target(s))
+            .transpose()?,
+        client: flags.values.get(&'t').cloned(),
+        all_others: flags.present.contains(&'a'),
+    }))
+}
+
+fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: FORMAT_ONLY_SHORT,
+            long: &[],
+        },
+        "list-clients",
+    )?;
+    no_extra_positionals(&flags, "list-clients", 0)?;
+    Ok(Command::ListClients(ListClients {
+        format: flags.values.get(&'F').cloned(),
+    }))
+}
+
+fn parse_window_step(argv: &[String], cmd_name: &str) -> Result<WindowStep, ParseError> {
+    Ok(WindowStep {
+        target: parse_target_only(argv, cmd_name)?,
+    })
+}
+
+fn parse_rename(argv: &[String], cmd_name: &str) -> Result<Rename, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: TARGET_ONLY_SHORT,
+            long: &[],
+        },
+        cmd_name,
+    )?;
+    no_extra_positionals(&flags, cmd_name, 1)?;
+    let name = flags
+        .positionals
+        .first()
+        .cloned()
+        .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))?;
+    Ok(Rename {
+        target: target_or_current(&flags.values, 't')?,
+        name,
+    })
+}
+
+const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
+    ('t', FlagKind::Value),
+    ('l', FlagKind::Bool),
+    ('n', FlagKind::Bool),
+    ('p', FlagKind::Bool),
+    ('T', FlagKind::Value),
+];
+
+fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: SWITCH_CLIENT_SHORT,
+            long: &[],
+        },
+        "switch-client",
+    )?;
+    no_extra_positionals(&flags, "switch-client", 0)?;
+    Ok(Command::SwitchClient(SwitchClient {
+        target: flags
+            .values
+            .get(&'t')
+            .map(|s| parse_target(s))
+            .transpose()?,
+        last: flags.present.contains(&'l'),
+        next: flags.present.contains(&'n'),
+        previous: flags.present.contains(&'p'),
+        key_table: flags.values.get(&'T').cloned(),
+    }))
+}
+
+fn parse_send_prefix(argv: &[String]) -> Result<Command, ParseError> {
+    Ok(Command::SendPrefix(SendPrefix {
+        target: parse_target_only(argv, "send-prefix")?,
+    }))
+}
+
 /// Resolves a handful of well-known tmux short names to the full command
 /// name `parse` matches on. `set`/`show` are load-bearing (spec §4.5);
 /// the rest are recognised where trivially table-driven.
@@ -736,6 +882,7 @@ fn canonical_name(name: &str) -> &str {
         "send" => "send-keys",
         "display" => "display-message",
         "capturep" => "capture-pane",
+        "attach" => "attach-session",
         other => other,
     }
 }
@@ -766,6 +913,22 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "display-message" => parse_display_message(rest),
         "kill-server" => parse_kill_server(rest),
         "subscribe" => parse_subscribe(rest),
+        "attach-session" => parse_attach_session(rest),
+        "detach-client" => parse_detach_client(rest),
+        "list-clients" => parse_list_clients(rest),
+        "next-window" => Ok(Command::NextWindow(parse_window_step(rest, "next-window")?)),
+        "previous-window" => Ok(Command::PreviousWindow(parse_window_step(
+            rest,
+            "previous-window",
+        )?)),
+        "last-window" => Ok(Command::LastWindow(parse_window_step(rest, "last-window")?)),
+        "rename-session" => Ok(Command::RenameSession(parse_rename(
+            rest,
+            "rename-session",
+        )?)),
+        "rename-window" => Ok(Command::RenameWindow(parse_rename(rest, "rename-window")?)),
+        "switch-client" => parse_switch_client(rest),
+        "send-prefix" => parse_send_prefix(rest),
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }
@@ -1580,5 +1743,164 @@ mod tests {
             let result = parse(&argv(case));
             assert!(result.is_ok(), "{case:?} failed: {result:?}");
         }
+    }
+
+    fn session(name: &str) -> Target {
+        Target::Session(SessionRef::Name(name.to_string()))
+    }
+
+    #[test]
+    fn attach_session_flags_and_alias() {
+        let want = Command::AttachSession(AttachSession {
+            target: session("work"),
+            detach_others: true,
+            nest: true,
+        });
+        let full = ["attach-session", "-d", "-t", "work", "--nest"];
+        assert_eq!(parse(&argv(&full)), Ok(want.clone()));
+        let short = ["attach", "-dtwork", "--nest"];
+        assert_eq!(parse(&argv(&short)), Ok(want));
+        assert_eq!(
+            parse(&argv(&["attach"])),
+            Ok(Command::AttachSession(AttachSession {
+                target: Target::Current,
+                detach_others: false,
+                nest: false,
+            }))
+        );
+    }
+
+    /// tmux's `-f` takes client flags; natively it is not a flag at all
+    /// (`--nest` forces nesting), so the tmux front end can own it.
+    #[test]
+    fn attach_session_rejects_dash_f() {
+        let err = parse(&argv(&["attach", "-f"])).unwrap_err();
+        assert_eq!(err.to_string(), "command attach-session: unknown flag -f");
+    }
+
+    #[test]
+    fn detach_client_flags() {
+        assert_eq!(
+            parse(&argv(&["detach-client", "-a", "-s", "work", "-t", "c1"])),
+            Ok(Command::DetachClient(DetachClient {
+                session: Some(session("work")),
+                client: Some("c1".to_string()),
+                all_others: true,
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["detach-client"])),
+            Ok(Command::DetachClient(DetachClient {
+                session: None,
+                client: None,
+                all_others: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn list_clients_with_format() {
+        assert_eq!(
+            parse(&argv(&["list-clients", "-F", "#{client_width}"])),
+            Ok(Command::ListClients(ListClients {
+                format: Some("#{client_width}".to_string()),
+            }))
+        );
+    }
+
+    #[test]
+    fn window_steps_take_a_session_target() {
+        let step = WindowStep {
+            target: session("s"),
+        };
+        assert_eq!(
+            parse(&argv(&["next-window", "-t", "s"])),
+            Ok(Command::NextWindow(step.clone()))
+        );
+        assert_eq!(
+            parse(&argv(&["previous-window", "-t", "s"])),
+            Ok(Command::PreviousWindow(step.clone()))
+        );
+        assert_eq!(
+            parse(&argv(&["last-window", "-t", "s"])),
+            Ok(Command::LastWindow(step))
+        );
+    }
+
+    #[test]
+    fn renames_take_a_target_and_one_name() {
+        assert_eq!(
+            parse(&argv(&["rename-session", "-t", "a", "b"])),
+            Ok(Command::RenameSession(Rename {
+                target: session("a"),
+                name: "b".to_string(),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["rename-window", "logs"])),
+            Ok(Command::RenameWindow(Rename {
+                target: Target::Current,
+                name: "logs".to_string(),
+            }))
+        );
+        let err = parse(&argv(&["rename-window"])).unwrap_err();
+        assert_eq!(err.to_string(), "command rename-window: missing argument");
+        let err = parse(&argv(&["rename-session", "a", "b"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "command rename-session: too many arguments (need at most 1)"
+        );
+    }
+
+    #[test]
+    fn switch_client_flags() {
+        assert_eq!(
+            parse(&argv(&[
+                "switch-client",
+                "-l",
+                "-n",
+                "-p",
+                "-t",
+                "s",
+                "-T",
+                "prefix"
+            ])),
+            Ok(Command::SwitchClient(SwitchClient {
+                target: Some(session("s")),
+                last: true,
+                next: true,
+                previous: true,
+                key_table: Some("prefix".to_string()),
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["switch-client"])),
+            Ok(Command::SwitchClient(SwitchClient {
+                target: None,
+                last: false,
+                next: false,
+                previous: false,
+                key_table: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn send_prefix_takes_a_pane_target() {
+        assert_eq!(
+            parse(&argv(&["send-prefix"])),
+            Ok(Command::SendPrefix(SendPrefix {
+                target: Target::Current,
+            }))
+        );
+    }
+
+    #[test]
+    fn capture_pane_e_sets_escapes() {
+        let Ok(Command::CapturePane(c)) = parse(&argv(&["capture-pane", "-e", "-p"])) else {
+            panic!("capture-pane -e did not parse");
+        };
+        assert!(c.opts.escapes);
+        assert!(c.print);
     }
 }

@@ -506,6 +506,7 @@ mod tests {
             cwd: std::path::PathBuf::from("/"),
             pane,
             env: Vec::new(),
+            client: None,
         }
     }
 

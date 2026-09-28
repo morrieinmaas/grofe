@@ -20,9 +20,9 @@ use crate::cmd::{
 };
 use crate::event::Event;
 use crate::protocol::ClientCtx;
-use crate::server::State;
 use crate::server::events::Events;
 use crate::server::model::{Model, PANE_BASE_INDEX};
+use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
 pub const REMAIN_ON_EXIT: &str = "remain-on-exit";
@@ -34,6 +34,13 @@ enum Kind {
     Number {
         max: i64,
     },
+    /// Free text, stored as given. Formats and styles in it are checked
+    /// where they are used (the status line), not here.
+    String,
+    /// One of a fixed set of words (tmux's choice options).
+    Choice(&'static [&'static str]),
+    /// A key name or `None`, stored in tmux's canonical spelling.
+    Key,
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -45,9 +52,16 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 has. `history-limit`, `base-index` and
-// `pane-base-index` are stored and shown, but the model still uses its
+// ponytail: only the options M1 and M2 need. `history-limit`, `base-index`
+// and `pane-base-index` are stored and shown, but the model still uses its
 // constants for them until config (M3) wires options through.
+//
+// M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
+// tmux's except where grofe differs on purpose or M2 formats cannot yet say
+// the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
+// `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
+// title, and the window formats without `#{window_flags}` (M3.6). tmux's
+// escape-time is a server option; grofe's server scope is global.
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -75,6 +89,107 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
+        // A choice in tmux 3.7b (`off`, `on`, `failed`), so `yes` is refused
+        // and a bad value is `unknown value`. ponytail: `failed` is not
+        // supported until something needs it.
+        kind: Kind::Choice(&["off", "on"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "status",
+        kind: Kind::Choice(&["off", "on", "2", "3", "4", "5"]),
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "status-left",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "[#{session_name}] ",
+    },
+    Builtin {
+        name: "status-right",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "%H:%M %d-%b-%y",
+    },
+    Builtin {
+        name: "status-left-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "10",
+    },
+    Builtin {
+        name: "status-right-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "40",
+    },
+    Builtin {
+        name: "status-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=green,fg=black",
+    },
+    Builtin {
+        name: "status-interval",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "15",
+    },
+    Builtin {
+        name: "window-status-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name} ",
+    },
+    Builtin {
+        name: "window-status-current-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name}*",
+    },
+    Builtin {
+        name: "prefix",
+        kind: Kind::Key,
+        scope: OptionScope::Session,
+        default: "C-b",
+    },
+    Builtin {
+        name: "escape-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "25",
+    },
+    Builtin {
+        name: "repeat-time",
+        kind: Kind::Number { max: 2_000_000 },
+        scope: OptionScope::Session,
+        default: "500",
+    },
+    Builtin {
+        name: "automatic-rename",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "automatic-rename-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{b:pane_current_path}",
+    },
+    Builtin {
+        name: "allow-rename",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -228,8 +343,16 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         Kind::Bool => match value {
             "on" | "yes" | "true" | "1" => Ok("on".to_string()),
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
-            _ => Err(format!("unknown value: {value}")),
+            // tmux's wording for a flag option; choices say `unknown value`.
+            _ => Err(format!("bad value: {value}")),
         },
+        Kind::String => Ok(value.to_string()),
+        Kind::Key => crate::server::input::parse_prefix(value)
+            .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
+        Kind::Choice(words) => words
+            .contains(&value)
+            .then(|| value.to_string())
+            .ok_or_else(|| format!("unknown value: {value}")),
         Kind::Number { max } => {
             let too_small = || format!("value is too small: {value}");
             let too_large = || format!("value is too large: {value}");
@@ -297,7 +420,7 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     match cmd {
         Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
         Command::ShowOptions(c) => show_options(model, ctx, c),
-        Command::DisplayMessage(c) => display_message(model, ctx, c),
+        Command::DisplayMessage(c) => display_message(state, ctx, c),
         Command::ListSessions(c) => list_sessions(model, c),
         Command::ListWindows(c) => list_windows(model, ctx, c),
         Command::ListPanes(c) => list_panes(model, ctx, c),
@@ -339,6 +462,16 @@ fn set_option(
         None if builtin(&c.name).is_some_and(|b| b.kind == Kind::Bool) => {
             let current = model.options.lookup(&c.name, &owner_chain(model, owner));
             bool_str(current != Some("on")).to_string()
+        }
+        // As tmux: a choice option given no value flips `off` and `on`
+        // and leaves any other word as it is.
+        None if builtin(&c.name).is_some_and(|b| matches!(b.kind, Kind::Choice(_))) => {
+            let current = model.options.lookup(&c.name, &owner_chain(model, owner));
+            match current {
+                Some("off") => "on".to_string(),
+                Some("on") => "off".to_string(),
+                other => other.unwrap_or_default().to_string(),
+            }
         }
         // An unknown name is reported before an absent value (tmux checks
         // the name first).
@@ -388,15 +521,50 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         .collect())
 }
 
-/// A value as `show-options` prints it, as tmux does: `''` when empty,
-/// double-quoted when it holds whitespace.
+/// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
+/// `''` when empty; double quotes when it holds any of `` #';${}%`` (with
+/// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
+/// a lone special character or `~` backslash-escaped; a leading `~`
+/// escaped; control characters C-style or octal.
 fn quote(value: &str) -> String {
+    const DOUBLE: &str = " #';${}%";
     if value.is_empty() {
-        "''".to_string()
-    } else if value.contains(char::is_whitespace) {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        return "''".to_string();
+    }
+    let quotes = if value.contains(|c| DOUBLE.contains(c)) {
+        Some('"')
+    } else if value.contains('"') {
+        Some('\'')
     } else {
-        value.to_string()
+        None
+    };
+    let mut chars = value.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && c != ' '
+        && (quotes.is_some() || c == '~')
+    {
+        return format!("\\{c}");
+    }
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            '\r' => escaped.push_str("\\r"),
+            '"' | '$' if quotes == Some('"') => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            c if c.is_ascii_control() => escaped.push_str(&format!("\\{:03o}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    let tilde = if escaped.starts_with('~') { "\\" } else { "" };
+    match quotes {
+        Some('"') => format!("\"{tilde}{escaped}\""),
+        Some(_) => format!("'{escaped}'"),
+        None => format!("{tilde}{escaped}"),
     }
 }
 
@@ -405,12 +573,22 @@ fn quote(value: &str) -> String {
 const DEFAULT_MESSAGE: &str =
     "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index}";
 
-// ponytail: with no clients before M2, display-message prints its text
-// with or without `-p`; M2 shows it on the client's status line.
-fn display_message(model: &Model, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+/// `display-message`: the text expanded against the target pane and the
+/// current client (the one whose binding ran it, else the most recently
+/// active one, as tmux's `cmd_find_best_client`), so `#{client_width}`
+/// and the other `client_*` variables work.
+// ponytail: printed with or without `-p`; showing it on the client's
+// status line without `-p` is M3.6's (spec §4.5 listing row).
+fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+    let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
-    Ok(format!("{}\n", expand(text, &FormatCtx::new(model, pane))))
+    let vars = FormatCtx::new(model, pane);
+    let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => expand(text, &clients::ClientVars::new(model, client, Some(vars))),
+        None => expand(text, &vars),
+    };
+    Ok(format!("{out}\n"))
 }
 
 fn lines(model: &Model, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
@@ -489,6 +667,11 @@ impl FormatVars for FormatCtx<'_> {
             "window_id" => w.id.to_string(),
             "window_active" => flag(s.active == w.id),
             "window_zoomed_flag" => flag(w.zoomed),
+            "window_width" => w.cols.to_string(),
+            "window_height" => w.rows.to_string(),
+            "window_panes" => w.layout.compute(w.area()).len().to_string(),
+            "session_windows" => s.windows.len().to_string(),
+            "session_attached" => s.attached.to_string(),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
@@ -529,10 +712,10 @@ mod tests {
         assert_eq!(o.set(s, "@x", "a", false), Ok(true));
         assert_eq!(o.set(s, "@x", "a", false), Ok(false));
         assert_eq!(o.set(s, "@x", "b", false), Ok(true));
-        // A built-in normalizes before comparing: `yes` is `on`.
-        assert_eq!(o.set(Owner::Global, REMAIN_ON_EXIT, "on", false), Ok(true));
+        // A flag option normalizes before comparing: `yes` is `on`.
+        assert_eq!(o.set(Owner::Global, "allow-rename", "on", false), Ok(true));
         assert_eq!(
-            o.set(Owner::Global, REMAIN_ON_EXIT, "yes", false),
+            o.set(Owner::Global, "allow-rename", "yes", false),
             Ok(false)
         );
     }
@@ -620,5 +803,59 @@ mod tests {
         assert_eq!(quote("a"), "a");
         assert_eq!(quote("a b"), "\"a b\"");
         assert_eq!(quote(""), "''");
+    }
+
+    /// Each case recorded from tmux 3.7b (`set -g @t <value>; show -g @t`)
+    /// on a private socket.
+    /// Recorded on tmux 3.7b (`set -g prefix X; show -gv prefix`).
+    #[test]
+    fn prefix_is_a_key_name_stored_as_tmux_spells_it() {
+        for (given, stored) in [
+            ("C-a", "C-a"),
+            ("c-B", "C-B"),
+            ("M-C-x", "C-M-x"),
+            ("^a", "C-a"),
+            ("pgup", "PPage"),
+            ("none", "None"),
+            ("C-S-a", "C-S-a"),
+            ("S-Tab", "S-Tab"),
+            ("BTab", "BTab"),
+        ] {
+            assert_eq!(validate("prefix", given), Ok(stored.to_string()), "{given}");
+        }
+        assert_eq!(validate("prefix", "foo"), Err("bad key: foo".to_string()));
+    }
+
+    #[test]
+    fn show_quotes_like_tmux() {
+        for (value, shown) in [
+            ("a#b", "\"a#b\""),
+            ("a{b", "\"a{b\""),
+            ("#{x}", "\"#{x}\""),
+            ("a}b", "\"a}b\""),
+            ("ab", "ab"),
+            ("a\"b", "'a\"b'"),
+            ("a'b", "\"a'b\""),
+            ("a$b", "\"a\\$b\""),
+            ("a;b", "\"a;b\""),
+            ("a\\b", "a\\\\b"),
+            ("~a", "\\~a"),
+            ("a~", "a~"),
+            ("#", "\\#"),
+            ("~", "\\~"),
+            (" ", "\" \""),
+            ("~a b", "\"\\~a b\""),
+            ("a \"b", "\"a \\\"b\""),
+            ("a `b", "\"a `b\""),
+            ("a\tb", "a\\tb"),
+            ("a\nb", "a\\nb"),
+            ("a\u{1}b", "a\\001b"),
+            ("a \\b", "\"a \\\\b\""),
+            ("a,b", "a,b"),
+            ("[a]", "[a]"),
+            ("a%b", "\"a%b\""),
+        ] {
+            assert_eq!(quote(value), shown, "{value:?}");
+        }
     }
 }

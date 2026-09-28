@@ -2,14 +2,16 @@
 
 use crate::cmd::{
     self, CapturePane, Command, KillPane, ResizeAction, ResizePane, Resolve, RespawnPane,
-    SelectPane, SendKeys, SendKeysItem, SplitWindow,
+    SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
 use crate::server::State;
+use crate::server::dispatch::options;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::input::{self, parse_prefix};
 use crate::server::layout::LayoutError;
 use crate::server::model::{HISTORY_LIMIT, Model, PANE_BASE_INDEX};
-use crate::server::pane::{PaneHandle, PaneSpawn};
+use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::types::{Edge, PaneId, Rect, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -245,7 +247,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     let spec = PaneSpawn {
         id: pane,
         argv: argv.clone(),
-        cwd: p.cwd.clone(),
+        cwd: usable_cwd(p.cwd.clone()),
         env: model.sessions[&model.windows[&p.window].session]
             .env
             .clone(),
@@ -295,6 +297,30 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     handle
         .enqueue_input(bytes)
         .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+    Ok(String::new())
+}
+
+/// `send-prefix`: the target pane's session `prefix` key, typed into the
+/// pane as encoded for its input modes. No prefix (`None`) sends nothing.
+pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<String, String> {
+    let model = &state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let prefix = model
+        .options
+        .lookup("prefix", &options::chain(model, pane))
+        .and_then(|v| parse_prefix(v).ok())
+        .flatten();
+    let Some(key) = prefix else {
+        return Ok(String::new());
+    };
+    let handle = &model.panes[&pane].handle;
+    let bytes = input::encode(&key, &handle.modes());
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+    handle
+        .enqueue_input(bytes)
+        .map_err(|e| format!("send-prefix: {pane}: {e}"))?;
     Ok(String::new())
 }
 

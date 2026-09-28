@@ -3,6 +3,21 @@
 //! One socket, two modes, chosen by the first line the client sends (spec
 //! §4.6). Control mode is newline-delimited JSON both ways ([`Request`] /
 //! [`Reply`]); attach mode follows its JSON [`Hello`] with binary [`Frame`]s.
+//!
+//! **Attach handshake (spec §4.6).** The server answers an attach hello with
+//! exactly ONE JSON [`Reply`] line, id [`HELLO_REPLY_ID`]: `Reply::Ok` (its
+//! `out` empty) when it accepts, or `Reply::Err` for a refusal (no such
+//! session, self-nesting without `--nest`) or a version mismatch, after which it
+//! closes the connection. After an ok line both sides switch to binary
+//! [`Frame`]s; bytes already buffered past the line belong to the frame
+//! stream and must not be dropped.
+//!
+//! **Attach check.** Before it touches the terminal, `grofe attach` sends
+//! [`ATTACH_CHECK`] with its `attach-session` arguments as a control
+//! request: the server resolves the target and refuses self-nesting as the
+//! attach hello would, without changing anything. Only on an `Ok` does the
+//! client probe the terminal and send the hello, so a bad target never
+//! costs a probe (tmux resolves the target before it opens the terminal).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -14,12 +29,18 @@ use tokio_util::bytes::{BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder, LinesCodec};
 
 use crate::event::Event;
-use crate::types::PaneId;
+use crate::types::{ClientId, PaneId};
 
 /// The size cap for a control-mode JSON line or a single attach-frame
 /// payload, so a bad peer can't make the server allocate unboundedly by
 /// claiming (or streaming) an enormous message.
 pub const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
+
+/// The longest hello line. A hello carries the client's whole environment,
+/// so this sits above macOS's ARG_MAX (1 MiB) and Linux's default
+/// environment limit, while still bounding what a connection that has not
+/// said who it is can make the server buffer.
+pub const HELLO_MAX_LEN: usize = 4 * 1024 * 1024;
 
 /// Builds the [`LinesCodec`] used for control-mode JSON lines, capped at
 /// [`MAX_MESSAGE_LEN`].
@@ -39,6 +60,11 @@ pub struct ClientCtx {
     /// spawned pane.
     #[serde(with = "env_map")]
     pub env: Vec<(String, String)>,
+    /// The attached client this request comes from: set by the server for
+    /// an attach connection and for commands its key bindings run; `None`
+    /// for one-shot CLI and control requests. Never on the wire.
+    #[serde(skip)]
+    pub client: Option<ClientId>,
 }
 
 /// (De)serializes [`ClientCtx::env`] as a JSON object, per spec §4.6.
@@ -77,6 +103,9 @@ mod env_map {
 #[serde(default)]
 pub struct Caps {
     pub truecolor: bool,
+    /// Styled (curly, dotted, dashed) and coloured underlines: SGR `4:x`
+    /// and SGR 58.
+    pub styled_underline: bool,
     pub sync: bool,
     pub kitty_keys: bool,
     pub kitty_graphics: bool,
@@ -96,10 +125,16 @@ pub enum Hello {
         rows: u16,
         term: String,
         caps: Caps,
-        /// The session to attach to; `None` when the client leaves it to
-        /// the server to pick (or create) one.
+        /// `attach -t`, raw: resolved by the server, so `s:1` keeps its
+        /// window part. `None` leaves the pick to the server.
         #[serde(default)]
-        session: Option<String>,
+        target: Option<String>,
+        /// `attach -d`: detach the session's other clients.
+        #[serde(default)]
+        detach_others: bool,
+        /// `attach --nest`: allow self-nesting (spec §4.6).
+        #[serde(default)]
+        nest: bool,
     },
 }
 
@@ -107,6 +142,14 @@ pub enum Hello {
 /// line (spec §4.6). Until M6 the protocol is internal and may change
 /// between commits.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// The `id` of the one [`Reply`] line that answers an attach hello (a hello
+/// carries no request id of its own). See the module docs for the handshake.
+pub const HELLO_REPLY_ID: u64 = 0;
+
+/// The control verb of the attach check (module docs): `argv[1..]` are
+/// `attach-session`'s arguments.
+pub const ATTACH_CHECK: &str = "__attach-check";
 
 /// Which side of a version mismatch needs to upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +182,8 @@ pub enum ProtocolError {
     },
     #[error("malformed hello: {0}")]
     Malformed(#[from] serde_json::Error),
+    #[error("environment too large: the hello is {len} bytes, over the 4 MiB limit")]
+    TooLarge { len: usize },
 }
 
 /// Encodes `hello` as the JSON hello line, embedding [`PROTOCOL_VERSION`]
@@ -148,7 +193,11 @@ pub fn encode_hello(hello: &Hello) -> Result<String, ProtocolError> {
     if let serde_json::Value::Object(map) = &mut value {
         map.insert("grofe".to_string(), PROTOCOL_VERSION.into());
     }
-    Ok(value.to_string())
+    let line = value.to_string();
+    if line.len() > HELLO_MAX_LEN {
+        return Err(ProtocolError::TooLarge { len: line.len() });
+    }
+    Ok(line)
 }
 
 /// Decodes a hello line, checking the protocol version before the shape so
@@ -388,7 +437,28 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            client: None,
         }
+    }
+
+    #[test]
+    fn an_over_cap_hello_names_the_environment() {
+        let env = [("BIG", "x".repeat(HELLO_MAX_LEN))];
+        let hello = Hello::Control(ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            client: None,
+        });
+        let err = encode_hello(&hello).unwrap_err().to_string();
+        assert!(
+            err.starts_with("environment too large: the hello is "),
+            "{err}"
+        );
+        assert!(err.ends_with("bytes, over the 4 MiB limit"), "{err}");
     }
 
     #[test]
@@ -407,11 +477,14 @@ mod tests {
             term: "xterm-ghostty".to_string(),
             caps: Caps {
                 truecolor: true,
+                styled_underline: true,
                 sync: true,
                 kitty_keys: true,
                 kitty_graphics: true,
             },
-            session: Some("main".to_string()),
+            target: Some("main:2".to_string()),
+            detach_others: true,
+            nest: true,
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
@@ -437,7 +510,9 @@ mod tests {
             rows: 50,
             term: "xterm-ghostty".to_string(),
             caps: Caps::default(),
-            session: None,
+            target: None,
+            detach_others: false,
+            nest: false,
         };
         let line = encode_hello(&hello).unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -445,17 +520,31 @@ mod tests {
         assert!(value.get("ctx").is_none());
         assert_eq!(value["cwd"], "/");
         assert_eq!(value["pane"], serde_json::Value::Null);
-        assert_eq!(value["session"], serde_json::Value::Null);
+        assert_eq!(value["target"], serde_json::Value::Null);
+        assert_eq!(value["detach_others"], false);
+        assert_eq!(value["nest"], false);
+        // The server-side client id never goes on the wire.
+        assert!(value.get("client").is_none());
     }
 
     #[test]
-    fn attach_hello_without_session_key_defaults_to_none() {
+    fn attach_hello_without_optional_keys_takes_defaults() {
         let line = r#"{"grofe":1,"mode":"attach","cwd":"/","pane":null,"env":{},
                         "cols":80,"rows":24,"term":"xterm","caps":{}}"#;
         let hello = decode_hello(line).unwrap();
         match hello {
-            Hello::Attach { session, caps, .. } => {
-                assert_eq!(session, None);
+            Hello::Attach {
+                ctx,
+                target,
+                detach_others,
+                nest,
+                caps,
+                ..
+            } => {
+                assert_eq!(target, None);
+                assert!(!detach_others);
+                assert!(!nest);
+                assert_eq!(ctx.client, None);
                 assert_eq!(caps, Caps::default());
             }
             other => panic!("expected Attach, got {other:?}"),
@@ -513,6 +602,40 @@ mod tests {
         let caps: Caps = serde_json::from_str(r#"{"truecolor":true}"#).unwrap();
         assert!(caps.truecolor);
         assert!(!caps.sync);
+        assert!(!caps.styled_underline);
+        let caps: Caps = serde_json::from_str(r#"{"styled_underline":true}"#).unwrap();
+        assert!(caps.styled_underline);
+    }
+
+    #[test]
+    fn attach_hello_flags_round_trip_and_client_is_not_sent() {
+        let mut c = ctx("/", None, &[]);
+        c.client = Some(ClientId(4));
+        let hello = Hello::Attach {
+            ctx: c,
+            cols: 80,
+            rows: 24,
+            term: "xterm".to_string(),
+            caps: Caps::default(),
+            target: Some("s:1".to_string()),
+            detach_others: true,
+            nest: true,
+        };
+        let decoded = decode_hello(&encode_hello(&hello).unwrap()).unwrap();
+        match decoded {
+            Hello::Attach {
+                ctx,
+                target,
+                detach_others,
+                nest,
+                ..
+            } => {
+                assert_eq!(target.as_deref(), Some("s:1"));
+                assert!(detach_others && nest);
+                assert_eq!(ctx.client, None);
+            }
+            other => panic!("expected Attach, got {other:?}"),
+        }
     }
 
     #[test]
