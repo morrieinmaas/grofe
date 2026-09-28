@@ -609,6 +609,8 @@ fn capture_pane_e_keeps_colours_and_attributes() {
 /// A coloured cell in the last column, recorded on tmux 3.7b: trailing
 /// blanks go, the SGR before the last cell stays (tmux trims the blank
 /// even when it is coloured), and the pen carries into the next line.
+/// This pins tmux's shape, not its bytes: grofe writes full `ESC[0;...m`
+/// forms where tmux writes the minimal SGR change.
 #[test]
 fn capture_pane_e_with_a_coloured_cell_in_the_last_column() {
     let srv = TestServer::start();
