@@ -153,7 +153,8 @@ Server
   `uid`. Tests run with `remain-on-exit = true`.
 - **Options** are scoped (global, session, window, pane). Built-in options are
   typed by the config schema. User options are prefixed `@` and are strings.
-  A user option set with `set -p --persist` is included in the M4 snapshot.
+  A user option set with `set -p --persist` is included in the M4 snapshot,
+  and stays marked until `set --no-persist` or an unset (§6).
   Setting an option to its current value is a no-op and emits no
   `option-changed` event, so hooks that re-set state on every tool call cost
   nothing downstream.
@@ -725,11 +726,14 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   `resume`. Every option set with `--persist`, at any scope. Runtime ids are not
   saved, and neither is any environment: a session's environment can hold
   secrets, and a restored session takes the restoring server's.
-- **Ending.** `kill-server` and SIGTERM write the state as it was before
-  teardown, so killing the server and restoring brings everything back. A
-  server that exits because its last session closed writes the empty state:
-  closing everything is a choice the next start respects. A crash leaves the
-  last debounced write.
+- **Ending.** `kill-server`, SIGTERM and SIGHUP write the state as it was
+  before shutdown, once, and then freeze the writer: a reboot or logout signals
+  every process in the session, so panes die and sessions close after the
+  server's signal, and none of that may reach the file. Killing the server and
+  restoring therefore brings everything back. Only a normal exit of the last
+  pane, with no termination signal pending, writes the empty state: closing
+  everything is a choice the next start respects. A crash leaves the last
+  debounced write.
 - **Versions.** A snapshot whose `version` this grofe does not know is renamed
   to `state.json.v<N>` before the server's first write, so an older grofe
   never overwrites a newer one's state; an unreadable one is renamed
@@ -737,7 +741,10 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
 - **What persists.** Identity-like options (`@agent_session`, `@agent_source`
   style) are set with `--persist`. State-like options (`@agent_state`) never
   are: after a restore the agents plugin shows a "restored" state until its
-  adapter reports, because a stale `working` is a lie.
+  adapter reports, because a stale `working` is a lie. The mark is sticky per
+  option: a later `set` without `--persist` keeps it (canopy's report path sets
+  values without the flag), and only `set --no-persist` or unsetting the
+  option clears it.
 - **Restore.** `grofe start-server --restore`, or `restore-on-start = true` in
   config (the default), recreates everything from the snapshot, and only into an
   empty server, so restoring twice cannot duplicate sessions. A server that
@@ -761,9 +768,13 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   (`pane-set-resume nvim -S <session>`), so the mechanism is not agent-shaped. A
   pane's resume is also set by the command it was spawned with and by
   `respawn-pane <cmd>`. `#{pane_resume}` shows it.
-  - `argv[0]` is resolved to an absolute path against the **caller's** `PATH`,
-    which every hello carries (§4.6), never the server's, so a server started at
-    boot with a minimal `PATH` can still run it (canopy ef20852).
+  - `argv[0]` is resolved to an absolute path, never against the server's
+    `PATH`, so a server started at boot with a minimal `PATH` can still run it
+    (canopy ef20852). A caller with pane context (a CLI inside a pane) is
+    resolved against its own `PATH`, which every hello carries (§4.6). A caller
+    without one, such as the agents plugin, whose environment is the server's,
+    is resolved against the target pane: its foreground process's own `PATH`
+    first, then the pane's spawn environment.
   - A resume is bound to the process that set it: the pane's foreground process
     group leader at set time, recorded by pid and start time so a reused pid
     does not count. When that process exits, the resume is cleared; a stopped
@@ -845,11 +856,11 @@ and the Lua API. The agents part and §7.1 are what M7 builds.
   | Key | Meaning |
   |---|---|
   | `id` | equals the directory name; charset `[A-Za-z0-9._:-]`, validated on entry and again on use (canopy 94435f6) |
-  | `command` | the agent's program name, matched against the pane's argv, never its comm |
+  | `command` | the agent's program name, non-empty, matched against the pane's argv, never its comm |
   | `resume_template` | argv that resumes a conversation; contains `{id}` |
-  | `launch_template` | argv that starts a new conversation at a chosen id; `{id}` required when `can_pin_at_launch` is `yes`, empty otherwise |
+  | `launch_template` | argv that starts a new conversation at a chosen id; must contain `{id}` when `can_pin_at_launch` is `yes`; may be empty (and is not checked) when `no` |
   | `can_pin_at_launch` | `yes` or `no`: whether the adapter can choose the session id at launch |
-  | `detect_draft` | command with `{pane}` reporting unsent input: exit 0 has a draft, 1 none, anything else undetermined; empty means the adapter cannot answer |
+  | `detect_draft` | command reporting unsent input, which must contain `{pane}` unless empty: exit 0 has a draft, 1 none, anything else undetermined; empty means the adapter cannot answer |
 
   grofe turns a template into an argv by substituting a validated id and
   splitting on spaces; a template with shell quoting or metacharacters is

@@ -17,8 +17,9 @@ redraw.
 
 **Your work survives a reboot.** In grofe a pane knows what it is running and
 how to bring it back. After a crash or a restart, your panes return in the same
-layout, in the same directories, running the same programs: your editor
-session, your REPL, the coding agent halfway through a conversation. No
+layout and the same directories. Panes that know how to resume come back
+running their program: your editor session, the coding agent halfway through
+a conversation. Every other pane comes back as a shell in its directory. No
 resurrect, no continuum, no list of process names to whitelist. Before you
 reboot, `grofe reboot-check` tells you exactly what will come back.
 
