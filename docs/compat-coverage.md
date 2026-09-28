@@ -553,7 +553,7 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `prefix` | 3 | yes |
 | `remain-on-exit` | 7 | yes |
 | `renumber-windows` | 1 | yes |
-| `set-clipboard` | 1 | no |
+| `set-clipboard` | 1 | yes |
 | `status` | 1 | yes |
 | `status-format[N]` | 1 | yes |
 | `status-interval` | 4 | yes |
@@ -607,7 +607,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{client_termname}` | 1 | no |
 | `#{client_tty}` | 22 | yes |
 | `#{copy_cursor_word}` | 2 | yes |
-| `#{cursor_y}` | 1 | no |
+| `#{cursor_y}` | 1 | yes |
 | `#{history_bytes}` | 1 | no |
 | `#{history_limit}` | 1 | no |
 | `#{history_size}` | 4 | yes |
