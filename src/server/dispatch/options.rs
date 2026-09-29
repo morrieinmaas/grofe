@@ -1263,22 +1263,34 @@ const DEFAULT_MESSAGE: &str =
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
 /// active one, as tmux's `cmd_find_best_client`), so `#{client_width}`
-/// and the other `client_*` variables work.
-// ponytail: printed with or without `-p`; showing it on the client's
-// status line without `-p` is M3.6's (spec §4.5 listing row).
-fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+/// and the other `client_*` variables work. With `-p` it is printed;
+/// without, it goes on that client's status line (`clients::
+/// display_message`, which logs it for `show-messages`), and with no
+/// client attached nothing happens, as in tmux 3.7b.
+fn display_message(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: DisplayMessage,
+) -> Result<String, String> {
     let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
-    let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+    let current = clients::current_client(state, ctx);
+    let out = match current.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
             expand(text, &ServerVars::new(state, pane, &client))
         }
         None => expand(text, &ServerVars::new(state, pane, &vars)),
     };
-    Ok(format!("{out}\n"))
+    if c.print {
+        return Ok(format!("{out}\n"));
+    }
+    if let Some(id) = current {
+        clients::display_message(state, id, &out);
+    }
+    Ok(String::new())
 }
 
 fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {

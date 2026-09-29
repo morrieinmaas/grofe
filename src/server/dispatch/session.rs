@@ -15,8 +15,18 @@ use crate::types::{SessionId, cap_size};
 
 /// `new-session`: a session with one window holding one pane. The server
 /// always creates it detached; without `-d` the CLI then attaches to it
-/// (`new_and_attach` in `main.rs`).
+/// (`new_and_attach` in `main.rs`). With `-A` and an existing `-s` name it
+/// attaches to that session instead ([`attach_existing`]).
 pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<String, String> {
+    if c.attach
+        && let Some(id) = c
+            .name
+            .as_deref()
+            .and_then(|n| state.model.session_by_name(n))
+    {
+        attach_existing(state, ctx, id);
+        return Ok(String::new());
+    }
     let model = &mut state.model;
     if let Some(name) = &c.name {
         check_name(model, name)?;
@@ -81,6 +91,29 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     Ok(String::new())
 }
 
+/// `new-session -A` for a session that exists, as tmux 3.7b's
+/// `attach-session`: an attached client (a binding's) switches to it.
+/// From the CLI the session becomes the most recently active one, so the
+/// `display-message -p #{session_id}` `new_and_attach` sends after it names
+/// this session and the CLI attaches to it; a second `-A` call therefore
+/// makes no duplicate.
+// ponytail: tmux 3.7b fails `new -A -s x -d` for an existing `x` from a
+// CLI with no terminal ("open terminal failed: not a terminal", recorded)
+// and attaches despite `-d` from one with a terminal. grofe cannot tell
+// that call from `new_and_attach`'s (which adds `-d` itself), so it
+// succeeds without attaching; `main.rs`'s `attaches` is where a tty check
+// would go.
+fn attach_existing(state: &mut State, ctx: &ClientCtx, id: SessionId) {
+    match ctx.client.filter(|c| state.clients.contains_key(c)) {
+        Some(client) => clients::show_session(state, client, id),
+        None => {
+            if let Some(s) = state.model.sessions.get_mut(&id) {
+                s.activity = Instant::now();
+            }
+        }
+    }
+}
+
 pub fn kill_session(state: &mut State, ctx: &ClientCtx, c: KillSession) -> Result<String, String> {
     let id = state.model.resolve_session(&c.target, ctx)?;
     let removed = state.model.remove_session(id);
@@ -131,16 +164,17 @@ pub fn rename_session(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<S
     Ok(String::new())
 }
 
-/// `switch-client` for the current client (the one whose binding ran it,
-/// else the most recently active one, as tmux picks): `-T` sets its key
-/// table; `-l` goes to its last session, `-n` / `-p` to the next or
-/// previous session by name (wrapping), otherwise to `-t`.
+/// `switch-client` for the `-c` client, else the current client (the one
+/// whose binding ran it, else the most recently active one, as tmux
+/// picks): `-T` sets its key table for its next key; `-l` goes to its last
+/// session, `-n` / `-p` to the next or previous session by name
+/// (wrapping), otherwise to `-t`.
 pub fn switch_client(
     state: &mut State,
     ctx: &ClientCtx,
     c: SwitchClient,
 ) -> Result<String, String> {
-    let id = clients::current_client(state, ctx).ok_or_else(|| "no current client".to_string())?;
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
     if let Some(table) = &c.key_table {
         if !state.registry.key_tables.exists(table) {
             return Err(format!("table {table} doesn't exist"));

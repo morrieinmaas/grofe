@@ -37,7 +37,7 @@ use nix::libc;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
-use crate::protocol::{Caps, ClientCtx, Dialect, Frame};
+use crate::protocol::{Caps, ClientCtx, Dialect, Failure, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
@@ -289,6 +289,11 @@ pub struct Registry {
     status_at: Option<Instant>,
     /// When window names are next checked (`automatic-rename`).
     names_at: Option<Instant>,
+    /// The status-line messages `show-messages` prints (TC.9), oldest
+    /// first, with when each was shown.
+    messages: VecDeque<(SystemTime, String)>,
+    /// `wait-for` channels (TC.9).
+    waits: BTreeMap<String, WaitChannel>,
 }
 
 impl Default for Registry {
@@ -303,6 +308,8 @@ impl Default for Registry {
             last_render: None,
             status_at: None,
             names_at: None,
+            messages: VecDeque::new(),
+            waits: BTreeMap::new(),
         }
     }
 }
@@ -505,6 +512,7 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
 /// Shows `text` as it is (styles in it are not drawn, as tmux shows a
 /// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
+    log_message(state, id, text);
     set_message(state, id, status::escape_hashes(text));
 }
 
@@ -514,7 +522,157 @@ pub fn show_message(state: &mut State, id: ClientId, text: &str) {
 /// status row (tmux's `message-line 0`) for `display-time`, or until a key
 /// is pressed; the rows below stay.
 pub fn display_message(state: &mut State, id: ClientId, text: &str) {
+    log_message(state, id, text);
     set_message(state, id, text.to_string());
+}
+
+/// How many messages `show-messages` keeps: tmux's `message-limit`
+/// default.
+// ponytail: fixed until `message-limit` is an option.
+const MESSAGE_LIMIT: usize = 1000;
+
+/// Adds a status-line message for client `id` to the server's message
+/// log, worded as tmux's `status_message_set` logs it.
+// ponytail: tmux also logs every command run after the config is loaded
+// (`<client> command: <cmd>`); grofe logs only the messages.
+fn log_message(state: &mut State, id: ClientId, text: &str) {
+    let Some(name) = state.clients.get(&id).map(|c| c.name.clone()) else {
+        return;
+    };
+    let log = &mut state.registry.messages;
+    log.push_back((SystemTime::now(), format!("{name} message: {text}")));
+    while log.len() > MESSAGE_LIMIT {
+        log.pop_front();
+    }
+}
+
+/// The message log (TC.9's `show-messages`), oldest first.
+pub(crate) fn messages(state: &State) -> impl DoubleEndedIterator<Item = &(SystemTime, String)> {
+    state.registry.messages.iter()
+}
+
+/// tmux's `format_pretty_time` without seconds (`#{t/p:...}`): `HH:MM`
+/// within a day, `%a%d` within the month or 28 days, `%d%b` within the
+/// year, else `%b%y`.
+pub(crate) fn pretty_time(t: SystemTime) -> String {
+    let secs = |t: SystemTime| {
+        t.duration_since(UNIX_EPOCH)
+            .map_or(0, |d| libc::time_t::try_from(d.as_secs()).unwrap_or(0))
+    };
+    let then = secs(t);
+    let now = secs(SystemTime::now()).max(then);
+    let age = now - then;
+    let (tm, now_tm) = (local_tm(then), local_tm(now));
+    let format = if age < 24 * 3600 {
+        "%H:%M"
+    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
+        "%a%d"
+    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
+        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
+    {
+        "%d%b"
+    } else {
+        "%b%y"
+    };
+    strftime(format, &tm)
+}
+
+fn local_tm(t: libc::time_t) -> libc::tm {
+    // SAFETY: `localtime_r` writes into the zeroed `tm` we own (all-zero
+    // is a valid `tm`).
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        tm
+    }
+}
+
+fn strftime(format: &str, tm: &libc::tm) -> String {
+    let Ok(format) = std::ffi::CString::new(format) else {
+        return String::new();
+    };
+    let mut buf = [0u8; 64];
+    // SAFETY: `buf` is writable for its length and `strftime` writes at
+    // most that many bytes, returning how many (0 on overflow).
+    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), tm) };
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+/// Client `id` redraws (`refresh-client`): only its status line with
+/// `status_only`, else everything, as if it had just attached.
+pub(crate) fn refresh(state: &mut State, id: ClientId, status_only: bool) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if !status_only {
+        c.outbox.prev = None;
+    }
+    c.dirty = true;
+    request_render(state, Instant::now());
+}
+
+/// Client `id`'s status rows as last drawn, and whether they are at the
+/// top of its screen (TC.9's `choose-client` preview copies them).
+pub(crate) fn drawn_status(state: &State, id: ClientId) -> Option<(&[StatusRow], bool)> {
+    let c = state.clients.get(&id)?;
+    Some((
+        &c.status_rows,
+        c.status_at == 0 && !c.status_rows.is_empty(),
+    ))
+}
+
+/// A client named on the command line (`-c` or `-t` of the client
+/// verbs), else the current client ([`current_client`]).
+pub(crate) fn target_client(
+    state: &State,
+    ctx: &ClientCtx,
+    name: Option<&str>,
+) -> Result<ClientId, String> {
+    match name {
+        Some(name) => client_by_name(state, name),
+        None => current_client(state, ctx).ok_or_else(|| "no current client".to_string()),
+    }
+}
+
+/// One `wait-for` channel (TC.9, M36-R1): signalled with nobody waiting,
+/// it stays woken until the next wait, as in tmux.
+#[derive(Default)]
+struct WaitChannel {
+    woken: bool,
+    waiters: Vec<oneshot::Sender<Result<String, Failure>>>,
+}
+
+/// `wait-for -S`: every waiter on `channel` is released; with none, the
+/// channel stays woken for the next wait.
+pub(crate) fn signal_channel(state: &mut State, channel: &str) {
+    let waits = &mut state.registry.waits;
+    let wc = waits.entry(channel.to_string()).or_default();
+    wc.waiters.retain(|tx| !tx.is_closed());
+    if wc.waiters.is_empty() {
+        wc.woken = true;
+        return;
+    }
+    for tx in wc.waiters.drain(..) {
+        let _ = tx.send(Ok(String::new()));
+    }
+    waits.remove(channel);
+}
+
+/// `wait-for`: returns at once when `channel` was woken; otherwise
+/// `reply` answers once it is signalled.
+pub(crate) fn wait_channel(
+    state: &mut State,
+    channel: &str,
+    reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
+) {
+    if state.registry.waits.get(channel).is_some_and(|wc| wc.woken) {
+        state.registry.waits.remove(channel);
+        return;
+    }
+    let tx = reply(state);
+    let wc = state.registry.waits.entry(channel.to_string()).or_default();
+    wc.waiters.retain(|tx| !tx.is_closed());
+    wc.waiters.push(tx);
 }
 
 fn set_message(state: &mut State, id: ClientId, text: String) {
@@ -1093,7 +1251,7 @@ pub fn follow(
 
 /// The visible panes of `w` and their rects in window coordinates (only
 /// the active pane when zoomed).
-fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
+pub(crate) fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
     if w.zoomed {
         vec![(w.active, w.area())]
     } else {
@@ -1477,7 +1635,7 @@ fn escape_time(model: &Model) -> Duration {
 }
 
 /// The session's `prefix` and `repeat-time`.
-fn key_settings(model: &Model, session: SessionId) -> KeySettings {
+pub(crate) fn key_settings(model: &Model, session: SessionId) -> KeySettings {
     let chain = [Owner::Session(session)];
     let default = KeySettings::default();
     KeySettings {
@@ -1871,6 +2029,44 @@ mod tests {
         assert!(deadline(&state).is_none_or(|d| d > Instant::now() + DISPLAY_TIME));
         input(&mut state, id, b"x", later);
         assert!(state.clients[&id].message.is_none());
+    }
+
+    /// TC.9: every status-line message is logged for `show-messages`, as
+    /// tmux logs `<client> message: <text>`, and the log keeps tmux's
+    /// `message-limit` newest.
+    #[test]
+    fn messages_are_logged_and_capped() {
+        let (mut state, id) = state_with_client();
+        display_message(&mut state, id, "hi");
+        show_message(&mut state, id, "an #[error]");
+        let log: Vec<&str> = messages(&state).map(|(_, m)| m.as_str()).collect();
+        assert_eq!(
+            log,
+            ["client-1 message: hi", "client-1 message: an #[error]"]
+        );
+        for i in 0..MESSAGE_LIMIT {
+            display_message(&mut state, id, &i.to_string());
+        }
+        assert_eq!(messages(&state).count(), MESSAGE_LIMIT);
+        assert_eq!(
+            messages(&state).next().map(|(_, m)| m.as_str()),
+            Some("client-1 message: 0")
+        );
+    }
+
+    /// tmux's `format_pretty_time`: the time of day within a day, else a
+    /// day and date, a date and month, or a month and year.
+    #[test]
+    fn pretty_times_follow_tmux() {
+        let now = SystemTime::now();
+        let t = pretty_time(now);
+        assert!(t.len() == 5 && t.as_bytes()[2] == b':', "{t}");
+        let year_ago = now - Duration::from_secs(400 * 24 * 3600);
+        let t = pretty_time(year_ago);
+        assert_eq!(t.len(), 5, "{t}");
+        assert!(t[3..].chars().all(|c| c.is_ascii_digit()), "{t}");
+        let week_ago = pretty_time(now - Duration::from_secs(7 * 24 * 3600));
+        assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
     }
 
     /// TC.10 fix round 1: a held client's input waits in order, holds
