@@ -531,3 +531,55 @@ fn kill_server_ends_a_popup_that_ignores_the_hangup() {
     let _ = wait_child(child, WAIT);
     drop(a);
 }
+
+/// A client resize fits the popup as tmux 3.7b does (recorded, 80x24 to
+/// 40x12 and back): no larger than the client, moved until it fits, over
+/// the status line when it must be, and its pty resized (the command sees
+/// the SIGWINCH); with room again it goes back to its own size and place.
+#[test]
+fn a_client_resize_fits_the_popup_and_its_pty() {
+    let srv = start();
+    let mut a = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
+    a.wait_until("the status row", WAIT, |t| {
+        t.lines().nth(23).unwrap_or_default().starts_with('[')
+    });
+    let child = popup(
+        &srv,
+        &[
+            "-w",
+            "60",
+            "-h",
+            "16",
+            "-T",
+            "ti",
+            "trap 'stty size' WINCH; stty size; while :; do sleep 0.2; done",
+        ],
+    );
+    a.wait_for("│14 58");
+    assert_eq!(
+        rows(&a.text())[3],
+        format!("         ┌─ti{}┐", "─".repeat(55))
+    );
+
+    a.resize(40, 12);
+    a.wait_for("│10 38");
+    let screen = rows(&a.text());
+    assert_eq!(screen[0], format!("┌─ti{}┐", "─".repeat(35)), "{screen:#?}");
+    assert_eq!(screen[1], format!("│14 58{:33}│", ""));
+    assert_eq!(
+        screen[11],
+        format!("└{}┘", "─".repeat(38)),
+        "over the status line"
+    );
+
+    a.resize(80, 24);
+    a.wait_until("the popup's own size again", WAIT, |t| {
+        t.lines().nth(3).unwrap_or("").starts_with("         ┌─ti─")
+            && t.lines()
+                .nth(6)
+                .unwrap_or("")
+                .starts_with("         │14 58")
+    });
+    a.send("\x03");
+    wait_child(child, WAIT).expect("answers");
+}

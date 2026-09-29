@@ -186,6 +186,29 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// The box as a `client`-sized terminal shows it, as tmux 3.7b's
+    /// `popup_resize_cb` fits it (recorded, 80x24 to 40x12 and back): no
+    /// larger than the client, moved left and up until it fits, and back
+    /// to its own size and place once the client has room again.
+    fn fitted(&self, (cols, rows): (u16, u16)) -> Frame {
+        if self.floating {
+            return self.clone();
+        }
+        let (w, h) = (self.size.0.min(cols), self.size.1.min(rows));
+        let fit = |at: i32, len: u16, room: u16| {
+            if at + i32::from(len) > i32::from(room) {
+                i32::from(room) - i32::from(len)
+            } else {
+                at
+            }
+        };
+        Frame {
+            at: (fit(self.at.0, w, cols), fit(self.at.1, h, rows)),
+            size: (w, h),
+            ..self.clone()
+        }
+    }
+
     /// The inside of the box: the command's pty.
     fn inside(&self) -> ((i32, i32), (u16, u16)) {
         let (w, h) = self.size;
@@ -228,7 +251,10 @@ impl Running {
 
 struct Popup {
     generation: u64,
+    /// As it was asked for; drawn [`Frame::fitted`] to the client.
     frame: Frame,
+    /// The pty's size now, so a client resize resizes it once.
+    pty: std::cell::Cell<(u16, u16)>,
     running: Running,
     /// The command's exit status once it has exited; after that the
     /// process is reaped, so it is never signalled again.
@@ -297,6 +323,7 @@ pub fn open(
         Popup {
             generation,
             frame,
+            pty: std::cell::Cell::new((cols, rows)),
             running: Running { handle, forwarder },
             exited: None,
             waiting: None,
@@ -555,7 +582,10 @@ fn mouse_bytes(
     {
         return Vec::new();
     }
-    let ((x, y), (cols, rows)) = frame.inside();
+    let Some(size) = state.clients.get(&client).map(|c| c.size) else {
+        return Vec::new();
+    };
+    let ((x, y), (cols, rows)) = frame.fitted(size).inside();
     let (dx, dy) = (i32::from(m.col) - x, i32::from(m.row) - y);
     let inside = (0..i32::from(cols)).contains(&dx) && (0..i32::from(rows)).contains(&dy);
     if !inside {
@@ -573,11 +603,19 @@ impl Overlay for PopupOverlay {
         let Some(popup) = state.popups.open.get(&client) else {
             return;
         };
-        let frame = &popup.frame;
+        let frame = &popup.frame.fitted((screen.cols, screen.rows));
+        let ((x, y), (cols, rows)) = frame.inside();
+        if cols == 0 || rows == 0 {
+            return;
+        }
+        if popup.pty.get() != (cols, rows) {
+            // A client resize: the command gets its SIGWINCH now.
+            popup.pty.set((cols, rows));
+            let _ = popup.running.handle.resize(cols, rows);
+        }
         if let Some(lines) = frame.lines {
             draw_box(screen, frame, lines);
         }
-        let ((x, y), (cols, rows)) = frame.inside();
         let snap = popup.running.handle.snapshot_rows(0..rows);
         for (r, row) in snap.rows.iter().enumerate() {
             for (c, cell) in row.iter().take(usize::from(cols)).enumerate() {
