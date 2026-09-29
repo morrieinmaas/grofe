@@ -107,9 +107,8 @@ pub fn display_popup(
 /// becomes the active pane, takes input and bindings as any pane does,
 /// is listed and counted with the window's panes, and closes as a pane
 /// does. `-P` prints it (`-F`, else tmux's `session:window.pane`).
-// ponytail: the pointer does not pick a floating pane (mouse.rs still
-// maps a click to the tiled pane under it), and the layout verbs
-// (resize-pane, swap-pane, select-layout) do not move one.
+// ponytail: a floating pane does not move when its window is resized,
+// and its border cannot be dragged.
 pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String, String> {
     let model = &state.model;
     let target = model.resolve_pane(&c.target, ctx)?;
