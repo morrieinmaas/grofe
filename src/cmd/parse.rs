@@ -1939,8 +1939,9 @@ pub fn split_argv(argv: &[String]) -> Vec<Vec<String>> {
 
 /// Resolves a handful of well-known tmux short names to the full command
 /// name `parse` matches on. `set`/`show` are load-bearing (spec §4.5);
-/// the rest are recognised where trivially table-driven.
-fn canonical_name(name: &str) -> &str {
+/// the rest are recognised where trivially table-driven. Public for
+/// `confirm-before`'s prompt, which names the command (TC.7).
+pub fn canonical_name(name: &str) -> &str {
     match name {
         "set" => "set-option",
         "show" => "show-options",

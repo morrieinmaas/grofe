@@ -1,60 +1,310 @@
 //! Menus and confirmations (TC.7): `display-menu`, `display-panes`,
-//! `confirm-before`, drawn by `server::menu`, and grofe aliases, expanded
-//! before a request is parsed ([`expand_aliases`]). TC.7 fills the
-//! handlers; each answers `not implemented: <verb>` until then.
+//! `confirm-before`, drawn by `server::menu` and `server::prompt`, and
+//! grofe aliases, expanded before a request is parsed ([`expand_aliases`]).
 
-use crate::cmd::{ConfirmBefore, DisplayMenu, DisplayPanes};
+use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry};
 use crate::protocol::ClientCtx;
-use crate::server::State;
+use crate::server::input::parse_key;
+use crate::server::menu::{self, Menu, MenuItem, Position};
+use crate::server::{State, clients, prompt};
 
-use super::not_implemented;
-
-/// `display-menu`.
-pub fn display_menu(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: DisplayMenu,
-) -> Result<String, String> {
-    not_implemented("display-menu")
+/// tmux's wording for a verb given no arguments.
+fn too_few_arguments(verb: &str) -> String {
+    cmd::ParseError::TooFewArguments(verb.to_string(), 1).to_string()
 }
 
-/// `display-panes`.
+/// `display-menu [-T title] [-x x] [-y y] name key command ...` on the
+/// current client, as tmux 3.7b: title, labels and commands are formats;
+/// an empty name is a separator, a name starting with `-` a disabled item;
+/// a key that is not a key name shows no key. Nothing opens while the
+/// client has a menu open, or when the menu does not fit. From the CLI the
+/// reply waits until the menu closes.
+pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Result<String, String> {
+    if c.items.is_empty() {
+        return Err(too_few_arguments("display-menu"));
+    }
+    let id = clients::current_client(state, ctx).ok_or("no current client")?;
+    let x = position(state, ctx, c.x.as_deref(), Axis::X)?;
+    let y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
+    let items = c
+        .items
+        .into_iter()
+        .map(|entry| match entry {
+            MenuEntry::Separator => MenuItem::Separator,
+            MenuEntry::Item { name, key, command } => MenuItem::Command {
+                label: name,
+                key: parse_key(&key).ok(),
+                command,
+            },
+        })
+        .collect();
+    let menu = Menu {
+        title: c.title,
+        items,
+        x,
+        y,
+    };
+    if menu::open(state, ctx, id, menu) {
+        menu::wait_for_close(state, ctx, id);
+    }
+    Ok(String::new())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+}
+
+/// A `-x`/`-y` value: tmux's letters (`C` either way, `P` and `R` for `x`,
+/// `P` for `y`), else a format expanded and read as C's `strtol` reads it
+/// (a leading number, else 0). The mouse letters (`M`, and `W`/`S` for the
+/// status line) are refused: grofe's mouse model passes the pointer as
+/// cells instead (TC.10, spec §4.5).
+fn position(
+    state: &State,
+    ctx: &ClientCtx,
+    value: Option<&str>,
+    axis: Axis,
+) -> Result<Position, String> {
+    let Some(value) = value else {
+        return Ok(Position::Centre);
+    };
+    match (value, axis) {
+        ("C", _) => return Ok(Position::Centre),
+        ("P", _) => return Ok(Position::Pane),
+        ("R", Axis::X) => return Ok(Position::PaneRight),
+        ("M" | "W", _) | ("S", Axis::Y) => {
+            return Err(format!("position needs the mouse: {value}"));
+        }
+        _ => {}
+    }
+    Ok(Position::Cells(strtol(&prompt::expand_command(
+        state, ctx, value,
+    ))))
+}
+
+/// C's `strtol(s, NULL, 10)`: blanks, a sign, then digits; 0 without any.
+fn strtol(s: &str) -> i64 {
+    let s = s.trim_start();
+    let (sign, digits) = match s.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    digits[..end].parse::<i64>().map_or(0, |n| sign * n)
+}
+
+/// `display-panes` on the current client: each pane labelled with its
+/// index until a key or tmux's `display-panes-time`; a digit selects that
+/// pane. From the CLI the reply waits until the labels close.
 pub fn display_panes(
-    _state: &mut State,
-    _ctx: &ClientCtx,
+    state: &mut State,
+    ctx: &ClientCtx,
     _c: DisplayPanes,
 ) -> Result<String, String> {
-    not_implemented("display-panes")
+    let id = clients::current_client(state, ctx).ok_or("no current client")?;
+    if menu::open_panes(state, id) {
+        menu::wait_for_close(state, ctx, id);
+    }
+    Ok(String::new())
 }
 
-/// `confirm-before`.
+/// `confirm-before [-p prompt] command`: a one-key prompt on the current
+/// client, `command` run only on `y`. The command must parse now, as
+/// tmux parses it when the prompt opens. Without `-p` the prompt names the
+/// first command, as tmux 3.7b words it (`Confirm 'kill-pane'? (y/n)`).
 pub fn confirm_before(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: ConfirmBefore,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: ConfirmBefore,
 ) -> Result<String, String> {
-    not_implemented("confirm-before")
+    let Some(command) = c.command else {
+        return Err(too_few_arguments("confirm-before"));
+    };
+    let cmds = cmd::split_command_string(&command).map_err(|e| e.to_string())?;
+    for argv in &cmds {
+        crate::compat::parse_split(ctx, argv)?;
+    }
+    let label = match c.prompt {
+        Some(p) => format!("{p} "),
+        None => {
+            let verb = cmds
+                .first()
+                .and_then(|argv| argv.first())
+                .map_or("", |v| cmd::parse::canonical_name(v));
+            format!("Confirm '{verb}'? (y/n) ")
+        }
+    };
+    prompt::confirm(state, ctx, label, command)
 }
 
-/// The request's argv with grofe aliases expanded (TC.7), or `None` to
-/// run it as it is. [`super::run`] and [`super::run_split`] call this
-/// before parsing, for every dialect.
-pub fn expand_aliases(_state: &State, _argv: &[String]) -> Option<Vec<String>> {
-    None
+/// The request's argv with grofe aliases expanded, or `None` to run it as
+/// it is. [`super::run`] and [`super::run_split`] call this before
+/// parsing, for every dialect. The aliases are the `command-alias` list,
+/// each `name=command`, as tmux 3.7b reads it (`cmd_get_alias`): the
+/// first entry whose name is exactly a command's verb replaces the verb
+/// with its command's words, and the command's own arguments follow. An
+/// alias is expanded once, never inside its own expansion. `argv` may hold
+/// several commands split at `;` arguments; each one's verb is looked up.
+// ponytail: a binding's already-split command is read the same way, so a
+// literal `;` argument in it would split it once an alias matches. An alias
+// whose value is a sequence (`a ; b`) is split only in a request's argv.
+pub fn expand_aliases(state: &State, argv: &[String]) -> Option<Vec<String>> {
+    let aliases = state.model.options.lookup_list("command-alias", &[])?;
+    let lookup = |verb: &str| {
+        aliases.values().find_map(|entry| {
+            let (name, value) = entry.split_once('=')?;
+            (name == verb).then_some(value)
+        })
+    };
+    let cmds = cmd::parse::split_argv(argv);
+    if !cmds
+        .iter()
+        .any(|words| words.first().is_some_and(|v| lookup(v).is_some()))
+    {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for words in cmds {
+        if !out.is_empty() {
+            out.push(";".to_string());
+        }
+        let expanded = words.first().and_then(|v| lookup(v)).and_then(|value| {
+            let mut value = cmd::split_command_string(value).ok()?;
+            let last = value.last_mut()?;
+            last.extend(words[1..].iter().cloned());
+            Some(value)
+        });
+        let commands = expanded.unwrap_or_else(|| vec![words]);
+        for (i, command) in commands.into_iter().enumerate() {
+            if i > 0 {
+                out.push(";".to_string());
+            }
+            // A word ending in `;` is a literal one: escape it again so the
+            // split that follows reads it back the same.
+            out.extend(command.into_iter().map(|w| match w.strip_suffix(';') {
+                Some(stem) => format!("{stem}\\;"),
+                None => w,
+            }));
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::server::{dispatch, test_ctx, test_state};
 
-    /// The stub edit's contract, replaced as each verb lands.
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    fn with_aliases(aliases: &[&str]) -> State {
+        let mut state = test_state();
+        for alias in aliases {
+            dispatch::run(
+                &mut state,
+                &test_ctx(),
+                &argv(&["set", "-ag", "command-alias", alias]),
+            )
+            .expect("set command-alias");
+        }
+        state
+    }
+
     #[test]
-    fn stubs_answer_not_implemented() {
+    fn an_alias_replaces_the_verb_and_keeps_the_arguments() {
+        let state = with_aliases(&["mya=display-message hi", "ren=rename-window -t main"]);
+        assert_eq!(
+            expand_aliases(&state, &argv(&["mya"])),
+            Some(argv(&["display-message", "hi"]))
+        );
+        assert_eq!(
+            expand_aliases(&state, &argv(&["ren", "new name"])),
+            Some(argv(&["rename-window", "-t", "main", "new name"]))
+        );
+        // Not an alias: run as it is.
+        assert_eq!(expand_aliases(&state, &argv(&["list-sessions"])), None);
+        // Exact names only.
+        assert_eq!(expand_aliases(&state, &argv(&["my"])), None);
+        assert_eq!(expand_aliases(&state, &argv(&["myab"])), None);
+        assert_eq!(expand_aliases(&test_state(), &argv(&["mya"])), None);
+    }
+
+    #[test]
+    fn each_command_of_a_sequence_is_looked_up() {
+        let state = with_aliases(&["mya=display-message hi", "two=a ; b x"]);
+        assert_eq!(
+            expand_aliases(&state, &argv(&["ls", ";", "mya", "a;"])),
+            Some(argv(&["ls", ";", "display-message", "hi", "a"]))
+        );
+        assert_eq!(
+            expand_aliases(&state, &argv(&["two", "y"])),
+            Some(argv(&["a", ";", "b", "x", "y"]))
+        );
+        // A literal `;` word survives the round trip.
+        let got = expand_aliases(&state, &argv(&["mya", "x\\;"])).expect("expanded");
+        assert_eq!(
+            cmd::parse::split_argv(&got),
+            vec![argv(&["display-message", "hi", "x;"])]
+        );
+    }
+
+    /// tmux 3.7b: the first entry with the name wins, and an alias is not
+    /// expanded inside its own expansion.
+    #[test]
+    fn the_first_alias_wins_and_expansion_happens_once() {
+        let state = with_aliases(&["a=b", "a=c", "b=display-message loop"]);
+        assert_eq!(expand_aliases(&state, &argv(&["a"])), Some(argv(&["b"])));
+    }
+
+    #[test]
+    fn an_alias_runs_as_its_command() {
+        let mut state = with_aliases(&["sesh=has-session -t nosuch"]);
+        let got = dispatch::run(&mut state, &test_ctx(), &argv(&["sesh"]));
+        assert_eq!(got, Err("can't find session: nosuch".to_string()));
+    }
+
+    #[test]
+    fn strtol_reads_a_leading_number() {
+        assert_eq!(strtol("12"), 12);
+        assert_eq!(strtol(" -5x"), -5);
+        assert_eq!(strtol("+3"), 3);
+        assert_eq!(strtol("R"), 0);
+        assert_eq!(strtol(""), 0);
+    }
+
+    #[test]
+    fn bare_verbs_are_too_few_arguments_and_menus_need_a_client() {
         let mut state = test_state();
         let ctx = test_ctx();
-        for verb in ["display-menu", "display-panes", "confirm-before"] {
-            let got = dispatch::run(&mut state, &ctx, &[verb.to_string()]);
-            assert_eq!(got, Err(format!("not implemented: {verb}")));
+        let run = |state: &mut State, words: &[&str]| dispatch::run(state, &ctx, &argv(words));
+        assert_eq!(
+            run(&mut state, &["display-menu"]),
+            Err(too_few_arguments("display-menu"))
+        );
+        assert_eq!(
+            run(&mut state, &["confirm-before"]),
+            Err(too_few_arguments("confirm-before"))
+        );
+        for words in [
+            &["display-menu", "a", "b", "c"][..],
+            &["display-panes"],
+            &["confirm-before", "kill-pane"],
+        ] {
+            assert_eq!(
+                run(&mut state, words),
+                Err("no current client".to_string()),
+                "{words:?}"
+            );
         }
+        assert_eq!(
+            run(&mut state, &["confirm-before", "no-such-verb"]),
+            Err("unknown command: no-such-verb".to_string())
+        );
     }
 }
