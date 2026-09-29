@@ -69,6 +69,136 @@ pub enum KeyCode {
     Delete,
     /// `F(1)` is F1.
     F(u8),
+    /// A bindable mouse key (`MouseDown1Pane`, TC.10); never sent to a
+    /// pane as a key.
+    Mouse(MouseKey),
+}
+
+/// A mouse key, as tmux 3.7b names them: what happened, with which button
+/// (`0` for the wheel), and where (spec §4.5 bindings row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MouseKey {
+    pub action: MouseAction,
+    pub button: u8,
+    pub place: MousePlace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseAction {
+    Down,
+    Up,
+    Drag,
+    DragEnd,
+    WheelUp,
+    WheelDown,
+    SecondClick,
+    DoubleClick,
+    TripleClick,
+}
+
+/// Where the pointer was: in a pane, on a border, or on the status line,
+/// in a window, session or user range (`Status`), in `status-left` or
+/// `status-right`'s own range, or in no range (`StatusDefault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MousePlace {
+    Pane,
+    Border,
+    Status,
+    StatusLeft,
+    StatusRight,
+    StatusDefault,
+    /// tmux 3.7's pane scrollbar parts and pane border controls (`Control0`
+    /// to `Control9`): the names parse and bind, grofe draws neither, so
+    /// they never fire.
+    ScrollbarUp,
+    ScrollbarSlider,
+    ScrollbarDown,
+    Control(u8),
+}
+
+const MOUSE_ACTIONS: &[(&str, MouseAction)] = &[
+    // Longest first: `MouseDragEnd` before `MouseDrag`.
+    ("MouseDragEnd", MouseAction::DragEnd),
+    ("MouseDrag", MouseAction::Drag),
+    ("MouseDown", MouseAction::Down),
+    ("MouseUp", MouseAction::Up),
+    ("WheelUp", MouseAction::WheelUp),
+    ("WheelDown", MouseAction::WheelDown),
+    ("SecondClick", MouseAction::SecondClick),
+    ("DoubleClick", MouseAction::DoubleClick),
+    ("TripleClick", MouseAction::TripleClick),
+];
+
+const MOUSE_PLACES: &[(&str, MousePlace)] = &[
+    ("Pane", MousePlace::Pane),
+    ("Border", MousePlace::Border),
+    ("Status", MousePlace::Status),
+    ("StatusLeft", MousePlace::StatusLeft),
+    ("StatusRight", MousePlace::StatusRight),
+    ("StatusDefault", MousePlace::StatusDefault),
+    ("ScrollbarUp", MousePlace::ScrollbarUp),
+    ("ScrollbarSlider", MousePlace::ScrollbarSlider),
+    ("ScrollbarDown", MousePlace::ScrollbarDown),
+];
+
+impl MouseKey {
+    /// A mouse key name without modifiers (`MouseDown1Pane`, `WheelUpStatus`),
+    /// matched case-insensitively as tmux matches key names. Buttons are 1
+    /// to 11; the wheel has none.
+    fn parse(name: &str) -> Option<MouseKey> {
+        let lower = name.to_ascii_lowercase();
+        let (word, action) = MOUSE_ACTIONS
+            .iter()
+            .find(|(w, _)| lower.starts_with(&w.to_ascii_lowercase()))?;
+        let rest = &lower[word.len()..];
+        let wheel = matches!(action, MouseAction::WheelUp | MouseAction::WheelDown);
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let button = if wheel {
+            (digits == 0).then_some(0)?
+        } else {
+            let n: u8 = rest[..digits].parse().ok()?;
+            (1..=11).contains(&n).then_some(n)?
+        };
+        let place = &rest[digits..];
+        let place = match place.strip_prefix("control") {
+            Some(n) if n.len() == 1 && n.as_bytes()[0].is_ascii_digit() => {
+                MousePlace::Control(n.as_bytes()[0] - b'0')
+            }
+            _ => {
+                MOUSE_PLACES
+                    .iter()
+                    .find(|(p, _)| p.eq_ignore_ascii_case(place))?
+                    .1
+            }
+        };
+        Some(MouseKey {
+            action: *action,
+            button,
+            place,
+        })
+    }
+}
+
+impl fmt::Display for MouseKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let action = MOUSE_ACTIONS
+            .iter()
+            .find(|(_, a)| *a == self.action)
+            .map_or("", |(w, _)| w);
+        let place = match self.place {
+            MousePlace::Control(n) => format!("Control{n}"),
+            other => MOUSE_PLACES
+                .iter()
+                .find(|(_, p)| *p == other)
+                .map_or("", |(w, _)| w)
+                .to_string(),
+        };
+        if self.button == 0 {
+            write!(f, "{action}{place}")
+        } else {
+            write!(f, "{action}{}{place}", self.button)
+        }
+    }
 }
 
 /// Modifiers held with a key.
@@ -233,9 +363,10 @@ const NAMES: &[(&str, KeyCode)] = &[
 
 /// Parse a tmux key name (`C-b`, `M-Up`, `^a`, `PPage`, `%`), as tmux 3.7b
 /// accepts it: modifier prefixes `C-`, `M-`, `S-` in any case and order,
-/// named keys case-insensitively. The error is tmux's `bad key: X`.
-// ponytail: tmux's keypad names (KP5, KPEnter) and mouse keys are not
-// parsed; KeyCode has no keypad variants and mouse binding is M3.
+/// named keys and mouse keys (`MouseDown1Pane`, [`MouseKey`])
+/// case-insensitively. The error is tmux's `bad key: X`.
+// ponytail: tmux's keypad names (KP5, KPEnter) are not parsed; KeyCode
+// has no keypad variants.
 pub fn parse_key(name: &str) -> Result<Key, String> {
     let bad = || format!("bad key: {name}");
     let mut mods = Mods::default();
@@ -261,6 +392,8 @@ pub fn parse_key(name: &str) -> Result<Key, String> {
         code
     } else if let Some(n) = function_key_number(rest) {
         KeyCode::F(n)
+    } else if let Some(m) = MouseKey::parse(rest) {
+        KeyCode::Mouse(m)
     } else {
         let mut chars = rest.chars();
         match (chars.next(), chars.next()) {
@@ -307,6 +440,7 @@ impl fmt::Display for Key {
             KeyCode::Char(' ') => f.write_str("Space"),
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "F{n}"),
+            KeyCode::Mouse(m) => write!(f, "{m}"),
             code => {
                 let name = NAMES
                     .iter()
@@ -1052,57 +1186,269 @@ impl KeyTables {
     }
 }
 
-/// The default key table (spec §5.3): tmux 3.7b's stock `prefix` bindings
-/// for the commands grofe has so far, with repeat where tmux has `-r`. New
-/// panes and windows open in the active pane's cwd (spec §5.3), which tmux
-/// leaves to a `-c '#{pane_current_path}'` in the user's config. Stock keys
-/// whose commands arrive later (`x` and `&` need `confirm-before`, `o`
-/// needs `+` target offsets) stay unbound.
+/// The default key table (spec §5.3, the "tmux default bindings" row, D10):
+/// tmux 3.7b's stock `prefix` bindings for the commands grofe has, with
+/// repeat where tmux has `-r` and tmux's notes (`list-keys -N`). New panes
+/// and windows open in the active pane's cwd (spec §5.3), which tmux leaves
+/// to a `-c '#{pane_current_path}'` in the user's config, and prompts and
+/// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
+/// `o` (needs `+`/`-` target offsets, FE.1's), `s` (needs `choose-tree
+/// -s`, TC.9's), `m`/`M` (marking), `C` and `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus), `*`
+/// (`new-pane`), `r`'s neighbours `DC` and `S-arrows` (`refresh-client`
+/// panning), and copy mode and buffers (`[ ] = # - PPage`, M5).
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
-    let mut bind = |key: &str, argv: &[&str], repeat: bool| {
+    let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
         let argv = argv.iter().map(|s| s.to_string()).collect();
         if let Ok(key) = parse_key(key) {
-            t.bind(PREFIX_TABLE, key, argv, repeat);
+            let mut b = Binding::new(vec![argv], repeat, BindingSource::Default);
+            b.desc = Some(note.to_string());
+            t.insert(PREFIX_TABLE, key, b);
         }
     };
     let here = "#{pane_current_path}";
-    bind("%", &["split-window", "-h", "-c", here], false);
-    bind("\"", &["split-window", "-c", here], false);
-    bind("c", &["new-window", "-c", here], false);
-    bind("d", &["detach-client"], false);
-    bind("n", &["next-window"], false);
-    bind("p", &["previous-window"], false);
-    bind("l", &["last-window"], false);
-    bind("(", &["switch-client", "-p"], false);
-    bind(")", &["switch-client", "-n"], false);
-    bind("L", &["switch-client", "-l"], false);
-    bind("z", &["resize-pane", "-Z"], false);
-    bind("C-b", &["send-prefix"], false);
-    bind(":", &["command-prompt"], false);
+    bind(
+        "%",
+        &["split-window", "-h", "-c", here],
+        false,
+        "Split window horizontally",
+    );
+    bind(
+        "\"",
+        &["split-window", "-c", here],
+        false,
+        "Split window vertically",
+    );
+    bind(
+        "c",
+        &["new-window", "-c", here],
+        false,
+        "Create a new window",
+    );
+    bind("d", &["detach-client"], false, "Detach the current client");
+    bind("n", &["next-window"], false, "Select the next window");
+    bind(
+        "p",
+        &["previous-window"],
+        false,
+        "Select the previous window",
+    );
+    bind(
+        "l",
+        &["last-window"],
+        false,
+        "Select the previously current window",
+    );
+    bind(
+        "(",
+        &["switch-client", "-p"],
+        false,
+        "Switch to previous client",
+    );
+    bind(
+        ")",
+        &["switch-client", "-n"],
+        false,
+        "Switch to next client",
+    );
+    bind(
+        "L",
+        &["switch-client", "-l"],
+        false,
+        "Switch to the last client",
+    );
+    bind("z", &["resize-pane", "-Z"], false, "Zoom the active pane");
+    bind("C-b", &["send-prefix"], false, "Send the prefix key");
+    bind(":", &["command-prompt"], false, "Prompt for a command");
     bind(
         ",",
         &["command-prompt", "-I", "#W", "rename-window \"%%\""],
         false,
+        "Rename current window",
     );
     bind(
         "$",
         &["command-prompt", "-I", "#S", "rename-session \"%%\""],
         false,
+        "Rename current session",
     );
     for n in 0..=9 {
         let target = format!(":{n}");
-        bind(&n.to_string(), &["select-window", "-t", &target], false);
+        bind(
+            &n.to_string(),
+            &["select-window", "-t", &target],
+            false,
+            &format!("Select window {n}"),
+        );
     }
-    for (key, flag) in [
-        ("Up", "-U"),
-        ("Down", "-D"),
-        ("Left", "-L"),
-        ("Right", "-R"),
+    for (key, flag, side) in [
+        ("Up", "-U", "above"),
+        ("Down", "-D", "below"),
+        ("Left", "-L", "to the left of"),
+        ("Right", "-R", "to the right of"),
     ] {
-        bind(key, &["select-pane", flag], true);
-        bind(&format!("M-{key}"), &["resize-pane", flag, "5"], true);
-        bind(&format!("C-{key}"), &["resize-pane", flag], true);
+        let dir = key.to_ascii_lowercase();
+        bind(
+            key,
+            &["select-pane", flag],
+            true,
+            &format!("Select the pane {side} the active pane"),
+        );
+        bind(
+            &format!("M-{key}"),
+            &["resize-pane", flag, "5"],
+            true,
+            &format!("Resize the pane {dir} by 5"),
+        );
+        bind(
+            &format!("C-{key}"),
+            &["resize-pane", flag],
+            true,
+            &format!("Resize the pane {dir}"),
+        );
+    }
+    // D10: the stock keys whose verbs M3.6 adds.
+    bind(
+        ";",
+        &["last-pane"],
+        false,
+        "Move to the previously active pane",
+    );
+    bind("C-o", &["rotate-window"], false, "Rotate through the panes");
+    bind(
+        "M-o",
+        &["rotate-window", "-D"],
+        false,
+        "Rotate through the panes in reverse",
+    );
+    bind("q", &["display-panes"], false, "Display pane numbers");
+    bind(
+        ".",
+        &["command-prompt", "-T", "target", "move-window -t \"%%\""],
+        false,
+        "Move the current window",
+    );
+    bind(
+        "f",
+        &["command-prompt", "find-window -Z \"%%\""],
+        false,
+        "Search for a pane",
+    );
+    bind(
+        "'",
+        &[
+            "command-prompt",
+            "-T",
+            "window-target",
+            "-p",
+            "index",
+            "select-window -t \":%%\"",
+        ],
+        false,
+        "Prompt for window index to select",
+    );
+    bind(
+        "C-z",
+        &["suspend-client"],
+        false,
+        "Suspend the current client",
+    );
+    bind(
+        "D",
+        &["choose-client", "-Z"],
+        false,
+        "Choose and detach a client from a list",
+    );
+    bind("~", &["show-messages"], false, "Show messages");
+    bind(
+        "E",
+        &["select-layout", "-E"],
+        false,
+        "Spread panes out evenly",
+    );
+    bind(
+        "M-n",
+        &["next-window", "-a"],
+        false,
+        "Select the next window with an alert",
+    );
+    bind(
+        "M-p",
+        &["previous-window", "-a"],
+        false,
+        "Select the previous window with an alert",
+    );
+    bind(
+        "/",
+        &["command-prompt", "-k", "-p", "key", "list-keys -1N \"%%\""],
+        false,
+        "Describe key binding",
+    );
+    bind(
+        "x",
+        &[
+            "confirm-before",
+            "-p",
+            "kill-pane #{pane_index}? (y/n)",
+            "kill-pane",
+        ],
+        false,
+        "Kill the active pane",
+    );
+    bind(
+        "&",
+        &[
+            "confirm-before",
+            "-p",
+            "kill-window #{window_name}? (y/n)",
+            "kill-window",
+        ],
+        false,
+        "Kill current window",
+    );
+    bind("!", &["break-pane"], false, "Break pane to a new window");
+    bind(
+        "{",
+        &["swap-pane", "-U"],
+        false,
+        "Swap the active pane with the pane above",
+    );
+    bind(
+        "}",
+        &["swap-pane", "-D"],
+        false,
+        "Swap the active pane with the pane below",
+    );
+    bind(
+        "i",
+        &["display-message"],
+        false,
+        "Display window information",
+    );
+    bind(
+        "w",
+        &["choose-tree", "-Zw"],
+        false,
+        "Choose a window from a list",
+    );
+    bind("Space", &["next-layout"], false, "Select next layout");
+    bind("?", &["list-keys", "-N"], false, "List key bindings");
+    bind("r", &["refresh-client"], false, "Redraw the current client");
+    for (key, layout, verb) in [
+        ("M-1", "even-horizontal", "Set"),
+        ("M-2", "even-vertical", "Set"),
+        ("M-3", "main-horizontal", "Set"),
+        ("M-4", "main-vertical", "Set"),
+        ("M-5", "tiled", "Select"),
+        ("M-6", "main-horizontal-mirrored", "Set"),
+        ("M-7", "main-vertical-mirrored", "Set"),
+    ] {
+        bind(
+            key,
+            &["select-layout", layout],
+            false,
+            &format!("{verb} the {layout} layout"),
+        );
     }
     t
 }
@@ -1191,8 +1537,9 @@ impl KeyState {
                 self.set_table(ROOT_TABLE);
                 Routed::ToPane(encode_paste(data, *start, *end, modes))
             }
-            // ponytail: mouse routing (bindable mouse keys, pane forwarding)
-            // is M3's (TC.10); M2 decodes and drops it.
+            // The mouse hook (`server::mouse`) routes the mouse: mouse keys,
+            // the built-in model and forwarding. What reaches the tables
+            // (`mouse off`) is dropped.
             Input::Mouse(_) => Routed::Consumed,
             Input::Focus(_) if !modes.focus => Routed::Consumed,
             Input::Focus(true) => Routed::ToPane(b"\x1b[I".to_vec()),
@@ -1245,6 +1592,13 @@ impl KeyState {
             }
             // Unbound after a prefix or in a custom table: dropped.
             if first != ROOT_TABLE {
+                return Routed::Consumed;
+            }
+            // D4, recorded on tmux 3.7b: back-tab typed with ctrl or meta
+            // (kitty `9;4u`, `\e\e[Z`) reaches a legacy pane as nothing,
+            // though `send-keys M-BTab` sends `\e[Z`.
+            let legacy = modes.kitty_flags & (1 | 8) == 0;
+            if legacy && key.code == KeyCode::BackTab && (key.mods.alt || key.mods.ctrl) {
                 return Routed::Consumed;
             }
             let bytes = encode(&key, modes);
@@ -2715,10 +3069,202 @@ mod tests {
         }
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
-        // Stock keys whose commands M2 lacks stay unbound.
-        for name in ["x", "&", "o", ";", "q", "s", "w", "[", "]"] {
+        // Stock keys grofe leaves unbound (out of scope, or M5's).
+        for name in ["o", "s", "m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
+    }
+
+    /// D10, recorded on tmux 3.7b (`list-keys -T prefix`, `list-keys -N`
+    /// on a private `-f /dev/null` server): the stock keys whose verbs
+    /// M3.6 adds, with tmux's notes. Formats tmux spells short (`#P`, `#W`)
+    /// are native (`#{pane_index}`).
+    #[test]
+    fn default_bindings_add_the_m36_stock_keys_with_notes() {
+        let t = default_bindings();
+        let cases: &[(&str, &[&str], &str)] = &[
+            (";", &["last-pane"], "Move to the previously active pane"),
+            ("C-o", &["rotate-window"], "Rotate through the panes"),
+            (
+                "M-o",
+                &["rotate-window", "-D"],
+                "Rotate through the panes in reverse",
+            ),
+            ("q", &["display-panes"], "Display pane numbers"),
+            (
+                ".",
+                &["command-prompt", "-T", "target", "move-window -t \"%%\""],
+                "Move the current window",
+            ),
+            (
+                "f",
+                &["command-prompt", "find-window -Z \"%%\""],
+                "Search for a pane",
+            ),
+            (
+                "'",
+                &[
+                    "command-prompt",
+                    "-T",
+                    "window-target",
+                    "-p",
+                    "index",
+                    "select-window -t \":%%\"",
+                ],
+                "Prompt for window index to select",
+            ),
+            ("C-z", &["suspend-client"], "Suspend the current client"),
+            (
+                "D",
+                &["choose-client", "-Z"],
+                "Choose and detach a client from a list",
+            ),
+            ("~", &["show-messages"], "Show messages"),
+            ("E", &["select-layout", "-E"], "Spread panes out evenly"),
+            (
+                "M-n",
+                &["next-window", "-a"],
+                "Select the next window with an alert",
+            ),
+            (
+                "M-p",
+                &["previous-window", "-a"],
+                "Select the previous window with an alert",
+            ),
+            (
+                "/",
+                &["command-prompt", "-k", "-p", "key", "list-keys -1N \"%%\""],
+                "Describe key binding",
+            ),
+            (
+                "x",
+                &[
+                    "confirm-before",
+                    "-p",
+                    "kill-pane #{pane_index}? (y/n)",
+                    "kill-pane",
+                ],
+                "Kill the active pane",
+            ),
+            ("!", &["break-pane"], "Break pane to a new window"),
+            (
+                "}",
+                &["swap-pane", "-D"],
+                "Swap the active pane with the pane below",
+            ),
+            ("w", &["choose-tree", "-Zw"], "Choose a window from a list"),
+            ("Space", &["next-layout"], "Select next layout"),
+            ("?", &["list-keys", "-N"], "List key bindings"),
+            (
+                "M-5",
+                &["select-layout", "tiled"],
+                "Select the tiled layout",
+            ),
+            ("C-Left", &["resize-pane", "-L"], "Resize the pane left"),
+            (
+                "M-Up",
+                &["resize-pane", "-U", "5"],
+                "Resize the pane up by 5",
+            ),
+            (
+                "Right",
+                &["select-pane", "-R"],
+                "Select the pane to the right of the active pane",
+            ),
+        ];
+        for (name, argv, note) in cases {
+            let b = t
+                .get(PREFIX_TABLE, &k(name))
+                .unwrap_or_else(|| panic!("{name} unbound"));
+            assert_eq!(words(b), *argv, "{name}");
+            assert_eq!(b.desc.as_deref(), Some(*note), "{name}");
+        }
+        // Every default carries a note, as every tmux stock binding does.
+        let unnoted: Vec<String> = t
+            .keys(PREFIX_TABLE)
+            .into_iter()
+            .filter(|key| t.exact(PREFIX_TABLE, key).is_some_and(|b| b.desc.is_none()))
+            .map(|key| key.to_string())
+            .collect();
+        assert!(unnoted.is_empty(), "{unnoted:?}");
+    }
+
+    /// tmux 3.7b's mouse key names parse, case-insensitively, with
+    /// modifiers, and print back in tmux's spelling.
+    #[test]
+    fn mouse_key_names_parse_and_print_as_tmux_does() {
+        for (name, shown) in [
+            ("MouseDown1Pane", "MouseDown1Pane"),
+            ("mousedown1status", "MouseDown1Status"),
+            ("MouseDown3Pane", "MouseDown3Pane"),
+            ("MouseDrag1Border", "MouseDrag1Border"),
+            ("MouseDragEnd1Pane", "MouseDragEnd1Pane"),
+            ("MouseUp2StatusLeft", "MouseUp2StatusLeft"),
+            ("MouseDown1StatusRight", "MouseDown1StatusRight"),
+            ("MouseDown1StatusDefault", "MouseDown1StatusDefault"),
+            ("WheelUpPane", "WheelUpPane"),
+            ("WheelDownStatus", "WheelDownStatus"),
+            ("DoubleClick1Pane", "DoubleClick1Pane"),
+            ("TripleClick1Pane", "TripleClick1Pane"),
+            ("SecondClick1Pane", "SecondClick1Pane"),
+            ("M-MouseDown3Pane", "M-MouseDown3Pane"),
+            ("C-MouseDown1Status", "C-MouseDown1Status"),
+            // tmux 3.7's names, recorded binding on a private server.
+            ("MouseDown1ScrollbarUp", "MouseDown1ScrollbarUp"),
+            ("MouseDrag1ScrollbarSlider", "MouseDrag1ScrollbarSlider"),
+            ("MouseDown1ScrollbarDown", "MouseDown1ScrollbarDown"),
+            ("WheelUpScrollbarUp", "WheelUpScrollbarUp"),
+            ("MouseDown1Control0", "MouseDown1Control0"),
+            ("mousedown1control9", "MouseDown1Control9"),
+            ("MouseUp3Control5", "MouseUp3Control5"),
+        ] {
+            let key = parse_key(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(matches!(key.code, KeyCode::Mouse(_)), "{name}");
+            assert_eq!(key.to_string(), shown, "{name}");
+        }
+        assert_eq!(
+            k("MouseDown1Pane").code,
+            KeyCode::Mouse(MouseKey {
+                action: MouseAction::Down,
+                button: 1,
+                place: MousePlace::Pane,
+            })
+        );
+        for bad in [
+            "MouseDown1",
+            "MouseDownPane",
+            "MouseDown0Pane",
+            "MouseDown12Pane",
+            "WheelUp1Pane",
+            "MouseDown1Window",
+            // tmux 3.7b: `unknown key: MouseDown1Control10`.
+            "MouseDown1Control10",
+            "MouseDown1Control",
+        ] {
+            assert_eq!(parse_key(bad), Err(format!("bad key: {bad}")), "{bad}");
+        }
+        // A mouse key is never bytes for a pane.
+        let key = k("MouseDown1Pane");
+        assert!(encode(&key, &InputModes::default()).is_empty());
+        assert!(encode(&key, &modes(1 | 8)).is_empty());
+    }
+
+    /// D4, recorded on tmux 3.7b through an attached client: kitty `9;4u`
+    /// (M-S-Tab), `9;6u` (C-S-Tab) and `\e\e[Z` (M-BTab) reach a legacy pane
+    /// as nothing; `9;2u` (S-Tab) and `\e[Z` as `\e[Z`.
+    #[test]
+    fn back_tab_with_ctrl_or_meta_sends_a_legacy_pane_nothing() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        assert_eq!(c.send(b"\x1b[9;4u", t), vec![Routed::Consumed]);
+        assert_eq!(c.send(b"\x1b[9;6u", t), vec![Routed::Consumed]);
+        assert_eq!(c.send(b"\x1b[9;2u", t), vec![pane(b"\x1b[Z")]);
+        assert_eq!(c.send(b"\x1b[Z", t), vec![pane(b"\x1b[Z")]);
+        // `send-keys M-BTab` still sends `\e[Z`, as tmux's does.
+        assert_eq!(
+            encode(&k("M-BTab"), &InputModes::default()),
+            b"\x1b[Z".to_vec()
+        );
     }
 
     #[test]
@@ -2802,10 +3348,10 @@ mod tests {
     #[test]
     fn config_tables_layer_over_defaults_and_reload_keeps_runtime() {
         let t = KeyTables::from_config(&[
-            config_key(PREFIX_TABLE, "x", &[&["split-window", "-h"]], 3),
+            config_key(PREFIX_TABLE, "X", &[&["split-window", "-h"]], 3),
             config_key(PREFIX_TABLE, "%", &[], 4),
         ]);
-        let x = t.exact(PREFIX_TABLE, &k("x")).expect("x");
+        let x = t.exact(PREFIX_TABLE, &k("X")).expect("X");
         assert_eq!(
             x.source,
             BindingSource::File {
@@ -2813,7 +3359,7 @@ mod tests {
                 line: 3
             }
         );
-        assert_eq!(x.name.as_deref(), Some("n-x"));
+        assert_eq!(x.name.as_deref(), Some("n-X"));
         assert!(t.exact(PREFIX_TABLE, &k("%")).is_none());
         assert_eq!(
             t.exact(PREFIX_TABLE, &k("c")).map(|b| &b.source),
@@ -2829,7 +3375,7 @@ mod tests {
         live.unbind_runtime(PREFIX_TABLE, &k("c"));
         let fresh = KeyTables::from_config(&[]);
         let t = live.with_config_from(fresh);
-        assert!(t.exact(PREFIX_TABLE, &k("x")).is_none(), "config x gone");
+        assert!(t.exact(PREFIX_TABLE, &k("X")).is_none(), "config X gone");
         assert!(t.exact(PREFIX_TABLE, &k("%")).is_some(), "stock % back");
         assert!(t.exact(PREFIX_TABLE, &k("y")).is_some(), "runtime y kept");
         assert!(

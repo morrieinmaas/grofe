@@ -24,8 +24,18 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         return Err(too_few_arguments("display-menu"));
     }
     let id = clients::current_client(state, ctx).ok_or("no current client")?;
-    let x = position(state, ctx, c.x.as_deref(), Axis::X)?;
-    let y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
+    let mut x = position(state, ctx, c.x.as_deref(), Axis::X)?;
+    let mut y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
+    // From a mouse key, a menu with no position opens at the pointer
+    // (spec §4.5, TC.10), as tmux's stock `-x M -y M`.
+    if let Some((px, py)) = crate::server::mouse::pointer(state, id) {
+        if c.x.is_none() {
+            x = Position::Pointer(px);
+        }
+        if c.y.is_none() {
+            y = Position::Pointer(py);
+        }
+    }
     let items = c
         .items
         .into_iter()

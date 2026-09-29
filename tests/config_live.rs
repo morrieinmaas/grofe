@@ -327,7 +327,7 @@ fn runtime_bind_key_is_marked_and_survives_reload() {
     assert_eq!(line, "bind-key -T prefix y split-window  # runtime");
     assert_eq!(
         key_line(&srv, "prefix", "c"),
-        "bind-key -T prefix c new-window -c \"#{pane_current_path}\"  # default"
+        "bind-key -T prefix c new-window -c \"#{pane_current_path}\"  # default: Create a new window"
     );
     srv.cmd(&["reload"]).expect("reload");
     assert_eq!(key_line(&srv, "prefix", "y"), line);
@@ -508,7 +508,7 @@ fn an_empty_command_unbinds_a_stock_key() {
     fs::remove_file(config_dir(&srv).join("config.toml")).expect("rm");
     srv.cmd(&["reload"]).expect("reload");
     assert!(
-        key_line(&srv, "prefix", "\\%").ends_with("  # default"),
+        key_line(&srv, "prefix", "\\%").ends_with("  # default: Split window horizontally"),
         "{}",
         keys(&srv, "prefix")
     );

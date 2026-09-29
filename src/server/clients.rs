@@ -29,7 +29,7 @@
 //!   (mouse modes, passthrough, graphics) ahead of the client's next frame,
 //!   in the same `Output` frame.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -208,14 +208,21 @@ pub struct ClientEntry {
     /// the language [`status::draw`] reads, and when it expires (`None`
     /// with `display-time 0`: only a key takes it down, as in tmux).
     message: Option<(String, Option<Instant>)>,
-    /// The status rows as last drawn, top first, for their click ranges.
+    /// The status rows as last drawn, top first, for their click ranges,
+    /// and the client row the first of them was drawn on.
     status_rows: Vec<StatusRow>,
+    status_at: u16,
     /// The window cell drawn at the client's top-left (crop, D6), as last
     /// drawn.
     pub viewport: (u16, u16),
     /// The outer terminal's mouse modes as last written (R2); `None`
     /// before the first write.
     mouse_modes: Option<bool>,
+    /// Input held while a binding's shell condition runs ([`hold_input`]),
+    /// in order, and how many conditions hold it.
+    held: VecDeque<Input>,
+    held_bytes: usize,
+    holds: u32,
     /// Needs a new frame.
     dirty: bool,
     outbox: Outbox,
@@ -348,6 +355,10 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             focused: true,
             message: None,
             status_rows: Vec::new(),
+            status_at: 0,
+            held: VecDeque::new(),
+            held_bytes: 0,
+            holds: 0,
             viewport: (0, 0),
             mouse_modes: None,
             dirty: true,
@@ -530,17 +541,27 @@ fn display_time(model: &Model, session: SessionId) -> Duration {
 }
 
 /// What a click at client cell `(col, row)` hits on client `id`'s status
-/// line, as last drawn: the range under it, if any (TC.10 sets
-/// `mouse_status_range` from it).
-pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+/// line, as last drawn: when it is on a status row, that row's index
+/// among the status rows and the range under it, if any (TC.10 sets
+/// `mouse_status_range` and `mouse_y` from them). Rows and ranges both
+/// come from the last draw, so an option changed since then cannot move a
+/// click onto another row's ranges.
+pub fn status_at(
+    state: &State,
+    id: ClientId,
+    col: u16,
+    row: u16,
+) -> Option<(u16, Option<RangeKind>)> {
     let c = state.clients.get(&id)?;
-    let geom = status_geometry(&state.model, c.session, c.size.1);
-    let line = row.checked_sub(geom.first_row)?;
-    if line >= geom.lines {
-        return None;
-    }
-    let range = c.status_rows.get(usize::from(line))?.range_at(col)?;
-    Some(range.kind.clone())
+    let line = row.checked_sub(c.status_at)?;
+    let drawn = c.status_rows.get(usize::from(line))?;
+    Some((line, drawn.range_at(col).map(|r| r.kind.clone())))
+}
+
+/// The range under a click at client cell `(col, row)` on client `id`'s
+/// status line as last drawn ([`status_at`]).
+pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+    status_at(state, id, col, row).and_then(|(_, range)| range)
 }
 
 /// A client size within tmux's bounds and grofe's cell cap
@@ -823,7 +844,7 @@ pub fn tick(state: &mut State, now: Instant) {
         };
         if c.decoder.deadline(escape).is_some_and(|d| d <= now) {
             for input in c.decoder.flush(now, escape) {
-                route(state, id, input, now);
+                deliver(state, id, input, now);
             }
         }
     }
@@ -911,9 +932,10 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         c.dirty = false;
-        if let Some((screen, viewport, rows)) = composed {
+        if let Some((screen, viewport, rows, status_at)) = composed {
             c.viewport = viewport;
             c.status_rows = rows;
+            c.status_at = status_at;
             let caps = c.caps;
             // A dropped frame keeps the client dirty, so it is redrawn once
             // its outbox has room even if nothing else changes.
@@ -1137,15 +1159,15 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
-/// Composes client `c`'s next screen, the viewport it was drawn with and
-/// its status rows: the window, the status rows above or below it
-/// (`status-position`), then every overlay (lowest priority first), then
-/// the wide-pair fix-up.
-fn compose_client(
-    state: &State,
-    id: ClientId,
-    c: &ClientEntry,
-) -> Option<(Screen, (u16, u16), Vec<StatusRow>)> {
+/// A composed frame: the screen, its viewport, its status rows and the
+/// client row the first of them is on.
+type Composed = (Screen, (u16, u16), Vec<StatusRow>, u16);
+
+/// Composes client `c`'s next screen, the viewport it was drawn with, its
+/// status rows and the client row the first of them is on: the window,
+/// the status rows above or below it (`status-position`), then every
+/// overlay (lowest priority first), then the wide-pair fix-up.
+fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Composed> {
     let model = &state.model;
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
@@ -1215,7 +1237,7 @@ fn compose_client(
         overlay.draw(state, id, &cx, &mut screen);
     }
     render::fix_wide_pairs(&mut screen);
-    Some((screen, viewport, rows))
+    Some((screen, viewport, rows, geom.first_row))
 }
 
 /// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
@@ -1494,15 +1516,80 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
     }
     touch_session(&mut state.model, session);
     for input in inputs {
-        // As tmux: a key press takes a message down, and still counts.
-        if let Input::Key(_) = input
-            && let Some(c) = state.clients.get_mut(&id)
-            && c.message.take().is_some()
-        {
-            c.dirty = true;
-            request_render(state, now);
+        deliver(state, id, input, now);
+    }
+}
+
+/// How much input a client may have held ([`hold_input`]): paste bytes,
+/// and one for anything else. tmux holds without limit; past this grofe
+/// drops what arrives, and logs it.
+const HELD_CAP: usize = 1 << 20;
+
+/// One decoded input from client `id`: held behind a running shell
+/// condition, else routed.
+fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if c.holds > 0 {
+        let size = match &input {
+            Input::Paste { data, .. } => data.len().max(1),
+            _ => 1,
+        };
+        if c.held_bytes + size > HELD_CAP {
+            eprintln!("grofe server: input held for {} is full; dropped", c.name);
+            return;
         }
-        route(state, id, input, now);
+        c.held_bytes += size;
+        c.held.push_back(input);
+        return;
+    }
+    // As tmux: a key press takes a message down, and still counts.
+    if let Input::Key(_) = input
+        && c.message.take().is_some()
+    {
+        c.dirty = true;
+        request_render(state, now);
+    }
+    route(state, id, input, now);
+}
+
+/// Holds client `id`'s input, in order, until [`release_input`]: a
+/// binding's shell condition runs off the actor, and as tmux's per-client
+/// command queue does, what the client types next waits for its branch
+/// (TC.10). Other clients are not held. A condition that never exits
+/// holds the client until it is killed or detaches, as in tmux.
+pub(crate) fn hold_input(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.holds += 1;
+    }
+}
+
+/// Ends one [`hold_input`]; with none left, the held input is routed in
+/// order, until an input starts another hold.
+pub(crate) fn release_input(state: &mut State, id: ClientId) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    c.holds = c.holds.saturating_sub(1);
+    let now = Instant::now();
+    loop {
+        let Some(c) = state.clients.get_mut(&id) else {
+            return;
+        };
+        if c.holds > 0 {
+            return;
+        }
+        let Some(input) = c.held.pop_front() else {
+            c.held_bytes = 0;
+            return;
+        };
+        let size = match &input {
+            Input::Paste { data, .. } => data.len().max(1),
+            _ => 1,
+        };
+        c.held_bytes = c.held_bytes.saturating_sub(size);
+        deliver(state, id, input, now);
     }
 }
 
@@ -1732,6 +1819,10 @@ mod tests {
                 focused: true,
                 message: None,
                 status_rows: Vec::new(),
+                status_at: 0,
+                held: VecDeque::new(),
+                held_bytes: 0,
+                holds: 0,
                 viewport: (0, 0),
                 mouse_modes: None,
                 dirty: false,
@@ -1782,6 +1873,35 @@ mod tests {
         assert!(state.clients[&id].message.is_none());
     }
 
+    /// TC.10 fix round 1: a held client's input waits in order, holds
+    /// nest, and past the cap new input is dropped.
+    #[test]
+    fn held_input_waits_in_order_until_the_last_release() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        hold_input(&mut state, id);
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab", now);
+        let held: Vec<Input> = state.clients[&id].held.iter().cloned().collect();
+        assert_eq!(
+            held,
+            vec![
+                Input::Key(crate::server::input::parse_key("a").unwrap()),
+                Input::Key(crate::server::input::parse_key("b").unwrap()),
+            ]
+        );
+        release_input(&mut state, id);
+        assert_eq!(state.clients[&id].held.len(), 2, "one hold left");
+        release_input(&mut state, id);
+        assert!(state.clients[&id].held.is_empty());
+        assert_eq!(state.clients[&id].held_bytes, 0);
+
+        hold_input(&mut state, id);
+        state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP;
+        input(&mut state, id, b"c", now);
+        assert!(state.clients[&id].held.is_empty(), "dropped past the cap");
+    }
+
     /// TC.11: a click maps onto the status row it lands on, at the bottom
     /// by default and at the top with `status-position top`.
     #[test]
@@ -1793,7 +1913,9 @@ mod tests {
             80,
         );
         let user = Some(RangeKind::User("net".to_string()));
-        state.clients.get_mut(&id).unwrap().status_rows = vec![net.clone()];
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![net.clone()];
+        c.status_at = 23;
         assert_eq!(status_range_at(&state, id, 1, 23), user);
         assert_eq!(status_range_at(&state, id, 1, 22), None);
         assert_eq!(status_range_at(&state, id, 40, 23), None);
@@ -1802,10 +1924,18 @@ mod tests {
         o.set(Owner::Global, "status", "2", false).unwrap();
         o.set(Owner::Global, "status-position", "top", false)
             .unwrap();
-        state.clients.get_mut(&id).unwrap().status_rows = vec![StatusRow::default(), net];
+        // TC.10: until the next draw, clicks still map onto the rows as
+        // they were drawn, not as the options now place them.
+        assert_eq!(status_range_at(&state, id, 1, 23), user);
+        assert_eq!(status_at(&state, id, 1, 0), None);
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![StatusRow::default(), net];
+        c.status_at = 0;
         assert_eq!(status_range_at(&state, id, 1, 1), user);
         assert_eq!(status_range_at(&state, id, 1, 0), None);
+        assert_eq!(status_at(&state, id, 1, 0), Some((0, None)));
         assert_eq!(status_range_at(&state, id, 1, 23), None);
+        assert_eq!(status_at(&state, id, 1, 2), None);
     }
 
     /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,

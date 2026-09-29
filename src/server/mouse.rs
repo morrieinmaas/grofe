@@ -1,16 +1,43 @@
-//! Mouse: click to focus, the read-only scrollback view, forwarding to
+//! Mouse: bindable mouse keys and grofe's built-in mouse model (TC.10,
+//! spec §4.5 bindings row), the read-only scrollback view and forwarding to
 //! panes that asked for the mouse (T3.2, spec §4.11 "Mouse"; M5 replaces
 //! the view with copy mode).
 //!
-//! As tmux 3.7b's stock root bindings, with `mouse on`:
-//! - a button press focuses the pane under the pointer (`select-pane -t =`)
-//!   and, if that pane asked for the mouse, is forwarded too;
+//! Every report becomes a mouse key, as tmux 3.7b's
+//! `server_client_check_mouse` makes one (recorded on a private server):
+//! - a press is `MouseDown<b>`; a press of the same button within 300 ms of
+//!   the last is `SecondClick<b>`, then `TripleClick<b>`, and 300 ms after a
+//!   second click with no third comes `DoubleClick<b>`, from a timer;
+//! - motion with a button held is `MouseDrag<b>`, placed where the press
+//!   was for its first report and where the pointer is after that; the
+//!   release that ends a drag is `MouseDragEnd<b>`, not `MouseUp<b>`;
+//! - the wheel is `WheelUp` or `WheelDown`;
+//! - the place is the pane under the pointer, a border, or the status line:
+//!   `Status` in a window, session or user range, `StatusLeft` and
+//!   `StatusRight` in those ranges, `StatusDefault` in none.
+//!
+//! A key bound in the client's table (else `root`) runs with the pointer's
+//! target as its current pane ([`run_mouse_binding`]): the pane under it,
+//! or on the status line the clicked window's active pane. While it runs,
+//! `#{mouse_status_range}` and the other mouse formats ([`format_var`])
+//! describe the event, and a bare `=` target (M36-R3) means the pointer's
+//! target ([`resolve_targets`]). An unbound key gets the built-in model,
+//! which replaces tmux's stock mouse bindings:
+//! - a press focuses the pane under the pointer (`select-pane -t =`) and,
+//!   if that pane asked for the mouse, is forwarded too;
 //! - the wheel goes to a pane that asked for the mouse; on the alternate
 //!   screen without mouse mode it does nothing (recorded: tmux sends such a
 //!   pane nothing, mode 1007 or not); otherwise wheel up opens the view;
+//!   this is tmux's `WheelUpPane` condition,
+//!   `#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}`;
 //! - in the view the wheel scrolls it 5 lines a tick and selects the pane
 //!   (copy mode's `select-pane \; send -X -N 5 scroll-up`), and scrolling
 //!   back to the bottom closes it (`copy-mode -e`);
+//! - `MouseDown1Status` switches to the window clicked (`switch-client -t
+//!   =`), and the wheel on the status line goes to the previous or next
+//!   window;
+//! - `MouseDrag1Border` moves the border under the pointer with it until
+//!   the release (`resize-pane -M`);
 //! - `q` and Escape close the view and are eaten; any other key or a paste
 //!   closes it and is then routed as usual (R17);
 //! - every other mouse event reaches a pane that asked for it, filtered by
@@ -20,28 +47,44 @@
 //! only enters copy mode (`[0/N]`), grofe's already scrolls 5 lines.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
-use crate::protocol::Dialect;
-use crate::server::State;
+use crate::protocol::{ClientCtx, Dialect};
 use crate::server::clients;
+use crate::server::dispatch;
 use crate::server::input::{
-    Input, InputHook, KeyCode, Mods, Mouse, MouseButton, MouseKind, Routed,
+    Input, InputHook, Key, KeyCode, Mods, Mouse, MouseAction, MouseButton, MouseKey, MouseKind,
+    MousePlace, ROOT_TABLE, Routed,
 };
+use crate::server::layout::BorderSegment;
 use crate::server::model::Window;
 use crate::server::pane::{CellFlags, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
-use crate::types::{ClientId, InputModes, MouseEncoding, MouseMode, PaneId, Rect};
+use crate::server::status::RangeKind;
+use crate::server::{Job, State};
+use crate::types::{
+    ClientId, Edge, InputModes, MouseEncoding, MouseMode, PaneId, Rect, SessionId, WindowId,
+};
 
 /// Lines per wheel tick in the view (tmux's `-N 5`).
 pub const WHEEL_LINES: usize = 5;
 
-/// The panes whose scrollback view is open, by pane.
+/// How long a click waits for the next one (tmux's `KEYC_CLICK_TIMEOUT`).
+pub const CLICK_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// The panes whose scrollback view is open, by pane; each client's place
+/// in the click and drag sequence; and the mouse event a bound command is
+/// running for.
 #[derive(Debug, Default)]
 pub struct MouseState {
     views: BTreeMap<PaneId, View>,
+    pointers: BTreeMap<ClientId, Pointer>,
+    /// Numbers each click wait, so a stale timer does nothing.
+    generation: u64,
+    /// Set while a mouse key's commands run ([`run_mouse_binding`]).
+    current: Option<MouseTarget>,
 }
 
 /// An open view: `offset` lines up from the live screen, as of when the
@@ -50,6 +93,59 @@ pub struct MouseState {
 struct View {
     offset: usize,
     history: usize,
+}
+
+/// One client's pointer, as tmux keeps it on the client.
+#[derive(Debug, Default)]
+struct Pointer {
+    /// The last report's cell (tmux's `lx`, `ly`): where a drag's first
+    /// report is placed, and where a border drag moves from.
+    last: Option<(u16, u16)>,
+    /// A drag in progress (tmux's `mouse_drag_flag`).
+    drag: Option<Drag>,
+    /// Waiting for another click (tmux's double- and triple-click flags).
+    click: Option<Click>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    button: u8,
+    /// The built-in border resize follows it (tmux's `mouse_drag_update`).
+    border: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Click {
+    button: u8,
+    /// A second click came: the timer fires `DoubleClick`.
+    second: bool,
+    generation: u64,
+    /// The last press, where `DoubleClick` is placed.
+    event: Mouse,
+}
+
+/// The mouse event a bound command runs for (M36-R3's "the pane or status
+/// range under the current mouse event").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MouseTarget {
+    pub client: ClientId,
+    /// The client cell of the event.
+    pub cell: (u16, u16),
+    /// The pane commands act on: the pane under the pointer, the pane
+    /// before a border, or on the status line the clicked window's active
+    /// pane.
+    pub pane: PaneId,
+    /// What a bare `=` target means: `%N` in a pane or on a border, `@N`
+    /// for a window range or any other status click (the current window),
+    /// `$N` for a session range.
+    pub target: String,
+    /// `Some` on the status line: the range under the pointer, if any.
+    pub range: Option<Option<RangeKind>>,
+    /// `mouse_x` and `mouse_y`: the 0-based cell inside `pane` when the
+    /// pointer is in it; on the status line the client column and the
+    /// status row's index (recorded on tmux 3.7b: `5,0`, `5,1` with two
+    /// rows, top or bottom).
+    pub pane_cell: Option<(u16, u16)>,
 }
 
 impl MouseState {
@@ -87,10 +183,28 @@ impl MouseState {
     pub fn is_open(&self, pane: PaneId) -> bool {
         self.views.contains_key(&pane)
     }
+
+    /// The mouse event the running command was bound to, if any.
+    pub fn current(&self) -> Option<&MouseTarget> {
+        self.current.as_ref()
+    }
+
+    /// Runs `f` with `target` as the current mouse event (a shell-form
+    /// conditional's branch, later), then restores the one before.
+    pub fn with_current<R>(
+        state: &mut State,
+        target: Option<MouseTarget>,
+        f: impl FnOnce(&mut State) -> R,
+    ) -> R {
+        let before = std::mem::replace(&mut state.mouse.current, target);
+        let out = f(state);
+        state.mouse.current = before;
+        out
+    }
 }
 
-/// Routes mouse input (focus, wheel, forwarding) and the keys that leave
-/// the view.
+/// Routes mouse input (mouse keys, the built-in model, forwarding) and the
+/// keys that leave the view.
 pub struct MouseHook;
 
 impl InputHook for MouseHook {
@@ -103,6 +217,8 @@ impl InputHook for MouseHook {
     ) -> Option<Routed> {
         let model = &state.model;
         state.mouse.views.retain(|p, _| model.panes.contains_key(p));
+        let clients = &state.clients;
+        state.mouse.pointers.retain(|c, _| clients.contains_key(c));
         match input {
             Input::Mouse(m) => on_mouse(state, client, m),
             Input::Key(key) => {
@@ -148,20 +264,23 @@ fn pane_rects(w: &Window) -> Vec<(PaneId, Rect)> {
     }
 }
 
-/// The pane under client cell `(col, row)` and the 0-based cell inside it:
-/// the client cell moves through the viewport (D6 crop) into window
-/// coordinates; the status row, borders and letterbox belong to no pane.
-fn pane_at(
-    panes: &[(PaneId, Rect)],
-    viewport: (u16, u16),
-    status_row: Option<u16>,
-    (col, row): (u16, u16),
-) -> Option<(PaneId, u16, u16)> {
-    if status_row.is_some_and(|s| row >= s) {
+/// Client cell `(col, row)` in window coordinates: through the viewport
+/// (D6 crop), below the status rows when they are on top. `None` off the
+/// window (on a status row).
+fn window_cell(cx: &OverlayCtx, (col, row): (u16, u16)) -> Option<(u32, u32)> {
+    let row = row.checked_sub(cx.window_top)?;
+    if cx.window_top == 0 && cx.status_row.is_some_and(|s| row >= s) {
         return None;
     }
-    let x = u32::from(col) + u32::from(viewport.0);
-    let y = u32::from(row) + u32::from(viewport.1);
+    Some((
+        u32::from(col) + u32::from(cx.viewport.0),
+        u32::from(row) + u32::from(cx.viewport.1),
+    ))
+}
+
+/// The pane under window cell `(x, y)` and the 0-based cell inside it;
+/// borders and letterbox belong to no pane.
+fn pane_at(panes: &[(PaneId, Rect)], (x, y): (u32, u32)) -> Option<(PaneId, u16, u16)> {
     panes.iter().find_map(|&(pane, r)| {
         let (left, top) = (u32::from(r.x), u32::from(r.y));
         let inside = (left..left + u32::from(r.cols)).contains(&x)
@@ -170,31 +289,345 @@ fn pane_at(
     })
 }
 
-fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
+/// Whether window cell `(x, y)` is on one of `borders`.
+fn on_border(borders: &[BorderSegment], (x, y): (u32, u32)) -> bool {
+    borders.iter().any(|b| match *b {
+        BorderSegment::Vertical { col, row, len } => {
+            x == u32::from(col) && (u32::from(row)..u32::from(row) + u32::from(len)).contains(&y)
+        }
+        BorderSegment::Horizontal { row, col, len } => {
+            y == u32::from(row) && (u32::from(col)..u32::from(col) + u32::from(len)).contains(&x)
+        }
+    })
+}
+
+/// The pane a border cell belongs to, as tmux's `window_get_active_at`
+/// finds it: the pane whose right or bottom edge the border runs along.
+fn border_pane(panes: &[(PaneId, Rect)], (x, y): (u32, u32)) -> Option<PaneId> {
+    panes.iter().find_map(|&(pane, r)| {
+        let (left, top) = (u32::from(r.x), u32::from(r.y));
+        let (right, bottom) = (left + u32::from(r.cols), top + u32::from(r.rows));
+        let inside = (left..=right).contains(&x) && (top..=bottom).contains(&y);
+        inside.then_some(pane)
+    })
+}
+
+/// What the pointer is over.
+enum Hit {
+    Pane(PaneId, u16, u16),
+    Border(PaneId),
+    /// The status row's index among the status rows, and the range.
+    Status(u16, Option<RangeKind>),
+    Nothing,
+}
+
+fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
+    if let Some((line, range)) = clients::status_at(state, client, cell.0, cell.1) {
+        return Hit::Status(line, range);
+    }
+    let (Some(cx), Some(w)) = (
+        clients::overlay_ctx(state, client),
+        client_window(state, client),
+    ) else {
+        return Hit::Nothing;
+    };
+    let Some(at) = window_cell(&cx, cell) else {
+        return Hit::Nothing;
+    };
+    let panes = pane_rects(w);
+    if let Some((pane, x, y)) = pane_at(&panes, at) {
+        return Hit::Pane(pane, x, y);
+    }
+    if !w.zoomed && on_border(&w.layout.borders(w.area()), at) {
+        return border_pane(&panes, at).map_or(Hit::Nothing, Hit::Border);
+    }
+    Hit::Nothing
+}
+
+fn place(hit: &Hit) -> Option<MousePlace> {
+    Some(match hit {
+        Hit::Pane(..) => MousePlace::Pane,
+        Hit::Border(_) => MousePlace::Border,
+        Hit::Status(_, None) => MousePlace::StatusDefault,
+        Hit::Status(_, Some(RangeKind::Left)) => MousePlace::StatusLeft,
+        Hit::Status(_, Some(RangeKind::Right)) => MousePlace::StatusRight,
+        Hit::Status(_, Some(_)) => MousePlace::Status,
+        Hit::Nothing => return None,
+    })
+}
+
+/// The target of an event at client cell `cell` over `hit`.
+fn target(state: &State, client: ClientId, cell: (u16, u16), hit: &Hit) -> Option<MouseTarget> {
     let session = state.clients.get(&client)?.session;
-    let on = state.model.options.lookup(
+    let current = state.model.sessions.get(&session)?.active;
+    let window_target = |w: WindowId| {
+        let w = state.model.windows.get(&w)?;
+        Some((w.active, w.id.to_string()))
+    };
+    let session_target = |s: SessionId| {
+        let active = state.model.sessions.get(&s)?.active;
+        Some((window_target(active)?.0, s.to_string()))
+    };
+    let (pane, target, range, pane_cell) = match hit {
+        Hit::Pane(p, x, y) => (*p, p.to_string(), None, Some((*x, *y))),
+        Hit::Border(p) => (*p, p.to_string(), None, None),
+        Hit::Status(line, range) => {
+            let (pane, target) = match range {
+                Some(RangeKind::Window(index)) => state
+                    .model
+                    .window_at_index(session, *index)
+                    .and_then(window_target),
+                Some(RangeKind::Session(id)) => session_target(SessionId(*id)),
+                Some(RangeKind::Pane(id)) => state
+                    .model
+                    .panes
+                    .contains_key(&PaneId(*id))
+                    .then(|| (PaneId(*id), PaneId(*id).to_string())),
+                _ => None,
+            }
+            .or_else(|| window_target(current))?;
+            (pane, target, Some(range.clone()), Some((cell.0, *line)))
+        }
+        Hit::Nothing => return None,
+    };
+    Some(MouseTarget {
+        client,
+        cell,
+        pane,
+        target,
+        range,
+        pane_cell,
+    })
+}
+
+/// tmux's button number for `b`.
+fn button_number(b: MouseButton) -> u8 {
+    match b {
+        MouseButton::Left => 1,
+        MouseButton::Middle => 2,
+        MouseButton::Right => 3,
+        MouseButton::Other(n) => n,
+    }
+}
+
+/// Turns report `m` into the mouse key it fires and the cell that key is
+/// placed at, stepping client `client`'s click and drag state as tmux's
+/// `server_client_check_mouse` does. `None` for a report that is no key
+/// (motion with no button, horizontal wheel) or that a border drag takes.
+fn classify(
+    state: &mut State,
+    client: ClientId,
+    m: &Mouse,
+) -> Option<(MouseAction, u8, (u16, u16))> {
+    let at = (m.col, m.row);
+    let generation = state.mouse.generation + 1;
+    let p = state.mouse.pointers.entry(client).or_default();
+    let last = p.last.replace(at);
+    let mut waits = false;
+    let key = match m.kind {
+        MouseKind::Move | MouseKind::WheelLeft | MouseKind::WheelRight => return None,
+        MouseKind::WheelUp => (MouseAction::WheelUp, 0, at),
+        MouseKind::WheelDown => (MouseAction::WheelDown, 0, at),
+        MouseKind::Up(b) => match p.drag.take() {
+            Some(d) => (MouseAction::DragEnd, d.button, at),
+            None => (MouseAction::Up, button_number(b), at),
+        },
+        MouseKind::Drag(b) => match p.drag {
+            Some(Drag { border: true, .. }) => return None,
+            Some(d) => (MouseAction::Drag, d.button, at),
+            None => {
+                let button = button_number(b);
+                p.drag = Some(Drag {
+                    button,
+                    border: false,
+                });
+                (MouseAction::Drag, button, last.unwrap_or(at))
+            }
+        },
+        MouseKind::Down(b) => {
+            let button = button_number(b);
+            let action = match p.click.take() {
+                Some(c) if c.button == button && !c.second => MouseAction::SecondClick,
+                Some(c) if c.button == button => MouseAction::TripleClick,
+                _ => MouseAction::Down,
+            };
+            if action != MouseAction::TripleClick {
+                p.click = Some(Click {
+                    button,
+                    second: action == MouseAction::SecondClick,
+                    generation,
+                    event: *m,
+                });
+                waits = true;
+            }
+            (action, button, at)
+        }
+    };
+    if waits {
+        state.mouse.generation = generation;
+        start_click_timer(state, client, generation);
+    }
+    Some(key)
+}
+
+/// After [`CLICK_TIMEOUT`], ends client `client`'s click wait `generation`:
+/// a second click with no third is a `DoubleClick`.
+fn start_click_timer(state: &State, client: ClientId, generation: u64) {
+    // Without a runtime (unit tests) the wait ends only with a click.
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let jobs = state.jobs.clone();
+    rt.spawn(async move {
+        tokio::time::sleep(CLICK_TIMEOUT).await;
+        let job: Job = Box::new(move |state: &mut State| click_timeout(state, client, generation));
+        let _ = jobs.send(job).await;
+    });
+}
+
+/// The click timer: see [`start_click_timer`].
+pub(crate) fn click_timeout(state: &mut State, client: ClientId, generation: u64) {
+    let Some(p) = state.mouse.pointers.get_mut(&client) else {
+        return;
+    };
+    let Some(c) = p.click.filter(|c| c.generation == generation) else {
+        return;
+    };
+    p.click = None;
+    if !c.second || !mouse_on(state, client) {
+        return;
+    }
+    let at = (c.event.col, c.event.row);
+    fire(
+        state,
+        client,
+        &c.event,
+        (MouseAction::DoubleClick, c.button, at),
+    );
+}
+
+fn mouse_on(state: &State, client: ClientId) -> bool {
+    let Some(session) = state.clients.get(&client).map(|c| c.session) else {
+        return false;
+    };
+    state.model.options.lookup(
         "mouse",
         &[crate::server::dispatch::options::Owner::Session(session)],
-    ) == Some("on");
-    if !on {
+    ) == Some("on")
+}
+
+fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
+    if !mouse_on(state, client) {
         // The key tables drop it, as with no mouse at all.
         return None;
     }
-    let cx = clients::overlay_ctx(state, client)?;
-    let rects = pane_rects(client_window(state, client)?);
-    // ponytail: status-line clicks, border drags and bindable mouse keys
-    // are TC.10's; a drag leaving its pane is dropped rather than
-    // following the pane it started in.
-    let Some((pane, x, y)) = pane_at(&rects, cx.viewport, cx.status_row, (m.col, m.row)) else {
-        return Some(Routed::Consumed);
+    // A client showing no window has nothing to point at.
+    client_window(state, client)?;
+    let from = state.mouse.pointers.get(&client).and_then(|p| p.last);
+    let Some(key) = classify(state, client, m) else {
+        let border = state
+            .mouse
+            .pointers
+            .get(&client)
+            .and_then(|p| p.drag)
+            .is_some_and(|d| d.border);
+        if border && let Some(from) = from {
+            drag_border(state, client, from, (m.col, m.row));
+            return Some(Routed::Consumed);
+        }
+        return Some(forward(state, client, m));
     };
+    fire(state, client, m, key);
+    Some(Routed::Consumed)
+}
+
+/// Runs mouse key `(action, button)` placed at `at` for report `m`: its
+/// binding if it has one, else the built-in model.
+fn fire(
+    state: &mut State,
+    client: ClientId,
+    m: &Mouse,
+    (action, button, at): (MouseAction, u8, (u16, u16)),
+) {
+    let hit = hit(state, client, at);
+    let Some(place) = place(&hit) else {
+        return;
+    };
+    let Some(target) = target(state, client, at, &hit) else {
+        return;
+    };
+    let key = Key::new(
+        KeyCode::Mouse(MouseKey {
+            action,
+            button,
+            place,
+        }),
+        m.mods,
+    );
+    if let Some((cmds, dialect)) = binding(state, client, &key) {
+        run_mouse_binding(state, &target, &cmds, dialect);
+        return;
+    }
+    builtin(state, client, m, &key, &target);
+}
+
+/// The binding of mouse key `key` in client `client`'s table, else in
+/// `root`, as tmux's key walk finds it. Any table but `root` ends with
+/// the event.
+fn binding(state: &mut State, client: ClientId, key: &Key) -> Option<(Vec<Vec<String>>, Dialect)> {
+    let table = state.clients.get(&client)?.keys.table().to_string();
+    if table != ROOT_TABLE {
+        clients::set_key_table(state, client, ROOT_TABLE);
+    }
+    let tables = &state.registry.key_tables;
+    let b = tables
+        .get(&table, key)
+        .or_else(|| tables.get(ROOT_TABLE, key))?;
+    Some((b.cmds.clone(), b.dialect))
+}
+
+/// grofe's built-in model for an unbound mouse key (the module docs).
+fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &MouseTarget) {
+    let KeyCode::Mouse(mk) = key.code else {
+        return;
+    };
+    let run = |state: &mut State, argv: &[&str]| {
+        let cmds = vec![argv.iter().map(|s| s.to_string()).collect()];
+        run_mouse_binding(state, target, &cmds, Dialect::Grofe);
+    };
+    match (mk.place, mk.action, mk.button) {
+        (MousePlace::Status, MouseAction::Down, 1) => run(state, &["switch-client", "-t", "="]),
+        (MousePlace::Status, MouseAction::WheelUp, _) => run(state, &["previous-window"]),
+        (MousePlace::Status, MouseAction::WheelDown, _) => run(state, &["next-window"]),
+        (MousePlace::Border, MouseAction::Drag, 1) => {
+            if let Some(p) = state.mouse.pointers.get_mut(&client) {
+                p.drag = Some(Drag {
+                    button: 1,
+                    border: true,
+                });
+            }
+            // As `resize-pane -M`: the first report already moves it.
+            let from = target.cell;
+            drag_border(state, client, from, (m.col, m.row));
+        }
+        (MousePlace::Pane, MouseAction::DoubleClick, _) => {}
+        (MousePlace::Pane, _, _) => {
+            let _ = in_pane(state, client, m, target.pane);
+        }
+        _ => {}
+    }
+}
+
+/// The built-in model for a report in pane `pane` (T3.2): a press focuses
+/// it; the wheel goes to a pane that asked for the mouse, scrolls an open
+/// view, or opens one; anything else the pane asked for is forwarded.
+fn in_pane(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) -> Option<()> {
     let p = state.model.panes.get(&pane)?;
     let modes = p.handle.modes();
     let history = p.handle.history_size();
     let in_view = state.mouse.is_open(pane);
     let wants = modes.mouse != MouseMode::Off && !in_view;
     let focus = vec![vec!["select-pane".into(), "-t".into(), pane.to_string()]];
-    let select = || Routed::Command(focus.clone(), Dialect::Grofe);
     let wheel = match m.kind {
         MouseKind::WheelUp => Some(WHEEL_LINES as isize),
         MouseKind::WheelDown => Some(-(WHEEL_LINES as isize)),
@@ -206,28 +639,198 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
         if in_view {
             state.mouse.scroll(pane, history, lines);
             clients::mark_all_dirty(state);
-            return Some(select());
-        }
-        if lines > 0 && !modes.alt_screen && history > 0 {
+            clients::run_binding(state, client, &focus, Dialect::Grofe);
+        } else if lines > 0 && !modes.alt_screen && history > 0 {
             state.mouse.scroll(pane, history, lines);
             clients::mark_all_dirty(state);
         }
-        return Some(Routed::Consumed);
+        return Some(());
     }
-    let pressed = matches!(m.kind, MouseKind::Down(_));
-    let Some(bytes) = encode(m, x, y, &modes).filter(|_| wants) else {
-        return Some(if pressed { select() } else { Routed::Consumed });
-    };
     // As tmux (`select-pane -t = \; send-keys -M`): the pane is active
     // before its click arrives.
-    if pressed {
+    if matches!(m.kind, MouseKind::Down(_)) {
         clients::run_binding(state, client, &focus, Dialect::Grofe);
     }
-    let p = state.model.panes.get(&pane)?;
-    if p.handle.enqueue_input(bytes).is_err() {
+    forward(state, client, m);
+    Some(())
+}
+
+/// Sends report `m` to the pane under it, if that pane asked for this
+/// kind of event and has no view open.
+// ponytail: a drag that leaves its pane is dropped rather than following
+// the pane it started in.
+fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
+    let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) else {
+        return Routed::Consumed;
+    };
+    if state.mouse.is_open(pane) {
+        return Routed::Consumed;
+    }
+    let Some(p) = state.model.panes.get(&pane) else {
+        return Routed::Consumed;
+    };
+    if let Some(bytes) = encode(m, x, y, &p.handle.modes())
+        && p.handle.enqueue_input(bytes).is_err()
+    {
         eprintln!("grofe server: input queue full for {pane}");
     }
-    Some(Routed::Consumed)
+    Routed::Consumed
+}
+
+/// A border drag from client cell `from` to `to`, as tmux 3.7b's
+/// `cmd_resize_pane_mouse_update`: a pane whose right edge is the border
+/// under `from` grows by the columns moved, one whose bottom edge is grows
+/// by the rows, each through [`crate::layout::LayoutTree::resize`]. A
+/// border the clamp kept back no longer lies under the pointer, so it
+/// waits until the pointer comes back to it (recorded).
+fn drag_border(state: &mut State, client: ClientId, from: (u16, u16), to: (u16, u16)) {
+    let Some(cx) = clients::overlay_ctx(state, client) else {
+        return;
+    };
+    let Some(w) = client_window(state, client) else {
+        return;
+    };
+    if w.zoomed {
+        return;
+    }
+    let window = w.id;
+    // As tmux: a pointer off the window (on the status line) drags along
+    // its nearest row.
+    let clamp = |(col, row): (u16, u16)| {
+        let top = cx.window_top;
+        let rows = w.rows.max(1);
+        let row = row.saturating_sub(top).min(rows - 1);
+        (
+            i32::from(col) + i32::from(cx.viewport.0),
+            i32::from(row) + i32::from(cx.viewport.1),
+        )
+    };
+    let ((lx, ly), (x, y)) = (clamp(from), clamp(to));
+    let area = w.area();
+    let panes = pane_rects(w);
+    let edge = |along_x: bool| {
+        panes.iter().find_map(|&(pane, r)| {
+            let (left, top) = (i32::from(r.x), i32::from(r.y));
+            let (right, bottom) = (left + i32::from(r.cols), top + i32::from(r.rows));
+            let hit = if along_x {
+                right == lx && top <= ly + 1 && bottom >= ly
+            } else {
+                bottom == ly && left <= lx + 1 && right >= lx
+            };
+            hit.then_some(pane)
+        })
+    };
+    let right = edge(true).filter(|_| x != lx);
+    let down = edge(false).filter(|_| y != ly);
+    if right.is_none() && down.is_none() {
+        return;
+    }
+    if let Some(w) = state.model.windows.get_mut(&window) {
+        if let Some(pane) = right {
+            w.layout.resize(area, pane, Edge::Right, x - lx);
+        }
+        if let Some(pane) = down {
+            w.layout.resize(area, pane, Edge::Down, y - ly);
+        }
+    }
+    state.model.relayout(window);
+    clients::changed(state);
+}
+
+/// Runs mouse-bound `cmds` in `dialect` for the event at `target`, as
+/// [`clients::run_binding`] runs a key's, but with the pointer's pane as
+/// the current pane while it is there, the event as the current mouse
+/// event, and a bare `=` resolved to the pointer's target (M36-R3). The
+/// first error stops the rest and shows on the client's status row.
+pub fn run_mouse_binding(
+    state: &mut State,
+    target: &MouseTarget,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+) {
+    let id = target.client;
+    MouseState::with_current(state, Some(target.clone()), |state| {
+        for argv in cmds {
+            let Some(c) = state.clients.get(&id) else {
+                break;
+            };
+            let pane = Some(target.pane)
+                .filter(|p| state.model.panes.contains_key(p))
+                .or_else(|| active_pane(state, id));
+            let ctx = ClientCtx {
+                pane,
+                dialect,
+                ..c.ctx.clone()
+            };
+            let argv = resolve_targets(state, argv);
+            let result = dispatch::run_split(state, &ctx, &argv);
+            state.deferred_reply = None;
+            if let Err(e) = result {
+                clients::show_message(state, id, e.trim_end());
+                break;
+            }
+        }
+    });
+    state.events.flush();
+    clients::changed(state);
+}
+
+/// `argv` with each bare `=` target (`-t =`, `-t=`, and the same for `-s`)
+/// replaced by the current mouse event's target (M36-R3). Outside a mouse
+/// key's commands a bare `=` is left as it is, the literal session name it
+/// is natively, which no session can have.
+pub fn resolve_targets(state: &State, argv: &[String]) -> Vec<String> {
+    let Some(m) = &state.mouse.current else {
+        return argv.to_vec();
+    };
+    let mut out = Vec::with_capacity(argv.len());
+    let mut after_flag = false;
+    for word in argv {
+        let replaced = match word.as_str() {
+            "=" if after_flag => m.target.clone(),
+            "-t=" | "-s=" => format!("{}{}", &word[..2], m.target),
+            _ => word.clone(),
+        };
+        after_flag = matches!(word.as_str(), "-t" | "-s");
+        out.push(replaced);
+    }
+    out
+}
+
+/// A format variable the mouse answers: while a mouse key's commands run,
+/// `mouse_status_range` (tmux's words for the range clicked, empty off the
+/// status line or outside a range), `mouse_pane`, and `mouse_x`/`mouse_y`
+/// ([`MouseTarget::pane_cell`]); and always
+/// `pane_in_mode` for `pane` (1 while its scrollback view is open). `None`
+/// lets the caller's own variables answer.
+pub fn format_var(state: &State, pane: Option<PaneId>, name: &str) -> Option<String> {
+    if name == "pane_in_mode" {
+        let open = pane.is_some_and(|p| state.mouse.is_open(p));
+        return Some(if open { "1" } else { "0" }.to_string());
+    }
+    let m = state.mouse.current.as_ref()?;
+    match name {
+        "mouse_status_range" => Some(match &m.range {
+            Some(Some(range)) => range.mouse_status_range(),
+            _ => String::new(),
+        }),
+        "mouse_pane" => Some(m.pane.to_string()),
+        "mouse_x" => m.pane_cell.map(|(x, _)| x.to_string()),
+        "mouse_y" => m.pane_cell.map(|(_, y)| y.to_string()),
+        _ => None,
+    }
+}
+
+/// The client cell of the mouse event client `client`'s running command
+/// was bound to: where a menu a mouse key opens goes (spec §4.5, TC.7's
+/// `menu::open` takes it as its position).
+pub fn pointer(state: &State, client: ClientId) -> Option<(u16, u16)> {
+    state
+        .mouse
+        .current
+        .as_ref()
+        .filter(|m| m.client == client)
+        .map(|m| m.cell)
 }
 
 /// Encodes `m` at 0-based pane cell `(x, y)` for a pane with `modes`, as
@@ -328,7 +931,8 @@ impl Overlay for ScrollbackOverlay {
             };
             let mut put = |x: u16, y: u16, cell: &SnapCell| {
                 let cx_ = i32::from(rect.x) + i32::from(x) - i32::from(cx.viewport.0);
-                let cy_ = i32::from(rect.y) + i32::from(y) - i32::from(cx.viewport.1);
+                let cy_ = i32::from(rect.y) + i32::from(y) - i32::from(cx.viewport.1)
+                    + i32::from(cx.window_top);
                 let inside = |v: i32, lo: u16, len: u16| {
                     v >= i32::from(lo) && v < i32::from(lo) + i32::from(len)
                 };
@@ -478,30 +1082,250 @@ mod tests {
         Rect { x, y, cols, rows }
     }
 
+    fn cx(viewport: (u16, u16), status_row: Option<u16>, window_top: u16) -> OverlayCtx {
+        OverlayCtx {
+            client: ClientId(1),
+            viewport,
+            status_row,
+            window_top,
+            panes: Vec::new(),
+        }
+    }
+
+    fn at(
+        panes: &[(PaneId, Rect)],
+        cx: &OverlayCtx,
+        cell: (u16, u16),
+    ) -> Option<(PaneId, u16, u16)> {
+        pane_at(panes, window_cell(cx, cell)?)
+    }
+
     #[test]
     fn maps_a_pointer_through_the_viewport_to_a_pane() {
         let panes = [
             (PaneId(1), rect(0, 0, 59, 23)),
             (PaneId(2), rect(60, 0, 20, 23)),
         ];
-        assert_eq!(
-            pane_at(&panes, (0, 0), Some(23), (3, 2)),
-            Some((PaneId(1), 3, 2))
-        );
-        assert_eq!(
-            pane_at(&panes, (0, 0), Some(23), (65, 2)),
-            Some((PaneId(2), 5, 2))
-        );
+        let bottom = cx((0, 0), Some(23), 0);
+        assert_eq!(at(&panes, &bottom, (3, 2)), Some((PaneId(1), 3, 2)));
+        assert_eq!(at(&panes, &bottom, (65, 2)), Some((PaneId(2), 5, 2)));
         // The border column, the status row, a letterbox cell.
-        assert_eq!(pane_at(&panes, (0, 0), Some(23), (59, 2)), None);
-        assert_eq!(pane_at(&panes, (0, 0), Some(23), (3, 23)), None);
-        assert_eq!(pane_at(&panes, (0, 0), None, (3, 30)), None);
+        assert_eq!(at(&panes, &bottom, (59, 2)), None);
+        assert_eq!(at(&panes, &bottom, (3, 23)), None);
+        assert_eq!(at(&panes, &cx((0, 0), None, 0), (3, 30)), None);
         // Cropped at x = 40: client column 30 is window column 70.
+        let cropped = cx((40, 1), Some(11), 0);
+        assert_eq!(at(&panes, &cropped, (30, 2)), Some((PaneId(2), 10, 3)));
+        assert_eq!(at(&panes, &cropped, (30, 11)), None);
+    }
+
+    /// TC.11's note: with the status line on top, the window starts below
+    /// it, so client row 1 is window row 0.
+    #[test]
+    fn maps_a_pointer_below_a_status_line_on_top() {
+        let panes = [(PaneId(1), rect(0, 0, 80, 23))];
+        let top = cx((0, 0), Some(0), 1);
+        assert_eq!(at(&panes, &top, (3, 0)), None);
+        assert_eq!(at(&panes, &top, (3, 1)), Some((PaneId(1), 3, 0)));
+        assert_eq!(at(&panes, &top, (3, 23)), Some((PaneId(1), 3, 22)));
+        let two = cx((0, 0), Some(0), 2);
+        assert_eq!(at(&panes, &two, (3, 1)), None);
+        assert_eq!(at(&panes, &two, (3, 2)), Some((PaneId(1), 3, 0)));
+    }
+
+    #[test]
+    fn finds_the_border_under_the_pointer_and_its_pane() {
+        let panes = [
+            (PaneId(1), rect(0, 0, 40, 23)),
+            (PaneId(2), rect(41, 0, 39, 11)),
+            (PaneId(3), rect(41, 12, 39, 11)),
+        ];
+        let borders = [
+            BorderSegment::Vertical {
+                col: 40,
+                row: 0,
+                len: 23,
+            },
+            BorderSegment::Horizontal {
+                row: 11,
+                col: 41,
+                len: 39,
+            },
+        ];
+        assert!(on_border(&borders, (40, 5)));
+        assert!(on_border(&borders, (50, 11)));
+        assert!(!on_border(&borders, (39, 5)));
+        assert!(!on_border(&borders, (40, 23)));
+        assert_eq!(border_pane(&panes, (40, 5)), Some(PaneId(1)));
+        assert_eq!(border_pane(&panes, (50, 11)), Some(PaneId(2)));
+    }
+
+    fn report(kind: MouseKind, col: u16, row: u16) -> Mouse {
+        Mouse {
+            kind,
+            col,
+            row,
+            mods: Mods::default(),
+        }
+    }
+
+    /// The keys tmux 3.7b fired for each sequence (recorded: every mouse
+    /// key bound to append its name to an option).
+    #[test]
+    fn reports_become_tmux_mouse_keys() {
+        let mut state = crate::server::test_state();
+        let c = ClientId(1);
+        let mut keys = |kinds: &[(MouseKind, u16, u16)]| -> Vec<(MouseAction, u8, (u16, u16))> {
+            kinds
+                .iter()
+                .filter_map(|&(k, x, y)| classify(&mut state, c, &report(k, x, y)))
+                .collect()
+        };
+        let down = MouseKind::Down(LEFT);
+        let up = MouseKind::Up(LEFT);
+        use MouseAction::*;
+        // Single, double (DoubleClick comes from the timer), triple, and a
+        // fourth click starting over.
         assert_eq!(
-            pane_at(&panes, (40, 1), Some(11), (30, 2)),
-            Some((PaneId(2), 10, 3))
+            keys(&[(down, 9, 4), (up, 9, 4)]),
+            vec![(Down, 1, (9, 4)), (Up, 1, (9, 4))]
         );
-        assert_eq!(pane_at(&panes, (40, 1), Some(11), (30, 11)), None);
+        assert_eq!(
+            keys(&[(down, 9, 4), (up, 9, 4)]),
+            vec![(SecondClick, 1, (9, 4)), (Up, 1, (9, 4))]
+        );
+        assert_eq!(
+            keys(&[(down, 9, 4), (up, 9, 4), (down, 9, 4)]),
+            vec![(TripleClick, 1, (9, 4)), (Up, 1, (9, 4)), (Down, 1, (9, 4))]
+        );
+        // Another button starts over.
+        let right = MouseKind::Down(MouseButton::Right);
+        assert_eq!(keys(&[(right, 9, 4)]), vec![(Down, 3, (9, 4))]);
+        // A drag's first report is placed where the press was, later ones
+        // where the pointer is; its release is the drag's end, not an up.
+        assert_eq!(
+            keys(&[
+                (down, 40, 4),
+                (MouseKind::Drag(LEFT), 42, 4),
+                (MouseKind::Drag(LEFT), 45, 5),
+                (up, 45, 5),
+                (up, 45, 5),
+            ]),
+            vec![
+                (Down, 1, (40, 4)),
+                (Drag, 1, (40, 4)),
+                (Drag, 1, (45, 5)),
+                (DragEnd, 1, (45, 5)),
+                (Up, 1, (45, 5)),
+            ]
+        );
+        assert_eq!(
+            keys(&[(MouseKind::WheelUp, 3, 3), (MouseKind::Move, 3, 3)]),
+            vec![(WheelUp, 0, (3, 3))]
+        );
+    }
+
+    /// The timer turns a second click with no third into `DoubleClick`; a
+    /// stale timer, or one after a single click, ends the wait only.
+    #[test]
+    fn the_click_timer_ends_the_wait() {
+        let mut state = crate::server::test_state();
+        let c = ClientId(1);
+        let down = report(MouseKind::Down(LEFT), 2, 2);
+        classify(&mut state, c, &down);
+        let first = state.mouse.generation;
+        classify(&mut state, c, &down);
+        let second = state.mouse.generation;
+        click_timeout(&mut state, c, first);
+        assert!(state.mouse.pointers[&c].click.is_some(), "stale timer");
+        click_timeout(&mut state, c, second);
+        assert!(state.mouse.pointers[&c].click.is_none());
+        // The next press is a fresh click.
+        assert_eq!(
+            classify(&mut state, c, &down).map(|k| k.0),
+            Some(MouseAction::Down)
+        );
+    }
+
+    fn mouse_target(target: &str, range: Option<Option<RangeKind>>) -> MouseTarget {
+        MouseTarget {
+            client: ClientId(1),
+            cell: (5, 23),
+            pane: PaneId(4),
+            target: target.to_string(),
+            range,
+            pane_cell: None,
+        }
+    }
+
+    fn words(w: &[&str]) -> Vec<String> {
+        w.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// M36-R3: a bare `=` means the mouse event's target only while a
+    /// mouse key's commands run.
+    #[test]
+    fn a_bare_equals_is_the_mouse_target_only_in_a_mouse_binding() {
+        let mut state = crate::server::test_state();
+        let argv = words(&["switch-client", "-t", "="]);
+        assert_eq!(resolve_targets(&state, &argv), argv);
+        state.mouse.current = Some(mouse_target("@3", Some(None)));
+        assert_eq!(
+            resolve_targets(&state, &argv),
+            words(&["switch-client", "-t", "@3"])
+        );
+        assert_eq!(
+            resolve_targets(&state, &words(&["copy-mode", "-t="])),
+            words(&["copy-mode", "-t@3"])
+        );
+        assert_eq!(
+            resolve_targets(&state, &words(&["swap-pane", "-s", "=", "-t", "=x"])),
+            words(&["swap-pane", "-s", "@3", "-t", "=x"])
+        );
+        // Only a flag's value: a literal `=` argument stays.
+        assert_eq!(
+            resolve_targets(&state, &words(&["send-keys", "-l", "="])),
+            words(&["send-keys", "-l", "="])
+        );
+    }
+
+    #[test]
+    fn mouse_formats_describe_the_running_event() {
+        let mut state = crate::server::test_state();
+        assert_eq!(format_var(&state, None, "mouse_status_range"), None);
+        assert_eq!(
+            format_var(&state, Some(PaneId(4)), "pane_in_mode").as_deref(),
+            Some("0")
+        );
+        state.mouse.scroll(PaneId(4), 10, 5);
+        assert_eq!(
+            format_var(&state, Some(PaneId(4)), "pane_in_mode").as_deref(),
+            Some("1")
+        );
+        let net = Some(Some(RangeKind::User("net".to_string())));
+        state.mouse.current = Some(mouse_target("@3", net));
+        assert_eq!(
+            format_var(&state, None, "mouse_status_range").as_deref(),
+            Some("net")
+        );
+        assert_eq!(
+            format_var(&state, None, "mouse_pane").as_deref(),
+            Some("%4")
+        );
+        assert_eq!(format_var(&state, None, "mouse_x"), None);
+        assert_eq!(format_var(&state, None, "session_name"), None);
+        state.mouse.current = Some(mouse_target("%4", Some(Some(RangeKind::Left))));
+        assert_eq!(
+            format_var(&state, None, "mouse_status_range").as_deref(),
+            Some("left")
+        );
+        state.mouse.current = Some(mouse_target("%4", None));
+        assert_eq!(
+            format_var(&state, None, "mouse_status_range").as_deref(),
+            Some("")
+        );
+        assert_eq!(pointer(&state, ClientId(1)), Some((5, 23)));
+        assert_eq!(pointer(&state, ClientId(2)), None);
     }
 
     #[test]
