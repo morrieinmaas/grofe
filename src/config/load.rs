@@ -17,6 +17,7 @@ use super::{
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
 use crate::server::input::{Key, parse_key};
+use crate::server::sources::MAX_SECONDS;
 
 /// Loads the machine's config chain: built-in defaults, `config.toml`,
 /// `conf.d/*.toml` in lexical order, `user.toml`. All errors, or none.
@@ -504,7 +505,7 @@ impl Loader {
     }
 
     /// `[status.sources.<name>]` (TC.4): `cmd` (required), `interval` and
-    /// `timeout` in whole seconds, at least 1. The value lands in
+    /// `timeout` in whole seconds, 1 to tmux's `INT_MAX`. The value lands in
     /// `@<name>`, so a name is letters, digits, `-` and `_`. A later layer
     /// replaces an earlier one's source of the same name, and an empty
     /// `cmd` removes it.
@@ -526,8 +527,8 @@ impl Loader {
                 self.error(f.path, line, &path, msg);
                 continue;
             }
-            match source(v.get_ref()) {
-                Err(msg) => self.error(f.path, line, &path, msg),
+            match source(f, v.get_ref()) {
+                Err((at, msg)) => self.error(f.path, at.unwrap_or(line), &path, msg),
                 Ok((cmd, _, _)) if cmd.trim().is_empty() => {
                     self.sources.remove(&name);
                 }
@@ -734,33 +735,42 @@ fn binding(v: &DeValue) -> Result<Parsed, String> {
     Ok(b)
 }
 
-/// A source's `{ cmd, interval, timeout }` table.
-fn source(v: &DeValue) -> Result<(String, Option<u64>, Option<u64>), String> {
+/// A source's `cmd`, `interval` and `timeout`.
+type SourceFields = (String, Option<u64>, Option<u64>);
+
+/// A source's `{ cmd, interval, timeout }` table. An error carries the line
+/// of the field it is about (`None`: the source's own line).
+fn source(f: &FileCtx, v: &DeValue) -> Result<SourceFields, (Option<usize>, String)> {
     let DeValue::Table(t) = v else {
-        return Err(format!("expected a table, found {}", v.type_str()));
+        return Err((None, format!("expected a table, found {}", v.type_str())));
     };
     let (mut cmd, mut interval, mut timeout) = (None, None, None);
     for (k, v) in entries(t) {
         let field = k.get_ref().as_ref();
+        let at = Some(f.line(k.span().start));
         let seconds = || match v.get_ref() {
             DeValue::Integer(i) => i64::from_str_radix(i.as_str(), i.radix())
                 .ok()
                 .and_then(|n| u64::try_from(n).ok())
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| format!("{field}: expected at least 1 second, found {i}")),
-            other => Err(format!(
-                "{field}: expected an integer (seconds), found {}",
-                other.type_str()
+                .filter(|n| (1..=MAX_SECONDS).contains(n))
+                .ok_or_else(|| {
+                    let msg = format!("{field}: expected 1 to {MAX_SECONDS} seconds, found {i}");
+                    (at, msg)
+                }),
+            other => Err((
+                at,
+                format!(
+                    "{field}: expected an integer (seconds), found {}",
+                    other.type_str()
+                ),
             )),
         };
         match field {
             "cmd" => match v.get_ref() {
                 DeValue::String(s) => cmd = Some(s.to_string()),
                 other => {
-                    return Err(format!(
-                        "cmd: expected a string, found {}",
-                        other.type_str()
-                    ));
+                    let msg = format!("cmd: expected a string, found {}", other.type_str());
+                    return Err((at, msg));
                 }
             },
             "interval" => interval = Some(seconds()?),
@@ -770,11 +780,12 @@ fn source(v: &DeValue) -> Result<(String, Option<u64>, Option<u64>), String> {
                 if let Some(s) = closest(other, ["cmd", "interval", "timeout"]) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
-                return Err(msg);
+                return Err((at, msg));
             }
         }
     }
-    Ok((cmd.ok_or("missing cmd")?, interval, timeout))
+    let cmd = cmd.ok_or((None, "missing cmd".to_string()))?;
+    Ok((cmd, interval, timeout))
 }
 
 /// A binding's command string as a checked sequence; empty unbinds (R11).

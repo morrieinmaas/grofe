@@ -541,9 +541,13 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
   [planned, M3.6]; the M3 dogfood setup lacks them until then. A source is
   declared in config (`[status.sources.<name>]` with `cmd`, `interval` and
   `timeout`, its value in `@<name>`) or inline as `#(cmd)` in a format (its
-  value in `@src-<hash of cmd>`); both show in `show-config --explain`.
-  Sources run with the server environment (§4.2), each spawn under the pane
-  spawn lock (§4.8), and a changed value triggers a repaint.
+  value in `@src-<hash of cmd>`). A declared source shows in `show-config
+  [--explain] [status.sources[.<name>]]` with the file that set it; an
+  inline one shows only as the format that holds it, and is dropped once
+  no format has asked for it for an hour, as tmux drops an unused job.
+  Sources run with the server
+  environment (§4.2), each spawn under the pane spawn lock (§4.8), and a
+  changed value triggers a repaint.
 - Multi-row status (`status 2` with `status-format[N]`; canopy uses two rows at
   the top) and `status-position top` [planned, M3.6].
 

@@ -135,6 +135,11 @@ fn run(args: &[String]) -> Result<String, String> {
                 status_source(&mut out, name, s);
             }
         }
+        Some("status.sources") => {
+            for (name, s) in &r.sources {
+                status_source(&mut out, name, s);
+            }
+        }
         Some(k) if k.starts_with("status.sources.") => {
             let name = &k["status.sources.".len()..];
             let s = r

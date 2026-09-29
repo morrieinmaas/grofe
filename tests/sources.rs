@@ -497,31 +497,39 @@ fn the_config_schema_checks_and_explains_sources() {
         )
     );
     assert!(ok(&srv, &["show-config"]).contains("status.sources.batt = "));
+    assert_eq!(
+        ok(&srv, &["show-config", "status.sources"]),
+        "status.sources.batt = { cmd = \"pmset -g batt\", interval = 30, timeout = 5 }\n"
+    );
 
     let cases = [
         (
             "[status.sources.b]\ncmd = \"x\"\nintervl = 3\n",
-            "status.sources.b: unknown field intervl, did you mean interval?",
+            "config.toml:3: status.sources.b: unknown field intervl, did you mean interval?",
         ),
         (
             "[status.sources.b]\ncmd = \"x\"\ninterval = 0\n",
-            "status.sources.b: interval: expected at least 1 second, found 0",
+            "config.toml:3: status.sources.b: interval: expected 1 to 2147483647 seconds, found 0",
+        ),
+        (
+            "[status.sources.b]\ncmd = \"x\"\ntimeout = 9223372036854775807\n",
+            "config.toml:3: status.sources.b: timeout: expected 1 to 2147483647 seconds, found 9223372036854775807",
         ),
         (
             "[status.sources.b]\ninterval = 1\n",
-            "status.sources.b: missing cmd",
+            "config.toml:1: status.sources.b: missing cmd",
         ),
         (
             "[status.sources.b]\ncmd = 3\n",
-            "status.sources.b: cmd: expected a string, found integer",
+            "config.toml:2: status.sources.b: cmd: expected a string, found integer",
         ),
         (
             "[status.sources.\"a b\"]\ncmd = \"x\"\n",
-            "status.sources.a b: a source name is letters, digits, - and _",
+            "config.toml:1: status.sources.a b: a source name is letters, digits, - and _",
         ),
         (
             "[status]\nsources = 1\n",
-            "status.sources: expected a table of sources, found integer",
+            "config.toml:2: status.sources: expected a table of sources, found integer",
         ),
     ];
     for (text, want) in cases {
@@ -564,4 +572,62 @@ fn show_v_and_q_answer_as_tmux() {
     assert_eq!(show(&["-gv", "nosuch[0]"]), no("nosuch[0]"));
     assert_eq!(show(&["-gqv", "nosuch[0]"]), yes(""));
     assert_eq!(show(&["-gqv", "@nope[1]"]), yes(""));
+}
+
+/// Review finding (critical): `interval = 9223372036854775807` and a
+/// `reload` overflowed a deadline and killed the server with every
+/// session. It is now refused with its file and line, the server keeps
+/// running, and the largest allowed value (tmux's INT_MAX) runs once and
+/// never overflows, across reloads.
+#[test]
+fn a_huge_interval_is_refused_and_the_largest_one_does_not_crash() {
+    let srv = start("");
+    let count = path(&srv, "count");
+    write_config(
+        &srv,
+        "[status.sources.huge]\ncmd = \"echo x\"\ninterval = 9223372036854775807\n",
+    );
+    let err = srv.cmd(&["reload"]).expect_err("the reload is refused");
+    assert!(
+        err.contains(
+            "config.toml:3: status.sources.huge: interval: expected 1 to 2147483647 seconds"
+        ),
+        "{err}"
+    );
+    assert_eq!(display(&srv, "#{session_name}"), "s");
+    load(
+        &srv,
+        &format!(
+            "[status.sources.max]\ncmd = \"echo x >> '{}'; echo ran\"\ninterval = 2147483647\ntimeout = 2147483647\n",
+            count.display()
+        ),
+    );
+    wait_until(|| display(&srv, "#{@max}") == "ran", WAIT).expect("the source ran");
+    ok(&srv, &["reload"]);
+    ok(&srv, &["set-option", "-g", "status-interval", "2147483647"]);
+    assert_eq!(display(&srv, "#{session_name}"), "s");
+    assert_eq!(lines(&count), 1);
+}
+
+/// Review finding: with `status-interval 0` a source that follows it ran
+/// once and never again, even once the interval was positive again. It
+/// now waits, and resumes when `status-interval` is set back.
+#[test]
+fn a_source_resumes_when_status_interval_leaves_zero() {
+    let srv = start("");
+    let count = path(&srv, "count");
+    ok(&srv, &["set-option", "-g", "status-interval", "0"]);
+    load(
+        &srv,
+        &format!(
+            "[status.sources.follow]\ncmd = \"echo x >> '{}'; echo n\"\n",
+            count.display()
+        ),
+    );
+    wait_until(|| lines(&count) == 1, WAIT).expect("the first run");
+    // Parked: no second run while the interval stays 0 (the source looks
+    // again every second, so 2.5 s would show one).
+    assert!(wait_until(|| lines(&count) > 1, Duration::from_millis(2500)).is_err());
+    ok(&srv, &["set-option", "-g", "status-interval", "1"]);
+    wait_until(|| lines(&count) >= 3, WAIT).expect("the source resumed");
 }

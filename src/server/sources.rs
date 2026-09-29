@@ -41,6 +41,19 @@ pub const MAX_LINE: usize = 4096;
 /// most this much.
 pub const MAX_OUTPUT: usize = 64 * 1024;
 
+/// The longest `interval` or `timeout` a config may give, in seconds:
+/// tmux's `INT_MAX`.
+pub const MAX_SECONDS: u64 = i32::MAX as u64;
+
+/// How often a source parked by `status-interval 0` looks again.
+// ponytail: a tick a second while parked; a hook on `status-interval`
+// changes would need an edit to the option store.
+const PARKED: Duration = Duration::from_secs(1);
+
+/// An inline source not requested (registered again) for this long is
+/// dropped, as tmux 3.7b drops a `#()` job unused for an hour.
+pub const INLINE_EXPIRY: Duration = Duration::from_secs(3600);
+
 /// The registered sources and their schedules; their values live in the
 /// option store. Lives on `State.sources`.
 #[derive(Default)]
@@ -58,10 +71,13 @@ pub struct Sources {
 struct Entry {
     /// Option names (`batt` for `@batt`, `src-<hash>`) that get the value.
     keys: BTreeMap<String, Registration>,
-    /// When the next run is due; `None` means never again (no interval).
+    /// When the next run is due; `None` means never (a deadline too far
+    /// for `Instant`).
     next: Option<Instant>,
     /// The run in flight, by number.
     running: Option<u64>,
+    /// A run has been started.
+    started: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +87,10 @@ struct Registration {
     timeout: Duration,
     /// Declared by the config, so `configure` replaces it on reload.
     config: bool,
+    /// For an inline source, when it was last registered (requested); one
+    /// not requested for [`INLINE_EXPIRY`] is dropped. `None` for a named
+    /// source, which never expires.
+    requested: Option<Instant>,
 }
 
 impl Entry {
@@ -104,6 +124,7 @@ impl Sources {
             keys: BTreeMap::new(),
             next: Some(now),
             running: None,
+            started: false,
         });
         entry.keys.insert(key.to_string(), reg);
     }
@@ -141,11 +162,26 @@ impl Sources {
             let Some(at) = e.next.filter(|at| *at <= now) else {
                 continue;
             };
-            e.next = e.interval(status_interval).map(|iv| {
-                let next = at + iv;
-                if next > now { next } else { now + iv }
-            });
+            let Some(iv) = e.interval(status_interval) else {
+                // `status-interval` is 0: after its first run the source
+                // waits, looking again every [`PARKED`], so a later
+                // positive `status-interval` resumes it.
+                e.next = now.checked_add(PARKED);
+                if !e.started {
+                    e.started = true;
+                    self.runs += 1;
+                    e.running = Some(self.runs);
+                    start.push((cmd.clone(), e.timeout(), self.runs));
+                }
+                continue;
+            };
+            // A deadline past what `Instant` holds means never.
+            e.next = at
+                .checked_add(iv)
+                .filter(|next| *next > now)
+                .or_else(|| now.checked_add(iv));
             if e.running.is_none() {
+                e.started = true;
                 self.runs += 1;
                 e.running = Some(self.runs);
                 start.push((cmd.clone(), e.timeout(), self.runs));
@@ -154,9 +190,30 @@ impl Sources {
         start
     }
 
-    /// The earliest time an entry is due.
+    /// The earliest time an entry is due or an inline source expires.
     fn earliest(&self) -> Option<Instant> {
-        self.entries.values().filter_map(|e| e.next).min()
+        let expiries = self
+            .entries
+            .values()
+            .flat_map(|e| e.keys.values())
+            .filter_map(|r| r.requested?.checked_add(INLINE_EXPIRY));
+        self.entries
+            .values()
+            .filter_map(|e| e.next)
+            .chain(expiries)
+            .min()
+    }
+
+    /// Drops the inline sources not requested for [`INLINE_EXPIRY`].
+    fn expire(&mut self, now: Instant) {
+        for e in self.entries.values_mut() {
+            e.keys.retain(|_, r| {
+                r.requested
+                    .and_then(|t| t.checked_add(INLINE_EXPIRY))
+                    .is_none_or(|until| until > now)
+            });
+        }
+        self.prune();
     }
 
     /// Run `run` of `cmd` ended.
@@ -185,11 +242,12 @@ pub fn inline_key(cmd: &str) -> String {
 /// for a named source, `@src-<hash of cmd>` for an inline one (`name` is
 /// `None`). `interval` `None` follows the global `status-interval`;
 /// `timeout` `None` is [`DEFAULT_TIMEOUT`]. Registering the same name and
-/// command again only updates its interval and timeout. This is the one
-/// function the tmux front end calls for `#(cmd)`.
-// ponytail: an inline source stays registered until the server exits, even
-// once no format uses it; a reference count would need the front end to
-// unregister.
+/// command again only updates its interval and timeout, and is cheap, so
+/// the tmux front end may call it on every expansion of a `#(cmd)`: each
+/// call counts as a request, and an inline source not requested for
+/// [`INLINE_EXPIRY`] is dropped, as tmux drops an unused job. This is the
+/// one function the front end calls for `#(cmd)`; [`unregister`] drops a
+/// source at once.
 pub fn register(
     state: &mut State,
     name: Option<&str>,
@@ -197,16 +255,47 @@ pub fn register(
     interval: Option<Duration>,
     timeout: Option<Duration>,
 ) -> String {
+    let now = Instant::now();
     let key = name.map_or_else(|| inline_key(cmd), str::to_string);
     let reg = Registration {
         interval,
         timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
         config: false,
+        requested: name.is_none().then_some(now),
     };
-    state.sources.add(&key, cmd, reg, Instant::now());
+    let same = |r: &Registration| Registration {
+        requested: None,
+        ..*r
+    };
+    if let Some(r) = state
+        .sources
+        .entries
+        .get_mut(cmd)
+        .and_then(|e| e.keys.get_mut(&key))
+        && same(r) == same(&reg)
+    {
+        // Already registered as asked: only the request time moves.
+        r.requested = reg.requested;
+        return format!("@{key}");
+    }
+    state.sources.add(&key, cmd, reg, now);
     state.sources.prune();
     reschedule(state);
     format!("@{key}")
+}
+
+/// Drops the source registered under `option` (`@batt`, `@src-<hash>`, as
+/// [`register`] returned it; the `@` is optional). Its option keeps its
+/// last value. Whether one was registered.
+pub fn unregister(state: &mut State, option: &str) -> bool {
+    let key = option.strip_prefix('@').unwrap_or(option);
+    let mut found = false;
+    for e in state.sources.entries.values_mut() {
+        found |= e.keys.remove(key).is_some();
+    }
+    state.sources.prune();
+    reschedule(state);
+    found
 }
 
 /// Applies the config's sources (`[status.sources]`), at start and on each
@@ -221,6 +310,7 @@ pub fn configure(state: &mut State, config: &Resolved) {
             interval: s.interval.map(Duration::from_secs),
             timeout: s.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs),
             config: true,
+            requested: None,
         };
         state.sources.add(name, &s.cmd, reg, now);
     }
@@ -274,7 +364,8 @@ async fn scheduler(mut due: watch::Receiver<Option<Instant>>, jobs: mpsc::Sender
     }
 }
 
-/// On the actor: starts every due source and publishes the next due time.
+/// On the actor: drops expired inline sources, starts every due source and
+/// publishes the next due time.
 fn tick(state: &mut State) {
     let status_interval = state
         .model
@@ -282,7 +373,9 @@ fn tick(state: &mut State) {
         .lookup("status-interval", &[])
         .and_then(|v| v.parse::<u64>().ok())
         .map_or(Duration::ZERO, Duration::from_secs);
-    for (cmd, timeout, run) in state.sources.due(Instant::now(), status_interval) {
+    let now = Instant::now();
+    state.sources.expire(now);
+    for (cmd, timeout, run) in state.sources.due(now, status_interval) {
         spawn_run(state, cmd, timeout, run);
     }
     reschedule(state);
@@ -416,32 +509,31 @@ impl LastLine {
         }
     }
 
+    /// Adds output. A CR ends a line as an LF does, as in tmux 3.7b
+    /// (`a\rb\n` gives `b`, `x\r\n\r\n` gives `x`).
     fn push(&mut self, bytes: &[u8]) {
-        for chunk in bytes.split_inclusive(|b| *b == b'\n') {
-            let (text, newline) = match chunk.strip_suffix(b"\n") {
-                Some(text) => (text, true),
-                None => (chunk, false),
+        for chunk in bytes.split_inclusive(|b| matches!(b, b'\n' | b'\r')) {
+            let (text, ends) = match chunk.split_last() {
+                Some((b'\n' | b'\r', text)) => (text, true),
+                _ => (chunk, false),
             };
             let room = MAX_LINE.saturating_sub(self.current.len());
             self.current
                 .extend_from_slice(&text[..text.len().min(room)]);
-            if newline {
-                if self.current.last() == Some(&b'\r') {
-                    self.current.pop();
-                }
-                if !self.current.is_empty() {
-                    self.last = Some(std::mem::take(&mut self.current));
-                }
-                self.current.clear();
+            if ends && !self.current.is_empty() {
+                self.last = Some(std::mem::take(&mut self.current));
             }
         }
     }
 
     /// The value, as tmux 3.7b keeps a `#()` job's (recorded): the last
-    /// non-empty line, blank lines skipped, a line of spaces counting;
-    /// once the output has ended, text after the last newline is that line.
-    /// Output with no non-empty line gives an empty value, and a run cut
-    /// off before any line gives `None` (the old value stays).
+    /// non-empty line, blank lines skipped, a line of spaces counting.
+    /// Text after the last line break (a partial line) is the value when
+    /// the output has ended, or when the run was cut off (timeout or
+    /// [`MAX_OUTPUT`]) before any complete line: as in tmux, whatever a
+    /// finished job left in its buffer shows. Output with no non-empty
+    /// text gives an empty value once ended; a run cut off with nothing
+    /// read gives `None`, so the old value stays.
     /// ponytail: tmux also shows each line as it arrives; here a run's
     /// value lands when its output ends or it is killed.
     fn value(mut self) -> Option<String> {
@@ -499,6 +591,7 @@ mod tests {
             interval: interval.map(Duration::from_secs),
             timeout: DEFAULT_TIMEOUT,
             config: false,
+            requested: None,
         }
     }
 
@@ -588,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_interval_applies_and_zero_runs_once() {
+    fn the_status_interval_applies_and_zero_parks_after_one_run() {
         let mut s = Sources::default();
         let t0 = Instant::now();
         s.add("a", "date", reg(None), t0);
@@ -597,7 +690,76 @@ mod tests {
         let mut s = Sources::default();
         s.add("a", "date", reg(None), t0);
         assert_eq!(s.due(t0, Duration::ZERO).len(), 1);
+        s.finished("date", 1);
+        // Parked: it looks again every PARKED, without running.
+        assert_eq!(s.earliest(), Some(t0 + PARKED));
+        assert!(s.due(t0 + PARKED, Duration::ZERO).is_empty());
+        // `status-interval` back to 5: it resumes at the next look.
+        assert_eq!(s.due(t0 + 2 * PARKED, 5 * SEC).len(), 1);
+        assert_eq!(s.earliest(), Some(t0 + 2 * PARKED + 5 * SEC));
+    }
+
+    /// Review finding: `at + iv` overflowed on a huge interval and the
+    /// server panicked. A deadline past what `Instant` holds is never.
+    #[test]
+    fn a_huge_interval_does_not_overflow() {
+        let mut s = Sources::default();
+        let t0 = Instant::now();
+        s.add("a", "date", reg(Some(u64::MAX)), t0);
+        assert_eq!(s.due(t0, SEC).len(), 1);
         assert_eq!(s.earliest(), None);
+        let mut s = Sources::default();
+        s.add("a", "date", reg(None), t0);
+        assert_eq!(s.due(t0, Duration::from_secs(u64::MAX)).len(), 1);
+        assert_eq!(s.earliest(), None);
+    }
+
+    #[test]
+    fn an_inline_source_expires_after_an_hour_unrequested() {
+        let mut state = crate::server::test_state();
+        let key = register(&mut state, None, "date", None, None);
+        register(&mut state, Some("named"), "uptime", None, None);
+        let requested = |state: &State| {
+            state.sources.entries["date"].keys[&key[1..]]
+                .requested
+                .expect("inline")
+        };
+        let t0 = requested(&state);
+        state.sources.expire(t0 + INLINE_EXPIRY - SEC);
+        assert!(state.sources.entries.contains_key("date"));
+        // A second request moves the expiry.
+        register(&mut state, None, "date", None, None);
+        let t1 = requested(&state);
+        assert!(t1 >= t0);
+        state.sources.expire(t1 + INLINE_EXPIRY);
+        assert!(!state.sources.entries.contains_key("date"));
+        // A named source never expires.
+        assert!(state.sources.entries.contains_key("uptime"));
+    }
+
+    #[test]
+    fn an_inline_expiry_is_a_scheduler_deadline() {
+        let mut s = Sources::default();
+        let t0 = Instant::now();
+        let inline = Registration {
+            requested: Some(t0),
+            ..reg(Some(60 * 60 * 24))
+        };
+        s.add("src-x", "x", inline, t0);
+        s.due(t0, SEC);
+        assert_eq!(s.earliest(), Some(t0 + INLINE_EXPIRY));
+    }
+
+    #[test]
+    fn unregister_drops_a_source() {
+        let mut state = crate::server::test_state();
+        let key = register(&mut state, None, "date", None, None);
+        assert!(unregister(&mut state, &key));
+        assert!(state.sources.entries.is_empty());
+        assert!(!unregister(&mut state, &key));
+        register(&mut state, Some("batt"), "x", None, None);
+        assert!(unregister(&mut state, "batt"));
+        assert!(state.sources.entries.is_empty());
     }
 
     #[test]
@@ -667,6 +829,10 @@ mod tests {
         assert_eq!(value(b"x\n  \n").await, v("  "));
         assert_eq!(value(b"").await, v(""));
         assert_eq!(value(b"crlf\r\n").await, v("crlf"));
+        // A CR is a line break too (tmux 3.7b, from the review).
+        assert_eq!(value(b"a\rb\n").await, v("b"));
+        assert_eq!(value(b"p\rq").await, v("q"));
+        assert_eq!(value(b"x\r\n\r\n").await, v("x"));
     }
 
     #[tokio::test]
@@ -692,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_cut_off_before_any_line_keeps_the_old_value() {
+    fn a_run_cut_off_mid_line_keeps_its_partial_line_or_else_the_old_value() {
         let mut l = LastLine::default();
         l.push(b"partial");
         // Not ended, no complete line: the partial text is all there is.
