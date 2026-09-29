@@ -1,6 +1,6 @@
 //! Status sources (TC.4, spec D8, §4.10): `[status.sources.<name>]` runs a
-//! command on a schedule, off the redraw path, and keeps its first output
-//! line in `@<name>`.
+//! command on a schedule, off the redraw path, and keeps its last non-empty
+//! output line in `@<name>`, as tmux 3.7b keeps a `#()` job's.
 //!
 //! Timing is checked against deadlines and baselines rather than fixed
 //! sleeps: a run count is taken over a window that starts at the first
@@ -305,18 +305,18 @@ fn a_hung_source_never_delays_a_frame_and_is_killed_at_its_timeout() {
     assert_eq!(display(&srv, "#{@hung}"), "");
 }
 
-/// The segment is empty until the first result, then holds the first line
-/// only. `show -gv` returns it and `-q` hides the not-yet-set error, as
+/// The segment is empty until the first result, then holds the last
+/// non-empty line (a blank last line skipped, as tmux 3.7b does). `show -gv` returns it and `-q` hides the not-yet-set error, as
 /// tmux 3.7b does for a user option.
 #[test]
-fn the_value_is_empty_until_the_first_line_arrives() {
+fn the_value_is_empty_until_the_run_ends_then_its_last_line() {
     let srv = TestServer::start();
     let started = path(&srv, "started");
     let gate = path(&srv, "gate");
     load(
         &srv,
         &format!(
-            "[status.sources.batt]\ncmd = \"touch '{}'; while [ ! -e '{}' ]; do sleep 0.05; done; printf 'first\\\\nsecond\\\\n'\"\ntimeout = 30\n",
+            "[status.sources.batt]\ncmd = \"touch '{}'; while [ ! -e '{}' ]; do sleep 0.05; done; printf 'first\\\\nsecond\\\\n\\\\n'\"\ntimeout = 30\n",
             started.display(),
             gate.display()
         ),
@@ -330,10 +330,10 @@ fn the_value_is_empty_until_the_first_line_arrives() {
         Err("invalid option: @batt\n".to_string())
     );
     fs::write(&gate, "").expect("open the gate");
-    wait_until(|| display(&srv, "#{@batt}") == "first", WAIT).expect("the first line arrives");
-    assert_eq!(ok(&srv, &["show-options", "-gv", "@batt"]), "first\n");
-    assert_eq!(ok(&srv, &["show-options", "-gqv", "@batt"]), "first\n");
-    assert_eq!(ok(&srv, &["show-options", "-g", "@batt"]), "@batt first\n");
+    wait_until(|| display(&srv, "#{@batt}") == "second", WAIT).expect("the last line arrives");
+    assert_eq!(ok(&srv, &["show-options", "-gv", "@batt"]), "second\n");
+    assert_eq!(ok(&srv, &["show-options", "-gqv", "@batt"]), "second\n");
+    assert_eq!(ok(&srv, &["show-options", "-g", "@batt"]), "@batt second\n");
 }
 
 /// Two sources with one command share one run (checked by the command's

@@ -1,6 +1,6 @@
 //! Status sources (spec D8, §4.10): commands the server runs on a schedule,
-//! off the redraw path, whose first output line is kept in an option the
-//! status line reads.
+//! off the redraw path, whose last non-empty output line is kept in an
+//! option the status line reads, as tmux 3.7b keeps a `#()` job's.
 //!
 //! A source is registered under an option name: `@<name>` for one the
 //! config declares (`[status.sources.<name>]`), `@src-<hash>` for an inline
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::{mpsc, watch};
 
 use crate::config::Resolved;
@@ -32,10 +32,14 @@ use crate::server::{Job, State, clients, hooks, pane};
 /// How long a run may take when its registration names no timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The most of a first line kept, in bytes. A source that prints more
-/// without a newline is cut here and its pipe closed, so a chatty command
-/// costs the server at most this much.
+/// The most of one line kept, in bytes; the rest of a longer line is
+/// dropped.
 pub const MAX_LINE: usize = 4096;
+
+/// The most output read from one run, in bytes. The pipe is then closed,
+/// so a command that spews output gets `SIGPIPE` and costs the server at
+/// most this much.
+pub const MAX_OUTPUT: usize = 64 * 1024;
 
 /// The registered sources and their schedules; their values live in the
 /// option store. Lives on `State.sources`.
@@ -306,8 +310,9 @@ fn spawn_run(state: &mut State, cmd: String, timeout: Duration, run: u64) {
     });
 }
 
-/// Runs `cmd` once: sends its first line to the actor as soon as it is read,
-/// then waits for the shell, killing its process group at `timeout`.
+/// Runs `cmd` once, reading its output until it closes, and waits for the
+/// shell, killing its process group at `timeout`. Then sends the value
+/// ([`LastLine::value`]) to the actor.
 async fn run_source(
     cmd: &str,
     env: Vec<(String, String)>,
@@ -340,14 +345,10 @@ async fn run_source(
     };
     let group = Group(Some(Pid::from_raw(pid)));
     let stdout = child.stdout.take();
+    let mut output = LastLine::default();
     let work = async {
-        if let Some(out) = stdout
-            && let Some(line) = first_line(out).await
-        {
-            let cmd = cmd.to_string();
-            let _ = jobs
-                .send(Box::new(move |s: &mut State| store(s, &cmd, &line)))
-                .await;
+        if let Some(out) = stdout {
+            output.read(out).await;
         }
         child.wait().await
     };
@@ -356,6 +357,12 @@ async fn run_source(
         let _ = child.wait().await;
     }
     group.disarm();
+    if let Some(line) = output.value() {
+        let cmd = cmd.to_string();
+        let _ = jobs
+            .send(Box::new(move |s: &mut State| store(s, &cmd, &line)))
+            .await;
+    }
 }
 
 /// A run's process group, killed if the run is dropped before its shell is
@@ -381,28 +388,81 @@ impl Drop for Group {
     }
 }
 
-/// The first line of `out`, without its line ending, cut at [`MAX_LINE`]
-/// bytes (on a character boundary). Output with no newline counts as one
-/// line; none at all is an empty line. `None` on a read error. The pipe is
-/// closed on return, so a command still writing gets `SIGPIPE`.
-async fn first_line(out: impl AsyncRead + Unpin) -> Option<String> {
-    let mut buf = Vec::new();
-    BufReader::new(out.take(MAX_LINE as u64))
-        .read_until(b'\n', &mut buf)
-        .await
-        .ok()?;
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
+/// A run's output as it is read: the last complete non-empty line and the
+/// line being read, each cut at [`MAX_LINE`] bytes.
+#[derive(Default)]
+struct LastLine {
+    last: Option<Vec<u8>>,
+    current: Vec<u8>,
+    /// The output reached its end (not the timeout or [`MAX_OUTPUT`]).
+    ended: bool,
+}
+
+impl LastLine {
+    /// Reads `out` until it ends, fails, or [`MAX_OUTPUT`] bytes have come.
+    /// The pipe is closed on return.
+    async fn read(&mut self, out: impl AsyncRead + Unpin) {
+        let mut out = out.take(MAX_OUTPUT as u64);
+        let mut buf = [0u8; 4096];
+        loop {
+            match out.read(&mut buf).await {
+                Ok(0) => {
+                    self.ended = out.limit() > 0;
+                    return;
+                }
+                Ok(n) => self.push(&buf[..n]),
+                Err(_) => return,
+            }
+        }
     }
-    if buf.last() == Some(&b'\r') {
-        buf.pop();
+
+    fn push(&mut self, bytes: &[u8]) {
+        for chunk in bytes.split_inclusive(|b| *b == b'\n') {
+            let (text, newline) = match chunk.strip_suffix(b"\n") {
+                Some(text) => (text, true),
+                None => (chunk, false),
+            };
+            let room = MAX_LINE.saturating_sub(self.current.len());
+            self.current
+                .extend_from_slice(&text[..text.len().min(room)]);
+            if newline {
+                if self.current.last() == Some(&b'\r') {
+                    self.current.pop();
+                }
+                if !self.current.is_empty() {
+                    self.last = Some(std::mem::take(&mut self.current));
+                }
+                self.current.clear();
+            }
+        }
     }
-    if let Err(e) = std::str::from_utf8(&buf)
-        && e.error_len().is_none()
-    {
-        buf.truncate(e.valid_up_to());
+
+    /// The value, as tmux 3.7b keeps a `#()` job's (recorded): the last
+    /// non-empty line, blank lines skipped, a line of spaces counting;
+    /// once the output has ended, text after the last newline is that line.
+    /// Output with no non-empty line gives an empty value, and a run cut
+    /// off before any line gives `None` (the old value stays).
+    /// ponytail: tmux also shows each line as it arrives; here a run's
+    /// value lands when its output ends or it is killed.
+    fn value(mut self) -> Option<String> {
+        let tail = !self.current.is_empty() && (self.ended || self.last.is_none());
+        let line = if tail {
+            Some(std::mem::take(&mut self.current))
+        } else {
+            self.last.take()
+        };
+        let mut line = match line {
+            Some(line) => line,
+            None if self.ended => Vec::new(),
+            None => return None,
+        };
+        if let Err(e) = std::str::from_utf8(&line)
+            && e.error_len().is_none()
+        {
+            line.truncate(e.valid_up_to());
+        }
+        Some(String::from_utf8_lossy(&line).into_owned())
     }
-    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// On the actor: `line` is `cmd`'s latest value. Every option registered
@@ -589,21 +649,55 @@ mod tests {
         assert_ne!(inline_key("date"), inline_key("date "));
     }
 
+    async fn value(out: &[u8]) -> Option<String> {
+        let mut l = LastLine::default();
+        l.read(out).await;
+        l.value()
+    }
+
+    /// The cases recorded on tmux 3.7b's `#()`.
     #[tokio::test]
-    async fn the_first_line_is_kept_and_bounded() {
-        assert_eq!(first_line(&b"one\ntwo\n"[..]).await.as_deref(), Some("one"));
-        assert_eq!(first_line(&b"crlf\r\nx"[..]).await.as_deref(), Some("crlf"));
-        assert_eq!(
-            first_line(&b"no newline"[..]).await.as_deref(),
-            Some("no newline")
-        );
-        assert_eq!(first_line(&b""[..]).await.as_deref(), Some(""));
+    async fn the_last_non_empty_line_is_kept_as_tmux_keeps_it() {
+        let v = |s: &str| Some(s.to_string());
+        assert_eq!(value(b"one\ntwo\n").await, v("two"));
+        assert_eq!(value(b"one\ntwo\n\n").await, v("two"));
+        assert_eq!(value(b"one\ntwo").await, v("two"));
+        assert_eq!(value(b"one\n\n\n").await, v("one"));
+        assert_eq!(value(b"\n").await, v(""));
+        assert_eq!(value(b"x\n  \n").await, v("  "));
+        assert_eq!(value(b"").await, v(""));
+        assert_eq!(value(b"crlf\r\n").await, v("crlf"));
+    }
+
+    #[tokio::test]
+    async fn a_line_and_the_output_are_bounded() {
         let long = vec![b'y'; MAX_LINE * 4];
-        assert_eq!(first_line(&long[..]).await.map(|l| l.len()), Some(MAX_LINE));
+        assert_eq!(value(&long).await.map(|l| l.len()), Some(MAX_LINE));
         // A character cut at the limit is dropped, not replaced.
         let mut cut = vec![b'a'; MAX_LINE - 1];
         cut.extend_from_slice("é".as_bytes());
-        assert_eq!(first_line(&cut[..]).await, Some("a".repeat(MAX_LINE - 1)));
+        assert_eq!(value(&cut).await, Some("a".repeat(MAX_LINE - 1)));
+        // Past MAX_OUTPUT the rest is not read: the last complete line
+        // before it stays.
+        let mut spew = b"keep\n".to_vec();
+        spew.extend(std::iter::repeat_n(b'y', MAX_OUTPUT));
+        spew.extend_from_slice(b"\nlater\n");
+        assert_eq!(value(&spew).await.as_deref(), Some("keep"));
+        // Split reads join into one line.
+        let mut l = LastLine::default();
+        l.push(b"tw");
+        l.push(b"o\nth");
+        l.push(b"ree\n");
+        assert_eq!(l.value().as_deref(), Some("three"));
+    }
+
+    #[test]
+    fn a_run_cut_off_before_any_line_keeps_the_old_value() {
+        let mut l = LastLine::default();
+        l.push(b"partial");
+        // Not ended, no complete line: the partial text is all there is.
+        assert_eq!(l.value().as_deref(), Some("partial"));
+        assert_eq!(LastLine::default().value(), None);
     }
 
     #[test]

@@ -205,8 +205,8 @@ pub struct ConfigHook {
     pub source: Source,
 }
 
-/// One `[status.sources.<name>]` entry (TC.4): a status source whose first
-/// output line lands in `@<name>`, from the last layer that declared it.
+/// One `[status.sources.<name>]` entry (TC.4): a status source whose last
+/// non-empty output line lands in `@<name>`, from the last layer that declared it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigSource {
     /// The shell command.
