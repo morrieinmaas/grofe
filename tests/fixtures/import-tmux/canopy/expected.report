@@ -1,0 +1,78 @@
+~/.config/tmux/tmux.conf:1: set-environment: set-environment -g CANOPY_STORE "$HOME/.local/share/canopy"
+~/.config/tmux/tmux.conf:2: set-environment: set-environment -g CANOPY_STATE "$HOME/.local/state/canopy"
+~/.config/tmux/tmux.conf:3: set-environment: set-environment -g CANOPY_CONFIG "$HOME/.config/canopy"
+~/.config/tmux/tmux.conf:4: note: source-file -q found ~/.local/share/canopy/tmux/tmux.conf
+~/.local/share/canopy/tmux/tmux.conf:39: note: source-file found ~/.local/share/canopy/tmux/conf.d/00-core.conf
+~/.local/share/canopy/tmux/conf.d/00-core.conf:6: user option: set -g @canopy_test_marker shipped-default
+~/.local/share/canopy/tmux/conf.d/00-core.conf:31: option grofe does not have: set -g renumber-windows on
+~/.local/share/canopy/tmux/conf.d/00-core.conf:33: option grofe does not have: setw -g mode-keys vi
+~/.local/share/canopy/tmux/conf.d/00-core.conf:48: %if: %if "#{==:#{@canopy_core_appended},}"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:52: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g default-terminal "tmux-256color"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:53: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -as terminal-features ",xterm-256color:RGB"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:54: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -as terminal-features ",ghostty:RGB"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:55: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -as terminal-features ",xterm-ghostty:RGB"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:61: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g allow-passthrough on
+~/.local/share/canopy/tmux/conf.d/00-core.conf:78: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g extended-keys always
+~/.local/share/canopy/tmux/conf.d/00-core.conf:92: %if: %if "#{>=:#{version},3.5}"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:93: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:92: set -g extended-keys-format csi-u
+~/.local/share/canopy/tmux/conf.d/00-core.conf:94: %endif: %endif
+~/.local/share/canopy/tmux/conf.d/00-core.conf:95: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -as terminal-features "xterm*:extkeys"
+~/.local/share/canopy/tmux/conf.d/00-core.conf:99: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -ga update-environment TERM
+~/.local/share/canopy/tmux/conf.d/00-core.conf:100: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -ga update-environment TERM_PROGRAM
+~/.local/share/canopy/tmux/conf.d/00-core.conf:102: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g @canopy_core_appended 1
+~/.local/share/canopy/tmux/conf.d/00-core.conf:103: %endif: %endif
+~/.local/share/canopy/tmux/tmux.conf:40: note: source-file -q found ~/.local/state/canopy/05-caps.conf
+~/.local/state/canopy/05-caps.conf:1: user option: set -g @canopy_has_wt 0
+~/.local/state/canopy/05-caps.conf:2: user option: set -g @canopy_has_fzf 1
+~/.local/state/canopy/05-caps.conf:3: user option: set -g @canopy_has_gum 0
+~/.local/state/canopy/05-caps.conf:4: user option: set -g @canopy_has_ghostty 0
+~/.local/state/canopy/05-caps.conf:5: user option: set -g @canopy_has_starship 1
+~/.local/state/canopy/05-caps.conf:6: user option: set -g @canopy_has_mise 1
+~/.local/state/canopy/05-caps.conf:7: user option: set -g @canopy_tmux_version 3.7b
+~/.local/share/canopy/tmux/tmux.conf:41: note: source-file -q found ~/.local/state/canopy/10-keys.conf
+~/.local/state/canopy/10-keys.conf:25: note: source-file of the imported config rewritten to reload
+~/.local/state/canopy/10-keys.conf:26: note: $CANOPY_STORE in keys.prefix.M-s is expanded when grofe loads the config, from the server's environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which M3.5 does not convert
+~/.local/state/canopy/10-keys.conf:27: note: $CANOPY_STORE in keys.prefix.M-r is expanded when grofe loads the config, from the server's environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which M3.5 does not convert
+~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/20-status.conf
+~/.local/share/canopy/tmux/conf.d/20-status.conf:28: user option: set -g @theme_bg "#fbf1c7"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:29: user option: set -g @theme_fg "#3c3836"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:30: user option: set -g @theme_blue "#458588"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:31: user option: set -g @theme_yellow "#b57614"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:32: user option: set -g @theme_green "#79740e"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:33: user option: set -g @theme_grey "#a89984"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:34: user option: set -g @theme_muted "#7c6f64"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:37: user option: set -g @theme_red "#cc241d"
+~/.local/share/canopy/tmux/conf.d/20-status.conf:59: user option: set -g @pill_l ""
+~/.local/share/canopy/tmux/conf.d/20-status.conf:60: user option: set -g @pill_r ""
+~/.local/share/canopy/tmux/conf.d/20-status.conf:64: user option: set -g @canopy_status_battery on
+~/.local/share/canopy/tmux/conf.d/20-status.conf:65: user option: set -g @canopy_status_net on
+~/.local/share/canopy/tmux/conf.d/20-status.conf:71: option grofe does not have: set -g status-format[1] ""
+~/.local/share/canopy/tmux/conf.d/20-status.conf:72: unknown value: top: set -g status-position top
+~/.local/share/canopy/tmux/conf.d/20-status.conf:73: option grofe does not have: set -g status-justify left
+~/.local/share/canopy/tmux/conf.d/20-status.conf:85: option grofe does not have: set -g window-status-separator ""
+~/.local/share/canopy/tmux/conf.d/20-status.conf:93: #() in a format (D8): set -g status-right "#($CANOPY_STORE/bin/canopy-status)"
+~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/30-plugins.conf
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:48: plugins and TPM: set -g @resurrect-dir "$CANOPY_STATE/resurrect"
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:70: plugins and TPM: set -g @continuum-restore on
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:83: plugins and TPM: set -g @continuum-save-interval '5'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:93: plugins and TPM: set -g @resurrect-strategy-nvim 'session'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:119: plugins and TPM: set -g @resurrect-save-command-strategy "../../strategies/canopy_save_command"
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:137: if-shell: if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:154: plugins and TPM: set -g @resurrect-save 'M-s'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:155: plugins and TPM: set -g @resurrect-restore 'M-r'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:157: if-shell: if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-resurrect/resurrect.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/resurrect.tmux"'
+~/.local/share/canopy/tmux/conf.d/30-plugins.conf:159: if-shell: if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux"'
+~/.local/share/canopy/tmux/tmux.conf:43: note: source-file -q found ~/.config/canopy/user.conf
+~/.config/canopy/user.conf:1: option grofe does not have: setw -g main-pane-width 50%
+~/.config/canopy/user.conf:3: unknown command: display-popup: bind g display-popup -E -w 95% -h 90% 'exec gh-dash'
+~/.local/state/canopy/10-keys.conf:17: note: keys.prefix.K is overridden by a later binding at ~/.config/canopy/user.conf:4
+~/.config/canopy/user.conf:6: key grofe does not know: bind -n MouseDown1Status if -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E "net-popup.sh #{mouse_status_range}"' 'switch-client -t ='
+~/.config/canopy/user.conf:9: set-environment: set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
+~/.config/canopy/user.conf:10: plugins and TPM: set -g @tpm_plugins '            tmux-plugins/tpm               tmux-plugins/tmux-sensible   '
+~/.config/canopy/user.conf:14: if-shell: if "test ! -d ~/.config/tmux/plugins/tpm" "run 'git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm'"
+~/.config/canopy/user.conf:15: plugins and TPM: run '~/.config/tmux/plugins/tpm/tpm'
+~/.local/state/canopy/10-keys.conf:8: note: keys.prefix.C-s is overridden by a later binding at ~/.config/canopy/user.conf:16
+~/.config/canopy/user.conf:17: run-shell: run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'
+~/.local/share/canopy/tmux/conf.d/20-status.conf:79: note: status.left is overridden by a later set at ~/.config/canopy/user.conf:18
+~/.config/canopy/user.conf:19: #() in a format (D8): set -g status-right "#(~/.config/tmux/battery.sh) %H:%M"
+~/.config/canopy/user.conf:20: if-shell: if-shell '[ -r ~/.config/themes/active ]' 'run-shell "~/.config/themes/apply-tmux.sh"'
