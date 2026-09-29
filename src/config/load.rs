@@ -11,12 +11,13 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
 use super::{
-    ConfigError, ConfigHook, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES, Provenance,
-    Resolved, Source, Ty, closest, tmux_name, toml_type,
+    ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES,
+    Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
 use crate::server::input::{Key, parse_key};
+use crate::server::sources::MAX_SECONDS;
 
 /// Loads the machine's config chain: built-in defaults, `config.toml`,
 /// `conf.d/*.toml` in lexical order, `user.toml`. All errors, or none.
@@ -90,6 +91,7 @@ struct Loader {
     provenance: Provenance,
     keys: Vec<KeyBinding>,
     hooks: BTreeMap<String, ConfigHook>,
+    sources: BTreeMap<String, ConfigSource>,
     errors: Vec<ConfigError>,
     warnings: Vec<String>,
     /// The include chain being loaded, for cycle detection.
@@ -158,6 +160,7 @@ impl Loader {
             provenance,
             keys: Vec::new(),
             hooks: BTreeMap::new(),
+            sources: BTreeMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             stack: Vec::new(),
@@ -173,6 +176,7 @@ impl Loader {
             lists: self.lists,
             keys: self.keys,
             hooks: self.hooks,
+            sources: self.sources,
             provenance: self.provenance,
             warnings: self.warnings,
         })
@@ -369,6 +373,9 @@ impl Loader {
     ) {
         let full = join(prefix, k.get_ref());
         let line = f.line(k.span().start);
+        if full == "status.sources" {
+            return self.sources(f, line, v.get_ref());
+        }
         if let Some(toml) = OPTION_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
             return self.set_option(f, line, toml, v.get_ref());
         }
@@ -387,7 +394,7 @@ impl Loader {
                     .iter()
                     .chain(LIST_NAMES)
                     .map(|(t, _)| *t)
-                    .chain(["requires", "source-file", "keys", "hooks"]);
+                    .chain(["requires", "source-file", "keys", "hooks", "status.sources"]);
                 if let Some(s) = closest(&full, known) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
@@ -494,6 +501,47 @@ impl Loader {
                 source: f.source(line),
             };
             self.hooks.insert(name, hook);
+        }
+    }
+
+    /// `[status.sources.<name>]` (TC.4): `cmd` (required), `interval` and
+    /// `timeout` in whole seconds, 1 to tmux's `INT_MAX`. The value lands in
+    /// `@<name>`, so a name is letters, digits, `-` and `_`. A later layer
+    /// replaces an earlier one's source of the same name, and an empty
+    /// `cmd` removes it.
+    fn sources(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table of sources, found {}", v.type_str());
+            return self.error(f.path, line, "status.sources", msg);
+        };
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let path = format!("status.sources.{name}");
+            let line = f.line(k.span().start);
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid {
+                let msg = "a source name is letters, digits, - and _".to_string();
+                self.error(f.path, line, &path, msg);
+                continue;
+            }
+            match source(f, v.get_ref()) {
+                Err((at, msg)) => self.error(f.path, at.unwrap_or(line), &path, msg),
+                Ok((cmd, _, _)) if cmd.trim().is_empty() => {
+                    self.sources.remove(&name);
+                }
+                Ok((cmd, interval, timeout)) => {
+                    let s = ConfigSource {
+                        cmd,
+                        interval,
+                        timeout,
+                        source: f.source(line),
+                    };
+                    self.sources.insert(name, s);
+                }
+            }
         }
     }
 
@@ -685,6 +733,59 @@ fn binding(v: &DeValue) -> Result<Parsed, String> {
     }
     b.cmds = commands(&b.command)?;
     Ok(b)
+}
+
+/// A source's `cmd`, `interval` and `timeout`.
+type SourceFields = (String, Option<u64>, Option<u64>);
+
+/// A source's `{ cmd, interval, timeout }` table. An error carries the line
+/// of the field it is about (`None`: the source's own line).
+fn source(f: &FileCtx, v: &DeValue) -> Result<SourceFields, (Option<usize>, String)> {
+    let DeValue::Table(t) = v else {
+        return Err((None, format!("expected a table, found {}", v.type_str())));
+    };
+    let (mut cmd, mut interval, mut timeout) = (None, None, None);
+    for (k, v) in entries(t) {
+        let field = k.get_ref().as_ref();
+        let at = Some(f.line(k.span().start));
+        let seconds = || match v.get_ref() {
+            DeValue::Integer(i) => i64::from_str_radix(i.as_str(), i.radix())
+                .ok()
+                .and_then(|n| u64::try_from(n).ok())
+                .filter(|n| (1..=MAX_SECONDS).contains(n))
+                .ok_or_else(|| {
+                    let msg = format!("{field}: expected 1 to {MAX_SECONDS} seconds, found {i}");
+                    (at, msg)
+                }),
+            other => Err((
+                at,
+                format!(
+                    "{field}: expected an integer (seconds), found {}",
+                    other.type_str()
+                ),
+            )),
+        };
+        match field {
+            "cmd" => match v.get_ref() {
+                DeValue::String(s) => cmd = Some(s.to_string()),
+                other => {
+                    let msg = format!("cmd: expected a string, found {}", other.type_str());
+                    return Err((at, msg));
+                }
+            },
+            "interval" => interval = Some(seconds()?),
+            "timeout" => timeout = Some(seconds()?),
+            other => {
+                let mut msg = format!("unknown field {other}");
+                if let Some(s) = closest(other, ["cmd", "interval", "timeout"]) {
+                    msg.push_str(&format!(", did you mean {s}?"));
+                }
+                return Err((at, msg));
+            }
+        }
+    }
+    let cmd = cmd.ok_or((None, "missing cmd".to_string()))?;
+    Ok((cmd, interval, timeout))
 }
 
 /// A binding's command string as a checked sequence; empty unbinds (R11).

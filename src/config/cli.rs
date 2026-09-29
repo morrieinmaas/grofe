@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest, list_tmux_name,
-    load, load_with_file, tmux_name, toml_type,
+    ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest,
+    list_tmux_name, load, load_with_file, tmux_name, toml_type,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
@@ -107,6 +107,16 @@ fn run(args: &[String]) -> Result<String, String> {
             out.push_str(&format!("  set by {}\n", h.source.describe(home)));
         }
     };
+    let status_source = |out: &mut String, name: &str, s: &ConfigSource| {
+        out.push_str(&format!(
+            "status.sources.{} = {}\n",
+            bare_or_quoted(name),
+            source_value(s)
+        ));
+        if explain {
+            out.push_str(&format!("  set by {}\n", s.source.describe(home)));
+        }
+    };
     match key {
         None => {
             for (k, _) in OPTION_NAMES {
@@ -121,6 +131,22 @@ fn run(args: &[String]) -> Result<String, String> {
             for (event, h) in &r.hooks {
                 hook(&mut out, event, h);
             }
+            for (name, s) in &r.sources {
+                status_source(&mut out, name, s);
+            }
+        }
+        Some("status.sources") => {
+            for (name, s) in &r.sources {
+                status_source(&mut out, name, s);
+            }
+        }
+        Some(k) if k.starts_with("status.sources.") => {
+            let name = &k["status.sources.".len()..];
+            let s = r
+                .sources
+                .get(name)
+                .ok_or_else(|| format!("show-config: no source {k}"))?;
+            status_source(&mut out, name, s);
         }
         Some(k) if tmux_name(k).is_some() => option(&mut out, k),
         Some(k) if list_tmux_name(k).is_some() => list(&mut out, k),
@@ -192,6 +218,16 @@ fn bare_or_quoted(s: &str) -> String {
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if bare { s.to_string() } else { quote(s) }
+}
+
+fn source_value(s: &ConfigSource) -> String {
+    let mut fields = vec![format!("cmd = {}", quote(&s.cmd))];
+    for (k, v) in [("interval", s.interval), ("timeout", s.timeout)] {
+        if let Some(v) = v {
+            fields.push(format!("{k} = {v}"));
+        }
+    }
+    format!("{{ {} }}", fields.join(", "))
 }
 
 fn binding_value(b: &KeyBinding) -> String {
