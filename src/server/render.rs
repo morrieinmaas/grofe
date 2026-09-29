@@ -98,8 +98,12 @@ pub struct OverlayCtx {
     pub client: ClientId,
     /// The window cell drawn at the client's top-left (D6 crop).
     pub viewport: (u16, u16),
-    /// The client row the status line is on; `None` when `status` is off.
+    /// The client row a message or prompt goes on: the first status row
+    /// (tmux's `message-line 0`); `None` when `status` is off.
     pub status_row: Option<u16>,
+    /// The client row the window's top row is drawn on: the number of
+    /// status rows with `status-position top`, else 0 (TC.11).
+    pub window_top: u16,
     /// Each visible pane and its rect in client coordinates, clipped to
     /// the part the client shows. With a viewport, a pane's cell `(x, y)`
     /// is at client cell `(x + pane_left - viewport.0, ...)`: the clipped
@@ -359,6 +363,34 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
 /// Draws `line` on `row` from column 0, clipped at the screen width. Zero
 /// width characters join the cell before them; a wide char that does not
 /// fit is a space.
+/// A window's composed screen with the status rows stacked above it
+/// (`top`) or below it, as one client screen: the window's cells and
+/// cursor move down by the rows above them (TC.11, `status-position`).
+pub fn with_status(window: Screen, status: &[StyledLine], top: bool) -> Screen {
+    let lines = status.len() as u16;
+    let mut screen = Screen::new(window.cols, window.rows + lines);
+    let above = if top { lines } else { 0 };
+    let cols = usize::from(window.cols);
+    let start = usize::from(above) * cols;
+    screen.cells[start..start + window.cells.len()].clone_from_slice(&window.cells);
+    let first = if top { 0 } else { window.rows };
+    for (i, line) in status.iter().enumerate() {
+        draw_line(&mut screen, first + i as u16, line);
+    }
+    screen.cursor = window.cursor.map(|c| CursorState {
+        row: c.row + above,
+        ..c
+    });
+    screen
+}
+
+/// Draws `line` over row `row` of `screen`, from column 0.
+pub fn draw_row(screen: &mut Screen, row: u16, line: &StyledLine) {
+    if row < screen.rows {
+        draw_line(screen, row, line);
+    }
+}
+
 fn draw_line(screen: &mut Screen, row: u16, line: &StyledLine) {
     let cols = screen.cols as usize;
     let base = row as usize * cols;

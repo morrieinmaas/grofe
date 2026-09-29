@@ -29,6 +29,8 @@ main-pane-width = "50%"
 [status]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:70
 lines = 2
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:72
+position = "top"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:75
 style = "bg=default,fg=#{@theme_fg}"
 # ~/.config/canopy/user.conf:18

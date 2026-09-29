@@ -173,6 +173,9 @@ pub struct SelectPane {
     pub last: bool,
     /// `-Z` (M3.6, TC.8): a zoomed window stays zoomed.
     pub keep_zoom: bool,
+    /// `-T` (M3.6, TC.11): sets the pane's title (expanded as a format)
+    /// instead of selecting it, as tmux does.
+    pub title: Option<String>,
 }
 
 /// What `resize-pane` does: move one or more borders by a shared cell

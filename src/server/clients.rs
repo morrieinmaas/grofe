@@ -47,18 +47,20 @@ use crate::server::input::{
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
-use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
+use crate::server::status::{
+    self, RangeKind, StatusInputs, StatusRow, StyledLine, WindowOptions, WindowStatus,
+};
 use crate::server::{State, dispatch, graphics, hooks};
 use crate::types::{ClientId, PaneId, Rect, SessionId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
-/// How long a status-line message stays up (tmux's `display-time`).
-// ponytail: `display-time` and `message-style` are fixed at tmux's
-// defaults until they are options.
+/// How long a status-line message stays up (tmux's `display-time`), when
+/// the session has no `display-time` option.
 pub const DISPLAY_TIME: Duration = Duration::from_millis(750);
-const MESSAGE_STYLE: &str = "bg=yellow,fg=black";
+/// tmux 3.7b's `message-style`, when the session has no such option.
+const MESSAGE_STYLE: &str = "bg=yellow,fg=black,fill=yellow";
 
 /// How often window names are checked for `automatic-rename` while clients
 /// are attached (tmux's `NAME_INTERVAL`).
@@ -201,9 +203,12 @@ pub struct ClientEntry {
     /// Whether the outer terminal has focus, from its focus reports (the
     /// client asks for them); a client starts focused, as in tmux.
     pub focused: bool,
-    /// A message shown instead of the status line until it expires or a
-    /// key is pressed (a failed binding's error, as tmux shows it).
+    /// A message shown on the status line's first row until it expires or
+    /// a key is pressed (a failed binding's error, as tmux shows it), in
+    /// the language [`status::draw`] reads.
     message: Option<(String, Instant)>,
+    /// The status rows as last drawn, top first, for their click ranges.
+    status_rows: Vec<StatusRow>,
     /// The window cell drawn at the client's top-left (crop, D6), as last
     /// drawn.
     pub viewport: (u16, u16),
@@ -341,6 +346,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             keys: KeyState::new(),
             focused: true,
             message: None,
+            status_rows: Vec::new(),
             viewport: (0, 0),
             mouse_modes: None,
             dirty: true,
@@ -484,14 +490,55 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
     }
 }
 
-/// Shows `text` on client `id`'s status row for [`DISPLAY_TIME`].
+/// Shows `text` as it is (styles in it are not drawn, as tmux shows a
+/// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
+    set_message(state, id, status::escape_hashes(text));
+}
+
+/// The status-line message area (spec §4.10) for `display-message`
+/// without `-p` (TC.9): `text` is already expanded, and `#[...]` styles in
+/// it are drawn, as tmux draws a `display-message`. It replaces the first
+/// status row (tmux's `message-line 0`) for `display-time`, or until a key
+/// is pressed; the rows below stay.
+pub fn display_message(state: &mut State, id: ClientId, text: &str) {
+    set_message(state, id, text.to_string());
+}
+
+fn set_message(state: &mut State, id: ClientId, text: String) {
     let now = Instant::now();
+    let Some(session) = state.clients.get(&id).map(|c| c.session) else {
+        return;
+    };
+    let until = now + display_time(&state.model, session);
     if let Some(c) = state.clients.get_mut(&id) {
-        c.message = Some((text.to_string(), now + DISPLAY_TIME));
+        c.message = Some((text, until));
         c.dirty = true;
         request_render(state, now);
     }
+}
+
+/// The session's `display-time`, or tmux's default.
+fn display_time(model: &Model, session: SessionId) -> Duration {
+    model
+        .options
+        .lookup("display-time", &[Owner::Session(session)])
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(DISPLAY_TIME, Duration::from_millis)
+}
+
+/// What a click at client cell `(col, row)` hits on client `id`'s status
+/// line, as last drawn: the range under it, if any (TC.10 sets
+/// `mouse_status_range` from it).
+pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+    let c = state.clients.get(&id)?;
+    let geom = status_geometry(&state.model, c.session, c.size.1);
+    let line = row.checked_sub(geom.first_row)?;
+    if line >= geom.lines {
+        return None;
+    }
+    let range = c.status_rows.get(usize::from(line))?.range_at(col)?;
+    Some(range.kind.clone())
 }
 
 /// A client size within tmux's bounds and grofe's cell cap
@@ -822,7 +869,7 @@ fn arm_status_clock(state: &mut State, now: Instant) {
     state.registry.status_at = state
         .clients
         .values()
-        .filter(|c| status_on(model, c.session))
+        .filter(|c| status_lines(model, c.session) > 0)
         .filter_map(|c| {
             model
                 .options
@@ -859,8 +906,9 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         c.dirty = false;
-        if let Some((screen, viewport)) = composed {
+        if let Some((screen, viewport, rows)) = composed {
             c.viewport = viewport;
+            c.status_rows = rows;
             let caps = c.caps;
             // A dropped frame keeps the client dirty, so it is redrawn once
             // its outbox has room even if nothing else changes.
@@ -869,18 +917,48 @@ fn render_dirty(state: &mut State) {
     }
 }
 
-/// Whether `session` shows a status row.
-fn status_on(model: &Model, session: SessionId) -> bool {
-    model
+/// How many status rows `session` shows: `status` is `off`, `on` or 2 to
+/// 5 (spec §4.10).
+fn status_lines(model: &Model, session: SessionId) -> u16 {
+    match model.options.lookup("status", &[Owner::Session(session)]) {
+        Some("off") | None => 0,
+        Some("on") => 1,
+        Some(n) => n.parse().unwrap_or(1),
+    }
+}
+
+/// Where a client's status rows are, for a client `rows` tall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StatusGeometry {
+    /// How many rows the status line takes (never more than the client).
+    lines: u16,
+    /// `status-position top`: the rows are above the window.
+    top: bool,
+    /// The client row of the first status row, where a message or prompt
+    /// goes (tmux's `message-line 0`).
+    first_row: u16,
+    /// The client row the window's top row is drawn on.
+    window_top: u16,
+}
+
+fn status_geometry(model: &Model, session: SessionId, rows: u16) -> StatusGeometry {
+    let lines = status_lines(model, session).min(rows);
+    let top = model
         .options
-        .lookup("status", &[Owner::Session(session)])
-        .is_some_and(|v| v != "off")
+        .lookup("status-position", &[Owner::Session(session)])
+        == Some("top");
+    StatusGeometry {
+        lines,
+        top,
+        first_row: if top { 0 } else { rows - lines },
+        window_top: if top { lines } else { 0 },
+    }
 }
 
 /// The window size a client of `session` with `size` wants: its terminal
-/// less the status row, never below 1x1.
+/// less the status rows, never below 1x1.
 fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (u16, u16) {
-    let status = u16::from(status_on(model, session));
+    let status = status_lines(model, session);
     (cols.max(1), rows.saturating_sub(status).max(1))
 }
 
@@ -1003,9 +1081,10 @@ fn overlay_ctx_at(
     c: &ClientEntry,
     viewport: (u16, u16),
 ) -> OverlayCtx {
-    let status = status_on(model, c.session);
     let (cols, rows) = c.size;
-    let win_rows = rows.saturating_sub(u16::from(status));
+    let geom = status_geometry(model, c.session, rows);
+    let win_rows = rows - geom.lines;
+    let top = u32::from(geom.window_top);
     let window = model
         .sessions
         .get(&c.session)
@@ -1017,15 +1096,15 @@ fn overlay_ctx_at(
         .filter_map(|(pane, r)| {
             let (vx, vy) = (u32::from(viewport.0), u32::from(viewport.1));
             let left = u32::from(r.x).max(vx);
-            let top = u32::from(r.y).max(vy);
+            let upper = u32::from(r.y).max(vy);
             let right = (u32::from(r.x) + u32::from(r.cols)).min(vx + u32::from(cols));
             let bottom = (u32::from(r.y) + u32::from(r.rows)).min(vy + u32::from(win_rows));
-            (left < right && top < bottom).then(|| {
+            (left < right && upper < bottom).then(|| {
                 let rect = Rect {
                     x: (left - vx) as u16,
-                    y: (top - vy) as u16,
+                    y: (upper - vy + top) as u16,
                     cols: (right - left) as u16,
-                    rows: (bottom - top) as u16,
+                    rows: (bottom - upper) as u16,
                 };
                 (pane, rect)
             })
@@ -1034,7 +1113,8 @@ fn overlay_ctx_at(
     OverlayCtx {
         client: id,
         viewport,
-        status_row: (status && rows > 0).then(|| rows - 1),
+        status_row: (geom.lines > 0).then_some(geom.first_row),
+        window_top: geom.window_top,
         panes,
     }
 }
@@ -1052,15 +1132,20 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
-/// Composes client `c`'s next screen, and the viewport it was drawn with:
-/// the frame, then every overlay (lowest priority first), then the
-/// wide-pair fix-up.
-fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Screen, (u16, u16))> {
+/// Composes client `c`'s next screen, the viewport it was drawn with and
+/// its status rows: the window, the status rows above or below it
+/// (`status-position`), then every overlay (lowest priority first), then
+/// the wide-pair fix-up.
+fn compose_client(
+    state: &State,
+    id: ClientId,
+    c: &ClientEntry,
+) -> Option<(Screen, (u16, u16), Vec<StatusRow>)> {
     let model = &state.model;
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
-    let status = status_on(model, s.id);
-    let visible = (c.size.0, c.size.1.saturating_sub(u16::from(status)));
+    let geom = status_geometry(model, s.id, c.size.1);
+    let visible = (c.size.0, c.size.1 - geom.lines);
     let area = w.area();
     let rects = visible_panes(w);
     let borders = if w.zoomed {
@@ -1089,12 +1174,8 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Scree
         (w.cols, w.rows),
         visible,
     );
-    let status_line = match &c.message {
-        Some((text, _)) => Some(message_line(text, c.size.0)),
-        None => status.then(|| status_line(model, c, s)),
-    };
-    let mut screen = render::compose(&FrameInputs {
-        client: c.size,
+    let window = render::compose(&FrameInputs {
+        client: visible,
         viewport,
         area,
         panes,
@@ -1102,22 +1183,52 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Scree
         border_style: window_style(model, w, "pane-border-style"),
         active_border_style: window_style(model, w, "pane-active-border-style"),
         active: w.active,
-        status: status_line,
+        status: None,
         cursor,
         graphics: state.graphics.remap(),
     });
+    let (rows, message) = status_rows(state, c, s, geom.lines);
+    let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
+    let mut screen = if let Some(first) = lines.first_mut() {
+        if let Some(m) = &message {
+            *first = m.line.clone();
+        }
+        render::with_status(window, &lines, geom.top)
+    } else {
+        // ponytail: with `status off` a message still takes the last row,
+        // drawn over the window's last row while it shows.
+        let mut window = window;
+        if let Some(m) = &message
+            && let Some(last) = window.rows.checked_sub(1)
+        {
+            render::draw_row(&mut window, last, &m.line);
+        }
+        window
+    };
     let cx = overlay_ctx_at(model, id, c, viewport);
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
     render::fix_wide_pairs(&mut screen);
-    Some((screen, viewport))
+    Some((screen, viewport, rows))
 }
 
-/// The status row for client `c` on session `s` (spec §4.10): options
-/// looked up from the current window's active pane, the window list with
-/// each window's own format and variables, the local time.
-fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
+/// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
+/// message row if one shows. Row N draws `status-format[N]`; an empty
+/// `status-format[0]` (the default) is tmux's default row, spelled by
+/// [`status::render_row`]; a row with no entry is blank in `status-style`.
+/// Formats expand against the current window's active pane with the
+/// server's and the client's variables over it (D9: `pane_title` and the
+/// host), options come from that pane's chain, and every window of the
+/// list expands against its own active pane.
+fn status_rows(
+    state: &State,
+    c: &ClientEntry,
+    s: &Session,
+    lines: u16,
+) -> (Vec<StatusRow>, Option<StatusRow>) {
+    let model = &state.model;
+    let width = c.size.0;
     let active = model.windows.get(&s.active).map(|w| w.active);
     let chain = active.map(|p| options::chain(model, p)).unwrap_or_default();
     let chain = if chain.is_empty() {
@@ -1125,62 +1236,119 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
     } else {
         chain
     };
-    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
-    let length = |name: &str| opt(name).parse::<u16>().unwrap_or(0);
-    let vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
-    let windows: Vec<(String, ClientVars)> = s
+    let opt = |name: &str, default: &'static str| {
+        model
+            .options
+            .lookup(name, &chain)
+            .map_or(default, |v| v as &str)
+    };
+    let client_vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
+    let server_vars = active.map(|p| options::ServerVars::new(state, p, &client_vars));
+    let vars: &dyn FormatVars = match &server_vars {
+        Some(v) => v,
+        None => &client_vars,
+    };
+    let style = opt("status-style", "");
+    let message = c.message.as_ref().map(|(text, _)| {
+        status::message_row(text, opt("message-style", MESSAGE_STYLE), vars, width)
+    });
+    if lines == 0 {
+        return (Vec::new(), message);
+    }
+    let now = local_now();
+    let formats = model.options.lookup_list("status-format", &chain);
+    let rows = (0..u32::from(lines))
+        .map(|i| match formats.and_then(|f| f.get(&i)) {
+            Some(t) if t.is_empty() && i == 0 => default_row(state, c, s, &chain, vars, now),
+            Some(t) => status::draw_row(t, style, vars, width, &now),
+            None => status::blank_row(style, vars, width),
+        })
+        .collect();
+    (rows, message)
+}
+
+/// tmux's default status row for client `c` on session `s`: status-left,
+/// the window list, status-right.
+fn default_row(
+    state: &State,
+    c: &ClientEntry,
+    s: &Session,
+    chain: &[Owner],
+    vars: &dyn FormatVars,
+    now: libc::tm,
+) -> StatusRow {
+    let model = &state.model;
+    let opt = |name: &str, default: &'static str| {
+        model
+            .options
+            .lookup(name, chain)
+            .map_or(default, |v| v as &str)
+    };
+    let length = |name: &str| opt(name, "0").parse::<u16>().unwrap_or(0);
+    let listed: Vec<(&crate::server::model::Window, Vec<Owner>)> = s
         .windows
         .iter()
         .filter_map(|id| {
             let w = model.windows.get(id)?;
-            let name = if *id == s.active {
-                "window-status-current-format"
-            } else {
-                "window-status-format"
-            };
-            let format = model
-                .options
-                .lookup(name, &options::chain(model, w.active))
-                .unwrap_or("")
-                .to_string();
-            Some((
-                format,
-                ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))),
-            ))
+            Some((w, options::chain(model, w.active)))
         })
         .collect();
-    let entries: Vec<WindowStatus> = windows
+    let client_vars: Vec<ClientVars> = listed
         .iter()
-        .map(|(format, vars)| WindowStatus {
-            format,
-            vars: vars as &dyn FormatVars,
+        .map(|(w, _)| ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))))
+        .collect();
+    let server_vars: Vec<options::ServerVars> = listed
+        .iter()
+        .zip(&client_vars)
+        .map(|((w, _), v)| options::ServerVars::new(state, w.active, v))
+        .collect();
+    let entries: Vec<WindowStatus> = listed
+        .iter()
+        .zip(&server_vars)
+        .map(|((w, chain), vars)| {
+            let wopt = |name: &str, default: &'static str| {
+                model
+                    .options
+                    .lookup(name, chain)
+                    .map_or(default, |v| v as &str)
+            };
+            let defaults = WindowOptions::default();
+            let current = w.id == s.active;
+            WindowStatus {
+                format: if current {
+                    wopt("window-status-current-format", "")
+                } else {
+                    wopt("window-status-format", "")
+                },
+                vars,
+                index: w.index,
+                current,
+                last: s.last_windows.last() == Some(&w.id),
+                bell: w.bell_flag,
+                options: WindowOptions {
+                    separator: wopt("window-status-separator", defaults.separator),
+                    style: wopt("window-status-style", defaults.style),
+                    current_style: wopt("window-status-current-style", defaults.current_style),
+                    last_style: wopt("window-status-last-style", defaults.last_style),
+                    bell_style: wopt("window-status-bell-style", defaults.bell_style),
+                },
+            }
         })
         .collect();
-    status::render(&StatusInputs {
-        left: opt("status-left"),
-        right: opt("status-right"),
+    status::render_row(&StatusInputs {
+        left: opt("status-left", ""),
+        right: opt("status-right", ""),
         left_length: length("status-left-length"),
         right_length: length("status-right-length"),
-        style: opt("status-style"),
-        vars: &vars,
+        style: opt("status-style", ""),
+        left_style: opt("status-left-style", "default"),
+        right_style: opt("status-right-style", "default"),
+        justify: opt("status-justify", "left"),
+        vars,
         windows: &entries,
         width: c.size.0,
-        now: local_now(),
+        now,
     })
-}
-
-/// A message across the whole status row, in `message-style`.
-// ponytail: with `status off` the message still takes the last row,
-// drawn over the window's last row while it shows.
-fn message_line(text: &str, width: u16) -> StyledLine {
-    let used = unicode_width::UnicodeWidthStr::width(text);
-    let pad = usize::from(width).saturating_sub(used);
-    StyledLine {
-        spans: vec![Span {
-            text: format!("{text}{}", " ".repeat(pad)),
-            style: status::parse_style(MESSAGE_STYLE),
-        }],
-    }
 }
 
 /// The local broken-down time, for strftime sequences in the status line.
@@ -1558,6 +1726,7 @@ mod tests {
                 keys: KeyState::new(),
                 focused: true,
                 message: None,
+                status_rows: Vec::new(),
                 viewport: (0, 0),
                 mouse_modes: None,
                 dirty: false,
@@ -1584,6 +1753,32 @@ mod tests {
         input(&mut state, id, b"x", now);
         assert!(state.clients[&id].message.is_none());
         assert!(state.clients[&id].dirty);
+    }
+
+    /// TC.11: a click maps onto the status row it lands on, at the bottom
+    /// by default and at the top with `status-position top`.
+    #[test]
+    fn a_status_click_finds_the_range_under_it() {
+        let (mut state, id) = state_with_client();
+        let net = status::draw(
+            "#[range=user|net]NET#[norange]",
+            status::Style::default(),
+            80,
+        );
+        let user = Some(RangeKind::User("net".to_string()));
+        state.clients.get_mut(&id).unwrap().status_rows = vec![net.clone()];
+        assert_eq!(status_range_at(&state, id, 1, 23), user);
+        assert_eq!(status_range_at(&state, id, 1, 22), None);
+        assert_eq!(status_range_at(&state, id, 40, 23), None);
+
+        let o = &mut state.model.options;
+        o.set(Owner::Global, "status", "2", false).unwrap();
+        o.set(Owner::Global, "status-position", "top", false)
+            .unwrap();
+        state.clients.get_mut(&id).unwrap().status_rows = vec![StatusRow::default(), net];
+        assert_eq!(status_range_at(&state, id, 1, 1), user);
+        assert_eq!(status_range_at(&state, id, 1, 0), None);
+        assert_eq!(status_range_at(&state, id, 1, 23), None);
     }
 
     /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,

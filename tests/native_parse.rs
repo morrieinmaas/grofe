@@ -948,6 +948,7 @@ fn equals_targets_are_literal_session_names() {
                 target: Target::Session(SessionRef::Name(name.to_string())),
                 last: false,
                 keep_zoom: false,
+                title: None,
             })),
             "{given}"
         );

@@ -443,6 +443,7 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
+    ('T', FlagKind::Value),
     ('L', FlagKind::Bool),
     ('l', FlagKind::Bool),
     ('Z', FlagKind::Bool),
@@ -482,6 +483,7 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
         target: target_or_current(&flags.values, 't')?,
         last: flags.present.contains(&'l'),
         keep_zoom: flags.present.contains(&'Z'),
+        title: flags.values.get(&'T').cloned(),
     }))
 }
 
@@ -2392,6 +2394,7 @@ mod tests {
                 }),
                 last: false,
                 keep_zoom: false,
+                title: None,
             })
         );
     }
@@ -2410,6 +2413,7 @@ mod tests {
                 }),
                 last: false,
                 keep_zoom: false,
+                title: None,
             })
         );
     }

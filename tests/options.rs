@@ -418,20 +418,25 @@ fn m2_options_set_and_show_by_tmux_name() {
     let rows: &[(&str, &str, &str, &str)] = &[
         ("status", "on", "-s", "off"),
         ("status-left", "\"[#{session_name}] \"", "-s", "L"),
-        ("status-right", "\"%H:%M %d-%b-%y\"", "-s", "R"),
+        (
+            "status-right",
+            "\"\\\"#{pane_title}\\\" %H:%M %d-%b-%y\"",
+            "-s",
+            "R",
+        ),
         ("status-left-length", "10", "-s", "32767"),
         ("status-right-length", "40", "-s", "0"),
         ("status-style", "bg=green,fg=black", "-s", "fg=red"),
         ("status-interval", "15", "-s", "2147483647"),
         (
             "window-status-format",
-            "\"#{window_index}:#{window_name} \"",
+            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
             "-w",
             "#{window_index}",
         ),
         (
             "window-status-current-format",
-            "\"#{window_index}:#{window_name}*\"",
+            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
             "-w",
             "[#{window_index}]",
         ),

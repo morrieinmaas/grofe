@@ -62,15 +62,17 @@ struct Builtin {
 // M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
 // tmux's except where grofe differs on purpose or M2 formats cannot yet say
 // the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
-// `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
-// title, and the window formats without `#{window_flags}` (M3.6). tmux's
-// escape-time is a server option; grofe's server scope is global.
+// `#{b:pane_current_path}` (spec §4.5), and `status-right`'s pane title
+// untrimmed (tmux's is `#{=21:pane_title}`; the native language has no `=`
+// trim, so a title over 21 columns shows whole). The window formats are
+// tmux's, `#I:#W` spelled out (TC.11, D8). tmux's escape-time is a server
+// option; grofe's server scope is global.
 //
 // M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
 // where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
 // external), `focus-events` on (tmux off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
-// synchronized panes). `status-position` takes only `bottom` until TC.11.
+// synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
 // the string translated into grofe's `#{...}`-only expander (R15).
 const BUILTINS: &[Builtin] = &[
@@ -123,7 +125,7 @@ const BUILTINS: &[Builtin] = &[
         name: "status-right",
         kind: Kind::String,
         scope: OptionScope::Session,
-        default: "%H:%M %d-%b-%y",
+        default: "\"#{pane_title}\" %H:%M %d-%b-%y",
     },
     Builtin {
         name: "status-left-length",
@@ -159,13 +161,13 @@ const BUILTINS: &[Builtin] = &[
         name: "window-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name} ",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
     },
     Builtin {
         name: "window-status-current-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}*",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
     },
     Builtin {
         name: "prefix",
@@ -253,7 +255,7 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-position",
-        kind: Kind::Choice(&["bottom"]),
+        kind: Kind::Choice(&["top", "bottom"]),
         scope: OptionScope::Session,
         default: "bottom",
     },
@@ -577,15 +579,41 @@ fn set_option(
     model: &mut Model,
     events: &mut Events,
     ctx: &ClientCtx,
-    c: SetOption,
+    mut c: SetOption,
 ) -> Result<String, String> {
-    let (base, index) = split_index(&c.name)?;
+    // TC.11, as tmux 3.7b (recorded): `-q` hides an unknown or ambiguous
+    // name and a target that does not resolve, never a bad value.
+    let quiet = |r: Result<String, String>| if c.quiet { Ok(String::new()) } else { r };
+    let (base, index) = match split_index(&c.name) {
+        Ok(split) => split,
+        Err(e) => return quiet(Err(e)),
+    };
+    if index.is_none() && list_builtin(base).is_none() && check_name(base).is_err() {
+        return quiet(check_name(base).map(|_| String::new()));
+    }
+    if c.expand
+        && let Some(value) = &c.value
+    {
+        // ponytail: `-F` expands against the target pane's `FormatCtx`,
+        // without the server's and client's variables over it.
+        let pane = model.resolve_pane(&c.target, ctx).ok();
+        c.value = Some(match pane {
+            Some(p) => expand(value, &FormatCtx::new(model, p)),
+            None => expand(value, &NoVars),
+        });
+    }
     if index.is_some() || list_builtin(base).is_some() {
         let base = base.to_string();
         return set_list(model, events, ctx, &c, &base, index);
     }
     let scope = default_scope(c.scope, Some(&c.name));
-    let owner = owner(model, scope, &c.target, ctx)?;
+    let owner = match owner(model, scope, &c.target, ctx) {
+        Ok(owner) => owner,
+        Err(e) => return quiet(Err(e)),
+    };
+    if c.only_if_unset && !c.unset && model.options.get(owner, &c.name).is_some() {
+        return quiet(Err(format!("already set: {}", c.name)));
+    }
     // A runtime value at global scope takes the option out of the
     // config's hands (R10).
     let changed = |model: &mut Model, events: &mut Events, changed: bool| {
@@ -626,9 +654,33 @@ fn set_option(
             return Err("empty value".to_string());
         }
     };
+    // `-a` appends to a string's value at this scope (tmux: style options
+    // join with a comma); any other kind takes the value as given.
+    let value = match model.options.get(owner, &c.name) {
+        Some(old) if c.append && is_text(&c.name) => {
+            let separator = if c.name.ends_with("-style") { "," } else { "" };
+            format!("{}{separator}{value}", old.value)
+        }
+        _ => value,
+    };
     let did = model.options.set(owner, &c.name, &value, c.persist)?;
     changed(model, events, did);
     Ok(String::new())
+}
+
+/// Whether `name` holds free text (a user option or a string built-in),
+/// which `-a` appends to.
+fn is_text(name: &str) -> bool {
+    name.starts_with('@') || builtin(name).is_some_and(|b| b.kind == Kind::String)
+}
+
+/// No format variables: `-F` with no pane to expand against.
+struct NoVars;
+
+impl FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
 }
 
 /// `option-changed`, emitted only for a real change (spec §4.2).
@@ -1123,7 +1175,8 @@ fn flag(b: bool) -> String {
 }
 
 /// Format variables that need the server state, not only the model
-/// (`socket_path`, `pane_title`, `pane_tty`), over `inner` for the rest.
+/// (`socket_path`, `pane_title`, `pane_tty`, and TC.11's `host` and
+/// `host_short`), over `inner` for the rest.
 /// Built where dispatch holds `&State`, the way `ClientVars` layers the
 /// client's variables.
 pub struct ServerVars<'a> {
@@ -1143,6 +1196,12 @@ impl FormatVars for ServerVars<'_> {
         match name {
             "socket_path" => Some(self.state.socket.display().to_string()),
             "pane_title" => Some(self.state.passthrough.title(self.pane)),
+            "host" => Some(crate::server::passthrough::hostname().to_string()),
+            // tmux: the host name up to its first dot.
+            "host_short" => {
+                let host = crate::server::passthrough::hostname();
+                Some(host.split('.').next().unwrap_or(host).to_string())
+            }
             "pane_tty" => {
                 let p = self.state.model.panes.get(&self.pane)?;
                 Some(p.handle.tty_path()?.display().to_string())
@@ -1254,7 +1313,7 @@ impl FormatVars for FormatCtx<'_> {
             "history_size" => p.handle.history_size().to_string(),
             "window_flags" => window_flags(s, w),
             // ponytail: `client_width`/`client_height` need clients (M2);
-            // `host_short` needs nix's `hostname` feature (not enabled).
+            // `host` and `host_short` are `ServerVars`' (TC.11).
             _ => return None,
         })
     }
@@ -1627,7 +1686,24 @@ fn set_list(
         return Err(not_a_list(base, &c.name));
     }
     let scope = default_scope(c.scope, Some(base));
-    let owner = owner(model, scope, &c.target, ctx)?;
+    let owner = match owner(model, scope, &c.target, ctx) {
+        Ok(owner) => owner,
+        Err(_) if c.quiet => return Ok(String::new()),
+        Err(e) => return Err(e),
+    };
+    if c.only_if_unset && !c.unset {
+        let list = model.options.list(owner, base);
+        let already = match index {
+            Some(i) => list.is_some_and(|l| l.items.contains_key(&i)),
+            None => list.is_some(),
+        };
+        if already {
+            if c.quiet {
+                return Ok(String::new());
+            }
+            return Err(format!("already set: {}", c.name));
+        }
+    }
     let op = match (c.unset, index, c.value.clone()) {
         (true, Some(i), _) => ListOp::Remove(i),
         (true, None, _) => ListOp::Reset,
@@ -1962,9 +2038,10 @@ mod tests {
             Err("unknown value: maybe".to_string())
         );
         assert_eq!(validate("mouse", "yes"), Ok("on".into()));
+        assert_eq!(validate("status-position", "top"), Ok("top".into()));
         assert_eq!(
-            validate("status-position", "top"),
-            Err("unknown value: top".to_string())
+            validate("status-position", "left"),
+            Err("unknown value: left".to_string())
         );
         assert_eq!(builtin_names().count(), BUILTINS.len());
     }
