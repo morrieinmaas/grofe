@@ -74,6 +74,11 @@ quick things.
 
 ## Switching from tmux
 
+> **Not yet.** This section describes where grofe is heading. The tmux
+> compatibility layer is still being built, so most tmux commands fail under
+> the `tmux` name today, and `#()` status segments are not converted yet.
+> Keep real tmux first on your `PATH` until a release says otherwise.
+
 grofe does not read `tmux.conf`, but it will convert one for you:
 
 ```sh
