@@ -84,12 +84,15 @@ fn find_unnested(s: &str, target: u8) -> Option<usize> {
 /// `m/r:` before `m:`).
 type Comparison = fn(&str, &str) -> bool;
 
-const COMPARISONS: [(&str, Comparison); 8] = [
+const COMPARISONS: [(&str, Comparison); 10] = [
     ("==:", |a, b| a == b),
     ("!=:", |a, b| a != b),
-    // tmux compares these as strings (`strcmp`), so `10` sorts before `9`.
+    // tmux compares these as strings (`strcmp`), so `10` sorts before `9`,
+    // and `<` and `<=` likewise.
     (">=:", |a, b| a >= b),
     (">:", |a, b| a > b),
+    ("<=:", |a, b| a <= b),
+    ("<:", |a, b| a < b),
     ("&&:", |a, b| is_truthy(a) && is_truthy(b)),
     ("||:", |a, b| is_truthy(a) || is_truthy(b)),
     ("m/r:", regex_match),
@@ -97,7 +100,7 @@ const COMPARISONS: [(&str, Comparison); 8] = [
 ];
 
 /// Expands the body of one `#{...}`: `?cond,then,else`, a comparison from
-/// [`COMPARISONS`], `b:var`, `t:var`, or a bare variable name.
+/// [`COMPARISONS`], `!:text`, `b:var`, `t:var`, or a bare variable name.
 fn expand_body(body: &str, vars: &dyn FormatVars) -> String {
     if let Some(rest) = body.strip_prefix('?') {
         return expand_ternary(rest, body, vars);
@@ -106,6 +109,15 @@ fn expand_body(body: &str, vars: &dyn FormatVars) -> String {
         if let Some(rest) = body.strip_prefix(prefix) {
             return expand_comparison(rest, body, op, vars);
         }
+    }
+    // `#{!:text}`: `1` when the expanded text is false, as in tmux 3.7b.
+    if let Some(rest) = body.strip_prefix("!:") {
+        return if is_truthy(&expand(rest, vars)) {
+            "0"
+        } else {
+            "1"
+        }
+        .to_string();
     }
     if let Some(rest) = body.strip_prefix("b:") {
         return expand_basename(rest, vars);
@@ -536,6 +548,15 @@ mod tests {
             ("#{&&:#{one},0}", "0"),
             ("#{||:0,x}", "1"),
             ("#{||:0,}", "0"),
+            ("#{<:a,b}", "1"),
+            ("#{<:9,10}", "0"),
+            ("#{<=:a,a}", "1"),
+            ("#{<=:b,a}", "0"),
+            ("#{!:0}", "1"),
+            ("#{!:}", "1"),
+            ("#{!:x}", "0"),
+            ("#{!:#{one}}", "0"),
+            ("#{!:#{nope}}", "1"),
             ("#{m:*ab*,xaby}", "1"),
             ("#{m:A*,abc}", "0"),
             ("#{m/r:^a.c$,abc}", "1"),
