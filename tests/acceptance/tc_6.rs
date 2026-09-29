@@ -244,6 +244,27 @@ fn a_popup_gets_the_visible_environment_and_not_the_hidden() {
     let child = popup(&srv, &["-E", &script]);
     assert!(wait_child(child, WAIT).expect("answers").success());
     assert_eq!(read(&out), "[][y][z][tmux][]\n");
+
+    // -e sets variables, a later one winning; one without `=` is ignored
+    // (recorded).
+    let out = srv.home.join("env-e.txt");
+    let script = format!(
+        "echo \"[$GROFE_TC6_VIS][$GROFE_TC6_E]\" > {}",
+        out.display()
+    );
+    let args = [
+        "-E",
+        "-e",
+        "GROFE_TC6_VIS",
+        "-e",
+        "GROFE_TC6_E=a",
+        "-e",
+        "GROFE_TC6_E=b",
+        &script,
+    ];
+    let child = popup(&srv, &args);
+    assert!(wait_child(child, WAIT).expect("answers").success());
+    assert_eq!(read(&out), "[y][b]\n");
 }
 
 /// Case 5: `-E` closes when the command exits, and the CLI gets its exit

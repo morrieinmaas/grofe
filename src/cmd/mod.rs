@@ -670,6 +670,9 @@ pub struct DisplayPopup {
     pub client: Option<String>,
     /// `-d`: the command's directory, raw (a format).
     pub cwd: Option<String>,
+    /// `-e NAME=value`, in order, a later one winning; one without `=` is
+    /// ignored, as tmux 3.7b ignores it.
+    pub env: Vec<(String, String)>,
     /// `-T`: the title (cosmetic), raw.
     pub title: Option<String>,
     /// `-w`: cells, or `N%` of the client.

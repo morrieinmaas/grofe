@@ -18,7 +18,7 @@ use crate::types::{ClientId, PaneId, Rect, SplitSize};
 /// `-h` (half the client each way by default), border included, placed by
 /// `-x`/`-y` as a menu is. `-T` and `-d` are formats. The command gets the
 /// environment a `run-shell` gets plus `TMUX` (no `TMUX_PANE`, as tmux
-/// 3.7b gives a popup), starts in `-d` or the session's directory, and
+/// 3.7b gives a popup) and `-e`'s variables, starts in `-d` or the session's directory, and
 /// `GROFE_PANE` names the client's current pane, so grofe commands run from
 /// the popup act where the popup was opened. From the CLI the reply waits
 /// until the popup closes, with its command's exit status.
@@ -78,6 +78,7 @@ pub fn display_popup(
             .into_iter()
             .filter(|(k, _)| k != "TMUX_PANE"),
     );
+    env.extend(c.env);
     let frame = Frame {
         at: (i32::from(at.0), i32::from(at.1)),
         size: (w, h),
