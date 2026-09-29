@@ -311,6 +311,8 @@ pub struct PaneHandle {
     sample: Arc<Mutex<ProcSample>>,
     /// The cwd the pane itself reported (OSC 7, T3.3).
     reported_cwd: Mutex<Option<PathBuf>>,
+    /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
+    tty: Option<PathBuf>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -338,7 +340,7 @@ impl PaneHandle {
             cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
-        let (master, child) = spawn_child(&spec, size)?;
+        let (master, child, tty) = spawn_child(&spec, size)?;
         let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
@@ -392,6 +394,7 @@ impl PaneHandle {
             graphics_ok,
             cell_px: Mutex::new(spec.cell_px),
             reported_cwd: Mutex::new(None),
+            tty,
             tasks: vec![reader, writer, sampler],
         })
     }
@@ -548,6 +551,11 @@ impl PaneHandle {
     /// from now on.
     pub fn set_reported_cwd(&self, cwd: PathBuf) {
         *lock(&self.reported_cwd) = Some(cwd);
+    }
+
+    /// The pty slave's path, as `#{pane_tty}` shows it.
+    pub fn tty_path(&self) -> Option<&Path> {
+        self.tty.as_deref()
     }
 
     /// Scrollback lines kept above the visible screen.
@@ -730,7 +738,7 @@ fn is_fork_error(e: &stdio::Error) -> bool {
 fn spawn_child(
     spec: &PaneSpawn,
     size: Size,
-) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>)> {
+) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>, Option<PathBuf>)> {
     let mut cmd = match &spec.argv {
         Some(argv) => {
             let (prog, args) = argv
@@ -783,12 +791,13 @@ fn spawn_child(
         Err(e) if is_fork_error(&e) => return Err(e),
         Err(_) => None,
     };
+    let tty = nix::unistd::ttyname(&pty.slave).ok();
     drop(pty.slave);
     drop(_guard);
 
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, child))
+    Ok((pty.master, child, tty))
 }
 
 #[cfg(test)]
