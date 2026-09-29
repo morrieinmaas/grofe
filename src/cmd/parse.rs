@@ -191,6 +191,9 @@ fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Resu
 const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('A', FlagKind::Bool),
     ('d', FlagKind::Bool),
+    ('P', FlagKind::Bool),
+    ('F', FlagKind::Value),
+    ('n', FlagKind::Value),
     ('s', FlagKind::Value),
     ('c', FlagKind::Value),
     ('x', FlagKind::Value),
@@ -224,6 +227,9 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         height,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
         attach: flags.present.contains(&'A'),
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
+        window_name: flags.values.get(&'n').cloned(),
     }))
 }
 
@@ -772,7 +778,12 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[('p', FlagKind::Bool), ('t', FlagKind::Value)];
+const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
+    ('p', FlagKind::Bool),
+    ('t', FlagKind::Value),
+    ('c', FlagKind::Value),
+    ('F', FlagKind::Value),
+];
 
 fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -784,7 +795,10 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         "display-message",
     )?;
     let mut positionals = flags.positionals.iter();
-    let text = positionals.next().cloned();
+    let text = positionals
+        .next()
+        .or_else(|| flags.values.get(&'F'))
+        .cloned();
     if positionals.next().is_some() {
         return Err(ParseError::TooManyArguments(
             "display-message".to_string(),
@@ -795,6 +809,7 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         print: flags.present.contains(&'p'),
         target: target_or_current(&flags.values, 't')?,
         text,
+        client: flags.values.get(&'c').cloned(),
     }))
 }
 
@@ -1470,11 +1485,16 @@ fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_choose_tree(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('Z', FlagKind::Bool), ('w', FlagKind::Bool)];
+    const SHORT: &[(char, FlagKind)] = &[
+        ('Z', FlagKind::Bool),
+        ('s', FlagKind::Bool),
+        ('w', FlagKind::Bool),
+    ];
     let flags = flags_for(argv, SHORT, "choose-tree")?;
     no_extra_positionals(&flags, "choose-tree", 0)?;
     Ok(Command::ChooseTree(ChooseTree {
         zoom: flags.present.contains(&'Z'),
+        sessions: flags.present.contains(&'s'),
         windows: flags.present.contains(&'w'),
     }))
 }
@@ -2142,7 +2162,7 @@ mod tests {
                 width: Some(80),
                 height: Some(24),
                 command: Some(vec!["sleep".to_string(), "30".to_string()]),
-                attach: false,
+                ..Default::default()
             })
         );
     }
@@ -2163,6 +2183,59 @@ mod tests {
     fn new_session_bare_defaults() {
         let cmd = parse(&argv(&["new-session"])).unwrap();
         assert_eq!(cmd, Command::NewSession(NewSession::default()));
+    }
+
+    /// TC.9: the corpus's `new-session -d -s x -n w -P -F fmt`
+    /// (opensessions, sessionx), `display-message -c <client> -F fmt` and
+    /// the stock `choose-tree -Zs`.
+    #[test]
+    fn tc9_flags_parse() {
+        assert_eq!(
+            parse(&argv(&[
+                "new-session",
+                "-dP",
+                "-s",
+                "x",
+                "-n",
+                "w",
+                "-F",
+                "#S"
+            ]))
+            .unwrap(),
+            Command::NewSession(NewSession {
+                detached: true,
+                name: Some("x".to_string()),
+                print: true,
+                format: Some("#S".to_string()),
+                window_name: Some("w".to_string()),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            parse(&argv(&[
+                "display-message",
+                "-p",
+                "-c",
+                "c1",
+                "-F",
+                "#{pane_id}"
+            ]))
+            .unwrap(),
+            Command::DisplayMessage(DisplayMessage {
+                print: true,
+                target: Target::Current,
+                text: Some("#{pane_id}".to_string()),
+                client: Some("c1".to_string()),
+            })
+        );
+        assert_eq!(
+            parse(&argv(&["choose-tree", "-Zs"])).unwrap(),
+            Command::ChooseTree(ChooseTree {
+                zoom: true,
+                sessions: true,
+                windows: false,
+            })
+        );
     }
 
     #[test]
@@ -2838,6 +2911,7 @@ mod tests {
                 print: true,
                 target: Target::Current,
                 text: Some("#{pane_uid}".to_string()),
+                client: None,
             })
         );
     }

@@ -349,3 +349,66 @@ fn wait_for_s_releases_a_waiting_wait_for() {
     let status = wait_child(waiter, WAIT).expect("the waiter exits");
     assert!(status.success(), "{status:?}");
 }
+
+/// tmux's stock `prefix s`: `choose-tree -Zs` lists the sessions
+/// collapsed, the current one selected.
+#[test]
+fn choose_tree_s_lists_sessions_collapsed() {
+    let srv = start();
+    new_session(&srv, "other");
+    let mut a = attach(&srv, "main");
+    srv.cmd(&["choose-tree", "-Zs"]).expect("choose-tree -Zs");
+    a.wait_for("(0) + main: 1 windows (attached)");
+    a.wait_for("(1) + other: 1 windows");
+    a.wait_for("┌ main (sort: index) ");
+    a.send("\x1b[C");
+    a.wait_for("(1) └─> + 1: ");
+    a.wait_for("(2) + other: 1 windows");
+}
+
+/// opensessions' `new-session -d -P -F` prints the new session; sessionx's
+/// `-n` names its window for good.
+#[test]
+fn new_session_p_prints_it_and_n_names_the_window() {
+    let srv = start();
+    let out = srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "x",
+        "-n",
+        "w",
+        "-P",
+        "-F",
+        "#{session_name}|#{window_name}",
+    ]);
+    assert_eq!(out.as_deref(), Ok("x|w\n"));
+    let out = srv.cmd(&["new-session", "-d", "-s", "y", "-P"]);
+    assert_eq!(out.as_deref(), Ok("y:\n"));
+    assert_eq!(display(&srv, "x", "#{window_name}"), "w");
+}
+
+/// `display-message -c` shows the message on that client only.
+#[test]
+fn display_message_c_goes_to_that_client() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    let mut b = attach(&srv, "main");
+    let names: Vec<String> = clients(&srv)
+        .iter()
+        .map(|c| c.split(' ').next().unwrap_or_default().to_string())
+        .collect();
+    srv.cmd(&["display-message", "-c", &names[0], "for a"])
+        .expect("display-message -c");
+    a.wait_until("a's message", WAIT, |t| last_row(t).trim_end() == "for a");
+    assert!(!last_row(&b.text()).contains("for a"));
+    let out = srv.cmd(&[
+        "display-message",
+        "-p",
+        "-c",
+        &names[1],
+        "-F",
+        "#{client_name}",
+    ]);
+    assert_eq!(out.as_deref(), Ok(format!("{}\n", names[1]).as_str()));
+}

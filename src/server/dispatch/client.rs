@@ -91,9 +91,7 @@ pub fn choose_tree(state: &mut State, ctx: &ClientCtx, c: ChooseTree) -> Result<
         &crate::cmd::Target::Current,
         tree::Opts {
             zoom: c.zoom,
-            // ponytail: `-s` (tmux's stock `prefix s`) is not parsed
-            // natively yet; `cmd::ChooseTree` has no field for it.
-            sessions: false,
+            sessions: c.sessions,
             windows: c.windows,
             find: None,
         },

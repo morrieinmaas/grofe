@@ -1276,8 +1276,26 @@ fn display_message(
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
-    let current = clients::current_client(state, ctx);
-    let out = match current.and_then(|id| state.clients.get(&id)) {
+    // `-c` names the client for the message; one that is not there shows
+    // nothing, as tmux's `CMD_CLIENT_CANFAIL`. Formats see that client if
+    // it shows the pane's session, else the current one.
+    let current = match &c.client {
+        Some(name) => state
+            .clients
+            .iter()
+            .find(|(_, e)| &e.name == name)
+            .map(|(id, _)| *id),
+        None => clients::current_client(state, ctx),
+    };
+    let session = model
+        .panes
+        .get(&pane)
+        .and_then(|p| model.windows.get(&p.window))
+        .map(|w| w.session);
+    let for_formats = current
+        .filter(|id| state.clients.get(id).map(|e| e.session) == session)
+        .or_else(|| clients::current_client(state, ctx));
+    let out = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
             expand(text, &ServerVars::new(state, pane, &client))

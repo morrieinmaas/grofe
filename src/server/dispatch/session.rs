@@ -3,9 +3,10 @@
 use std::time::Instant;
 
 use crate::cmd::{
-    HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
+    self, HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
 };
 use crate::protocol::ClientCtx;
+use crate::server::dispatch::options::{FormatCtx, Owner, ServerVars};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
@@ -74,11 +75,12 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         attached: 0,
         created: std::time::SystemTime::now(),
     });
+    let named = c.window_name.is_some();
     model.insert_window(Window {
         id: window,
         session: id,
         index: model.base_index(id),
-        name: default_name(&cwd),
+        name: c.window_name.unwrap_or_else(|| default_name(&cwd)),
         layout: LayoutTree::new(pane),
         active: pane,
         zoomed: false,
@@ -87,9 +89,27 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         bell_flag: false,
         last_panes: Vec::new(),
     });
+    // `-n` names the window for good, as `rename-window` does.
+    if named {
+        model
+            .options
+            .set(Owner::Window(window), "automatic-rename", "off", false)?;
+    }
     crate::server::hooks::session_created(state, id);
-    Ok(String::new())
+    if !c.print {
+        return Ok(String::new());
+    }
+    let format = c.format.as_deref().unwrap_or(NEW_SESSION_TEMPLATE);
+    let vars = FormatCtx::new(&state.model, pane);
+    Ok(format!(
+        "{}\n",
+        cmd::expand(format, &ServerVars::new(state, pane, &vars))
+    ))
 }
+
+/// What `new-session -P` prints without `-F` (tmux's
+/// `NEW_SESSION_TEMPLATE`).
+const NEW_SESSION_TEMPLATE: &str = "#{session_name}:";
 
 /// `new-session -A` for a session that exists, as tmux 3.7b's
 /// `attach-session`: an attached client (a binding's) switches to it.

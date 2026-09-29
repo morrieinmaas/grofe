@@ -266,6 +266,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
             vec!["choose-tree", "-Zw"],
             Command::ChooseTree(ChooseTree {
                 zoom: true,
+                sessions: false,
                 windows: true,
             }),
         ),
