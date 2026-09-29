@@ -724,24 +724,41 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
     let scope = default_scope(c.scope, c.name.as_deref());
     let owner = owner(model, scope, &c.target, ctx)?;
     if let Some(name) = &c.name {
-        check_name(name)?;
-        // As tmux: a user option not set at this scope is an error.
-        if name.starts_with('@') && model.options.get(owner, name).is_none() {
-            return Err(format!("invalid option: {name}"));
+        // As tmux: a user option not set at this scope is an error. `-q`
+        // (recorded on tmux 3.7b) makes that, and an unknown option, an
+        // empty answer.
+        let known = check_name(name).and_then(|()| {
+            if name.starts_with('@') && model.options.get(owner, name).is_none() {
+                Err(format!("invalid option: {name}"))
+            } else {
+                Ok(())
+            }
+        });
+        match known {
+            Err(_) if c.quiet => return Ok(String::new()),
+            known => known?,
         }
     }
+    // `-v` (tmux 3.7b): each value alone and unquoted.
+    let line = |name: &str, value: &str| {
+        if c.value_only {
+            format!("{value}\n")
+        } else {
+            format!("{name} {}\n", quote(value))
+        }
+    };
     let mut lines: Vec<(&str, String)> = model
         .options
         .at(owner)
         .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name))
-        .map(|(name, e)| (name.as_str(), format!("{name} {}\n", quote(&e.value))))
+        .map(|(name, e)| (name.as_str(), line(name, &e.value)))
         .collect();
     if c.name.is_none() {
         lines.extend(
             model
                 .options
                 .lists_at(owner)
-                .map(|(name, l)| (name.as_str(), list_lines(name, l, false))),
+                .map(|(name, l)| (name.as_str(), list_lines(name, l, c.value_only))),
         );
         lines.sort_by(|a, b| a.0.cmp(b.0));
     }
@@ -1859,10 +1876,20 @@ fn show_list(
     };
     if list_builtin(base).is_none() {
         // As tmux: a scalar at an index shows its value under that name.
-        check_name(base).map_err(|_| format!("invalid option: {full}"))?;
+        // `-q` makes an unknown or unset one an empty answer.
+        let invalid = || {
+            if c.quiet {
+                Ok(String::new())
+            } else {
+                Err(format!("invalid option: {full}"))
+            }
+        };
+        if check_name(base).is_err() {
+            return invalid();
+        }
         return match model.options.get(owner, base) {
             Some(e) => Ok(line(&e.value)),
-            None if base.starts_with('@') => Err(format!("invalid option: {full}")),
+            None if base.starts_with('@') => invalid(),
             None => Ok(String::new()),
         };
     }
