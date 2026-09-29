@@ -24,15 +24,15 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
-use crate::cmd::{self, CommandPrompt, RunShell};
+use crate::cmd::{self, CommandPrompt, Resolve, RunShell};
 use crate::protocol::{ClientCtx, Dialect};
-use crate::server::State;
 use crate::server::clients::{self, ClientVars};
 use crate::server::dispatch::{self, options::FormatCtx};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::status;
+use crate::server::{State, hooks};
 use crate::types::ClientId;
 
 /// tmux's `prompt-history-limit`.
@@ -537,25 +537,30 @@ fn verb(template: &str) -> String {
 /// `run-shell` (R23): `/bin/sh -c` in a task of its own, never waited on
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
-/// runs in the session's cwd and its output is dropped.
+/// runs in the session's cwd and its output is dropped. With `-b` (TC.5)
+/// the reply is empty and immediate, and the output is dropped. The shell
+/// gets the server environment and the session's (`hooks::shell_env`).
 // ponytail: a failing command's output comes before the error, as in tmux,
 // but on stderr with exit 1: tmux prints it on stdout and exits with the
 // command's status, which the reply protocol cannot carry yet. From a
-// binding the output would go to view mode (M5). No `-b`, `-d`, `-C`
-// (`-b` is TC.5's).
+// binding the output would go to view mode (M5). No `-d`, `-C`.
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
-    let session_cwd = ctx
+    let client_session = ctx
         .client
         .and_then(|id| state.clients.get(&id))
-        .map(|client| client.session)
+        .map(|client| client.session);
+    let session_cwd = client_session
         .and_then(|s| state.model.sessions.get(&s))
         .map(|s| s.cwd.clone());
     let from_binding = session_cwd.is_some();
     let cwd = pane::usable_cwd(session_cwd.unwrap_or_else(|| ctx.cwd.clone()));
-    let reply = (!from_binding).then(|| dispatch::defer_reply(state));
+    let session =
+        client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
+    let env = hooks::shell_env(state, session);
+    let reply = (!from_binding && !c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     tokio::spawn(async move {
-        let result = shell(&c.cmd, cwd, socket, reply.is_some()).await;
+        let result = shell(&c.cmd, cwd, env, socket, reply.is_some()).await;
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
@@ -570,6 +575,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
 async fn shell(
     script: &str,
     cwd: PathBuf,
+    env: Vec<(String, String)>,
     socket: PathBuf,
     capture: bool,
 ) -> Result<String, String> {
@@ -584,6 +590,7 @@ async fn shell(
             .arg("-c")
             .arg(script)
             .current_dir(cwd)
+            .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
@@ -875,6 +882,7 @@ mod tests {
             shell(
                 "echo hi; echo two >&1; echo no >&2",
                 dir.clone(),
+                Vec::new(),
                 socket.clone(),
                 true
             )
@@ -882,35 +890,49 @@ mod tests {
             Ok("hi\ntwo\n".to_string())
         );
         assert_eq!(
-            shell("printf abc", dir.clone(), socket.clone(), true).await,
+            shell("printf abc", dir.clone(), Vec::new(), socket.clone(), true).await,
             Ok("abc\n".to_string())
         );
         assert_eq!(
-            shell("true", dir.clone(), socket.clone(), true).await,
+            shell("true", dir.clone(), Vec::new(), socket.clone(), true).await,
             Ok(String::new())
         );
-        let pwd = shell("pwd -P", dir.clone(), socket.clone(), true).await;
+        let pwd = shell("pwd -P", dir.clone(), Vec::new(), socket.clone(), true).await;
         assert_eq!(pwd, Ok(format!("{}\n", dir.display())));
         assert_eq!(
-            shell("echo \"$GROFE\"", dir.clone(), socket, true).await,
+            shell("echo \"$GROFE\"", dir.clone(), Vec::new(), socket, true).await,
             Ok("/nonexistent.sock\n".to_string())
         );
         assert_eq!(
-            shell("exit 3", dir.clone(), PathBuf::from("/x"), true).await,
+            shell("exit 3", dir.clone(), Vec::new(), PathBuf::from("/x"), true).await,
             Err("'exit 3' returned 3".to_string())
         );
         assert_eq!(
-            shell("echo a; exit 3", dir, PathBuf::from("/x"), true).await,
+            shell("echo a; exit 3", dir, Vec::new(), PathBuf::from("/x"), true).await,
             Err("a\n'echo a; exit 3' returned 3".to_string())
         );
         // Without capture (a binding) stdout goes nowhere.
         let dir = std::env::temp_dir();
         assert_eq!(
-            shell("echo dropped", dir.clone(), PathBuf::from("/x"), false).await,
+            shell(
+                "echo dropped",
+                dir.clone(),
+                Vec::new(),
+                PathBuf::from("/x"),
+                false
+            )
+            .await,
             Ok(String::new())
         );
         assert_eq!(
-            shell("echo a; exit 2", dir, PathBuf::from("/x"), false).await,
+            shell(
+                "echo a; exit 2",
+                dir,
+                Vec::new(),
+                PathBuf::from("/x"),
+                false
+            )
+            .await,
             Err("'echo a; exit 2' returned 2".to_string())
         );
     }

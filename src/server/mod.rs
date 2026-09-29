@@ -267,6 +267,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
     if p.handle.generation() != generation {
         return;
     }
+    hooks::pane_event(&mut state.hooks, pane, &kind);
     match kind {
         PaneEventKind::Exited(status) => {
             let uid = p.uid.clone();
@@ -445,7 +446,7 @@ async fn serve(
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
-        hooks: hooks::Hooks::default(),
+        hooks: hooks::Hooks::for_server(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),

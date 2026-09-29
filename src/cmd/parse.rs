@@ -1773,11 +1773,28 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     Ok(cmds)
 }
 
-/// A variable's value for [`split_command_string`], empty when unset.
-// ponytail: the server process's environment; TC.5's global environment
-// (`set-environment -g`) replaces it.
+/// Where [`split_command_string`] looks a `$NAME` up.
+pub type VariableSource = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+static VARIABLES: std::sync::OnceLock<VariableSource> = std::sync::OnceLock::new();
+
+/// Makes `source` the one [`split_command_string`] expands `$NAME` from,
+/// for the rest of the process. A server sets its global environment
+/// (`set-environment -g`, hidden variables included, as tmux 3.7b) once at
+/// start; a later call changes nothing.
+pub fn set_variable_source(source: VariableSource) {
+    let _ = VARIABLES.set(source);
+}
+
+/// A variable's value for [`split_command_string`], empty when unset:
+/// from [`set_variable_source`]'s source, else (outside a server) the
+/// process environment.
 fn env_var(name: &str) -> String {
-    std::env::var(name).unwrap_or_default()
+    match VARIABLES.get() {
+        Some(source) => source(name),
+        None => std::env::var(name).ok(),
+    }
+    .unwrap_or_default()
 }
 
 fn syntax_error() -> ParseError {
