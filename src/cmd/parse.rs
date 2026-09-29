@@ -502,13 +502,6 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     .collect();
     let width = extent_value(&flags, 'x', 0, SizeWords::Trio("width"))?;
     let height = extent_value(&flags, 'y', 0, SizeWords::Trio("height"))?;
-    // ponytail: TC.8 implements `-x`/`-y` in `resize_pane` and removes this
-    // guard; until then the sizes would be ignored silently.
-    if width.is_some() || height.is_some() {
-        return Err(ParseError::Other(
-            "not implemented: resize-pane -x/-y".to_string(),
-        ));
-    }
     let zoom = flags.present.contains(&'Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(

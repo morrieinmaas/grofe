@@ -9,10 +9,10 @@ use crate::server::dispatch::options;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
 use crate::server::layout::LayoutError;
-use crate::server::model::Model;
+use crate::server::model::{Model, Window};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, clients, graphics};
-use crate::types::{Edge, PaneId, Rect, WindowId};
+use crate::types::{Dir, Edge, PaneId, Rect, SplitSize, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
 pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, String> {
@@ -51,7 +51,7 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         .map_err(|e| match e {
             // tmux 3.7b's text, verbatim.
             LayoutError::TooSmall(_) => "size or position no space for a new pane".to_string(),
-            LayoutError::NotFound(_) => e.to_string(),
+            LayoutError::NotFound(_) | LayoutError::Invalid => e.to_string(),
         })?;
 
     unzoom(&mut state.model, window);
@@ -73,7 +73,7 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         model.panes.remove(&new);
         return Err(e.to_string());
     }
-    w.active = new;
+    set_active(w, new);
     model.relayout(window);
     Ok(String::new())
 }
@@ -102,7 +102,7 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
             unzoom(model, window);
         }
         if let Some(w) = model.windows.get_mut(&window) {
-            w.active = pane;
+            set_active(w, pane);
         }
         return Ok(String::new());
     };
@@ -116,9 +116,16 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
         .neighbour(area, pane, edge)
         .or_else(|| wrapped_neighbour(w.layout.compute(area), area, pane, edge));
     if let Some(next) = next {
-        w.active = next;
+        set_active(w, next);
     }
     Ok(String::new())
+}
+
+/// Makes `pane` its window's active pane, the one it replaces becoming
+/// the window's last pane (`last-pane`), as tmux does.
+pub(crate) fn set_active(w: &mut Window, pane: PaneId) {
+    w.layout.focus(w.active, pane);
+    w.active = pane;
 }
 
 /// The pane `select-pane` wraps to when `pane` has no neighbour across
@@ -160,9 +167,11 @@ fn wrapped_neighbour(
         .map(|(id, _)| *id)
 }
 
-/// `resize-pane`. As tmux: `-L n` moves the border on the pane's right
-/// left by `n` cells, or the border on its left when it has no right
-/// neighbour (`-R`, `-U`, `-D` likewise). `-Z` toggles zoom.
+/// `resize-pane`. As tmux: `-x`/`-y` first make the pane that wide or
+/// tall (cells, or a percent of the window), then `-L n` moves the border
+/// on the pane's right left by `n` cells, or the border on its left when
+/// it has no right neighbour (`-R`, `-U`, `-D` likewise). `-Z` toggles
+/// zoom.
 fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<String, String> {
     let model = &mut state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
@@ -179,6 +188,19 @@ fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<Stri
         return Ok(String::new());
     };
     let area = w.area();
+    let cells = |size: SplitSize, len: u16| match size {
+        SplitSize::Cells(n) => n,
+        SplitSize::Percent(p) => (u32::from(len) * u32::from(p) / 100) as u16,
+        SplitSize::Half => len / 2,
+    };
+    if let Some(width) = c.width {
+        let cells = cells(width, area.cols);
+        w.layout.resize_to(area, pane, Dir::Horizontal, cells);
+    }
+    if let Some(height) = c.height {
+        let cells = cells(height, area.rows);
+        w.layout.resize_to(area, pane, Dir::Vertical, cells);
+    }
     for edge in edges {
         // The border tmux moves: after the pane if there is one, else before.
         let (after, before, toward_after) = match edge {
@@ -212,7 +234,7 @@ fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
         return;
     }
     w.zoomed = true;
-    w.active = pane;
+    set_active(w, pane);
     let (cols, rows) = (w.cols, w.rows);
     if let Some(p) = model.panes.get_mut(&pane) {
         p.cols = cols;
@@ -224,7 +246,7 @@ fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
 }
 
 /// Leaves zoom before a layout change, as tmux does.
-fn unzoom(model: &mut Model, window: WindowId) {
+pub(crate) fn unzoom(model: &mut Model, window: WindowId) {
     if let Some(w) = model.windows.get_mut(&window)
         && w.zoomed
     {
@@ -250,7 +272,24 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
             index + model.pane_base_index(w.id)
         ));
     }
-    let argv = match c.command {
+    respawn(state, pane, c.command).map_err(|e| format!("respawn pane failed: {e}"))?;
+    Ok(String::new())
+}
+
+/// Starts a new process in `pane` (kept in place, same `%N` and
+/// `pane_uid`): `command`, else the pane's resume argv, in its spawn cwd.
+/// A live process is hung up. The error is the reason the spawn failed.
+pub(crate) fn respawn(
+    state: &mut State,
+    pane: PaneId,
+    command: Option<Vec<String>>,
+) -> Result<(), String> {
+    let model = &state.model;
+    let p = model
+        .panes
+        .get(&pane)
+        .ok_or_else(|| format!("can't find pane: {pane}"))?;
+    let argv = match command {
         Some(command) => command_argv(Some(command)),
         None => p.resume.clone(),
     };
@@ -271,7 +310,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     };
     let cwd = spec.cwd.display().to_string();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
-        .map_err(|e| format!("respawn pane failed: can't start pane in {cwd}: {e}"))?;
+        .map_err(|e| format!("can't start pane in {cwd}: {e}"))?;
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
         // process (`-k`), and stops its tasks. An `Exited` its reader had
@@ -282,7 +321,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         p.argv = argv.clone();
         p.resume = argv;
     }
-    Ok(String::new())
+    Ok(())
 }
 
 /// `send-keys`: key names encoded for the pane's current input modes,

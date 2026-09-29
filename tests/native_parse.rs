@@ -9,7 +9,7 @@ mod common;
 use common::TestServer;
 use grofe::cmd::target::parse_target;
 use grofe::cmd::*;
-use grofe::types::SplitSize;
+use grofe::types::{Edge, SplitSize};
 
 fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| w.to_string()).collect()
@@ -579,18 +579,32 @@ fn existing_verbs_parse_their_new_flags() {
     assert_eq!(c.client.as_deref(), Some("/dev/ttys003"));
     assert_eq!(c.target, Some(t("s")));
 
-    // `resize-pane -x/-y` is refused until TC.8 implements it, rather than
-    // parsing to a resize that silently does nothing.
-    for words in [
-        &["resize-pane", "-t", "%1", "-x", "26"][..],
-        &["resize-pane", "-y", "50%"][..],
-        &["resize-pane", "-L", "-x", "10"][..],
+    // `resize-pane -x/-y` (TC.8): a size alone, or with a direction.
+    for (words, width, height, edges) in [
+        (
+            &["resize-pane", "-t", "%1", "-x", "26"][..],
+            Some(SplitSize::Cells(26)),
+            None,
+            vec![],
+        ),
+        (
+            &["resize-pane", "-y", "50%"][..],
+            None,
+            Some(SplitSize::Percent(50)),
+            vec![],
+        ),
+        (
+            &["resize-pane", "-L", "-x", "10"][..],
+            Some(SplitSize::Cells(10)),
+            None,
+            vec![Edge::Left],
+        ),
     ] {
-        assert_eq!(
-            err(words),
-            "not implemented: resize-pane -x/-y",
-            "{words:?}"
-        );
+        let Ok(Command::ResizePane(c)) = p(words) else {
+            panic!("{words:?}");
+        };
+        assert_eq!((c.width, c.height), (width, height), "{words:?}");
+        assert_eq!(c.action, ResizeAction::Edges(edges, 1), "{words:?}");
     }
 
     let Ok(Command::SelectLayout(c)) = p(&["select-layout", "-E"]) else {
