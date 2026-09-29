@@ -208,8 +208,10 @@ pub struct ClientEntry {
     /// the language [`status::draw`] reads, and when it expires (`None`
     /// with `display-time 0`: only a key takes it down, as in tmux).
     message: Option<(String, Option<Instant>)>,
-    /// The status rows as last drawn, top first, for their click ranges.
+    /// The status rows as last drawn, top first, for their click ranges,
+    /// and the client row the first of them was drawn on.
     status_rows: Vec<StatusRow>,
+    status_at: u16,
     /// The window cell drawn at the client's top-left (crop, D6), as last
     /// drawn.
     pub viewport: (u16, u16),
@@ -348,6 +350,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             focused: true,
             message: None,
             status_rows: Vec::new(),
+            status_at: 0,
             viewport: (0, 0),
             mouse_modes: None,
             dirty: true,
@@ -530,17 +533,21 @@ fn display_time(model: &Model, session: SessionId) -> Duration {
 }
 
 /// What a click at client cell `(col, row)` hits on client `id`'s status
-/// line, as last drawn: the range under it, if any (TC.10 sets
-/// `mouse_status_range` from it).
-pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+/// line, as last drawn: whether it is on a status row, and the range
+/// under it, if any (TC.10 sets `mouse_status_range` from it). Rows and
+/// ranges both come from the last draw, so an option changed since then
+/// cannot move a click onto another row's ranges.
+pub fn status_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<Option<RangeKind>> {
     let c = state.clients.get(&id)?;
-    let geom = status_geometry(&state.model, c.session, c.size.1);
-    let line = row.checked_sub(geom.first_row)?;
-    if line >= geom.lines {
-        return None;
-    }
-    let range = c.status_rows.get(usize::from(line))?.range_at(col)?;
-    Some(range.kind.clone())
+    let line = row.checked_sub(c.status_at)?;
+    let drawn = c.status_rows.get(usize::from(line))?;
+    Some(drawn.range_at(col).map(|r| r.kind.clone()))
+}
+
+/// The range under a click at client cell `(col, row)` on client `id`'s
+/// status line as last drawn ([`status_at`]).
+pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+    status_at(state, id, col, row).flatten()
 }
 
 /// A client size within tmux's bounds and grofe's cell cap
@@ -911,9 +918,10 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         c.dirty = false;
-        if let Some((screen, viewport, rows)) = composed {
+        if let Some((screen, viewport, rows, status_at)) = composed {
             c.viewport = viewport;
             c.status_rows = rows;
+            c.status_at = status_at;
             let caps = c.caps;
             // A dropped frame keeps the client dirty, so it is redrawn once
             // its outbox has room even if nothing else changes.
@@ -1137,15 +1145,15 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
-/// Composes client `c`'s next screen, the viewport it was drawn with and
-/// its status rows: the window, the status rows above or below it
-/// (`status-position`), then every overlay (lowest priority first), then
-/// the wide-pair fix-up.
-fn compose_client(
-    state: &State,
-    id: ClientId,
-    c: &ClientEntry,
-) -> Option<(Screen, (u16, u16), Vec<StatusRow>)> {
+/// A composed frame: the screen, its viewport, its status rows and the
+/// client row the first of them is on.
+type Composed = (Screen, (u16, u16), Vec<StatusRow>, u16);
+
+/// Composes client `c`'s next screen, the viewport it was drawn with, its
+/// status rows and the client row the first of them is on: the window,
+/// the status rows above or below it (`status-position`), then every
+/// overlay (lowest priority first), then the wide-pair fix-up.
+fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Composed> {
     let model = &state.model;
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
@@ -1215,7 +1223,7 @@ fn compose_client(
         overlay.draw(state, id, &cx, &mut screen);
     }
     render::fix_wide_pairs(&mut screen);
-    Some((screen, viewport, rows))
+    Some((screen, viewport, rows, geom.first_row))
 }
 
 /// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
@@ -1732,6 +1740,7 @@ mod tests {
                 focused: true,
                 message: None,
                 status_rows: Vec::new(),
+                status_at: 0,
                 viewport: (0, 0),
                 mouse_modes: None,
                 dirty: false,
@@ -1793,7 +1802,9 @@ mod tests {
             80,
         );
         let user = Some(RangeKind::User("net".to_string()));
-        state.clients.get_mut(&id).unwrap().status_rows = vec![net.clone()];
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![net.clone()];
+        c.status_at = 23;
         assert_eq!(status_range_at(&state, id, 1, 23), user);
         assert_eq!(status_range_at(&state, id, 1, 22), None);
         assert_eq!(status_range_at(&state, id, 40, 23), None);
@@ -1802,10 +1813,18 @@ mod tests {
         o.set(Owner::Global, "status", "2", false).unwrap();
         o.set(Owner::Global, "status-position", "top", false)
             .unwrap();
-        state.clients.get_mut(&id).unwrap().status_rows = vec![StatusRow::default(), net];
+        // TC.10: until the next draw, clicks still map onto the rows as
+        // they were drawn, not as the options now place them.
+        assert_eq!(status_range_at(&state, id, 1, 23), user);
+        assert_eq!(status_at(&state, id, 1, 0), None);
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![StatusRow::default(), net];
+        c.status_at = 0;
         assert_eq!(status_range_at(&state, id, 1, 1), user);
         assert_eq!(status_range_at(&state, id, 1, 0), None);
+        assert_eq!(status_at(&state, id, 1, 0), Some(None));
         assert_eq!(status_range_at(&state, id, 1, 23), None);
+        assert_eq!(status_at(&state, id, 1, 2), None);
     }
 
     /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
