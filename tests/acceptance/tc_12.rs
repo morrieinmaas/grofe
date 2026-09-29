@@ -154,27 +154,31 @@ fn a_wrapped_transmit_split_across_reads_still_unwraps() {
 }
 
 /// Case 3: a wrapped OSC 52 store reaches the client exactly as a bare
-/// one does (re-encoded, BEL-terminated, while `set-clipboard` is on), and
-/// a wrapped notification is cleaned of C1 controls like a bare one.
+/// one does (re-encoded, BEL-terminated, while `set-clipboard` is on), a
+/// wrapped notification is cleaned of C1 controls like a bare one, and a
+/// wrapped cursor colour is relayed like a bare one (R16).
 #[test]
 fn a_wrapped_clipboard_store_and_notification_are_reemitted() {
     let srv = TestServer::start();
     let parts = [
         &wrap(b"\x1b]52;c;aGVsbG8K\x1b\\")[..],
         &wrap(b"\x1b]9;x\xc2\x9c\xc2\x9b6n\x07")[..],
+        &wrap(b"\x1b]12;#ff0000\x07")[..],
     ];
     new_session(&srv, &cat_parts(&srv, &parts));
     let mut a = attach(&srv, &[]);
     a.wait_for("DONE");
     a.wait_for_output(b"\x1b]52;c;aGVsbG8K\x07", 0);
     a.wait_for_output(b"\x1b]9;x6n\x07", 0);
+    a.wait_for_output(b"\x1b]12;#ff0000\x07", 0);
     let out = a.output();
     assert!(find(out, b"\xc2\x9c").is_none() && find(out, b"\xc2\x9b").is_none());
     assert!(find(out, b"tmux;").is_none());
 }
 
-/// Case 4: wrapped text, a private CSI, a DCS and an OSC outside the set
-/// reach neither the pane's screen nor the client.
+/// Case 4: wrapped text, a private CSI, a DCS, an OSC the bare path does
+/// not act on, and content behind a CAN reach neither the pane's screen
+/// nor the client.
 #[test]
 fn an_unknown_wrapped_sequence_reaches_neither_screen_nor_client() {
     let srv = TestServer::start();
@@ -182,8 +186,9 @@ fn an_unknown_wrapped_sequence_reaches_neither_screen_nor_client() {
         &wrap(b"LEAK")[..],
         &wrap(b"\x1b[?7727h")[..],
         &wrap(b"\x1bPqLEAK\x1b\\")[..],
-        &wrap(b"\x1b]12;#ff0000\x07")[..],
+        &wrap(b"\x1b]4;1;rgb:ff/00/00\x07")[..],
         &wrap(b"\x1b]52;c;aGVsbG8K\x07LEAK")[..],
+        &wrap(b"\x18LEAK\x1b[31mX")[..],
         b"shown\r\n",
     ];
     new_session(&srv, &cat_parts(&srv, &parts));
@@ -196,7 +201,7 @@ fn an_unknown_wrapped_sequence_reaches_neither_screen_nor_client() {
     for leak in [
         &b"LEAK"[..],
         b"\x1b[?7727h",
-        b"\x1b]12;",
+        b"\x1b]4;",
         b"aGVsbG8K",
         b"tmux;",
     ] {
@@ -236,4 +241,34 @@ fn an_unterminated_wrapper_is_dropped_when_the_pane_exits() {
     let out = a.output();
     assert!(find(out, b"aGVsbG8K").is_none());
     assert!(find(out, b"LEAK").is_none());
+}
+
+/// Fix round 1: `allow-passthrough` takes tmux 3.7b's values (window
+/// scope, default `off`), so the `set -p allow-passthrough on` icat and
+/// canopy send works; it changes nothing about unwrapping.
+#[test]
+fn allow_passthrough_is_an_option_with_tmux_values() {
+    let srv = TestServer::start();
+    new_session(&srv, "exec sleep 600");
+    let show = |args: &[&str]| srv.cmd(args).map(|s| s.trim_end().to_string());
+    assert_eq!(
+        show(&["show", "-gw", "allow-passthrough"]),
+        Ok("allow-passthrough off".to_string())
+    );
+    srv.cmd(&["set", "-p", "allow-passthrough", "on"])
+        .expect("set -p on");
+    assert_eq!(
+        show(&["show", "-p", "allow-passthrough"]),
+        Ok("allow-passthrough on".to_string())
+    );
+    srv.cmd(&["set", "allow-passthrough", "all"])
+        .expect("set all");
+    assert_eq!(
+        show(&["show", "-w", "allow-passthrough"]),
+        Ok("allow-passthrough all".to_string())
+    );
+    let err = srv
+        .cmd(&["set", "allow-passthrough", "yes"])
+        .expect_err("yes is not a value");
+    assert!(err.contains("unknown value"), "{err}");
 }

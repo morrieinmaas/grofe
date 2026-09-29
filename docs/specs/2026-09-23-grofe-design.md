@@ -335,7 +335,7 @@ lands in the milestone shown.
 | Buffers and copy | `set-buffer`, `paste-buffer -p`, `choose-buffer`, `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` in the `copy-mode-vi` table, `command-prompt -T search` | pass-through | M5, with copy mode |
 | Formats | short forms `#S #I #W #h #P`; the inventory's variables (`client_name`, `client_tty`, `client_prefix`, `client_session`, `client_last_session`, `pane_tty`, `pane_title`, `pane_start_command`, `pane_in_mode`, `pane_mode`, `pane_left`, `pane_top`, `alternate_on`, `mouse_any_flag`, `window_layout`, `window_flags`, `window_panes`, `session_windows`, `session_grouped`, `pid`, `socket_path`, `mouse_status_range`, `history_size`, `version`, and grofe's own `grofe_version`); modifiers `#{!=:}`, `#{>:}`, `#{>=:}`, `#{&&:}`, `#{\|\|:}`, `#{m:}` (fnmatch), `#{m/r:}` (regex), `#{t:}`; conditions on bare names (`#{?#W,..}`, `#{?@opt,..}`); `##` and `##{` escaping; `#(cmd)` as a cached source (D8) | short forms and `##` rewritten; `#(cmd)` to a cached source; modifiers native | M3.6 (`copy_cursor_word`: M5) |
 | Status line | `status 2` with `status-format[N]` rows; `status-position top`; `status-justify`; `status-interval`, which also drives sources; `status-left-length`, `status-right-length`; `window-status-format`, `window-status-current-format`, `window-status-separator`; styles `#[range=user\|<name>]..#[norange]` (a click sets `mouse_status_range`) and `#[align=left\|centre\|right]`; a repaint within one frame when an option the status reads changes | tmux option names onto native status options | M3.6 (one row, window formats, strftime: M2) |
-| Terminal passthrough | `DCS tmux;` wrappers, which apps send once `$TMUX` is set, are unwrapped: a wrapped APC `_G` is handled as a placeholder-mode kitty graphics command (§4.9), a wrapped sequence from the §4.9 set is re-emitted, anything else is dropped | none: native pane-output handling, not argv | M3.6 |
+| Terminal passthrough | `DCS tmux;` wrappers, which apps send once `$TMUX` is set, are unwrapped: a wrapped APC `_G` is handled as a placeholder-mode kitty graphics command (§4.9), any other wrapped sequence the bare path acts on is handled exactly as if sent bare, anything else is dropped (§4.9) | none: native pane-output handling, not argv | M3.6 |
 
 **Out of scope for compatibility**, each with its reason:
 
@@ -486,7 +486,14 @@ before the parser sees it. Unsupported in v1: sixel, kitty graphics direct
 placement, arbitrary DCS passthrough (a nested tmux works as a normal terminal
 app, without passthrough). The one exception is the `DCS tmux;` wrapper that
 apps send once `$TMUX` is set (D12): it is unwrapped and its content handled
-as if sent directly, within this set (§4.5) [planned, M3.6].
+exactly as if sent bare (§4.5) [M3.6]. A wrapper is let out only when its
+content is nothing but complete sequences the bare path acts on (OSC 0, 2,
+7, 8, 9, 12, 52, 112 and 777, BEL, kitty graphics APC `_G`), each then
+meeting its bare filters; anything else, CAN and SUB included, drops the
+whole wrapper, as does content past tmux 3.7b's 1 MB input buffer. So a
+wrapped sequence never reaches a client unless the same bytes sent bare
+would. `allow-passthrough` is accepted with tmux's values and changes
+nothing.
 
 **Inline images [planned, M3]: kitty graphics via Unicode placeholders.** grofe
 supports the kitty graphics protocol's Unicode-placeholder mode, the mode kitty

@@ -24,10 +24,10 @@
 //! unwrapped by the same [`Scanner`]: none of its bytes reach the emulator
 //! as they are. Its content, `ESC ESC` read as one `ESC`, is fed through a
 //! fresh scanner and on to the emulator as if sent bare, but only when it
-//! is nothing but complete sequences from the §4.9 set (OSC 0, 2, 8, 9,
-//! 52 and 777, BEL, APC `_G`). Anything else is dropped whole, so a wrapper
-//! lets out nothing that the same bytes sent bare would not, and each
-//! sequence it lets out meets the same filters downstream.
+//! is nothing but complete sequences the bare path acts on (OSC 0, 2, 7,
+//! 8, 9, 12, 52, 112 and 777, BEL, APC `_G`). Anything else is dropped
+//! whole, so a wrapper lets out nothing that the same bytes sent bare
+//! would not, and each sequence it lets out meets the same filters.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -55,9 +55,16 @@ const MAX_OSC: usize = 4 * 1024;
 
 /// What opens the wrapper TC.12 unwraps: `ESC P tmux;`.
 const DCS_TMUX: &[u8] = b"\x1bPtmux;";
-/// The OSC numbers a wrapper may carry: title (0, 2), hyperlink (8),
-/// notifications (9, 777) and clipboard (52), spec §4.9.
-const WRAPPED_OSC: &[&[u8]] = &[b"0", b"2", b"8", b"9", b"52", b"777"];
+/// Most content bytes (after `tmux;`, `ESC ESC` counted once) of one
+/// wrapper, as tmux 3.7b's `input-buffer-size` of 1048576 allows once it
+/// has counted `tmux;` and a terminator: recorded, 1048570 passes and
+/// 1048571 is dropped.
+const MAX_DCS_TMUX: usize = 1024 * 1024 - 6;
+/// The OSC numbers a wrapper may carry: those the bare path acts on. Title
+/// (0, 2), cwd (7), hyperlink (8), notifications (9, 777), cursor colour
+/// (12, 112) and clipboard (52); each then meets its bare filters (the
+/// OSC 7 host check, [`relayed`] leaving `12;?` to the emulator).
+const WRAPPED_OSC: &[&[u8]] = &[b"0", b"2", b"7", b"8", b"9", b"12", b"52", b"112", b"777"];
 
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
@@ -222,13 +229,11 @@ impl Scanner {
                     self.begin(Dcs);
                 }
             }
+            // CAN and SUB are content here, as tmux 3.7b keeps them: a
+            // wrapper holding one is dropped whole, not cut short.
             Dcs => match b {
                 ESC => self.state = DcsEsc,
-                CAN | SUB => {
-                    self.state = Ground;
-                    out.push(b);
-                }
-                _ => self.keep(b, MAX_APC),
+                _ => self.keep(b, MAX_DCS_TMUX),
             },
             DcsEsc => match b {
                 b'\\' => {
@@ -240,7 +245,7 @@ impl Scanner {
                 }
                 ESC => {
                     self.state = Dcs;
-                    self.keep(ESC, MAX_APC);
+                    self.keep(ESC, MAX_DCS_TMUX);
                 }
                 // A lone ESC is dropped and the byte after it kept, as
                 // tmux 3.7b reads it.
@@ -332,9 +337,9 @@ impl Scanner {
         self.overlong = false;
     }
 
-    // ponytail: a sequence past its bound (MAX_APC, MAX_OSC) is dropped
-    // whole rather than streamed; kitty chunks real transmissions far
-    // below it.
+    // ponytail: a sequence past its bound (MAX_APC, MAX_OSC,
+    // MAX_DCS_TMUX) is dropped whole rather than streamed; kitty chunks
+    // real transmissions far below it.
     fn keep(&mut self, b: u8, max: usize) {
         if self.overlong {
             return;
@@ -1073,6 +1078,11 @@ mod tests {
             b"\x1b]9;done\x07",
             b"\x1b]777;notify;T;B\x1b\\",
             b"\x07",
+            b"\x1b]7;file:///tmp\x07",
+            b"\x1b]7;file://elsewhere.example.com/tmp\x07",
+            b"\x1b]12;#ff0000\x07",
+            b"\x1b]12;?\x07",
+            b"\x1b]112\x07",
             // Several in one wrapper.
             b"\x1b]9;one\x07\x1b]9;two\x07\x07",
         ] {
@@ -1093,10 +1103,8 @@ mod tests {
             b"\x1b[?1049h",
             b"\x1bPq#0;2;0;0;0\x1b\\",
             b"\x1b_Xother\x1b\\",
-            b"\x1b]7;file:///tmp\x07",
-            b"\x1b]12;#ff0000\x07",
-            b"\x1b]112\x07",
             b"\x1b]1;icon\x07",
+            b"\x1b]1122\x07",
             b"\x1b]4;1;rgb:ff/00/00\x07",
             b"\x1b]52;c;aGVsbG8K\x07LEAK",
             b"LEAK\x1b]52;c;aGVsbG8K\x07",
@@ -1107,6 +1115,9 @@ mod tests {
             b"\x1b_Ga=q;AAAA",
             b"\x1b_Ga=q;AAAA\x1b[1m",
             b"\x1b]9;x\x1b\\\x1b",
+            b"\x18LEAK\x1b[31mX",
+            b"\x1b]52;c;aGV\x18sbG8K\x07",
+            b"\x1b]9;x\x1a\x07",
             b"",
         ] {
             assert_every_split(&around(&wrap(inner)), b"a\x1b[1mz", &[]);
@@ -1175,7 +1186,8 @@ mod tests {
     }
 
     /// An unterminated wrapper hides what follows until its ST, like tmux
-    /// 3.7b; CAN or SUB abort it, reaching the emulator as they do bare.
+    /// 3.7b; CAN and SUB are content, as tmux 3.7b keeps them, so they
+    /// neither end it nor reach the emulator.
     #[test]
     fn an_unterminated_wrapper_hides_output_until_its_end() {
         let (out, events) = scan_all(&[b"a\x1bPtmux;\x1b\x1b]9;x\x07", b"LEAK", b"more"]);
@@ -1184,18 +1196,30 @@ mod tests {
         let (out, events) = scan_all(&[b"a\x1bPtmux;\x1b\x1b]9;x\x07", b"LEAK\x1b\\z"]);
         assert_eq!(out, b"az");
         assert!(events.is_empty(), "the wrapper held more than the OSC");
-        for abort in [CAN, SUB] {
-            let input = [&b"a\x1bPtmux;\x1b\x1b]9;x\x07"[..], &[abort], b"z"].concat();
-            assert_every_split(&input, &[b'a', abort, b'z'], &[]);
+        for c in [CAN, SUB] {
+            let input = [&b"a\x1bPtmux;\x1b\x1b]9;x\x07"[..], &[c], b"LEAK"].concat();
+            assert_every_split(&input, b"a", &[]);
+            let input = [&input[..], b"\x1b\\z"].concat();
+            assert_every_split(&input, b"az", &[]);
         }
     }
 
-    /// A wrapper past the APC bound is dropped whole, and scanning goes
-    /// on; one just inside it still unwraps.
+    /// Fix round 1: a CAN inside a wrapper once cut it short and let the
+    /// rest (text, an SGR) reach the emulator.
+    #[test]
+    fn a_can_inside_a_wrapper_leaks_nothing() {
+        for c in [CAN, SUB] {
+            let inner = [&[c][..], b"LEAK\x1b[31mX"].concat();
+            assert_every_split(&around(&wrap(&inner)), b"a\x1b[1mz", &[]);
+        }
+    }
+
+    /// A wrapper past tmux 3.7b's bound is dropped whole, and scanning
+    /// goes on; one at the bound still unwraps.
     #[test]
     fn an_overlong_wrapper_is_dropped_and_scanning_goes_on() {
         let mut big = b"\x1b_Ga=q;".to_vec();
-        big.resize(MAX_APC + 10, b'A');
+        big.resize(MAX_DCS_TMUX - 1, b'A');
         big.extend_from_slice(b"\x1b\\");
         let input = [&wrap(&big)[..], b"x", &wrap(APC)].concat();
         let (out, events) = scan_all(&[&input]);
@@ -1203,7 +1227,7 @@ mod tests {
         assert_eq!(events, vec![PaneEventKind::Graphics(APC.to_vec())]);
 
         let mut fits = b"\x1b_Ga=t;".to_vec();
-        fits.resize(MAX_APC - 2, b'A');
+        fits.resize(MAX_DCS_TMUX - 2, b'A');
         fits.extend_from_slice(b"\x1b\\");
         let (out, events) = scan_all(&[&wrap(&fits)]);
         assert!(out.is_empty());
@@ -1253,21 +1277,21 @@ mod tests {
     proptest! {
         /// Whatever a wrapper holds, split however, the emulator sees the
         /// text around it plus at most set sequences: no CSI, no DCS, no
-        /// text from inside, and no OSC outside 0, 2, 8, 9, 52, 777.
+        /// text from inside, and no OSC outside 0, 2, 7, 8, 9, 12, 52, 112
+        /// and 777.
         #[test]
         fn a_wrapper_lets_out_only_set_sequences(
             inner in proptest::collection::vec(
                 prop_oneof![
                     Just(ESC), Just(b']'), Just(b'\\'), Just(b'_'), Just(b'G'),
                     Just(b'P'), Just(BEL), Just(b';'), Just(b'5'), Just(b'2'),
-                    Just(b'9'), Just(b'['), Just(0x9c), Just(0xc2), any::<u8>(),
+                    Just(b'9'), Just(b'['), Just(0x9c), Just(0xc2), Just(CAN),
+                    Just(SUB), any::<u8>(),
                 ],
                 0..200,
             ),
             cuts in proptest::collection::vec(0usize..220, 0..5),
         ) {
-            // CAN and SUB abort a wrapper, visibly; that is tested apart.
-            let inner: Vec<u8> = inner.into_iter().filter(|&b| b != CAN && b != SUB).collect();
             let input = [&b"<"[..], &wrap(&inner), b">"].concat();
             let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(input.len())).collect();
             cuts.sort();
@@ -1295,7 +1319,8 @@ mod tests {
                     .copied()
                     .collect();
                 prop_assert!(
-                    [&b"0"[..], b"2", b"8", b"9", b"52", b"777"].contains(&&num[..]),
+                    [&b"0"[..], b"2", b"7", b"8", b"9", b"12", b"52", b"112", b"777"]
+                        .contains(&&num[..]),
                     "OSC {:?} in {:?}", num, mid
                 );
                 let end = body.iter().position(|&b| b == BEL || b == ESC);
@@ -1314,8 +1339,9 @@ mod tests {
                         prop_assert!(b.starts_with(b"\x1b_G") && b.ends_with(b"\x1b\\"));
                     }
                     PaneEventKind::Osc(b) => {
-                        prop_assert!(b.starts_with(b"9;") || b.starts_with(b"777;"));
+                        prop_assert!(relayed(b));
                     }
+                    PaneEventKind::Cwd(_) => {}
                     other => prop_assert!(false, "{:?}", other),
                 }
             }
