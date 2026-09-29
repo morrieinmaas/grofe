@@ -671,6 +671,7 @@ fn leave_session(state: &mut State, id: ClientId, session: SessionId) {
 
 /// Tells every client why it is going away and forgets them (server exit).
 pub fn shutdown(state: &mut State, reason: &str) {
+    crate::server::popup::shutdown(state);
     for (_, mut c) in std::mem::take(&mut state.clients) {
         if let Some(tx) = c.exit.take() {
             let _ = tx.send(reason.to_string());

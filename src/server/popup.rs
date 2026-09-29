@@ -46,7 +46,7 @@ use crate::server::pane::{
 };
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::status::{self, Style};
-use crate::server::{Job, State, clients};
+use crate::server::{Job, State, clients, passthrough};
 use crate::types::{ClientId, Rect};
 
 /// How long a closed popup's process group has to exit after its hangup
@@ -378,11 +378,10 @@ fn on_event(state: &mut State, id: ClientId, generation: u64, kind: PaneEventKin
         PaneEventKind::Clipboard(text)
             if state.model.options.lookup("set-clipboard", &[]) == Some("on") =>
         {
-            let bytes = osc(format!("52;c;{}", base64(text.as_bytes())).as_bytes());
-            clients::queue_raw(state, id, &bytes);
+            clients::queue_raw(state, id, &passthrough::osc52(&text));
         }
         PaneEventKind::Osc(body) if !body.starts_with(b"12;") && !body.starts_with(b"112") => {
-            clients::queue_raw(state, id, &osc(&body));
+            clients::queue_raw(state, id, &passthrough::osc(&body));
         }
         _ => {}
     }
@@ -444,6 +443,38 @@ pub fn close(state: &mut State, id: ClientId) {
             });
             let _ = jobs.send(job).await;
         });
+    }
+}
+
+/// The server is exiting: every popup closes, and each command gets
+/// [`KILL_GRACE`] to go after its hangup before its group is killed. The
+/// actor is stopping, so this waits here instead of on a timer job, and
+/// reaps each command itself.
+pub fn shutdown(state: &mut State) {
+    use nix::sys::wait::{WaitPidFlag, waitpid};
+    let ids: Vec<ClientId> = state.popups.open.keys().copied().collect();
+    for id in ids {
+        close(state, id);
+    }
+    let groups: Vec<Pid> = std::mem::take(&mut state.popups.closing)
+        .into_values()
+        .filter_map(|c| c.running.handle.pid().and_then(|p| i32::try_from(p).ok()))
+        .map(Pid::from_raw)
+        .collect();
+    let deadline = Instant::now() + KILL_GRACE;
+    let mut left = groups;
+    while !left.is_empty() && Instant::now() < deadline {
+        // The leader is reaped here (it is ours); the group is gone once
+        // no process is left in it.
+        left.retain(|pid| {
+            let _ = waitpid(*pid, Some(WaitPidFlag::WNOHANG));
+            killpg(*pid, None).is_ok()
+        });
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for pid in left {
+        let _ = killpg(pid, Signal::SIGKILL);
+        let _ = waitpid(pid, None);
     }
 }
 
@@ -663,34 +694,6 @@ fn visible_width(text: &str) -> usize {
     width
 }
 
-/// An OSC sequence around `body`, BEL-terminated.
-fn osc(body: &[u8]) -> Vec<u8> {
-    let mut out = b"\x1b]".to_vec();
-    out.extend_from_slice(body);
-    out.push(0x07);
-    out
-}
-
-/// Standard base64, padded, for OSC 52.
-fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(char::from(TABLE[(n >> (18 - 6 * i) & 63) as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,11 +822,17 @@ mod tests {
         assert!(!closes(&Key::plain(KeyCode::Char('c'))));
     }
 
+    /// The reviewer's payload: C1 CSI and ST and CR/LF inside an OSC 9 are
+    /// dropped on the way to the client, exactly as for a pane's OSC 9.
     #[test]
-    fn base64_pads() {
-        assert_eq!(base64(b"hi"), "aGk=");
-        assert_eq!(base64(b"abc"), "YWJj");
-        assert_eq!(base64(b"a"), "YQ==");
+    fn a_popups_osc_is_cleaned_as_a_panes() {
+        let mut state = crate::server::test_state();
+        let id = ClientId(1);
+        let body = b"9;X\xc2\x9b2J\xc2\x9c\r\n".to_vec();
+        assert_eq!(passthrough::osc(&body), b"\x1b]9;X2J\x07".to_vec());
+        // With no popup open on the client nothing is queued at all.
+        on_event(&mut state, id, 1, PaneEventKind::Osc(body));
+        assert!(state.clients.is_empty());
     }
 
     /// No popup opens without its client, and a waiting CLI gets the

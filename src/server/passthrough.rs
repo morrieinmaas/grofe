@@ -715,12 +715,12 @@ fn clean(bytes: &[u8]) -> String {
 }
 
 /// An OSC with `body` ([`clean`]ed), terminated by BEL.
-fn osc(body: &[u8]) -> Vec<u8> {
+pub(crate) fn osc(body: &[u8]) -> Vec<u8> {
     format!("\x1b]{}\x07", clean(body)).into_bytes()
 }
 
 /// OSC 52 storing `text` in the clipboard, as tmux writes it (`Ms`).
-fn osc52(text: &str) -> Vec<u8> {
+pub(crate) fn osc52(text: &str) -> Vec<u8> {
     let data = base64::engine::general_purpose::STANDARD.encode(text);
     format!("\x1b]52;c;{data}\x07").into_bytes()
 }

@@ -342,22 +342,34 @@ fn closing_a_popup_ends_its_process_group_without_zombies() {
 fn a_popup_cannot_write_to_the_terminal() {
     let srv = start();
     let mut a = attach(&srv, "main");
-    let child = popup(
-        &srv,
-        &[
-            "-w",
-            "30",
-            "-h",
-            "5",
-            "printf '\\033]0;tc6-evil\\007\\033]2;tc6-evil2\\033\\\\seen\\n'; exec cat",
-        ],
-    );
+    // The reviewer's OSC 9 (a C1 CSI and ST and a CR/LF in the body), an
+    // OSC 777 with a C1 CSI, an OSC 52 store and two titles.
+    let script = srv.home.join("osc.sh");
+    fs::write(
+        &script,
+        "printf '\\033]9;X\\302\\2332J\\302\\234\\r\\n\\007'\n\
+         printf '\\033]777;notify;T;B\\302\\233x\\007'\n\
+         printf '\\033]52;c;aGk=\\007'\n\
+         printf '\\033]0;tc6-evil\\007\\033]2;tc6-evil2\\033\\\\'\n\
+         echo seen; exec cat\n",
+    )
+    .expect("script");
+    let command = format!("sh {}", script.display());
+    let child = popup(&srv, &["-w", "30", "-h", "5", &command]);
     a.wait_for("│seen");
-    let raw = String::from_utf8_lossy(a.output()).into_owned();
+    let raw = a.output().to_vec();
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"tc6-evil"), "a popup title reached the terminal");
     assert!(
-        !raw.contains("tc6-evil"),
-        "a popup title reached the terminal"
+        !has("\u{9b}".as_bytes()) && !has("\u{9c}".as_bytes()),
+        "a C1 control"
     );
+    assert!(has(b"\x1b]9;X2J\x07"), "OSC 9 not relayed clean");
+    assert!(
+        has(b"\x1b]777;notify;T;Bx\x07"),
+        "OSC 777 not relayed clean"
+    );
+    assert!(has(b"\x1b]52;c;aGk=\x07"), "OSC 52 not relayed");
     a.send("\x1b");
     wait_child(child, WAIT).expect("answers");
 }
@@ -495,4 +507,27 @@ fn a_popup_gets_mouse_reports_inside_it() {
     assert!(!a.text().contains(";2;2"), "a report outside the popup");
     a.send("\x03");
     wait_child(child, WAIT).expect("answers");
+}
+
+/// `kill-server` with a popup whose command ignores the hangup still ends
+/// it: after the grace period its process group is killed, and nothing is
+/// left behind.
+#[test]
+fn kill_server_ends_a_popup_that_ignores_the_hangup() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    let pids = srv.home.join("hup.txt");
+    let script = format!(
+        "trap '' HUP; echo $$ > {}; echo up; while :; do sleep 1; done",
+        pids.display()
+    );
+    let child = popup(&srv, &["-w", "30", "-h", "5", &script]);
+    a.wait_for("│up");
+    let pid = read(&pids).trim_end().to_string();
+    assert!(exists(&pid));
+    srv.cmd(&["kill-server"]).expect("kill-server");
+    wait_until(|| !exists(&pid), WAIT)
+        .unwrap_or_else(|e| panic!("popup command {pid} outlived the server: {e}"));
+    let _ = wait_child(child, WAIT);
+    drop(a);
 }
