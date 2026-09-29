@@ -13,8 +13,8 @@ use super::{
     CommandPrompt, Condition, ConfirmBefore, DetachClient, DisplayMenu, DisplayMessage,
     DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, OptionScope, ParseError,
-    RefreshClient, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope,
+    ParseError, RefreshClient, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
     RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem,
     SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment, ShowHooks, ShowMessages,
     ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
@@ -500,8 +500,15 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     .filter(|(c, _)| flags.present.contains(c))
     .map(|(_, edge)| edge)
     .collect();
-    let width = extent_value(&flags, 'x', "width")?;
-    let height = extent_value(&flags, 'y', "height")?;
+    let width = extent_value(&flags, 'x', 0, SizeWords::Trio("width"))?;
+    let height = extent_value(&flags, 'y', 0, SizeWords::Trio("height"))?;
+    // ponytail: TC.8 implements `-x`/`-y` in `resize_pane` and removes this
+    // guard; until then the sizes would be ignored silently.
+    if width.is_some() || height.is_some() {
+        return Err(ParseError::Other(
+            "not implemented: resize-pane -x/-y".to_string(),
+        ));
+    }
     let zoom = flags.present.contains(&'Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(
@@ -1127,43 +1134,99 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
 
 // ---- M3.6 verbs (TC.2) ----
 
-/// A size as tmux's `args_percentage` reads it: cells, or `N%` up to
-/// 100, else `<what> invalid` (tmux 3.7b's wording).
-fn parse_extent(s: &str, what: &str) -> Result<SplitSize, ParseError> {
-    let invalid = || ParseError::Other(format!("{what} invalid"));
-    match s.strip_suffix('%') {
-        Some(pct) => pct
-            .parse::<u8>()
+/// A number as tmux's `args_percentage` reads it: an integer, or one
+/// with a `%` suffix. `None` when it is neither.
+fn amount(s: &str) -> Option<(i64, bool)> {
+    let (digits, percent) = match s.strip_suffix('%') {
+        Some(d) => (d, true),
+        None => (s, false),
+    };
+    digits.parse::<i64>().ok().map(|n| (n, percent))
+}
+
+/// How tmux 3.7b words a bad size: `<what> invalid`, `<what> too small`
+/// and `<what> too large`, or one fixed text for every failure
+/// (`join-pane -l`).
+#[derive(Clone, Copy)]
+enum SizeWords {
+    Trio(&'static str),
+    Fixed(&'static str),
+}
+
+/// A size of at least `min`, in cells or `N%` up to 100, worded as tmux
+/// 3.7b words it (recorded on `tmux -L grofe-tc2`): `display-popup -w 0`
+/// is `width too small`, `-h 200%` `height too large`, `-w 5x` `width
+/// invalid`; `join-pane -l` gives `size or position invalid tiled
+/// geometry` for any bad value. Whether a size fits the window or client
+/// is the handler's check.
+fn parse_extent(s: &str, min: i64, words: SizeWords) -> Result<SplitSize, ParseError> {
+    let fail = |why: &str| {
+        ParseError::Other(match words {
+            SizeWords::Trio(what) => format!("{what} {why}"),
+            SizeWords::Fixed(text) => text.to_string(),
+        })
+    };
+    let (n, percent) = amount(s).ok_or_else(|| fail("invalid"))?;
+    if n < min {
+        return Err(fail("too small"));
+    }
+    if percent {
+        u8::try_from(n)
             .ok()
             .filter(|p| *p <= 100)
             .map(SplitSize::Percent)
-            .ok_or_else(invalid),
-        None => s.parse().map(SplitSize::Cells).map_err(|_| invalid()),
+            .ok_or_else(|| fail("too large"))
+    } else {
+        u16::try_from(n)
+            .map(SplitSize::Cells)
+            .map_err(|_| fail("too large"))
     }
 }
 
 fn extent_value(
     flags: &ParsedFlags,
     key: char,
-    what: &str,
+    min: i64,
+    words: SizeWords,
 ) -> Result<Option<SplitSize>, ParseError> {
     flags
         .values
         .get(&key)
-        .map(|s| parse_extent(s, what))
+        .map(|s| parse_extent(s, min, words))
         .transpose()
 }
 
-/// A cell count, else `<what> invalid`.
-fn cells_value(flags: &ParsedFlags, key: char, what: &str) -> Result<Option<u16>, ParseError> {
-    flags
-        .values
-        .get(&key)
-        .map(|s| {
-            s.parse()
-                .map_err(|_| ParseError::Other(format!("{what} invalid")))
-        })
-        .transpose()
+/// `new-pane`'s wording for every bad size or position (tmux 3.7b).
+const NEW_PANE_WORDS: SizeWords = SizeWords::Trio("size or position");
+
+/// A `new-pane -X`/`-Y` position: signed cells or `N%` (tmux 3.7b takes
+/// `-X -1` and `-X 50%`).
+fn offset_value(flags: &ParsedFlags, key: char) -> Result<Option<Offset>, ParseError> {
+    let fail = |why: &str| ParseError::Other(format!("size or position {why}"));
+    let Some(s) = flags.values.get(&key) else {
+        return Ok(None);
+    };
+    let (n, percent) = amount(s).ok_or_else(|| fail("invalid"))?;
+    let offset = if percent {
+        if n < 0 {
+            return Err(fail("too small"));
+        }
+        Offset::Percent(
+            u8::try_from(n)
+                .ok()
+                .filter(|p| *p <= 100)
+                .ok_or_else(|| fail("too large"))?,
+        )
+    } else {
+        Offset::Cells(i32::try_from(n).map_err(|_| {
+            if n < 0 {
+                fail("too small")
+            } else {
+                fail("too large")
+            }
+        })?)
+    };
+    Ok(Some(offset))
 }
 
 fn target_if_given(
@@ -1221,7 +1284,12 @@ fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseErr
         full: flags.present.contains(&'f'),
         horizontal: flags.present.contains(&'h'),
         vertical: flags.present.contains(&'v'),
-        size: extent_value(&flags, 'l', "size")?,
+        size: extent_value(
+            &flags,
+            'l',
+            0,
+            SizeWords::Fixed("size or position invalid tiled geometry"),
+        )?,
     })
 }
 
@@ -1422,8 +1490,8 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
         client: flags.values.get(&'c').cloned(),
         cwd: flags.values.get(&'d').cloned(),
         title: flags.values.get(&'T').cloned(),
-        width: extent_value(&flags, 'w', "width")?,
-        height: extent_value(&flags, 'h', "height")?,
+        width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
+        height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,
         x: flags.values.get(&'x').cloned(),
         y: flags.values.get(&'y').cloned(),
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
@@ -1447,10 +1515,10 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.values.get(&'F').cloned(),
         target: target_or_current(&flags.values, 't')?,
         cwd: flags.values.get(&'c').cloned(),
-        width: cells_value(&flags, 'x', "width")?,
-        height: cells_value(&flags, 'y', "height")?,
-        x: cells_value(&flags, 'X', "x-position")?,
-        y: cells_value(&flags, 'Y', "y-position")?,
+        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(&flags, 'X')?,
+        y: offset_value(&flags, 'Y')?,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
     }))
 }

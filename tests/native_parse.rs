@@ -372,10 +372,10 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 format: s("#{pane_id}"),
                 target: t("%1"),
                 cwd: s("/tmp"),
-                width: Some(138),
-                height: Some(30),
-                x: Some(31),
-                y: Some(9),
+                width: Some(SplitSize::Cells(138)),
+                height: Some(SplitSize::Cells(30)),
+                x: Some(Offset::Cells(31)),
+                y: Some(Offset::Cells(9)),
                 command: Some(argv(&["sh", "-c", "fzf"])),
             }),
         ),
@@ -579,16 +579,19 @@ fn existing_verbs_parse_their_new_flags() {
     assert_eq!(c.client.as_deref(), Some("/dev/ttys003"));
     assert_eq!(c.target, Some(t("s")));
 
-    let Ok(Command::ResizePane(c)) = p(&["resize-pane", "-t", "%1", "-x", "26"]) else {
-        panic!("resize-pane -x");
-    };
-    assert_eq!(c.width, Some(SplitSize::Cells(26)));
-    assert_eq!(c.height, None);
-    assert_eq!(c.action, ResizeAction::Edges(vec![], 1));
-    let Ok(Command::ResizePane(c)) = p(&["resize-pane", "-y", "50%"]) else {
-        panic!("resize-pane -y");
-    };
-    assert_eq!(c.height, Some(SplitSize::Percent(50)));
+    // `resize-pane -x/-y` is refused until TC.8 implements it, rather than
+    // parsing to a resize that silently does nothing.
+    for words in [
+        &["resize-pane", "-t", "%1", "-x", "26"][..],
+        &["resize-pane", "-y", "50%"][..],
+        &["resize-pane", "-L", "-x", "10"][..],
+    ] {
+        assert_eq!(
+            err(words),
+            "not implemented: resize-pane -x/-y",
+            "{words:?}"
+        );
+    }
 
     let Ok(Command::SelectLayout(c)) = p(&["select-layout", "-E"]) else {
         panic!("select-layout -E");
@@ -690,15 +693,61 @@ fn command_prompt_parses_background_and_the_prompt_flags() {
     assert!(c.single);
 }
 
-/// Values the flags above reject, worded like tmux 3.7b (`width invalid`).
+/// `new-pane` takes what tmux 3.7b takes: sizes in percent, and signed
+/// or percent positions (`-x 50% -y 50%`, `-X -1`, `-X 50%`).
+#[test]
+fn new_pane_takes_percent_sizes_and_signed_positions() {
+    let Ok(Command::NewPane(c)) = p(&[
+        "new-pane", "-x", "50%", "-y", "50%", "-X", "-1", "-Y", "25%",
+    ]) else {
+        panic!("new-pane percent");
+    };
+    assert_eq!(c.width, Some(SplitSize::Percent(50)));
+    assert_eq!(c.height, Some(SplitSize::Percent(50)));
+    assert_eq!(c.x, Some(Offset::Cells(-1)));
+    assert_eq!(c.y, Some(Offset::Percent(25)));
+    let Ok(Command::NewPane(c)) = p(&["new-pane", "-x", "0", "-X", "-99999"]) else {
+        panic!("new-pane zero");
+    };
+    assert_eq!(c.width, Some(SplitSize::Cells(0)));
+    assert_eq!(c.x, Some(Offset::Cells(-99999)));
+}
+
+/// Values the flags above reject, each text recorded from tmux 3.7b on
+/// `tmux -L grofe-tc2 -f /dev/null`.
 #[test]
 fn bad_values_and_argument_counts_are_errors() {
-    assert_eq!(err(&["join-pane", "-l", "abc"]), "size invalid");
-    assert_eq!(err(&["resize-pane", "-x", "abc"]), "width invalid");
-    assert_eq!(err(&["resize-window", "-x", "abc"]), "width invalid");
-    assert_eq!(err(&["display-popup", "-w", "big"]), "width invalid");
-    assert_eq!(err(&["display-popup", "-h", "200%"]), "height invalid");
-    assert_eq!(err(&["new-pane", "-X", "-1"]), "x-position invalid");
+    for (words, want) in [
+        (
+            &["join-pane", "-l", "abc"][..],
+            "size or position invalid tiled geometry",
+        ),
+        (
+            &["join-pane", "-l", "200%"][..],
+            "size or position invalid tiled geometry",
+        ),
+        (
+            &["join-pane", "-l", "-3"][..],
+            "size or position invalid tiled geometry",
+        ),
+        (&["resize-pane", "-x", "abc"][..], "width invalid"),
+        (&["resize-pane", "-x", "200%"][..], "width too large"),
+        (&["resize-window", "-x", "abc"][..], "width invalid"),
+        (&["display-popup", "-w", "5x"][..], "width invalid"),
+        (&["display-popup", "-w", "0"][..], "width too small"),
+        (&["display-popup", "-w", "-1%"][..], "width too small"),
+        (&["display-popup", "-h", "200%"][..], "height too large"),
+        (&["display-popup", "-h", "101%"][..], "height too large"),
+        (&["new-pane", "-x", "abc"][..], "size or position invalid"),
+        (&["new-pane", "-X", "abc"][..], "size or position invalid"),
+        (&["new-pane", "-x", "-5"][..], "size or position too small"),
+        (
+            &["new-pane", "-x", "101%"][..],
+            "size or position too large",
+        ),
+    ] {
+        assert_eq!(err(words), want, "{words:?}");
+    }
     assert_eq!(
         err(&["if-shell", "-F", "1", "a", "b", "c"]),
         "command if-shell: too many arguments (need at most 3)"

@@ -169,7 +169,9 @@ pub enum ResizeAction {
 /// `resize-pane` (`-L -R -U -D -Z -t`, an amount, and from M3.6 `-x -y`).
 /// `width`/`height` set the pane's size outright, in cells or `N%` of the
 /// window; they may come with a direction, or alone, in which case
-/// `action` is `Edges` with no edges.
+/// `action` is `Edges` with no edges. Until TC.8 implements them, `parse`
+/// refuses them with `not implemented: resize-pane -x/-y`, so they stay
+/// `None` here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResizePane {
     pub action: ResizeAction,
@@ -657,10 +659,21 @@ pub struct DisplayPopup {
     pub command: Option<Vec<String>>,
 }
 
+/// A `new-pane` position (`-X`/`-Y`): cells from the window's origin,
+/// possibly negative, or `N%` of the window. tmux 3.7b accepts both
+/// (`-X -1`, `-X 50%`) and checks the range against the window when it
+/// runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offset {
+    Cells(i32),
+    Percent(u8),
+}
+
 /// `new-pane` (TC.6, M36-R1): a floating pane. The flag letters follow
 /// tmux 3.7b's usage (`-x width -y height -X x-position -Y y-position`),
 /// which fzf 0.74.4 sends as `-x 138 -y 30 -X 31 -Y 9`; TC.6's golden
-/// (M36-R2) settles their meaning.
+/// (M36-R2) settles their meaning. Sizes may be `N%` (`-x 50%`); whether
+/// one fits the window is checked when it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewPane {
     /// `-P`: print the new pane's `format`.
@@ -671,14 +684,14 @@ pub struct NewPane {
     pub target: Target,
     /// `-c`: the command's directory, raw (a format).
     pub cwd: Option<String>,
-    /// `-x`, in cells.
-    pub width: Option<u16>,
-    /// `-y`, in cells.
-    pub height: Option<u16>,
-    /// `-X`, in cells.
-    pub x: Option<u16>,
-    /// `-Y`, in cells.
-    pub y: Option<u16>,
+    /// `-x`.
+    pub width: Option<SplitSize>,
+    /// `-y`.
+    pub height: Option<SplitSize>,
+    /// `-X`.
+    pub x: Option<Offset>,
+    /// `-Y`.
+    pub y: Option<Offset>,
     pub command: Option<Vec<String>>,
 }
 
