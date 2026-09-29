@@ -62,6 +62,16 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
         "status.window.current-format",
         "window-status-current-format",
     ),
+    ("status.justify", "status-justify"),
+    ("status.left-style", "status-left-style"),
+    ("status.right-style", "status-right-style"),
+    ("status.window.separator", "window-status-separator"),
+    ("status.window.style", "window-status-style"),
+    ("status.window.current-style", "window-status-current-style"),
+    ("status.window.last-style", "window-status-last-style"),
+    ("status.window.bell-style", "window-status-bell-style"),
+    ("message.style", "message-style"),
+    ("message.display-time-ms", "display-time"),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
     ("compat-identity", "compat-identity"),
@@ -105,7 +115,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "status.lines"
         | "status.left-length"
         | "status.right-length"
-        | "status.interval" => Ty::Int,
+        | "status.interval"
+        | "message.display-time-ms" => Ty::Int,
         _ => Ty::Str,
     }
 }

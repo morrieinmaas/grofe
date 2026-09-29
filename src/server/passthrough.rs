@@ -476,7 +476,8 @@ fn is_this_host(host: &str) -> bool {
     !me.is_empty() && (host.eq_ignore_ascii_case(me) || host.eq_ignore_ascii_case(short))
 }
 
-fn hostname() -> &'static str {
+/// This machine's host name (`gethostname`), read once.
+pub(crate) fn hostname() -> &'static str {
     static HOST: OnceLock<String> = OnceLock::new();
     HOST.get_or_init(|| {
         let mut buf = [0u8; 256];

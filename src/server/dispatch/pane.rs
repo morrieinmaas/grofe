@@ -143,7 +143,11 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
     let pane = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&pane].window;
     let Some(edge) = c.edge else {
-        switch_active(model, window, pane, c.keep_zoom);
+        if let Some(title) = &c.title {
+            set_title(state, pane, title);
+        } else {
+            switch_active(model, window, pane, c.keep_zoom);
+        }
         return Ok(String::new());
     };
     let Some(w) = model.windows.get(&window) else {
@@ -155,11 +159,26 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
         .layout
         .neighbour(area, pane, edge)
         .or_else(|| wrapped_neighbour(w.layout.compute(area), area, pane, edge));
-    match next {
-        Some(next) => switch_active(model, window, next, c.keep_zoom),
-        None => unzoom(model, window),
+    match (next, &c.title) {
+        (Some(next), Some(title)) => set_title(state, next, title),
+        (None, Some(_)) => {}
+        (Some(next), None) => switch_active(model, window, next, c.keep_zoom),
+        (None, None) => unzoom(model, window),
     }
     Ok(String::new())
+}
+
+/// `select-pane -T`: `title`, expanded against `pane`, becomes its title,
+/// as if the pane had set it (OSC 2), so `#{pane_title}`, the status line
+/// and `set-titles` all see it.
+fn set_title(state: &mut State, pane: PaneId, title: &str) {
+    let title = crate::cmd::expand(title, &options::FormatCtx::new(&state.model, pane));
+    crate::server::passthrough::on_pane_event(
+        state,
+        pane,
+        crate::server::pane::PaneEventKind::Title(title),
+    );
+    clients::mark_all_dirty(state);
 }
 
 /// `last-pane` and `select-pane -l`: the window's last pane becomes active

@@ -29,6 +29,8 @@ main-pane-width = "50%"
 [status]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:70
 lines = 2
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:72
+position = "top"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:75
 style = "bg=default,fg=#{@theme_fg}"
 # ~/.config/canopy/user.conf:18
@@ -39,6 +41,8 @@ left-length = 40
 right-length = 120
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:74
 interval = 5
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:73
+justify = "left"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:71
 rows = ["", ""]
 
@@ -47,6 +51,8 @@ rows = ["", ""]
 format = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #I #W #[fg=#{@theme_grey},bg=default]#{@pill_r} "
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:87
 current-format = "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #I #W#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} "
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:85
+separator = ""
 
 [keys.prefix]
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:22
