@@ -13,7 +13,7 @@ use super::{
     CommandPrompt, Condition, ConfirmBefore, DetachClient, DisplayMenu, DisplayMessage,
     DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope,
+    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
     ParseError, RefreshClient, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
     RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem,
     SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment, ShowHooks, ShowMessages,
@@ -1432,12 +1432,32 @@ fn parse_move_window(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('S', FlagKind::Bool)];
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('S', FlagKind::Bool),
+        ('c', FlagKind::Bool),
+        ('L', FlagKind::Bool),
+        ('R', FlagKind::Bool),
+        ('U', FlagKind::Bool),
+        ('D', FlagKind::Bool),
+    ];
     let flags = flags_for(argv, SHORT, "refresh-client")?;
-    no_extra_positionals(&flags, "refresh-client", 0)?;
+    no_extra_positionals(&flags, "refresh-client", 1)?;
+    let pan = [
+        ('c', Pan::Reset),
+        ('L', Pan::Left),
+        ('R', Pan::Right),
+        ('U', Pan::Up),
+        ('D', Pan::Down),
+    ]
+    .into_iter()
+    .find(|(f, _)| flags.present.contains(f))
+    .map(|(_, p)| p);
     Ok(Command::RefreshClient(RefreshClient {
         client: flags.values.get(&'t').cloned(),
         status: flags.present.contains(&'S'),
+        pan,
+        adjustment: flags.positionals.first().cloned(),
     }))
 }
 

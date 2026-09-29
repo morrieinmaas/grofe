@@ -117,12 +117,9 @@ const NEW_SESSION_TEMPLATE: &str = "#{session_name}:";
 /// `display-message -p #{session_id}` `new_and_attach` sends after it names
 /// this session and the CLI attaches to it; a second `-A` call therefore
 /// makes no duplicate.
-// ponytail: tmux 3.7b fails `new -A -s x -d` for an existing `x` from a
-// CLI with no terminal ("open terminal failed: not a terminal", recorded)
-// and attaches despite `-d` from one with a terminal. grofe cannot tell
-// that call from `new_and_attach`'s (which adds `-d` itself), so it
-// succeeds without attaching; `main.rs`'s `attaches` is where a tty check
-// would go.
+// The CLI's own `new -A` for an existing session never gets here: `main.rs`
+// attaches to it first (despite `-d`, as tmux 3.7b), or fails without a
+// terminal. This covers a session made between that check and the create.
 fn attach_existing(state: &mut State, ctx: &ClientCtx, id: SessionId) {
     match ctx.client.filter(|c| state.clients.contains_key(c)) {
         Some(client) => clients::show_session(state, client, id),

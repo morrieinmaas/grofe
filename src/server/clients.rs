@@ -51,7 +51,7 @@ use crate::server::status::{
     self, RangeKind, StatusInputs, StatusRow, StyledLine, WindowOptions, WindowStatus,
 };
 use crate::server::{State, dispatch, graphics, hooks};
-use crate::types::{ClientId, PaneId, Rect, SessionId, cap_size};
+use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -92,6 +92,9 @@ pub struct Accepted {
     pub output: mpsc::Receiver<Vec<u8>>,
     /// Dropped without a value when the server goes away mid-write.
     pub exit: oneshot::Receiver<String>,
+    /// A value asks the client to suspend itself (`suspend-client`, TC.9):
+    /// its connection sends a `suspend` frame after the output before it.
+    pub suspend: mpsc::Receiver<()>,
 }
 
 /// A client's one-slot output: the actor offers each new screen, and the
@@ -215,6 +218,15 @@ pub struct ClientEntry {
     /// The window cell drawn at the client's top-left (crop, D6), as last
     /// drawn.
     pub viewport: (u16, u16),
+    /// Set by `refresh-client -L/-R/-U/-D` (TC.9): the window whose
+    /// visible part the client moved by hand, and where it is; the view
+    /// then stops following the cursor until `-c`, another window, or the
+    /// window fitting the client, as tmux's `pan_window`.
+    pan: Option<(WindowId, u16, u16)>,
+    /// `suspend-client` stopped the client (TC.9): nothing is drawn for it
+    /// until it resumes and sends its size, which redraws it in full.
+    suspended: bool,
+    suspend_tx: mpsc::Sender<()>,
     /// The outer terminal's mouse modes as last written (R2); `None`
     /// before the first write.
     mouse_modes: Option<bool>,
@@ -341,6 +353,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     state.registry.next_id += 1;
     let (outbox, output) = Outbox::new();
     let (exit_tx, exit) = oneshot::channel();
+    let (suspend_tx, suspend) = mpsc::channel(1);
     let ctx = ClientCtx {
         client: Some(id),
         ..req.ctx
@@ -367,6 +380,9 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             held_bytes: 0,
             holds: 0,
             viewport: (0, 0),
+            pan: None,
+            suspended: false,
+            suspend_tx,
             mouse_modes: None,
             dirty: true,
             outbox,
@@ -383,7 +399,12 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     // As tmux 3.7b (recorded): an attach is a session change, then a resize.
     hooks::client_session_changed(state, id);
     hooks::client_resized(state, id);
-    Ok(Accepted { id, output, exit })
+    Ok(Accepted {
+        id,
+        output,
+        exit,
+        suspend,
+    })
 }
 
 /// Everything attach refuses before it changes anything, in tmux's order:
@@ -621,6 +642,18 @@ pub(crate) fn drawn_status(state: &State, id: ClientId) -> Option<(&[StatusRow],
     ))
 }
 
+/// `suspend-client` (TC.9): client `id` is asked to stop itself with
+/// SIGTSTP, as tmux 3.7b's MSG_SUSPEND; nothing is drawn for it until it
+/// resumes.
+pub(crate) fn suspend(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id)
+        && !c.suspended
+        && c.suspend_tx.try_send(()).is_ok()
+    {
+        c.suspended = true;
+    }
+}
+
 /// A client named on the command line (`-c` or `-t` of the client
 /// verbs), else the current client ([`current_client`]).
 pub(crate) fn target_client(
@@ -736,13 +769,29 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
             let Some(c) = state.clients.get_mut(&id) else {
                 return;
             };
+            // A suspended client sends its size when it resumes: its
+            // terminal is its own again, so everything is drawn anew.
+            if c.suspended {
+                c.suspended = false;
+                c.outbox.prev = None;
+                c.mouse_modes = None;
+                c.dirty = true;
+                sync_mouse_modes(state);
+                let Some(c) = state.clients.get_mut(&id) else {
+                    return;
+                };
+                c.pending_size = Some(clamp_size((cols, rows)));
+                request_render(state, Instant::now());
+                hooks::client_resized(state, id);
+                return;
+            }
             c.pending_size = Some(clamp_size((cols, rows)));
             request_render(state, Instant::now());
             hooks::client_resized(state, id);
         }
         Frame::Detach => detach(state, id),
         // Server-to-client kinds: ignored if a client sends them.
-        Frame::Output(_) | Frame::Exit(_) => {}
+        Frame::Output(_) | Frame::Exit(_) | Frame::Suspend => {}
     }
 }
 
@@ -1070,7 +1119,7 @@ fn render_dirty(state: &mut State) {
     let ids: Vec<ClientId> = state
         .clients
         .iter()
-        .filter(|(_, c)| c.dirty && c.outbox.ready())
+        .filter(|(_, c)| c.dirty && !c.suspended && c.outbox.ready())
         .map(|(id, _)| *id)
         .collect();
     for id in ids {
@@ -1086,12 +1135,19 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         let composed = compose_client(state, id, c);
+        let fits = window_fits(&state.model, c);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
         c.dirty = false;
         if let Some((screen, viewport, rows, status_at)) = composed {
             c.viewport = viewport;
+            c.pan = match (c.pan, fits) {
+                (Some((window, ..)), Some((current, false))) if window == current => {
+                    Some((window, viewport.0, viewport.1))
+                }
+                _ => None,
+            };
             c.status_rows = rows;
             c.status_at = status_at;
             let caps = c.caps;
@@ -1100,6 +1156,61 @@ fn render_dirty(state: &mut State) {
             c.dirty = !c.outbox.offer(screen, &caps);
         }
     }
+}
+
+/// Client `c`'s current window, and whether it fits the client (then
+/// there is nothing to pan).
+fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
+    let w = model.windows.get(&model.sessions.get(&c.session)?.active)?;
+    let (cols, rows) = visible_size(model, c);
+    Some((w.id, w.cols <= cols && w.rows <= rows))
+}
+
+/// The part of client `c` that shows the window: its size less the
+/// status rows.
+fn visible_size(model: &Model, c: &ClientEntry) -> (u16, u16) {
+    let lines = status_geometry(model, c.session, c.size.1).lines;
+    (c.size.0, c.size.1.saturating_sub(lines))
+}
+
+/// `refresh-client -c/-L/-R/-U/-D` (TC.9): moves the visible part of a
+/// window larger than client `id` by `by` cells, or with `Reset` goes
+/// back to following the cursor, as tmux 3.7b's `cmd_refresh_client_exec`.
+pub(crate) fn pan(state: &mut State, id: ClientId, pan: cmd::Pan, by: u16) {
+    let model = &state.model;
+    let Some(c) = state.clients.get(&id) else {
+        return;
+    };
+    let Some(w) = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))
+    else {
+        return;
+    };
+    let (cols, rows) = visible_size(model, c);
+    let (wid, wcols, wrows) = (w.id, w.cols, w.rows);
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if pan == cmd::Pan::Reset {
+        c.pan = None;
+    } else {
+        let (_, mut x, mut y) = match c.pan {
+            Some(p) if p.0 == wid => p,
+            _ => (wid, c.viewport.0, c.viewport.1),
+        };
+        match pan {
+            cmd::Pan::Left => x = x.saturating_sub(by),
+            cmd::Pan::Right => x = x.saturating_add(by).min(wcols.saturating_sub(cols)),
+            cmd::Pan::Up => y = y.saturating_sub(by),
+            cmd::Pan::Down => y = y.saturating_add(by).min(wrows.saturating_sub(rows)),
+            cmd::Pan::Reset => {}
+        }
+        c.pan = Some((wid, x, y));
+    }
+    c.dirty = true;
+    request_render(state, Instant::now());
 }
 
 /// How many status rows `session` shows: `status` is `off`, `on` or 2 to
@@ -1353,12 +1464,15 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             Some((id, rect, snap))
         })
         .collect();
-    let viewport = follow(
-        c.viewport,
-        cursor.map(|p| (p.col, p.row)),
-        (w.cols, w.rows),
-        visible,
-    );
+    let viewport = match c.pan {
+        Some((window, x, y)) if window == w.id => follow((x, y), None, (w.cols, w.rows), visible),
+        _ => follow(
+            c.viewport,
+            cursor.map(|p| (p.col, p.row)),
+            (w.cols, w.rows),
+            visible,
+        ),
+    };
     let window = render::compose(&FrameInputs {
         client: visible,
         viewport,
@@ -1982,6 +2096,9 @@ mod tests {
                 held_bytes: 0,
                 holds: 0,
                 viewport: (0, 0),
+                pan: None,
+                suspended: false,
+                suspend_tx: mpsc::channel(1).0,
                 mouse_modes: None,
                 dirty: false,
                 outbox,

@@ -922,7 +922,21 @@ async fn write_frames(
     mut out: FramedWrite<tokio::net::unix::OwnedWriteHalf, FrameCodec>,
     mut accepted: clients::Accepted,
 ) {
-    while let Some(bytes) = accepted.output.recv().await {
+    loop {
+        // Output first, so a suspend goes out after what was drawn before it.
+        let bytes = tokio::select! {
+            biased;
+            bytes = accepted.output.recv() => match bytes {
+                Some(bytes) => bytes,
+                None => break,
+            },
+            Some(()) = accepted.suspend.recv() => {
+                if out.send(Frame::Suspend).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
         // A redraw of a huge client can pass the frame cap: it goes out as
         // consecutive frames, which the client just writes in order.
         for chunk in bytes.chunks(protocol::MAX_MESSAGE_LEN) {

@@ -107,6 +107,9 @@ fn main() -> ExitCode {
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
+        "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
+            attach_existing(&globals.socket(), rest)
+        }
         "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
@@ -336,6 +339,40 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
 fn fail(msg: &str) -> ExitCode {
     eprintln!("{}", msg.trim_end_matches('\n'));
     ExitCode::FAILURE
+}
+
+/// For `new-session -A -s <name>`: the id of the running session named
+/// exactly `<name>`, if there is one (no server means none).
+fn existing_for_a(socket: &Path, argv: &[String]) -> Option<String> {
+    let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv) else {
+        return None;
+    };
+    let name = c.name.filter(|_| c.attach)?;
+    let stream = UnixStream::connect(socket).ok()?;
+    let argv = ["list-sessions", "-F", "#{session_id} #{session_name}"].map(String::from);
+    let Ok(Reply::Ok { out, .. }) = request(stream, socket, &argv) else {
+        return None;
+    };
+    out.lines()
+        .filter_map(|l| l.split_once(' '))
+        .find(|(_, n)| *n == name)
+        .map(|(id, _)| id.to_string())
+}
+
+/// `new-session -A` for a session that exists: tmux 3.7b's
+/// `attach-session`, even with `-d` (recorded): the client attaches when it
+/// has a terminal, else fails as tmux does.
+fn attach_existing(socket: &Path, argv: &[String]) -> ExitCode {
+    if !io::stdin().is_terminal() {
+        return fail("open terminal failed: not a terminal");
+    }
+    match existing_for_a(socket, argv) {
+        Some(id) => attach(
+            socket,
+            &["attach-session".to_string(), "-t".to_string(), id],
+        ),
+        None => fail("no sessions"),
+    }
 }
 
 /// Whether `argv` is a `new-session` that attaches (no `-d`). One that does

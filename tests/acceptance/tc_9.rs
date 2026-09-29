@@ -112,10 +112,19 @@ fn new_session_a_twice_leaves_one_session_and_attaches() {
         .map(|c| c.split(' ').nth(1).unwrap_or_default().to_string())
         .collect();
     assert_eq!(on, ["x", "x"]);
-    // From the CLI, `-A` on an existing session makes no duplicate either.
-    srv.cmd(&["new-session", "-A", "-d", "-s", "x"])
-        .expect("new-session -A -d");
+    // With no terminal, `-A` on an existing session fails as tmux 3.7b's
+    // does, `-d` or not, and makes no duplicate.
+    let out = srv.run(&["new-session", "-A", "-d", "-s", "x"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(
+        out.stderr.trim_end(),
+        "open terminal failed: not a terminal"
+    );
     assert_eq!(lines(&srv, &["list-sessions"]).len(), 2);
+    // A new name with `-A -d` is made detached.
+    srv.cmd(&["new-session", "-A", "-d", "-s", "z"])
+        .expect("new-session -A -d");
+    assert_eq!(lines(&srv, &["list-sessions"]).len(), 3);
 }
 
 /// `has-session` answers with its exit status alone, as tmux's.
@@ -321,13 +330,51 @@ fn choose_client_lists_clients_and_enter_detaches() {
     wait_clients(&srv, &[&format!("{} main", names[1])]);
 }
 
-/// Case 8: `suspend-client` stops the attach client with SIGTSTP.
+/// Case 8: `suspend-client` stops the attach client with SIGTSTP, so the
+/// interactive shell that ran it reports a stopped job; `fg` resumes it
+/// and the screen is drawn again.
 #[test]
-#[ignore = "suspend-client needs a suspend attach frame outside TC.9's files (TC.9 report)"]
-fn suspend_client_stops_the_attach_client() {
+fn suspend_client_stops_the_client_and_fg_resumes_it() {
     let srv = start();
-    let _a = attach(&srv, "main");
+    let grofe = srv.command();
+    let mut line = format!("'{}'", grofe.get_program().to_string_lossy());
+    for arg in grofe.get_args() {
+        line.push_str(&format!(" '{}'", arg.to_string_lossy()));
+    }
+    line.push_str(" attach -t main; echo \"stopped=$?\"\n");
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.arg("-i")
+        .env("PS1", "$ ")
+        .env("ENV", "")
+        .env("TERM", "xterm-256color")
+        .env_remove("COLORTERM");
+    for (key, value) in grofe.get_envs() {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
+    }
+    if let Some(dir) = grofe.get_current_dir() {
+        cmd.current_dir(dir);
+    }
+    let mut a = Harness::spawn(cmd, 80, 24);
+    a.wait_for("$ ");
+    a.send(line);
+    wait_last_row_starts(&mut a, "[main]");
     srv.cmd(&["suspend-client"]).expect("suspend-client");
+    // The shell's report of a job stopped by SIGTSTP: 128 plus its number.
+    let stopped = format!("stopped={}", 128 + nix::libc::SIGTSTP);
+    a.wait_for(&stopped);
+    assert_eq!(clients(&srv).len(), 1, "a suspended client stays attached");
+    a.send("fg\n");
+    a.wait_until("the client drawn again", WAIT, |t| {
+        last_row(t).starts_with("[main]") && !t.contains(&stopped)
+    });
+    srv.cmd(&["send-keys", "-t", "main", "back"])
+        .expect("send-keys");
+    a.wait_for("back");
+    srv.cmd(&["detach-client"]).expect("detach-client");
+    a.wait_for("[detached (from session main)]");
 }
 
 /// Case 9: `wait-for -S chan` releases a `wait-for chan` blocked on it.
@@ -411,4 +458,52 @@ fn display_message_c_goes_to_that_client() {
         "#{client_name}",
     ]);
     assert_eq!(out.as_deref(), Ok(format!("{}\n", names[1]).as_str()));
+}
+
+/// tmux's stock pan keys: `refresh-client -L` moves the visible part of a
+/// window larger than the client, and `-c` goes back to following the
+/// cursor.
+#[test]
+fn refresh_client_pans_a_window_larger_than_the_client() {
+    let srv = start();
+    srv.cmd(&[
+        "new-window",
+        "-t",
+        "main",
+        "printf '\\033[1;100HFARRIGHT'; exec cat",
+    ])
+    .expect("new-window");
+    srv.cmd(&["resize-window", "-t", "main", "-x", "120", "-y", "40"])
+        .expect("resize-window");
+    let mut a = attach(&srv, "main");
+    a.wait_for("FARRIGHT");
+    srv.cmd(&["refresh-client", "-L", "50"]).expect("pan left");
+    a.wait_until("the text panned off", WAIT, |t| !t.contains("FARRIGHT"));
+    srv.cmd(&["refresh-client", "-c"]).expect("reset");
+    a.wait_for("FARRIGHT");
+    let err = srv.cmd(&["refresh-client", "-R", "nope"]).unwrap_err();
+    assert_eq!(err.trim_end(), "adjustment invalid");
+    let keys = srv.cmd(&["list-keys", "-T", "prefix"]).expect("list-keys");
+    for want in [
+        "refresh-client -U 10",
+        "refresh-client -c",
+        "suspend-client",
+        "choose-tree -Zs",
+    ] {
+        assert!(keys.contains(want), "{want}: {keys}");
+    }
+}
+
+/// `new-session -A -d` on an existing session attaches anyway when there
+/// is a terminal, as tmux 3.7b does.
+#[test]
+fn new_session_a_d_attaches_from_a_terminal() {
+    let srv = start();
+    let mut cmd = srv.command();
+    cmd.args(["new-session", "-A", "-d", "-s", "main"])
+        .env("TERM", "xterm-256color")
+        .env_remove("COLORTERM");
+    let mut a = Harness::spawn(cmd, 80, 24);
+    wait_last_row_starts(&mut a, "[main]");
+    assert_eq!(lines(&srv, &["list-sessions"]).len(), 1);
 }

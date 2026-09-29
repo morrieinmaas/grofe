@@ -9,16 +9,28 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::{State, clients, dispatch, tree};
 
-use super::not_implemented;
-
 /// `refresh-client`: the client (`-t`, else the current one) redraws, only
-/// its status line with `-S`.
+/// its status line with `-S`; `-c/-L/-R/-U/-D [n]` (tmux's stock pan keys)
+/// move the visible part of a window larger than the client instead.
 pub fn refresh_client(
     state: &mut State,
     ctx: &ClientCtx,
     c: RefreshClient,
 ) -> Result<String, String> {
     let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    if let Some(pan) = c.pan {
+        let by = match c.adjustment.as_deref() {
+            None => 1,
+            Some(s) => match s.parse::<i64>() {
+                Ok(n) if n < 1 => return Err("adjustment too small".to_string()),
+                Ok(n) if n > i64::from(i32::MAX) => return Err("adjustment too large".to_string()),
+                Ok(n) => u16::try_from(n).unwrap_or(u16::MAX),
+                Err(_) => return Err("adjustment invalid".to_string()),
+            },
+        };
+        clients::pan(state, id, pan, by);
+        return Ok(String::new());
+    }
     clients::refresh(state, id, c.status);
     Ok(String::new())
 }
@@ -50,17 +62,16 @@ pub fn choose_client(
     tree::open_clients(state, ctx, c.zoom)
 }
 
-/// `suspend-client`.
-// ponytail: stays unimplemented. Suspending needs the attach client to
-// restore its terminal and stop itself (tmux's MSG_SUSPEND), which is a new
-// attach frame in `protocol.rs` and its handling in `client.rs`, outside
-// TC.9's files (see the TC.9 report).
+/// `suspend-client`: the client (`-t`, else the current one) stops itself
+/// with SIGTSTP, as tmux 3.7b's; `fg` in its shell brings it back.
 pub fn suspend_client(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: SuspendClient,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SuspendClient,
 ) -> Result<String, String> {
-    not_implemented("suspend-client")
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    clients::suspend(state, id);
+    Ok(String::new())
 }
 
 /// `find-window`: the tree chooser, showing only the windows whose name,
@@ -121,15 +132,6 @@ mod tests {
     fn run(state: &mut crate::server::State, words: &[&str]) -> Result<String, String> {
         let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
         dispatch::run(state, &test_ctx(), &argv)
-    }
-
-    #[test]
-    fn suspend_client_is_not_implemented_yet() {
-        let mut state = test_state();
-        assert_eq!(
-            run(&mut state, &["suspend-client"]),
-            Err("not implemented: suspend-client".to_string())
-        );
     }
 
     #[test]

@@ -609,6 +609,23 @@ pub struct RefreshClient {
     pub client: Option<String>,
     /// `-S`: redraw only the status line.
     pub status: bool,
+    /// `-c`, `-L`, `-R`, `-U` or `-D` (tmux's stock pan keys): which way
+    /// the visible part of a window larger than the client moves; the first
+    /// given in that order wins, as in tmux.
+    pub pan: Option<Pan>,
+    /// The pan's cells, raw (tmux checks it is 1 or more when it runs).
+    pub adjustment: Option<String>,
+}
+
+/// `refresh-client`'s pan flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pan {
+    /// `-c`: back to following the cursor.
+    Reset,
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// `show-messages` (TC.9; tmux's `info` is `show-messages -JT`).
