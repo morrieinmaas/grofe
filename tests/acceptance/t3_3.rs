@@ -288,12 +288,20 @@ fn titles_follow_set_titles() {
 
     // On: the shown pane's `set-titles-string` (kept to just the pane
     // title here, to isolate it from `automatic-rename`) is relayed as
-    // OSC 0; the other window's stays in grofe until shown.
+    // OSC 0; the other window's stays in grofe until shown. `mark` is
+    // taken before the `set` commands, not after: either one is a
+    // non-read-only command, so it redraws every client on its own
+    // (`clients::changed`), and that redraw can carry the title before a
+    // client ever sends anything. A `mark` taken after the commands races
+    // that redraw and, once in a while, catches the title already gone,
+    // timing out below. The sleep turns that race into a certainty rather
+    // than leaving it to timing luck.
+    let mark = a.output().len();
     srv.cmd(&["set", "-g", "set-titles", "on"])
         .expect("set-titles on");
     srv.cmd(&["set", "-g", "set-titles-string", "#{pane_title}"])
         .expect("set-titles-string");
-    let mark = a.output().len();
+    std::thread::sleep(Duration::from_millis(25));
     a.send("\r");
     a.wait_for_output(b"\x1b]0;yo\x07", mark);
     assert_eq!(count(a.output(), b"\x1b]0;hi"), 0);
