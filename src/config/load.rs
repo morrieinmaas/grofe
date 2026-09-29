@@ -11,8 +11,8 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
 use super::{
-    ConfigError, ConfigHook, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES, Provenance,
-    Resolved, Source, Ty, closest, tmux_name, toml_type,
+    ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES,
+    Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
@@ -90,6 +90,7 @@ struct Loader {
     provenance: Provenance,
     keys: Vec<KeyBinding>,
     hooks: BTreeMap<String, ConfigHook>,
+    sources: BTreeMap<String, ConfigSource>,
     errors: Vec<ConfigError>,
     warnings: Vec<String>,
     /// The include chain being loaded, for cycle detection.
@@ -158,6 +159,7 @@ impl Loader {
             provenance,
             keys: Vec::new(),
             hooks: BTreeMap::new(),
+            sources: BTreeMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             stack: Vec::new(),
@@ -173,6 +175,7 @@ impl Loader {
             lists: self.lists,
             keys: self.keys,
             hooks: self.hooks,
+            sources: self.sources,
             provenance: self.provenance,
             warnings: self.warnings,
         })
@@ -369,6 +372,9 @@ impl Loader {
     ) {
         let full = join(prefix, k.get_ref());
         let line = f.line(k.span().start);
+        if full == "status.sources" {
+            return self.sources(f, line, v.get_ref());
+        }
         if let Some(toml) = OPTION_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
             return self.set_option(f, line, toml, v.get_ref());
         }
@@ -387,7 +393,7 @@ impl Loader {
                     .iter()
                     .chain(LIST_NAMES)
                     .map(|(t, _)| *t)
-                    .chain(["requires", "source-file", "keys", "hooks"]);
+                    .chain(["requires", "source-file", "keys", "hooks", "status.sources"]);
                 if let Some(s) = closest(&full, known) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
@@ -494,6 +500,47 @@ impl Loader {
                 source: f.source(line),
             };
             self.hooks.insert(name, hook);
+        }
+    }
+
+    /// `[status.sources.<name>]` (TC.4): `cmd` (required), `interval` and
+    /// `timeout` in whole seconds, at least 1. The value lands in
+    /// `@<name>`, so a name is letters, digits, `-` and `_`. A later layer
+    /// replaces an earlier one's source of the same name, and an empty
+    /// `cmd` removes it.
+    fn sources(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table of sources, found {}", v.type_str());
+            return self.error(f.path, line, "status.sources", msg);
+        };
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let path = format!("status.sources.{name}");
+            let line = f.line(k.span().start);
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid {
+                let msg = "a source name is letters, digits, - and _".to_string();
+                self.error(f.path, line, &path, msg);
+                continue;
+            }
+            match source(v.get_ref()) {
+                Err(msg) => self.error(f.path, line, &path, msg),
+                Ok((cmd, _, _)) if cmd.trim().is_empty() => {
+                    self.sources.remove(&name);
+                }
+                Ok((cmd, interval, timeout)) => {
+                    let s = ConfigSource {
+                        cmd,
+                        interval,
+                        timeout,
+                        source: f.source(line),
+                    };
+                    self.sources.insert(name, s);
+                }
+            }
         }
     }
 
@@ -685,6 +732,49 @@ fn binding(v: &DeValue) -> Result<Parsed, String> {
     }
     b.cmds = commands(&b.command)?;
     Ok(b)
+}
+
+/// A source's `{ cmd, interval, timeout }` table.
+fn source(v: &DeValue) -> Result<(String, Option<u64>, Option<u64>), String> {
+    let DeValue::Table(t) = v else {
+        return Err(format!("expected a table, found {}", v.type_str()));
+    };
+    let (mut cmd, mut interval, mut timeout) = (None, None, None);
+    for (k, v) in entries(t) {
+        let field = k.get_ref().as_ref();
+        let seconds = || match v.get_ref() {
+            DeValue::Integer(i) => i64::from_str_radix(i.as_str(), i.radix())
+                .ok()
+                .and_then(|n| u64::try_from(n).ok())
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| format!("{field}: expected at least 1 second, found {i}")),
+            other => Err(format!(
+                "{field}: expected an integer (seconds), found {}",
+                other.type_str()
+            )),
+        };
+        match field {
+            "cmd" => match v.get_ref() {
+                DeValue::String(s) => cmd = Some(s.to_string()),
+                other => {
+                    return Err(format!(
+                        "cmd: expected a string, found {}",
+                        other.type_str()
+                    ));
+                }
+            },
+            "interval" => interval = Some(seconds()?),
+            "timeout" => timeout = Some(seconds()?),
+            other => {
+                let mut msg = format!("unknown field {other}");
+                if let Some(s) = closest(other, ["cmd", "interval", "timeout"]) {
+                    msg.push_str(&format!(", did you mean {s}?"));
+                }
+                return Err(msg);
+            }
+        }
+    }
+    Ok((cmd.ok_or("missing cmd")?, interval, timeout))
 }
 
 /// A binding's command string as a checked sequence; empty unbinds (R11).

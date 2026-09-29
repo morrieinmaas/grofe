@@ -205,6 +205,20 @@ pub struct ConfigHook {
     pub source: Source,
 }
 
+/// One `[status.sources.<name>]` entry (TC.4): a status source whose first
+/// output line lands in `@<name>`, from the last layer that declared it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSource {
+    /// The shell command.
+    pub cmd: String,
+    /// Seconds between runs; `None` follows `status-interval`.
+    pub interval: Option<u64>,
+    /// Seconds a run may take before its process group is killed; `None`
+    /// is `server::sources::DEFAULT_TIMEOUT`.
+    pub timeout: Option<u64>,
+    pub source: Source,
+}
+
 /// A fully loaded and validated config.
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -215,6 +229,8 @@ pub struct Resolved {
     pub keys: Vec<KeyBinding>,
     /// `[hooks]` by event name (TC.5).
     pub hooks: BTreeMap<String, ConfigHook>,
+    /// `[status.sources]` by name (TC.4).
+    pub sources: BTreeMap<String, ConfigSource>,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// Who set each option and list.
