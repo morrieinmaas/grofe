@@ -310,7 +310,7 @@ fn destination(
         let session = model.resolve_session(&Target::Current, ctx)?;
         if after {
             let current = model.sessions[&session].active;
-            return Ok((session, Some(model.windows[&current].index + 1)));
+            return Ok((session, Some(next_index(model.windows[&current].index)?)));
         }
         return Ok((session, None));
     };
@@ -328,7 +328,11 @@ fn destination(
             (session, Some(index))
         }
     };
-    Ok((session, if after { index.map(|i| i + 1) } else { index }))
+    let index = match index {
+        Some(i) if after => Some(next_index(i)?),
+        other => other,
+    };
+    Ok((session, index))
 }
 
 /// `move-window`: window `-s` (the current one) moves to `-t`'s index, or
@@ -353,7 +357,7 @@ pub fn move_window(state: &mut State, ctx: &ClientCtx, c: MoveWindow) -> Result<
     let index = match index {
         None => model.free_window_index(session),
         Some(i) if c.after => {
-            shuffle_up(model, session, i);
+            shuffle_up(model, session, i)?;
             i
         }
         Some(i) => match model.window_at_index(session, i) {
@@ -399,44 +403,34 @@ fn relink(model: &mut Model, window: WindowId, session: SessionId, index: u32) {
 
 /// tmux's `winlink_shuffle_up`: frees `index` in `session` by moving the
 /// windows from it up to the first free index up by one.
-pub(crate) fn shuffle_up(model: &mut Model, session: SessionId, index: u32) {
-    let Some(gap) = (index..).find(|i| model.window_at_index(session, *i).is_none()) else {
-        return;
+pub(crate) fn shuffle_up(model: &mut Model, session: SessionId, index: u32) -> Result<(), String> {
+    let Some(gap) = (index..=u32::MAX).find(|i| model.window_at_index(session, *i).is_none())
+    else {
+        return Err(format!("no free index after {index}"));
     };
     for i in (index..gap).rev() {
         if let Some(id) = model.window_at_index(session, i)
             && let Some(w) = model.windows.get_mut(&id)
         {
+            // `i` is below `gap`, so this cannot overflow.
             w.index = i + 1;
         }
     }
+    Ok(())
 }
 
-/// Takes `window` out of its session's window list without closing it, as
-/// tmux's `session_detach` unlinks a winlink: the session's current
-/// window, if it was this one, becomes its last window, else the one
-/// before it, else the one after. A session left with no windows goes.
+/// The index after `index`, or an error past the largest.
+pub(crate) fn next_index(index: u32) -> Result<u32, String> {
+    index
+        .checked_add(1)
+        .ok_or_else(|| format!("no index after {index}"))
+}
+
+/// Takes `window` out of its session's window list without closing it
+/// ([`Model::unlink_window`]).
 fn unlink(model: &mut Model, window: WindowId) {
-    let Some(session) = model.windows.get(&window).map(|w| w.session) else {
-        return;
-    };
-    let Some(s) = model.sessions.get_mut(&session) else {
-        return;
-    };
-    let pos = s.windows.iter().position(|id| *id == window);
-    s.windows.retain(|id| *id != window);
-    s.last_windows.retain(|id| *id != window);
-    if s.windows.is_empty() {
-        model.sessions.remove(&session);
-        model.client_last_session.retain(|_, last| *last != session);
-        return;
-    }
-    if s.active == window {
-        let pos = pos.unwrap_or(0);
-        s.active = match s.last_windows.pop() {
-            Some(last) => last,
-            None => s.windows[pos.saturating_sub(1).min(s.windows.len() - 1)],
-        };
+    if let Some(session) = model.windows.get(&window).map(|w| w.session) {
+        model.unlink_window(session, window);
     }
 }
 

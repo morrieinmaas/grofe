@@ -9,7 +9,7 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::pane::print_pane;
-use crate::server::dispatch::structure::shuffle_up;
+use crate::server::dispatch::structure::{next_index, shuffle_up};
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, MainSize, Preset};
 use crate::server::model::{Model, Window};
@@ -36,7 +36,10 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         // -a: after the target window, moving later windows up; a free
         // index is taken as it is, as tmux 3.7b does.
         target if c.after => match model.resolve_window(target, ctx) {
-            Ok(w) => (model.windows[&w].session, model.windows[&w].index + 1),
+            Ok(w) => (
+                model.windows[&w].session,
+                next_index(model.windows[&w].index)?,
+            ),
             Err(e) => match target {
                 Target::Window(s, WindowRef::Index(i)) => {
                     (model.resolve_session(&Target::Session(s.clone()), ctx)?, *i)
@@ -56,6 +59,11 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
             (session, model.free_window_index(session))
         }
     };
+    // As tmux: the windows in the way move up before the pane starts.
+    if c.after {
+        shuffle_up(&mut state.model, session, index)?;
+    }
+    let model = &state.model;
     let s = &model.sessions[&session];
     let env = s.env.clone();
     let target = model.windows.get(&s.active).map(|w| w.active);
@@ -75,9 +83,6 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     )?;
     let model = &mut state.model;
     let named = c.name.is_some();
-    if c.after {
-        shuffle_up(model, session, index);
-    }
     model.insert_window(Window {
         id: window,
         session,

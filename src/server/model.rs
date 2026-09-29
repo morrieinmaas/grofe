@@ -371,27 +371,34 @@ impl Model {
         };
         let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
         let removed = self.take_panes(&ids);
-        let Some(session) = self.sessions.get_mut(&w.session) else {
-            return removed;
+        self.unlink_window(w.session, window);
+        removed
+    }
+
+    /// Takes `window` out of `session`'s window list and last-window
+    /// stack, as tmux's `session_detach` unlinks a winlink: if it was the
+    /// current window, the last window takes over, else the one before
+    /// it, else the one after. A session left with no windows goes. The
+    /// window itself (if still in the model) and its panes are untouched.
+    pub fn unlink_window(&mut self, session: SessionId, window: WindowId) {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return;
         };
-        let pos = session.windows.iter().position(|id| *id == window);
-        session.windows.retain(|id| *id != window);
-        if session.windows.is_empty() {
-            self.sessions.remove(&w.session);
-            self.client_last_session
-                .retain(|_, last| *last != w.session);
-            return removed;
+        let pos = s.windows.iter().position(|id| *id == window);
+        s.windows.retain(|id| *id != window);
+        s.last_windows.retain(|id| *id != window);
+        if s.windows.is_empty() {
+            self.sessions.remove(&session);
+            self.client_last_session.retain(|_, last| *last != session);
+            return;
         }
-        session.last_windows.retain(|w| *w != window);
-        if session.active == window {
-            // As tmux: the last window takes over, else the one at the
-            // same position.
-            session.active = match session.last_windows.pop() {
-                Some(l) => l,
-                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+        if s.active == window {
+            let pos = pos.unwrap_or(0);
+            s.active = match s.last_windows.pop() {
+                Some(last) => last,
+                None => s.windows[pos.saturating_sub(1).min(s.windows.len() - 1)],
             };
         }
-        removed
     }
 
     /// Removes a session with all its windows and panes. Returns the

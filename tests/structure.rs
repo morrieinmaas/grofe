@@ -1351,3 +1351,155 @@ fn a_resized_window_keeps_its_size_when_a_client_resizes() {
         "window-size manual\n"
     );
 }
+
+// ---- Fix round 1: room freed by a leaving pane is handed out cell by
+// cell across a nested split on the same axis, as tmux's
+// `layout_resize_adjust` does (tmux 3.7b goldens, windows 200x49). ----
+
+/// Session `s`, `cols`x`rows`, built by `splits` (each `split-window`'s
+/// flags), every pane `sleep`ing.
+fn built(cols: &str, rows: &str, splits: &[&[&str]]) -> TestServer {
+    let srv = server();
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            cols,
+            "-y",
+            rows,
+            SLEEP,
+        ],
+    );
+    for flags in splits {
+        let mut args = vec!["split-window"];
+        args.extend_from_slice(flags);
+        args.push(SLEEP);
+        ok(&srv, &args);
+    }
+    srv
+}
+
+#[test]
+fn freed_room_is_shared_across_a_nested_split() {
+    let a_beside_bc: &[&[&str]] = &[&["-h", "-t", "%0"], &["-v", "-t", "%1"]];
+    let deeper: &[&[&str]] = &[
+        &["-h", "-t", "%0"],
+        &["-v", "-t", "%1"],
+        &["-h", "-t", "%2"],
+    ];
+
+    let srv = built("200", "49", a_beside_bc);
+    ok(&srv, &["join-pane", "-h", "-s", "%0", "-t", "%2"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%1 0,0 200x24", "%2 0,25 100x24", "%0 101,25 99x24 *"]
+    );
+
+    let srv = built("200", "49", a_beside_bc);
+    ok(&srv, &["join-pane", "-b", "-h", "-s", "%0", "-t", "%2"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%1 0,0 200x24", "%2 101,25 99x24", "%0 0,25 100x24 *"]
+    );
+
+    let srv = built("200", "49", deeper);
+    ok(&srv, &["break-pane", "-d", "-s", "%0"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%1 0,0 200x24", "%2 0,25 100x24", "%3 101,25 99x24 *"]
+    );
+
+    let srv = built("200", "49", deeper);
+    ok(&srv, &["kill-pane", "-t", "%0"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%1 0,0 200x24", "%2 0,25 100x24", "%3 101,25 99x24 *"]
+    );
+
+    let srv = built(
+        "200",
+        "50",
+        &[
+            &["-h", "-t", "%0"],
+            &["-v", "-t", "%1"],
+            &["-h", "-t", "%2"],
+            &["-h", "-t", "%3"],
+        ],
+    );
+    ok(&srv, &["kill-pane", "-t", "%0"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        [
+            "%1 0,0 200x25",
+            "%2 0,26 83x24",
+            "%3 84,26 58x24",
+            "%4 143,26 57x24 *"
+        ]
+    );
+
+    let srv = built(
+        "80",
+        "50",
+        &[
+            &["-v", "-t", "%0"],
+            &["-h", "-t", "%0"],
+            &["-v", "-t", "%0"],
+        ],
+    );
+    assert_eq!(
+        panes(&srv, "s:0"),
+        [
+            "%0 0,0 40x12",
+            "%3 0,13 40x12 *",
+            "%2 41,0 39x25",
+            "%1 0,26 80x24"
+        ]
+    );
+    ok(&srv, &["kill-pane", "-t", "%1"]);
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%0 0,0 40x25", "%3 0,26 40x24 *", "%2 41,0 39x50"]
+    );
+}
+
+/// With no last window, closing the current window selects the one before
+/// it (tmux 3.7b's `session_detach`), for `kill-window` and `move-window`
+/// alike.
+#[test]
+fn closing_the_current_window_falls_back_to_the_one_before() {
+    let setup = || {
+        let srv = server();
+        ok(
+            &srv,
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "s",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                SLEEP,
+            ],
+        );
+        for i in 1..=3 {
+            ok(&srv, &["new-window", "-d", "-t", &format!("s:{i}"), SLEEP]);
+        }
+        ok(&srv, &["select-window", "-t", "s:2"]);
+        ok(&srv, &["kill-window", "-t", "s:0"]);
+        srv
+    };
+    let srv = setup();
+    ok(&srv, &["kill-window", "-t", "s:2"]);
+    assert_eq!(windows(&srv, "s"), ["1 @1 *", "3 @3"]);
+
+    let srv = setup();
+    ok(&srv, &["new-session", "-d", "-s", "o", SLEEP]);
+    ok(&srv, &["move-window", "-s", "s:2", "-t", "o:5"]);
+    assert_eq!(windows(&srv, "s"), ["1 @1 *", "3 @3"]);
+}

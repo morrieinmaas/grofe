@@ -232,14 +232,6 @@ enum Axis {
     Col,
 }
 
-/// Which side of a node the space freed by a removed sibling entered from,
-/// along the growth axis `grow` is called with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Front,
-    Back,
-}
-
 impl LayoutTree {
     /// A window with a single pane filling the whole area.
     pub fn new(pane: PaneId) -> Self {
@@ -448,10 +440,10 @@ impl LayoutTree {
         let removed = children.remove(idx);
         // The removed child's own weight, plus the one border cell that's
         // now gone too, is the extent whoever inherits its space gains
-        // along `dir`. It goes to the side the removed child sat on: the
-        // previous child if there was one, otherwise the new first child.
+        // along `dir`. It goes to the previous child if there was one,
+        // otherwise the new first child, which hands it on round-robin as
+        // tmux's `layout_resize_adjust` does.
         let gain = removed.weight + 1;
-        let side = if idx == 0 { Side::Front } else { Side::Back };
         if children.len() == 1 {
             // The survivor takes over the whole slot this split occupied,
             // growing by `gain` along `dir`. Unlike the non-collapse case,
@@ -459,19 +451,16 @@ impl LayoutTree {
             // (it's this split's axis, the one being discarded), so the
             // growth has to be pushed down through it explicitly.
             let mut remaining = children.pop().unwrap();
-            grow(&mut remaining.node, dir, gain, side);
+            grow(&mut remaining.node, dir, gain);
             let slot = node_at_mut(&mut self.root, parent_path);
             *slot = remaining.node;
         } else {
             // Like tmux's layout_destroy_cell: give the removed child's
             // cells to its neighbour directly (its own weight, in this
-            // group's list). If the neighbour is itself a nested split,
-            // push the same growth down into it too (grow's doc comment),
-            // since a same-axis descendant further down would otherwise
-            // keep weights summing to the neighbour's OLD extent.
+            // group's list), and push the growth down into it ([`adjust`]).
             let neighbour = idx.saturating_sub(1);
             children[neighbour].weight += gain;
-            grow(&mut children[neighbour].node, dir, gain, side);
+            grow(&mut children[neighbour].node, dir, gain);
         }
     }
 
@@ -498,21 +487,12 @@ impl LayoutTree {
                 continue;
             };
             let dir = *dir;
-            // Whichever of near/far comes first in the children list faces
-            // the moved border from its own back edge, the other from its
-            // own front; `grow`/`shrink` need that to know which child of a
-            // nested same-axis group to touch first.
-            let (near_side, far_side) = if far_idx > idx {
-                (Side::Back, Side::Front)
-            } else {
-                (Side::Front, Side::Back)
-            };
             // The tree is exact on `area` now, so each weight is that
             // child's real size and `max_shrink` reads real sizes too.
-            let (grower, grow_side, shrinker, shrink_side) = if delta > 0 {
-                (idx, near_side, far_idx, far_side)
+            let (grower, shrinker) = if delta > 0 {
+                (idx, far_idx)
             } else {
-                (far_idx, far_side, idx, near_side)
+                (far_idx, idx)
             };
             let cap = max_shrink(&children[shrinker].node, children[shrinker].weight, dir);
             let amt = delta.unsigned_abs().min(cap);
@@ -522,8 +502,8 @@ impl LayoutTree {
             debug_assert!(amt < children[shrinker].weight);
             children[shrinker].weight = children[shrinker].weight.saturating_sub(amt);
             children[grower].weight += amt;
-            grow(&mut children[grower].node, dir, amt, grow_side);
-            shrink(&mut children[shrinker].node, dir, amt, shrink_side);
+            grow(&mut children[grower].node, dir, amt);
+            shrink(&mut children[shrinker].node, dir, amt);
             return;
         }
     }
@@ -764,6 +744,12 @@ impl LayoutTree {
         if (geometry.x, geometry.y) != (0, 0) {
             return Err(LayoutError::Invalid);
         }
+        // Geometry can come from a user's layout string (FE.2): bound its
+        // depth and size before walking it.
+        let mut budget = self.order.len();
+        if !bounded(geometry, 0, &mut budget) {
+            return Err(LayoutError::Invalid);
+        }
         let root = import_node(geometry).ok_or(LayoutError::Invalid)?;
         let mut got = Vec::new();
         leaves(&root, &mut got);
@@ -848,17 +834,10 @@ fn resize_cells(children: &mut [Child], dir: Dir, cell: usize, change: i64) {
         let take = u32::try_from(needed)
             .unwrap_or(u32::MAX)
             .min(cap(&children[shrinker]));
-        // The room crosses the borders between the two, so it enters the
-        // grower on the side facing the shrinker.
-        let (grow_side, shrink_side) = if shrinker > grower {
-            (Side::Back, Side::Front)
-        } else {
-            (Side::Front, Side::Back)
-        };
         children[grower].weight += take;
-        grow(&mut children[grower].node, dir, take, grow_side);
+        grow(&mut children[grower].node, dir, take);
         children[shrinker].weight -= take;
-        shrink(&mut children[shrinker].node, dir, take, shrink_side);
+        shrink(&mut children[shrinker].node, dir, take);
         needed -= u64::from(take);
     }
 }
@@ -923,6 +902,32 @@ fn export_node(node: &Node, rect: Rect) -> LayoutGeometry {
         cols: rect.cols,
         rows: rect.rows,
         cell,
+    }
+}
+
+/// How deep [`LayoutTree::import`] lets cells nest. A tree of `n` panes
+/// is at most `n - 1` splits deep, and no window holds this many panes.
+const IMPORT_MAX_DEPTH: usize = 256;
+
+/// Whether `g` nests no deeper than [`IMPORT_MAX_DEPTH`] and holds no more
+/// than `budget` panes, found without going past either bound: every
+/// split's children each hold a pane at least, so a split with more
+/// children than the budget left fails before they are walked.
+fn bounded(g: &LayoutGeometry, depth: usize, budget: &mut usize) -> bool {
+    if depth > IMPORT_MAX_DEPTH {
+        return false;
+    }
+    match &g.cell {
+        GeometryCell::Pane(_) => match budget.checked_sub(1) {
+            Some(left) => {
+                *budget = left;
+                true
+            }
+            None => false,
+        },
+        GeometryCell::Split { children, .. } => {
+            children.len() <= *budget && children.iter().all(|c| bounded(c, depth + 1, budget))
+        }
     }
 }
 
@@ -1329,46 +1334,57 @@ fn node_at_mut<'a>(node: &'a mut Node, path: &[usize]) -> &'a mut Node {
     }
 }
 
-/// Grows `node`'s own extent along `dir` by `delta` cells, freed by a
-/// removed sibling elsewhere in the tree and entering from `side`. Matches
-/// tmux's `layout_resize_adjust`, except that tmux spreads a resize's
-/// growth evenly across a same-axis group's children; here the delta goes
-/// entirely to the one child adjacent to `side`, the simpler rule `remove`
-/// already needed (a removed sibling's cells have nowhere else to go).
-///
-/// A leaf has no weight of its own to grow: its size lives entirely in its
-/// parent's `Child::weight`, which the caller already adjusted. A split
-/// along `dir` (the growth axis) only has one child actually touching the
-/// freed space: the last child if it came from the back, the first if it
-/// came from the front. That child's own weight grows by `delta`, and
-/// `grow` recurses into just that child, since none of the split's other
-/// children changed extent. A split along the other axis doesn't subdivide
-/// `dir` at all, so growing it doesn't change any of its children's own
-/// weights (those are shares of the *other* axis); it changes what every
-/// one of them inherits along `dir`, so all of them recurse with the same
-/// delta and side.
-fn grow(node: &mut Node, dir: Dir, delta: u32, side: Side) {
-    if delta == 0 {
+/// Grows `node`'s own extent along `dir` by `delta` cells ([`adjust`]).
+fn grow(node: &mut Node, dir: Dir, delta: u32) {
+    adjust(node, dir, i64::from(delta));
+}
+
+/// Shrinks `node`'s own extent along `dir` by `delta` cells ([`adjust`]).
+/// The caller first clamps `delta` to `max_shrink(node, own_extent, dir)`.
+fn shrink(node: &mut Node, dir: Dir, delta: u32) {
+    adjust(node, dir, -i64::from(delta));
+}
+
+/// tmux's `layout_resize_adjust`: `node`'s own extent along `dir` changed
+/// by `change` cells (its weight, which lives in its parent's `Child`,
+/// the caller already changed); this passes the change down. A leaf needs
+/// nothing more. A split along the other axis does not divide `dir`, so
+/// every child takes the whole change. A split along `dir` hands it out
+/// one cell at a time, round-robin from its first child, a shrink skipping
+/// children that cannot give a cell, until it is used up (or, for a shrink
+/// the caller did not clamp, no child can give).
+fn adjust(node: &mut Node, dir: Dir, mut change: i64) {
+    let Node::Split {
+        dir: node_dir,
+        children,
+    } = node
+    else {
+        return;
+    };
+    if *node_dir != dir {
+        for child in children.iter_mut() {
+            adjust(&mut child.node, dir, change);
+        }
         return;
     }
-    match node {
-        Node::Leaf(_) => {}
-        Node::Split {
-            dir: node_dir,
-            children,
-        } => {
-            if *node_dir == dir {
-                let idx = match side {
-                    Side::Front => 0,
-                    Side::Back => children.len() - 1,
-                };
-                children[idx].weight += delta;
-                grow(&mut children[idx].node, dir, delta, side);
-            } else {
-                for child in children.iter_mut() {
-                    grow(&mut child.node, dir, delta, side);
-                }
+    while change != 0 {
+        let before = change;
+        for child in children.iter_mut() {
+            if change == 0 {
+                break;
             }
+            if change > 0 {
+                child.weight += 1;
+                adjust(&mut child.node, dir, 1);
+                change -= 1;
+            } else if max_shrink(&child.node, child.weight, dir) > 0 {
+                child.weight -= 1;
+                adjust(&mut child.node, dir, -1);
+                change += 1;
+            }
+        }
+        if change == before {
+            return;
         }
     }
 }
@@ -1407,59 +1423,6 @@ fn max_shrink(node: &Node, own_extent: u32, dir: Dir) -> u32 {
                     .map(|c| max_shrink(&c.node, own_extent, dir))
                     .min()
                     .unwrap_or(0)
-            }
-        }
-    }
-}
-
-/// Shrinks `node`'s own extent along `dir` by `delta` cells, taken from the
-/// side facing the moved border (`side`) first, then its neighbours in
-/// order if that side alone can't spare it all. The caller must first
-/// clamp `delta` to `max_shrink(node, own_extent, dir)`, so every child
-/// touched here has room to give up its share without dropping below one
-/// cell; `shrink` itself doesn't re-check.
-///
-/// A leaf does nothing (mirrors `grow`'s leaf arm: its size lives in its
-/// parent's weight, already reduced by the caller). A split along `dir`
-/// takes as much as each child in turn (starting from `side`) can spare,
-/// via `max_shrink`, until `delta` is used up; unlike `grow`, more than one
-/// child can be touched, since one child's own ceiling might not cover the
-/// whole request. A split along the other axis doesn't subdivide `dir`, so
-/// every child inherits the same smaller extent: the full `delta` (not
-/// divided) recurses into each of them.
-fn shrink(node: &mut Node, dir: Dir, mut delta: u32, side: Side) {
-    if delta == 0 {
-        return;
-    }
-    match node {
-        Node::Leaf(_) => {}
-        Node::Split {
-            dir: node_dir,
-            children,
-        } => {
-            if *node_dir == dir {
-                let order: Box<dyn Iterator<Item = usize>> = match side {
-                    Side::Front => Box::new(0..children.len()),
-                    Side::Back => Box::new((0..children.len()).rev()),
-                };
-                for idx in order {
-                    if delta == 0 {
-                        break;
-                    }
-                    let cap = max_shrink(&children[idx].node, children[idx].weight, dir);
-                    let take = delta.min(cap);
-                    if take == 0 {
-                        continue;
-                    }
-                    debug_assert!(take < children[idx].weight);
-                    children[idx].weight = children[idx].weight.saturating_sub(take);
-                    shrink(&mut children[idx].node, dir, take, side);
-                    delta -= take;
-                }
-            } else {
-                for child in children.iter_mut() {
-                    shrink(&mut child.node, dir, delta, side);
-                }
             }
         }
     }
@@ -2013,9 +1976,11 @@ mod tests {
         tree.split(area, B, Dir::Vertical, D, SplitSize::Cells(2))
             .unwrap();
         tree.remove(A);
+        // tmux 3.7b (8x15, the same splits, `kill-pane` A): the 10 rows
+        // go round-robin to B and D, 7 and 7.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&B].rows, 12);
-        assert_eq!(rects[&D].rows, 2);
+        assert_eq!(rects[&B].rows, 7);
+        assert_eq!(rects[&D].rows, 7);
         assert_eq!(rects[&C].cols, 3);
     }
 
@@ -2055,15 +2020,18 @@ mod tests {
             .unwrap();
         tree.remove(A);
 
+        // tmux 3.7b (80x10, the same splits, `kill-pane` A, then
+        // `resize-pane -t C -L 5`): the 60 columns go round-robin to C and
+        // D.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 66);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 36);
+        assert_eq!(rects[&D].cols, 32);
 
         // A follow-up resize inside the neighbour must still be exact.
         tree.resize(area, D, Edge::Left, 5);
         let after: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(after[&C].cols, 61);
-        assert_eq!(after[&D].cols, 7);
+        assert_eq!(after[&C].cols, 31);
+        assert_eq!(after[&D].cols, 37);
     }
 
     /// root (Horizontal) [A(59), P (Vertical, weight 20) [
@@ -2103,9 +2071,11 @@ mod tests {
         // that shrink pushed down into them too.
         let (mut tree, area) = resize_hole_tree();
         tree.resize(area, A, Edge::Right, 5);
+        // tmux 3.7b (`resize-pane -t A -R 5`): the shrink is taken
+        // round-robin, C 13 and D 1.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 12);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 13);
+        assert_eq!(rects[&D].cols, 1);
     }
 
     #[test]
@@ -2120,9 +2090,10 @@ mod tests {
         let (mut tree, area) = resize_hole_tree();
         tree.remove(B);
         tree.resize(area, C, Edge::Left, 4);
+        // tmux 3.7b (`kill-pane` B, `resize-pane -t A -L 4`): C 19, D 4.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 21);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 19);
+        assert_eq!(rects[&D].cols, 4);
     }
 
     #[test]
@@ -3546,6 +3517,51 @@ mod tests {
         assert_eq!(tree.borders(area), borders);
         assert_eq!(tree.export(area), exported);
         assert!(all_exact(&tree.root, area));
+    }
+
+    /// Geometry from a user's string is bounded before it is walked: a
+    /// chain nested far too deep, or a split with more cells than the
+    /// tree has panes, is refused without recursing through it.
+    #[test]
+    fn import_bounds_depth_and_size_first() {
+        let (mut tree, area) = a_beside_bc();
+        let before = tree.compute(area);
+        let pane = |p| LayoutGeometry {
+            x: 0,
+            y: 0,
+            cols: 10,
+            rows: 10,
+            cell: GeometryCell::Pane(p),
+        };
+        let mut deep = pane(A);
+        for _ in 0..100_000 {
+            deep = LayoutGeometry {
+                cell: GeometryCell::Split {
+                    dir: Dir::Horizontal,
+                    children: vec![deep],
+                },
+                ..pane(A)
+            };
+        }
+        assert_eq!(tree.import(&deep), Err(LayoutError::Invalid));
+        let wide = LayoutGeometry {
+            cell: GeometryCell::Split {
+                dir: Dir::Horizontal,
+                children: vec![pane(A); 1_000_000],
+            },
+            ..pane(A)
+        };
+        assert_eq!(tree.import(&wide), Err(LayoutError::Invalid));
+        assert_eq!(tree.compute(area), before);
+        // Dropping the deep chain recurses too; unwind it by hand.
+        let mut node = Some(deep);
+        while let Some(LayoutGeometry {
+            cell: GeometryCell::Split { mut children, .. },
+            ..
+        }) = node
+        {
+            node = children.pop();
+        }
     }
 
     #[test]
