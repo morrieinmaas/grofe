@@ -89,5 +89,7 @@ M-s = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/save.sh"'
 M-r = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/restore.sh"'
 # ~/.config/canopy/user.conf:2
 B = "run-shell '$HOME/.local/bin/cockpit'"
+# ~/.config/canopy/user.conf:3
+g = "display-popup -E -w 95% -h 90% 'exec gh-dash'"
 # ~/.config/canopy/user.conf:5
 "?" = "run-shell '$HOME/.config/tmux/keys-popup.sh'"
