@@ -128,17 +128,11 @@ pub fn confirm_before(
     for argv in &cmds {
         crate::compat::parse_split(ctx, argv)?;
     }
-    let label = match c.prompt {
-        Some(p) => format!("{p} "),
-        None => {
-            let verb = cmds
-                .first()
-                .and_then(|argv| argv.first())
-                .map_or("", |v| cmd::parse::canonical_name(v));
-            format!("Confirm '{verb}'? (y/n) ")
-        }
-    };
-    prompt::confirm(state, ctx, label, command)
+    let verb = cmds
+        .first()
+        .and_then(|argv| argv.first())
+        .map_or("", |v| cmd::parse::canonical_name(v));
+    prompt::confirm(state, ctx, c.prompt.as_deref(), verb, command)
 }
 
 /// The request's argv with grofe aliases expanded, or `None` to run it as
@@ -149,38 +143,19 @@ pub fn confirm_before(
 /// with its command's words, and the command's own arguments follow. An
 /// alias is expanded once, never inside its own expansion. `argv` may hold
 /// several commands split at `;` arguments; each one's verb is looked up.
-// ponytail: a binding's already-split command is read the same way, so a
-// literal `;` argument in it would split it once an alias matches. An alias
-// whose value is a sequence (`a ; b`) is split only in a request's argv.
 pub fn expand_aliases(state: &State, argv: &[String]) -> Option<Vec<String>> {
-    let aliases = state.model.options.lookup_list("command-alias", &[])?;
-    let lookup = |verb: &str| {
-        aliases.values().find_map(|entry| {
-            let (name, value) = entry.split_once('=')?;
-            (name == verb).then_some(value)
-        })
-    };
     let cmds = cmd::parse::split_argv(argv);
-    if !cmds
+    let expanded: Vec<Option<Vec<Vec<String>>>> = cmds
         .iter()
-        .any(|words| words.first().is_some_and(|v| lookup(v).is_some()))
-    {
+        .map(|words| expand_alias_command(state, words))
+        .collect();
+    if expanded.iter().all(Option::is_none) {
         return None;
     }
     let mut out: Vec<String> = Vec::new();
-    for words in cmds {
-        if !out.is_empty() {
-            out.push(";".to_string());
-        }
-        let expanded = words.first().and_then(|v| lookup(v)).and_then(|value| {
-            let mut value = cmd::split_command_string(value).ok()?;
-            let last = value.last_mut()?;
-            last.extend(words[1..].iter().cloned());
-            Some(value)
-        });
-        let commands = expanded.unwrap_or_else(|| vec![words]);
-        for (i, command) in commands.into_iter().enumerate() {
-            if i > 0 {
+    for (words, expanded) in cmds.into_iter().zip(expanded) {
+        for command in expanded.unwrap_or_else(|| vec![words]) {
+            if !out.is_empty() {
                 out.push(";".to_string());
             }
             // A word ending in `;` is a literal one: escape it again so the
@@ -192,6 +167,24 @@ pub fn expand_aliases(state: &State, argv: &[String]) -> Option<Vec<String>> {
         }
     }
     Some(out)
+}
+
+/// One already-split command (a binding's, the prompt's, a menu item's)
+/// with an alias verb expanded: the alias's commands, the command's own
+/// arguments after the last of them, or `None` when the verb is no alias
+/// (or its value does not split). A `;` word in `argv` stays literal.
+/// [`super::run_split`] runs what this returns; `bind-key` stores it, as
+/// tmux expands an alias when the binding is made.
+pub fn expand_alias_command(state: &State, argv: &[String]) -> Option<Vec<Vec<String>>> {
+    let (verb, args) = argv.split_first()?;
+    let aliases = state.model.options.lookup_list("command-alias", &[])?;
+    let value = aliases.values().find_map(|entry| {
+        let (name, value) = entry.split_once('=')?;
+        (name == verb).then_some(value)
+    })?;
+    let mut cmds = cmd::split_command_string(value).ok()?;
+    cmds.last_mut()?.extend(args.iter().cloned());
+    Some(cmds)
 }
 
 #[cfg(test)]
@@ -267,6 +260,27 @@ mod tests {
         let mut state = with_aliases(&["sesh=has-session -t nosuch"]);
         let got = dispatch::run(&mut state, &test_ctx(), &argv(&["sesh"]));
         assert_eq!(got, Err("can't find session: nosuch".to_string()));
+    }
+
+    /// tmux 3.7b: an alias standing for a sequence runs every command of
+    /// it from a binding, a menu item or the prompt (all split already).
+    #[test]
+    fn a_split_command_can_be_a_sequence_alias() {
+        let state = with_aliases(&["two=rename-window S1 ; set -g @b S2"]);
+        assert_eq!(
+            expand_alias_command(&state, &argv(&["two", "x"])),
+            Some(vec![
+                argv(&["rename-window", "S1"]),
+                argv(&["set", "-g", "@b", "S2", "x"])
+            ])
+        );
+        // A `;` word of a split command stays literal.
+        let state = with_aliases(&["say=send-keys"]);
+        assert_eq!(
+            expand_alias_command(&state, &argv(&["say", ";"])),
+            Some(vec![argv(&["send-keys", ";"])])
+        );
+        assert_eq!(expand_alias_command(&state, &argv(&["ls"])), None);
     }
 
     #[test]

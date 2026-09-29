@@ -65,8 +65,13 @@ impl Prompts {
 
     /// Closes client `id`'s prompt, answering a CLI that waits on it.
     fn close(&mut self, id: ClientId) -> Option<Prompt> {
+        self.close_with(id, Ok(String::new()))
+    }
+
+    /// Closes client `id`'s prompt, answering a waiting CLI with `answer`.
+    fn close_with(&mut self, id: ClientId, answer: Result<String, Failure>) -> Option<Prompt> {
         if let Some(reply) = self.waiting.remove(&id) {
-            let _ = reply.send(Ok(String::new()));
+            let _ = reply.send(answer);
         }
         self.open.remove(&id)
     }
@@ -399,6 +404,10 @@ impl InputHook for PromptHook {
         input: &Input,
         _now: Instant,
     ) -> Option<Routed> {
+        // An open menu takes the keys first, as tmux's overlay does.
+        if state.menus.is_open(client) {
+            return None;
+        }
         let Prompts { open, history, .. } = &mut state.prompts;
         let prompt = open.get_mut(&client)?;
         if let Input::Focus(_) = input {
@@ -433,8 +442,16 @@ impl InputHook for PromptHook {
         };
         let routed = match edit {
             Edit::Keep => Routed::Consumed,
+            Edit::Cancel if prompt.read == Read::Confirm => {
+                state.prompts.close_with(client, Err(cancelled()));
+                Routed::Consumed
+            }
             Edit::Cancel => {
                 state.prompts.close(client);
+                Routed::Consumed
+            }
+            Edit::Enter if prompt.read == Read::Confirm && prompt.line() != "y" => {
+                state.prompts.close_with(client, Err(cancelled()));
                 Routed::Consumed
             }
             Edit::Enter => {
@@ -519,18 +536,7 @@ pub fn command_prompt(
     if state.prompts.is_open(id) {
         return Ok(String::new());
     }
-    let expand = |s: &str| {
-        let Some(client) = state.clients.get(&id) else {
-            return s.to_string();
-        };
-        let model = &state.model;
-        let pane = model
-            .sessions
-            .get(&client.session)
-            .and_then(|s| model.windows.get(&s.active))
-            .map(|w| FormatCtx::new(model, w.active));
-        cmd::expand(&long_aliases(s), &ClientVars::new(model, client, pane))
-    };
+    let expand = |s: &str| expand_for(state, id, s);
     let label = match (&c.prompt, &c.template) {
         (Some(p), _) => format!("{} ", expand(p)),
         (None, Some(t)) => format!("({}) ", verb(t)),
@@ -553,14 +559,17 @@ pub fn command_prompt(
     Ok(String::new())
 }
 
-/// `confirm-before`'s prompt on the current client: `label` then one
-/// keystroke; `command` runs only on `y`, as tmux 3.7b's default
-/// `confirm-key` (recorded: `n`, `Y` and Enter all cancel). From the CLI
-/// the reply waits until the prompt closes, as for `command-prompt`.
+/// `confirm-before`'s prompt on the current client: `-p` (a format,
+/// expanded as `command-prompt`'s, then a blank) or `Confirm '<verb>'?
+/// (y/n) `, then one keystroke; `command` runs only on `y`, as tmux
+/// 3.7b's default `confirm-key` (recorded: `n`, `Y` and Enter all cancel).
+/// From the CLI the reply waits until the prompt closes; a cancelled
+/// prompt exits 1 with no message, as tmux's does (recorded).
 pub fn confirm(
     state: &mut State,
     ctx: &ClientCtx,
-    label: String,
+    prompt: Option<&str>,
+    verb: &str,
     command: String,
 ) -> Result<String, String> {
     let Some(id) = clients::current_client(state, ctx) else {
@@ -569,6 +578,10 @@ pub fn confirm(
     if state.prompts.is_open(id) {
         return Ok(String::new());
     }
+    let label = match prompt {
+        Some(p) => format!("{} ", expand_for(state, id, p)),
+        None => format!("Confirm '{verb}'? (y/n) "),
+    };
     let prompt = Prompt {
         dialect: ctx.dialect,
         read: Read::Confirm,
@@ -576,6 +589,31 @@ pub fn confirm(
     };
     open(state, ctx, id, prompt, true);
     Ok(String::new())
+}
+
+/// What a waiting CLI gets when `confirm-before` is cancelled: exit 1,
+/// nothing printed.
+fn cancelled() -> Failure {
+    Failure {
+        err: String::new(),
+        out: String::new(),
+        status: Some(1),
+    }
+}
+
+/// `text` (`-p`, `-I`) expanded as a format for client `id`, against its
+/// current pane, tmux's one-letter aliases (`#W`) included.
+fn expand_for(state: &State, id: ClientId, text: &str) -> String {
+    let Some(client) = state.clients.get(&id) else {
+        return text.to_string();
+    };
+    let model = &state.model;
+    let pane = model
+        .sessions
+        .get(&client.session)
+        .and_then(|s| model.windows.get(&s.active))
+        .map(|w| FormatCtx::new(model, w.active));
+    cmd::expand(&long_aliases(text), &ClientVars::new(model, client, pane))
 }
 
 /// Opens `prompt` on client `id`; a CLI caller waits for it to close when
@@ -1079,6 +1117,24 @@ mod tests {
         let got = feed(&mut state, Input::Key(key(KeyCode::Left)));
         assert_eq!(got, command(&["display-message", "got Left"]));
         assert!(!state.prompts.is_open(ClientId(1)));
+    }
+
+    /// Recorded on tmux 3.7b: a waiting `confirm-before` CLI exits 0 on `y`
+    /// and 1, silently, on anything else.
+    #[test]
+    fn a_cancelled_confirm_answers_its_cli_with_status_1() {
+        let mut state = crate::server::test_state();
+        for (k, want) in [
+            (key(KeyCode::Char('n')), Err(cancelled())),
+            (key(KeyCode::Escape), Err(cancelled())),
+            (key(KeyCode::Char('y')), Ok(String::new())),
+        ] {
+            open_prompt(&mut state, Read::Confirm, "", "kill-pane");
+            let (tx, mut rx) = oneshot::channel();
+            state.prompts.waiting.insert(ClientId(1), tx);
+            feed(&mut state, Input::Key(k));
+            assert_eq!(rx.try_recv().expect("answered"), want, "{k:?}");
+        }
     }
 
     /// Recorded on tmux 3.7b: only `y` confirms; `n`, `Y` and Enter cancel;

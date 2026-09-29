@@ -403,3 +403,148 @@ fn a_menu_opened_by_one_client_is_invisible_to_another() {
     a.send("a");
     wait_window_name(&srv, "one");
 }
+
+/// Fix round 1: `-p` is a format (tmux 3.7b shows `ok start?` for
+/// `-p 'ok #W?'`), and a cancelled confirmation exits 1 from the CLI.
+#[test]
+fn confirm_before_expands_its_prompt_and_a_cancel_exits_1() {
+    let srv = start();
+    srv.cmd(&["rename-window", "-t", "main", "start"])
+        .expect("rename");
+    let mut a = attach(&srv);
+    let confirm = |a: &mut Harness, key: &str| {
+        let mut cli = srv.command();
+        cli.args(["confirm-before", "-p", "ok #W?", "set -g @ok yes"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let cli = cli.spawn().expect("spawn confirm-before");
+        wait_last_row(a, "ok start?");
+        a.send(key);
+        common::wait_child(cli, WAIT).expect("confirm-before exits")
+    };
+    let status = confirm(&mut a, "n");
+    assert_eq!(status.code(), Some(1), "{status:?}");
+    assert!(srv.cmd(&["show", "-gv", "@ok"]).is_err());
+    let status = confirm(&mut a, "y");
+    assert!(status.success(), "{status:?}");
+    assert_eq!(srv.cmd(&["show", "-gv", "@ok"]).as_deref(), Ok("yes\n"));
+}
+
+/// Fix round 1: an alias standing for two commands runs both from a
+/// binding, a menu item and a prompt template; a binding keeps what the
+/// alias meant when it was made, as tmux expands it then.
+#[test]
+fn a_sequence_alias_runs_both_commands_everywhere() {
+    let srv = start();
+    let set_alias = |value: &str| {
+        srv.cmd(&["set", "-g", "command-alias[0]", value])
+            .expect("set alias");
+    };
+    set_alias("two=rename-window S1 ; set -g @b S2");
+    let reset = || {
+        srv.cmd(&["rename-window", "-t", "main", "x"])
+            .expect("rename");
+        srv.cmd(&["set", "-g", "@b", "none"]).expect("set");
+    };
+    let both = || {
+        wait_until(
+            || {
+                srv.cmd(&[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    "main",
+                    "#{window_name} #{@b}",
+                ])
+                .is_ok_and(|s| s == "S1 S2\n")
+            },
+            WAIT,
+        )
+    };
+    bind(&srv, &["t", "two"]);
+    bind(
+        &srv,
+        &[
+            "m",
+            "display-menu",
+            "-x",
+            "2",
+            "-y",
+            "10",
+            "Both",
+            "b",
+            "two",
+        ],
+    );
+    bind(&srv, &["p", "command-prompt", "-p", "go", "two"]);
+    let mut a = attach(&srv);
+
+    reset();
+    // The binding was made with the alias: unsetting it changes nothing.
+    srv.cmd(&["set", "-gu", "command-alias[0]"]).expect("unset");
+    a.send("\x02t");
+    both().unwrap_or_else(|e| panic!("binding: {e}"));
+    set_alias("two=rename-window S1 ; set -g @b S2");
+
+    reset();
+    a.send("\x02m");
+    a.wait_for("│ Both (b) │");
+    a.send("b");
+    both().unwrap_or_else(|e| panic!("menu item: {e}"));
+
+    reset();
+    a.send("\x02p");
+    wait_last_row(&mut a, "go");
+    a.send("\r");
+    both().unwrap_or_else(|e| panic!("prompt: {e}"));
+}
+
+/// Fix round 1: with a prompt and a menu open on one client, keys go to
+/// the menu, as tmux's overlay takes them first.
+#[test]
+fn a_menu_takes_the_keys_over_an_open_prompt() {
+    let srv = start();
+    bind(
+        &srv,
+        &["P", "command-prompt", "rename-window 'from prompt'"],
+    );
+    bind(
+        &srv,
+        &[
+            "m",
+            "display-menu",
+            "-x",
+            "2",
+            "-y",
+            "10",
+            "Item",
+            "i",
+            "rename-window item",
+        ],
+    );
+    let mut a = attach(&srv);
+    a.send("\x02P");
+    wait_last_row(&mut a, "(rename-window)");
+    let mut cli = srv.command();
+    cli.args([
+        "display-menu",
+        "-x",
+        "2",
+        "-y",
+        "10",
+        "Item",
+        "i",
+        "rename-window item",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    let cli = cli.spawn().expect("spawn display-menu");
+    a.wait_for("│ Item (i) │");
+    a.send("i");
+    wait_window_name(&srv, "item");
+    common::wait_child(cli, WAIT).expect("display-menu exits");
+    // The prompt is still open, and empty.
+    wait_last_row(&mut a, "(rename-window)");
+}

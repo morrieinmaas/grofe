@@ -888,10 +888,17 @@ pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String
     if cmds.is_empty() {
         return Ok(String::new());
     }
+    // An alias (TC.7) is expanded now, as tmux expands it when the binding
+    // is made: the binding keeps what it ran then.
+    let cmds: Vec<Vec<String>> = cmds
+        .into_iter()
+        .flat_map(|argv| {
+            crate::server::dispatch::menu::expand_alias_command(state, &argv)
+                .unwrap_or_else(|| vec![argv])
+        })
+        .collect();
     for argv in &cmds {
-        // An alias (TC.7) is checked as what it runs, as tmux checks it.
-        let expanded = crate::server::dispatch::menu::expand_aliases(state, argv);
-        crate::compat::parse_split(ctx, expanded.as_deref().unwrap_or(argv))?;
+        crate::compat::parse_split(ctx, argv)?;
     }
     let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
     b.desc = c.note;
@@ -973,9 +980,11 @@ pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<Stri
 /// key, `C-b `; with `-T`, that table alone and no prefix). With `-1` only
 /// the first, and when a client is current it goes to that client's status
 /// line instead, unpadded, as tmux's stock `prefix /` shows it.
-// ponytail: tmux 3.7b prints nothing from the CLI when a key is given,
-// and `-1N` of a key without a note shows the first noted binding; grofe
-// lists what the key names.
+// ponytail: tmux 3.7b's CLI prints nothing when a key is given, with or
+// without `-N` or `-1` (recorded: `list-keys -T prefix c`, `list-keys -1
+// -T prefix c` and `list-keys -N c` all print nothing), and `-1N` of a key
+// without a note shows the first noted binding; grofe lists what the key
+// names. Matching tmux's output is FE.4's.
 fn list_notes(
     state: &mut State,
     ctx: &ClientCtx,
