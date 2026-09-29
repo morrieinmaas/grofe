@@ -9,12 +9,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AttachSession, BindKey, CapturePane, Command, CommandPrompt, DetachClient, DisplayMessage,
-    HasSession, KillPane, KillServer, KillSession, KillWindow, ListClients, ListKeys, ListPanes,
-    ListSessions, ListWindows, NewSession, NewWindow, OptionScope, ParseError, Reload, Rename,
-    ResizeAction, ResizePane, RespawnPane, RunShell, SelectLayout, SelectPane, SelectWindow,
-    SendKeys, SendKeysItem, SendPrefix, SetOption, ShowOptions, SourceFile, SplitWindow, Subscribe,
-    SwitchClient, Target, UnbindKey, WindowStep,
+    AttachSession, BindKey, BreakPane, CapturePane, ChooseClient, ChooseTree, Command,
+    CommandPrompt, Condition, ConfirmBefore, DetachClient, DisplayMenu, DisplayMessage,
+    DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
+    KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
+    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope,
+    ParseError, RefreshClient, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem,
+    SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment, ShowHooks, ShowMessages,
+    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
+    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -185,6 +189,7 @@ fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Resu
 }
 
 const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
+    ('A', FlagKind::Bool),
     ('d', FlagKind::Bool),
     ('s', FlagKind::Value),
     ('c', FlagKind::Value),
@@ -218,6 +223,7 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         width,
         height,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        attach: flags.present.contains(&'A'),
     }))
 }
 
@@ -268,11 +274,13 @@ fn parse_kill_pane(argv: &[String]) -> Result<Command, ParseError> {
 
 const FORMAT_ONLY_SHORT: &[(char, FlagKind)] = &[('F', FlagKind::Value)];
 
+const LIST_SESSIONS_SHORT: &[(char, FlagKind)] = &[('F', FlagKind::Value), ('f', FlagKind::Value)];
+
 fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: FORMAT_ONLY_SHORT,
+            short: LIST_SESSIONS_SHORT,
             long: &[],
         },
         "list-sessions",
@@ -280,16 +288,22 @@ fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
     no_extra_positionals(&flags, "list-sessions", 0)?;
     Ok(Command::ListSessions(ListSessions {
         format: flags.values.get(&'F').cloned(),
+        filter: flags.values.get(&'f').cloned(),
     }))
 }
 
-const TARGET_FORMAT_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('F', FlagKind::Value)];
+const LIST_WINDOWS_SHORT: &[(char, FlagKind)] = &[
+    ('t', FlagKind::Value),
+    ('F', FlagKind::Value),
+    ('a', FlagKind::Bool),
+    ('f', FlagKind::Value),
+];
 
 fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: TARGET_FORMAT_SHORT,
+            short: LIST_WINDOWS_SHORT,
             long: &[],
         },
         "list-windows",
@@ -298,14 +312,24 @@ fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ListWindows(ListWindows {
         target: target_or_current(&flags.values, 't')?,
         format: flags.values.get(&'F').cloned(),
+        all: flags.present.contains(&'a'),
+        filter: flags.values.get(&'f').cloned(),
     }))
 }
+
+const LIST_PANES_SHORT: &[(char, FlagKind)] = &[
+    ('t', FlagKind::Value),
+    ('F', FlagKind::Value),
+    ('a', FlagKind::Bool),
+    ('s', FlagKind::Bool),
+    ('f', FlagKind::Value),
+];
 
 fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: TARGET_FORMAT_SHORT,
+            short: LIST_PANES_SHORT,
             long: &[],
         },
         "list-panes",
@@ -314,6 +338,9 @@ fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ListPanes(ListPanes {
         target: target_or_current(&flags.values, 't')?,
         format: flags.values.get(&'F').cloned(),
+        all: flags.present.contains(&'a'),
+        session: flags.present.contains(&'s'),
+        filter: flags.values.get(&'f').cloned(),
     }))
 }
 
@@ -449,6 +476,8 @@ const RESIZE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('D', FlagKind::Bool),
     ('Z', FlagKind::Bool),
     ('t', FlagKind::Value),
+    ('x', FlagKind::Value),
+    ('y', FlagKind::Value),
 ];
 
 fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
@@ -471,6 +500,15 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     .filter(|(c, _)| flags.present.contains(c))
     .map(|(_, edge)| edge)
     .collect();
+    let width = extent_value(&flags, 'x', 0, SizeWords::Trio("width"))?;
+    let height = extent_value(&flags, 'y', 0, SizeWords::Trio("height"))?;
+    // ponytail: TC.8 implements `-x`/`-y` in `resize_pane` and removes this
+    // guard; until then the sizes would be ignored silently.
+    if width.is_some() || height.is_some() {
+        return Err(ParseError::Other(
+            "not implemented: resize-pane -x/-y".to_string(),
+        ));
+    }
     let zoom = flags.present.contains(&'Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(
@@ -480,7 +518,7 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     let action = if zoom {
         ResizeAction::ToggleZoom
     } else {
-        if edges.is_empty() {
+        if edges.is_empty() && width.is_none() && height.is_none() {
             return Err(ParseError::Other(
                 "resize-pane: expected one of -L -R -U -D -Z".to_string(),
             ));
@@ -494,25 +532,28 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ResizePane(ResizePane {
         action,
         target: target_or_current(&flags.values, 't')?,
+        width,
+        height,
     }))
 }
 
 const RESPAWN_PANE_SHORT: &[(char, FlagKind)] = &[('k', FlagKind::Bool), ('t', FlagKind::Value)];
 
-fn parse_respawn_pane(argv: &[String]) -> Result<Command, ParseError> {
+/// `respawn-pane`, and `respawn-window` (M36-R6), which has its shape.
+fn parse_respawn(argv: &[String], cmd_name: &str) -> Result<RespawnPane, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
             short: RESPAWN_PANE_SHORT,
             long: &[],
         },
-        "respawn-pane",
+        cmd_name,
     )?;
-    Ok(Command::RespawnPane(RespawnPane {
+    Ok(RespawnPane {
         kill: flags.present.contains(&'k'),
         target: target_or_current(&flags.values, 't')?,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
-    }))
+    })
 }
 
 const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
@@ -558,6 +599,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
 const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('e', FlagKind::Bool),
+    ('J', FlagKind::Bool),
     ('S', FlagKind::Value),
     ('E', FlagKind::Value),
     ('t', FlagKind::Value),
@@ -597,6 +639,7 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
             end,
             escapes: flags.present.contains(&'e'),
         },
+        join: flags.present.contains(&'J'),
     }))
 }
 
@@ -607,6 +650,10 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('u', FlagKind::Bool),
     ('t', FlagKind::Value),
+    ('a', FlagKind::Bool),
+    ('F', FlagKind::Bool),
+    ('q', FlagKind::Bool),
+    ('o', FlagKind::Bool),
 ];
 const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
 
@@ -664,6 +711,10 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         target: target_or_current(&flags.values, 't')?,
         name,
         value,
+        append: flags.present.contains(&'a'),
+        expand: flags.present.contains(&'F'),
+        quiet: flags.present.contains(&'q'),
+        only_if_unset: flags.present.contains(&'o'),
     }))
 }
 
@@ -673,6 +724,8 @@ const SHOW_OPTIONS_SHORT: &[(char, FlagKind)] = &[
     ('w', FlagKind::Bool),
     ('p', FlagKind::Bool),
     ('t', FlagKind::Value),
+    ('v', FlagKind::Bool),
+    ('q', FlagKind::Bool),
 ];
 
 fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
@@ -694,6 +747,8 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
         scope,
         target: target_or_current(&flags.values, 't')?,
         name,
+        value_only: flags.present.contains(&'v'),
+        quiet: flags.present.contains(&'q'),
     }))
 }
 
@@ -798,9 +853,29 @@ fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-fn parse_window_step(argv: &[String], cmd_name: &str) -> Result<WindowStep, ParseError> {
+fn parse_last_window(argv: &[String]) -> Result<WindowStep, ParseError> {
     Ok(WindowStep {
-        target: parse_target_only(argv, cmd_name)?,
+        target: parse_target_only(argv, "last-window")?,
+        alert: false,
+    })
+}
+
+const WINDOW_STEP_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('a', FlagKind::Bool)];
+
+/// `next-window`/`previous-window` (`-t` session, `-a` alert).
+fn parse_window_step(argv: &[String], cmd_name: &str) -> Result<WindowStep, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: WINDOW_STEP_SHORT,
+            long: &[],
+        },
+        cmd_name,
+    )?;
+    no_extra_positionals(&flags, cmd_name, 0)?;
+    Ok(WindowStep {
+        target: target_or_current(&flags.values, 't')?,
+        alert: flags.present.contains(&'a'),
     })
 }
 
@@ -831,6 +906,7 @@ const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('n', FlagKind::Bool),
     ('p', FlagKind::Bool),
     ('T', FlagKind::Value),
+    ('c', FlagKind::Value),
 ];
 
 fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
@@ -853,6 +929,7 @@ fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
         next: flags.present.contains(&'n'),
         previous: flags.present.contains(&'p'),
         key_table: flags.values.get(&'T').cloned(),
+        client: flags.values.get(&'c').cloned(),
     }))
 }
 
@@ -932,20 +1009,27 @@ fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const TABLE_ONLY_SHORT: &[(char, FlagKind)] = &[('T', FlagKind::Value)];
+const LIST_KEYS_SHORT: &[(char, FlagKind)] = &[
+    ('T', FlagKind::Value),
+    ('1', FlagKind::Bool),
+    ('N', FlagKind::Bool),
+];
 
 fn parse_list_keys(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: TABLE_ONLY_SHORT,
+            short: LIST_KEYS_SHORT,
             long: &[],
         },
         "list-keys",
     )?;
-    no_extra_positionals(&flags, "list-keys", 0)?;
+    no_extra_positionals(&flags, "list-keys", 1)?;
     Ok(Command::ListKeys(ListKeys {
         table: flags.values.get(&'T').cloned(),
+        first: flags.present.contains(&'1'),
+        notes: flags.present.contains(&'N'),
+        key: flags.positionals.first().cloned(),
     }))
 }
 
@@ -980,7 +1064,14 @@ fn parse_reload(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::Reload(Reload))
 }
 
-const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[('p', FlagKind::Value), ('I', FlagKind::Value)];
+const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[
+    ('p', FlagKind::Value),
+    ('I', FlagKind::Value),
+    ('b', FlagKind::Bool),
+    ('k', FlagKind::Bool),
+    ('1', FlagKind::Bool),
+    ('T', FlagKind::Value),
+];
 
 fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -996,13 +1087,25 @@ fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
         prompt: flags.values.get(&'p').cloned(),
         initial: flags.values.get(&'I').cloned(),
         template: flags.positionals.first().cloned(),
+        background: flags.present.contains(&'b'),
+        key: flags.present.contains(&'k'),
+        single: flags.present.contains(&'1'),
+        prompt_type: flags.values.get(&'T').cloned(),
     }))
 }
 
 fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "run-shell")?;
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[('b', FlagKind::Bool)],
+            long: &[],
+        },
+        "run-shell",
+    )?;
     Ok(Command::RunShell(RunShell {
         cmd: one_positional(&flags, "run-shell")?,
+        background: flags.present.contains(&'b'),
     }))
 }
 
@@ -1010,14 +1113,550 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: TARGET_ONLY_SHORT,
+            short: &[('t', FlagKind::Value), ('E', FlagKind::Bool)],
             long: &[],
         },
         "select-layout",
     )?;
+    let spread = flags.present.contains(&'E');
+    let name = if spread {
+        no_extra_positionals(&flags, "select-layout", 1)?;
+        flags.positionals.first().cloned().unwrap_or_default()
+    } else {
+        one_positional(&flags, "select-layout")?
+    };
     Ok(Command::SelectLayout(SelectLayout {
         target: target_or_current(&flags.values, 't')?,
-        name: one_positional(&flags, "select-layout")?,
+        name,
+        spread,
+    }))
+}
+
+// ---- M3.6 verbs (TC.2) ----
+
+/// A number as tmux's `args_percentage` reads it: an integer, or one
+/// with a `%` suffix. `None` when it is neither.
+fn amount(s: &str) -> Option<(i64, bool)> {
+    let (digits, percent) = match s.strip_suffix('%') {
+        Some(d) => (d, true),
+        None => (s, false),
+    };
+    digits.parse::<i64>().ok().map(|n| (n, percent))
+}
+
+/// How tmux 3.7b words a bad size: `<what> invalid`, `<what> too small`
+/// and `<what> too large`, or one fixed text for every failure
+/// (`join-pane -l`).
+#[derive(Clone, Copy)]
+enum SizeWords {
+    Trio(&'static str),
+    Fixed(&'static str),
+}
+
+/// A size of at least `min`, in cells or `N%` up to 100, worded as tmux
+/// 3.7b words it (recorded on `tmux -L grofe-tc2`): `display-popup -w 0`
+/// is `width too small`, `-h 200%` `height too large`, `-w 5x` `width
+/// invalid`; `join-pane -l` gives `size or position invalid tiled
+/// geometry` for any bad value. Whether a size fits the window or client
+/// is the handler's check.
+fn parse_extent(s: &str, min: i64, words: SizeWords) -> Result<SplitSize, ParseError> {
+    let fail = |why: &str| {
+        ParseError::Other(match words {
+            SizeWords::Trio(what) => format!("{what} {why}"),
+            SizeWords::Fixed(text) => text.to_string(),
+        })
+    };
+    let (n, percent) = amount(s).ok_or_else(|| fail("invalid"))?;
+    if n < min {
+        return Err(fail("too small"));
+    }
+    if percent {
+        u8::try_from(n)
+            .ok()
+            .filter(|p| *p <= 100)
+            .map(SplitSize::Percent)
+            .ok_or_else(|| fail("too large"))
+    } else {
+        u16::try_from(n)
+            .map(SplitSize::Cells)
+            .map_err(|_| fail("too large"))
+    }
+}
+
+fn extent_value(
+    flags: &ParsedFlags,
+    key: char,
+    min: i64,
+    words: SizeWords,
+) -> Result<Option<SplitSize>, ParseError> {
+    flags
+        .values
+        .get(&key)
+        .map(|s| parse_extent(s, min, words))
+        .transpose()
+}
+
+/// `new-pane`'s wording for every bad size or position (tmux 3.7b).
+const NEW_PANE_WORDS: SizeWords = SizeWords::Trio("size or position");
+
+/// A `new-pane -X`/`-Y` position: signed cells or `N%` (tmux 3.7b takes
+/// `-X -1` and `-X 50%`).
+fn offset_value(flags: &ParsedFlags, key: char) -> Result<Option<Offset>, ParseError> {
+    let fail = |why: &str| ParseError::Other(format!("size or position {why}"));
+    let Some(s) = flags.values.get(&key) else {
+        return Ok(None);
+    };
+    let (n, percent) = amount(s).ok_or_else(|| fail("invalid"))?;
+    let offset = if percent {
+        if n < 0 {
+            return Err(fail("too small"));
+        }
+        Offset::Percent(
+            u8::try_from(n)
+                .ok()
+                .filter(|p| *p <= 100)
+                .ok_or_else(|| fail("too large"))?,
+        )
+    } else {
+        Offset::Cells(i32::try_from(n).map_err(|_| {
+            if n < 0 {
+                fail("too small")
+            } else {
+                fail("too large")
+            }
+        })?)
+    };
+    Ok(Some(offset))
+}
+
+fn target_if_given(
+    values: &BTreeMap<char, String>,
+    key: char,
+) -> Result<Option<Target>, ParseError> {
+    values.get(&key).map(|s| parse_target(s)).transpose()
+}
+
+/// At least `min` positionals, worded like tmux (`too few arguments`),
+/// unless `argv` is empty: a bare M3.6 verb parses, with its required
+/// positionals `None`, so that its handler answers (the stub-phase tests
+/// run every verb bare) and refuses it.
+fn needs_positionals(
+    argv: &[String],
+    flags: &ParsedFlags,
+    cmd_name: &str,
+    min: usize,
+) -> Result<(), ParseError> {
+    if argv.is_empty() || flags.positionals.len() >= min {
+        Ok(())
+    } else {
+        Err(ParseError::TooFewArguments(cmd_name.to_string(), min))
+    }
+}
+
+fn flags_for(
+    argv: &[String],
+    short: &'static [(char, FlagKind)],
+    cmd_name: &str,
+) -> Result<ParsedFlags, ParseError> {
+    tokenize(argv, &FlagTable { short, long: &[] }, cmd_name)
+}
+
+const JOIN_PANE_SHORT: &[(char, FlagKind)] = &[
+    ('b', FlagKind::Bool),
+    ('d', FlagKind::Bool),
+    ('f', FlagKind::Bool),
+    ('h', FlagKind::Bool),
+    ('v', FlagKind::Bool),
+    ('l', FlagKind::Value),
+    ('s', FlagKind::Value),
+    ('t', FlagKind::Value),
+];
+
+/// `join-pane` and `move-pane`, which share tmux's flags.
+fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseError> {
+    let flags = flags_for(argv, JOIN_PANE_SHORT, cmd_name)?;
+    no_extra_positionals(&flags, cmd_name, 0)?;
+    Ok(JoinPane {
+        src: target_or_current(&flags.values, 's')?,
+        dst: target_or_current(&flags.values, 't')?,
+        before: flags.present.contains(&'b'),
+        detach: flags.present.contains(&'d'),
+        full: flags.present.contains(&'f'),
+        horizontal: flags.present.contains(&'h'),
+        vertical: flags.present.contains(&'v'),
+        size: extent_value(
+            &flags,
+            'l',
+            0,
+            SizeWords::Fixed("size or position invalid tiled geometry"),
+        )?,
+    })
+}
+
+fn parse_swap_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('U', FlagKind::Bool),
+        ('D', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "swap-pane")?;
+    no_extra_positionals(&flags, "swap-pane", 0)?;
+    Ok(Command::SwapPane(SwapPane {
+        src: target_if_given(&flags.values, 's')?,
+        dst: target_or_current(&flags.values, 't')?,
+        up: flags.present.contains(&'U'),
+        down: flags.present.contains(&'D'),
+    }))
+}
+
+fn parse_swap_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('s', FlagKind::Value), ('t', FlagKind::Value)];
+    let flags = flags_for(argv, SHORT, "swap-window")?;
+    no_extra_positionals(&flags, "swap-window", 0)?;
+    Ok(Command::SwapWindow(SwapWindow {
+        src: target_if_given(&flags.values, 's')?,
+        dst: target_or_current(&flags.values, 't')?,
+    }))
+}
+
+fn parse_break_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('d', FlagKind::Bool),
+        ('n', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "break-pane")?;
+    no_extra_positionals(&flags, "break-pane", 0)?;
+    Ok(Command::BreakPane(BreakPane {
+        src: target_or_current(&flags.values, 's')?,
+        dst: target_if_given(&flags.values, 't')?,
+        detach: flags.present.contains(&'d'),
+        name: flags.values.get(&'n').cloned(),
+    }))
+}
+
+fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('x', FlagKind::Value),
+        ('y', FlagKind::Value),
+        ('A', FlagKind::Bool),
+        ('a', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "resize-window")?;
+    no_extra_positionals(&flags, "resize-window", 0)?;
+    Ok(Command::ResizeWindow(ResizeWindow {
+        target: target_or_current(&flags.values, 't')?,
+        width: flags
+            .values
+            .get(&'x')
+            .map(|s| parse_window_size(s, "width"))
+            .transpose()?,
+        height: flags
+            .values
+            .get(&'y')
+            .map(|s| parse_window_size(s, "height"))
+            .transpose()?,
+        largest: flags.present.contains(&'A'),
+        smallest: flags.present.contains(&'a'),
+    }))
+}
+
+fn parse_rotate_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('U', FlagKind::Bool),
+        ('D', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "rotate-window")?;
+    no_extra_positionals(&flags, "rotate-window", 0)?;
+    Ok(Command::RotateWindow(RotateWindow {
+        target: target_or_current(&flags.values, 't')?,
+        up: flags.present.contains(&'U'),
+        down: flags.present.contains(&'D'),
+    }))
+}
+
+fn parse_move_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('a', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "move-window")?;
+    no_extra_positionals(&flags, "move-window", 0)?;
+    Ok(Command::MoveWindow(MoveWindow {
+        src: target_or_current(&flags.values, 's')?,
+        dst: target_if_given(&flags.values, 't')?,
+        after: flags.present.contains(&'a'),
+        renumber: flags.present.contains(&'r'),
+    }))
+}
+
+fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('S', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "refresh-client")?;
+    no_extra_positionals(&flags, "refresh-client", 0)?;
+    Ok(Command::RefreshClient(RefreshClient {
+        client: flags.values.get(&'t').cloned(),
+        status: flags.present.contains(&'S'),
+    }))
+}
+
+fn parse_show_messages(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('J', FlagKind::Bool),
+        ('T', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "show-messages")?;
+    no_extra_positionals(&flags, "show-messages", 0)?;
+    Ok(Command::ShowMessages(ShowMessages {
+        client: flags.values.get(&'t').cloned(),
+        jobs: flags.present.contains(&'J'),
+        terminals: flags.present.contains(&'T'),
+    }))
+}
+
+fn parse_choose_client(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, &[('Z', FlagKind::Bool)], "choose-client")?;
+    no_extra_positionals(&flags, "choose-client", 0)?;
+    Ok(Command::ChooseClient(ChooseClient {
+        zoom: flags.present.contains(&'Z'),
+    }))
+}
+
+fn parse_suspend_client(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, &[('t', FlagKind::Value)], "suspend-client")?;
+    no_extra_positionals(&flags, "suspend-client", 0)?;
+    Ok(Command::SuspendClient(SuspendClient {
+        client: flags.values.get(&'t').cloned(),
+    }))
+}
+
+fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('Z', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "find-window")?;
+    needs_positionals(argv, &flags, "find-window", 1)?;
+    no_extra_positionals(&flags, "find-window", 1)?;
+    Ok(Command::FindWindow(FindWindow {
+        target: target_or_current(&flags.values, 't')?,
+        zoom: flags.present.contains(&'Z'),
+        pattern: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_choose_tree(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('Z', FlagKind::Bool), ('w', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "choose-tree")?;
+    no_extra_positionals(&flags, "choose-tree", 0)?;
+    Ok(Command::ChooseTree(ChooseTree {
+        zoom: flags.present.contains(&'Z'),
+        windows: flags.present.contains(&'w'),
+    }))
+}
+
+fn parse_wait_for(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, &[('S', FlagKind::Bool)], "wait-for")?;
+    needs_positionals(argv, &flags, "wait-for", 1)?;
+    no_extra_positionals(&flags, "wait-for", 1)?;
+    Ok(Command::WaitFor(WaitFor {
+        channel: flags.positionals.first().cloned(),
+        signal: flags.present.contains(&'S'),
+    }))
+}
+
+fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('E', FlagKind::Bool),
+        ('B', FlagKind::Bool),
+        ('b', FlagKind::Value),
+        ('c', FlagKind::Value),
+        ('d', FlagKind::Value),
+        ('T', FlagKind::Value),
+        ('w', FlagKind::Value),
+        ('h', FlagKind::Value),
+        ('x', FlagKind::Value),
+        ('y', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "display-popup")?;
+    Ok(Command::DisplayPopup(DisplayPopup {
+        close_on_exit: flags.present.contains(&'E'),
+        no_border: flags.present.contains(&'B'),
+        border: flags.values.get(&'b').cloned(),
+        client: flags.values.get(&'c').cloned(),
+        cwd: flags.values.get(&'d').cloned(),
+        title: flags.values.get(&'T').cloned(),
+        width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
+        height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,
+        x: flags.values.get(&'x').cloned(),
+        y: flags.values.get(&'y').cloned(),
+        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+    }))
+}
+
+fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('P', FlagKind::Bool),
+        ('F', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('c', FlagKind::Value),
+        ('x', FlagKind::Value),
+        ('y', FlagKind::Value),
+        ('X', FlagKind::Value),
+        ('Y', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "new-pane")?;
+    Ok(Command::NewPane(NewPane {
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
+        target: target_or_current(&flags.values, 't')?,
+        cwd: flags.values.get(&'c').cloned(),
+        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(&flags, 'X')?,
+        y: offset_value(&flags, 'Y')?,
+        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+    }))
+}
+
+/// `display-menu`'s items, read as tmux 3.7b's `cmd_display_menu` reads
+/// them: `name key command`, except an empty name, which is a separator
+/// alone; a short last item is `not enough arguments`.
+fn menu_entries(args: &[String]) -> Result<Vec<MenuEntry>, ParseError> {
+    let mut items = Vec::new();
+    let mut rest = args;
+    while let Some((name, tail)) = rest.split_first() {
+        if name.is_empty() {
+            items.push(MenuEntry::Separator);
+            rest = tail;
+            continue;
+        }
+        let [key, command, tail @ ..] = tail else {
+            return Err(ParseError::Other("not enough arguments".to_string()));
+        };
+        items.push(MenuEntry::Item {
+            name: name.clone(),
+            key: key.clone(),
+            command: command.clone(),
+        });
+        rest = tail;
+    }
+    Ok(items)
+}
+
+fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('T', FlagKind::Value),
+        ('x', FlagKind::Value),
+        ('y', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "display-menu")?;
+    needs_positionals(argv, &flags, "display-menu", 1)?;
+    Ok(Command::DisplayMenu(DisplayMenu {
+        title: flags.values.get(&'T').cloned(),
+        x: flags.values.get(&'x').cloned(),
+        y: flags.values.get(&'y').cloned(),
+        items: menu_entries(&flags.positionals)?,
+    }))
+}
+
+fn parse_confirm_before(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, &[('p', FlagKind::Value)], "confirm-before")?;
+    needs_positionals(argv, &flags, "confirm-before", 1)?;
+    no_extra_positionals(&flags, "confirm-before", 1)?;
+    Ok(Command::ConfirmBefore(ConfirmBefore {
+        prompt: flags.values.get(&'p').cloned(),
+        command: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_if_shell(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('F', FlagKind::Bool),
+        ('b', FlagKind::Bool),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "if-shell")?;
+    needs_positionals(argv, &flags, "if-shell", 2)?;
+    no_extra_positionals(&flags, "if-shell", 3)?;
+    let mut positionals = flags.positionals.iter().cloned();
+    let condition = positionals.next().map(|c| {
+        if flags.present.contains(&'F') {
+            Condition::Format(c)
+        } else {
+            Condition::Shell(c)
+        }
+    });
+    Ok(Command::If(If {
+        condition,
+        then: positionals.next(),
+        otherwise: positionals.next(),
+        background: flags.present.contains(&'b'),
+        target: target_or_current(&flags.values, 't')?,
+    }))
+}
+
+fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('g', FlagKind::Bool), ('u', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "set-hook")?;
+    needs_positionals(argv, &flags, "set-hook", 1)?;
+    no_extra_positionals(&flags, "set-hook", 2)?;
+    let mut positionals = flags.positionals.iter().cloned();
+    Ok(Command::SetHook(SetHook {
+        global: flags.present.contains(&'g'),
+        unset: flags.present.contains(&'u'),
+        hook: positionals.next(),
+        command: positionals.next(),
+    }))
+}
+
+fn parse_show_hooks(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, &[('g', FlagKind::Bool)], "show-hooks")?;
+    no_extra_positionals(&flags, "show-hooks", 1)?;
+    Ok(Command::ShowHooks(ShowHooks {
+        global: flags.present.contains(&'g'),
+        hook: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_set_environment(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('g', FlagKind::Bool),
+        ('u', FlagKind::Bool),
+        ('h', FlagKind::Bool),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "set-environment")?;
+    needs_positionals(argv, &flags, "set-environment", 1)?;
+    no_extra_positionals(&flags, "set-environment", 2)?;
+    let mut positionals = flags.positionals.iter().cloned();
+    Ok(Command::SetEnvironment(SetEnvironment {
+        global: flags.present.contains(&'g'),
+        unset: flags.present.contains(&'u'),
+        hidden: flags.present.contains(&'h'),
+        target: target_or_current(&flags.values, 't')?,
+        name: positionals.next(),
+        value: positionals.next(),
+    }))
+}
+
+fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('g', FlagKind::Bool),
+        ('h', FlagKind::Bool),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "show-environment")?;
+    no_extra_positionals(&flags, "show-environment", 1)?;
+    Ok(Command::ShowEnvironment(ShowEnvironment {
+        global: flags.present.contains(&'g'),
+        hidden: flags.present.contains(&'h'),
+        target: target_or_current(&flags.values, 't')?,
+        name: flags.positionals.first().cloned(),
     }))
 }
 
@@ -1031,12 +1670,16 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
 /// - in double quotes and bare words a backslash keeps the next character
 ///   literally, `$VAR` and `${VAR}` expand (unset is empty), and a `~` or
 ///   `~user` that starts the word is that home directory;
+/// - a `$` before anything that can't start a name is a literal `$`, but a
+///   `$` that ends the string is a syntax error (D17), as is an unquoted
+///   `$;` that ends it; `${` must close over a name (`invalid environment
+///   variable`);
 /// - an unquoted `;` ends a command wherever it is; a `\;` word is a
-///   literal `;` argument, except a trailing one, which is dropped;
+///   literal `;` argument (so a stored `a \; b` is one command, D24),
+///   except a trailing one, which is dropped;
 /// - an unterminated quote is closed at the end of the string.
 ///
-/// Empty commands are dropped. Never fails today; the `Result` is the
-/// contract for a stricter grammar.
+/// Empty commands are dropped.
 // ponytail: no `\n`/`\e`/octal/`\u` escapes, `#` comments or `%if`.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     let mut cmds = Vec::new();
@@ -1096,14 +1739,20 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
                     match x {
                         '"' => break,
                         '\\' => word.push(chars.next().unwrap_or('\\')),
-                        '$' => expand_var(&mut chars, &mut word),
+                        '$' => expand_var(&mut chars, &mut word)?,
                         x => word.push(x),
                     }
                 }
             }
             '$' => {
                 started = true;
-                expand_var(&mut chars, &mut word);
+                // tmux 3.7b's lexer quirk, recorded: `display $;` is a
+                // syntax error, `display $; ` is `display $`.
+                let mut ahead = chars.clone();
+                if ahead.next() == Some(';') && ahead.next().is_none() {
+                    return Err(syntax_error());
+                }
+                expand_var(&mut chars, &mut word)?;
             }
             '~' if fresh => {
                 started = true;
@@ -1131,31 +1780,48 @@ fn env_var(name: &str) -> String {
     std::env::var(name).unwrap_or_default()
 }
 
+fn syntax_error() -> ParseError {
+    ParseError::Other("syntax error".to_string())
+}
+
 /// After a `$`: `${NAME}` or `NAME` (letters, digits, `_`), expanded into
-/// `out`; a `$` before anything else is literal.
-fn expand_var(chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String) {
+/// `out`; a `$` before anything else is literal. As tmux 3.7b's lexer: a
+/// `$` at the end is a syntax error, and `${` must close over name
+/// characters.
+fn expand_var(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    out: &mut String,
+) -> Result<(), ParseError> {
     let is_name = |c: &char| c.is_ascii_alphanumeric() || *c == '_';
     let mut name = String::new();
-    if chars.peek() == Some(&'{') {
-        chars.next();
-        for c in chars.by_ref() {
-            if c == '}' {
-                break;
+    match chars.peek() {
+        None => return Err(syntax_error()),
+        Some('{') => {
+            chars.next();
+            loop {
+                match chars.next() {
+                    Some('}') => break,
+                    Some(c) if is_name(&c) => name.push(c),
+                    _ => {
+                        return Err(ParseError::Other(
+                            "invalid environment variable".to_string(),
+                        ));
+                    }
+                }
             }
-            name.push(c);
         }
-    } else if chars
-        .peek()
-        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
-    {
-        while let Some(c) = chars.next_if(is_name) {
-            name.push(c);
+        Some(c) if c.is_ascii_alphabetic() || *c == '_' => {
+            while let Some(c) = chars.next_if(is_name) {
+                name.push(c);
+            }
         }
-    } else {
-        out.push('$');
-        return;
+        Some(_) => {
+            out.push('$');
+            return Ok(());
+        }
     }
     out.push_str(&env_var(&name));
+    Ok(())
 }
 
 /// After a word-initial `~`: `~` is `$HOME` (else the user's passwd home),
@@ -1285,7 +1951,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "kill-pane" => parse_kill_pane(rest),
         "select-pane" => parse_select_pane(rest),
         "resize-pane" => parse_resize_pane(rest),
-        "respawn-pane" => parse_respawn_pane(rest),
+        "respawn-pane" => Ok(Command::RespawnPane(parse_respawn(rest, "respawn-pane")?)),
         "list-panes" => parse_list_panes(rest),
         "send-keys" => parse_send_keys(rest),
         "capture-pane" => parse_capture_pane(rest),
@@ -1302,7 +1968,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             rest,
             "previous-window",
         )?)),
-        "last-window" => Ok(Command::LastWindow(parse_window_step(rest, "last-window")?)),
+        "last-window" => Ok(Command::LastWindow(parse_last_window(rest)?)),
         "rename-session" => Ok(Command::RenameSession(parse_rename(
             rest,
             "rename-session",
@@ -1318,55 +1984,47 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
         "select-layout" => parse_select_layout(rest),
-        other => parse_m36_stub(other).ok_or_else(|| ParseError::UnknownCommand(name.clone())),
+        "join-pane" => Ok(Command::JoinPane(parse_join_pane(rest, "join-pane")?)),
+        "move-pane" => Ok(Command::MovePane(parse_join_pane(rest, "move-pane")?)),
+        "swap-pane" => parse_swap_pane(rest),
+        "swap-window" => parse_swap_window(rest),
+        "break-pane" => parse_break_pane(rest),
+        "resize-window" => parse_resize_window(rest),
+        "last-pane" => Ok(Command::LastPane(LastPane {
+            target: parse_target_only(rest, "last-pane")?,
+        })),
+        "rotate-window" => parse_rotate_window(rest),
+        "move-window" => parse_move_window(rest),
+        "next-layout" => Ok(Command::NextLayout(NextLayout {
+            target: parse_target_only(rest, "next-layout")?,
+        })),
+        "respawn-window" => Ok(Command::RespawnWindow(parse_respawn(
+            rest,
+            "respawn-window",
+        )?)),
+        "refresh-client" => parse_refresh_client(rest),
+        "show-messages" => parse_show_messages(rest),
+        "choose-client" => parse_choose_client(rest),
+        "suspend-client" => parse_suspend_client(rest),
+        "find-window" => parse_find_window(rest),
+        "choose-tree" => parse_choose_tree(rest),
+        "wait-for" => parse_wait_for(rest),
+        "display-popup" => parse_display_popup(rest),
+        "new-pane" => parse_new_pane(rest),
+        "display-menu" => parse_display_menu(rest),
+        "display-panes" => {
+            let flags = tokenize(rest, &NO_FLAGS, "display-panes")?;
+            no_extra_positionals(&flags, "display-panes", 0)?;
+            Ok(Command::DisplayPanes(DisplayPanes {}))
+        }
+        "confirm-before" => parse_confirm_before(rest),
+        "if-shell" => parse_if_shell(rest),
+        "set-hook" => parse_set_hook(rest),
+        "show-hooks" => parse_show_hooks(rest),
+        "set-environment" => parse_set_environment(rest),
+        "show-environment" => parse_show_environment(rest),
+        _ => Err(ParseError::UnknownCommand(name.clone())),
     }
-}
-
-/// The M3.6 verbs the stub edit routes (m36-addendum, "Stub edit"): the
-/// verb alone, its arguments ignored until TC.2 parses each verb's flags
-/// into its struct (and moves the verb up into [`parse`]'s table).
-fn parse_m36_stub(name: &str) -> Option<Command> {
-    use super::{
-        BreakPane, ChooseClient, ChooseTree, ConfirmBefore, DisplayMenu, DisplayPanes,
-        DisplayPopup, FindWindow, If, JoinPane, LastPane, MovePane, MoveWindow, NewPane,
-        NextLayout, RefreshClient, ResizeWindow, RotateWindow, SetEnvironment, SetHook,
-        ShowEnvironment, ShowHooks, ShowMessages, SuspendClient, SwapPane, SwapWindow, WaitFor,
-    };
-    Some(match name {
-        "join-pane" => Command::JoinPane(JoinPane::default()),
-        "swap-pane" => Command::SwapPane(SwapPane::default()),
-        "swap-window" => Command::SwapWindow(SwapWindow::default()),
-        "break-pane" => Command::BreakPane(BreakPane::default()),
-        "resize-window" => Command::ResizeWindow(ResizeWindow::default()),
-        "last-pane" => Command::LastPane(LastPane::default()),
-        "rotate-window" => Command::RotateWindow(RotateWindow::default()),
-        "move-window" => Command::MoveWindow(MoveWindow::default()),
-        "move-pane" => Command::MovePane(MovePane::default()),
-        "next-layout" => Command::NextLayout(NextLayout::default()),
-        "respawn-window" => Command::RespawnWindow(RespawnPane {
-            kill: false,
-            target: Target::Current,
-            command: None,
-        }),
-        "refresh-client" => Command::RefreshClient(RefreshClient::default()),
-        "show-messages" => Command::ShowMessages(ShowMessages::default()),
-        "choose-client" => Command::ChooseClient(ChooseClient::default()),
-        "suspend-client" => Command::SuspendClient(SuspendClient::default()),
-        "find-window" => Command::FindWindow(FindWindow::default()),
-        "choose-tree" => Command::ChooseTree(ChooseTree::default()),
-        "wait-for" => Command::WaitFor(WaitFor::default()),
-        "display-popup" => Command::DisplayPopup(DisplayPopup::default()),
-        "new-pane" => Command::NewPane(NewPane::default()),
-        "display-menu" => Command::DisplayMenu(DisplayMenu::default()),
-        "display-panes" => Command::DisplayPanes(DisplayPanes::default()),
-        "confirm-before" => Command::ConfirmBefore(ConfirmBefore::default()),
-        "if-shell" => Command::If(If::default()),
-        "set-hook" => Command::SetHook(SetHook::default()),
-        "show-hooks" => Command::ShowHooks(ShowHooks::default()),
-        "set-environment" => Command::SetEnvironment(SetEnvironment::default()),
-        "show-environment" => Command::ShowEnvironment(ShowEnvironment::default()),
-        _ => return None,
-    })
 }
 
 #[cfg(test)]
@@ -1446,6 +2104,7 @@ mod tests {
                 width: Some(80),
                 height: Some(24),
                 command: Some(vec!["sleep".to_string(), "30".to_string()]),
+                attach: false,
             })
         );
     }
@@ -1508,6 +2167,7 @@ mod tests {
             cmd,
             Command::ListSessions(ListSessions {
                 format: Some("#{session_name}".to_string()),
+                filter: None,
             })
         );
     }
@@ -1520,6 +2180,9 @@ mod tests {
             Command::ListPanes(ListPanes {
                 target: Target::Session(SessionRef::Name("work".to_string())),
                 format: None,
+                all: false,
+                session: false,
+                filter: None,
             })
         );
     }
@@ -1706,6 +2369,8 @@ mod tests {
             Command::ResizePane(ResizePane {
                 action: ResizeAction::Edges(vec![Edge::Left], 5),
                 target: Target::Current,
+                width: None,
+                height: None,
             })
         );
     }
@@ -1718,6 +2383,8 @@ mod tests {
             Command::ResizePane(ResizePane {
                 action: ResizeAction::Edges(vec![Edge::Down], 1),
                 target: Target::Current,
+                width: None,
+                height: None,
             })
         );
     }
@@ -1732,6 +2399,8 @@ mod tests {
             Command::ResizePane(ResizePane {
                 action: ResizeAction::Edges(vec![Edge::Left, Edge::Right], 5),
                 target: Target::Current,
+                width: None,
+                height: None,
             })
         );
     }
@@ -1759,6 +2428,8 @@ mod tests {
                     window: WindowRef::Current,
                     pane: PanePart::Id(PaneId(1)),
                 }),
+                width: None,
+                height: None,
             })
         );
     }
@@ -1880,6 +2551,7 @@ mod tests {
                     end: Some(CaptureBound::VisibleEnd),
                     escapes: false,
                 },
+                join: false,
             })
         );
     }
@@ -1897,6 +2569,7 @@ mod tests {
                     end: Some(CaptureBound::Line(0)),
                     escapes: false,
                 },
+                join: false,
             })
         );
     }
@@ -1914,6 +2587,7 @@ mod tests {
                     end: None,
                     escapes: false,
                 },
+                join: false,
             })
         );
     }
@@ -1939,6 +2613,10 @@ mod tests {
                 target: Target::Current,
                 name: "history-limit".to_string(),
                 value: Some("50000".to_string()),
+                append: false,
+                expand: false,
+                quiet: false,
+                only_if_unset: false,
             })
         );
     }
@@ -1955,6 +2633,10 @@ mod tests {
                 target: Target::Current,
                 name: "@my-opt".to_string(),
                 value: None,
+                append: false,
+                expand: false,
+                quiet: false,
+                only_if_unset: false,
             })
         );
     }
@@ -2058,6 +2740,8 @@ mod tests {
                 scope: Some(OptionScope::Window),
                 target: Target::Current,
                 name: None,
+                value_only: false,
+                quiet: false,
             })
         );
     }
@@ -2071,6 +2755,8 @@ mod tests {
                 scope: Some(OptionScope::Global),
                 target: Target::Current,
                 name: None,
+                value_only: false,
+                quiet: false,
             })
         );
     }
@@ -2248,6 +2934,7 @@ mod tests {
     fn window_steps_take_a_session_target() {
         let step = WindowStep {
             target: session("s"),
+            alert: false,
         };
         assert_eq!(
             parse(&argv(&["next-window", "-t", "s"])),
@@ -2307,6 +2994,7 @@ mod tests {
                 next: true,
                 previous: true,
                 key_table: Some("prefix".to_string()),
+                client: None,
             }))
         );
         assert_eq!(
@@ -2317,6 +3005,7 @@ mod tests {
                 next: false,
                 previous: false,
                 key_table: None,
+                client: None,
             }))
         );
     }
@@ -2442,7 +3131,7 @@ mod tests {
             ("display \"~\"", vec![argv(&["display", &home])]),
             ("display a~ '~'", vec![argv(&["display", "a~", "~"])]),
             ("display ~root", vec![argv(&["display", &root])]),
-            ("display $ a$", vec![argv(&["display", "$", "a$"])]),
+            ("display $ a", vec![argv(&["display", "$", "a"])]),
         ];
         for (input, want) in cases {
             assert_eq!(split_command_string(input), Ok(want), "{input:?}");
@@ -2554,6 +3243,9 @@ mod tests {
             parse(&argv(&["lsk", "-T", "prefix"])),
             Ok(Command::ListKeys(ListKeys {
                 table: Some("prefix".to_string()),
+                first: false,
+                notes: false,
+                key: None,
             }))
         );
         assert_eq!(
@@ -2583,6 +3275,10 @@ mod tests {
                 prompt: Some("name".to_string()),
                 initial: Some("old".to_string()),
                 template: Some("rename-window '%%'".to_string()),
+                background: false,
+                key: false,
+                single: false,
+                prompt_type: None,
             }))
         );
         assert_eq!(
@@ -2591,12 +3287,17 @@ mod tests {
                 prompt: None,
                 initial: None,
                 template: None,
+                background: false,
+                key: false,
+                single: false,
+                prompt_type: None,
             }))
         );
         assert_eq!(
             parse(&argv(&["run", "echo hi; echo two"])),
             Ok(Command::RunShell(RunShell {
                 cmd: "echo hi; echo two".to_string(),
+                background: false,
             }))
         );
         assert!(parse(&argv(&["run-shell"])).is_err());
@@ -2609,105 +3310,9 @@ mod tests {
             Ok(Command::SelectLayout(SelectLayout {
                 target: parse_target("%1").expect("target"),
                 name: "main-vertical".to_string(),
+                spread: false,
             }))
         );
         assert!(parse(&argv(&["select-layout"])).is_err());
-    }
-
-    /// The stub edit: every M3.6 verb parses to its variant's empty struct
-    /// (TC.2 replaces this with each verb's flag table); their tmux short
-    /// names are not native (FE.1's alias table), and neither is
-    /// `list-commands` (M36-R1).
-    #[test]
-    fn m36_verbs_parse_to_their_stub_structs() {
-        use crate::cmd::*;
-        let cases = [
-            ("join-pane", Command::JoinPane(JoinPane::default())),
-            ("swap-pane", Command::SwapPane(SwapPane::default())),
-            ("swap-window", Command::SwapWindow(SwapWindow::default())),
-            ("break-pane", Command::BreakPane(BreakPane::default())),
-            (
-                "resize-window",
-                Command::ResizeWindow(ResizeWindow::default()),
-            ),
-            ("last-pane", Command::LastPane(LastPane::default())),
-            (
-                "rotate-window",
-                Command::RotateWindow(RotateWindow::default()),
-            ),
-            ("move-window", Command::MoveWindow(MoveWindow::default())),
-            ("move-pane", Command::MovePane(MovePane::default())),
-            ("next-layout", Command::NextLayout(NextLayout::default())),
-            (
-                "respawn-window",
-                Command::RespawnWindow(RespawnPane {
-                    kill: false,
-                    target: Target::Current,
-                    command: None,
-                }),
-            ),
-            (
-                "refresh-client",
-                Command::RefreshClient(RefreshClient::default()),
-            ),
-            (
-                "show-messages",
-                Command::ShowMessages(ShowMessages::default()),
-            ),
-            (
-                "choose-client",
-                Command::ChooseClient(ChooseClient::default()),
-            ),
-            (
-                "suspend-client",
-                Command::SuspendClient(SuspendClient::default()),
-            ),
-            ("find-window", Command::FindWindow(FindWindow::default())),
-            ("choose-tree", Command::ChooseTree(ChooseTree::default())),
-            ("wait-for", Command::WaitFor(WaitFor::default())),
-            (
-                "display-popup",
-                Command::DisplayPopup(DisplayPopup::default()),
-            ),
-            ("new-pane", Command::NewPane(NewPane::default())),
-            ("display-menu", Command::DisplayMenu(DisplayMenu::default())),
-            (
-                "display-panes",
-                Command::DisplayPanes(DisplayPanes::default()),
-            ),
-            (
-                "confirm-before",
-                Command::ConfirmBefore(ConfirmBefore::default()),
-            ),
-            ("if-shell", Command::If(If::default())),
-            ("set-hook", Command::SetHook(SetHook::default())),
-            ("show-hooks", Command::ShowHooks(ShowHooks::default())),
-            (
-                "set-environment",
-                Command::SetEnvironment(SetEnvironment::default()),
-            ),
-            (
-                "show-environment",
-                Command::ShowEnvironment(ShowEnvironment::default()),
-            ),
-        ];
-        for (verb, want) in cases {
-            assert_eq!(parse(&argv(&[verb])), Ok(want), "{verb}");
-        }
-        for tmux_only in [
-            "joinp",
-            "swapp",
-            "breakp",
-            "if",
-            "popup",
-            "menu",
-            "list-commands",
-        ] {
-            assert_eq!(
-                parse(&argv(&[tmux_only])),
-                Err(ParseError::UnknownCommand(tmux_only.to_string())),
-                "{tmux_only}"
-            );
-        }
     }
 }
