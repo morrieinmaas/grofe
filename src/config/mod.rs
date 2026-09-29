@@ -47,6 +47,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // Top-level keys stay above the sectioned ones: `import-tmux` writes
     // them in this order.
     ("main-pane-width", "main-pane-width"),
+    ("main-pane-height", "main-pane-height"),
+    ("window-size", "window-size"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),

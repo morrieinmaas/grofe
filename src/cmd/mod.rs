@@ -99,7 +99,8 @@ pub struct ListSessions {
     pub filter: Option<String>,
 }
 
-/// `new-window` (`-d -t -n -c`, plus a trailing shell command).
+/// `new-window` (`-d -t -n -c`, plus a trailing shell command; from M3.6
+/// `-a -P -F`, TC.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewWindow {
     pub detached: bool,
@@ -107,6 +108,12 @@ pub struct NewWindow {
     pub name: Option<String>,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
+    /// `-a`: at the index after the target window.
+    pub after: bool,
+    /// `-P`: print the new window (`-F`, else tmux's default format).
+    pub print: bool,
+    /// `-F`.
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +136,8 @@ pub struct ListWindows {
     pub filter: Option<String>,
 }
 
-/// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command).
+/// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command;
+/// from M3.6 `-b -f -d -P -F`, TC.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitWindow {
     pub dir: Dir,
@@ -137,6 +145,16 @@ pub struct SplitWindow {
     pub size: SplitSize,
     pub target: Target,
     pub command: Option<Vec<String>>,
+    /// `-b`: left of or above the target.
+    pub before: bool,
+    /// `-f`: beside the whole window.
+    pub full: bool,
+    /// `-d`: the new pane does not become active.
+    pub detached: bool,
+    /// `-P`: print the new pane (`-F`, else tmux's default format).
+    pub print: bool,
+    /// `-F`.
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +169,10 @@ pub struct KillPane {
 pub struct SelectPane {
     pub edge: Option<Edge>,
     pub target: Target,
+    /// `-l` (M3.6, TC.8): the target window's last pane, as `last-pane`.
+    pub last: bool,
+    /// `-Z` (M3.6, TC.8): a zoomed window stays zoomed.
+    pub keep_zoom: bool,
 }
 
 /// What `resize-pane` does: move one or more borders by a shared cell
@@ -169,9 +191,7 @@ pub enum ResizeAction {
 /// `resize-pane` (`-L -R -U -D -Z -t`, an amount, and from M3.6 `-x -y`).
 /// `width`/`height` set the pane's size outright, in cells or `N%` of the
 /// window; they may come with a direction, or alone, in which case
-/// `action` is `Edges` with no edges. Until TC.8 implements them, `parse`
-/// refuses them with `not implemented: resize-pane -x/-y`, so they stay
-/// `None` here.
+/// `action` is `Edges` with no edges. They apply before the direction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResizePane {
     pub action: ResizeAction,
@@ -189,6 +209,8 @@ pub struct RespawnPane {
     pub kill: bool,
     pub target: Target,
     pub command: Option<Vec<String>>,
+    /// `-c` (M3.6, TC.8): the start directory, raw (a format).
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -424,7 +424,7 @@ pub(crate) fn select_target(
         if let Target::Pane(_) = target {
             let pane = model.resolve_pane(target, ctx)?;
             if let Some(w) = model.windows.get_mut(&window) {
-                w.active = pane;
+                w.set_active(pane);
             }
         }
         model.select_window(window);
@@ -929,10 +929,17 @@ fn resize_session(model: &mut Model, session: SessionId, (cols, rows): (u16, u16
     s.cols = cols;
     s.rows = rows;
     for id in s.windows.clone() {
+        // A window `resize-window` sized (`window-size manual`) keeps it.
+        let manual = model.windows.get(&id).is_some_and(|w| {
+            model
+                .options
+                .lookup("window-size", &options::chain(model, w.active))
+                == Some("manual")
+        });
         let Some(w) = model.windows.get_mut(&id) else {
             continue;
         };
-        if (w.cols, w.rows) == (cols, rows) {
+        if manual || (w.cols, w.rows) == (cols, rows) {
             continue;
         }
         w.cols = cols;

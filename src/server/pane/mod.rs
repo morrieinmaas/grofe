@@ -458,6 +458,15 @@ impl PaneHandle {
     /// sequence from the renderer's `write_sgr` goes wherever the style
     /// changes, carried across lines as tmux does.
     pub fn capture(&self, opts: &CaptureOpts) -> String {
+        self.capture_lines(opts, false)
+    }
+
+    /// [`Self::capture`] with tmux's `-J` when `join`: a row that wraps
+    /// onto the next one is joined to it, its trailing blanks kept.
+    // ponytail: tmux keeps the trailing blanks of every line that was
+    // written up to its end; the grid cannot tell written blanks from
+    // empty cells, so a line that does not wrap is still trimmed.
+    pub fn capture_lines(&self, opts: &CaptureOpts, join: bool) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
         let sgr_flags = CellFlags::BOLD
@@ -515,6 +524,14 @@ impl PaneHandle {
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);
                 }
+            }
+            let wraps = join
+                && row[Column(grid.columns() - 1)]
+                    .flags
+                    .contains(CellFlags::WRAPLINE);
+            if wraps {
+                out.push_str(&text);
+                continue;
             }
             out.push_str(text.trim_end_matches(' '));
             out.push('\n');

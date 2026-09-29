@@ -79,9 +79,50 @@ pub struct Window {
     /// tmux's `window_bell_flag` (R13): set by a bell (T3.3), cleared when
     /// the window becomes its session's current window.
     pub bell_flag: bool,
+    /// The panes that were active before `active`, most recent last
+    /// (tmux's `last_panes`, for `last-pane`), kept by
+    /// [`Window::set_active`] and [`Window::lose_pane`].
+    pub last_panes: Vec<PaneId>,
 }
 
 impl Window {
+    /// Makes `pane` the active pane; the one it replaces becomes the most
+    /// recent last pane, as tmux's `window_set_active_pane` does.
+    pub fn set_active(&mut self, pane: PaneId) {
+        if self.active == pane {
+            return;
+        }
+        let old = self.active;
+        self.last_panes.retain(|p| *p != pane && *p != old);
+        self.last_panes.push(old);
+        self.active = pane;
+    }
+
+    /// The pane `last-pane` goes back to.
+    pub fn last_pane(&self) -> Option<PaneId> {
+        self.last_panes.last().copied()
+    }
+
+    /// After `pane` left the window, whose index order was `order`: it
+    /// leaves the last-pane stack, and if it was active the last pane
+    /// takes over, else the one before it, else the one after (tmux's
+    /// `window_lost_pane`).
+    pub fn lose_pane(&mut self, order: &[PaneId], pane: PaneId) {
+        self.last_panes.retain(|p| *p != pane);
+        if self.active != pane {
+            return;
+        }
+        let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
+        let next = self
+            .last_pane()
+            .or_else(|| pos.checked_sub(1).map(|i| order[i]))
+            .or_else(|| order.get(pos + 1).copied());
+        if let Some(next) = next {
+            self.active = next;
+            self.last_panes.retain(|p| *p != next);
+        }
+    }
+
     /// The area the layout is computed against.
     pub fn area(&self) -> Rect {
         Rect {
@@ -317,13 +358,9 @@ impl Model {
         if order.len() <= 1 {
             return self.remove_window(window_id);
         }
-        let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
         window.zoomed = false;
         window.layout.remove(pane);
-        if window.active == pane {
-            let rest: Vec<PaneId> = order.into_iter().filter(|p| *p != pane).collect();
-            window.active = rest[pos.min(rest.len() - 1)];
-        }
+        window.lose_pane(&order, pane);
         let removed = self.take_panes(&[pane]);
         self.relayout(window_id);
         removed
@@ -337,29 +374,36 @@ impl Model {
         };
         let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
         let removed = self.take_panes(&ids);
-        let Some(session) = self.sessions.get_mut(&w.session) else {
-            return removed;
+        self.unlink_window(w.session, window);
+        removed
+    }
+
+    /// Takes `window` out of `session`'s window list and last-window
+    /// stack, as tmux's `session_detach` unlinks a winlink: if it was the
+    /// current window, the last window takes over, else the one before
+    /// it, else the one after. A session left with no windows goes. The
+    /// window itself (if still in the model) and its panes are untouched.
+    pub fn unlink_window(&mut self, session: SessionId, window: WindowId) {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return;
         };
-        let pos = session.windows.iter().position(|id| *id == window);
-        session.windows.retain(|id| *id != window);
-        if session.windows.is_empty() {
-            let name = std::mem::take(&mut session.name);
-            self.closed_sessions.push((w.session, name));
-            self.sessions.remove(&w.session);
-            self.client_last_session
-                .retain(|_, last| *last != w.session);
-            return removed;
+        let pos = s.windows.iter().position(|id| *id == window);
+        s.windows.retain(|id| *id != window);
+        s.last_windows.retain(|id| *id != window);
+        if s.windows.is_empty() {
+            let name = std::mem::take(&mut s.name);
+            self.closed_sessions.push((session, name));
+            self.sessions.remove(&session);
+            self.client_last_session.retain(|_, last| *last != session);
+            return;
         }
-        session.last_windows.retain(|w| *w != window);
-        if session.active == window {
-            // As tmux: the last window takes over, else the one at the
-            // same position.
-            session.active = match session.last_windows.pop() {
-                Some(l) => l,
-                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+        if s.active == window {
+            let pos = pos.unwrap_or(0);
+            s.active = match s.last_windows.pop() {
+                Some(last) => last,
+                None => s.windows[pos.saturating_sub(1).min(s.windows.len() - 1)],
             };
         }
-        removed
     }
 
     /// Removes a session with all its windows and panes. Returns the
@@ -725,6 +769,7 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            last_panes: Vec::new(),
         });
         model.insert_window(Window {
             id: w2,
@@ -737,6 +782,7 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            last_panes: Vec::new(),
         });
 
         // A second session, owning nothing of "a"'s.
@@ -766,6 +812,45 @@ mod tests {
         assert!(err.contains(&format!("can't find pane: {p2}")), "{err}");
     }
 
+    /// tmux's `last_panes`: `set_active` pushes the pane it replaces, and a
+    /// pane that leaves drops out; the active one leaving hands over to
+    /// the last pane, else the one before, else the one after.
+    #[test]
+    fn the_last_pane_stack_follows_tmux() {
+        let (a, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+        let mut w = Window {
+            id: WindowId(0),
+            session: SessionId(0),
+            index: 0,
+            name: String::new(),
+            layout: LayoutTree::new(a),
+            active: a,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+            bell_flag: false,
+            last_panes: Vec::new(),
+        };
+        assert_eq!(w.last_pane(), None);
+        w.set_active(b);
+        w.set_active(c);
+        assert_eq!(w.last_pane(), Some(b));
+        w.set_active(b);
+        assert_eq!((w.last_pane(), w.last_panes.len()), (Some(c), 2));
+        w.set_active(b);
+        assert_eq!(w.last_pane(), Some(c));
+        // The active pane leaves: the last pane takes over and leaves the
+        // stack.
+        w.lose_pane(&[a, b, c], b);
+        assert_eq!((w.active, w.last_pane()), (c, Some(a)));
+        // With no last pane: the one before, else the one after.
+        w.last_panes.clear();
+        w.lose_pane(&[a, c], c);
+        assert_eq!(w.active, a);
+        w.lose_pane(&[a, b], a);
+        assert_eq!(w.active, b);
+    }
+
     /// R13, as tmux 3.7b does it (recorded on a private socket): selecting
     /// a window clears its bell flag, reselecting the current window does
     /// not, and neither does anything to another window's flag.
@@ -787,6 +872,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 bell_flag: true,
+                last_panes: Vec::new(),
             });
         }
         let flag = |m: &Model, w| m.windows[&w].bell_flag;
