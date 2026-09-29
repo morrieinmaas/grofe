@@ -1,0 +1,6 @@
+# TC.7: confirm-before without -p names the command in its prompt.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& confirm-before -t {client} "kill-pane -t main"
+screen Confirm

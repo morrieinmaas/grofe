@@ -1,0 +1,7 @@
+# TC.7 (M36-R5): numeric positions past the edge are moved inside the
+# client; -y is the row under the menu.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& display-menu -c {client} -x 58 -y 30 One o "display-message one"
+screen One

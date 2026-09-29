@@ -1,0 +1,22 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+client 60x15 attach -t main
+$& display-menu -c {client} -T Title -x C -y C First a "display-message one" "" Second b "display-message two" -Disabled c "display-message three"
+screen Second
+|
+|
+|
+|
+|                       ┌─Title──────┐
+|                       │ First  (a) │
+|                       ├────────────┤
+|                       │ Second (b) │
+|                       │ Disabled   │
+|                       └────────────┘
+|
+|
+|
+|
+| [main] 1:first*                               "<HOST>"

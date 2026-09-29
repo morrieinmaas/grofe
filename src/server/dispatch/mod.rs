@@ -90,10 +90,19 @@ pub fn run_parsed(
 }
 
 /// Runs one command whose argv is already split (a binding, the prompt,
-/// the mouse): a `;` argument in it is literal, never a separator.
+/// the mouse): a `;` argument in it is literal, never a separator. An
+/// alias verb may stand for several commands ([`menu::expand_alias_command`]).
 pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    let expanded = menu::expand_aliases(state, argv);
-    let cmds = compat::parse_split(ctx, expanded.as_deref().unwrap_or(argv))?;
+    let cmds = match menu::expand_alias_command(state, argv) {
+        Some(expanded) => {
+            let mut cmds = Vec::new();
+            for argv in &expanded {
+                cmds.extend(compat::parse_split(ctx, argv)?);
+            }
+            cmds
+        }
+        None => compat::parse_split(ctx, argv)?,
+    };
     run_commands(state, ctx, cmds)
 }
 
