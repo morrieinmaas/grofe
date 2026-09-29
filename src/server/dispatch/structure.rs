@@ -531,15 +531,45 @@ pub fn rotate_window(
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };
-    // ponytail: tmux 3.7b's rotate-window also rotates floating panes into
-    // the layout (recorded); grofe leaves them out, as every layout verb.
-    let pos = w.tiled_ids().iter().position(|p| *p == w.active);
-    w.layout.rotate(c.down);
-    if let Some(next) = pos.and_then(|i| w.tiled_ids().get(i).copied()) {
+    let order = w.pane_ids();
+    let pos = order.iter().position(|p| *p == w.active);
+    if w.floating.is_empty() {
+        w.layout.rotate(c.down);
+    } else {
+        rotate_slots(w, &order, c.down);
+    }
+    if let Some(next) = pos.and_then(|i| w.pane_ids().get(i).copied()) {
         w.set_active(next);
     }
     model.relayout(window);
     Ok(String::new())
+}
+
+/// rotate-window over a window with floating panes, as tmux 3.7b does
+/// (recorded): the panes in index order move one place up (`-D`: down)
+/// through the window's slots, the layout's cells then the floating
+/// panes' places, so a tiled pane can land in a floating place (and float
+/// there, at that place's size) and a floating pane in a cell.
+fn rotate_slots(w: &mut Window, order: &[PaneId], down: bool) {
+    let n = order.len();
+    if n < 2 {
+        return;
+    }
+    let moved: Vec<PaneId> = (0..n)
+        .map(|i| order[if down { (i + n - 1) % n } else { (i + 1) % n }])
+        .collect();
+    let tiled = w.tiled_ids();
+    // Through placeholders, since a cell may not name a pane twice.
+    let placeholder = |i: usize| PaneId(HOLE.0 - 1 - i as u32);
+    for (i, pane) in tiled.iter().enumerate() {
+        w.layout.replace(*pane, placeholder(i));
+    }
+    for (i, pane) in moved.iter().take(tiled.len()).enumerate() {
+        w.layout.replace(placeholder(i), *pane);
+    }
+    for (f, pane) in w.floating.iter_mut().zip(&moved[tiled.len()..]) {
+        f.pane = *pane;
+    }
 }
 
 /// `next-layout`: the preset after the last one applied to the window

@@ -786,35 +786,48 @@ fn floating_pane(srv: &TestServer, args: &[&str]) -> String {
     srv.cmd(&argv).expect("new-pane").trim_end().to_string()
 }
 
-/// Layout verbs leave a floating pane alone: after select-layout,
-/// next-layout and rotate-window it is listed once, still floating where
-/// it was, and killing it leaves no layout entry behind (the tiled panes
-/// still lay out and split). swap-pane refuses it with tmux 3.7b's text.
-#[test]
-fn layout_verbs_leave_floating_panes_out() {
-    let srv = start();
-    let _a = attach(&srv, "main");
+/// A window of tiled panes `t0`, `t1` (split -h) and floating pane `f`
+/// (-x 20 -y 5 -X 5 -Y 2), as recorded on tmux 3.7b; returns the ids.
+fn tiled_tiled_floating(srv: &TestServer) -> [String; 3] {
+    let t0 = list(srv, "#{pane_id}").trim_end().to_string();
     srv.cmd(&["split-window", "-h", "-t", "main", "cat"])
         .expect("split");
-    let float = floating_pane(&srv, &["-x", "20", "-y", "5", "-X", "5", "-Y", "2", "cat"]);
-    let geometry =
-        "#{pane_id} #{pane_floating_flag} #{pane_left} #{pane_top} #{pane_width} #{pane_height}";
-    for verb in [
-        &["select-layout", "-t", "main", "even-vertical"][..],
-        &["next-layout", "-t", "main"],
-        &["rotate-window", "-t", "main"],
-    ] {
-        srv.cmd(verb).unwrap_or_else(|e| panic!("{verb:?}: {e}"));
-        let panes = list(&srv, geometry);
-        assert_eq!(panes.matches(&float).count(), 1, "{verb:?}: {panes}");
-        assert!(
-            panes.contains(&format!("{float} 1 5 2 20 5")),
-            "{verb:?}: {panes}"
-        );
-    }
+    let f = floating_pane(srv, &["-x", "20", "-y", "5", "-X", "5", "-Y", "2", "cat"]);
+    let ids = list(srv, "#{pane_id}");
+    let t1 = ids.lines().nth(1).expect("second pane").to_string();
+    [t0, t1, f]
+}
+
+const GEOMETRY: &str = "#{pane_id} #{pane_floating_flag} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}";
+
+/// tmux 3.7b's rows (recorded), `%0`/`%1`/`%2` being `t0`/`t1`/`f`.
+fn recorded(ids: &[String; 3], rows: &[&str]) -> String {
+    rows.iter()
+        .map(|r| {
+            let r = r
+                .replace("%0", "@A")
+                .replace("%1", "@B")
+                .replace("%2", "@C")
+                .replace("@A", &ids[0])
+                .replace("@B", &ids[1])
+                .replace("@C", &ids[2]);
+            r + "\n"
+        })
+        .collect()
+}
+
+/// select-layout and next-layout fold a floating pane into the layout,
+/// tiled from then on, as tmux 3.7b does when the window has tiled panes
+/// (recorded); it is listed once, and killing it leaves no layout entry
+/// behind. swap-pane refuses a floating pane with tmux's text.
+#[test]
+fn a_layout_preset_tiles_floating_panes() {
+    let srv = start();
+    let _a = attach(&srv, "main");
+    let ids = tiled_tiled_floating(&srv);
     for words in [
-        ["-s", float.as_str(), "-t", "main"],
-        ["-s", "main", "-t", float.as_str()],
+        ["-s", ids[2].as_str(), "-t", "main"],
+        ["-s", "main", "-t", ids[2].as_str()],
     ] {
         let mut argv = vec!["swap-pane"];
         argv.extend_from_slice(&words);
@@ -823,8 +836,14 @@ fn layout_verbs_leave_floating_panes_out() {
             Err("cannot swap floating panes\n".to_string())
         );
     }
-    srv.cmd(&["kill-pane", "-t", &float]).expect("kill-pane");
-    assert!(!list(&srv, "#{pane_id}").contains(&float));
+    srv.cmd(&["select-layout", "-t", "main", "even-vertical"])
+        .expect("select-layout");
+    let want = recorded(
+        &ids,
+        &["%0 0 0 0 60 4 0", "%1 0 0 5 60 4 0", "%2 0 0 10 60 4 1"],
+    );
+    assert_eq!(list(&srv, GEOMETRY), want);
+    srv.cmd(&["kill-pane", "-t", &ids[2]]).expect("kill-pane");
     srv.cmd(&["select-layout", "-t", "main", "even-horizontal"])
         .expect("select-layout");
     srv.cmd(&["split-window", "-t", "main", "cat"])
@@ -832,6 +851,47 @@ fn layout_verbs_leave_floating_panes_out() {
     let panes = list(&srv, "#{pane_id} #{pane_floating_flag} #{window_panes}");
     assert_eq!(panes.lines().count(), 3, "{panes}");
     assert!(panes.lines().all(|l| l.ends_with(" 0 3")), "{panes}");
+
+    // next-layout, from no preset yet: even-horizontal over all three.
+    let srv = start();
+    let _a = attach(&srv, "main");
+    let ids = tiled_tiled_floating(&srv);
+    srv.cmd(&["next-layout", "-t", "main"])
+        .expect("next-layout");
+    let want = recorded(
+        &ids,
+        &["%0 0 0 0 20 14 0", "%1 0 21 0 19 14 0", "%2 0 41 0 19 14 1"],
+    );
+    assert_eq!(list(&srv, GEOMETRY), want);
+}
+
+/// rotate-window moves the panes through the window's slots, the layout's
+/// cells then the floating places, as tmux 3.7b does (recorded): a tiled
+/// pane lands in the floating place and floats there, the floating pane
+/// takes a cell, and the slot that was active stays active.
+#[test]
+fn rotate_window_moves_panes_through_floating_places() {
+    let srv = start();
+    let _a = attach(&srv, "main");
+    let ids = tiled_tiled_floating(&srv);
+    let steps: [(&[&str], [&str; 3]); 3] = [
+        (
+            &["rotate-window", "-t", "main"],
+            ["%1 0 0 0 30 14 0", "%2 0 31 0 29 14 0", "%0 1 5 2 20 5 1"],
+        ),
+        (
+            &["rotate-window", "-D", "-t", "main"],
+            ["%0 0 0 0 30 14 0", "%1 0 31 0 29 14 0", "%2 1 5 2 20 5 1"],
+        ),
+        (
+            &["rotate-window", "-D", "-t", "main"],
+            ["%2 0 0 0 30 14 0", "%0 0 31 0 29 14 0", "%1 1 5 2 20 5 1"],
+        ),
+    ];
+    for (argv, rows) in steps {
+        srv.cmd(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        assert_eq!(list(&srv, GEOMETRY), recorded(&ids, &rows), "{argv:?}");
+    }
 }
 
 /// resize-pane sizes a floating pane: `-x`/`-y` set it, an edge moves
