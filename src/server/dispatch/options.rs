@@ -257,6 +257,18 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "bottom",
     },
+    // TC.12: tmux 3.7b's name, values, window scope and default, so the
+    // `set -p allow-passthrough on` that icat, snacks.nvim and canopy send
+    // works and `show` answers.
+    // ponytail: a no-op. grofe always unwraps `DCS tmux;` and lets out only
+    // what the same bytes sent bare would (passthrough.rs), so there is
+    // nothing for `off` to guard; canopy turns it on anyway.
+    Builtin {
+        name: "allow-passthrough",
+        kind: Kind::Choice(&["off", "on", "all"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
     // M3.6 (the stub edit): the server's identity override (spec D12).
     // TC.1 reads it once at start; until then nothing does.
     Builtin {
@@ -1418,6 +1430,7 @@ mod tests {
             ("pane-border-style", "default", OptionScope::Window),
             ("pane-active-border-style", "fg=green", OptionScope::Window),
             ("status-position", "bottom", OptionScope::Session),
+            ("allow-passthrough", "off", OptionScope::Window),
         ] {
             assert_eq!(o.lookup(name, &[]), Some(default), "{name}");
             assert_eq!(builtin(name).map(|b| b.scope), Some(scope), "{name}");
