@@ -265,6 +265,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "auto",
     },
+    // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
+    // any string; `select-layout` reads cells or `N%`). ponytail:
+    // `main-vertical` reads it once TC.8 wires `dispatch/window.rs`.
+    Builtin {
+        name: "main-pane-width",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "80",
+    },
 ];
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
@@ -306,6 +315,9 @@ pub struct Options {
     /// List options (TC.2b), beside the scalar store so [`Entry`] keeps
     /// its shape.
     lists: BTreeMap<Owner, BTreeMap<String, ListEntry>>,
+    /// Global lists the config set, each with the elements it had before,
+    /// as `config_base` for scalars.
+    config_list_base: BTreeMap<String, BTreeMap<u32, String>>,
 }
 
 impl Options {
@@ -336,6 +348,7 @@ impl Options {
     /// leaves alone.
     fn mark_runtime(&mut self, name: &str) {
         self.config_base.remove(name);
+        self.config_list_base.remove(name);
         self.runtime.insert(name.to_string());
     }
 
@@ -796,6 +809,7 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     if !resolved.keys.is_empty() || tables.is_configured() {
         *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
     }
+    apply_config_lists(model, events, resolved);
     crate::server::sources::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
@@ -938,6 +952,10 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let model = &mut state.model;
     for (name, value, _) in resolved.configured() {
         set_global(model, &mut state.events, name, value);
+        model.options.mark_runtime(name);
+    }
+    for (name, items, _) in resolved.configured_lists() {
+        set_global_list(model, &mut state.events, name, list_items(items));
         model.options.mark_runtime(name);
     }
     let tables = &mut state.registry.key_tables;
@@ -1406,6 +1424,8 @@ pub enum ListOp {
     Push(String),
     /// The list becomes just the text at index 0.
     Replace(String),
+    /// The list becomes exactly these elements.
+    Items(BTreeMap<u32, String>),
     /// Element `index` goes; later ones keep their indices.
     Remove(u32),
     /// Back to the default (global) or gone (elsewhere).
@@ -1483,6 +1503,7 @@ impl Options {
                 items.insert(free, value);
             }
             ListOp::Replace(value) => *items = BTreeMap::from([(0, value)]),
+            ListOp::Items(new) => *items = new,
             ListOp::Remove(index) => {
                 items.remove(&index);
             }
@@ -1588,6 +1609,71 @@ fn set_list(
         });
     }
     Ok(String::new())
+}
+
+/// A config list's elements, element N at index N.
+fn list_items(items: &[String]) -> BTreeMap<u32, String> {
+    (0..).zip(items.iter().cloned()).collect()
+}
+
+/// Sets a whole global list, emitting `option-changed` (value-less, as
+/// for any whole-list change) on a change.
+fn set_global_list(
+    model: &mut Model,
+    events: &mut Events,
+    name: &str,
+    items: BTreeMap<u32, String>,
+) {
+    match model
+        .options
+        .edit_list(Owner::Global, name, ListOp::Items(items), false)
+    {
+        Ok(true) => events.emit(Event::OptionChanged {
+            scope: scope_name(Owner::Global),
+            name: name.to_string(),
+            value: None,
+        }),
+        Ok(false) => {}
+        Err(e) => eprintln!("grofe config: {name}: {e}"),
+    }
+}
+
+/// `apply_config` for lists (R10): a list the config no longer sets goes
+/// back to what it was before the config set it; one set at runtime is
+/// left alone.
+fn apply_config_lists(model: &mut Model, events: &mut Events, resolved: &Resolved) {
+    let configured: Vec<(&str, &[String])> = resolved
+        .configured_lists()
+        .map(|(n, v, _)| (n, v))
+        .collect();
+    let dropped: Vec<(String, BTreeMap<u32, String>)> = model
+        .options
+        .config_list_base
+        .iter()
+        .filter(|(name, _)| !configured.iter().any(|(n, _)| n == name))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    for (name, base) in dropped {
+        model.options.config_list_base.remove(&name);
+        set_global_list(model, events, &name, base);
+    }
+    for (name, items) in configured {
+        if model.options.runtime.contains(name) {
+            continue;
+        }
+        if !model.options.config_list_base.contains_key(name) {
+            let base = model
+                .options
+                .list(Owner::Global, name)
+                .map(|l| l.items.clone())
+                .unwrap_or_default();
+            model
+                .options
+                .config_list_base
+                .insert(name.to_string(), base);
+        }
+        set_global_list(model, events, name, list_items(items));
+    }
 }
 
 fn scope_name(owner: Owner) -> String {

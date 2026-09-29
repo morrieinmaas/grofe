@@ -44,6 +44,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("set-titles-string", "set-titles-string"),
     ("set-clipboard", "set-clipboard"),
     ("focus-events", "focus-events"),
+    // Top-level keys stay above the sectioned ones: `import-tmux` writes
+    // them in this order.
+    ("main-pane-width", "main-pane-width"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -61,6 +64,21 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-border.active-style", "pane-active-border-style"),
     ("compat-identity", "compat-identity"),
 ];
+
+/// TOML key to tmux option name for every list option (TC.2b). A TOML
+/// array of strings sets the whole list, element N from index N.
+pub const LIST_NAMES: &[(&str, &str)] = &[
+    ("status.rows", "status-format"),
+    ("command-alias", "command-alias"),
+];
+
+/// The tmux name of a list option's TOML key.
+pub fn list_tmux_name(toml_key: &str) -> Option<&'static str> {
+    LIST_NAMES
+        .iter()
+        .find(|(t, _)| *t == toml_key)
+        .map(|(_, n)| *n)
+}
 
 /// The TOML type an option takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +199,9 @@ pub struct Resolved {
     pub options: BTreeMap<&'static str, String>,
     /// Bindings in load order.
     pub keys: Vec<KeyBinding>,
-    /// Who set each option.
+    /// Every list option by TOML key (TC.2b), element N at index N.
+    pub lists: BTreeMap<&'static str, Vec<String>>,
+    /// Who set each option and list.
     pub provenance: Provenance,
     /// Files skipped by an unmet `requires` (R7), one line each.
     pub warnings: Vec<String>,
@@ -201,6 +221,16 @@ impl Resolved {
             let src = self.provenance.get(k)?;
             let name = tmux_name(k)?;
             (src.layer != Layer::Defaults).then_some((name, v.as_str(), src))
+        })
+    }
+
+    /// `(tmux name, elements, source)` for every list a file set, as
+    /// [`Resolved::configured`] for scalars.
+    pub fn configured_lists(&self) -> impl Iterator<Item = (&'static str, &[String], &Source)> {
+        self.lists.iter().filter_map(|(k, v)| {
+            let src = self.provenance.get(k)?;
+            let name = list_tmux_name(k)?;
+            (src.layer != Layer::Defaults).then_some((name, v.as_slice(), src))
         })
     }
 
@@ -265,10 +295,25 @@ mod tests {
 
     #[test]
     fn toml_names_are_unique() {
-        for (i, (a, _)) in OPTION_NAMES.iter().enumerate() {
+        let all: Vec<&str> = OPTION_NAMES
+            .iter()
+            .chain(LIST_NAMES)
+            .map(|(t, _)| *t)
+            .collect();
+        for (i, a) in all.iter().enumerate() {
+            assert!(all[i + 1..].iter().all(|b| a != b), "{a} listed twice");
+        }
+    }
+
+    #[test]
+    fn every_list_option_has_a_toml_name() {
+        let lists: Vec<&str> = crate::server::dispatch::options::list_names().collect();
+        let named: Vec<&str> = LIST_NAMES.iter().map(|(_, n)| *n).collect();
+        assert_eq!(lists.len(), named.len());
+        for name in lists {
             assert!(
-                OPTION_NAMES[i + 1..].iter().all(|(b, _)| a != b),
-                "{a} listed twice"
+                named.contains(&name),
+                "list option {name} has no LIST_NAMES row"
             );
         }
     }
