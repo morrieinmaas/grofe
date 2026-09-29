@@ -3,126 +3,115 @@
 //! their context, plus the server environment `set-environment` keeps
 //! (spec §4.2).
 //!
-//! **Events.** [`EVENTS`] lists grofe's event names, what each means, and
-//! the tmux hook FE.3 maps onto it. An event is found by comparing the
-//! model after a command sequence or a pane event with the model the last
-//! check saw ([`run_pending`]), so it names what changed, not which command
-//! changed it.
+//! **Events.** [`EVENTS`] lists grofe's event names, what fires each, and
+//! the tmux hook FE.3 maps onto it. Each is emitted where it happens, with
+//! the context tmux 3.7b gives its hook (recorded on a private socket):
 //!
-//! **Timing.** Command-shaped events (tmux's `after-*` hooks) run their
-//! hook inside [`run_pending`], before the triggering request's reply goes
-//! out, as tmux 3.7b's `after-*` hooks hold the CLI. Notify-shaped events
-//! (tmux's `session-created`, `client-resized` and the like) fire after the
-//! reply: they are sent through `State.jobs`, and run inline only when the
-//! queue is full. Commands a hook runs trigger no hooks of their own, as in
-//! tmux.
+//! - the command-shaped ones (tmux's `after-*` hooks) by
+//!   [`run_command`], which `dispatch` runs every command through; they run
+//!   before the request's reply, as tmux's hold the CLI;
+//! - the notify-shaped ones by the code that does the thing
+//!   ([`session_created`], [`client_session_changed`], [`client_resized`],
+//!   [`pane_exited`], and the model's `closed_sessions` for
+//!   `session-closed`); they go through `State.jobs`, so they run after
+//!   the reply, in the order they happened.
+//!
+//! Hooks run on one queue, in order, and a hook's `run-shell` without `-b`
+//! holds the queue until its shell exits, as tmux's command queue does; a
+//! CLI request whose `after-*` hook waits so gets its reply only then.
+//! Commands a hook runs trigger no hooks, as in tmux.
 //!
 //! **Environment.** The global environment starts as the server process's
-//! own. Hidden (`-h`) variables never reach a process (a new pane or
-//! `run-shell`'s shell, recorded on tmux 3.7b); they, like every global
-//! variable, expand in `$NAME` in a command string
+//! own, and is all a pane or `run-shell` gets from the server's. Hidden
+//! (`-h`) variables never reach a process (recorded on tmux 3.7b); they,
+//! like every global variable, expand in `$NAME` in a command string
 //! (`cmd::split_command_string`, through [`Hooks::for_server`]). A
 //! session's variables live in its `Session.env`, its hidden ones here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Duration;
 
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::oneshot;
 
-use crate::cmd::{self, FormatVars, Resolve, Target};
+use crate::cmd::{self, Command, FormatVars, Resolve, Target};
 use crate::config::Resolved;
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::dispatch::{self, options};
-use crate::server::pane::PaneEventKind;
 use crate::server::{Job, State};
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
 
 /// One grofe event a hook can be bound to.
 pub struct EventSpec {
     pub name: &'static str,
-    /// What the event means, for `show-hooks` readers and FE.3.
+    /// What fires the event, for readers and FE.3.
     pub fires: &'static str,
     /// The tmux 3.7b hook FE.3's table maps onto this event.
     pub tmux: &'static str,
-    /// Fired after the triggering reply (tmux's notify hooks), not before.
-    notify: bool,
 }
 
-/// Every grofe event, in the order hooks for one change run.
+/// Every grofe event.
 pub const EVENTS: &[EventSpec] = &[
     EventSpec {
-        name: "session-created",
-        fires: "a session was created",
-        tmux: "session-created",
-        notify: true,
-    },
-    EventSpec {
-        name: "window-created",
-        fires: "a window was added to an existing session",
-        tmux: "after-new-window",
-        notify: false,
+        name: "pane-focused",
+        fires: "select-pane made another pane active",
+        tmux: "after-select-pane",
     },
     EventSpec {
         name: "window-focused",
-        fires: "a session's current window became another existing window",
+        fires: "select-window succeeded, even on the current window",
         tmux: "after-select-window",
-        notify: false,
     },
     EventSpec {
-        name: "pane-focused",
-        fires: "a window's active pane became another existing pane",
-        tmux: "after-select-pane",
-        notify: false,
-    },
-    EventSpec {
-        name: "window-resized",
-        fires: "a window changed size",
-        tmux: "after-resize-window",
-        notify: false,
-    },
-    EventSpec {
-        name: "pane-resized",
-        fires: "a window's panes changed size while the window did not (once per window)",
-        tmux: "after-resize-pane",
-        notify: false,
-    },
-    EventSpec {
-        name: "client-resized",
-        fires: "an attached client's terminal changed size",
-        tmux: "client-resized",
-        notify: true,
-    },
-    EventSpec {
-        name: "client-session-changed",
-        fires: "an attached client switched to another session",
-        tmux: "client-session-changed",
-        notify: true,
-    },
-    EventSpec {
-        name: "pane-died",
-        fires: "a pane's process exited and remain-on-exit kept the pane",
-        tmux: "pane-died",
-        notify: true,
-    },
-    EventSpec {
-        name: "pane-exited",
-        fires: "a pane's process exited and the pane was removed",
-        tmux: "pane-exited",
-        notify: true,
+        name: "window-created",
+        fires: "new-window made a window",
+        tmux: "after-new-window",
     },
     EventSpec {
         name: "pane-closed",
-        fires: "a command removed a pane (its window stays, or it was the window's only pane)",
+        fires: "kill-pane removed a pane",
         tmux: "after-kill-pane",
-        notify: false,
+    },
+    EventSpec {
+        name: "pane-resized",
+        fires: "resize-pane succeeded",
+        tmux: "after-resize-pane",
+    },
+    EventSpec {
+        name: "window-resized",
+        fires: "resize-window succeeded",
+        tmux: "after-resize-window",
+    },
+    EventSpec {
+        name: "client-resized",
+        fires: "a client attached, or its terminal reported a size",
+        tmux: "client-resized",
+    },
+    EventSpec {
+        name: "client-session-changed",
+        fires: "a client attached, or switch-client or attach-session ran for it",
+        tmux: "client-session-changed",
+    },
+    EventSpec {
+        name: "session-created",
+        fires: "new-session made a session",
+        tmux: "session-created",
     },
     EventSpec {
         name: "session-closed",
         fires: "a session was removed",
         tmux: "session-closed",
-        notify: true,
+    },
+    EventSpec {
+        name: "pane-exited",
+        fires: "a pane's process exited and the pane was removed",
+        tmux: "pane-exited",
+    },
+    EventSpec {
+        name: "pane-died",
+        fires: "a pane's process exited and remain-on-exit kept the pane",
+        tmux: "pane-died",
     },
 ];
 
@@ -131,21 +120,16 @@ pub fn event(name: &str) -> Option<&'static EventSpec> {
     EVENTS.iter().find(|e| e.name == name)
 }
 
-/// How often the model is checked for changes no command or pane event
-/// reports (a client's resize, applied on a render tick), while any hook
-/// is bound.
-// ponytail: polling; the upgrade is a `run_pending` call after
-// `clients::tick` applies sizes and after every `Job`.
-const POLL: Duration = Duration::from_millis(200);
-
 /// A hook's command string, split when it was set (so `$NAME` expanded
-/// then, as tmux 3.7b expands it), in the dialect of the request that set
-/// it.
+/// then, as tmux 3.7b expands it), in the dialect of the request or config
+/// file that set it.
 #[derive(Clone)]
 struct Stored {
     text: String,
     cmds: Vec<Vec<String>>,
     dialect: Dialect,
+    /// Set by the config (`[hooks]`), so a reload may replace it.
+    from_config: bool,
 }
 
 #[derive(Clone)]
@@ -157,44 +141,60 @@ struct Var {
 type Env = BTreeMap<String, Var>;
 
 /// Bound hooks and the server environment (TC.5). Lives on `State.hooks`.
-#[derive(Default)]
 pub struct Hooks {
     bound: BTreeMap<&'static str, Stored>,
-    /// The model as the last check saw it; `None` while no hook is bound.
-    snapshot: Option<Snapshot>,
-    /// Panes whose process exit the actor just handled ([`pane_event`]).
-    exited: Vec<PaneId>,
-    /// The last pane event changed nothing a hook watches (output, title).
-    skip: bool,
+    /// Events `set-hook` set or unset: a reload leaves them alone (R10).
+    runtime: BTreeSet<&'static str>,
+    /// Notify hooks the job queue refused, run at the next [`run_pending`].
+    overflow: Vec<Job>,
+    /// Hook commands waiting to run, in order.
+    queue: VecDeque<Queued>,
     /// Hooks are running: their commands trigger none.
     running: bool,
-    /// Running on the actor after a reply (a job): notify events run now.
-    in_job: bool,
-    polling: bool,
+    /// The queue waits for a hook's `run-shell` to exit.
+    waiting: bool,
+    /// Told when the queue is next idle.
+    idle: Vec<oneshot::Sender<()>>,
+    /// See [`take_reply_hold`].
+    reply_hold: Option<oneshot::Receiver<()>>,
     global: Arc<RwLock<Env>>,
     /// Hidden session variables (`set-environment -h -t`), by session.
     session_hidden: BTreeMap<SessionId, BTreeMap<String, String>>,
 }
 
+impl Default for Hooks {
+    /// No hooks, and the global environment seeded from the process's.
+    fn default() -> Hooks {
+        let env = std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .map(|(k, value)| {
+                let var = Var {
+                    value,
+                    hidden: false,
+                };
+                (k, var)
+            })
+            .collect();
+        Hooks {
+            bound: BTreeMap::new(),
+            runtime: BTreeSet::new(),
+            overflow: Vec::new(),
+            queue: VecDeque::new(),
+            running: false,
+            waiting: false,
+            idle: Vec::new(),
+            reply_hold: None,
+            global: Arc::new(RwLock::new(env)),
+            session_hidden: BTreeMap::new(),
+        }
+    }
+}
+
 impl Hooks {
-    /// The server's hooks: the global environment starts as the process's
-    /// own, and `$NAME` in command strings expands from it from now on.
+    /// The server's hooks: as [`Hooks::default`], and `$NAME` in command
+    /// strings expands from this global environment from now on.
     pub fn for_server() -> Hooks {
         let hooks = Hooks::default();
-        {
-            let mut env = hooks.global.write().unwrap_or_else(PoisonError::into_inner);
-            for (name, value) in std::env::vars_os() {
-                if let (Ok(name), Ok(value)) = (name.into_string(), value.into_string()) {
-                    env.insert(
-                        name,
-                        Var {
-                            value,
-                            hidden: false,
-                        },
-                    );
-                }
-            }
-        }
         let global = Arc::clone(&hooks.global);
         cmd::parse::set_variable_source(Box::new(move |name| {
             let env = global.read().unwrap_or_else(PoisonError::into_inner);
@@ -208,17 +208,57 @@ impl Hooks {
     }
 }
 
-/// Applies the config's hooks (`[hooks]`), at start and on each `reload`,
-/// after its options (TC.5).
-// ponytail: the config schema has no `[hooks]` table yet (it is in
-// `src/config`, outside TC.5's files); hooks are set at runtime only.
-pub fn configure(_state: &mut State, _config: &Resolved) {}
+// ---- binding ----
 
-// ---- hooks ----
+/// A hook command string split and checked as `[hooks]` checks it: each
+/// command must parse natively, with its formats (`-t #{hook_pane}` is not
+/// a valid target until expanded) expanded to nothing. An empty string is
+/// no commands (the hook is removed).
+pub fn check_command(command: &str) -> Result<Vec<Vec<String>>, String> {
+    if command.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let cmds = cmd::split_command_string(command).map_err(|e| e.to_string())?;
+    for argv in &cmds {
+        cmd::parse(&unformatted(argv)).map_err(|e| e.to_string())?;
+    }
+    Ok(cmds)
+}
+
+fn unformatted(argv: &[String]) -> Vec<String> {
+    argv.iter().map(|w| cmd::expand(w, &NoVars)).collect()
+}
+
+/// Applies the config's `[hooks]`, at start and on each `reload`, after
+/// its options: each event `set-hook` has not touched gets the config's
+/// command, or none. The loader already checked every command, and a
+/// reload with any error changes nothing (T3.5).
+pub fn configure(state: &mut State, config: &Resolved) {
+    let hooks = &mut state.hooks;
+    let runtime = &hooks.runtime;
+    hooks
+        .bound
+        .retain(|e, s| !s.from_config || runtime.contains(e));
+    for (name, h) in &config.hooks {
+        let Some(spec) = event(name) else {
+            continue;
+        };
+        if hooks.runtime.contains(spec.name) || h.cmds.is_empty() {
+            continue;
+        }
+        let stored = Stored {
+            text: h.command.clone(),
+            cmds: h.cmds.clone(),
+            dialect: Dialect::Grofe,
+            from_config: true,
+        };
+        hooks.bound.insert(spec.name, stored);
+    }
+}
 
 /// Binds `event` to `command` (`set-hook -g`), replacing what was bound.
-/// The string is split now and each command must parse, as tmux checks
-/// at set time; formats in it are expanded when it runs.
+/// The string is split now and each command must parse (in the request's
+/// dialect), as tmux checks at set time; formats in it expand when it runs.
 pub fn bind(
     state: &mut State,
     ctx: &ClientCtx,
@@ -230,25 +270,23 @@ pub fn bind(
         return Err("empty value".to_string());
     }
     for argv in &cmds {
-        // Formats (`-t #{hook_pane}`) are not valid targets until expanded.
-        let argv: Vec<String> = argv.iter().map(|w| cmd::expand(w, &NoVars)).collect();
-        crate::compat::parse_split(ctx, &argv)?;
+        crate::compat::parse_split(ctx, &unformatted(argv))?;
     }
-    state.hooks.bound.insert(
-        event.name,
-        Stored {
-            text: command.to_string(),
-            cmds,
-            dialect: ctx.dialect,
-        },
-    );
-    start_polling(state);
+    let stored = Stored {
+        text: command.to_string(),
+        cmds,
+        dialect: ctx.dialect,
+        from_config: false,
+    };
+    state.hooks.bound.insert(event.name, stored);
+    state.hooks.runtime.insert(event.name);
     Ok(())
 }
 
 /// Removes `event`'s hook (`set-hook -gu`); nothing bound is fine.
 pub fn unbind(state: &mut State, event: &'static EventSpec) {
     state.hooks.bound.remove(event.name);
+    state.hooks.runtime.insert(event.name);
 }
 
 /// `show-hooks -g`: `<event> <command>` for each bound event, or for
@@ -268,106 +306,241 @@ pub fn show(state: &State, name: Option<&str>) -> Result<String, String> {
     })
 }
 
-/// Notes a pane event the actor is handling, before [`run_pending`] runs
-/// for it: an exit (`pane-exited` rather than `pane-closed`), or an event
-/// that changes nothing a hook watches.
-pub fn pane_event(hooks: &mut Hooks, pane: PaneId, kind: &PaneEventKind) {
-    if matches!(kind, PaneEventKind::Exited(_)) {
-        hooks.exited.push(pane);
-    } else {
-        hooks.skip = true;
+// ---- emission ----
+
+/// One event that happened, with the context its hook runs in.
+struct Fired {
+    event: &'static str,
+    /// The pane the hook's formats and current target use; `None`, or a
+    /// pane gone by the time it runs, means the current pane then.
+    pane: Option<PaneId>,
+    hook_pane: Option<PaneId>,
+    hook_window: Option<WindowId>,
+    hook_session_name: Option<String>,
+    hook_client: Option<String>,
+}
+
+impl Fired {
+    fn new(event: &'static str, pane: Option<PaneId>) -> Fired {
+        Fired {
+            event,
+            pane,
+            hook_pane: None,
+            hook_window: None,
+            hook_session_name: None,
+            hook_client: None,
+        }
     }
 }
 
-/// Runs the hooks for what just happened. Called once after every command
-/// sequence (`dispatch`, before its reply goes out) and after every pane
-/// event, before their events are flushed to subscribers.
+fn wanted(state: &State, name: &str) -> bool {
+    !state.hooks.running && state.hooks.bound.contains_key(name)
+}
+
+/// A session's current window's active pane.
+fn session_pane(state: &State, session: SessionId) -> Option<PaneId> {
+    let s = state.model.sessions.get(&session)?;
+    state.model.windows.get(&s.active).map(|w| w.active)
+}
+
+/// Queues a notify-shaped hook to run after the current reply; a full
+/// queue keeps it for the next [`run_pending`].
+fn notify(state: &mut State, f: Fired) {
+    let job: Job = Box::new(move |state: &mut State| run_hook(state, &f, false));
+    if let Err(TrySendError::Full(job) | TrySendError::Closed(job)) = state.jobs.try_send(job) {
+        state.hooks.overflow.push(job);
+    }
+}
+
+/// `session-created`: new-session made `session`. Its pane is the new
+/// session's.
+pub fn session_created(state: &mut State, session: SessionId) {
+    if !wanted(state, "session-created") {
+        return;
+    }
+    let mut f = Fired::new("session-created", session_pane(state, session));
+    f.hook_session_name = state.model.sessions.get(&session).map(|s| s.name.clone());
+    notify(state, f);
+}
+
+/// `client-session-changed` for client `id`, which now shows its session
+/// (attach, switch-client, attach-session; tmux fires it even when the
+/// session is the same one).
+pub fn client_session_changed(state: &mut State, id: ClientId) {
+    client_event(state, id, "client-session-changed");
+}
+
+/// `client-resized`: client `id` attached or reported a size (tmux fires
+/// it for every report, even of the same size).
+pub fn client_resized(state: &mut State, id: ClientId) {
+    client_event(state, id, "client-resized");
+}
+
+fn client_event(state: &mut State, id: ClientId, name: &'static str) {
+    if !wanted(state, name) {
+        return;
+    }
+    let Some(client) = state.clients.get(&id) else {
+        return;
+    };
+    let mut f = Fired::new(name, session_pane(state, client.session));
+    f.hook_client = Some(client.name.clone());
+    notify(state, f);
+}
+
+/// A pane's process exited and the model has handled it: `pane-died` if
+/// remain-on-exit kept the pane (its own pane as context), else
+/// `pane-exited` (the current pane as context, the gone one as
+/// `#{hook_pane}`).
+pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
+    let kept = state.model.panes.contains_key(&pane);
+    let name = if kept { "pane-died" } else { "pane-exited" };
+    if !wanted(state, name) {
+        return;
+    }
+    let mut f = Fired::new(name, kept.then_some(pane));
+    f.hook_pane = Some(pane);
+    f.hook_window = Some(window);
+    notify(state, f);
+}
+
+/// Runs what is pending after a command sequence (before its reply) or a
+/// pane event: `session-closed` for each session the model removed (the
+/// current pane as context), and hooks a full job queue refused.
 pub fn run_pending(state: &mut State) {
-    let skip = std::mem::take(&mut state.hooks.skip);
-    let exited = std::mem::take(&mut state.hooks.exited);
+    let closed = std::mem::take(&mut state.model.closed_sessions);
     if state.hooks.running {
         return;
     }
-    if state.hooks.bound.is_empty() {
-        state.hooks.snapshot = None;
-        return;
-    }
-    if skip && exited.is_empty() && state.hooks.snapshot.is_some() {
-        return;
-    }
-    let now = Snapshot::of(state);
-    let fired = match &state.hooks.snapshot {
-        Some(before) => diff(before, &now, &exited),
-        None => Vec::new(),
-    };
-    state.hooks.snapshot = Some(now);
-    let mut ran = false;
-    for f in fired {
-        if !state.hooks.bound.contains_key(f.event.name) {
-            continue;
-        }
-        if f.event.notify && !state.hooks.in_job {
-            defer(state, f);
-        } else {
-            run_hook(state, &f);
-            ran = true;
+    for (_, name) in closed {
+        if wanted(state, "session-closed") {
+            let mut f = Fired::new("session-closed", None);
+            f.hook_session_name = Some(name);
+            notify(state, f);
         }
     }
-    // What the hooks themselves changed fires nothing.
-    if ran && state.hooks.snapshot.is_some() {
-        state.hooks.snapshot = Some(Snapshot::of(state));
+    for job in std::mem::take(&mut state.hooks.overflow) {
+        job(state);
     }
 }
 
-/// Runs a notify-shaped hook after the reply, through the job queue; now,
-/// if the queue is full.
-fn defer(state: &mut State, f: Fired) {
-    let job: Job = Box::new(move |state: &mut State| {
-        run_hook(state, &f);
-        if state.hooks.snapshot.is_some() {
-            state.hooks.snapshot = Some(Snapshot::of(state));
-        }
-    });
-    match state.jobs.try_send(job) {
-        Ok(()) => {}
-        Err(TrySendError::Full(job) | TrySendError::Closed(job)) => job(state),
-    }
+/// What a command-shaped hook needs from before its command ran.
+enum Before {
+    /// select-pane: the window and its active pane.
+    SelectPane(WindowId, PaneId),
+    /// select-window: the target window's session.
+    SelectWindow(SessionId),
+    /// new-window: the highest window id so far.
+    NewWindow(Option<WindowId>),
+    KillPane,
+    ResizePane(PaneId),
+    ResizeWindow(WindowId),
 }
 
-/// Starts the [`POLL`] task, once, when a hook is first bound on a
-/// running server.
-fn start_polling(state: &mut State) {
-    if state.hooks.polling || tokio::runtime::Handle::try_current().is_err() {
-        return;
-    }
-    state.hooks.polling = true;
-    let jobs = state.jobs.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(POLL).await;
-            let job: Job = Box::new(|state: &mut State| {
-                state.hooks.in_job = true;
-                run_pending(state);
-                state.hooks.in_job = false;
-            });
-            if jobs.send(job).await.is_err() {
-                break;
+impl Before {
+    fn of(state: &State, ctx: &ClientCtx, cmd: &Command) -> Option<(&'static str, Before)> {
+        let m = &state.model;
+        let before = match cmd {
+            Command::SelectPane(c) => {
+                let pane = m.resolve_pane(&c.target, ctx).ok()?;
+                let window = m.panes.get(&pane)?.window;
+                let active = m.windows.get(&window)?.active;
+                ("pane-focused", Before::SelectPane(window, active))
             }
-        }
-    });
+            Command::SelectWindow(c) => {
+                let window = m.resolve_window(&c.target, ctx).ok()?;
+                let session = m.windows.get(&window)?.session;
+                ("window-focused", Before::SelectWindow(session))
+            }
+            Command::NewWindow(_) => (
+                "window-created",
+                Before::NewWindow(m.windows.keys().next_back().copied()),
+            ),
+            Command::KillPane(_) => ("pane-closed", Before::KillPane),
+            Command::ResizePane(c) => (
+                "pane-resized",
+                Before::ResizePane(m.resolve_pane(&c.target, ctx).ok()?),
+            ),
+            Command::ResizeWindow(c) => (
+                "window-resized",
+                Before::ResizeWindow(m.resolve_window(&c.target, ctx).ok()?),
+            ),
+            _ => return None,
+        };
+        Some(before)
+    }
+
+    /// The hook's pane once its command succeeded, as tmux 3.7b gives it;
+    /// `None` when the hook does not fire.
+    fn pane(self, state: &State, ctx: &ClientCtx) -> Option<Option<PaneId>> {
+        let m = &state.model;
+        let active = |w: WindowId| m.windows.get(&w).map(|w| w.active);
+        Some(match self {
+            Before::SelectPane(window, was) => {
+                let now = active(window)?;
+                if now == was {
+                    return None;
+                }
+                Some(now)
+            }
+            Before::SelectWindow(session) => session_pane(state, session),
+            Before::NewWindow(last) => {
+                let new = m.windows.keys().copied().find(|w| Some(*w) > last)?;
+                active(new)
+            }
+            // The pane is gone: the current pane, when the hook runs.
+            Before::KillPane => ctx.pane.filter(|p| m.panes.contains_key(p)),
+            Before::ResizePane(pane) => Some(pane),
+            Before::ResizeWindow(window) => active(window),
+        })
+    }
 }
 
-/// Runs the hook bound to `f`'s event: each command, its formats expanded
-/// against the event, through the dispatcher with the event's pane as the
-/// current one. The first error stops it, and goes to the server log.
-// ponytail: a hook's `run-shell` (without `-b`) runs off the actor and
-// does not hold the triggering reply, which tmux 3.7b's `after-*` hooks
-// do; its output is dropped.
-fn run_hook(state: &mut State, f: &Fired) {
-    let Some(stored) = state.hooks.bound.get(f.event.name).cloned() else {
+/// Runs one command through `route` and then, if it succeeded, its
+/// command-shaped hook (tmux's `after-<verb>`), before the request goes on.
+pub fn run_command(
+    state: &mut State,
+    ctx: &ClientCtx,
+    cmd: Command,
+    route: fn(&mut State, &ClientCtx, Command) -> Result<String, String>,
+) -> Result<String, String> {
+    let before = Before::of(state, ctx, &cmd).filter(|(name, _)| wanted(state, name));
+    let result = route(state, ctx, cmd);
+    if result.is_ok()
+        && let Some((name, before)) = before
+        && let Some(pane) = before.pane(state, ctx)
+    {
+        run_hook(state, &Fired::new(name, pane), true);
+        // A request from the CLI waits for its hooks (a binding has no
+        // reply to hold).
+        if state.hooks.waiting && ctx.client.is_none() && state.hooks.reply_hold.is_none() {
+            let (tx, rx) = oneshot::channel();
+            state.hooks.idle.push(tx);
+            state.hooks.reply_hold = Some(rx);
+        }
+    }
+    result
+}
+
+/// A hook's commands, expanded, waiting to run in order on the hook queue.
+struct Queued {
+    event: &'static str,
+    ctx: ClientCtx,
+    cmds: VecDeque<Vec<String>>,
+}
+
+/// Queues the hook bound to `f`'s event (its formats expanded now,
+/// against the event, with the event's pane as the current one), at the
+/// front for a command-shaped hook, which runs next, and at the back for
+/// a notify-shaped one; then runs the queue.
+fn run_hook(state: &mut State, f: &Fired, front: bool) {
+    if state.hooks.running {
+        return;
+    }
+    let Some(stored) = state.hooks.bound.get(f.event).cloned() else {
         return;
     };
-    let pane = context_pane(state, f);
+    let pane = context_pane(state, f.pane);
     let cwd = pane
         .and_then(|p| state.model.panes.get(&p))
         .and_then(|p| state.model.windows.get(&p.window))
@@ -380,7 +553,7 @@ fn run_hook(state: &mut State, f: &Fired) {
         client: None,
         dialect: stored.dialect,
     };
-    let argvs: Vec<Vec<String>> = {
+    let cmds = {
         let formats = pane.map(|p| options::FormatCtx::new(&state.model, p));
         let server = match (pane, &formats) {
             (Some(p), Some(inner)) => Some(options::ServerVars::new(state, p, inner)),
@@ -396,54 +569,96 @@ fn run_hook(state: &mut State, f: &Fired) {
             .map(|argv| argv.iter().map(|w| cmd::expand(w, &vars)).collect())
             .collect()
     };
-    state.hooks.running = true;
-    // A hook's `run-shell` must not take over the triggering request's
-    // deferred reply.
-    let deferred = state.deferred_reply.take();
-    for argv in argvs {
-        if let Err(e) = dispatch::run_split(state, &ctx, &argv) {
-            eprintln!("grofe hook {}: {e}", f.event.name);
-            break;
-        }
+    let queued = Queued {
+        event: f.event,
+        ctx,
+        cmds,
+    };
+    if front {
+        state.hooks.queue.push_front(queued);
+    } else {
+        state.hooks.queue.push_back(queued);
     }
-    state.deferred_reply = deferred;
-    state.hooks.running = false;
+    drain(state);
 }
 
-/// The pane a hook runs against: the event's own if it is still there,
-/// else what tmux 3.7b gives (recorded: `after-kill-pane` and
-/// `pane-exited` see the window's pane left active, `session-closed` the
-/// most recent session's): the event window's active pane, its session's,
-/// then the current one.
-fn context_pane(state: &State, f: &Fired) -> Option<PaneId> {
+/// Runs queued hook commands in order, as tmux's command queue does: a
+/// `run-shell` without `-b` holds everything after it (later commands and
+/// later hooks) until its shell exits. The first error ends a hook's
+/// commands, and goes to the server log.
+fn drain(state: &mut State) {
+    if state.hooks.running || state.hooks.waiting {
+        return;
+    }
+    while let Some(mut q) = state.hooks.queue.pop_front() {
+        state.hooks.running = true;
+        // The hook's `run-shell` answers here, not to the request that
+        // triggered it; what its commands close fires nothing.
+        let deferred = state.deferred_reply.take();
+        let closed = std::mem::take(&mut state.model.closed_sessions);
+        let mut shell = None;
+        while let Some(argv) = q.cmds.pop_front() {
+            if let Err(e) = dispatch::run_split(state, &q.ctx, &argv) {
+                eprintln!("grofe hook {}: {e}", q.event);
+                q.cmds.clear();
+            }
+            if let Some(rx) = state.deferred_reply.take() {
+                shell = Some(rx);
+                break;
+            }
+        }
+        state.deferred_reply = deferred;
+        state.model.closed_sessions = closed;
+        state.hooks.running = false;
+        if let Some(rx) = shell {
+            if !q.cmds.is_empty() {
+                state.hooks.queue.push_front(q);
+            }
+            state.hooks.waiting = true;
+            let jobs = state.jobs.clone();
+            tokio::spawn(async move {
+                let _ = rx.await;
+                let resume: Job = Box::new(|state: &mut State| {
+                    state.hooks.waiting = false;
+                    drain(state);
+                });
+                let _ = jobs.send(resume).await;
+            });
+            return;
+        }
+    }
+    for idle in std::mem::take(&mut state.hooks.idle) {
+        let _ = idle.send(());
+    }
+}
+
+/// For the reply to the request that just ran (`finish`): a receiver that
+/// fires once the hook queue is idle, when one of its command-shaped
+/// hooks is still waiting on a shell (tmux 3.7b holds the CLI until its
+/// `after-*` hooks finish).
+pub fn take_reply_hold(state: &mut State) -> Option<oneshot::Receiver<()>> {
+    state.hooks.reply_hold.take()
+}
+
+/// `pane` if it is still there, else the current pane: with no client and
+/// no pane, the most recent session's (tmux's `cmd_find_best_session`).
+fn context_pane(state: &State, pane: Option<PaneId>) -> Option<PaneId> {
     let model = &state.model;
-    let live = |p: PaneId| model.panes.contains_key(&p).then_some(p);
-    f.pane
-        .and_then(live)
-        .or_else(|| {
-            f.window
-                .and_then(|w| model.windows.get(&w))
-                .map(|w| w.active)
-        })
-        .or_else(|| {
-            let s = model.sessions.get(&f.session?)?;
-            model.windows.get(&s.active).map(|w| w.active)
-        })
-        .or_else(|| {
-            let ctx = ClientCtx {
-                cwd: PathBuf::from("/"),
-                pane: None,
-                env: Vec::new(),
-                client: None,
-                dialect: Dialect::Grofe,
-            };
-            model.resolve_pane(&Target::Current, &ctx).ok()
-        })
+    pane.filter(|p| model.panes.contains_key(p)).or_else(|| {
+        let ctx = ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+            dialect: Dialect::Grofe,
+        };
+        model.resolve_pane(&Target::Current, &ctx).ok()
+    })
 }
 
 /// A hook's own variables (`#{hook}`, `#{hook_pane}`, `#{hook_window}`,
-/// `#{hook_session}`, `#{hook_session_name}`, `#{hook_client}`), over its
-/// pane's formats.
+/// `#{hook_session_name}`, `#{hook_client}`: set only where tmux 3.7b sets
+/// them, else empty), over its pane's formats.
 struct HookVars<'a> {
     fired: &'a Fired,
     inner: Option<&'a dyn FormatVars>,
@@ -452,13 +667,13 @@ struct HookVars<'a> {
 impl FormatVars for HookVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
         let f = self.fired;
+        let text = |v: Option<String>| Some(v.unwrap_or_default());
         match name {
-            "hook" => Some(f.event.name.to_string()),
-            "hook_pane" => f.pane.map(|p| p.to_string()),
-            "hook_window" => f.window.map(|w| w.to_string()),
-            "hook_session" => f.session.map(|s| s.to_string()),
-            "hook_session_name" => f.session_name.clone(),
-            "hook_client" => f.client.map(|c| c.0.to_string()),
+            "hook" => Some(f.event.to_string()),
+            "hook_pane" => text(f.hook_pane.map(|p| p.to_string())),
+            "hook_window" => text(f.hook_window.map(|w| w.to_string())),
+            "hook_session_name" => text(f.hook_session_name.clone()),
+            "hook_client" => text(f.hook_client.clone()),
             _ => self.inner?.get(name),
         }
     }
@@ -472,298 +687,20 @@ impl FormatVars for NoVars {
     }
 }
 
-// ---- finding events ----
-
-/// One event that happened, with what it happened to.
-#[derive(Clone)]
-struct Fired {
-    event: &'static EventSpec,
-    pane: Option<PaneId>,
-    window: Option<WindowId>,
-    session: Option<SessionId>,
-    session_name: Option<String>,
-    client: Option<ClientId>,
-}
-
-struct SessionSnap {
-    name: String,
-    active: WindowId,
-}
-
-struct WindowSnap {
-    session: SessionId,
-    active: PaneId,
-    size: (u16, u16),
-    panes: Vec<PaneId>,
-}
-
-struct PaneSnap {
-    window: WindowId,
-    size: (u16, u16),
-    dead: bool,
-}
-
-struct ClientSnap {
-    session: SessionId,
-    size: (u16, u16),
-}
-
-/// What the hooks watch in the model and the clients.
-#[derive(Default)]
-struct Snapshot {
-    sessions: BTreeMap<SessionId, SessionSnap>,
-    windows: BTreeMap<WindowId, WindowSnap>,
-    panes: BTreeMap<PaneId, PaneSnap>,
-    clients: BTreeMap<ClientId, ClientSnap>,
-}
-
-impl Snapshot {
-    fn of(state: &State) -> Snapshot {
-        let m = &state.model;
-        Snapshot {
-            sessions: m
-                .sessions
-                .iter()
-                .map(|(id, s)| {
-                    let snap = SessionSnap {
-                        name: s.name.clone(),
-                        active: s.active,
-                    };
-                    (*id, snap)
-                })
-                .collect(),
-            windows: m
-                .windows
-                .iter()
-                .map(|(id, w)| {
-                    let snap = WindowSnap {
-                        session: w.session,
-                        active: w.active,
-                        size: (w.cols, w.rows),
-                        panes: w.pane_ids(),
-                    };
-                    (*id, snap)
-                })
-                .collect(),
-            panes: m
-                .panes
-                .iter()
-                .map(|(id, p)| {
-                    let snap = PaneSnap {
-                        window: p.window,
-                        size: (p.cols, p.rows),
-                        dead: p.dead.is_some(),
-                    };
-                    (*id, snap)
-                })
-                .collect(),
-            clients: state
-                .clients
-                .iter()
-                .map(|(id, c)| {
-                    let snap = ClientSnap {
-                        session: c.session,
-                        size: c.size,
-                    };
-                    (*id, snap)
-                })
-                .collect(),
-        }
-    }
-
-    /// A session's active window's active pane.
-    fn session_pane(&self, session: SessionId) -> Option<PaneId> {
-        let s = self.sessions.get(&session)?;
-        self.windows.get(&s.active).map(|w| w.active)
-    }
-
-    fn session_name(&self, session: SessionId) -> Option<String> {
-        self.sessions.get(&session).map(|s| s.name.clone())
-    }
-}
-
-/// The events between `old` and `new`, in [`EVENTS`] order. `exited`:
-/// panes whose process exit caused this check.
-// ponytail: found from the model, not the commands that ran. So a no-op
-// `select-pane` fires nothing (tmux 3.7b fires nothing either); a
-// `pane-resized` names the window's active pane when it changed size,
-// though `resize-pane -t` named another; `window-resized` also fires when
-// a client's size resizes the window; `pane-closed` also fires for
-// `kill-window` on a one-pane window; `select-layout` fires
-// `pane-resized`; `break-pane` fires `window-created`.
-fn diff(old: &Snapshot, new: &Snapshot, exited: &[PaneId]) -> Vec<Fired> {
-    let mut fired = Vec::new();
-    let mut push = |name: &str, pane, window, session: Option<SessionId>, client| {
-        let Some(spec) = event(name) else {
-            return;
-        };
-        let session_name =
-            session.and_then(|s| new.session_name(s).or_else(|| old.session_name(s)));
-        fired.push(Fired {
-            event: spec,
-            pane,
-            window,
-            session,
-            session_name,
-            client,
-        });
-    };
-
-    for id in new
-        .sessions
-        .keys()
-        .filter(|s| !old.sessions.contains_key(s))
-    {
-        push(
-            "session-created",
-            new.session_pane(*id),
-            None,
-            Some(*id),
-            None,
-        );
-    }
-    for (id, w) in &new.windows {
-        if !old.windows.contains_key(id) && old.sessions.contains_key(&w.session) {
-            push(
-                "window-created",
-                Some(w.active),
-                Some(*id),
-                Some(w.session),
-                None,
-            );
-        }
-    }
-    for (id, s) in &new.sessions {
-        let Some(before) = old.sessions.get(id) else {
-            continue;
-        };
-        let both = old.windows.contains_key(&s.active) && new.windows.contains_key(&before.active);
-        if before.active != s.active && both {
-            let pane = new.windows.get(&s.active).map(|w| w.active);
-            push("window-focused", pane, Some(s.active), Some(*id), None);
-        }
-    }
-    for (id, w) in &new.windows {
-        let Some(before) = old.windows.get(id) else {
-            continue;
-        };
-        let both = old.panes.contains_key(&w.active) && new.panes.contains_key(&before.active);
-        if before.active != w.active && both {
-            push(
-                "pane-focused",
-                Some(w.active),
-                Some(*id),
-                Some(w.session),
-                None,
-            );
-        }
-    }
-    for (id, w) in &new.windows {
-        let Some(before) = old.windows.get(id) else {
-            continue;
-        };
-        if before.size != w.size {
-            push(
-                "window-resized",
-                Some(w.active),
-                Some(*id),
-                Some(w.session),
-                None,
-            );
-            continue;
-        }
-        let mut panes = w.panes.clone();
-        let mut before_panes = before.panes.clone();
-        panes.sort();
-        before_panes.sort();
-        if panes != before_panes {
-            continue;
-        }
-        let changed: Vec<PaneId> = panes
-            .iter()
-            .filter(|p| {
-                let size = |s: &Snapshot| s.panes.get(p).map(|p| p.size);
-                size(old) != size(new)
-            })
-            .copied()
-            .collect();
-        if let Some(first) = changed.first() {
-            let pane = if changed.contains(&w.active) {
-                w.active
-            } else {
-                *first
-            };
-            push("pane-resized", Some(pane), Some(*id), Some(w.session), None);
-        }
-    }
-    for (id, c) in &new.clients {
-        let Some(before) = old.clients.get(id) else {
-            continue;
-        };
-        let pane = new.session_pane(c.session);
-        if before.size != c.size {
-            push("client-resized", pane, None, Some(c.session), Some(*id));
-        }
-        if before.session != c.session {
-            push(
-                "client-session-changed",
-                pane,
-                None,
-                Some(c.session),
-                Some(*id),
-            );
-        }
-    }
-    for (id, p) in &new.panes {
-        if p.dead && old.panes.get(id).is_some_and(|before| !before.dead) {
-            let session = new.windows.get(&p.window).map(|w| w.session);
-            push("pane-died", Some(*id), Some(p.window), session, None);
-        }
-    }
-    for (id, p) in old
-        .panes
-        .iter()
-        .filter(|(id, _)| !new.panes.contains_key(id))
-    {
-        let window = old.windows.get(&p.window);
-        let session = window.map(|w| w.session);
-        if exited.contains(id) {
-            push("pane-exited", Some(*id), Some(p.window), session, None);
-            continue;
-        }
-        let window_stays = new.windows.contains_key(&p.window);
-        let only_pane = window.is_some_and(|w| w.panes.len() == 1)
-            && session.is_some_and(|s| new.sessions.contains_key(&s));
-        if window_stays || only_pane {
-            push("pane-closed", Some(*id), Some(p.window), session, None);
-        }
-    }
-    for id in old
-        .sessions
-        .keys()
-        .filter(|id| !new.sessions.contains_key(id))
-    {
-        push("session-closed", None, None, Some(*id), None);
-    }
-    fired
-}
-
 // ---- environment ----
 
 /// The server environment a new or respawned pane of `session` starts
 /// with, under the session's own: every global variable but the hidden
-/// ones.
-// ponytail: a variable unset from the global environment that the server
-// process itself inherited still reaches panes, which inherit the
-// server's environment (`PaneSpawn.env` is applied over it and has no
-// removals).
+/// ones. A pane gets nothing else from the server's own environment, so
+/// `set-environment -gu` removes even a variable the server started with.
 pub fn pane_env(state: &State, _session: SessionId) -> Vec<(String, String)> {
     visible(&state.hooks.global())
 }
 
-/// The environment a shell the server runs for `session` gets (`run-shell`,
-/// popups, status sources): the global environment, then the session's,
-/// both without hidden variables, as tmux 3.7b's `run-shell`.
+/// The whole environment a shell the server runs for `session` gets
+/// (`run-shell`, popups, status sources): the global environment, then
+/// the session's, both without hidden variables, as tmux 3.7b's
+/// `run-shell`.
 pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, String)> {
     let mut env = visible(&state.hooks.global());
     if let Some(s) = session.and_then(|s| state.model.sessions.get(&s)) {
@@ -852,6 +789,17 @@ pub fn variables(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
         .collect()
 }
 
+/// An empty global environment, for tests that list it.
+#[cfg(test)]
+pub(crate) fn clear_environment(state: &mut State) {
+    state
+        .hooks
+        .global
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,42 +832,19 @@ mod tests {
             bind(&mut state, &ctx, spec, ""),
             Err("empty value".to_string())
         );
-        assert_eq!(
-            bind(
-                &mut state,
-                &ctx,
-                spec,
-                "select-pane -t #{hook_pane} ; list-sessions"
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            show(&state, None),
-            Ok("pane-focused select-pane -t #{hook_pane} ; list-sessions\n".to_string())
-        );
-    }
-
-    #[test]
-    fn hooks_do_nothing_while_none_is_bound() {
-        let mut state = test_state();
-        run_pending(&mut state);
-        assert!(state.hooks.snapshot.is_none());
+        let cmd = "select-pane -t #{hook_pane} ; list-sessions";
+        assert_eq!(bind(&mut state, &ctx, spec, cmd), Ok(()));
+        assert_eq!(show(&state, None), Ok(format!("pane-focused {cmd}\n")));
+        assert_eq!(check_command(cmd).map(|c| c.len()), Ok(2));
+        assert_eq!(check_command("  "), Ok(Vec::new()));
     }
 
     #[tokio::test]
     async fn a_session_hook_runs_once_and_its_commands_trigger_none() {
         let mut state = test_state();
         // The hook creates a session itself: that must not fire it again.
-        fire(
-            &mut state,
-            &[
-                "set-hook",
-                "-g",
-                "session-created",
-                "new-session -d -s from-hook",
-            ],
-        )
-        .unwrap();
+        let hook = "new-session -d -s from-hook";
+        fire(&mut state, &["set-hook", "-g", "session-created", hook]).unwrap();
         fire(&mut state, &["new-session", "-d", "-s", "a"]).unwrap();
         let names: Vec<&str> = state
             .model
@@ -934,15 +859,18 @@ mod tests {
     #[test]
     fn hidden_variables_stay_out_of_processes() {
         let mut state = test_state();
-        set_global(&mut state, "A", Some("1".into()), false);
-        set_global(&mut state, "H", Some("2".into()), true);
+        set_global(&mut state, "GROFE_TC5_A", Some("1".into()), false);
+        set_global(&mut state, "GROFE_TC5_H", Some("2".into()), true);
         let env = shell_env(&state, None);
-        assert_eq!(env, vec![("A".to_string(), "1".to_string())]);
-        set_global(&mut state, "A", None, false);
-        assert_eq!(pane_env(&state, SessionId(0)), Vec::new());
-        assert_eq!(
-            variables(&state, None),
-            vec![("H".to_string(), "2".to_string(), true)]
+        assert!(env.contains(&("GROFE_TC5_A".to_string(), "1".to_string())));
+        assert!(!env.iter().any(|(k, _)| k == "GROFE_TC5_H"));
+        set_global(&mut state, "GROFE_TC5_A", None, false);
+        assert!(
+            !pane_env(&state, SessionId(0))
+                .iter()
+                .any(|(k, _)| k == "GROFE_TC5_A")
         );
+        let vars = variables(&state, None);
+        assert!(vars.contains(&("GROFE_TC5_H".to_string(), "2".to_string(), true)));
     }
 }

@@ -102,7 +102,13 @@ pub fn show_environment(
 
 #[cfg(test)]
 mod tests {
-    use crate::server::{State, dispatch, test_ctx, test_state};
+    use crate::server::{State, dispatch, hooks, test_ctx};
+
+    fn test_state() -> State {
+        let mut state = crate::server::test_state();
+        hooks::clear_environment(&mut state);
+        state
+    }
 
     fn run(state: &mut State, words: &[&str]) -> Result<String, String> {
         let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();

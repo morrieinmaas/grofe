@@ -189,10 +189,7 @@ fn answer_check(stream: &UnixStream, refusal: Option<&str>) -> Result<Vec<String
             id: req.id,
             out: String::new(),
         },
-        Some(err) => Reply::Err {
-            id: req.id,
-            err: err.to_string(),
-        },
+        Some(err) => Reply::err(req.id, err),
     };
     let line = serde_json::to_string(&reply).expect("encode reply");
     let _ = (&*stream).write_all(format!("{line}\n").as_bytes());
@@ -545,10 +542,10 @@ fn colorterm_gives_truecolor_without_any_reply() {
             ..Caps::default()
         }
     );
-    conn.reply(&Reply::Err {
-        id: grofe::protocol::HELLO_REPLY_ID,
-        err: "no such session: work".to_string(),
-    });
+    conn.reply(&Reply::err(
+        grofe::protocol::HELLO_REPLY_ID,
+        "no such session: work",
+    ));
     tty.wait_for(b"STATUS=1");
     tty.assert_restored();
 }
@@ -667,10 +664,10 @@ fn attach_from_inside_a_pane_sends_the_pane_and_prints_a_refusal() {
     // holds %3 and decides (spec §4.6).
     assert_eq!(ctx.pane, Some(PaneId(3)));
     assert!(!nest);
-    conn.reply(&Reply::Err {
-        id: grofe::protocol::HELLO_REPLY_ID,
-        err: "sessions should be nested with care, use --nest to force".to_string(),
-    });
+    conn.reply(&Reply::err(
+        grofe::protocol::HELLO_REPLY_ID,
+        "sessions should be nested with care, use --nest to force",
+    ));
     tty.wait_for(b"use --nest to force");
     tty.wait_for(b"STATUS=1");
     assert!(

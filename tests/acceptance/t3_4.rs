@@ -238,9 +238,12 @@ fn run_shell_answers_with_stdout_and_fails_on_nonzero_exit() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout, "hi\ntwo\n");
 
+    // D20, as tmux 3.7b (recorded): the message on stdout, the command's
+    // own exit status.
     let out = srv.run(&["run-shell", "false"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert_eq!(out.stderr.trim_end(), "'false' returned 1");
+    assert_eq!(out.stdout, "'false' returned 1\n", "{out:?}");
+    assert_eq!(out.stderr, "", "{out:?}");
 
     // stderr is not the reply.
     let out = srv.run(&["run-shell", "echo out; echo err >&2"]);
@@ -248,8 +251,14 @@ fn run_shell_answers_with_stdout_and_fails_on_nonzero_exit() {
 
     // A failing command's output comes before its error, as in tmux.
     let out = srv.run(&["run-shell", "echo a; exit 3"]);
-    assert!(!out.status.success(), "{out:?}");
-    assert_eq!(out.stderr, "a\n'echo a; exit 3' returned 3\n", "{out:?}");
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert_eq!(out.stdout, "a\n'echo a; exit 3' returned 3\n", "{out:?}");
+    let out = srv.run(&["run-shell", "echo out; kill -9 $$"]);
+    assert_eq!(out.status.code(), Some(137), "{out:?}");
+    assert_eq!(
+        out.stdout, "out\n'echo out; kill -9 $$' terminated by signal 9\n",
+        "{out:?}"
+    );
 }
 
 /// D8: a long `run-shell` holds its own CLI, not the server.

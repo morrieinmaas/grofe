@@ -137,6 +137,9 @@ pub struct Model {
     /// Who the server says it is (spec D12), fixed at start by
     /// `compat::server_started` (TC.1); grofe until then.
     pub identity: crate::compat::Identity,
+    /// Sessions removed since `hooks::run_pending` last took them, as
+    /// `(id, name)`, for the `session-closed` hook (TC.5).
+    pub closed_sessions: Vec<(SessionId, String)>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -340,6 +343,8 @@ impl Model {
         let pos = session.windows.iter().position(|id| *id == window);
         session.windows.retain(|id| *id != window);
         if session.windows.is_empty() {
+            let name = std::mem::take(&mut session.name);
+            self.closed_sessions.push((w.session, name));
             self.sessions.remove(&w.session);
             self.client_last_session
                 .retain(|_, last| *last != w.session);
@@ -363,6 +368,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.closed_sessions.push((session, s.name.clone()));
         self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);

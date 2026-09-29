@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
 use crate::cmd::{self, CommandPrompt, Resolve, RunShell};
-use crate::protocol::{ClientCtx, Dialect};
+use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::clients::{self, ClientVars};
 use crate::server::dispatch::{self, options::FormatCtx};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
@@ -52,7 +52,7 @@ pub struct Prompts {
     open: BTreeMap<ClientId, Prompt>,
     /// The CLI replies of `command-prompt`s waiting for their prompt to
     /// close.
-    waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, String>>>,
+    waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, Failure>>>,
     /// Lines entered at any prompt, newest last.
     history: Vec<String>,
 }
@@ -540,10 +540,10 @@ fn verb(template: &str) -> String {
 /// runs in the session's cwd and its output is dropped. With `-b` (TC.5)
 /// the reply is empty and immediate, and the output is dropped. The shell
 /// gets the server environment and the session's (`hooks::shell_env`).
-// ponytail: a failing command's output comes before the error, as in tmux,
-// but on stderr with exit 1: tmux prints it on stdout and exits with the
-// command's status, which the reply protocol cannot carry yet. From a
-// binding the output would go to view mode (M5). No `-d`, `-C`.
+/// A failing command's output and tmux's message go to the CLI's stdout,
+/// and the CLI exits with the command's status (D20, as tmux 3.7b).
+// ponytail: from a binding the output would go to view mode (M5). No
+// `-d`, `-C`.
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
     let client_session = ctx
         .client
@@ -578,7 +578,7 @@ async fn shell(
     env: Vec<(String, String)>,
     socket: PathBuf,
     capture: bool,
-) -> Result<String, String> {
+) -> Result<String, Failure> {
     let stdout = if capture {
         Stdio::piped()
     } else {
@@ -590,6 +590,7 @@ async fn shell(
             .arg("-c")
             .arg(script)
             .current_dir(cwd)
+            .env_clear()
             .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
@@ -603,23 +604,31 @@ async fn shell(
     let out = child
         .wait_with_output()
         .await
-        .map_err(|e| format!("'{script}' failed: {e}"))?;
+        .map_err(|e| Failure::from(format!("'{script}' failed: {e}")))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
     match exit_result(script, out.status) {
         Ok(()) => Ok(text),
-        Err(e) => Err(text + &e),
+        // As tmux 3.7b (recorded): the output, then the message, both on
+        // stdout, and the CLI exits with the command's status.
+        Err((message, status)) => Err(Failure {
+            err: String::new(),
+            out: format!("{text}{message}\n"),
+            status: Some(status),
+        }),
     }
 }
 
-fn exit_result(script: &str, status: ExitStatus) -> Result<(), String> {
+/// tmux's message for a failed shell and the status its CLI exits with
+/// (128 plus the signal for a killed one).
+fn exit_result(script: &str, status: ExitStatus) -> Result<(), (String, i32)> {
     match (status.code(), status.signal()) {
         (Some(0), _) => Ok(()),
-        (Some(n), _) => Err(format!("'{script}' returned {n}")),
-        (None, Some(sig)) => Err(format!("'{script}' terminated by signal {sig}")),
-        (None, None) => Err(format!("'{script}' failed")),
+        (Some(n), _) => Err((format!("'{script}' returned {n}"), n)),
+        (None, Some(sig)) => Err((format!("'{script}' terminated by signal {sig}"), 128 + sig)),
+        (None, None) => Err((format!("'{script}' failed"), 1)),
     }
 }
 
@@ -866,12 +875,20 @@ mod tests {
         assert_eq!(exit_result("true", ExitStatus::from_raw(0)), Ok(()));
         assert_eq!(
             exit_result("false", ExitStatus::from_raw(1 << 8)),
-            Err("'false' returned 1".to_string())
+            Err(("'false' returned 1".to_string(), 1))
         );
         assert_eq!(
             exit_result("kill", ExitStatus::from_raw(15)),
-            Err("'kill' terminated by signal 15".to_string())
+            Err(("'kill' terminated by signal 15".to_string(), 143))
         );
+    }
+
+    fn failed(out: &str, status: i32) -> Failure {
+        Failure {
+            err: String::new(),
+            out: out.to_string(),
+            status: Some(status),
+        }
     }
 
     #[tokio::test]
@@ -905,11 +922,11 @@ mod tests {
         );
         assert_eq!(
             shell("exit 3", dir.clone(), Vec::new(), PathBuf::from("/x"), true).await,
-            Err("'exit 3' returned 3".to_string())
+            Err(failed("'exit 3' returned 3\n", 3))
         );
         assert_eq!(
             shell("echo a; exit 3", dir, Vec::new(), PathBuf::from("/x"), true).await,
-            Err("a\n'echo a; exit 3' returned 3".to_string())
+            Err(failed("a\n'echo a; exit 3' returned 3\n", 3))
         );
         // Without capture (a binding) stdout goes nowhere.
         let dir = std::env::temp_dir();
@@ -933,7 +950,7 @@ mod tests {
                 false
             )
             .await,
-            Err("'echo a; exit 2' returned 2".to_string())
+            Err(failed("'echo a; exit 2' returned 2\n", 2))
         );
     }
 }

@@ -426,7 +426,20 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
             let _ = stdout.flush();
             ExitCode::SUCCESS
         }
-        Ok(Reply::Err { err, .. }) => fail(&err),
+        Ok(Reply::Err {
+            err, out, status, ..
+        }) => {
+            // A failing `run-shell` prints its output (and tmux's message)
+            // on stdout and exits with its own status, as tmux 3.7b (D20).
+            let mut stdout = io::stdout().lock();
+            let _ = stdout.write_all(out.as_bytes());
+            let _ = stdout.flush();
+            if !err.is_empty() {
+                eprintln!("{}", err.trim_end_matches('\n'));
+            }
+            let status = status.and_then(|s| u8::try_from(s).ok()).unwrap_or(1);
+            ExitCode::from(status.max(1))
+        }
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
     }

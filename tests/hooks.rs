@@ -1,10 +1,13 @@
 //! TC.5: grofe's event hooks and the server environment (spec §4.2, §4.5
-//! "Hooks and environment"). Each event FE.3's tmux hook names map onto
-//! runs its hook once per triggering action, with the event's pane and
-//! session; `set-hook -gu` stops it; a hook's `run-shell -b` never delays
-//! the next command; `set-environment` reaches new panes and `run-shell`,
-//! `-u` removes a variable, and a hidden one reaches command strings (`$X`)
-//! but no process.
+//! "Hooks and environment"). Each event FE.3's twelve tmux hook names map
+//! onto runs its hook once per triggering action, in tmux 3.7b's order and
+//! with tmux 3.7b's context (recorded on a private socket, see
+//! [`TMUX_ORDER`]); `set-hook -gu` stops it; `[hooks]` in the config binds
+//! them too, and a reload keeps runtime hooks; a hook's `run-shell -b`
+//! never delays the next command; `set-environment` reaches new panes and
+//! `run-shell`, `-u` removes a variable (even one the server started
+//! with), and a hidden one reaches `$NAME` in command strings but no
+//! process.
 //!
 //! Every server runs in the `TestServer` harness's own tempdirs.
 
@@ -22,7 +25,83 @@ use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(5);
 /// How long a test waits to be sure a hook did not run (again).
-const QUIET: Duration = Duration::from_millis(600);
+const QUIET: Duration = Duration::from_millis(400);
+
+/// Every event, and the tmux 3.7b hook it stands for.
+const EVENTS: &[(&str, &str)] = &[
+    ("pane-focused", "after-select-pane"),
+    ("window-focused", "after-select-window"),
+    ("window-created", "after-new-window"),
+    ("pane-closed", "after-kill-pane"),
+    ("pane-resized", "after-resize-pane"),
+    ("window-resized", "after-resize-window"),
+    ("client-resized", "client-resized"),
+    ("client-session-changed", "client-session-changed"),
+    ("session-created", "session-created"),
+    ("session-closed", "session-closed"),
+    ("pane-exited", "pane-exited"),
+    ("pane-died", "pane-died"),
+];
+
+/// What the hooks logged on tmux 3.7b (`-L grofe-tc5 -f /dev/null`, every
+/// hook bound to the same `LINE`) for the steps of
+/// [`the_twelve_events_fire_in_tmuxs_order_with_tmuxs_context`], with
+/// tmux's ids mapped to grofe's (tmux numbers windows and sessions the
+/// same way; only the hook names differ).
+const TMUX_ORDER: &[(&str, &[&str])] = &[
+    ("split", &[]),
+    ("select-pane-change", &["pane-focused p=%0 s=a hp= hs= hw="]),
+    ("select-pane-noop", &[]),
+    ("select-pane-other", &["pane-focused p=%1 s=a hp= hs= hw="]),
+    ("resize-pane", &["pane-resized p=%1 s=a hp= hs= hw="]),
+    (
+        "resize-pane-zoom-twice",
+        &[
+            "pane-resized p=%1 s=a hp= hs= hw=",
+            "pane-resized p=%1 s=a hp= hs= hw=",
+        ],
+    ),
+    ("new-window-d", &["window-created p=%2 s=a hp= hs= hw="]),
+    ("new-window", &["window-created p=%3 s=a hp= hs= hw="]),
+    (
+        "select-window-change",
+        &["window-focused p=%2 s=a hp= hs= hw="],
+    ),
+    (
+        "select-window-noop",
+        &["window-focused p=%2 s=a hp= hs= hw="],
+    ),
+    (
+        "kill-pane-other-window",
+        &["pane-closed p=%2 s=a hp= hs= hw="],
+    ),
+    (
+        "kill-window-last-pane",
+        &["pane-closed p=%2 s=a hp= hs= hw="],
+    ),
+    ("new-session", &["session-created p=%4 s=b hp= hs=b hw="]),
+    ("kill-session", &["session-closed p=%2 s=a hp= hs=b hw="]),
+    ("new-session-2", &["session-created p=%5 s=c hp= hs=c hw="]),
+    (
+        "kill-last-pane-of-session",
+        &[
+            "pane-closed p=%2 s=a hp= hs= hw=",
+            "session-closed p=%2 s=a hp= hs=c hw=",
+        ],
+    ),
+    ("exit-remain-on", &["pane-died p=%6 s=a hp=%6 hs= hw=@1"]),
+    ("exit-remain-off", &["pane-exited p=%6 s=a hp=%7 hs= hw=@1"]),
+    (
+        "short-lived-session",
+        &[
+            "session-created p=%8 s=d hp= hs=d hw=",
+            "pane-exited p=%6 s=a hp=%8 hs= hw=@5",
+            "session-closed p=%6 s=a hp= hs=d hw=",
+        ],
+    ),
+];
+
+const LINE: &str = "#{hook} p=#{pane_id} s=#{session_name} hp=#{hook_pane} hs=#{hook_session_name} hw=#{hook_window}";
 
 fn ok(srv: &TestServer, args: &[&str]) -> String {
     srv.cmd(args).unwrap_or_else(|e| panic!("{args:?}: {e}"))
@@ -42,24 +121,156 @@ fn log_lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Binds `event` to a command that appends `<event> <pane_id>
-/// <session_name> <hook_pane>` to `log`.
-fn bind(srv: &TestServer, event: &str, log: &Path) {
-    let cmd = format!(
-        "run-shell 'echo {event} #{{pane_id}} #{{session_name}} #{{hook_pane}} >> {}'",
-        log.display()
-    );
+/// Binds `event` to a command that appends `fmt`, expanded, to `log`.
+fn bind_line(srv: &TestServer, event: &str, fmt: &str, log: &Path) {
+    let cmd = format!("run-shell \"echo '{fmt}' >> {}\"", log.display());
     ok(srv, &["set-hook", "-g", event, &cmd]);
+}
+
+/// Waits until `log` has `want` more lines than `seen`, then makes sure
+/// no more come, and returns the new ones.
+fn new_lines(log: &Path, seen: &mut usize, want: usize) -> Vec<String> {
+    let _ = wait_until(|| log_lines(log).len() >= *seen + want, WAIT);
+    std::thread::sleep(QUIET);
+    let lines = log_lines(log);
+    let new = lines[(*seen).min(lines.len())..].to_vec();
+    *seen = lines.len();
+    new
+}
+
+fn pane_of(srv: &TestServer, target: &str) -> String {
+    display(srv, target, "#{pane_id}")
+}
+
+fn start() -> (TestServer, PathBuf) {
+    let srv = TestServer::start();
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "a", "-x", "80", "-y", "24"],
+    );
+    let log = srv.home.join("hooks.log");
+    (srv, log)
+}
+
+/// Case 1: with all twelve bound, each action runs exactly the hooks tmux
+/// 3.7b runs for it, in the same order and with the same context, the
+/// steps probe5 recorded (`after-resize-window` needs `resize-window`,
+/// TC.8's; the client events have their own test).
+#[test]
+fn the_twelve_events_fire_in_tmuxs_order_with_tmuxs_context() {
+    let (srv, log) = start();
+    for (event, _) in EVENTS {
+        bind_line(&srv, event, LINE, &log);
+    }
+    let mut seen = 0;
+    for (step, want) in TMUX_ORDER {
+        let run = |args: &[&str]| ok(&srv, args);
+        match *step {
+            "split" => drop(run(&["split-window", "-t", "a"])),
+            "select-pane-change" | "select-pane-noop" => drop(run(&["select-pane", "-t", "%0"])),
+            "select-pane-other" => drop(run(&["select-pane", "-t", "%1"])),
+            "resize-pane" => drop(run(&["resize-pane", "-t", "%1", "-D", "2"])),
+            "resize-pane-zoom-twice" => {
+                run(&["resize-pane", "-Z", "-t", "%1"]);
+                run(&["resize-pane", "-Z", "-t", "%1"]);
+            }
+            "new-window-d" => drop(run(&["new-window", "-d", "-t", "a"])),
+            "new-window" => drop(run(&["new-window", "-t", "a"])),
+            "select-window-change" | "select-window-noop" => {
+                drop(run(&["select-window", "-t", "@1"]))
+            }
+            "kill-pane-other-window" => drop(run(&["kill-pane", "-t", "%0"])),
+            "kill-window-last-pane" => drop(run(&["kill-pane", "-t", "%3"])),
+            "new-session" => drop(run(&["new-session", "-d", "-s", "b"])),
+            "kill-session" => drop(run(&["kill-session", "-t", "b"])),
+            "new-session-2" => drop(run(&["new-session", "-d", "-s", "c"])),
+            "kill-last-pane-of-session" => drop(run(&["kill-pane", "-t", "%5"])),
+            "exit-remain-on" => drop(run(&["split-window", "-t", "a", "exit 3"])),
+            "exit-remain-off" => {
+                run(&["set", "-g", "remain-on-exit", "off"]);
+                run(&["split-window", "-t", "a", "sleep 0.2"]);
+            }
+            "short-lived-session" => drop(run(&["new-session", "-d", "-s", "d", "sleep 0.5"])),
+            other => panic!("no step {other}"),
+        }
+        let got = new_lines(&log, &mut seen, want.len());
+        assert_eq!(got, *want, "step {step}");
+    }
+}
+
+/// Case 1, the client events: attaching is a session change and a resize,
+/// every size report is a resize, and every switch a session change (even
+/// to the same session), as tmux 3.7b (recorded with a pty client).
+#[test]
+fn client_events_fire_as_tmux() {
+    let (srv, log) = start();
+    ok(&srv, &["new-session", "-d", "-s", "b"]);
+    let fmt = "#{hook} p=#{pane_id} s=#{session_name} hc=#{hook_client}";
+    bind_line(&srv, "client-resized", fmt, &log);
+    bind_line(&srv, "client-session-changed", fmt, &log);
+    let (a, b) = (pane_of(&srv, "a"), pane_of(&srv, "b"));
+    let mut seen = 0;
+    let mut client = Harness::spawn_attach_with_env(srv.command(), "a", &[], 80, 24);
+    let got = new_lines(&log, &mut seen, 2);
+    let name = ok(&srv, &["list-clients", "-F", "#{client_name}"])
+        .trim_end()
+        .to_string();
+    assert_eq!(
+        got,
+        [
+            format!("client-session-changed p={a} s=a hc={name}"),
+            format!("client-resized p={a} s=a hc={name}"),
+        ]
+    );
+    client.resize(100, 30);
+    // One SIGWINCH, one report, one hook.
+    assert_eq!(
+        new_lines(&log, &mut seen, 1),
+        [format!("client-resized p={a} s=a hc={name}")]
+    );
+    ok(&srv, &["switch-client", "-t", "b"]);
+    let want = vec![format!("client-session-changed p={b} s=b hc={name}")];
+    assert_eq!(new_lines(&log, &mut seen, 1), want);
+    ok(&srv, &["switch-client", "-t", "b"]);
+    assert_eq!(new_lines(&log, &mut seen, 1), want);
+}
+
+/// A command-shaped hook runs before its command's reply (tmux 3.7b's
+/// `after-*` hooks hold the CLI), so the next command sees what it did.
+#[test]
+fn a_command_hook_has_run_when_its_command_returns() {
+    let (srv, _) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    ok(
+        &srv,
+        &[
+            "set-hook",
+            "-g",
+            "pane-focused",
+            "set -g @focused #{pane_id}",
+        ],
+    );
+    ok(&srv, &["select-pane", "-t", &first]);
+    assert_eq!(display(&srv, "a", "#{@focused}"), first);
+}
+
+/// Binds `event` to a command that appends `<event> <pane_id>` to `log`.
+fn bind(srv: &TestServer, event: &str, log: &Path) {
+    bind_line(srv, event, "#{hook} #{pane_id}", log);
 }
 
 /// Waits for exactly one line in `log`, then makes sure no second one
 /// comes, and returns it.
 fn once(log: &Path) -> String {
-    wait_until(|| !log_lines(log).is_empty(), WAIT)
-        .unwrap_or_else(|e| panic!("the hook never ran: {e}"));
-    std::thread::sleep(QUIET);
-    let lines = log_lines(log);
-    assert_eq!(lines.len(), 1, "the hook ran more than once: {lines:?}");
+    let mut seen = 0;
+    let lines = new_lines(log, &mut seen, 1);
+    assert_eq!(
+        lines.len(),
+        1,
+        "the hook ran {} times: {lines:?}",
+        lines.len()
+    );
     let _ = fs::remove_file(log);
     lines[0].clone()
 }
@@ -73,179 +284,22 @@ fn unbind(srv: &TestServer, event: &str) {
     ok(srv, &["set-hook", "-gu", event]);
 }
 
-fn pane_of(srv: &TestServer, target: &str) -> String {
-    display(srv, target, "#{pane_id}")
-}
-
-fn start() -> (TestServer, PathBuf) {
-    let srv = TestServer::start();
-    ok(
-        &srv,
-        &["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"],
-    );
-    let log = srv.home.join("hooks.log");
-    (srv, log)
-}
-
-/// Case 1, the command-shaped events (tmux's `after-*` names): each runs
-/// its hook once per action, with the pane it acted on and its session.
+/// A command-shaped hook's `run-shell` without `-b` holds the CLI's reply
+/// until it exits (tmux 3.7b's waited about 1.04 s on a `sleep 1`).
 #[test]
-fn command_events_run_their_hook_once_with_the_events_pane() {
-    let (srv, log) = start();
-    let first = pane_of(&srv, "main");
-    ok(&srv, &["split-window", "-t", "main"]);
-    let second = pane_of(&srv, "main");
-
-    // after-select-pane.
-    bind(&srv, "pane-focused", &log);
-    ok(&srv, &["select-pane", "-t", &first]);
-    assert_eq!(once(&log), format!("pane-focused {first} main {first}"));
-    // Selecting the pane that is already active changes nothing (tmux
-    // 3.7b fires nothing either).
-    ok(&srv, &["select-pane", "-t", &first]);
-    quiet(&log);
-    unbind(&srv, "pane-focused");
-
-    // after-resize-pane: once, though both panes change size.
-    bind(&srv, "pane-resized", &log);
-    ok(&srv, &["resize-pane", "-t", &first, "-D", "2"]);
-    assert_eq!(once(&log), format!("pane-resized {first} main {first}"));
-    unbind(&srv, "pane-resized");
-
-    // after-new-window.
-    bind(&srv, "window-created", &log);
-    ok(&srv, &["new-window", "-d", "-t", "main"]);
-    let created = pane_of(&srv, "main:2");
-    assert_eq!(
-        once(&log),
-        format!("window-created {created} main {created}")
-    );
-    unbind(&srv, "window-created");
-
-    // after-select-window.
-    bind(&srv, "window-focused", &log);
-    ok(&srv, &["select-window", "-t", "main:2"]);
-    assert_eq!(
-        once(&log),
-        format!("window-focused {created} main {created}")
-    );
-    unbind(&srv, "window-focused");
-
-    // after-kill-pane: `#{hook_pane}` is the pane that went, `#{pane_id}`
-    // the one left active in its window (as tmux 3.7b).
-    bind(&srv, "pane-closed", &log);
-    ok(&srv, &["kill-pane", "-t", &second]);
-    assert_eq!(once(&log), format!("pane-closed {first} main {second}"));
-    unbind(&srv, "pane-closed");
-}
-
-/// Case 1, the notify-shaped events: sessions coming and going and panes
-/// exiting.
-#[test]
-fn session_and_pane_exit_events_run_their_hook_once() {
-    let (srv, log) = start();
-
-    // session-created.
-    bind(&srv, "session-created", &log);
-    ok(&srv, &["new-session", "-d", "-s", "other"]);
-    let other = pane_of(&srv, "other");
-    assert_eq!(once(&log), format!("session-created {other} other {other}"));
-    unbind(&srv, "session-created");
-
-    // session-closed: the session is gone, so its name is
-    // `#{hook_session_name}`.
-    let cmd = format!(
-        "run-shell 'echo closed #{{hook_session_name}} >> {}'",
-        log.display()
-    );
-    ok(&srv, &["set-hook", "-g", "session-closed", &cmd]);
-    ok(&srv, &["kill-session", "-t", "other"]);
-    assert_eq!(once(&log), "closed other");
-    unbind(&srv, "session-closed");
-
-    // pane-died: the harness runs with remain-on-exit on.
-    bind(&srv, "pane-died", &log);
-    ok(&srv, &["split-window", "-t", "main", "exit 3"]);
-    let line = once(&log);
-    let died = ok(
-        &srv,
-        &["list-panes", "-t", "main", "-F", "#{pane_id} #{pane_dead}"],
-    )
-    .lines()
-    .find(|l| l.ends_with(" 1"))
-    .and_then(|l| l.split(' ').next().map(str::to_string))
-    .expect("a dead pane");
-    assert_eq!(line, format!("pane-died {died} main {died}"));
-    unbind(&srv, "pane-died");
-
-    // pane-exited: with remain-on-exit off the pane goes.
-    ok(&srv, &["set", "-g", "remain-on-exit", "off"]);
-    let cmd = format!(
-        "run-shell 'echo exited #{{hook_pane}} #{{session_name}} >> {}'",
-        log.display()
-    );
-    ok(&srv, &["set-hook", "-g", "pane-exited", &cmd]);
-    ok(&srv, &["split-window", "-t", "main", "sleep 0.5"]);
-    let exiting = pane_of(&srv, "main");
-    assert_eq!(once(&log), format!("exited {exiting} main"));
-}
-
-/// Case 1, the client events: an attached client resizing (and its
-/// window with it) and switching sessions.
-#[test]
-fn client_events_run_their_hook_once() {
-    let (srv, log) = start();
-    ok(&srv, &["new-session", "-d", "-s", "other"]);
-    let mut client = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
-    wait_until(|| ok(&srv, &["list-clients"]).lines().count() == 1, WAIT).expect("attached");
-    let main_pane = pane_of(&srv, "main");
-    // The window follows the client's size first.
-    std::thread::sleep(QUIET);
-
-    // client-resized and after-resize-window.
-    bind(&srv, "client-resized", &log);
-    let window_log = srv.home.join("window.log");
-    bind(&srv, "window-resized", &window_log);
-    client.resize(100, 30);
-    assert_eq!(
-        once(&log),
-        format!("client-resized {main_pane} main {main_pane}")
-    );
-    assert_eq!(
-        once(&window_log),
-        format!("window-resized {main_pane} main {main_pane}")
-    );
-    unbind(&srv, "client-resized");
-    unbind(&srv, "window-resized");
-
-    // client-session-changed.
-    bind(&srv, "client-session-changed", &log);
-    ok(&srv, &["switch-client", "-t", "other"]);
-    let other = pane_of(&srv, "other");
-    assert_eq!(
-        once(&log),
-        format!("client-session-changed {other} other {other}")
-    );
-}
-
-/// A command-shaped hook runs before its command's reply (tmux 3.7b's
-/// `after-*` hooks hold the CLI), so the next command sees what it did.
-#[test]
-fn a_command_hook_has_run_when_its_command_returns() {
+fn a_blocking_run_shell_in_a_command_hook_holds_the_reply() {
     let (srv, _) = start();
-    let first = pane_of(&srv, "main");
-    ok(&srv, &["split-window", "-t", "main"]);
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
     ok(
         &srv,
-        &[
-            "set-hook",
-            "-g",
-            "pane-focused",
-            "set -g @focused #{hook_pane}",
-        ],
+        &["set-hook", "-g", "pane-focused", "run-shell 'sleep 1'"],
     );
+    let started = Instant::now();
     ok(&srv, &["select-pane", "-t", &first]);
-    assert_eq!(display(&srv, "main", "#{@focused}"), first);
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(900), "took {took:?}");
+    assert!(took < Duration::from_secs(4), "took {took:?}");
 }
 
 /// Case 2: a hook removed with `set-hook -gu` does not run again, and
@@ -253,13 +307,13 @@ fn a_command_hook_has_run_when_its_command_returns() {
 #[test]
 fn an_unset_hook_stops_running() {
     let (srv, log) = start();
-    let first = pane_of(&srv, "main");
-    ok(&srv, &["split-window", "-t", "main"]);
-    let second = pane_of(&srv, "main");
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let second = pane_of(&srv, "a");
     bind(&srv, "pane-focused", &log);
     let shown = ok(&srv, &["show-hooks", "-g"]);
     assert!(
-        shown.starts_with("pane-focused run-shell 'echo pane-focused"),
+        shown.starts_with("pane-focused run-shell \"echo '#{hook} #{pane_id}'"),
         "{shown}"
     );
     ok(&srv, &["select-pane", "-t", &first]);
@@ -277,8 +331,8 @@ fn an_unset_hook_stops_running() {
 #[test]
 fn a_background_run_shell_hook_does_not_delay_the_next_command() {
     let (srv, _) = start();
-    let first = pane_of(&srv, "main");
-    ok(&srv, &["split-window", "-t", "main"]);
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
     ok(
         &srv,
         &["set-hook", "-g", "pane-focused", "run-shell -b 'sleep 5'"],
@@ -299,7 +353,7 @@ fn a_background_run_shell_hook_does_not_delay_the_next_command() {
 fn new_pane_env(srv: &TestServer, name: &str) -> Vec<String> {
     let out = srv.home.join(format!("{name}.env"));
     let script = format!("env > {}.tmp; mv {0}.tmp {0}; sleep 30", out.display());
-    ok(srv, &["new-window", "-d", "-t", "main", &script]);
+    ok(srv, &["new-window", "-d", "-t", "a", &script]);
     wait_until(|| out.exists(), WAIT).expect("the pane wrote its env");
     fs::read_to_string(&out)
         .expect("read env")
@@ -340,9 +394,9 @@ fn a_session_variable_reaches_its_panes_and_run_shell() {
     let (srv, _) = start();
     ok(
         &srv,
-        &["set-environment", "-t", "main", "GROFE_TC5_SESS", "s1"],
+        &["set-environment", "-t", "a", "GROFE_TC5_SESS", "s1"],
     );
-    assert!(ok(&srv, &["show-environment", "-t", "main"]).contains("GROFE_TC5_SESS=s1\n"));
+    assert!(ok(&srv, &["show-environment", "-t", "a"]).contains("GROFE_TC5_SESS=s1\n"));
     assert!(new_pane_env(&srv, "session").contains(&"GROFE_TC5_SESS=s1".to_string()));
     // From inside the session (a CLI without a pane picks the most recent
     // session, as tmux).
@@ -357,8 +411,8 @@ fn a_session_variable_reaches_its_panes_and_run_shell() {
 #[test]
 fn a_hidden_variable_reaches_command_strings_and_not_a_new_pane() {
     let (srv, log) = start();
-    let first = pane_of(&srv, "main");
-    ok(&srv, &["split-window", "-t", "main"]);
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
     ok(&srv, &["set-environment", "-gh", "GROFE_TC5_SECRET", "x"]);
     assert_eq!(
         ok(&srv, &["show-environment", "-gh"]),
@@ -404,4 +458,141 @@ fn command_strings_expand_variables_from_the_global_environment() {
             .any(|l| l.contains("F9") && l.contains("display-message hello")),
         "{keys}"
     );
+}
+
+/// Case 5 for a variable the server started with (and the CLI did not):
+/// `-gu` removes it from new panes and `run-shell` too, as tmux 3.7b seeds
+/// its global environment from its own.
+#[test]
+fn unsetting_a_variable_the_server_started_with_removes_it() {
+    let name = "GROFE_TC5_SERVER_ONLY";
+    let live = spawn_server("", &[(name, "1")]);
+    let srv = &live.srv;
+    assert!(new_pane_env(srv, "before").contains(&format!("{name}=1")));
+    assert_eq!(ok(srv, &["run-shell", &format!("echo x${name}")]), "x1\n");
+    ok(srv, &["set-environment", "-gu", name]);
+    let env = new_pane_env(srv, "after");
+    assert!(
+        !env.iter().any(|l| l.starts_with(&format!("{name}="))),
+        "{env:?}"
+    );
+    assert_eq!(ok(srv, &["run-shell", &format!("echo x${name}")]), "x\n");
+}
+
+/// A server whose config was written before it started. Killed on drop.
+struct Live {
+    child: Option<std::process::Child>,
+    srv: TestServer,
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn config_file(srv: &TestServer) -> PathBuf {
+    srv.config_home.join("grofe").join("config.toml")
+}
+
+fn write_config(srv: &TestServer, text: &str) {
+    let path = config_file(srv);
+    fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    fs::write(&path, text).expect("write config");
+}
+
+fn start_with_config(text: &str) -> Live {
+    spawn_server(text, &[])
+}
+
+/// A server started over config `text`, with `env` added to its own
+/// environment only, and one detached session `a`.
+fn spawn_server(text: &str, env: &[(&str, &str)]) -> Live {
+    let srv = TestServer::unstarted();
+    write_config(&srv, text);
+    let mut cmd = srv.command();
+    cmd.envs(env.iter().copied());
+    cmd.arg("__server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let live = Live {
+        child: Some(cmd.spawn().expect("spawn server")),
+        srv,
+    };
+    if wait_until(|| live.srv.is_running(), WAIT).is_err() {
+        panic!("server did not start; log:\n{}", live.srv.log());
+    }
+    ok(
+        &live.srv,
+        &["new-session", "-d", "-s", "a", "-x", "80", "-y", "24"],
+    );
+    live
+}
+
+/// `[hooks]` binds events from the config, with provenance in
+/// `show-config --explain`; `reload` replaces them all or nothing, and
+/// keeps a hook set at runtime.
+#[test]
+fn config_hooks_bind_and_reload_all_or_nothing() {
+    let live = start_with_config("[hooks]\npane-focused = \"set -g @cfg one:#{pane_id}\"\n");
+    let srv = &live.srv;
+    let first = pane_of(srv, "a");
+    ok(srv, &["split-window", "-t", "a"]);
+    ok(srv, &["select-pane", "-t", &first]);
+    assert_eq!(display(srv, "a", "#{@cfg}"), format!("one:{first}"));
+    assert_eq!(
+        ok(srv, &["show-hooks", "-g"]),
+        "pane-focused set -g @cfg one:#{pane_id}\n"
+    );
+    let explain = ok(srv, &["show-config", "--explain", "hooks.pane-focused"]);
+    assert!(
+        explain.starts_with("hooks.pane-focused = \"set -g @cfg one:#{pane_id}\"\n  set by "),
+        "{explain}"
+    );
+
+    // An error anywhere keeps every hook as it was.
+    write_config(
+        srv,
+        "[hooks]\npane-focused = \"set -g @cfg two\"\nno-such-event = \"list-sessions\"\n",
+    );
+    let out = srv.run(&["reload"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        out.stderr.contains("hooks.no-such-event: unknown hook"),
+        "{}",
+        out.stderr
+    );
+    let bad = srv.run(&["reload"]);
+    assert!(!bad.status.success());
+    write_config(srv, "[hooks]\npane-focused = \"nosuchverb\"\n");
+    let out = srv.run(&["reload"]);
+    assert!(
+        out.stderr
+            .contains("hooks.pane-focused: unknown command: nosuchverb"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        ok(srv, &["show-hooks", "-g"]),
+        "pane-focused set -g @cfg one:#{pane_id}\n"
+    );
+
+    // A good reload replaces it; a runtime hook survives the next one.
+    write_config(
+        srv,
+        "[hooks]\npane-focused = \"set -g @cfg two\"\npane-died = \"list-sessions\"\n",
+    );
+    ok(srv, &["reload"]);
+    assert_eq!(
+        ok(srv, &["show-hooks", "-g"]),
+        "pane-died list-sessions\npane-focused set -g @cfg two\n"
+    );
+    ok(srv, &["set-hook", "-g", "pane-died", "list-clients"]);
+    write_config(srv, "");
+    ok(srv, &["reload"]);
+    assert_eq!(ok(srv, &["show-hooks", "-g"]), "pane-died list-clients\n");
 }

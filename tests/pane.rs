@@ -24,7 +24,8 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         session: SessionId(0),
         argv: Some(argv.iter().map(|s| s.to_string()).collect()),
         cwd: std::env::temp_dir(),
-        env: Vec::new(),
+        // The whole environment (a pane inherits none of the server's).
+        env: std::env::vars().collect(),
         cols: 80,
         rows: 24,
         history_limit: 1000,
