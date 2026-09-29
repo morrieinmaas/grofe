@@ -1,6 +1,5 @@
-//! Popups (TC.6, spec §4.5 "Overlays"): `display-popup` and `new-pane`, a
-//! command in its own pty drawn over one client's frame ([`PopupOverlay`])
-//! and taking that client's input while open ([`PopupHook`]). A popup is
+//! Popups (TC.6, spec §4.5 "Overlays"): `display-popup`, a command in its
+//! own pty drawn over one client's frame ([`PopupOverlay`]) and taking that client's input while open ([`PopupHook`]). A popup is
 //! not a pane in the model. Its pty's events reach the actor as
 //! [`super::Job`]s.
 //!
@@ -17,9 +16,7 @@
 //! - A second popup on a client that has one open does nothing.
 //! - From the CLI, `display-popup` answers when the popup closes, with its
 //!   command's exit status, or 129 when closing the popup hung it up.
-//! - `new-pane` is tmux 3.7's floating pane, which grofe draws as a popup
-//!   at a window cell, in the active pane border style. It closes when its
-//!   command exits, and keys never close it.
+//! - A client resize fits the box to the client and resizes the pty.
 //!
 //! The command's output goes through the same emulator and passthrough
 //! scanner as a pane's, and only reaches the client as cells, so a popup
@@ -169,8 +166,7 @@ pub fn place(
 /// What a popup looks like and how it behaves, as its command asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
-    /// The box's top-left cell on the client, border included; a floating
-    /// pane's may be off screen.
+    /// The box's top-left cell on the client, border included.
     pub at: (i32, i32),
     /// The box's size, border included.
     pub size: (u16, u16),
@@ -181,8 +177,6 @@ pub struct Frame {
     pub border_style: Style,
     /// `-E`: close when the command exits.
     pub close_on_exit: bool,
-    /// `new-pane`: closes when the command exits, and keys never close it.
-    pub floating: bool,
 }
 
 impl Frame {
@@ -191,9 +185,6 @@ impl Frame {
     /// larger than the client, moved left and up until it fits, and back
     /// to its own size and place once the client has room again.
     fn fitted(&self, (cols, rows): (u16, u16)) -> Frame {
-        if self.floating {
-            return self.clone();
-        }
         let (w, h) = (self.size.0.min(cols), self.size.1.min(rows));
         let fit = |at: i32, len: u16, room: u16| {
             if at + i32::from(len) > i32::from(room) {
@@ -429,7 +420,7 @@ fn exited(state: &mut State, id: ClientId, generation: u64, status: Option<i32>)
         return;
     };
     popup.exited = Some(status);
-    if popup.frame.close_on_exit || popup.frame.floating {
+    if popup.frame.close_on_exit {
         close(state, id);
     } else {
         clients::mark_dirty(state, id);
@@ -534,8 +525,7 @@ impl InputHook for PopupHook {
         _now: Instant,
     ) -> Option<Routed> {
         let popup = state.popups.open.get(&client)?;
-        let may_close =
-            !popup.frame.floating && (!popup.frame.close_on_exit || popup.exited.is_some());
+        let may_close = !popup.frame.close_on_exit || popup.exited.is_some();
         let running = popup.exited.is_none();
         let handle = &popup.running.handle;
         let bytes = match input {
@@ -814,7 +804,6 @@ mod tests {
             title: Some("a-very-long-title-longer-than-box".to_string()),
             border_style: Style::default(),
             close_on_exit: false,
-            floating: false,
         };
         draw_box(&mut screen, &frame, Lines::Double);
         let row = |y: usize| -> String {
@@ -831,8 +820,7 @@ mod tests {
         assert_eq!(frame.inside(), ((3, 2), (18, 3)));
     }
 
-    /// A floating pane may start off screen: only its visible part is
-    /// drawn.
+    /// A box partly off screen: only its visible part is drawn.
     #[test]
     fn a_box_off_screen_is_clipped() {
         let mut screen = Screen::new(10, 5);
@@ -843,7 +831,6 @@ mod tests {
             title: None,
             border_style: Style::default(),
             close_on_exit: false,
-            floating: true,
         };
         draw_box(&mut screen, &frame, Lines::Single);
         let text: String = screen.cells[..10].iter().map(|c| c.c).collect();
@@ -888,7 +875,6 @@ mod tests {
             title: None,
             border_style: Style::default(),
             close_on_exit: false,
-            floating: false,
         };
         let spawn = PaneSpawn {
             id: PaneId(0),

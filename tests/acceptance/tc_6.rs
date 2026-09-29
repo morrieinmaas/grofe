@@ -413,26 +413,36 @@ fn position_letters_follow_the_current_pane() {
     wait_child(child, WAIT).expect("answers");
 }
 
-/// Case 6 (M36-R1): fzf 0.74's `new-pane -P -F #{pane_id} -t %N -c <dir>
-/// -x -y -X -Y sh -c ...` form. As tmux 3.7b does (recorded, `-x 30 -y 8
-/// -X 5 -Y 3`): it prints a pane id of its own, which is the command's
-/// `TMUX_PANE`; the command runs in `<dir>` on a 30x8 pty whose border
-/// sits around the window cells from (5, 3); keys go to it; it closes
-/// when its command exits.
+/// Case 6 (M36-R1): fzf 0.74's flow over `new-pane -P -F #{pane_id} -t
+/// %N -c <dir> -x -y -X -Y sh -c ...`, a tmux 3.7 floating pane. As tmux
+/// 3.7b does (recorded, `-x 30 -y 8 -X 5 -Y 3`): it prints the new pane's
+/// id, which is the command's `TMUX_PANE` and takes `set-option -p`; the
+/// command runs in `<dir>` on a 30x8 pty whose border sits around the
+/// window cells from (5, 3); it is listed and counted with the window's
+/// panes; keys go to it; with `remain-on-exit off` it goes when its
+/// command exits, and the tiled pane is active again. fzf then waits with
+/// `wait-for`, which is TC.9's and not merged: a file stands in for it.
 #[test]
-fn an_fzf_shaped_new_pane_matches_tmuxs_floating_pane() {
+fn an_fzf_shaped_new_pane_is_a_floating_pane() {
     let srv = start();
     let mut a = attach(&srv, "main");
     let dir = canonical_dir(&srv, "npdir");
     let out = srv.home.join("np.txt");
+    let done = srv.home.join("np.done");
+    let grofe = env!("CARGO_BIN_EXE_grofe");
+    let sock = srv.socket.display().to_string();
     let script = format!(
-        "echo \"$TMUX_PANE $(pwd) $(stty size)\" > {}; echo in-np; read line; echo \"got $line\" >> {}",
-        out.display(),
-        out.display()
+        "{grofe} -S {sock} set-option -p -t \"$TMUX_PANE\" remain-on-exit off; \
+         {grofe} -S {sock} set-option -p -t \"$TMUX_PANE\" @fzf-border-label picker; \
+         echo \"$TMUX_PANE $(pwd) $(stty size)\" > {out}; echo in-np; read line; \
+         echo \"got $line\" >> {out}; touch {done}",
+        out = out.display(),
+        done = done.display(),
     );
     let target = srv
         .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
         .expect("pane id");
+    let target = target.trim_end();
     let printed = srv
         .cmd(&[
             "new-pane",
@@ -440,7 +450,7 @@ fn an_fzf_shaped_new_pane_matches_tmuxs_floating_pane() {
             "-F",
             "#{pane_id}",
             "-t",
-            target.trim_end(),
+            target,
             "-c",
             dir.to_str().expect("utf-8"),
             "-x",
@@ -457,10 +467,7 @@ fn an_fzf_shaped_new_pane_matches_tmuxs_floating_pane() {
         ])
         .expect("new-pane");
     let id = printed.trim_end();
-    assert!(
-        id.starts_with('%') && id != target.trim_end(),
-        "{printed:?}"
-    );
+    assert!(id.starts_with('%') && id != target, "{printed:?}");
     a.wait_for("│in-np");
     let screen = rows(&a.text());
     let side = format!("    │{:30}│", "");
@@ -470,15 +477,199 @@ fn an_fzf_shaped_new_pane_matches_tmuxs_floating_pane() {
     want.extend(std::iter::repeat_n(side, 7));
     want.push(format!("    └{}┘", "─".repeat(30)));
     assert_eq!(screen[..12], want[..], "screen:\n{}", screen.join("\n"));
-    let first = read(&out);
     assert_eq!(
-        first.trim_end(),
+        read(&out).trim_end(),
         format!("{id} {} 8 30", dir.display()),
         "TMUX_PANE, cwd and pty size"
     );
+    let label = srv
+        .cmd(&["display-message", "-p", "-t", id, "#{@fzf-border-label}"])
+        .expect("label");
+    assert_eq!(label.trim_end(), "picker");
+    let panes = srv
+        .cmd(&[
+            "list-panes", "-t", "main", "-F",
+            "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag} #{pane_active} #{window_panes}",
+        ])
+        .expect("list-panes");
+    assert_eq!(
+        panes,
+        format!("{target} 0 0 60 14 0 0 2\n{id} 5 3 30 8 1 1 2\n")
+    );
     a.send("picked\r");
+    wait_until(|| done.exists(), WAIT).expect("the command finished");
     a.wait_until("the floating pane to close", WAIT, |t| !t.contains("in-np"));
     assert!(read(&out).contains("got picked"));
+    let panes = srv
+        .cmd(&[
+            "list-panes",
+            "-t",
+            "main",
+            "-F",
+            "#{pane_id} #{pane_active}",
+        ])
+        .expect("list-panes");
+    assert_eq!(panes, format!("{target} 1\n"));
+}
+
+/// A floating pane belongs to its window, as tmux 3.7b's does: every
+/// client showing the window draws it, the prefix and bindings reach it
+/// (prefix `c` from inside it makes a window), and it outlives a detach.
+/// A split of it is refused with tmux's text.
+#[test]
+fn a_floating_pane_is_the_windows_on_every_client() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    let mut b = attach(&srv, "main");
+    srv.cmd(&[
+        "new-pane",
+        "-x",
+        "20",
+        "-y",
+        "4",
+        "-X",
+        "5",
+        "-Y",
+        "2",
+        "sh",
+        "-c",
+        "echo floaty; exec cat",
+    ])
+    .expect("new-pane");
+    a.wait_for("│floaty");
+    b.wait_for("│floaty");
+    let float = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("active pane");
+    let float = float.trim_end();
+    assert_eq!(
+        srv.cmd(&["split-window", "-t", float]),
+        Err("size or position can't split a floating pane\n".to_string())
+    );
+
+    a.send("typed");
+    a.wait_for("│typed");
+    b.wait_for("│typed");
+    a.send("\x02c");
+    wait_until(
+        || {
+            srv.cmd(&["list-windows", "-t", "main"])
+                .is_ok_and(|w| w.lines().count() == 2)
+        },
+        WAIT,
+    )
+    .expect("prefix c made a window");
+
+    a.send("\x02d");
+    a.wait_exit();
+    drop(b);
+    let panes = srv
+        .cmd(&[
+            "list-panes",
+            "-t",
+            "main:1",
+            "-F",
+            "#{pane_id} #{pane_floating_flag}",
+        ])
+        .expect("list-panes");
+    assert!(panes.contains(&format!("{float} 1")), "{panes}");
+}
+
+/// Several floating panes stack as tmux 3.7b's do (recorded): the newest
+/// on top and active; selecting a lower one raises it; with the tiled
+/// pane active they stay drawn over it in their order.
+#[test]
+fn floating_panes_stack_and_rise_when_selected() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "60",
+        "-y",
+        "14",
+        "sh",
+        "-c",
+        "echo TILED; exec cat",
+    ])
+    .expect("new-session");
+    let mut a = attach(&srv, "main");
+    let tiled = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("pane");
+    let first = srv
+        .cmd(&[
+            "new-pane",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "5",
+            "-Y",
+            "2",
+            "sh",
+            "-c",
+            "echo F1; exec cat",
+        ])
+        .expect("first");
+    srv.cmd(&[
+        "new-pane",
+        "-x",
+        "20",
+        "-y",
+        "5",
+        "-X",
+        "15",
+        "-Y",
+        "4",
+        "sh",
+        "-c",
+        "echo F2; exec cat",
+    ])
+    .expect("second");
+    a.wait_for("│F2");
+    let top = [
+        "TILED",
+        "    ┌────────────────────┐",
+        "    │F1                  │",
+        "    │         ┌────────────────────┐",
+        "    │         │F2                  │",
+        "    │         │                    │",
+        "    │         │                    │",
+        "    └─────────│                    │",
+        "              │                    │",
+        "              └────────────────────┘",
+    ];
+    assert_eq!(rows(&a.text())[..10], top[..]);
+    srv.cmd(&["select-pane", "-t", first.trim_end()])
+        .expect("select");
+    let raised = [
+        "TILED",
+        "    ┌────────────────────┐",
+        "    │F1                  │",
+        "    │                    │─────────┐",
+        "    │                    │         │",
+        "    │                    │         │",
+        "    │                    │         │",
+        "    └────────────────────┘         │",
+        "              │                    │",
+        "              └────────────────────┘",
+    ];
+    a.wait_until("F1 on top", WAIT, |t| rows(t)[..10] == raised[..]);
+    srv.cmd(&["select-pane", "-t", tiled.trim_end()])
+        .expect("select tiled");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        rows(&a.text())[..10],
+        raised[..],
+        "still drawn over the tiled pane"
+    );
 }
 
 /// With `mouse` on, a report inside the popup reaches a command that asked

@@ -1,15 +1,17 @@
-//! Popups (TC.6, M36-R1): `display-popup` and `new-pane`, both drawn by
-//! `server::popup`. The values and error texts are tmux 3.7b's, recorded
+//! Popups and floating panes (TC.6, M36-R1): `display-popup`, drawn by
+//! `server::popup`, and `new-pane`, a pane of the window drawn by the
+//! renderer over its layout. The values and error texts are tmux 3.7b's, recorded
 //! on a private server.
 
-use crate::cmd::{self, DisplayPopup, NewPane, Offset, Resolve};
+use crate::cmd::{DisplayPopup, NewPane, Offset, Resolve};
 use crate::compat;
 use crate::protocol::ClientCtx;
-use crate::server::dispatch::options::{self, FormatCtx, ServerVars};
-use crate::server::dispatch::{command_argv, pane_env, resolve_cwd};
+use crate::server::dispatch::pane::print_pane;
+use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::model::Floating;
 use crate::server::pane::{PaneSpawn, usable_cwd};
 use crate::server::popup::{self, Frame, Lines, Position};
-use crate::server::status::{self, Style};
+use crate::server::status::Style;
 use crate::server::{State, clients, hooks, prompt};
 use crate::types::{ClientId, PaneId, Rect, SplitSize};
 
@@ -86,7 +88,6 @@ pub fn display_popup(
         title,
         border_style: Style::default(),
         close_on_exit: c.close_on_exit,
-        floating: false,
     };
     // ponytail: without a command tmux starts its default-shell as a plain
     // shell; grofe starts the user's login shell, as for a pane.
@@ -97,18 +98,18 @@ pub fn display_popup(
     Ok(String::new())
 }
 
-/// `new-pane`: tmux 3.7's floating pane, drawn as a popup over the window
-/// of the target pane (`-t`) on the client showing it. `-x`/`-y` are its
-/// size (half the window's width and a quarter of its height by default)
-/// and `-X`/`-Y` its window cell, cells or a percent of the window; its
-/// border is drawn around that, in the active pane border style. Its
-/// command gets a new pane's environment, `TMUX_PANE` a pane id of its
-/// own, which `-P` prints (with `-F`, as a format of the target pane with
-/// the new id). It closes when its command exits.
-// ponytail: tmux's floating pane is a pane of the window, shown on every
-// client of it and listed by list-panes; grofe's is an overlay on one
-// client, one at a time, which takes all of that client's keys (its prefix
-// too) until it closes.
+/// `new-pane`: tmux 3.7's floating pane, a pane of the target pane's
+/// window outside its layout, drawn over it on every client showing the
+/// window (tmux 3.7b, recorded). `-x`/`-y` are its size (half the
+/// window's width and a quarter of its height by default) and `-X`/`-Y`
+/// the window cell of its top-left content cell, cells or a percent of
+/// the window; by default each new one cascades 4 right and 2 down. It
+/// becomes the active pane, takes input and bindings as any pane does,
+/// is listed and counted with the window's panes, and closes as a pane
+/// does. `-P` prints it (`-F`, else tmux's `session:window.pane`).
+// ponytail: the pointer does not pick a floating pane (mouse.rs still
+// maps a click to the tiled pane under it), and the layout verbs
+// (resize-pane, swap-pane, select-layout) do not move one.
 pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String, String> {
     let model = &state.model;
     let target = model.resolve_pane(&c.target, ctx)?;
@@ -118,88 +119,39 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
     let (sx, sy) = (w.cols, w.rows);
     let width = c.width.map_or(sx / 2, |s| cells(s, sx));
     let height = c.height.map_or(sy / 4, |s| cells(s, sy));
-    // The first floating pane cascades from (4, 2), as tmux's does.
-    let x = c.x.map_or(4, |o| offset(o, sx));
-    let y = c.y.map_or(2, |o| offset(o, sy));
+    let n = w.floating.len() as i32 + 1;
+    let x = c.x.map_or(4 * n, |o| offset(o, sx));
+    let y = c.y.map_or(2 * n, |o| offset(o, sy));
     if width > sx || height > sy || x > i32::from(sx) || y > i32::from(sy) {
         return Err("size or position too large".to_string());
     }
     if x + i32::from(width) <= 0 || y + i32::from(height) <= 0 {
         return Err("size or position too small".to_string());
     }
-    let id = clients::current_client(state, ctx)
-        .filter(|id| showing(state, *id, window))
-        .or_else(|| {
-            state
-                .clients
-                .iter()
-                .filter(|(id, _)| showing(state, **id, window))
-                .max_by_key(|(_, c)| c.activity)
-                .map(|(id, _)| *id)
-        })
-        .ok_or("no client shows the window")?;
-    if state.popups.is_open(id) {
-        return Err("a popup is already open".to_string());
-    }
-    let cx = clients::overlay_ctx(state, id).ok_or("no current client")?;
-    let origin = (
-        x - i32::from(cx.viewport.0),
-        y - i32::from(cx.viewport.1) + i32::from(cx.window_top),
-    );
-    let model = &state.model;
     let s = &model.sessions[&session];
-    let cwd = usable_cwd(resolve_cwd(
-        model,
-        ctx,
-        Some(target),
-        c.cwd.as_deref(),
-        &s.cwd,
-    ));
-    let border_style = status::parse_style(
-        model
-            .options
-            .lookup("pane-active-border-style", &options::chain(model, target))
-            .unwrap_or(""),
-    );
-    let new = state.model.alloc_pane_id();
-    let env = pane_env(
+    let env = s.env.clone();
+    let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
+    let cell_px = clients::cell_px(state, session);
+    let new = spawn_pane(
         state,
-        session,
-        new,
-        state.model.sessions[&session].env.clone(),
-    );
-    let frame = Frame {
-        at: (origin.0 - 1, origin.1 - 1),
-        size: (width + 2, height + 2),
-        lines: Some(Lines::Single),
-        title: None,
-        border_style,
-        close_on_exit: true,
-        floating: true,
+        (session, window),
+        env,
+        command_argv(c.command),
+        cwd,
+        (width.max(1), height.max(1)),
+        cell_px,
+    )?;
+    let Some(w) = state.model.windows.get_mut(&window) else {
+        state.model.panes.remove(&new);
+        return Err(format!("can't find window: {window}"));
     };
-    let spawn = spawn_for(state, session, target, command_argv(c.command), cwd, env);
-    if !popup::open(state, id, frame, spawn)? {
-        return Err("a popup is already open".to_string());
-    }
+    let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
+    w.floating.push(Floating { pane: new, x, y, z });
+    w.set_active(new);
     if !c.print {
         return Ok(String::new());
     }
-    let format = c
-        .format
-        .as_deref()
-        .unwrap_or(crate::server::dispatch::pane::NEW_PANE_TEMPLATE);
-    let model = &state.model;
-    let index = model.pane_base_index(window) as usize + model.windows[&window].pane_ids().len();
-    let inner = FormatCtx::new(model, target);
-    let server = ServerVars::new(state, target, &inner);
-    let vars = Floating {
-        inner: &server,
-        id: new,
-        index,
-        at: (x, y),
-        size: (width, height),
-    };
-    Ok(cmd::expand(format, &vars) + "\n")
+    Ok(print_pane(&state.model, new, c.format.as_deref()))
 }
 
 /// The spawn for a popup's command: `GROFE_PANE` is `pane`'s id, `env` the
@@ -226,40 +178,6 @@ fn spawn_for(
         cell_px: clients::cell_px(state, session),
         graphics_ok: false,
     }
-}
-
-/// The target pane's variables, with the floating pane's own over them.
-struct Floating<'a> {
-    inner: &'a dyn cmd::FormatVars,
-    id: PaneId,
-    index: usize,
-    at: (i32, i32),
-    size: (u16, u16),
-}
-
-impl cmd::FormatVars for Floating<'_> {
-    fn get(&self, name: &str) -> Option<String> {
-        Some(match name {
-            "pane_id" => self.id.to_string(),
-            "pane_index" => self.index.to_string(),
-            "pane_floating_flag" => "1".to_string(),
-            "pane_active" => "1".to_string(),
-            "pane_left" => self.at.0.to_string(),
-            "pane_top" => self.at.1.to_string(),
-            "pane_width" => self.size.0.to_string(),
-            "pane_height" => self.size.1.to_string(),
-            _ => return self.inner.get(name),
-        })
-    }
-}
-
-/// Whether client `id` shows `window`.
-fn showing(state: &State, id: ClientId, window: crate::types::WindowId) -> bool {
-    state
-        .clients
-        .get(&id)
-        .and_then(|c| state.model.sessions.get(&c.session))
-        .is_some_and(|s| s.active == window)
 }
 
 /// The active pane of client `id`'s current window.

@@ -95,6 +95,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         rows: size.1,
         bell_flag: false,
         last_panes: Vec::new(),
+        floating: Vec::new(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {

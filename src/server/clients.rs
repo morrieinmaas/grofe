@@ -1202,7 +1202,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         (w.cols, w.rows),
         visible,
     );
-    let window = render::compose(&FrameInputs {
+    let mut window = render::compose(&FrameInputs {
         client: visible,
         viewport,
         area,
@@ -1215,6 +1215,29 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         cursor,
         graphics: state.graphics.remap(),
     });
+    if !w.zoomed && !w.floating.is_empty() {
+        let mut stack = w.floating.clone();
+        stack.sort_by_key(|f| f.z);
+        let floating: Vec<render::FloatingPane> = stack
+            .iter()
+            .filter_map(|f| {
+                let p = model.panes.get(&f.pane)?;
+                Some(render::FloatingPane {
+                    at: (f.x, f.y),
+                    size: (p.cols, p.rows),
+                    snap: p.handle.snapshot_rows(0..p.rows),
+                    active: f.pane == w.active,
+                })
+            })
+            .collect();
+        render::draw_floating(
+            &mut window,
+            &floating,
+            viewport,
+            &window_style(model, w, "pane-border-style"),
+            &window_style(model, w, "pane-active-border-style"),
+        );
+    }
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if let Some(first) = lines.first_mut() {

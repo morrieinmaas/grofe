@@ -53,6 +53,10 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     let target = model.resolve_pane(&c.target, ctx)?;
     let p = &model.panes[&target];
     let window = p.window;
+    if model.windows[&window].floating(target).is_some() {
+        // tmux 3.7b's text, recorded.
+        return Err("size or position can't split a floating pane".to_string());
+    }
     let size = (p.cols, p.rows);
     let s = &model.sessions[&model.windows[&window].session];
     let env = s.env.clone();
