@@ -73,6 +73,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         cols: size.0,
         rows: size.1,
         bell_flag: false,
+        last_panes: Vec::new(),
     });
     Ok(String::new())
 }

@@ -221,6 +221,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 kill: true,
                 target: t("@1"),
                 command: Some(argv(&["htop"])),
+                cwd: None,
             }),
         ),
         (
@@ -607,6 +608,38 @@ fn existing_verbs_parse_their_new_flags() {
         assert_eq!(c.action, ResizeAction::Edges(edges, 1), "{words:?}");
     }
 
+    // TC.8's corpus flags.
+    let Ok(Command::SplitWindow(c)) = p(&[
+        "split-window",
+        "-b",
+        "-f",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-h",
+        "-l",
+        "30",
+    ]) else {
+        panic!("split-window -b -f -d -P -F");
+    };
+    assert!(c.before && c.full && c.detached && c.print);
+    assert_eq!(c.format.as_deref(), Some("#{pane_id}"));
+    let Ok(Command::NewWindow(c)) = p(&["new-window", "-a", "-P", "-F", "#{window_id}"]) else {
+        panic!("new-window -a -P -F");
+    };
+    assert!(c.after && c.print);
+    assert_eq!(c.format.as_deref(), Some("#{window_id}"));
+    let Ok(Command::SelectPane(c)) = p(&["select-pane", "-l", "-Z"]) else {
+        panic!("select-pane -l -Z");
+    };
+    assert!(c.last && c.keep_zoom);
+    let Ok(Command::RespawnPane(c)) = p(&["respawn-pane", "-c", "/tmp", "-k"]) else {
+        panic!("respawn-pane -c");
+    };
+    assert_eq!(c.cwd.as_deref(), Some("/tmp"));
+    assert!(c.kill);
+
     let Ok(Command::SelectLayout(c)) = p(&["select-layout", "-E"]) else {
         panic!("select-layout -E");
     };
@@ -913,6 +946,8 @@ fn equals_targets_are_literal_session_names() {
             Ok(Command::SelectPane(SelectPane {
                 edge: None,
                 target: Target::Session(SessionRef::Name(name.to_string())),
+                last: false,
+                keep_zoom: false,
             })),
             "{given}"
         );

@@ -8,6 +8,8 @@ use crate::cmd::{
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
+use crate::server::dispatch::pane::print_pane;
+use crate::server::dispatch::structure::shuffle_up;
 use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, MainSize, Preset};
 use crate::server::model::{Model, Window};
@@ -25,10 +27,23 @@ pub fn default_name(cwd: &Path) -> String {
 }
 
 /// `new-window`: `-t session:N` creates window N (which must be free);
-/// any other target picks the session and the lowest free index.
+/// any other target picks the session and the lowest free index. With
+/// `-a`, the index after the target window, later windows moving up as
+/// tmux's `winlink_shuffle_up` moves them. `-P` prints the new pane.
 pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<String, String> {
     let model = &state.model;
     let (session, index) = match &c.target {
+        // -a: after the target window, moving later windows up; a free
+        // index is taken as it is, as tmux 3.7b does.
+        target if c.after => match model.resolve_window(target, ctx) {
+            Ok(w) => (model.windows[&w].session, model.windows[&w].index + 1),
+            Err(e) => match target {
+                Target::Window(s, WindowRef::Index(i)) => {
+                    (model.resolve_session(&Target::Session(s.clone()), ctx)?, *i)
+                }
+                _ => return Err(e),
+            },
+        },
         Target::Window(s, WindowRef::Index(index)) => {
             let session = model.resolve_session(&Target::Session(s.clone()), ctx)?;
             if model.window_at_index(session, *index).is_some() {
@@ -60,6 +75,9 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     )?;
     let model = &mut state.model;
     let named = c.name.is_some();
+    if c.after {
+        shuffle_up(model, session, index);
+    }
     model.insert_window(Window {
         id: window,
         session,
@@ -71,6 +89,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         cols: size.0,
         rows: size.1,
         bell_flag: false,
+        last_panes: Vec::new(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
@@ -79,7 +98,11 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     if !c.detached {
         model.select_window(window);
     }
-    Ok(String::new())
+    Ok(if c.print {
+        print_pane(model, pane, c.format.as_deref())
+    } else {
+        String::new()
+    })
 }
 
 fn stop_automatic_rename(model: &mut Model, window: WindowId) -> Result<(), String> {
@@ -308,9 +331,7 @@ pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) 
 }
 
 /// `window`'s `main-pane-width` and `main-pane-height`, or tmux's defaults
-/// where unset or not a size.
-// ponytail: grofe has no `main-pane-height` option yet (TC.2b registered
-// the width only), so the height is always tmux's default of 24.
+/// where not a size.
 pub(crate) fn main_sizes(model: &Model, window: WindowId) -> (MainSize, MainSize) {
     let Some(w) = model.windows.get(&window) else {
         return (MainSize::WIDTH, MainSize::HEIGHT);

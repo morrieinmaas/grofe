@@ -5,6 +5,9 @@
 //! both servers number them from `%0` and `@0` in creation order.
 
 mod common;
+#[allow(dead_code)]
+#[path = "acceptance/harness.rs"]
+mod harness;
 
 use std::time::Duration;
 
@@ -55,6 +58,7 @@ fn err(srv: &TestServer, args: &[&str]) -> String {
 fn server() -> TestServer {
     let srv = TestServer::start();
     ok(&srv, &["set-option", "-g", "base-index", "0"]);
+    ok(&srv, &["set-option", "-g", "pane-base-index", "0"]);
     ok(&srv, &["set-option", "-g", "status", "off"]);
     srv
 }
@@ -408,9 +412,9 @@ fn resize_window_matches_tmux() {
         display(&srv, "s", "#{window_width}x#{window_height}"),
         "200x50"
     );
-    // -A with no client showing the session changes nothing.
+    // -A with no client showing the session: the session's size.
     ok(&srv, &["resize-window", "-A", "-t", "s:0"]);
-    assert_eq!(panes(&srv, "s:0")[0], "%0 0,0 50x30");
+    assert_eq!(panes(&srv, "s:0")[0], "%0 0,0 100x50");
 }
 
 #[test]
@@ -985,4 +989,365 @@ fn export_then_import_reproduces_the_geometry() {
     tree.import(&exported).expect("import");
     assert_eq!(render(&tree), before);
     assert_eq!(tree.export(area), exported);
+}
+
+// ---- The corpus flags on split-window, new-window, select-pane,
+// respawn-pane and capture-pane, and window sizing (TC.8, orchestrator
+// ruling). Goldens from `env -u TMUX -u TMUX_PANE <tmux 3.7b>`. ----
+
+/// `split-window -b -f -d -P -F`: where the pane goes, where it comes in
+/// index order (tmux's `window_add_pane`), and what `-P` prints.
+#[test]
+fn split_window_b_f_d_p_match_tmux() {
+    let cases: [(&[&str], &str, &[&str]); 7] = [
+        (
+            &["-b", "-t", "%1"],
+            "s:0.1",
+            &[
+                "%0 0,0 100x50",
+                "%3 101,0 99x12 *",
+                "%1 101,13 99x12",
+                "%2 101,26 99x24",
+            ],
+        ),
+        (
+            &["-b", "-h", "-t", "%1"],
+            "s:0.1",
+            &[
+                "%0 0,0 100x50",
+                "%3 101,0 49x25 *",
+                "%1 151,0 49x25",
+                "%2 101,26 99x24",
+            ],
+        ),
+        (
+            &["-f", "-h", "-t", "%1"],
+            "s:0.3",
+            &[
+                "%0 0,0 50x50",
+                "%1 51,0 49x25",
+                "%2 51,26 49x24",
+                "%3 101,0 99x50 *",
+            ],
+        ),
+        (
+            &["-b", "-f", "-h", "-l", "40", "-t", "%1"],
+            "s:0.0",
+            &[
+                "%3 0,0 40x50 *",
+                "%0 41,0 79x50",
+                "%1 121,0 79x25",
+                "%2 121,26 79x24",
+            ],
+        ),
+        (
+            &["-d", "-t", "%1"],
+            "s:0.2",
+            &[
+                "%0 0,0 100x50",
+                "%1 101,0 99x12",
+                "%3 101,13 99x12",
+                "%2 101,26 99x24 *",
+            ],
+        ),
+        (
+            &["-b", "-f", "-v", "-t", "%2"],
+            "s:0.0",
+            &[
+                "%3 0,0 200x25 *",
+                "%0 0,26 100x24",
+                "%1 101,26 99x12",
+                "%2 101,39 99x11",
+            ],
+        ),
+        (
+            &["-f", "-v", "-l", "10", "-t", "%0"],
+            "s:0.3",
+            &[
+                "%0 0,0 100x39",
+                "%1 101,0 99x19",
+                "%2 101,20 99x19",
+                "%3 0,40 200x10 *",
+            ],
+        ),
+    ];
+    for (flags, printed, want) in cases {
+        let srv = three_panes();
+        let mut args = vec!["split-window", "-P"];
+        args.extend_from_slice(flags);
+        args.push(SLEEP);
+        let out = srv.cmd(&args).unwrap_or_else(|e| panic!("{flags:?}: {e}"));
+        assert_eq!(out, format!("{printed}\n"), "{flags:?}");
+        assert_eq!(panes(&srv, "s:0"), want, "{flags:?}");
+    }
+    // The opensessions sidebar's form.
+    let srv = three_panes();
+    let out = srv
+        .cmd(&[
+            "split-window",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-b",
+            "-f",
+            "-h",
+            "-l",
+            "30",
+            "-t",
+            "%1",
+            SLEEP,
+        ])
+        .expect("split-window");
+    assert_eq!(out, "%3\n");
+    assert_eq!(
+        panes(&srv, "s:0"),
+        [
+            "%3 0,0 30x50 *",
+            "%0 31,0 84x50",
+            "%1 116,0 84x25",
+            "%2 116,26 84x24"
+        ]
+    );
+}
+
+#[test]
+fn new_window_a_p_f_match_tmux() {
+    let srv = three_panes();
+    ok(&srv, &["new-window", "-d", "-t", "s:3", SLEEP]);
+    ok(&srv, &["new-window", "-d", "-t", "s:4", SLEEP]);
+    let out = srv
+        .cmd(&["new-window", "-a", "-P", "-t", "s:0", SLEEP])
+        .expect("new-window -a");
+    assert_eq!(out, "s:1.0\n");
+    assert_eq!(windows(&srv, "s"), ["0 @0", "1 @3 *", "3 @1", "4 @2"]);
+    let out = srv
+        .cmd(&[
+            "new-window",
+            "-d",
+            "-a",
+            "-P",
+            "-F",
+            "#{window_id} #{window_index}",
+            "-t",
+            "s:5",
+            SLEEP,
+        ])
+        .expect("new-window -a -F");
+    assert_eq!(out, "@4 5\n");
+    // No -t: after the current window, the ones in the way moving up.
+    ok(&srv, &["new-window", "-a", "-d", SLEEP]);
+    assert_eq!(
+        windows(&srv, "s"),
+        ["0 @0", "1 @3 *", "2 @5", "3 @1", "4 @2", "5 @4"]
+    );
+}
+
+#[test]
+fn select_pane_l_and_z_match_tmux() {
+    let srv = three_panes();
+    let state = || display(&srv, "s", "#{window_zoomed_flag} #{pane_id}");
+    ok(&srv, &["resize-pane", "-Z", "-t", "%1"]);
+    ok(&srv, &["select-pane", "-t", "%0", "-Z"]);
+    assert_eq!(state(), "1 %0");
+    ok(&srv, &["select-pane", "-L", "-Z", "-t", "%0"]);
+    assert_eq!(state(), "1 %1");
+    ok(&srv, &["select-pane", "-l", "-Z"]);
+    assert_eq!(state(), "1 %0");
+    ok(&srv, &["select-pane", "-l"]);
+    assert_eq!(state(), "0 %1");
+
+    let srv = three_panes();
+    ok(&srv, &["select-pane", "-t", "%0"]);
+    ok(&srv, &["select-pane", "-l", "-t", "s"]);
+    assert_eq!(display(&srv, "s", "#{pane_id}"), "%2");
+}
+
+/// With no last pane (`split-window -d` never visits the new one), a
+/// window of two panes goes to the other; of three it is an error.
+#[test]
+fn last_pane_falls_back_to_the_other_of_two() {
+    let srv = server();
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            SLEEP,
+        ],
+    );
+    ok(&srv, &["split-window", "-d", "-t", "s", SLEEP]);
+    ok(&srv, &["last-pane", "-t", "s"]);
+    assert_eq!(display(&srv, "s", "#{pane_id}"), "%1");
+    let srv = server();
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            SLEEP,
+        ],
+    );
+    ok(&srv, &["split-window", "-d", "-t", "s", SLEEP]);
+    ok(&srv, &["split-window", "-d", "-t", "s", SLEEP]);
+    assert_eq!(err(&srv, &["last-pane", "-t", "s"]), "no last pane");
+}
+
+/// `respawn-pane -c` (which-key) starts the pane in that directory, which
+/// it then keeps; `respawn-window -c` likewise.
+#[test]
+fn respawn_c_sets_the_start_directory() {
+    let srv = server();
+    let (one, two) = (srv.home.join("one"), srv.home.join("two"));
+    std::fs::create_dir_all(&one).expect("mkdir");
+    std::fs::create_dir_all(&two).expect("mkdir");
+    let (one, two) = (one.canonicalize().unwrap(), two.canonicalize().unwrap());
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            SLEEP,
+        ],
+    );
+    let path = || {
+        let p = display(&srv, "s", "#{pane_current_path}");
+        std::path::PathBuf::from(p)
+            .canonicalize()
+            .unwrap_or_default()
+    };
+    ok(
+        &srv,
+        &[
+            "respawn-pane",
+            "-k",
+            "-c",
+            one.to_str().unwrap(),
+            "-t",
+            "s",
+            SLEEP,
+        ],
+    );
+    srv.wait_for(|| path() == one, WAIT).expect("in one");
+    ok(&srv, &["respawn-pane", "-k", "-t", "s", SLEEP]);
+    srv.wait_for(|| path() == one, WAIT).expect("still in one");
+    ok(
+        &srv,
+        &[
+            "respawn-window",
+            "-k",
+            "-c",
+            two.to_str().unwrap(),
+            "-t",
+            "s",
+            SLEEP,
+        ],
+    );
+    srv.wait_for(|| path() == two, WAIT).expect("in two");
+}
+
+/// `capture-pane -J` joins a wrapped row to the next (tmux 3.7b).
+// ponytail: tmux also keeps the written trailing blanks of `xyz  `; the
+// grid cannot tell them from empty cells, so grofe trims them.
+#[test]
+fn capture_pane_j_joins_wrapped_lines() {
+    let srv = server();
+    let cmd = "printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\nxyz  \\n'; sleep 300";
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "5", cmd],
+    );
+    let a29 = "a".repeat(29);
+    srv.wait_for(|| srv.capture("s").contains("xyz"), WAIT)
+        .expect("printed");
+    let joined = srv
+        .cmd(&["capture-pane", "-p", "-J", "-t", "s"])
+        .expect("-J");
+    assert_eq!(joined, format!("{a29}\nxyz\n\n\n"));
+    let plain = srv.cmd(&["capture-pane", "-p", "-t", "s"]).expect("-p");
+    assert_eq!(plain, format!("{}\n{}\nxyz\n\n\n", &a29[..20], &a29[20..]));
+}
+
+#[test]
+fn main_horizontal_takes_main_pane_height() {
+    let srv = server();
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            SLEEP,
+        ],
+    );
+    ok(&srv, &["split-window", "-t", "s", SLEEP]);
+    ok(
+        &srv,
+        &["set-option", "-w", "-t", "s", "main-pane-height", "30"],
+    );
+    ok(&srv, &["select-layout", "-t", "s", "main-horizontal"]);
+    assert_eq!(panes(&srv, "s:0"), ["%0 0,0 200x30", "%1 0,31 200x19 *"]);
+    ok(
+        &srv,
+        &["set-option", "-w", "-t", "s", "main-pane-height", "50%"],
+    );
+    ok(&srv, &["select-layout", "-t", "s", "main-horizontal"]);
+    assert_eq!(panes(&srv, "s:0"), ["%0 0,0 200x24", "%1 0,25 200x25 *"]);
+}
+
+/// `resize-window` makes the window `window-size manual` (tmux 3.7b, `-A`
+/// too), so an attached client resizing leaves it alone while its other
+/// windows follow the client.
+#[test]
+fn a_resized_window_keeps_its_size_when_a_client_resizes() {
+    let srv = three_panes();
+    ok(&srv, &["new-window", "-d", "-t", "s:1", SLEEP]);
+    ok(
+        &srv,
+        &["resize-window", "-t", "s:0", "-x", "100", "-y", "30"],
+    );
+    let setting = srv
+        .cmd(&["show-options", "-w", "-t", "s:0", "window-size"])
+        .expect("show");
+    assert_eq!(setting, "window-size manual\n");
+    let size = |w: &str| display(&srv, w, "#{window_width}x#{window_height}");
+    let mut client = harness::Harness::spawn_attach_with_env(srv.command(), "s", &[], 120, 40);
+    srv.wait_for(|| size("s:1") == "120x40", WAIT)
+        .expect("the other window follows the client");
+    assert_eq!(size("s:0"), "100x30");
+    client.resize(90, 20);
+    srv.wait_for(|| size("s:1") == "90x20", WAIT)
+        .expect("the other window follows the resize");
+    assert_eq!(size("s:0"), "100x30");
+    assert_eq!(panes(&srv, "s:0")[0], "%0 0,0 50x30");
+    // -A takes the client's size, and stays manual.
+    ok(&srv, &["resize-window", "-A", "-t", "s:0"]);
+    assert_eq!(size("s:0"), "90x20");
+    assert_eq!(
+        srv.cmd(&["show-options", "-w", "-t", "s:0", "window-size"])
+            .expect("show"),
+        "window-size manual\n"
+    );
 }

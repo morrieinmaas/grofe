@@ -14,7 +14,8 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::State;
 use crate::server::dispatch::options::Owner;
-use crate::server::dispatch::pane::{respawn, set_active, unzoom};
+use crate::server::dispatch::pane::{respawn, select_last, unzoom};
+use crate::server::dispatch::resolve_cwd;
 use crate::server::dispatch::window::{AUTOMATIC_RENAME, apply_preset, default_name, main_sizes};
 use crate::server::layout::{Insert, LayoutTree, Preset};
 use crate::server::model::{Model, Window};
@@ -92,7 +93,7 @@ fn join(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, Strin
         layout.remove(src);
         layout.replace(MOVING, src);
         w.layout = layout;
-        lose(w, &order, src);
+        w.lose_pane(&order, src);
     } else {
         take_out(model, src_w, src);
         if let Some(w) = model.windows.get_mut(&dst_w) {
@@ -105,14 +106,14 @@ fn join(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, Strin
     if !c.detach
         && let Some(w) = model.windows.get_mut(&dst_w)
     {
-        set_active(w, src);
+        w.set_active(src);
         model.select_window(dst_w);
     }
     finish_leaving(model, src_w, dst_w);
     Ok(String::new())
 }
 
-/// Takes `pane` out of `window`'s layout without killing it ([`lose`]).
+/// Takes `pane` out of `window`'s layout without killing it ([`Window::lose_pane`]).
 /// A pane that is the window's only one stays in the layout;
 /// [`finish_leaving`] closes the window.
 fn take_out(model: &mut Model, window: WindowId, pane: PaneId) {
@@ -124,27 +125,7 @@ fn take_out(model: &mut Model, window: WindowId, pane: PaneId) {
         return;
     }
     w.layout.remove(pane);
-    lose(w, &order, pane);
-}
-
-/// After `pane` left `w`, whose index order was `order`: if it was the
-/// active pane, the window's last pane takes over, else the one before
-/// it, else the one after, as tmux's `window_lost_pane` does.
-fn lose(w: &mut Window, order: &[PaneId], pane: PaneId) {
-    w.layout.forget(pane);
-    if w.active != pane {
-        return;
-    }
-    let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
-    let next = w
-        .layout
-        .last_focused()
-        .or_else(|| pos.checked_sub(1).map(|i| order[i]))
-        .or_else(|| order.get(pos + 1).copied());
-    if let Some(next) = next {
-        w.active = next;
-        w.layout.forget(next);
-    }
+    w.lose_pane(&order, pane);
 }
 
 /// After a pane left `from` for `to`: `from` goes if it has no pane left,
@@ -192,14 +173,16 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
             return Ok(String::new());
         };
         w.layout.swap(src, dst);
-        set_active(w, dst);
+        w.set_active(dst);
         model.relayout(dst_w);
         return Ok(String::new());
     }
     for (window, out, into) in [(src_w, src, dst), (dst_w, dst, src)] {
         if let Some(w) = model.windows.get_mut(&window) {
             w.layout.replace(out, into);
-            set_active(w, into);
+            w.set_active(into);
+            // The pane that left is no one's last pane here.
+            w.last_panes.retain(|p| *p != out);
         }
         if let Some(p) = model.panes.get_mut(&into) {
             p.window = window;
@@ -292,6 +275,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             cols,
             rows,
             bell_flag: false,
+            last_panes: Vec::new(),
         });
         if let Some(p) = model.panes.get_mut(&pane) {
             p.window = id;
@@ -415,7 +399,7 @@ fn relink(model: &mut Model, window: WindowId, session: SessionId, index: u32) {
 
 /// tmux's `winlink_shuffle_up`: frees `index` in `session` by moving the
 /// windows from it up to the first free index up by one.
-fn shuffle_up(model: &mut Model, session: SessionId, index: u32) {
+pub(crate) fn shuffle_up(model: &mut Model, session: SessionId, index: u32) {
     let Some(gap) = (index..).find(|i| model.window_at_index(session, *i).is_none()) else {
         return;
     };
@@ -458,11 +442,10 @@ fn unlink(model: &mut Model, window: WindowId) {
 
 /// `resize-window`: the window becomes `-x` by `-y` cells (either kept
 /// when not given), or with `-A`/`-a` the size of the largest or smallest
-/// client showing its session, and its panes are laid out again.
-// ponytail: tmux also sets the window's `window-size` to `manual`, so no
-// client resizes it back; grofe has no `window-size` option, and the next
-// resize of a client showing the session sizes it to that client again.
-// `-A`/`-a` compare whole terminals, status row included.
+/// client showing its session (its terminal less the status row; the
+/// session's size with none), and its panes are laid out again. As tmux
+/// 3.7b, it sets the window's `window-size` to `manual`, `-A`/`-a`
+/// included, so clients no longer resize it.
 pub fn resize_window(
     state: &mut State,
     ctx: &ClientCtx,
@@ -470,23 +453,37 @@ pub fn resize_window(
 ) -> Result<String, String> {
     let window = state.model.resolve_window(&c.target, ctx)?;
     let session = state.model.windows[&window].session;
+    let status = state
+        .model
+        .options
+        .lookup("status", &[Owner::Session(session)])
+        .is_some_and(|v| v != "off");
     let clients = state
         .clients
         .values()
         .filter(|cl| cl.session == session)
-        .map(|cl| cl.size);
+        .map(|cl| (cl.size.0, cl.size.1.saturating_sub(u16::from(status))));
+    let area = |(cols, rows): &(u16, u16)| u32::from(*cols) * u32::from(*rows);
     let by_client = if c.largest {
-        clients.max_by_key(|(cols, rows)| u32::from(*cols) * u32::from(*rows))
+        Some(clients.max_by_key(area))
     } else if c.smallest {
-        clients.min_by_key(|(cols, rows)| u32::from(*cols) * u32::from(*rows))
+        Some(clients.min_by_key(area))
     } else {
         None
     };
     let model = &mut state.model;
+    let s = &model.sessions[&session];
+    let session_size = (s.cols, s.rows);
+    model
+        .options
+        .set(Owner::Window(window), "window-size", "manual", false)?;
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };
-    let (cols, rows) = by_client.unwrap_or((c.width.unwrap_or(w.cols), c.height.unwrap_or(w.rows)));
+    let (cols, rows) = match by_client {
+        Some(size) => size.unwrap_or(session_size),
+        None => (c.width.unwrap_or(w.cols), c.height.unwrap_or(w.rows)),
+    };
     (w.cols, w.rows) = cap_size(cols, rows);
     let (zoomed, active, size) = (w.zoomed, w.active, (w.cols, w.rows));
     model.relayout(window);
@@ -500,18 +497,11 @@ pub fn resize_window(
 }
 
 /// `last-pane`: the window's previously active pane becomes active again
-/// (leaving zoom), as tmux does.
+/// (leaving zoom), as tmux does ([`select_last`]).
 pub fn last_pane(state: &mut State, ctx: &ClientCtx, c: LastPane) -> Result<String, String> {
     let model = &mut state.model;
     let window = model.resolve_window(&c.target, ctx)?;
-    let last = model.windows[&window]
-        .layout
-        .last_focused()
-        .ok_or_else(|| "no last pane".to_string())?;
-    unzoom(model, window);
-    if let Some(w) = model.windows.get_mut(&window) {
-        set_active(w, last);
-    }
+    select_last(model, window, false)?;
     Ok(String::new())
 }
 
@@ -532,7 +522,7 @@ pub fn rotate_window(
     let pos = w.pane_ids().iter().position(|p| *p == w.active);
     w.layout.rotate(c.down);
     if let Some(next) = pos.and_then(|i| w.pane_ids().get(i).copied()) {
-        set_active(w, next);
+        w.set_active(next);
     }
     model.relayout(window);
     Ok(String::new())
@@ -580,13 +570,17 @@ pub fn respawn_window(
     let Some((&first, rest)) = panes.split_first() else {
         return Ok(String::new());
     };
+    let cwd = c.cwd.as_deref().map(|dir| {
+        let spawned = &model.panes[&first].cwd;
+        resolve_cwd(model, ctx, Some(first), Some(dir), spawned)
+    });
     for pane in rest {
         let removed = state.model.remove_pane(*pane);
         state.events.panes_killed(removed);
     }
-    respawn(state, first, c.command).map_err(|e| format!("respawn window failed: {e}"))?;
+    respawn(state, first, c.command, cwd).map_err(|e| format!("respawn window failed: {e}"))?;
     if let Some(w) = state.model.windows.get_mut(&window) {
-        set_active(w, first);
+        w.set_active(first);
     }
     state.model.relayout(window);
     Ok(String::new())

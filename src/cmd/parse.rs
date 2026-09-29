@@ -346,6 +346,9 @@ fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
 
 const NEW_WINDOW_SHORT: &[(char, FlagKind)] = &[
     ('d', FlagKind::Bool),
+    ('a', FlagKind::Bool),
+    ('P', FlagKind::Bool),
+    ('F', FlagKind::Value),
     ('t', FlagKind::Value),
     ('n', FlagKind::Value),
     ('c', FlagKind::Value),
@@ -366,11 +369,19 @@ fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
         name: flags.values.get(&'n').cloned(),
         cwd: flags.values.get(&'c').cloned(),
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        after: flags.present.contains(&'a'),
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
     }))
 }
 
 const SPLIT_WINDOW_SHORT: &[(char, FlagKind)] = &[
     ('h', FlagKind::Bool),
+    ('b', FlagKind::Bool),
+    ('f', FlagKind::Bool),
+    ('d', FlagKind::Bool),
+    ('P', FlagKind::Bool),
+    ('F', FlagKind::Value),
     ('v', FlagKind::Bool),
     ('c', FlagKind::Value),
     ('p', FlagKind::Value),
@@ -423,11 +434,18 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         size,
         target: target_or_current(&flags.values, 't')?,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        before: flags.present.contains(&'b'),
+        full: flags.present.contains(&'f'),
+        detached: flags.present.contains(&'d'),
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
     }))
 }
 
 const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
     ('L', FlagKind::Bool),
+    ('l', FlagKind::Bool),
+    ('Z', FlagKind::Bool),
     ('R', FlagKind::Bool),
     ('U', FlagKind::Bool),
     ('D', FlagKind::Bool),
@@ -462,6 +480,8 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::SelectPane(SelectPane {
         edge: edges.into_iter().next(),
         target: target_or_current(&flags.values, 't')?,
+        last: flags.present.contains(&'l'),
+        keep_zoom: flags.present.contains(&'Z'),
     }))
 }
 
@@ -530,7 +550,11 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const RESPAWN_PANE_SHORT: &[(char, FlagKind)] = &[('k', FlagKind::Bool), ('t', FlagKind::Value)];
+const RESPAWN_PANE_SHORT: &[(char, FlagKind)] = &[
+    ('k', FlagKind::Bool),
+    ('t', FlagKind::Value),
+    ('c', FlagKind::Value),
+];
 
 /// `respawn-pane`, and `respawn-window` (M36-R6), which has its shape.
 fn parse_respawn(argv: &[String], cmd_name: &str) -> Result<RespawnPane, ParseError> {
@@ -546,6 +570,7 @@ fn parse_respawn(argv: &[String], cmd_name: &str) -> Result<RespawnPane, ParseEr
         kill: flags.present.contains(&'k'),
         target: target_or_current(&flags.values, 't')?,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        cwd: flags.values.get(&'c').cloned(),
     })
 }
 
@@ -2202,6 +2227,9 @@ mod tests {
                 name: Some("editor".to_string()),
                 cwd: Some("/tmp".to_string()),
                 command: Some(vec!["vim".to_string()]),
+                after: false,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2217,6 +2245,11 @@ mod tests {
                 size: SplitSize::Half,
                 target: Target::Current,
                 command: None,
+                before: false,
+                full: false,
+                detached: false,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2240,6 +2273,11 @@ mod tests {
                 size: SplitSize::Percent(30),
                 target: Target::Current,
                 command: None,
+                before: false,
+                full: false,
+                detached: false,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2255,6 +2293,11 @@ mod tests {
                 size: SplitSize::Cells(10),
                 target: Target::Current,
                 command: None,
+                before: false,
+                full: false,
+                detached: false,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2286,6 +2329,11 @@ mod tests {
                 size: SplitSize::Half,
                 target: Target::Current,
                 command: Some(vec!["ls".to_string(), "-la".to_string()]),
+                before: false,
+                full: false,
+                detached: false,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2325,6 +2373,8 @@ mod tests {
                     window: WindowRef::Current,
                     pane: PanePart::Id(PaneId(3)),
                 }),
+                last: false,
+                keep_zoom: false,
             })
         );
     }
@@ -2341,6 +2391,8 @@ mod tests {
                     window: WindowRef::Current,
                     pane: PanePart::Id(PaneId(3)),
                 }),
+                last: false,
+                keep_zoom: false,
             })
         );
     }
@@ -2456,6 +2508,7 @@ mod tests {
                     pane: PanePart::Id(PaneId(2)),
                 }),
                 command: Some(vec!["bash".to_string()]),
+                cwd: None,
             })
         );
     }
@@ -2811,6 +2864,9 @@ mod tests {
                 name: None,
                 cwd: None,
                 command: Some(vec!["-x".to_string()]),
+                after: false,
+                print: false,
+                format: None,
             })
         );
     }

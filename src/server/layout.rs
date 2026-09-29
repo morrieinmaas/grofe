@@ -220,12 +220,6 @@ pub struct LayoutTree {
     /// returns them in. It is the leaves' order, except where tmux's is
     /// not: a pane joined before its target, or a mirrored preset.
     order: Vec<PaneId>,
-    /// The panes that were active before the current one, most recent
-    /// last (tmux's `last_panes`, for `last-pane`), kept by [`Self::focus`].
-    // ponytail: window state, not layout; it lives here because the window
-    // (model.rs) is outside TC.8's files. Move it onto `Window` when that
-    // file is open.
-    recent: Vec<PaneId>,
     /// The last preset applied, as a [`Preset::index`]: where
     /// `next-layout` goes on from (tmux's `lastlayout`).
     last_preset: Option<usize>,
@@ -253,7 +247,6 @@ impl LayoutTree {
             root: Node::Leaf(pane),
             exact_for: None,
             order: vec![pane],
-            recent: Vec::new(),
             last_preset: None,
         }
     }
@@ -446,7 +439,6 @@ impl LayoutTree {
             return;
         }
         self.order.retain(|p| *p != pane);
-        self.recent.retain(|p| *p != pane);
         let idx = path[path.len() - 1];
         let parent_path = &path[..path.len() - 1];
         let Node::Split { dir, children } = node_at_mut(&mut self.root, parent_path) else {
@@ -631,27 +623,14 @@ impl LayoutTree {
         self.order.contains(&pane)
     }
 
-    /// Records that the active pane changed from `from` to `to`: `from`
-    /// becomes the most recent pane for `last-pane`, as tmux's
-    /// `window_set_active_pane` keeps its stack.
-    pub fn focus(&mut self, from: PaneId, to: PaneId) {
-        if from == to {
-            return;
+    /// Moves `pane` to position `index` in index order (clamped to the
+    /// end), leaving every cell where it is: `split-window` places a new
+    /// pane in tmux's list apart from its cell.
+    pub fn reorder(&mut self, pane: PaneId, index: usize) {
+        if let Some(pos) = self.order.iter().position(|p| *p == pane) {
+            self.order.remove(pos);
+            self.order.insert(index.min(self.order.len()), pane);
         }
-        self.recent.retain(|p| *p != from && *p != to);
-        if self.contains(from) {
-            self.recent.push(from);
-        }
-    }
-
-    /// The pane that was active before the current one (`last-pane`).
-    pub fn last_focused(&self) -> Option<PaneId> {
-        self.recent.last().copied()
-    }
-
-    /// Drops `pane` from the `last-pane` history.
-    pub fn forget(&mut self, pane: PaneId) {
-        self.recent.retain(|p| *p != pane);
     }
 
     /// Swaps two panes' cells and index positions (`swap-pane` within a
@@ -676,7 +655,6 @@ impl LayoutTree {
             return false;
         }
         self.relabel(&|p| if p == old { new } else { p });
-        self.recent.retain(|p| *p != old);
         true
     }
 
@@ -778,8 +756,8 @@ impl LayoutTree {
 
     /// Replaces the layout with `geometry`, which must tile its area
     /// exactly (every split's children one border cell apart, spanning it)
-    /// and hold exactly this tree's panes. Index order, the `last-pane`
-    /// history and the `next-layout` position stay, as a layout string
+    /// and hold exactly this tree's panes. Index order and the
+    /// `next-layout` position stay, as a layout string
     /// leaves tmux's pane list alone (the codec puts the panes in the
     /// cells, in the order tmux would).
     pub fn import(&mut self, geometry: &LayoutGeometry) -> Result<(), LayoutError> {
@@ -3613,25 +3591,6 @@ mod tests {
             assert_eq!(tree.compute(area), before);
         }
     }
-
-    #[test]
-    fn focus_keeps_the_last_pane_stack() {
-        let (mut tree, _) = a_beside_bc();
-        assert_eq!(tree.last_focused(), None);
-        tree.focus(A, B);
-        tree.focus(B, C);
-        assert_eq!(tree.last_focused(), Some(B));
-        tree.focus(C, B);
-        assert_eq!(tree.last_focused(), Some(C));
-        tree.focus(B, B);
-        assert_eq!(tree.last_focused(), Some(C));
-        // A pane that leaves drops out of the stack.
-        tree.remove(C);
-        assert_eq!(tree.last_focused(), Some(A));
-        tree.focus(B, PaneId(9));
-        assert_eq!(tree.last_focused(), Some(B));
-    }
-
     fn structure_op_strategy() -> impl Strategy<Value = (u8, [bool; 3], usize, usize, u16, u8)> {
         (
             0u8..10,

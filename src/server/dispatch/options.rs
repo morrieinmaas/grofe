@@ -278,13 +278,28 @@ const BUILTINS: &[Builtin] = &[
         default: "auto",
     },
     // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
-    // any string; `select-layout` reads cells or `N%`). ponytail:
-    // `main-vertical` reads it once TC.8 wires `dispatch/window.rs`.
+    // any string; `select-layout` reads cells or `N%`, TC.8).
     Builtin {
         name: "main-pane-width",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "80",
+    },
+    // TC.8: as `main-pane-width`, for the `main-horizontal` presets.
+    Builtin {
+        name: "main-pane-height",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "24",
+    },
+    // TC.8: tmux's `window-size`. `resize-window` sets `manual`, which
+    // stops clients resizing the window; grofe sizes every other value as
+    // `latest` (spec D6).
+    Builtin {
+        name: "window-size",
+        kind: Kind::Choice(&["largest", "smallest", "manual", "latest"]),
+        scope: OptionScope::Window,
+        default: "latest",
     },
 ];
 
