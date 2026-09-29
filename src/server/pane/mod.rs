@@ -700,23 +700,40 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
 }
 
 /// The shell for a pane with no argv: `SHELL` from the spawn env, then the
-/// server's; `/bin/sh` when neither is set or the one found is not an
-/// executable absolute path (tmux's `checkshell`).
+/// server's ([`pick_shell`]).
 fn default_shell(spec: &PaneSpawn) -> String {
-    spec.env
-        .iter()
-        .rev()
-        .find(|(k, _)| k == "SHELL")
-        .map(|(_, v)| v.clone())
-        .or_else(|| std::env::var("SHELL").ok())
-        .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
+    pick_shell(
+        spec.env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "SHELL")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("SHELL").ok()),
+    )
+}
+
+/// `candidate` when it is an executable absolute path (tmux's
+/// `checkshell`), else the user's passwd shell when that is, else
+/// `/bin/sh`, as tmux's `getshell` falls back (spec D2 in the M3.6 ledger).
+fn pick_shell(candidate: Option<String>) -> String {
+    let usable = |s: &String| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok();
+    candidate
+        .filter(usable)
+        .or_else(|| passwd_shell().filter(usable))
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
-/// The directory a pane starts in: `cwd` if it is one, else `$HOME`, else
-/// `/`, as tmux falls back when it cannot `chdir`.
+/// The login shell in the passwd entry of the server's user.
+fn passwd_shell() -> Option<String> {
+    let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
+    user.shell.into_os_string().into_string().ok()
+}
+
+/// The directory a pane starts in: `cwd` if it is one the server may enter
+/// (search permission, so an EACCES directory does not leave a dead pane),
+/// else `$HOME`, else `/`, as tmux falls back when it cannot `chdir`.
 pub fn usable_cwd(cwd: PathBuf) -> PathBuf {
-    if cwd.is_dir() {
+    if cwd.is_dir() && access(&cwd, AccessFlags::X_OK).is_ok() {
         return cwd;
     }
     std::env::var_os("HOME")
@@ -961,21 +978,57 @@ mod tests {
         assert_eq!(handle.current_path(), Some(there));
     }
 
+    /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's
+    /// `getshell` does, and to `/bin/sh` only when that is unusable too.
     #[test]
-    fn a_stale_shell_falls_back_to_bin_sh() {
+    fn a_stale_shell_falls_back_to_the_passwd_shell() {
         let spec = |shell: &str| PaneSpawn {
             env: vec![("SHELL".to_string(), shell.to_string())],
             ..spec_with_term("xterm-256color")
         };
-        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), "/bin/sh");
-        assert_eq!(default_shell(&spec("sh")), "/bin/sh");
-        assert_eq!(default_shell(&spec("/etc/hosts")), "/bin/sh");
+        let passwd = passwd_shell()
+            .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
+            .unwrap_or_else(|| "/bin/sh".into());
+        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), passwd);
+        assert_eq!(default_shell(&spec("sh")), passwd);
+        assert_eq!(default_shell(&spec("/etc/hosts")), passwd);
         assert_eq!(default_shell(&spec("/bin/sh")), "/bin/sh");
         let sh = std::fs::canonicalize("/bin/sh")
             .unwrap()
             .display()
             .to_string();
         assert_eq!(default_shell(&spec(&sh)), sh);
+    }
+
+    /// D2: with no `SHELL` anywhere, the passwd entry's shell.
+    #[test]
+    fn no_shell_at_all_is_the_passwd_shell() {
+        let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+            .unwrap()
+            .expect("a passwd entry");
+        let shell = user.shell.display().to_string();
+        assert!(shell.starts_with('/'), "{shell}");
+        assert_eq!(pick_shell(None), shell);
+    }
+
+    /// D5: a directory the server cannot enter (EACCES) falls back to
+    /// `$HOME`, where `is_dir` alone kept it and the pane died.
+    #[test]
+    fn an_unenterable_cwd_falls_back_to_home() {
+        use std::os::unix::fs::PermissionsExt;
+        if nix::unistd::geteuid().is_root() {
+            return; // root enters any directory
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(locked.is_dir());
+        let got = usable_cwd(locked.clone());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(got, home);
+        assert_eq!(usable_cwd(dir.path().to_path_buf()), dir.path());
     }
 
     #[test]
