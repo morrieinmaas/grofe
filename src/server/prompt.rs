@@ -65,8 +65,13 @@ impl Prompts {
 
     /// Closes client `id`'s prompt, answering a CLI that waits on it.
     fn close(&mut self, id: ClientId) -> Option<Prompt> {
+        self.close_with(id, Ok(String::new()))
+    }
+
+    /// Closes client `id`'s prompt, answering a waiting CLI with `answer`.
+    fn close_with(&mut self, id: ClientId, answer: Result<String, Failure>) -> Option<Prompt> {
         if let Some(reply) = self.waiting.remove(&id) {
-            let _ = reply.send(Ok(String::new()));
+            let _ = reply.send(answer);
         }
         self.open.remove(&id)
     }
@@ -83,6 +88,20 @@ impl Prompts {
     }
 }
 
+/// How a prompt reads its answer (tmux's prompt flags).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Read {
+    /// A line, edited until Enter.
+    Line,
+    /// `-1` (`PROMPT_SINGLE`): one keystroke, as the character it types.
+    Single,
+    /// `-k` (`PROMPT_KEY`): one key, as its name.
+    Key,
+    /// `confirm-before`: one keystroke, read as `-1` reads it; the command
+    /// runs only if it is `y`.
+    Confirm,
+}
+
 /// One open prompt.
 #[derive(Debug)]
 struct Prompt {
@@ -97,6 +116,7 @@ struct Prompt {
     back: Option<usize>,
     /// What the command runs in (`compat::prompt_dialect`).
     dialect: Dialect,
+    read: Read,
 }
 
 /// What a key did to a prompt.
@@ -117,6 +137,7 @@ impl Prompt {
             template,
             back: None,
             dialect: Dialect::Grofe,
+            read: Read::Line,
         }
     }
 
@@ -308,6 +329,25 @@ impl Prompt {
     }
 }
 
+/// The character a keystroke types at a one-key prompt (`-1`,
+/// `confirm-before`), as tmux 3.7b's `status_prompt_key` reads it: a
+/// control chord is its C0 byte, Enter, Tab, Escape and Backspace theirs,
+/// Meta is dropped; a key that types nothing (an arrow, a function key) is
+/// `None`, and the prompt stays open.
+fn single_char(key: &Key) -> Option<char> {
+    let m = key.mods;
+    match key.code {
+        KeyCode::Char(c) if m.ctrl && c.is_ascii() => char::from_u32(u32::from(c) & 0x1f),
+        KeyCode::Char(c) if m.shift => Some(c.to_ascii_uppercase()),
+        KeyCode::Char(c) => Some(c),
+        KeyCode::Enter => Some('\r'),
+        KeyCode::Tab => Some('\t'),
+        KeyCode::Escape => Some('\x1b'),
+        KeyCode::Backspace => Some('\x7f'),
+        _ => None,
+    }
+}
+
 /// tmux's `cmd_template_replace` for the first answer: `%1` is replaced
 /// everywhere, `%%` the first time only; `%%%` (and `%1%`) also escapes
 /// `"`, `\`, `$`, `;` and `~` in the answer. A template without `%` is
@@ -364,35 +404,74 @@ impl InputHook for PromptHook {
         input: &Input,
         _now: Instant,
     ) -> Option<Routed> {
+        // An open menu takes the keys first, as tmux's overlay does.
+        if state.menus.is_open(client) {
+            return None;
+        }
         let Prompts { open, history, .. } = &mut state.prompts;
         let prompt = open.get_mut(&client)?;
-        let edit = match input {
-            Input::Key(key) => prompt.key(key, history),
-            Input::Paste { data, .. } => {
+        if let Input::Focus(_) = input {
+            return None;
+        }
+        let edit = match (prompt.read, input) {
+            (Read::Line, Input::Key(key)) => prompt.key(key, history),
+            (Read::Line, Input::Paste { data, .. }) => {
                 prompt.insert(&String::from_utf8_lossy(data));
                 Edit::Keep
             }
-            Input::Mouse(_) => Edit::Keep,
-            Input::Focus(_) => return None,
+            (Read::Key, Input::Key(key)) => {
+                prompt.set_line(&key.to_string());
+                Edit::Enter
+            }
+            (Read::Single | Read::Confirm, Input::Key(key)) => match single_char(key) {
+                // As tmux: the keystroke joins the line, and only a line of
+                // exactly that one character is an answer.
+                Some(c) => {
+                    prompt.text.insert(prompt.cursor, c);
+                    if prompt.text.len() == 1 {
+                        Edit::Enter
+                    } else {
+                        Edit::Cancel
+                    }
+                }
+                None => Edit::Keep,
+            },
+            // ponytail: a paste at a one-key prompt is dropped; tmux reads
+            // its first character.
+            _ => Edit::Keep,
         };
         let routed = match edit {
             Edit::Keep => Routed::Consumed,
+            Edit::Cancel if prompt.read == Read::Confirm => {
+                state.prompts.close_with(client, Err(cancelled()));
+                Routed::Consumed
+            }
             Edit::Cancel => {
                 state.prompts.close(client);
+                Routed::Consumed
+            }
+            Edit::Enter if prompt.read == Read::Confirm && prompt.line() != "y" => {
+                state.prompts.close_with(client, Err(cancelled()));
                 Routed::Consumed
             }
             Edit::Enter => {
                 let prompt = state.prompts.close(client)?;
                 let line = prompt.line();
-                state.prompts.remember(&line);
-                let command = replace_template(&prompt.template, &line);
-                match cmd::split_command_string(&command) {
-                    Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, prompt.dialect),
-                    Ok(_) => Routed::Consumed,
-                    Err(e) => {
+                let command = match prompt.read {
+                    Read::Line => {
+                        state.prompts.remember(&line);
+                        Some(replace_template(&prompt.template, &line))
+                    }
+                    Read::Single | Read::Key => Some(replace_template(&prompt.template, &line)),
+                    Read::Confirm => (line == "y").then_some(prompt.template),
+                };
+                match command.map(|c| cmd::split_command_string(&c)) {
+                    Some(Ok(cmds)) if !cmds.is_empty() => Routed::Command(cmds, prompt.dialect),
+                    Some(Err(e)) => {
                         clients::show_message(state, client, &e.to_string());
                         Routed::Consumed
                     }
+                    _ => Routed::Consumed,
                 }
             }
         };
@@ -442,9 +521,10 @@ pub fn client_gone(state: &mut State, id: ClientId) {
 /// `command-prompt` (R24: `-p`, `-I`, a `%%` template) on the current
 /// client. `-p` and `-I` are formats. A client whose prompt is already open
 /// keeps it, as in tmux. From the CLI the reply waits until the prompt
-/// closes, as tmux's does.
-// ponytail: no `-b` (answer at once), since the parser has no such flag
-// yet; `-k`, `-1`, `-T`, several `-p` prompts: TC.7.
+/// closes, as tmux's does, unless `-b`. `-1` answers with the one
+/// keystroke typed, `-k` with the name of the one key pressed (TC.7); `-T`
+/// is accepted, since grofe's prompt has no completion to choose.
+// ponytail: several `-p` prompts (`-p a,b`) are one label.
 pub fn command_prompt(
     state: &mut State,
     ctx: &ClientCtx,
@@ -456,18 +536,7 @@ pub fn command_prompt(
     if state.prompts.is_open(id) {
         return Ok(String::new());
     }
-    let expand = |s: &str| {
-        let Some(client) = state.clients.get(&id) else {
-            return s.to_string();
-        };
-        let model = &state.model;
-        let pane = model
-            .sessions
-            .get(&client.session)
-            .and_then(|s| model.windows.get(&s.active))
-            .map(|w| FormatCtx::new(model, w.active));
-        cmd::expand(&long_aliases(s), &ClientVars::new(model, client, pane))
-    };
+    let expand = |s: &str| expand_for(state, id, s);
     let label = match (&c.prompt, &c.template) {
         (Some(p), _) => format!("{} ", expand(p)),
         (None, Some(t)) => format!("({}) ", verb(t)),
@@ -476,17 +545,86 @@ pub fn command_prompt(
     let initial = c.initial.as_deref().map(expand).unwrap_or_default();
     let dialect = crate::compat::prompt_dialect(state, ctx.dialect, c.template.is_some());
     let template = c.template.unwrap_or_else(|| "%1".to_string());
+    let read = match (c.key, c.single) {
+        (true, _) => Read::Key,
+        (false, true) => Read::Single,
+        (false, false) => Read::Line,
+    };
     let prompt = Prompt {
         dialect,
+        read,
         ..Prompt::new(label, &initial, template)
     };
+    open(state, ctx, id, prompt, !c.background);
+    Ok(String::new())
+}
+
+/// `confirm-before`'s prompt on the current client: `-p` (a format,
+/// expanded as `command-prompt`'s, then a blank) or `Confirm '<verb>'?
+/// (y/n) `, then one keystroke; `command` runs only on `y`, as tmux
+/// 3.7b's default `confirm-key` (recorded: `n`, `Y` and Enter all cancel).
+/// From the CLI the reply waits until the prompt closes; a cancelled
+/// prompt exits 1 with no message, as tmux's does (recorded).
+pub fn confirm(
+    state: &mut State,
+    ctx: &ClientCtx,
+    prompt: Option<&str>,
+    verb: &str,
+    command: String,
+) -> Result<String, String> {
+    let Some(id) = clients::current_client(state, ctx) else {
+        return Err("no current client".to_string());
+    };
+    if state.prompts.is_open(id) {
+        return Ok(String::new());
+    }
+    let label = match prompt {
+        Some(p) => format!("{} ", expand_for(state, id, p)),
+        None => format!("Confirm '{verb}'? (y/n) "),
+    };
+    let prompt = Prompt {
+        dialect: ctx.dialect,
+        read: Read::Confirm,
+        ..Prompt::new(label, "", command)
+    };
+    open(state, ctx, id, prompt, true);
+    Ok(String::new())
+}
+
+/// What a waiting CLI gets when `confirm-before` is cancelled: exit 1,
+/// nothing printed.
+fn cancelled() -> Failure {
+    Failure {
+        err: String::new(),
+        out: String::new(),
+        status: Some(1),
+    }
+}
+
+/// `text` (`-p`, `-I`) expanded as a format for client `id`, against its
+/// current pane, tmux's one-letter aliases (`#W`) included.
+fn expand_for(state: &State, id: ClientId, text: &str) -> String {
+    let Some(client) = state.clients.get(&id) else {
+        return text.to_string();
+    };
+    let model = &state.model;
+    let pane = model
+        .sessions
+        .get(&client.session)
+        .and_then(|s| model.windows.get(&s.active))
+        .map(|w| FormatCtx::new(model, w.active));
+    cmd::expand(&long_aliases(text), &ClientVars::new(model, client, pane))
+}
+
+/// Opens `prompt` on client `id`; a CLI caller waits for it to close when
+/// `wait` is set.
+fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, prompt: Prompt, wait: bool) {
     state.prompts.open.insert(id, prompt);
-    if ctx.client.is_none() {
+    if wait && ctx.client.is_none() {
         let reply = dispatch::defer_reply(state);
         state.prompts.waiting.insert(id, reply);
     }
     clients::mark_dirty(state, id);
-    Ok(String::new())
 }
 
 /// tmux's one-letter format aliases (`#S`, `#W`, ...) in their `#{...}`
@@ -573,8 +711,8 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
 
 /// `run-shell`'s command, format-expanded as tmux 3.7b expands it: against
 /// the current pane and client, and inside a hook its `#{hook*}`
-/// variables.
-fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> String {
+/// variables. Menus expand their items the same way (TC.7).
+pub(crate) fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> String {
     use crate::server::dispatch::options::ServerVars;
     let model = &state.model;
     let hook = hooks::current_formats(state);
@@ -905,6 +1043,121 @@ mod tests {
     fn the_label_for_a_template_is_its_verb() {
         assert_eq!(verb("rename-window \"%%\""), "rename-window");
         assert_eq!(verb(""), "");
+    }
+
+    /// Runs `input` through the prompt hook for a prompt open on client 1.
+    fn feed(state: &mut State, input: Input) -> Option<Routed> {
+        PromptHook.on_input(state, ClientId(1), &input, Instant::now())
+    }
+
+    fn open_prompt(state: &mut State, read: Read, initial: &str, template: &str) {
+        let prompt = Prompt {
+            read,
+            ..Prompt::new("x ".to_string(), initial, template.to_string())
+        };
+        state.prompts.open.insert(ClientId(1), prompt);
+    }
+
+    fn command(words: &[&str]) -> Option<Routed> {
+        let argv = words.iter().map(|w| w.to_string()).collect();
+        Some(Routed::Command(vec![argv], Dialect::Grofe))
+    }
+
+    /// Recorded on tmux 3.7b: `-1` answers with the character typed, a
+    /// control key with its byte; an arrow types nothing and the prompt
+    /// stays; with `-I` text the line is longer than one character, so the
+    /// prompt closes without running anything.
+    #[test]
+    fn a_single_key_prompt_answers_with_one_keystroke() {
+        let mut state = crate::server::test_state();
+        let template = "display-message 'got %%'";
+        open_prompt(&mut state, Read::Single, "", template);
+        let got = feed(&mut state, Input::Key(key(KeyCode::Char('x'))));
+        assert_eq!(got, command(&["display-message", "got x"]));
+        assert!(!state.prompts.is_open(ClientId(1)));
+
+        open_prompt(&mut state, Read::Single, "", template);
+        let got = feed(&mut state, Input::Key(key(KeyCode::Left)));
+        assert_eq!(got, Some(Routed::Consumed));
+        assert!(state.prompts.is_open(ClientId(1)));
+        let got = feed(&mut state, Input::Key(key(KeyCode::Enter)));
+        assert_eq!(got, command(&["display-message", "got \r"]));
+
+        open_prompt(&mut state, Read::Single, "abc", template);
+        let got = feed(&mut state, Input::Key(key(KeyCode::Char('z'))));
+        assert_eq!(got, Some(Routed::Consumed));
+        assert!(!state.prompts.is_open(ClientId(1)));
+        // Nothing enters the history.
+        assert!(state.prompts.history.is_empty());
+
+        assert_eq!(single_char(&ctrl('x')), Some('\x18'));
+        assert_eq!(single_char(&key(KeyCode::Backspace)), Some('\x7f'));
+        assert_eq!(single_char(&key(KeyCode::Escape)), Some('\x1b'));
+        assert_eq!(single_char(&key(KeyCode::F(1))), None);
+        let meta = Key {
+            code: KeyCode::Char('q'),
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(single_char(&meta), Some('q'));
+    }
+
+    /// Recorded on tmux 3.7b: `-k` answers with the key's name, arrows and
+    /// function keys included.
+    #[test]
+    fn a_key_prompt_answers_with_the_keys_name() {
+        let mut state = crate::server::test_state();
+        let template = "display-message 'got %%'";
+        open_prompt(&mut state, Read::Key, "xyz", template);
+        let got = feed(&mut state, Input::Key(ctrl('x')));
+        assert_eq!(got, command(&["display-message", "got C-x"]));
+        open_prompt(&mut state, Read::Key, "", template);
+        let got = feed(&mut state, Input::Key(key(KeyCode::Left)));
+        assert_eq!(got, command(&["display-message", "got Left"]));
+        assert!(!state.prompts.is_open(ClientId(1)));
+    }
+
+    /// Recorded on tmux 3.7b: a waiting `confirm-before` CLI exits 0 on `y`
+    /// and 1, silently, on anything else.
+    #[test]
+    fn a_cancelled_confirm_answers_its_cli_with_status_1() {
+        let mut state = crate::server::test_state();
+        for (k, want) in [
+            (key(KeyCode::Char('n')), Err(cancelled())),
+            (key(KeyCode::Escape), Err(cancelled())),
+            (key(KeyCode::Char('y')), Ok(String::new())),
+        ] {
+            open_prompt(&mut state, Read::Confirm, "", "kill-pane");
+            let (tx, mut rx) = oneshot::channel();
+            state.prompts.waiting.insert(ClientId(1), tx);
+            feed(&mut state, Input::Key(k));
+            assert_eq!(rx.try_recv().expect("answered"), want, "{k:?}");
+        }
+    }
+
+    /// Recorded on tmux 3.7b: only `y` confirms; `n`, `Y` and Enter cancel;
+    /// an arrow leaves the prompt open.
+    #[test]
+    fn confirm_runs_its_command_only_on_y() {
+        let mut state = crate::server::test_state();
+        for (k, want) in [
+            (key(KeyCode::Char('n')), Some(Routed::Consumed)),
+            (key(KeyCode::Char('Y')), Some(Routed::Consumed)),
+            (key(KeyCode::Enter), Some(Routed::Consumed)),
+            (key(KeyCode::Char('y')), command(&["kill-pane", "-t", "%1"])),
+        ] {
+            open_prompt(&mut state, Read::Confirm, "", "kill-pane -t %1");
+            assert_eq!(feed(&mut state, Input::Key(k)), want, "{k:?}");
+            assert!(!state.prompts.is_open(ClientId(1)));
+        }
+        open_prompt(&mut state, Read::Confirm, "", "kill-pane");
+        assert_eq!(
+            feed(&mut state, Input::Key(key(KeyCode::Up))),
+            Some(Routed::Consumed)
+        );
+        assert!(state.prompts.is_open(ClientId(1)));
     }
 
     #[test]

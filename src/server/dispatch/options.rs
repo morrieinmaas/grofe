@@ -1004,6 +1004,15 @@ pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String
     if cmds.is_empty() {
         return Ok(String::new());
     }
+    // An alias (TC.7) is expanded now, as tmux expands it when the binding
+    // is made: the binding keeps what it ran then.
+    let cmds: Vec<Vec<String>> = cmds
+        .into_iter()
+        .flat_map(|argv| {
+            crate::server::dispatch::menu::expand_alias_command(state, &argv)
+                .unwrap_or_else(|| vec![argv])
+        })
+        .collect();
     for argv in &cmds {
         crate::compat::parse_split(ctx, argv)?;
     }
@@ -1035,16 +1044,29 @@ pub fn unbind_key(state: &mut State, _ctx: &ClientCtx, c: UnbindKey) -> Result<S
     Ok(String::new())
 }
 
-/// `list-keys [-T table]` in grofe's native form, one line per binding:
-/// `bind-key [-r] -T <table> <key> <command>` as tmux spells it, then
-/// `  # <source>`, with `: <desc>` and `[<name>]` when set. The source is
-/// `default`, `<file>:<line>` (`~` for `$HOME`), `runtime` or
-/// `plugin <name>`, so a binding from outside the config table shows.
+/// `list-keys [-1N] [-T table] [key]` in grofe's native form, one line per
+/// binding: `bind-key [-r] -T <table> <key> <command>` as tmux spells it,
+/// then `  # <source>`, with `: <desc>` and `[<name>]` when set. The source
+/// is `default`, `<file>:<line>` (`~` for `$HOME`), `runtime` or
+/// `plugin <name>`, so a binding from outside the config table shows. A
+/// key lists only its binding; `-1` only the first line; `-N` the notes
+/// ([`list_notes`]).
 // ponytail: tmux's padded `list-keys` layout is FE.4's.
-pub fn list_keys(state: &mut State, _ctx: &ClientCtx, c: ListKeys) -> Result<String, String> {
+pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<String, String> {
+    let only = match &c.key {
+        Some(name) => Some(parse_key(name).map_err(|_| format!("invalid key: {name}"))?),
+        None => None,
+    };
     let tables = &state.registry.key_tables;
+    if let Some(t) = &c.table
+        && !tables.exists(t)
+    {
+        return Err(format!("table {t} doesn't exist"));
+    }
+    if c.notes {
+        return list_notes(state, ctx, &c, only);
+    }
     let names: Vec<&str> = match &c.table {
-        Some(t) if !tables.exists(t) => return Err(format!("table {t} doesn't exist")),
         Some(t) => vec![t.as_str()],
         None => tables.table_names().collect(),
     };
@@ -1052,14 +1074,80 @@ pub fn list_keys(state: &mut State, _ctx: &ClientCtx, c: ListKeys) -> Result<Str
     let mut out = String::new();
     for table in names {
         for key in tables.keys(table) {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
             let Some(b) = tables.exact(table, &key) else {
                 continue;
             };
             out.push_str(&binding_line(table, &key, b, home.as_deref()));
             out.push('\n');
+            if c.first {
+                return Ok(out);
+            }
         }
     }
     Ok(out)
+}
+
+/// `list-keys -N`: each binding with a note as `<prefix><key> <note>`, keys
+/// padded to the widest, as tmux 3.7b prints them (recorded: without `-T`,
+/// the prefix table then the root table, every line after the prefix
+/// key, `C-b `; with `-T`, that table alone and no prefix). With `-1` only
+/// the first, and when a client is current it goes to that client's status
+/// line instead, unpadded, as tmux's stock `prefix /` shows it.
+// ponytail: tmux 3.7b's CLI prints nothing when a key is given, with or
+// without `-N` or `-1` (recorded: `list-keys -T prefix c`, `list-keys -1
+// -T prefix c` and `list-keys -N c` all print nothing), and `-1N` of a key
+// without a note shows the first noted binding; grofe lists what the key
+// names. Matching tmux's output is FE.4's.
+fn list_notes(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: &ListKeys,
+    only: Option<Key>,
+) -> Result<String, String> {
+    let tables = &state.registry.key_tables;
+    let prefix = match state.model.options.lookup("prefix", &[]) {
+        Some(p) if !p.eq_ignore_ascii_case("None") => format!("{p} "),
+        _ => String::new(),
+    };
+    let names: Vec<(&str, &str)> = match &c.table {
+        Some(t) => vec![(t.as_str(), "")],
+        None => vec![("prefix", prefix.as_str()), ("root", prefix.as_str())],
+    };
+    let mut notes: Vec<(String, String)> = Vec::new();
+    for (table, start) in names {
+        for key in tables.keys(table) {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
+            let Some(note) = tables.exact(table, &key).and_then(|b| b.desc.as_deref()) else {
+                continue;
+            };
+            if note.is_empty() {
+                continue;
+            }
+            notes.push((format!("{start}{key}"), note.to_string()));
+        }
+    }
+    if c.first {
+        notes.truncate(1);
+        if let (Some((key, note)), Some(id)) = (notes.first(), clients::current_client(state, ctx))
+        {
+            clients::show_message(state, id, &format!("{key} {note}"));
+            return Ok(String::new());
+        }
+    }
+    let width = notes
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
+    Ok(notes
+        .iter()
+        .map(|(key, note)| format!("{key:<width$} {note}\n"))
+        .collect())
 }
 
 fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> String {
@@ -1972,6 +2060,60 @@ mod tests {
     use super::*;
     use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
+
+    /// TC.7: `list-keys` for one key, `-1` for the first line, `-N` for
+    /// notes in tmux 3.7b's form (recorded: `C-b c       Create a new
+    /// window`, keys padded to the widest; without `-T` the prefix table,
+    /// then the root table, every line after the prefix key).
+    #[test]
+    fn list_keys_one_key_first_and_notes() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let mut run = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv)
+        };
+        run(&["bind-key", "-N", "Kill the active pane", "x", "kill-pane"]).expect("bind");
+        run(&["bind-key", "-N", "Next layout", "Space", "next-layout"]).expect("bind");
+        run(&["bind-key", "y", "list-sessions"]).expect("bind");
+        run(&["bind-key", "-n", "-N", "Root note", "F6", "list-sessions"]).expect("bind");
+
+        let got = run(&["list-keys", "-T", "prefix", "x"]).expect("list-keys x");
+        assert_eq!(got.lines().count(), 1, "{got}");
+        assert!(got.starts_with("bind-key -T prefix x kill-pane"), "{got}");
+        assert_eq!(
+            run(&["list-keys", "-T", "prefix", "F12"]),
+            Ok(String::new())
+        );
+        let first = run(&["list-keys", "-1", "-T", "prefix"]).expect("-1");
+        assert_eq!(first.lines().count(), 1, "{first}");
+
+        assert_eq!(
+            run(&["list-keys", "-N"]),
+            Ok(
+                "C-b Space Next layout\nC-b x     Kill the active pane\nC-b F6    Root note\n"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            run(&["list-keys", "-N", "-T", "root"]),
+            Ok("F6 Root note\n".to_string())
+        );
+        assert_eq!(
+            run(&["list-keys", "-N", "x"]),
+            Ok("C-b x Kill the active pane\n".to_string())
+        );
+        // No attached client: `-1N` prints its line.
+        assert_eq!(
+            run(&["list-keys", "-1N", "x"]),
+            Ok("C-b x Kill the active pane\n".to_string())
+        );
+        assert_eq!(run(&["list-keys", "-1N", "y"]), Ok(String::new()));
+        assert_eq!(
+            run(&["list-keys", "-1N", "NotAKey"]),
+            Err("invalid key: NotAKey".to_string())
+        );
+    }
 
     /// The stub edit: `bind-key` checks the command in the request's
     /// dialect and keeps that dialect on the binding.
