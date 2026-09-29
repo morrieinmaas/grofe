@@ -1170,9 +1170,8 @@ impl KeyTables {
 /// and windows open in the active pane's cwd (spec §5.3), which tmux leaves
 /// to a `-c '#{pane_current_path}'` in the user's config, and prompts and
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
-/// `o` (needs `+` target offsets), `s` (native `choose-tree` has `-w`
-/// only), `m`/`M` (marking), `C` and `t` (out of
-/// scope, spec §4.5), `<`/`>` (tmux's window and pane menus), `*`
+/// `o` (needs `+`/`-` target offsets, FE.1's), `s` (needs `choose-tree
+/// -s`, TC.9's), `m`/`M` (marking), `C` and `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus), `*`
 /// (`new-pane`), `r`'s neighbours `DC` and `S-arrows` (`refresh-client`
 /// panning), and copy mode and buffers (`[ ] = # - PPage`, M5).
 pub fn default_bindings() -> KeyTables {

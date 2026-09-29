@@ -321,6 +321,14 @@ fn status_col(a: &mut Harness, row: usize, needle: &str) -> u16 {
 /// its branch, anywhere else the else branch, `switch-client -t =`, which
 /// (M36-R3) switches to the window clicked.
 fn owner_status_binding(srv: &TestServer) {
+    let log = log_path(srv);
+    srv.cmd(&[
+        "set-environment",
+        "-g",
+        "GROFE_TC10_LOG",
+        &log.display().to_string(),
+    ])
+    .expect("setenv");
     srv.cmd(&[
         "set",
         "-g",
@@ -336,10 +344,17 @@ fn owner_status_binding(srv: &TestServer) {
             "if-shell",
             "-F",
             "#{m:*net*,#{mouse_status_range}}",
-            "set -g @hit net",
+            // As the owner's `display-popup "net-popup.sh #{mouse_status_range}"`:
+            // a command's formats see the range (here run-shell's).
+            "set -g @hit net ; run-shell -b 'printf %s #{mouse_status_range} > \"$GROFE_TC10_LOG\"'",
             "switch-client -t =",
         ],
     );
+}
+
+/// Where the owner-shaped binding's shell writes the range it saw.
+fn log_path(srv: &TestServer) -> std::path::PathBuf {
+    srv.log_path().with_file_name("tc10-range.log")
 }
 
 /// Cases 3 and 7: `MouseDown1Status` conditioned on the range fires its
@@ -359,6 +374,12 @@ fn a_status_click_dispatches_on_its_range() {
     let net = status_col(&mut a, 23, "NET");
     click_alone(&mut a, 1, net + 1, 24);
     wait_opt(&srv, "@hit", "net");
+    let log = log_path(&srv);
+    let shell = wait_until(
+        || std::fs::read_to_string(&log).unwrap_or_default() == "net",
+        WAIT,
+    );
+    assert!(shell.is_ok(), "{:?}", std::fs::read_to_string(&log));
     assert_eq!(var(&srv, "main", "#{window_index}"), "1", "cpu switched");
 
     // Window 2's entry in the list: the else branch switches to it.
@@ -487,8 +508,6 @@ fn double_click_fires_once() {
 /// Mouse-bound commands act on the pane under the pointer, not the active
 /// one; case 6's pointer, which `display-menu` opens at, is the clicked
 /// cell (`#{mouse_x}`, `#{mouse_y}` inside the pane).
-// ponytail: TC.7's `display-menu` is a stub on this branch, so the menu
-// itself is not drawn; `mouse::pointer` is the position it takes.
 #[test]
 fn a_mouse_binding_acts_on_the_pane_under_the_pointer() {
     let srv = start("exec sh");
@@ -665,4 +684,43 @@ fn the_view_draws_below_a_status_line_on_top() {
     let text = a.text();
     let first = text.lines().next().unwrap_or_default();
     assert!(first.contains("[main]"), "status row replaced: {first:?}");
+}
+
+/// Case 6: a `MouseDown3Pane` menu with no position opens at the pointer,
+/// where tmux 3.7b's `-x M -y M` puts it (recorded: a click at cell
+/// (20, 8) draws the 11-wide box from (15, 8)), and its keys work.
+#[test]
+fn a_mouse_menu_opens_at_the_pointer() {
+    let srv = start("exec sh");
+    bind(
+        &srv,
+        &[
+            "-n",
+            "MouseDown3Pane",
+            "display-menu",
+            "-T",
+            "T",
+            "One",
+            "o",
+            "set -g @m one",
+            "Two",
+            "t",
+            "set -g @m two",
+        ],
+    );
+    let mut a = attach(&srv, 80, 24);
+    a.wait_for("$");
+    click_alone(&mut a, 3, 21, 9);
+    a.wait_until("the menu", WAIT, |t| t.contains("One"));
+    let text = a.text();
+    let row = text.lines().nth(8).unwrap_or_default();
+    let left = row.find('┌').map(|i| row[..i].chars().count());
+    assert_eq!(left, Some(15), "{text}");
+    assert!(row.contains("┌─T───────┐"), "{row:?}");
+    assert!(
+        text.lines().nth(9).unwrap_or_default().contains("One (o)"),
+        "{text}"
+    );
+    a.send("t");
+    wait_opt(&srv, "@m", "two");
 }

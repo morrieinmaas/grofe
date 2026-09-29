@@ -1362,6 +1362,10 @@ impl<'a> ServerVars<'a> {
 
 impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        // The mouse event a mouse key's commands run for, and the view (TC.10).
+        if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+            return Some(v);
+        }
         match name {
             "socket_path" => Some(self.state.socket.display().to_string()),
             "pane_title" => Some(self.state.passthrough.title(self.pane)),
@@ -2073,6 +2077,8 @@ mod tests {
             let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
             crate::server::dispatch::run(&mut state, &ctx, &argv)
         };
+        // The stock keys carry tmux's notes too (TC.10); start without them.
+        run(&["unbind-key", "-a", "-T", "prefix"]).expect("unbind");
         run(&["bind-key", "-N", "Kill the active pane", "x", "kill-pane"]).expect("bind");
         run(&["bind-key", "-N", "Next layout", "Space", "next-layout"]).expect("bind");
         run(&["bind-key", "y", "list-sessions"]).expect("bind");

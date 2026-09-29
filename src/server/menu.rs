@@ -129,6 +129,9 @@ pub enum Position {
     /// `R`, for `x` only: the menu's right edge on the current pane's (on
     /// `y`, as `Pane`).
     PaneRight,
+    /// The pointer's client cell, for a menu a mouse key opens (TC.10, as
+    /// tmux's `M`): centred on it for `x`, its top row for `y`.
+    Pointer(u16),
 }
 
 /// An open menu, laid out.
@@ -390,6 +393,7 @@ fn place(
         Position::Centre => (cols - 1) / 2 - w / 2,
         Position::Pane => i64::from(pane.x),
         Position::PaneRight => i64::from(pane.x) + i64::from(pane.cols) - w,
+        Position::Pointer(x) => i64::from(x) - w / 2,
     };
     if n + w >= cols {
         n = cols - w;
@@ -401,6 +405,7 @@ fn place(
         Position::Cells(n) => n,
         Position::Centre => (rows - 1) / 2 + h / 2,
         Position::Pane | Position::PaneRight => i64::from(pane.y) + i64::from(pane.rows),
+        Position::Pointer(y) => i64::from(y) + h,
     };
     n = if n < h { 0 } else { n - h };
     if n + h >= rows {
@@ -1268,6 +1273,15 @@ mod tests {
         );
         // Too big for the client: tmux opens nothing.
         assert_eq!(place((Centre, Centre), (81, 3), (80, 24), pane0), None);
+        // TC.10, recorded on tmux 3.7b (`-x M -y M`, an 11 by 4 box): the
+        // box is centred on the pointer's column, its top on its row, and
+        // kept inside the client.
+        let m = |x, y| place((Pointer(x), Pointer(y)), (11, 4), (80, 24), pane0);
+        assert_eq!(m(20, 8), Some((15, 8)));
+        assert_eq!(m(69, 2), Some((64, 2)));
+        assert_eq!(m(4, 21), Some((0, 20)));
+        assert_eq!(m(39, 0), Some((34, 0)));
+        assert_eq!(m(1, 11), Some((0, 11)));
     }
 
     fn label(index: u32, (x, y, cols, rows): (u16, u16, u16, u16), active: bool) -> PaneLabel {
