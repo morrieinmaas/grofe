@@ -499,6 +499,34 @@ fn window_flags_and_the_pane_title_reach_the_status_line() {
         t.contains(&format!("|my 2|{host}|"))
     });
     assert_eq!(display(&srv, "#{pane_title}"), "my 2");
+    set(&srv, &["-g", "window-status-separator", ""]);
+    h.wait_until("no separator", WAIT, |t| {
+        t.lines()
+            .nth(4)
+            .is_some_and(|r| r.starts_with("[s] 1:a-2:b*Z"))
+    });
+}
+
+/// `status-justify` and the `window-status-*-style` options are real
+/// options: set at runtime, they move and colour the window list.
+#[test]
+fn status_justify_and_the_window_styles_are_options() {
+    let srv = start(40, 4);
+    set(&srv, &["-g", "automatic-rename", "off"]);
+    srv.cmd(&["rename-window", "-t", "s:1", "w"]).unwrap();
+    set(&srv, &["-g", "status-right", "R"]);
+    set(&srv, &["-g", "status-justify", "right"]);
+    set(&srv, &["-g", "window-status-current-style", "reverse"]);
+    let mut h = attach(&srv, 40, 4);
+    // tmux 3.7b: "[s]" then the list flush against status-right.
+    let want = format!("[s] {}1:w*R", " ".repeat(31));
+    h.wait_until("the list against status-right", WAIT, |t| {
+        t.lines().nth(3) == Some(want.as_str())
+    });
+    assert_eq!(
+        srv.cmd(&["set", "-g", "status-justify", "middle"]),
+        Err("unknown value: middle\n".to_string())
+    );
 }
 
 /// The message area: a binding's error shows on the first status row, at

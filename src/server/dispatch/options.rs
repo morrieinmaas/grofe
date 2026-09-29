@@ -169,6 +169,70 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
     },
+    // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
+    // of the status line (spec §4.5's status-line row).
+    Builtin {
+        name: "status-justify",
+        kind: Kind::Choice(&["left", "centre", "right", "absolute-centre"]),
+        scope: OptionScope::Session,
+        default: "left",
+    },
+    Builtin {
+        name: "status-left-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "status-right-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-separator",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: " ",
+    },
+    Builtin {
+        name: "window-status-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-current-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-last-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-bell-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "reverse",
+    },
+    Builtin {
+        name: "message-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=yellow,fg=black,fill=yellow",
+    },
+    Builtin {
+        name: "display-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "750",
+    },
     Builtin {
         name: "prefix",
         kind: Kind::Key,
