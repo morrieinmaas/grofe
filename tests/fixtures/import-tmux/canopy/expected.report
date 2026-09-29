@@ -60,7 +60,7 @@
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:159: if-shell: if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux"'
 ~/.local/share/canopy/tmux/tmux.conf:43: note: source-file -q found ~/.config/canopy/user.conf
 ~/.local/state/canopy/10-keys.conf:17: note: keys.prefix.K is overridden by a later binding at ~/.config/canopy/user.conf:4
-~/.config/canopy/user.conf:6: key grofe does not know: bind -n MouseDown1Status if -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E "net-popup.sh #{mouse_status_range}"' 'switch-client -t ='
+~/.config/canopy/user.conf:6: unknown command: if: bind -n MouseDown1Status if -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E "net-popup.sh #{mouse_status_range}"' 'switch-client -t ='
 ~/.config/canopy/user.conf:9: set-environment: set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
 ~/.config/canopy/user.conf:10: plugins and TPM: set -g @tpm_plugins '            tmux-plugins/tpm               tmux-plugins/tmux-sensible   '
 ~/.config/canopy/user.conf:14: if-shell: if "test ! -d ~/.config/tmux/plugins/tpm" "run 'git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm'"
