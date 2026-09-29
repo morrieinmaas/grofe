@@ -1,0 +1,16 @@
+~/.tmux.conf:2: option grofe does not have: set -g default-terminal "tmux-256color"
+~/.tmux.conf:3: option grofe does not have: set -ga terminal-overrides ",xterm-256color:Tc"
+~/.tmux.conf:12: option grofe does not have: set -g renumber-windows on
+~/.tmux.conf:13: option grofe does not have: setw -g mode-keys vi
+~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
+~/.tmux.conf:24: key table copy-mode-vi: bind -T copy-mode-vi v send -X begin-selection
+~/.tmux.conf:25: key table copy-mode-vi: bind -T copy-mode-vi y send -X copy-pipe-and-cancel "pbcopy"
+~/.tmux.conf:28: #() in a format (D8): set -g status-right '#(uptime | cut -d, -f1) %H:%M'
+~/.tmux.conf:32: boolean with no value (tmux toggle): set -g mouse
+~/.tmux.conf:33: plugins and TPM: set -g @plugin 'tmux-plugins/tpm'
+~/.tmux.conf:34: plugins and TPM: set -g @plugin 'tmux-plugins/tmux-sensible'
+~/.tmux.conf:35: set-hook: set-hook -g after-new-window 'select-layout even-horizontal'
+~/.tmux.conf:36: if-shell: if-shell 'uname | grep -q Darwin' 'set -g default-command "reattach-to-user-namespace -l zsh"'
+~/.tmux.conf:6: note: keys.prefix.C-a is overridden by a later binding at ~/.tmux/local.conf:3
+~/.tmux.conf:38: skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf
+~/.tmux.conf:39: plugins and TPM: run '~/.tmux/plugins/tpm/tpm'

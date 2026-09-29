@@ -1,0 +1,38 @@
+Vendored read-only from morrieinmaas/canopy at tag v0.1.0
+(refs/tags/v0.1.0 -> a5704efb9d35d3861a94de3e49a7116aadf33c24), via:
+
+  gh api repos/morrieinmaas/canopy/contents/<path>?ref=v0.1.0 \
+    -H "Accept: application/vnd.github.raw"
+
+Blob SHAs at that ref:
+
+  tmux/tmux.conf              ec1280f1ee5d617516df059eeada3b6bfa1a8afe
+  tmux/conf.d/00-core.conf    c4e4b2aab7e991131900a0c17321ae0297d3839b
+  tmux/conf.d/20-status.conf  cfdc9279cb6a4322fd8669892074a6dd0e57867d
+  tmux/conf.d/30-plugins.conf d9e0f088e5de0557a54c0efae582e086aabb5777
+  tmux/keys.tsv                192c4ce3e290af91ec0c41adc2953948d3ec9d20
+
+home/.local/share/canopy/tmux/{tmux.conf,conf.d/00-core.conf,
+conf.d/20-status.conf,conf.d/30-plugins.conf} are copied byte for byte from
+those blobs (20-status.conf keeps its Nerd Font pill glyphs, U+E0B6 and
+U+E0B4, intact).
+
+home/.local/state/canopy/10-keys.conf is what keys.tsv (vendored beside this
+SOURCE file, not under home/: it is canopy's own source data, never read by
+`tmux` or `import-tmux`) becomes through bin/canopy-keys's awk program at the
+same ref: a fixed header comment, then one `bind [flags] <key> <command>`
+line per row, each internal ` ; ` written ` \; `. Checked by hand against
+the 20 rows; not machine-regenerated because the reference awk implementation
+(`gsub(/ ; /, " \\; ", cmd)`) collapses the escape on this machine's awk
+(both /usr/bin/awk and nanobrew's gawk warn "escape sequence `\;' treated as
+plain `;'" and drop the backslash), which the byte-exact golden cannot carry.
+
+home/.local/state/canopy/05-caps.conf, home/.config/canopy/user.conf and
+home/.config/tmux/tmux.conf (the entry stub) are not vendored: they are the
+shapes task-TI.1-brief.md gives directly (canopy-caps's fixed tool order,
+and a trimmed, de-identified user.conf and entry stub built from athome's
+public dot_config/tmux/tmux.conf.tmpl with $HOME in place of a rendered
+absolute path).
+
+Never fetched from or compared against the owner's local canopy install or
+~/.tmux.conf; only this repo's public GitHub contents API at the pinned tag.

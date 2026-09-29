@@ -1,0 +1,50 @@
+# canopy's key table. Keys are data, per spec section 4.4: this file is the
+# single declaration of every binding canopy ships, and `canopy keys`
+# generates $CANOPY_STATE/10-keys.conf from it. Nothing else binds a key.
+#
+# The point is that there are no orphan keys. A binding that exists only as
+# a `bind` line somewhere has no description, no group, and cannot appear in
+# a palette, a which-key menu or a cheatsheet; one declared here has all
+# four by construction, and M4's surfaces read this same file rather than a
+# second copy of the truth.
+#
+# Format: tab-separated, six columns.
+#
+#   name         a stable identifier, unique, used by the surfaces
+#   key          the key, as tmux names it
+#   flags        bind flags, or - for none. -r means repeatable: hold the
+#                prefix window open and tap the key again
+#   command      the tmux command, verbatim
+#   group        what it is about, used to group a menu
+#   description  one line, written for somebody who does not already know
+#
+# Deviation from the spec, recorded rather than silent: section 4.4 says
+# every binding invokes a dispatcher command. Splitting a pane through
+# `canopy` would fork a process per keypress to do what tmux does natively,
+# and buy nothing, since the name, group and description live here either
+# way. Bindings that need canopy call it; the rest are tmux commands.
+#
+# prefix itself is not here. It is an option rather than a binding, and
+# spec 4.2 gives it to 00-core.
+#
+# name	key	flags	command	group	description
+prefix-send	C-s	-	send-prefix	prefix	Send the prefix through to a nested tmux or an app that wants it
+split-right	|	-	split-window -h -c "#{pane_current_path}"	pane	Split to the right, in the directory this pane is in
+split-down	-	-	split-window -v -c "#{pane_current_path}"	pane	Split below, in the directory this pane is in
+pane-left	h	-	select-pane -L	pane	Focus the pane to the left
+pane-down	j	-	select-pane -D	pane	Focus the pane below
+pane-up	k	-	select-pane -U	pane	Focus the pane above
+pane-right	l	-	select-pane -R	pane	Focus the pane to the right
+pane-wider-left	H	-r	resize-pane -L 5	pane	Grow the pane leftwards, repeatable
+pane-taller-down	J	-r	resize-pane -D 3	pane	Grow the pane downwards, repeatable
+pane-taller-up	K	-r	resize-pane -U 3	pane	Grow the pane upwards, repeatable
+pane-wider-right	L	-r	resize-pane -R 5	pane	Grow the pane rightwards, repeatable
+window-new	C	-	new-window -c "#{pane_current_path}"	window	A plain new window, in the directory this pane is in
+window-cockpit	c	-	new-window -c "#{pane_current_path}" ; split-window -h -c "#{pane_current_path}" ; split-window -v -c "#{pane_current_path}" ; select-layout main-vertical ; select-pane -t 1	window	A new window in the cockpit layout: one full-height pane on the left, two stacked on the right
+layout-cockpit	V	-	select-layout main-vertical	window	Reshape this window into the cockpit layout
+session-last	t	-	switch-client -l	session	The session you were in before this one
+session-prev	(	-r	switch-client -p	session	Previous session, repeatable
+session-next	)	-r	switch-client -n	session	Next session, repeatable
+canopy-reload	r	-	source-file "$CANOPY_STORE/tmux/tmux.conf" ; display-message "canopy: reloaded"	canopy	Re-read canopy's configuration, your user.conf included
+save-now	M-s	-	run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/save.sh"	session	Save every session now, without waiting for the next autosave
+restore-now	M-r	-	run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/restore.sh"	session	Restore the last save over this server, replacing what is open
