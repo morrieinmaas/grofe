@@ -39,6 +39,8 @@ left-length = 40
 right-length = 120
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:74
 interval = 5
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:71
+rows = ["", ""]
 
 [status.window]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:86

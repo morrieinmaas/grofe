@@ -1463,6 +1463,11 @@ impl Options {
         persist: bool,
     ) -> Result<bool, String> {
         let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        // As tmux: removing from a list this owner doesn't have changes
+        // nothing, and must not create an empty one that hides the parent's.
+        if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
+            return Ok(false);
+        }
         let at = self.lists.entry(owner).or_default();
         if op == ListOp::Reset {
             let changed = if owner == Owner::Global {
@@ -1515,7 +1520,7 @@ impl Options {
 
 /// `name` split into its base and `[N]` index, as tmux 3.7b's
 /// `options_parse` reads it.
-fn split_index(name: &str) -> Result<(&str, Option<u32>), String> {
+pub fn split_index(name: &str) -> Result<(&str, Option<u32>), String> {
     let Some(open) = name.find('[') else {
         return Ok((name, None));
     };

@@ -46,7 +46,6 @@
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:60: user option: set -g @pill_r ""
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:64: user option: set -g @canopy_status_battery on
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:65: user option: set -g @canopy_status_net on
-~/.local/share/canopy/tmux/conf.d/20-status.conf:71: option grofe does not have: set -g status-format[1] ""
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:72: unknown value: top: set -g status-position top
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:73: option grofe does not have: set -g status-justify left
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:85: option grofe does not have: set -g window-status-separator ""

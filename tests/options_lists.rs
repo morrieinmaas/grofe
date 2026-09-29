@@ -110,6 +110,10 @@ fn a_session_list_holds_only_what_the_session_set() {
     srv.cmd(&["set", "-g", "status-format[1]", "global"])
         .unwrap();
     assert_eq!(srv.cmd(&["show", "status-format"]).unwrap(), "");
+    // As tmux: removing from a list the session doesn't have is a no-op
+    // and creates nothing that would hide the global rows.
+    srv.cmd(&["set", "-u", "status-format[1]"]).unwrap();
+    assert_eq!(srv.cmd(&["show", "status-format"]).unwrap(), "");
     srv.cmd(&["set", "status-format[1]", "sess"]).unwrap();
     assert_eq!(
         srv.cmd(&["show", "status-format"]).unwrap(),
