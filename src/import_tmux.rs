@@ -105,14 +105,16 @@ pub fn run(args: &[String]) -> ExitCode {
             .unwrap_or_else(std::env::temp_dir),
         None => std::env::temp_dir(),
     };
-    let check_path = check_dir.join(format!(
-        ".grofe-import-tmux-check-{}.toml",
-        std::process::id()
-    ));
-    if let Err(e) = fs::write(&check_path, &text) {
-        eprintln!("import-tmux: cannot write {}: {e}", check_path.display());
-        return ExitCode::from(1);
-    }
+    let check_path = match create_temp_file(&check_dir, "check", &text) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "import-tmux: cannot write a check file in {}: {e}",
+                check_dir.display()
+            );
+            return ExitCode::from(1);
+        }
+    };
     let checked = config::load_one(&check_path, &env);
     let _ = fs::remove_file(&check_path);
     if let Err(errs) = checked {
@@ -135,12 +137,17 @@ pub fn run(args: &[String]) -> ExitCode {
                 .parent()
                 .filter(|d| !d.as_os_str().is_empty())
                 .unwrap_or(Path::new("."));
-            let tmp = dir.join(format!(
-                ".grofe-import-tmux-{}.toml.tmp",
-                std::process::id()
-            ));
-            let wrote = fs::write(&tmp, &text).and_then(|()| fs::rename(&tmp, path));
-            if wrote.is_err() {
+            let tmp = match create_temp_file(dir, "out", &text) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "import-tmux: cannot write a temp file in {}: {e}",
+                        dir.display()
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+            if fs::rename(&tmp, path).is_err() {
                 let _ = fs::remove_file(&tmp);
                 eprintln!("import-tmux: cannot write {}", path.display());
                 return ExitCode::from(1);
@@ -154,10 +161,46 @@ pub fn run(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Creates a fresh file in `dir` holding `text` and returns its path.
+/// Never follows a symlink: the name is unpredictable (a ULID, not just
+/// this process's id) and the file is opened with `create_new` (POSIX
+/// `O_CREAT|O_EXCL`), so a pre-placed symlink or file at a guessed path
+/// makes this fail rather than write through it — load-bearing on a
+/// shared machine, for both the self-check file and the `-o` atomic
+/// write. Retries a handful of times on the vanishingly unlikely chance
+/// of an id collision.
+fn create_temp_file(dir: &Path, label: &str, text: &str) -> std::io::Result<PathBuf> {
+    for _ in 0..8 {
+        let path = dir.join(format!(
+            ".grofe-import-tmux-{label}-{}.tmp",
+            ulid::Ulid::generate()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(text.as_bytes())?;
+                f.flush()?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(
+        "could not create a temp file after several attempts",
+    ))
+}
+
 /// No path given: `~/.tmux.conf`, then `$XDG_CONFIG_HOME/tmux/tmux.conf`,
 /// then `~/.config/tmux/tmux.conf` (spec 5.5; tmux 3.7b also checks
 /// `$XDG_CONFIG_HOME`, which collapses onto the third check when it is
 /// unset).
+// ponytail: order taken from the task brief's own reading of tmux 3.7b,
+// not re-verified against tmux's source; `$XDG_CONFIG_DIRS` (the plural,
+// colon-separated fallback list) is not checked, only `$XDG_CONFIG_HOME`.
 fn default_entry_path(home: Option<&Path>, xdg_config_home: Option<&Path>) -> Option<PathBuf> {
     if let Some(h) = home {
         let p = h.join(".tmux.conf");
@@ -195,21 +238,38 @@ struct Word {
     /// expanded, never dropped by the tokenizer; a caller that does not
     /// care about sub-commands can ignore it).
     is_sep: bool,
+    /// For a separator word: `\;` (true) is a sequence separator inside a
+    /// binding's own command tail; a bare `;` (false) ends the current
+    /// top-level command outright, exactly like a newline (tmux 3.7b,
+    /// recorded on the private socket: `bind x display a ; set -g @foo 1`
+    /// binds only `display a` and runs the `set` immediately at load
+    /// time). `read_lines` splits on the bare kind before dispatch; a
+    /// binding's own tail only ever sees the escaped kind.
+    escaped: bool,
 }
 
-/// One logical tmux.conf line: physical lines joined on a trailing `\`.
+/// One logical tmux.conf line, already split into its top-level commands
+/// (spec 5.5: a bare `;` ends one and starts the next, physical lines
+/// joined on a trailing `\`, and a `{ ... }` block read as one unit).
 struct Line {
     /// 1-based line number of the first physical line.
     line: usize,
-    /// Raw source text of the (possibly joined) logical line.
+    /// Raw source text of this one command (not the whole physical line
+    /// when more than one command shares it).
     text: String,
     words: Vec<Word>,
+    /// A `{ ... }` command block (spec 5.5, M3.6): reported once, as a
+    /// whole, never tokenized into `words`.
+    is_block: bool,
 }
 
-/// Splits `text` into logical lines (a trailing unescaped `\` joins the
-/// next physical line, spec 5.5), each split into words. Blank and
-/// comment-only lines are dropped (but still consume their physical line
-/// number, so later numbering stays right).
+/// Splits `text` into logical lines: a trailing unescaped `\` joins the
+/// next physical line, and a `{` outside quotes opens a command block
+/// read to its matching `}` so line counting stays right (spec 5.5). Each
+/// logical line is then split into its top-level commands on a bare `;`
+/// (rule: only `\;` stays inside one command, see [`Word::escaped`]).
+/// Blank and comment-only lines are dropped (but still consume their
+/// physical line number, so later numbering stays right).
 fn read_lines(text: &str) -> Vec<Line> {
     let physical: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
@@ -222,36 +282,129 @@ fn read_lines(text: &str) -> Vec<Line> {
         }
         let start = i;
         let mut joined = String::new();
+        let mut saw_brace = false;
+        let mut depth = 0i32;
         loop {
-            let l = physical[i];
-            match l.strip_suffix('\\') {
-                Some(stripped) if i + 1 < physical.len() => {
-                    joined.push_str(stripped);
-                    i += 1;
-                }
-                _ => {
-                    joined.push_str(l);
-                    i += 1;
-                    break;
+            let mut segment = String::new();
+            loop {
+                let l = physical[i];
+                match l.strip_suffix('\\') {
+                    Some(stripped) if i + 1 < physical.len() => {
+                        segment.push_str(stripped);
+                        i += 1;
+                    }
+                    _ => {
+                        segment.push_str(l);
+                        i += 1;
+                        break;
+                    }
                 }
             }
+            if !joined.is_empty() {
+                joined.push('\n');
+            }
+            joined.push_str(&segment);
+            let (seg_saw, seg_depth) = brace_scan(&segment);
+            saw_brace |= seg_saw;
+            depth += seg_depth;
+            if saw_brace && depth > 0 && i < physical.len() {
+                continue;
+            }
+            break;
         }
-        let words = tokenize_words(&joined);
-        if !words.is_empty() {
+        if saw_brace {
             out.push(Line {
                 line: start + 1,
                 text: joined,
-                words,
+                words: Vec::new(),
+                is_block: true,
+            });
+            continue;
+        }
+        let words = tokenize_words(&joined);
+        for cmd in split_top_level(words) {
+            if cmd.is_empty() {
+                continue;
+            }
+            let cmd_text = cmd
+                .iter()
+                .map(|w| w.raw.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            out.push(Line {
+                line: start + 1,
+                text: cmd_text,
+                words: cmd,
+                is_block: false,
             });
         }
     }
     out
 }
 
-/// Splits one logical line into words: `#` outside quotes starts a
-/// comment; single quotes are literal; double quotes and bare words take
-/// backslash escapes; `;` and `\;` are read as standalone separator words.
-/// Never expands `$VAR` or `~` (see module docs).
+/// Splits a tokenized line into its top-level commands at a bare `;`
+/// (dropped); an escaped `\;` stays inside its command, for a binding's
+/// own tail to split further.
+fn split_top_level(words: Vec<Word>) -> Vec<Vec<Word>> {
+    let mut cmds = vec![Vec::new()];
+    for w in words {
+        if w.is_sep && !w.escaped {
+            cmds.push(Vec::new());
+        } else {
+            cmds.last_mut()
+                .expect("always at least one command")
+                .push(w);
+        }
+    }
+    cmds
+}
+
+/// Scans `text` (one physical-line segment, already backslash-joined)
+/// outside quotes and comments for `{`/`}`. Returns whether any brace was
+/// seen at all, and the net depth change (positive: more `{` than `}`).
+/// A `#` outside quotes ends the scan.
+fn brace_scan(text: &str) -> (bool, i32) {
+    enum Q {
+        Bare,
+        Single,
+        Double,
+    }
+    let mut q = Q::Bare;
+    let mut seen = false;
+    let mut depth = 0i32;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (&q, c) {
+            (Q::Bare, '#') => break,
+            (Q::Bare, '\'') => q = Q::Single,
+            (Q::Bare, '"') => q = Q::Double,
+            (Q::Bare, '{') => {
+                seen = true;
+                depth += 1;
+            }
+            (Q::Bare, '}') => {
+                seen = true;
+                depth -= 1;
+            }
+            (Q::Bare, '\\') => {
+                chars.next();
+            }
+            (Q::Single, '\'') => q = Q::Bare,
+            (Q::Double, '"') => q = Q::Bare,
+            (Q::Double, '\\') => {
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    (seen, depth)
+}
+
+/// Splits one logical line's command text into words: `#` outside quotes
+/// starts a comment; single quotes are literal; double quotes and bare
+/// words take backslash escapes; `;` and `\;` are read as standalone
+/// separator words ([`Word::escaped`] tells them apart). Never expands
+/// `$VAR` or `~` (see module docs).
 #[allow(unused_assignments)] // the final `end_word!()` resets `started` too, harmlessly
 fn tokenize_words(line: &str) -> Vec<Word> {
     let mut words = Vec::new();
@@ -264,11 +417,12 @@ fn tokenize_words(line: &str) -> Vec<Word> {
     macro_rules! end_word {
         () => {
             if started {
-                let is_sep = escaped_semicolon && value == ";";
+                let is_sep = value == ";";
                 words.push(Word {
                     raw: std::mem::take(&mut raw),
                     value: std::mem::take(&mut value),
                     is_sep,
+                    escaped: escaped_semicolon && is_sep,
                 });
                 started = false;
             }
@@ -289,6 +443,7 @@ fn tokenize_words(line: &str) -> Vec<Word> {
                     raw: ";".to_string(),
                     value: ";".to_string(),
                     is_sep: true,
+                    escaped: false,
                 });
             }
             '\\' => {
@@ -337,18 +492,37 @@ fn tokenize_words(line: &str) -> Vec<Word> {
     words
 }
 
+/// A word-scanning quote state: bare (unquoted), inside `'...'` (fully
+/// literal, no escapes), or inside `"..."` (backslash escapes, `$`
+/// expands). A `'` seen while [`Quote::Double`] is a literal apostrophe,
+/// not a toggle back to bare: `"it's $HOME"` stays double-quoted the
+/// whole way through, so `$HOME` is still outside single quotes.
+enum Quote {
+    Bare,
+    Single,
+    Double,
+}
+
 /// Whether `raw` (exact source text) holds an unescaped `$` outside
 /// single quotes (spec 5.5 rule 3).
 fn has_bare_dollar(raw: &str) -> bool {
-    let mut in_single = false;
+    let mut q = Quote::Bare;
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
-        match c {
-            '\'' => in_single = !in_single,
-            '\\' if !in_single => {
+        match (&q, c) {
+            (Quote::Single, '\'') => q = Quote::Bare,
+            (Quote::Single, _) => {}
+            (Quote::Double, '"') => q = Quote::Bare,
+            (Quote::Double, '\\') => {
                 chars.next();
             }
-            '$' if !in_single => return true,
+            (Quote::Double, '$') => return true,
+            (Quote::Bare, '\'') => q = Quote::Single,
+            (Quote::Bare, '"') => q = Quote::Double,
+            (Quote::Bare, '\\') => {
+                chars.next();
+            }
+            (Quote::Bare, '$') => return true,
             _ => {}
         }
     }
@@ -360,21 +534,44 @@ fn has_bare_dollar(raw: &str) -> bool {
 /// expands anything; this only observes.
 fn env_refs_outside_single_quotes(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut in_single = false;
+    let mut q = Quote::Bare;
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
-        match c {
-            '\'' => in_single = !in_single,
-            '\\' if !in_single => {
+        let found = match (&q, c) {
+            (Quote::Single, '\'') => {
+                q = Quote::Bare;
+                None
+            }
+            (Quote::Single, _) => None,
+            (Quote::Double, '"') => {
+                q = Quote::Bare;
+                None
+            }
+            (Quote::Double, '\\') => {
                 chars.next();
+                None
             }
-            '$' if !in_single => {
-                let name = read_ident(&mut chars);
-                if !name.is_empty() && !out.contains(&name) {
-                    out.push(name);
-                }
+            (Quote::Double, '$') => Some(read_ident(&mut chars)),
+            (Quote::Bare, '\'') => {
+                q = Quote::Single;
+                None
             }
-            _ => {}
+            (Quote::Bare, '"') => {
+                q = Quote::Double;
+                None
+            }
+            (Quote::Bare, '\\') => {
+                chars.next();
+                None
+            }
+            (Quote::Bare, '$') => Some(read_ident(&mut chars)),
+            _ => None,
+        };
+        if let Some(name) = found
+            && !name.is_empty()
+            && !out.contains(&name)
+        {
+            out.push(name);
         }
     }
     out
@@ -513,6 +710,11 @@ impl Importer {
     }
 
     fn dispatch(&mut self, file: &Path, l: &Line) {
+        if l.is_block {
+            // Reported once, as a whole (spec 5.5, M3.6): grofe does not
+            // evaluate `{ ... }` command blocks yet.
+            return self.report(file, l.line, "command block", &l.text);
+        }
         let Some(first) = l.words.first() else {
             return;
         };
@@ -542,8 +744,9 @@ impl Importer {
             return self.report(file, l.line, &reason, &l.text);
         }
         let rest = &l.words[1..];
+        let is_setw = matches!(name.as_str(), "setw" | "set-window-option");
         match canonical_directive(&name) {
-            "set-option" => self.handle_set(file, l.line, &l.text, rest),
+            "set-option" => self.handle_set(file, l.line, &l.text, rest, is_setw),
             "bind-key" => self.handle_bind(file, l.line, &l.text, rest),
             "unbind-key" => self.handle_unbind(file, l.line, &l.text, rest),
             "source-file" => self.handle_source_file(file, l.line, &l.text, rest),
@@ -558,10 +761,11 @@ impl Importer {
 
     // ---- set / set-option / setw / set-window-option ----
 
-    fn handle_set(&mut self, file: &Path, line: usize, text: &str, words: &[Word]) {
+    fn handle_set(&mut self, file: &Path, line: usize, text: &str, words: &[Word], is_setw: bool) {
         let mut append = false;
         let mut unset = false;
         let mut unsupported_flag = false;
+        let mut scope_flag = is_setw;
         let mut i = 0;
         while let Some(w) = words.get(i) {
             let v = w.value.as_str();
@@ -569,7 +773,8 @@ impl Importer {
             {
                 for c in v[1..].chars() {
                     match c {
-                        'g' | 's' | 'w' | 'o' | 'q' => {}
+                        'g' | 's' | 'w' => scope_flag = true,
+                        'o' | 'q' => {}
                         'a' => append = true,
                         'u' => unset = true,
                         _ => unsupported_flag = true,
@@ -609,7 +814,20 @@ impl Importer {
         };
         i += 1;
         if unset {
-            self.options.remove(toml_key);
+            // Account for the line either way (rule 1): note where it
+            // took effect, and note the value it removed, if any, so
+            // that line stays accounted for too.
+            if let Some(old) = self.options.remove(toml_key) {
+                self.note(
+                    &old.file,
+                    old.line,
+                    format!(
+                        "{toml_key} is unset by set -u at {}:{line}",
+                        tilde(file, self.home.as_deref())
+                    ),
+                );
+            }
+            self.note(file, line, format!("{toml_key} unset here (-u)"));
             return;
         }
         let Some(value_word) = words.get(i) else {
@@ -624,6 +842,7 @@ impl Importer {
         if has_bare_dollar(&value_word.raw) {
             return self.report(file, line, "environment variable in a value", text);
         }
+        let old_entry = self.options.get(toml_key).map(|e| (e.file.clone(), e.line));
         let final_value = if append {
             match self.options.get(toml_key) {
                 Some(existing) => format!("{}{}", existing.value, value_word.value),
@@ -646,19 +865,35 @@ impl Importer {
                     .get(Owner::Global, &name)
                     .map(|e| e.value.clone())
                     .unwrap_or(final_value);
-                // A plain (non-append) set fully replaces an earlier value
-                // in this import; note it at the superseded line so that
-                // line is still accounted for (rule 7: later wins).
-                if !append && let Some(old) = self.options.get(toml_key) {
-                    let old_file = old.file.clone();
-                    let old_line = old.line;
+                // A plain (non-append) set fully replaces an earlier
+                // value, and an append still builds on it, but either way
+                // the earlier line's own comment is about to disappear
+                // from the output; note it there so it stays accounted
+                // for (rule 7: later wins).
+                if let Some((old_file, old_line)) = old_entry {
+                    let verb = if append {
+                        "is appended to by a later set -a"
+                    } else {
+                        "is overridden by a later set"
+                    };
                     self.note(
                         &old_file,
                         old_line,
                         format!(
-                            "{toml_key} is overridden by a later set at {}:{line}",
+                            "{toml_key} {verb} at {}:{line}",
                             tilde(file, self.home.as_deref())
                         ),
+                    );
+                }
+                if !scope_flag {
+                    // No -g/-s/-w in the file: tmux 3.7b errors "no
+                    // current session" at server start, but applies it to
+                    // the current session on a later source-file; grofe's
+                    // config is global, so this converts as -g anyway.
+                    self.note(
+                        file,
+                        line,
+                        format!("{toml_key} has no -g/-s/-w; grofe's config is global, so it is treated as -g"),
                     );
                 }
                 self.options.insert(
@@ -686,15 +921,8 @@ impl Importer {
             let Some(w) = words.get(i) else {
                 return self.report(file, line, "command not converted", text);
             };
-            match w.value.as_str() {
-                "-n" => {
-                    root = true;
-                    i += 1;
-                }
-                "-r" => {
-                    repeat = true;
-                    i += 1;
-                }
+            let v = w.value.as_str();
+            match v {
                 "-T" => {
                     i += 1;
                     let Some(t) = words.get(i) else {
@@ -709,6 +937,21 @@ impl Importer {
                         return self.report(file, line, "command not converted", text);
                     };
                     note = Some(n.value.clone());
+                    i += 1;
+                }
+                // Combined boolean flags, as tmux accepts them (recorded:
+                // `bind -nr M-x ...` binds root with repeat = true).
+                v if v.len() > 1
+                    && v.starts_with('-')
+                    && v[1..].chars().all(|c| matches!(c, 'n' | 'r')) =>
+                {
+                    for c in v[1..].chars() {
+                        match c {
+                            'n' => root = true,
+                            'r' => repeat = true,
+                            _ => unreachable!(),
+                        }
+                    }
                     i += 1;
                 }
                 s if s.starts_with('-') && s.len() > 1 => {
@@ -760,11 +1003,8 @@ impl Importer {
             let Some(w) = words.get(i) else {
                 return self.report(file, line, "command not converted", text);
             };
-            match w.value.as_str() {
-                "-n" => {
-                    root = true;
-                    i += 1;
-                }
+            let v = w.value.as_str();
+            match v {
                 "-T" => {
                     i += 1;
                     let Some(t) = words.get(i) else {
@@ -773,7 +1013,16 @@ impl Importer {
                     table = Some(t.value.clone());
                     i += 1;
                 }
-                "-a" => return self.report(file, line, "unbind -a", text),
+                v if v.len() > 1
+                    && v.starts_with('-')
+                    && v[1..].chars().all(|c| matches!(c, 'n' | 'a')) =>
+                {
+                    if v[1..].contains('a') {
+                        return self.report(file, line, "unbind -a", text);
+                    }
+                    root = true;
+                    i += 1;
+                }
                 s if s.starts_with('-') && s.len() > 1 => {
                     return self.report(file, line, "flag not converted", text);
                 }
@@ -1000,6 +1249,18 @@ impl Importer {
         match fs::read_to_string(path) {
             Ok(text) => {
                 self.read_files.insert(canon.clone());
+                // The source-file line itself sets no config value of its
+                // own (rule 8: the output is flat), but it must still be
+                // accounted for: note that it was found and followed.
+                self.note(
+                    from_file,
+                    from_line,
+                    format!(
+                        "source-file{} found {}",
+                        if quiet { " -q" } else { "" },
+                        tilde(path, self.home.as_deref())
+                    ),
+                );
                 self.stack.push(canon);
                 self.load_text(path, &text);
                 self.stack.pop();
@@ -1022,26 +1283,53 @@ impl Importer {
     /// first from `set-environment -g` values seen so far in this import,
     /// then the importer's own process environment; a leading `~` (the
     /// whole word, unquoted) expands from `$HOME`. Single-quoted text is
-    /// never touched.
+    /// never touched; a `'` inside double quotes is a literal apostrophe
+    /// (see [`Quote`]).
     fn resolve_path_word(&self, raw: &str) -> String {
         let mut out = String::new();
         let mut chars = raw.chars().peekable();
-        let mut in_single = false;
+        let mut q = Quote::Bare;
         let mut fresh = true;
         while let Some(c) = chars.next() {
-            match c {
-                '\'' => {
-                    in_single = !in_single;
+            match (&q, c) {
+                (Quote::Single, '\'') => {
+                    q = Quote::Bare;
                     fresh = false;
                 }
-                '"' => fresh = false,
-                '\\' if !in_single => {
+                (Quote::Single, c) => out.push(c),
+                (Quote::Double, '"') => {
+                    q = Quote::Bare;
+                    fresh = false;
+                }
+                (Quote::Double, '\\') => {
+                    if let Some(n) = chars.next() {
+                        out.push(n);
+                    }
+                }
+                (Quote::Double, '$') => {
+                    let name = read_ident(&mut chars);
+                    if name.is_empty() {
+                        out.push('$');
+                    } else {
+                        out.push_str(&self.lookup_env(&name));
+                    }
+                }
+                (Quote::Double, c) => out.push(c),
+                (Quote::Bare, '\'') => {
+                    q = Quote::Single;
+                    fresh = false;
+                }
+                (Quote::Bare, '"') => {
+                    q = Quote::Double;
+                    fresh = false;
+                }
+                (Quote::Bare, '\\') => {
                     if let Some(n) = chars.next() {
                         out.push(n);
                     }
                     fresh = false;
                 }
-                '$' if !in_single => {
+                (Quote::Bare, '$') => {
                     let name = read_ident(&mut chars);
                     if name.is_empty() {
                         out.push('$');
@@ -1050,14 +1338,14 @@ impl Importer {
                     }
                     fresh = false;
                 }
-                '~' if fresh && !in_single => {
+                (Quote::Bare, '~') if fresh => {
                     match &self.home {
                         Some(h) => out.push_str(&h.to_string_lossy()),
                         None => out.push('~'),
                     }
                     fresh = false;
                 }
-                c => {
+                (Quote::Bare, c) => {
                     out.push(c);
                     fresh = false;
                 }
@@ -1184,7 +1472,7 @@ impl Importer {
                 ));
                 out.push_str(&format!(
                     "{} = {}\n",
-                    bare_or_quoted(&b.key.to_string()),
+                    key_toml(&b.key.to_string()),
                     binding_value(b)
                 ));
             }
@@ -1346,6 +1634,19 @@ fn bare_or_quoted(s: &str) -> String {
     if bare { s.to_string() } else { quote(s) }
 }
 
+/// A binding's key, as a TOML key: [`bare_or_quoted`], except a lone `-`
+/// is always quoted too. The brief lists it alongside `|`, `(` and `"` as
+/// needing quotes; `bare_or_quoted` alone (copied from `config/cli.rs`,
+/// which never renders a lone `-` key) would leave it bare, since a
+/// single dash is technically a legal bare TOML key.
+fn key_toml(s: &str) -> String {
+    if s == "-" {
+        quote(s)
+    } else {
+        bare_or_quoted(s)
+    }
+}
+
 fn binding_value(b: &BindingEntry) -> String {
     if b.desc.is_none() && !b.repeat {
         return quote(&b.command);
@@ -1404,12 +1705,90 @@ mod tests {
     }
 
     #[test]
-    fn block_spanning_lines_reports_once_at_its_first_line() {
-        // A `{ ... }` command block is out of scope for M3.5 (rule 10:
-        // reported like any other unconverted line); this only checks
-        // line numbering keeps up afterwards.
-        let lines = read_lines("run-shell 'x'\nbind z noop\n");
-        assert_eq!(lines[1].line, 2);
+    fn a_real_brace_block_is_read_as_one_unit_and_reported_once() {
+        // Real tmux 3.7b syntax, recorded on the private socket.
+        let text =
+            "if -F '#{==:1,1}' {\n    set -g base-index 5\n    bind y noop\n}\nbind z noop\n";
+        let lines = read_lines(text);
+        assert_eq!(lines.len(), 2, "the block is one Line, plus bind z");
+        assert!(lines[0].is_block);
+        assert_eq!(lines[0].line, 1);
+        assert!(lines[0].text.contains("base-index 5"));
+        assert!(lines[0].text.contains("bind y noop"));
+        assert!(!lines[1].is_block);
+        assert_eq!(lines[1].line, 5);
+
+        let mut imp = Importer::new(None);
+        imp.dispatch(Path::new("t.conf"), &lines[0]);
+        assert_eq!(imp.reports.len(), 1, "reported once, not per inner line");
+        assert_eq!(imp.reports[0].key, "command block");
+        assert!(!imp.options.contains_key("base-index"), "never evaluated");
+    }
+
+    #[test]
+    fn a_one_line_block_is_also_reported_as_a_block() {
+        let lines = read_lines("if -F '#{==:1,1}' { set -g base-index 5 }\n");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].is_block);
+    }
+
+    #[test]
+    fn bare_semicolon_ends_the_command_and_starts_a_new_one() {
+        // tmux 3.7b, recorded: `bind x display a ; set -g @foo 1` in a
+        // config file binds only `display a`; the `set` runs immediately
+        // at load time, as its own command.
+        let lines = read_lines("bind x display a ; set -g @foo 1\n");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "bind x display a");
+        assert_eq!(lines[1].text, "set -g @foo 1");
+        assert_eq!(lines[0].line, lines[1].line);
+
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        for l in &lines {
+            imp.dispatch(f, l);
+        }
+        assert_eq!(
+            imp.keys
+                .iter()
+                .find(|b| b.key == parse_key("x").unwrap())
+                .map(|b| b.command.as_str()),
+            Some("display a")
+        );
+        assert!(imp.reports.iter().any(|r| r.key == "user option"));
+    }
+
+    #[test]
+    fn escaped_semicolon_stays_inside_one_bind_command() {
+        let lines = read_lines("bind c new-window \\; select-pane -t 1\n");
+        assert_eq!(lines.len(), 1, "a \\; command stays on one Line");
+        let mut imp = Importer::new(None);
+        imp.dispatch(Path::new("t.conf"), &lines[0]);
+        let b = imp
+            .keys
+            .iter()
+            .find(|b| b.key == parse_key("c").unwrap())
+            .expect("bound");
+        assert_eq!(b.command, "new-window ; select-pane -t 1");
+    }
+
+    #[test]
+    fn bare_semicolon_also_splits_a_plain_set_line() {
+        let lines = read_lines("set -g base-index 3 ; set -g history-limit 5\n");
+        assert_eq!(lines.len(), 2);
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        for l in &lines {
+            imp.dispatch(f, l);
+        }
+        assert_eq!(
+            imp.options.get("base-index").map(|e| e.value.as_str()),
+            Some("3")
+        );
+        assert_eq!(
+            imp.options.get("history-limit").map(|e| e.value.as_str()),
+            Some("5")
+        );
     }
 
     #[test]
@@ -1418,6 +1797,33 @@ mod tests {
         assert!(!has_bare_dollar("'$HOME/x'"));
         assert!(has_bare_dollar("$HOME"));
         assert!(!has_bare_dollar(r#""\$HOME""#));
+    }
+
+    #[test]
+    fn apostrophe_inside_double_quotes_does_not_toggle_quote_state() {
+        // A `'` inside `"..."` is a literal apostrophe, not a switch to
+        // single-quote (literal) mode; $HOME stays outside single quotes
+        // either way (recorded against real tmux: `"it's $HOME"` expands
+        // $HOME in `set -g @x "it's $HOME"`).
+        assert!(has_bare_dollar(r#""it's $HOME""#));
+        assert_eq!(
+            env_refs_outside_single_quotes(r#""don't $FOO""#),
+            vec!["FOO".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_path_word_expands_after_an_apostrophe_in_double_quotes() {
+        let mut imp = Importer::new(Some(PathBuf::from("/home/x")));
+        imp.env.insert(
+            "FOO".to_string(),
+            EnvEntry {
+                value: "bar".to_string(),
+                file: PathBuf::from("t.conf"),
+                line: 1,
+            },
+        );
+        assert_eq!(imp.resolve_path_word(r#""don't $FOO""#), "don't bar");
     }
 
     #[test]
@@ -1464,16 +1870,23 @@ mod tests {
             1,
             "set -g base-index 0",
             &tokenize_words("-g base-index 0"),
+            false,
         );
         imp.handle_set(
             f,
             2,
             "set -g base-index 1",
             &tokenize_words("-g base-index 1"),
+            false,
         );
         let e = imp.options.get("base-index").expect("set");
         assert_eq!(e.value, "1");
         assert_eq!(e.line, 2);
+        assert!(
+            imp.reports
+                .iter()
+                .any(|r| r.key == "note" && r.message.contains("overridden by a later set"))
+        );
     }
 
     #[test]
@@ -1483,10 +1896,85 @@ mod tests {
         // a report note.
         let mut imp = Importer::new(None);
         let f = Path::new("t.conf");
-        imp.handle_set(f, 1, "set prefix C-a", &tokenize_words("prefix C-a"));
+        imp.handle_set(f, 1, "set prefix C-a", &tokenize_words("prefix C-a"), false);
         assert_eq!(
             imp.options.get("prefix").map(|e| e.value.as_str()),
             Some("C-a")
+        );
+        assert!(
+            imp.reports
+                .iter()
+                .any(|r| r.key == "note" && r.message.contains("no -g")),
+            "reports: {:?}",
+            imp.reports
+        );
+    }
+
+    #[test]
+    fn setw_counts_as_a_scope_flag_and_needs_no_note() {
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        imp.handle_set(
+            f,
+            1,
+            "setw pane-base-index 1",
+            &tokenize_words("pane-base-index 1"),
+            true,
+        );
+        assert!(!imp.reports.iter().any(|r| r.message.contains("no -g")));
+    }
+
+    #[test]
+    fn set_u_notes_the_unset_and_the_value_it_removed() {
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        imp.handle_set(
+            f,
+            1,
+            "set -g mouse on",
+            &tokenize_words("-g mouse on"),
+            false,
+        );
+        imp.handle_set(f, 2, "set -gu mouse", &tokenize_words("-gu mouse"), false);
+        assert!(!imp.options.contains_key("mouse"));
+        assert!(
+            imp.reports
+                .iter()
+                .any(|r| r.line == 1 && r.message.contains("unset by set -u"))
+        );
+        assert!(
+            imp.reports
+                .iter()
+                .any(|r| r.line == 2 && r.message.contains("unset here"))
+        );
+    }
+
+    #[test]
+    fn set_a_notes_the_line_it_appends_to() {
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        imp.handle_set(
+            f,
+            1,
+            "set -g status-left foo",
+            &tokenize_words("-g status-left foo"),
+            false,
+        );
+        imp.handle_set(
+            f,
+            2,
+            "set -ag status-left bar",
+            &tokenize_words("-ag status-left bar"),
+            false,
+        );
+        assert_eq!(
+            imp.options.get("status.left").map(|e| e.value.as_str()),
+            Some("foobar")
+        );
+        assert!(
+            imp.reports
+                .iter()
+                .any(|r| r.line == 1 && r.message.contains("appended to by a later set -a"))
         );
     }
 
@@ -1506,5 +1994,52 @@ mod tests {
             argv[0],
             vec!["split-window", "-h", "-c", "#{pane_current_path}"]
         );
+    }
+
+    #[test]
+    fn source_file_outside_the_chain_stays_a_source_file() {
+        // Case 7's second half: only a path that resolves back into
+        // *this* import's own inclusion chain is rewritten to `reload`.
+        let mut imp = Importer::new(None);
+        let f = Path::new("/scratch/conf");
+        imp.stack.push(canonical(f));
+        let words = tokenize_words("r source-file /elsewhere.conf");
+        imp.handle_bind(f, 1, "bind r source-file /elsewhere.conf", &words);
+        let b = imp
+            .keys
+            .iter()
+            .find(|b| b.key == parse_key("r").unwrap())
+            .expect("bound");
+        assert_eq!(b.command, "source-file /elsewhere.conf");
+        assert!(!imp.reports.iter().any(|r| r.key == "note"));
+    }
+
+    #[test]
+    fn dollar_var_in_a_binding_stays_literal_and_gets_a_note() {
+        let mut imp = Importer::new(None);
+        let f = Path::new("t.conf");
+        imp.env.insert(
+            "CANOPY_STORE".to_string(),
+            EnvEntry {
+                value: "/store".to_string(),
+                file: f.to_path_buf(),
+                line: 1,
+            },
+        );
+        let words = tokenize_words(r#"M-s run-shell "$CANOPY_STORE/save.sh""#);
+        imp.handle_bind(f, 2, "bind M-s run-shell \"$CANOPY_STORE/save.sh\"", &words);
+        let b = imp
+            .keys
+            .iter()
+            .find(|b| b.key == parse_key("M-s").unwrap())
+            .expect("bound");
+        assert_eq!(b.command, r#"run-shell "$CANOPY_STORE/save.sh""#);
+        assert!(imp.reports.iter().any(|r| r.key == "note"
+            && r.message.contains("$CANOPY_STORE")
+            && r.message.contains("set-environment -g at")));
+        // Commands are never expanded (case 8, checked end to end at the
+        // integration level with a real process environment): rebuilding
+        // the same binding is deterministic regardless of what
+        // CANOPY_STORE happens to resolve to for path purposes.
     }
 }

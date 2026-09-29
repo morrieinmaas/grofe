@@ -223,10 +223,10 @@ fn case3_output_loads_with_show_config() {
 
 /// Every non-blank, non-comment physical line of every input file is
 /// either the start of an emitted `# <path>:<line>` entry, or named by a
-/// report line at that file and line (including a note's own line, and a
-/// `source-file`/`set-environment` line, which is always reported even
-/// when also consumed for path resolution). A silently dropped line fails
-/// this.
+/// report line at that file and line: `source-file` and `set-environment`
+/// lines get a `note` of their own (found/consumed) even though they set
+/// no config value directly; every other unconvertible line gets its
+/// reason. A silently dropped line fails this.
 #[test]
 fn case4_report_completeness() {
     for name in ["canopy", "dotfiles"] {
@@ -254,12 +254,7 @@ fn case4_report_completeness() {
                 .find(|(p, _)| p.ends_with(&rel))
                 .map(|(_, lines)| lines.clone())
                 .unwrap_or_default();
-            for (line, is_source_file) in starts {
-                // Rule 8: "the source-file line itself emits nothing: the
-                // output is flat" - it is exempt by design, not a drop.
-                if is_source_file {
-                    continue;
-                }
+            for line in starts {
                 assert!(
                     covered.contains(&line),
                     "[{name}] {}:{line} is not accounted for (no emitted comment and no report line)",
@@ -295,22 +290,16 @@ fn line_refs(text: &str) -> Vec<(PathBuf, usize)> {
 }
 
 /// The 1-based physical line numbers, per file under `home/`, that start
-/// a non-blank, non-comment logical directive (not itself blank/comment,
-/// and not a continuation of the previous physical line, which does not
-/// end in a lone trailing `\`), paired with whether that directive is a
-/// `source-file`/`source` (rule 8: it emits nothing of its own, by
-/// design, so it is exempt from the completeness check below).
-fn directive_start_lines(home: &Path) -> BTreeMap<PathBuf, Vec<(usize, bool)>> {
+/// a non-blank, non-comment logical directive: not itself blank/comment,
+/// and not a continuation of the previous physical line (which does not
+/// end in a lone trailing `\`).
+fn directive_start_lines(home: &Path) -> BTreeMap<PathBuf, Vec<usize>> {
     let mut out = BTreeMap::new();
     collect_directive_starts(home, home, &mut out);
     out
 }
 
-fn collect_directive_starts(
-    root: &Path,
-    dir: &Path,
-    out: &mut BTreeMap<PathBuf, Vec<(usize, bool)>>,
-) {
+fn collect_directive_starts(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<usize>>) {
     for entry in fs::read_dir(dir).expect("read_dir") {
         let entry = entry.expect("entry");
         let path = entry.path();
@@ -329,9 +318,7 @@ fn collect_directive_starts(
                 let trimmed = physical[i].trim_start();
                 let is_blank_or_comment = trimmed.is_empty() || trimmed.starts_with('#');
                 if !prev_continued && !is_blank_or_comment {
-                    let word = trimmed.split_whitespace().next().unwrap_or("");
-                    let is_source_file = word == "source-file" || word == "source";
-                    starts.push((i + 1, is_source_file));
+                    starts.push(i + 1);
                 }
                 prev_continued = !is_blank_or_comment && physical[i].ends_with('\\');
                 i += 1;
@@ -425,6 +412,64 @@ fn case8_canopy_store_in_the_importers_env_never_changes_stdout() {
         out.stdout, out2.stdout,
         "CANOPY_STORE in the importer's own env must not change a binding's command text"
     );
+}
+
+// ---- case 10: split round trip, over every binding both fixtures emit ----
+
+/// For every binding either fixture emits, `cmd::split_command_string`
+/// followed by `cmd::parse` on each resulting sub-command must succeed:
+/// the same check the config loader itself runs when it reads a binding
+/// back (spec 5.5 "Binding command strings").
+#[test]
+fn case10_every_binding_round_trips_through_split_command_string() {
+    for name in ["canopy", "dotfiles"] {
+        let f = Fixture::new(name);
+        let out = f.run(&[]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "[{name}] stderr:\n{}",
+            out.stderr
+        );
+        let doc: toml::Table = out.stdout.parse().expect("valid toml");
+        let Some(keys) = doc.get("keys").and_then(toml::Value::as_table) else {
+            panic!("[{name}] no [keys] table in the output");
+        };
+        let mut checked = 0;
+        for table_name in ["prefix", "root"] {
+            let Some(table) = keys.get(table_name).and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (key, v) in table {
+                let cmd = match v {
+                    toml::Value::String(s) => s.clone(),
+                    toml::Value::Table(fields) => fields
+                        .get("cmd")
+                        .and_then(toml::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    other => panic!("[{name}] keys.{table_name}.{key}: unexpected shape {other:?}"),
+                };
+                if cmd.is_empty() {
+                    continue; // an unbind (R11): nothing to round-trip.
+                }
+                let argv = grofe::cmd::split_command_string(&cmd).unwrap_or_else(|e| {
+                    panic!("[{name}] keys.{table_name}.{key} = {cmd:?}: split_command_string: {e}")
+                });
+                assert!(
+                    !argv.is_empty(),
+                    "[{name}] keys.{table_name}.{key} = {cmd:?}: no command"
+                );
+                for words in &argv {
+                    grofe::cmd::parse(words).unwrap_or_else(|e| {
+                        panic!("[{name}] keys.{table_name}.{key} = {cmd:?}: parse {words:?}: {e}")
+                    });
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "[{name}] no bindings found to check");
+    }
 }
 
 // ---- case 12: publishability ----

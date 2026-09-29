@@ -52,7 +52,7 @@ C-s = "send-prefix"
 # ~/.local/state/canopy/10-keys.conf:9
 "|" = 'split-window -h -c "#{pane_current_path}"'
 # ~/.local/state/canopy/10-keys.conf:10
-- = 'split-window -v -c "#{pane_current_path}"'
+"-" = 'split-window -v -c "#{pane_current_path}"'
 # ~/.local/state/canopy/10-keys.conf:11
 h = "select-pane -L"
 # ~/.local/state/canopy/10-keys.conf:12

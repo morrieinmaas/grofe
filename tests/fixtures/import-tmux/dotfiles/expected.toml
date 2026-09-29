@@ -44,7 +44,7 @@ r = 'reload ; display "Reloaded!"'
 # ~/.tmux.conf:16
 "|" = 'split-window -h -c "#{pane_current_path}"'
 # ~/.tmux.conf:17
-- = 'split-window -v -c "#{pane_current_path}"'
+"-" = 'split-window -v -c "#{pane_current_path}"'
 # ~/.tmux.conf:18
 '"' = ""
 # ~/.tmux.conf:19

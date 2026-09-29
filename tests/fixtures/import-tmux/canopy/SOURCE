@@ -36,3 +36,12 @@ absolute path).
 
 Never fetched from or compared against the owner's local canopy install or
 ~/.tmux.conf; only this repo's public GitHub contents API at the pinned tag.
+
+License: canopy is Apache License, Version 2.0 (its own LICENSE file at
+that ref), copyright 2026 morrieinmaas. Its NOTICE file (blob at that ref:
+a5caf179f5bcba5fe6be4bbe670aa7f94e55bbfd) additionally attributes two
+vendored tmux plugins, tmux-resurrect and tmux-continuum (both Bruno
+Sutic, MIT); neither plugin's files are vendored into this fixture, only
+the entry-stub, conf.d and state files listed above. This line is grofe's
+own Apache-2.0 §4(d) attribution notice for that NOTICE file's content, in
+the derivative work these fixtures are part of.
