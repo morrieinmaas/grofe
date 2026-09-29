@@ -132,6 +132,9 @@ pub struct Model {
     /// -l`). Switching a client records it; removing a session drops
     /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
+    /// Who the server says it is (spec D12), fixed at start by
+    /// `compat::server_started` (TC.1); grofe until then.
+    pub identity: crate::compat::Identity,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -633,6 +636,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let spec = PaneSpawn {
             id,
+            session: SessionId(0),
             argv: Some(vec!["sleep".to_string(), "30".to_string()]),
             cwd: std::env::temp_dir(),
             env: Vec::new(),

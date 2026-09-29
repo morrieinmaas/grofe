@@ -6,6 +6,7 @@
 
 use crate::config::Resolved;
 use crate::server::State;
+use crate::types::SessionId;
 
 /// Bound hooks and the server environment (TC.5). Lives on `State.hooks`.
 #[derive(Default)]
@@ -14,6 +15,12 @@ pub struct Hooks {}
 /// Applies the config's hooks (`[hooks]`), at start and on each `reload`,
 /// after its options (TC.5). Does nothing yet.
 pub fn configure(_state: &mut State, _config: &Resolved) {}
+
+/// The server environment (`set-environment -g`, TC.5) a new or respawned
+/// pane of `session` starts with, under the session's own. None yet.
+pub fn pane_env(_state: &State, _session: SessionId) -> Vec<(String, String)> {
+    Vec::new()
+}
 
 /// Runs the hooks for what just happened. Called once after every command
 /// sequence (`dispatch`, before its reply goes out) and after every pane

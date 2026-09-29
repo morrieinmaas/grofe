@@ -122,11 +122,18 @@ impl StartOptions {
 }
 
 /// Work for the actor, sent from a task off it (a status source's result,
-/// TC.4; a popup's pty, TC.6; a shell condition's answer, TC.10). It runs
-/// between messages with the whole state, then the events it caused are
-/// flushed; what it changed on screen it marks itself
-/// (`clients::mark_dirty`, `clients::changed`).
+/// TC.4; a popup's pty, TC.6; a shell condition's answer, TC.10; a notify
+/// hook deferred past its command's reply, TC.5). It runs between messages
+/// with the whole state, then the events it caused are flushed; what it
+/// changed on screen it marks itself (`clients::mark_dirty`,
+/// `clients::changed`).
 pub type Job = Box<dyn FnOnce(&mut State) + Send>;
+
+/// How many [`Job`]s may wait for the actor. A task off the actor that
+/// finds the queue full waits (`send().await`, or `blocking_send` on a
+/// plain thread); code on the actor uses `try_send` and handles `Full`
+/// itself, since the actor waiting on its own queue would never wake.
+pub const JOB_QUEUE: usize = 256;
 
 /// Everything the actor owns.
 pub struct State {
@@ -166,11 +173,10 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
-    /// Sends a [`Job`] to the actor; any task may hold a clone. The actor
-    /// keeps this one, so the channel never closes while it runs.
-    // ponytail: unbounded; a job is small and each producer (one source
-    // run in flight, one popup pty) is bounded by its own design.
-    pub jobs: mpsc::UnboundedSender<Job>,
+    /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
+    /// for who may wait); any task may hold a clone. The actor keeps this
+    /// one, so the channel never closes while it runs.
+    pub jobs: mpsc::Sender<Job>,
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
     pub deferred_reply: Option<oneshot::Receiver<Result<String, String>>>,
@@ -423,7 +429,7 @@ async fn serve(
     eprintln!("grofe server listening on {}", socket.display());
 
     let (pane_tx, pane_rx) = mpsc::channel(256);
-    let (jobs_tx, jobs_rx) = mpsc::unbounded_channel();
+    let (jobs_tx, jobs_rx) = mpsc::channel(JOB_QUEUE);
     let mut state = State {
         socket,
         model: model::Model::new(options.remain_on_exit),
@@ -516,7 +522,7 @@ async fn actor(
     conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
-    mut jobs: mpsc::UnboundedReceiver<Job>,
+    mut jobs: mpsc::Receiver<Job>,
     (mut sigterm, mut sigint, mut sighup): (
         tokio::signal::unix::Signal,
         tokio::signal::unix::Signal,
@@ -643,8 +649,10 @@ fn handle(state: &mut State, msg: ServerMsg) {
             if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
-            let read_only = dispatch::read_only(&ctx, &req.argv);
-            let result = dispatch(state, &ctx, &req.argv);
+            // Parsed once: classified, then run.
+            let parsed = dispatch::parse(state, &ctx, &req.argv);
+            let read_only = dispatch::read_only(&parsed);
+            let result = dispatch::run_parsed(state, &ctx, parsed);
             finish(state, req.id, result, reply);
             if !read_only {
                 clients::changed(state);
@@ -947,9 +955,9 @@ pub(crate) fn test_ctx() -> ClientCtx {
 
 /// [`test_state`] on `socket`, with the receiving end of its job channel.
 #[cfg(test)]
-fn test_state_at(socket: PathBuf) -> (State, mpsc::UnboundedReceiver<Job>) {
+fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
     let (pane_events, _) = mpsc::channel(1);
-    let (jobs, jobs_rx) = mpsc::unbounded_channel();
+    let (jobs, jobs_rx) = mpsc::channel(JOB_QUEUE);
     let socket_id = fs::symlink_metadata(&socket)
         .ok()
         .map(|m| (m.dev(), m.ino()));
@@ -1001,7 +1009,7 @@ mod tests {
         let tx = state.jobs.clone();
         std::thread::spawn(move || {
             let job: Job = Box::new(|state: &mut State| state.exit = true);
-            tx.send(job).map_err(|_| "closed").expect("send");
+            tx.blocking_send(job).map_err(|_| "closed").expect("send");
         })
         .join()
         .expect("sender thread");
@@ -1009,6 +1017,41 @@ mod tests {
         assert!(!state.exit);
         run_job(&mut state, job);
         assert!(state.exit);
+    }
+
+    /// Fix round 1: the queue is bounded. On the actor, `try_send` on a
+    /// full queue answers `Full` at once instead of waiting; off it, a
+    /// sender waits until the actor has run a job, then goes through.
+    #[tokio::test]
+    async fn a_full_job_queue_refuses_on_the_actor_and_waits_off_it() {
+        use tokio::sync::mpsc::error::TrySendError;
+        let (mut state, mut jobs) = test_state_at(PathBuf::from("/nonexistent/grofe-full.sock"));
+        let noop = || -> Job { Box::new(|_: &mut State| {}) };
+        for _ in 0..JOB_QUEUE {
+            assert!(state.jobs.try_send(noop()).is_ok());
+        }
+        assert!(matches!(
+            state.jobs.try_send(noop()),
+            Err(TrySendError::Full(_))
+        ));
+        let tx = state.jobs.clone();
+        let waiting = tokio::spawn(async move {
+            let job: Job = Box::new(|state: &mut State| state.exit = true);
+            tx.send(job).await.map_err(|_| "closed")
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished(), "sent into a full queue");
+        let job = jobs.recv().await.expect("a job");
+        run_job(&mut state, job);
+        waiting
+            .await
+            .expect("task")
+            .expect("sent once there was room");
+        for _ in 0..JOB_QUEUE {
+            let job = jobs.recv().await.expect("a job");
+            run_job(&mut state, job);
+        }
+        assert!(state.exit, "the waiting job ran last");
     }
 
     /// Fix round 1: a handler that deferred its answer and then failed is

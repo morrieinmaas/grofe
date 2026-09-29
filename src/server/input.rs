@@ -30,6 +30,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::protocol::Dialect;
 use crate::server::State;
 use crate::types::{ClientId, InputModes};
 
@@ -83,8 +84,8 @@ pub struct Mods {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Routed {
     /// A bound command sequence, each command's argv, for dispatch in
-    /// order (R12).
-    Command(Vec<Vec<String>>),
+    /// order (R12), in the dialect it was stored in (spec §4.5).
+    Command(Vec<Vec<String>>, Dialect),
     /// Bytes for the active pane, encoded for its `InputModes`.
     ToPane(Vec<u8>),
     /// Eaten (a prefix key, an overlay's key).
@@ -879,10 +880,13 @@ pub struct Binding {
     pub desc: Option<String>,
     /// The config's stable `name` (spec §5.2).
     pub name: Option<String>,
+    /// The language `cmds` are in (spec §4.5: a stored command keeps the
+    /// dialect it was bound in). Grofe until the front end binds (FE.1).
+    pub dialect: Dialect,
 }
 
 impl Binding {
-    /// A default-table binding: no description or name.
+    /// A default-table binding: no description or name, grofe's dialect.
     pub fn new(cmds: Vec<Vec<String>>, repeat: bool, source: BindingSource) -> Binding {
         Binding {
             cmds,
@@ -890,6 +894,7 @@ impl Binding {
             source,
             desc: None,
             name: None,
+            dialect: Dialect::Grofe,
         }
     }
 }
@@ -1228,7 +1233,7 @@ impl KeyState {
                 } else {
                     self.set_table(ROOT_TABLE);
                 }
-                return Routed::Command(b.cmds.clone());
+                return Routed::Command(b.cmds.clone(), b.dialect);
             }
             if self.table != ROOT_TABLE || repeating {
                 self.set_table(ROOT_TABLE);
@@ -2120,7 +2125,7 @@ mod tests {
     }
 
     fn cmd(words: &[&str]) -> Routed {
-        Routed::Command(vec![argv(words)])
+        Routed::Command(vec![argv(words)], Dialect::Grofe)
     }
 
     fn pane(bytes: &[u8]) -> Routed {
@@ -2745,13 +2750,27 @@ mod tests {
         assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
         assert_eq!(
             c.send(b"Z", t),
-            vec![Routed::Command(vec![
-                argv(&["split-window"]),
-                argv(&["select-pane", "-L"])
-            ])]
+            vec![Routed::Command(
+                vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
+                Dialect::Grofe
+            )]
         );
         let b = c.tables.get(PREFIX_TABLE, &k("%")).expect("bound");
         assert_eq!(b.cmds, vec![argv(&["split-window", "-h"])]);
+    }
+
+    /// The stub edit: a binding's commands route in its own dialect.
+    #[test]
+    fn a_binding_routes_in_its_own_dialect() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        let mut b = Binding::new(vec![argv(&["neww"])], false, BindingSource::Runtime);
+        b.dialect = Dialect::Tmux;
+        c.tables.insert(ROOT_TABLE, k("F5"), b);
+        assert_eq!(
+            c.send(b"\x1b[15~", t),
+            vec![Routed::Command(vec![argv(&["neww"])], Dialect::Tmux)]
+        );
     }
 
     fn config_key(

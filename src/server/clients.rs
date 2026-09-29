@@ -37,7 +37,7 @@ use nix::libc;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
-use crate::protocol::{Caps, ClientCtx, Frame};
+use crate::protocol::{Caps, ClientCtx, Dialect, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
@@ -1370,22 +1370,25 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
                 eprintln!("grofe server: input queue full for {}", p.id);
             }
         }
-        Routed::Command(cmds) => run_binding(state, id, &cmds),
+        Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
         Routed::Consumed => {}
     }
 }
 
 /// Runs bound commands for client `id` in order, each with the client's
-/// context and its active pane (as it is then) as the current pane; the
-/// first error stops the rest and shows on the client's status row, as
-/// tmux shows it. Output, and any deferred answer, is dropped.
-pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>]) {
+/// context and its active pane (as it is then) as the current pane, parsed
+/// in `dialect`, the binding's own (spec §4.5), never the attaching
+/// client's: a native binding stays native under `tmux attach`. The first
+/// error stops the rest and shows on the client's status row, as tmux shows
+/// it. Output, and any deferred answer, is dropped.
+pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
     for argv in cmds {
         let Some(c) = state.clients.get(&id) else {
             break;
         };
         let ctx = ClientCtx {
             pane: active_pane(&state.model, c.session),
+            dialect,
             ..c.ctx.clone()
         };
         let result = dispatch::run_split(state, &ctx, argv);

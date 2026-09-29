@@ -3,9 +3,9 @@
 //! table, and the dialect decision that sends a request's argv to the
 //! native parser or to the tmux front end ([`tmux`], FE.1).
 //!
-//! The stub edit leaves it inert: the identity is always grofe, only a
-//! request that says `dialect: tmux` (which no CLI sends yet) reaches the
-//! front end, and the front end rejects every tmux form.
+//! The stub edit leaves it inert: the identity (`Model.identity`) stays
+//! grofe, only a request that says `dialect: tmux` (which no CLI sends
+//! yet) reaches the front end, and the front end rejects every tmux form.
 
 pub mod tmux;
 
@@ -15,25 +15,29 @@ use std::path::Path;
 use crate::cmd::{self, Command};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
+use crate::types::{PaneId, SessionId};
 
 /// Who a server says it is (spec D12): grofe, or tmux when started through
-/// a `tmux` name or with `compat-identity tmux`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// a `tmux` name or with `compat-identity tmux`. Kept on `Model.identity`,
+/// so formats (`#{version}`, TC.3) and tests read it from the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Identity {
+    #[default]
     Grofe,
     Tmux,
 }
 
-/// The server's identity, fixed once at start (TC.1). Always grofe until
-/// TC.1 lands.
-pub fn identity() -> Identity {
-    Identity::Grofe
-}
-
 /// Called once in the server, after its config is applied: where TC.1
-/// fixes the identity from the starting CLI's `argv[0]` and the
+/// fixes `state.model.identity` from the starting CLI's `argv[0]` and the
 /// `compat-identity` option. Does nothing yet.
 pub fn server_started(_state: &mut State) {}
+
+/// Variables a new or respawned pane of `session` gets from the server's
+/// identity (TC.1: `TMUX`, `TMUX_PANE`, `TERM_PROGRAM`), applied over the
+/// session's environment. None yet.
+pub fn pane_env(_state: &State, _session: SessionId, _pane: PaneId) -> Vec<(String, String)> {
+    Vec::new()
+}
 
 /// Whether the CLI runs under the name `tmux`: `argv[0]`'s basename is
 /// exactly `tmux` (a symlink on `PATH`, spec D1).
@@ -53,10 +57,14 @@ pub fn parse_request(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, S
 }
 
 /// One command whose argv is already split (a binding, the prompt, the
-/// mouse). Parsed natively: the dialect of stored commands (spec §4.5) is
-/// TC.1's and FE.1's to decide.
-pub fn parse_split(_ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
-    cmd::parse(argv).map(|c| vec![c]).map_err(|e| e.to_string())
+/// mouse), in the dialect it was stored in: `run_binding` sets
+/// `ctx.dialect` from the binding (spec §4.5), never from the client that
+/// pressed the key.
+pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
+    match ctx.dialect {
+        Dialect::Grofe => cmd::parse(argv).map(|c| vec![c]).map_err(|e| e.to_string()),
+        Dialect::Tmux => tmux::dispatch(argv, ctx).map_err(|e| e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +81,18 @@ mod tests {
             dialect,
             ..crate::server::test_ctx()
         }
+    }
+
+    /// Fix round 1: the identity lives on the model, grofe until TC.1
+    /// fixes it, and a test can set it.
+    #[test]
+    fn identity_is_on_the_model_and_starts_as_grofe() {
+        let mut state = crate::server::test_state();
+        assert_eq!(state.model.identity, Identity::Grofe);
+        server_started(&mut state);
+        assert_eq!(state.model.identity, Identity::Grofe);
+        state.model.identity = Identity::Tmux;
+        assert_eq!(state.model.identity, Identity::Tmux);
     }
 
     #[test]
@@ -109,7 +129,9 @@ mod tests {
         );
         let err = parse_request(&ctx(Dialect::Tmux), &argv(&["list-sessions"])).unwrap_err();
         assert_eq!(err, "tmux front end is not implemented: list-sessions");
-        let got = parse_split(&ctx(Dialect::Tmux), &argv(&["kill-server"]));
+        let got = parse_split(&ctx(Dialect::Grofe), &argv(&["kill-server"]));
         assert_eq!(got, Ok(vec![Command::KillServer(KillServer)]));
+        let err = parse_split(&ctx(Dialect::Tmux), &argv(&["kill-server"])).unwrap_err();
+        assert_eq!(err, "tmux front end is not implemented: kill-server");
     }
 }

@@ -45,21 +45,48 @@ use crate::server::{State, clients, graphics, prompt};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
-/// Runs a request's argv (`argv[0]` is the verb) against the server
-/// state, returning its stdout or its error message.
-///
-/// argv may hold several commands, split at `;` arguments as tmux's CLI
-/// splits them ([`cmd::parse_sequence`]): they run in order and the first
-/// error stops the rest.
-// ponytail: the reply is the output of every command, or the first error
-// alone; output of commands before a failing one is dropped.
-pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+/// A request, parsed once ([`parse`]) and then both classified
+/// ([`read_only`]) and run ([`run_parsed`]), so a front-end miss is logged
+/// once per request.
+#[derive(Debug)]
+pub enum Parsed {
+    /// [`ATTACH_CHECK`] with `attach-session`'s arguments.
+    AttachCheck(Vec<String>),
+    Commands(Vec<Command>),
+}
+
+/// Parses a request's argv (`argv[0]` is the verb): grofe aliases
+/// expanded ([`menu::expand_aliases`]), then split and parsed in the
+/// request's dialect (`compat::parse_request`).
+pub fn parse(state: &State, ctx: &ClientCtx, argv: &[String]) -> Result<Parsed, String> {
     if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
-        return clients::attach_check(state, ctx, &argv[1..]);
+        return Ok(Parsed::AttachCheck(argv[1..].to_vec()));
     }
     let expanded = menu::expand_aliases(state, argv);
-    let cmds = compat::parse_request(ctx, expanded.as_deref().unwrap_or(argv))?;
-    run_commands(state, ctx, cmds)
+    compat::parse_request(ctx, expanded.as_deref().unwrap_or(argv)).map(Parsed::Commands)
+}
+
+/// Runs a request's argv against the server state, returning its stdout
+/// or its error message: [`parse`], then [`run_parsed`].
+pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let parsed = parse(state, ctx, argv);
+    run_parsed(state, ctx, parsed)
+}
+
+/// Runs a parsed request. argv may have held several commands, split at
+/// `;` arguments as tmux's CLI splits them ([`cmd::parse_sequence`]): they
+/// run in order and the first error stops the rest.
+// ponytail: the reply is the output of every command, or the first error
+// alone; output of commands before a failing one is dropped.
+pub fn run_parsed(
+    state: &mut State,
+    ctx: &ClientCtx,
+    parsed: Result<Parsed, String>,
+) -> Result<String, String> {
+    match parsed? {
+        Parsed::AttachCheck(args) => clients::attach_check(state, ctx, &args),
+        Parsed::Commands(cmds) => run_commands(state, ctx, cmds),
+    }
 }
 
 /// Runs one command whose argv is already split (a binding, the prompt,
@@ -100,12 +127,11 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
 /// requests count as changing something.
 // ponytail: an explicit list. The upgrade path is a per-command "changed"
 // result from dispatch, so each handler says what it touched.
-pub fn read_only(ctx: &ClientCtx, argv: &[String]) -> bool {
-    if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
-        return true;
-    }
-    let Ok(cmds) = compat::parse_request(ctx, argv) else {
-        return false;
+pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
+    let cmds = match parsed {
+        Ok(Parsed::AttachCheck(_)) => return true,
+        Ok(Parsed::Commands(cmds)) => cmds,
+        Err(_) => return false,
     };
     cmds.iter().all(|c| {
         matches!(
@@ -187,7 +213,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // M3: bindings and config (T3.5), the prompt and run-shell (T3.4),
         // layout presets (T3.7).
-        Command::BindKey(c) => options::bind_key(state, c),
+        Command::BindKey(c) => options::bind_key(state, ctx, c),
         Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
         Command::ListKeys(c) => options::list_keys(state, ctx, c),
         Command::SourceFile(c) => options::source_file(state, ctx, c),
@@ -267,6 +293,21 @@ pub(crate) fn resolve_cwd(
     ctx.cwd.join(dir)
 }
 
+/// A new or respawned pane's environment: the server environment
+/// (`hooks::pane_env`, TC.5) under the session's `env`, then what the
+/// server's identity adds (`compat::pane_env`, TC.1). Later entries win.
+pub(crate) fn pane_env(
+    state: &State,
+    session: SessionId,
+    pane: PaneId,
+    env: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut all = server::hooks::pane_env(state, session);
+    all.extend(env);
+    all.extend(compat::pane_env(state, session, pane));
+    all
+}
+
 struct NoVars;
 
 impl cmd::FormatVars for NoVars {
@@ -278,7 +319,8 @@ impl cmd::FormatVars for NoVars {
 /// Spawns a pane for `window` (which may not be in the model yet) with
 /// `env` (its session's), inserts it into `state.model.panes`, and returns
 /// its id. The caller puts it in the window's layout. `cell_px` is
-/// [`clients::cell_px`] for the window's session.
+/// [`clients::cell_px`] for the window's session. The pane's environment
+/// is [`pane_env`]'s.
 pub(crate) fn spawn_pane(
     state: &mut State,
     // The window's session, passed in: a new window is not in the model yet.
@@ -293,9 +335,10 @@ pub(crate) fn spawn_pane(
     let cwd = usable_cwd(cwd);
     let spec = PaneSpawn {
         id,
+        session,
         argv: argv.clone(),
         cwd: cwd.clone(),
-        env,
+        env: pane_env(state, session, id, env),
         cols,
         rows,
         history_limit: state.model.history_limit(session),
@@ -334,7 +377,8 @@ mod tests {
 
     #[test]
     fn only_listed_commands_are_read_only() {
-        let ctx = crate::server::test_ctx();
+        let (state, ctx) = (crate::server::test_state(), crate::server::test_ctx());
+        let read_only = |argv: &[String]| read_only(&parse(&state, &ctx, argv));
         for words in [
             &["list-sessions"][..],
             &["lsw"],
@@ -344,7 +388,7 @@ mod tests {
             &["capture-pane", "-p"],
             &[ATTACH_CHECK, "-t", "main"],
         ] {
-            assert!(read_only(&ctx, &argv(words)), "{words:?}");
+            assert!(read_only(&argv(words)), "{words:?}");
         }
         for words in [
             &["display-message", "hello"][..],
@@ -354,7 +398,7 @@ mod tests {
             &["no-such-command"],
             &[],
         ] {
-            assert!(!read_only(&ctx, &argv(words)), "{words:?}");
+            assert!(!read_only(&argv(words)), "{words:?}");
         }
     }
 }
