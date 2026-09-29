@@ -330,8 +330,11 @@ pub fn select_layout(
 /// stays when it does not fit), laid out at once.
 pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) {
     if let Some(w) = model.windows.get_mut(&window) {
-        let (area, panes) = (w.area(), w.pane_ids());
-        w.layout.preset(area, preset, &panes);
+        // Floating panes stay out of every layout operation.
+        let (area, panes) = (w.area(), w.tiled_ids());
+        if !panes.is_empty() {
+            w.layout.preset(area, preset, &panes);
+        }
     }
     model.relayout(window);
 }

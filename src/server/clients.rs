@@ -817,6 +817,7 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     if resized {
+        crate::server::popup::clients_resized(state);
         changed(state);
     }
     let escape = escape_time(&state.model);

@@ -90,15 +90,21 @@ pub struct Window {
 
 /// Where a floating pane is: the window cell of its top-left content
 /// cell (its border is drawn around it, and either may be off the
-/// window), and its place in the stack, highest on top. Its size is the
-/// pane's own `cols` by `rows`.
+/// window), its size, and its place in the stack, highest on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Floating {
     pub pane: PaneId,
     pub x: i32,
     pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
     pub z: u32,
 }
+
+/// Stands in a window's layout once its last tiled pane has gone while
+/// floating panes remain (tmux 3.7b keeps such a window, recorded): no
+/// pane has this id, so nothing is drawn or listed for it.
+pub const HOLE: PaneId = PaneId(u32::MAX);
 
 impl Window {
     /// Makes `pane` the active pane; the one it replaces becomes the most
@@ -160,11 +166,19 @@ impl Window {
     /// order, as tmux 3.7b indexes them: position `i` is pane index
     /// `i + pane-base-index`.
     pub fn pane_ids(&self) -> Vec<PaneId> {
+        let mut ids = self.tiled_ids();
+        ids.extend(self.floating.iter().map(|f| f.pane));
+        ids
+    }
+
+    /// The panes in the layout, in layout order: the only ones a layout
+    /// operation (presets, rotation, splits) may touch.
+    pub fn tiled_ids(&self) -> Vec<PaneId> {
         self.layout
             .compute(self.area())
             .into_iter()
             .map(|(id, _)| id)
-            .chain(self.floating.iter().map(|f| f.pane))
+            .filter(|id| *id != HOLE)
             .collect()
     }
 
@@ -385,15 +399,20 @@ impl Model {
             return self.take_panes(&[pane]);
         };
         let order = window.pane_ids();
+        if order.len() <= 1 {
+            return self.remove_window(window_id);
+        }
         if window.floating(pane).is_some() {
             window.floating.retain(|f| f.pane != pane);
             window.lose_pane(&order, pane);
             return self.take_panes(&[pane]);
         }
-        // ponytail: the last tiled pane going takes the window, floating
-        // panes and all.
-        if order.len() - window.floating.len() <= 1 {
-            return self.remove_window(window_id);
+        if window.tiled_ids().len() <= 1 {
+            // Floating panes remain: the window stays, as tmux 3.7b's does.
+            window.zoomed = false;
+            window.layout.replace(pane, HOLE);
+            window.lose_pane(&order, pane);
+            return self.take_panes(&[pane]);
         }
         window.zoomed = false;
         window.layout.remove(pane);
@@ -493,7 +512,16 @@ impl Model {
         let Some(w) = self.windows.get(&window) else {
             return;
         };
-        for (id, rect) in w.layout.compute(w.area()) {
+        let floating = w.floating.iter().map(|f| {
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                cols: f.cols,
+                rows: f.rows,
+            };
+            (f.pane, rect)
+        });
+        for (id, rect) in w.layout.compute(w.area()).into_iter().chain(floating) {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };

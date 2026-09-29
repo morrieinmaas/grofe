@@ -101,7 +101,7 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         model.panes.remove(&new);
         return Err(e.to_string());
     }
-    let order = w.pane_ids();
+    let order = w.tiled_ids();
     let at = match (c.before, c.full) {
         (true, true) => Some(0),
         (true, false) => order.iter().position(|p| *p == target),
@@ -298,6 +298,29 @@ fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<Stri
         SplitSize::Percent(p) => (u32::from(len) * u32::from(p) / 100) as u16,
         SplitSize::Half => len / 2,
     };
+    if let Some(f) = w.floating.iter_mut().find(|f| f.pane == pane) {
+        // A floating pane takes its new size itself: -x/-y set it, each
+        // edge moves its right or bottom side by `amount`.
+        // ponytail: tmux 3.7b's edges on a floating pane also move the
+        // tiled layout under it (recorded); grofe keeps that apart.
+        if let Some(width) = c.width {
+            f.cols = cells(width, area.cols).max(1);
+        }
+        if let Some(height) = c.height {
+            f.rows = cells(height, area.rows).max(1);
+        }
+        for edge in edges {
+            let grow = |n: u16, by: i32| (i32::from(n) + by).clamp(1, i32::from(u16::MAX)) as u16;
+            match edge {
+                Edge::Right => f.cols = grow(f.cols, amount),
+                Edge::Left => f.cols = grow(f.cols, -amount),
+                Edge::Down => f.rows = grow(f.rows, amount),
+                Edge::Up => f.rows = grow(f.rows, -amount),
+            }
+        }
+        model.relayout(window);
+        return Ok(String::new());
+    }
     if let Some(width) = c.width {
         let cells = cells(width, area.cols);
         w.layout.resize_to(area, pane, Dir::Horizontal, cells);

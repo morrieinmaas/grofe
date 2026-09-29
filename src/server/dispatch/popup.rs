@@ -146,7 +146,14 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         return Err(format!("can't find window: {window}"));
     };
     let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
-    w.floating.push(Floating { pane: new, x, y, z });
+    w.floating.push(Floating {
+        pane: new,
+        x,
+        y,
+        cols: width.max(1),
+        rows: height.max(1),
+        z,
+    });
     w.set_active(new);
     if !c.print {
         return Ok(String::new());

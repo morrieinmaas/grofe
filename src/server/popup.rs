@@ -245,7 +245,7 @@ struct Popup {
     /// As it was asked for; drawn [`Frame::fitted`] to the client.
     frame: Frame,
     /// The pty's size now, so a client resize resizes it once.
-    pty: std::cell::Cell<(u16, u16)>,
+    pty: (u16, u16),
     running: Running,
     /// The command's exit status once it has exited; after that the
     /// process is reaped, so it is never signalled again.
@@ -314,7 +314,7 @@ pub fn open(
         Popup {
             generation,
             frame,
-            pty: std::cell::Cell::new((cols, rows)),
+            pty: (cols, rows),
             running: Running { handle, forwarder },
             exited: None,
             waiting: None,
@@ -496,6 +496,25 @@ pub fn shutdown(state: &mut State) {
     }
 }
 
+/// Clients were resized: each popup's pty takes the size of its box as
+/// fitted to its client now ([`Frame::fitted`]), so its command gets the
+/// SIGWINCH; the overlay then draws the fitted box.
+pub fn clients_resized(state: &mut State) {
+    let State {
+        popups, clients, ..
+    } = state;
+    for (id, popup) in popups.open.iter_mut() {
+        let Some(size) = clients.get(id).map(|c| c.size) else {
+            continue;
+        };
+        let (_, inside) = popup.frame.fitted(size).inside();
+        if inside != popup.pty && inside.0 > 0 && inside.1 > 0 {
+            popup.pty = inside;
+            let _ = popup.running.handle.resize(inside.0, inside.1);
+        }
+    }
+}
+
 /// Client `id` went away: its popup closes.
 pub fn client_gone(state: &mut State, id: ClientId) {
     close(state, id);
@@ -597,11 +616,6 @@ impl Overlay for PopupOverlay {
         let ((x, y), (cols, rows)) = frame.inside();
         if cols == 0 || rows == 0 {
             return;
-        }
-        if popup.pty.get() != (cols, rows) {
-            // A client resize: the command gets its SIGWINCH now.
-            popup.pty.set((cols, rows));
-            let _ = popup.running.handle.resize(cols, rows);
         }
         if let Some(lines) = frame.lines {
             draw_box(screen, frame, lines);

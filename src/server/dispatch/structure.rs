@@ -18,7 +18,7 @@ use crate::server::dispatch::pane::{respawn, select_last, unzoom};
 use crate::server::dispatch::resolve_cwd;
 use crate::server::dispatch::window::{AUTOMATIC_RENAME, apply_preset, default_name, main_sizes};
 use crate::server::layout::{Insert, LayoutTree, Preset};
-use crate::server::model::{Model, Window};
+use crate::server::model::{HOLE, Model, Window};
 use crate::types::{Dir, PaneId, SessionId, SplitSize, WindowId, cap_size};
 
 /// A placeholder id for a pane being moved within its own window, which
@@ -78,6 +78,10 @@ fn join(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, Strin
         before: c.before,
         full: c.full,
     };
+    if w.floating(dst).is_some() {
+        // tmux 3.7b's text, recorded.
+        return Err("size or position can't split a floating pane".to_string());
+    }
     let same = src_w == dst_w;
     let mut layout = w.layout.clone();
     let placed = if same { MOVING } else { src };
@@ -93,6 +97,8 @@ fn join(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, Strin
         layout.remove(src);
         layout.replace(MOVING, src);
         w.layout = layout;
+        // A floating pane joined into the layout is tiled from now on.
+        w.floating.retain(|f| f.pane != src);
         w.lose_pane(&order, src);
     } else {
         take_out(model, src_w, src);
@@ -124,7 +130,13 @@ fn take_out(model: &mut Model, window: WindowId, pane: PaneId) {
     if order.len() < 2 {
         return;
     }
-    w.layout.remove(pane);
+    if w.floating(pane).is_some() {
+        w.floating.retain(|f| f.pane != pane);
+    } else if w.tiled_ids().len() < 2 {
+        w.layout.replace(pane, HOLE);
+    } else {
+        w.layout.remove(pane);
+    }
     w.lose_pane(&order, pane);
 }
 
@@ -163,6 +175,11 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
         model.resolve_pane(c.src.as_ref().unwrap_or(&Target::Current), ctx)?
     };
     let src_w = model.panes[&src].window;
+    let floats = |w: WindowId, p: PaneId| model.windows[&w].floating(p).is_some();
+    if floats(src_w, src) || floats(dst_w, dst) {
+        // tmux 3.7b's text, recorded.
+        return Err("cannot swap floating panes".to_string());
+    }
     unzoom(model, dst_w);
     unzoom(model, src_w);
     if src == dst {
@@ -514,9 +531,11 @@ pub fn rotate_window(
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };
-    let pos = w.pane_ids().iter().position(|p| *p == w.active);
+    // ponytail: tmux 3.7b's rotate-window also rotates floating panes into
+    // the layout (recorded); grofe leaves them out, as every layout verb.
+    let pos = w.tiled_ids().iter().position(|p| *p == w.active);
     w.layout.rotate(c.down);
-    if let Some(next) = pos.and_then(|i| w.pane_ids().get(i).copied()) {
+    if let Some(next) = pos.and_then(|i| w.tiled_ids().get(i).copied()) {
         w.set_active(next);
     }
     model.relayout(window);

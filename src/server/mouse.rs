@@ -334,6 +334,22 @@ fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
     let Some(at) = window_cell(&cx, cell) else {
         return Hit::Nothing;
     };
+    // A floating pane is over the layout, the top one first; its border
+    // belongs to no pane (TC.6).
+    if !w.zoomed {
+        let mut stack = w.floating.clone();
+        stack.sort_by_key(|f| std::cmp::Reverse(f.z));
+        let (x, y) = (i64::from(at.0), i64::from(at.1));
+        for f in stack {
+            let (dx, dy) = (x - i64::from(f.x), y - i64::from(f.y));
+            if (0..i64::from(f.cols)).contains(&dx) && (0..i64::from(f.rows)).contains(&dy) {
+                return Hit::Pane(f.pane, dx as u16, dy as u16);
+            }
+            if (-1..=i64::from(f.cols)).contains(&dx) && (-1..=i64::from(f.rows)).contains(&dy) {
+                return Hit::Nothing;
+            }
+        }
+    }
     let panes = pane_rects(w);
     if let Some((pane, x, y)) = pane_at(&panes, at) {
         return Hit::Pane(pane, x, y);

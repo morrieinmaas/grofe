@@ -774,3 +774,167 @@ fn a_client_resize_fits_the_popup_and_its_pty() {
     a.send("\x03");
     wait_child(child, WAIT).expect("answers");
 }
+
+fn list(srv: &TestServer, format: &str) -> String {
+    srv.cmd(&["list-panes", "-t", "main", "-F", format])
+        .expect("list-panes")
+}
+
+fn floating_pane(srv: &TestServer, args: &[&str]) -> String {
+    let mut argv = vec!["new-pane", "-P", "-F", "#{pane_id}"];
+    argv.extend_from_slice(args);
+    srv.cmd(&argv).expect("new-pane").trim_end().to_string()
+}
+
+/// Layout verbs leave a floating pane alone: after select-layout,
+/// next-layout and rotate-window it is listed once, still floating where
+/// it was, and killing it leaves no layout entry behind (the tiled panes
+/// still lay out and split). swap-pane refuses it with tmux 3.7b's text.
+#[test]
+fn layout_verbs_leave_floating_panes_out() {
+    let srv = start();
+    let _a = attach(&srv, "main");
+    srv.cmd(&["split-window", "-h", "-t", "main", "cat"])
+        .expect("split");
+    let float = floating_pane(&srv, &["-x", "20", "-y", "5", "-X", "5", "-Y", "2", "cat"]);
+    let geometry =
+        "#{pane_id} #{pane_floating_flag} #{pane_left} #{pane_top} #{pane_width} #{pane_height}";
+    for verb in [
+        &["select-layout", "-t", "main", "even-vertical"][..],
+        &["next-layout", "-t", "main"],
+        &["rotate-window", "-t", "main"],
+    ] {
+        srv.cmd(verb).unwrap_or_else(|e| panic!("{verb:?}: {e}"));
+        let panes = list(&srv, geometry);
+        assert_eq!(panes.matches(&float).count(), 1, "{verb:?}: {panes}");
+        assert!(
+            panes.contains(&format!("{float} 1 5 2 20 5")),
+            "{verb:?}: {panes}"
+        );
+    }
+    for words in [
+        ["-s", float.as_str(), "-t", "main"],
+        ["-s", "main", "-t", float.as_str()],
+    ] {
+        let mut argv = vec!["swap-pane"];
+        argv.extend_from_slice(&words);
+        assert_eq!(
+            srv.cmd(&argv),
+            Err("cannot swap floating panes\n".to_string())
+        );
+    }
+    srv.cmd(&["kill-pane", "-t", &float]).expect("kill-pane");
+    assert!(!list(&srv, "#{pane_id}").contains(&float));
+    srv.cmd(&["select-layout", "-t", "main", "even-horizontal"])
+        .expect("select-layout");
+    srv.cmd(&["split-window", "-t", "main", "cat"])
+        .expect("split after");
+    let panes = list(&srv, "#{pane_id} #{pane_floating_flag} #{window_panes}");
+    assert_eq!(panes.lines().count(), 3, "{panes}");
+    assert!(panes.lines().all(|l| l.ends_with(" 0 3")), "{panes}");
+}
+
+/// resize-pane sizes a floating pane: `-x`/`-y` set it, an edge moves
+/// its right or bottom side.
+#[test]
+fn resize_pane_resizes_a_floating_pane() {
+    let srv = start();
+    let _a = attach(&srv, "main");
+    let float = floating_pane(&srv, &["-x", "20", "-y", "5", "-X", "5", "-Y", "2", "cat"]);
+    srv.cmd(&["resize-pane", "-t", &float, "-x", "30", "-y", "6"])
+        .expect("resize");
+    srv.cmd(&["resize-pane", "-t", &float, "-R", "3"])
+        .expect("resize -R");
+    srv.cmd(&["resize-pane", "-t", &float, "-U", "2"])
+        .expect("resize -U");
+    let got = srv
+        .cmd(&[
+            "display-message",
+            "-p",
+            "-t",
+            &float,
+            "#{pane_width}x#{pane_height} #{pane_left},#{pane_top}",
+        ])
+        .expect("display");
+    assert_eq!(got.trim_end(), "33x4 5,2");
+    let tiled = list(&srv, "#{pane_floating_flag} #{pane_width}x#{pane_height}");
+    assert!(tiled.contains("0 60x14"), "the tiled pane moved: {tiled}");
+}
+
+/// Killing the last tiled pane keeps the window while a floating pane is
+/// left, as tmux 3.7b does (recorded): the floating pane is its only,
+/// active pane, still drawn; a split of it is refused.
+#[test]
+fn a_window_keeps_its_floating_pane_after_its_last_tiled_one() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    let tiled = list(&srv, "#{pane_id}").trim_end().to_string();
+    let float = floating_pane(
+        &srv,
+        &[
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "5",
+            "-Y",
+            "2",
+            "sh",
+            "-c",
+            "echo FL; exec cat",
+        ],
+    );
+    a.wait_for("│FL");
+    srv.cmd(&["kill-pane", "-t", &tiled]).expect("kill-pane");
+    let panes = list(
+        &srv,
+        "#{pane_id} #{pane_active} #{pane_floating_flag} #{window_panes} #{pane_left} #{pane_top}",
+    );
+    assert_eq!(panes, format!("{float} 1 1 1 5 2\n"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(a.text().contains("│FL"));
+    assert_eq!(
+        srv.cmd(&["split-window", "-t", &float]),
+        Err("size or position can't split a floating pane\n".to_string())
+    );
+    srv.cmd(&["kill-pane", "-t", &float])
+        .expect("kill the last");
+    assert!(srv.cmd(&["has-session", "-t", "main"]).is_err());
+}
+
+/// A click on a floating pane selects it and reaches it, at its own
+/// cell, as tmux 3.7b does (recorded), not the tiled pane under it.
+#[test]
+fn a_click_selects_a_floating_pane_and_reaches_it() {
+    let srv = start();
+    srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse on");
+    let mut a = attach(&srv, "main");
+    let tiled = list(&srv, "#{pane_id}").trim_end().to_string();
+    let float = floating_pane(
+        &srv,
+        &[
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "5",
+            "-Y",
+            "2",
+            "sh",
+            "-c",
+            "printf '\\033[?1000h\\033[?1006hready\\n'; stty -echo -icanon; exec cat -v",
+        ],
+    );
+    a.wait_for("│ready");
+    srv.cmd(&["select-pane", "-t", &tiled])
+        .expect("select tiled");
+    // Client cell (10, 4) is the floating pane's cell (5, 2).
+    a.send("\x1b[<0;11;5M\x1b[<0;11;5m");
+    a.wait_for("^[[<0;6;3M^[[<0;6;3m");
+    let active = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("active");
+    assert_eq!(active.trim_end(), float);
+}
