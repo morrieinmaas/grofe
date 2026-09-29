@@ -1,0 +1,28 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+client 60x15 attach -t main
+$ new-pane -P -F #{pane_id} -t main:1.1 -c /tmp -x 30 -y 8 -X 5 -Y 3 sh -c "echo in-np; exec cat"
+%1
+? 0
+screen in-np
+|
+|
+|     ┌──────────────────────────────┐
+|     │in-np                         │
+|     │                              │
+|     │                              │
+|     │                              │
+|     │                              │
+|     │                              │
+|     │                              │
+|     │                              │
+|     └──────────────────────────────┘
+|
+|
+| [main] 1:first*                               "<HOST>"
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+%0 0 0 60 14 0
+%1 5 3 30 8 1
+? 0

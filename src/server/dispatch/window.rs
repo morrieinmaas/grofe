@@ -95,6 +95,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         rows: size.1,
         bell_flag: false,
         last_panes: Vec::new(),
+        floating: Vec::new(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
@@ -326,11 +327,18 @@ pub fn select_layout(
 }
 
 /// `preset` over `window`'s panes in index order (D18: the old layout
-/// stays when it does not fit), laid out at once.
+/// stays when it does not fit), laid out at once. As tmux 3.7b (recorded):
+/// a window with tiled panes folds its floating panes into the preset,
+/// after the tiled ones, and they are tiled from then on; a window with
+/// only floating panes keeps them floating.
 pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) {
-    if let Some(w) = model.windows.get_mut(&window) {
+    if let Some(w) = model.windows.get_mut(&window)
+        && !w.tiled_ids().is_empty()
+    {
         let (area, panes) = (w.area(), w.pane_ids());
-        w.layout.preset(area, preset, &panes);
+        if w.layout.preset(area, preset, &panes) {
+            w.floating.clear();
+        }
     }
     model.relayout(window);
 }
