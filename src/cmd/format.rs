@@ -79,19 +79,157 @@ fn find_unnested(s: &str, target: u8) -> Option<usize> {
     None
 }
 
-/// Expands the body of one `#{...}`: `?cond,then,else`, `==:a,b`, `b:var`,
-/// or a bare variable name.
+/// The two-argument modifiers: `#{op:a,b}` expands both sides as text and
+/// gives `1` or `0`. Longer prefixes come first (`>=:` before `>:`,
+/// `m/r:` before `m:`).
+type Comparison = fn(&str, &str) -> bool;
+
+const COMPARISONS: [(&str, Comparison); 8] = [
+    ("==:", |a, b| a == b),
+    ("!=:", |a, b| a != b),
+    // tmux compares these as strings (`strcmp`), so `10` sorts before `9`.
+    (">=:", |a, b| a >= b),
+    (">:", |a, b| a > b),
+    ("&&:", |a, b| is_truthy(a) && is_truthy(b)),
+    ("||:", |a, b| is_truthy(a) || is_truthy(b)),
+    ("m/r:", regex_match),
+    ("m:", |pattern, s| fnmatch(pattern.as_bytes(), s.as_bytes())),
+];
+
+/// Expands the body of one `#{...}`: `?cond,then,else`, a comparison from
+/// [`COMPARISONS`], `b:var`, `t:var`, or a bare variable name.
 fn expand_body(body: &str, vars: &dyn FormatVars) -> String {
     if let Some(rest) = body.strip_prefix('?') {
         return expand_ternary(rest, body, vars);
     }
-    if let Some(rest) = body.strip_prefix("==:") {
-        return expand_eq(rest, body, vars);
+    for (prefix, op) in COMPARISONS {
+        if let Some(rest) = body.strip_prefix(prefix) {
+            return expand_comparison(rest, body, op, vars);
+        }
     }
     if let Some(rest) = body.strip_prefix("b:") {
         return expand_basename(rest, vars);
     }
+    if let Some(rest) = body.strip_prefix("t:") {
+        return expand_time(rest, vars);
+    }
     resolve(body, vars)
+}
+
+/// `#{t:var}`: the variable's value, seconds since the epoch, as
+/// `ctime(3)` prints it in local time (`Wed Nov 15 00:13:20 2023`); empty
+/// when it is not a positive number. As with `b:`, a nested argument is
+/// expanded and returned unchanged (verified against tmux 3.7b).
+fn expand_time(arg: &str, vars: &dyn FormatVars) -> String {
+    if arg.contains("#{") {
+        return expand(arg, vars);
+    }
+    vars.get(arg)
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|t| *t > 0)
+        .and_then(ctime)
+        .unwrap_or_default()
+}
+
+/// `ctime(3)`'s text for `secs`, without the newline.
+fn ctime(secs: i64) -> Option<String> {
+    use nix::libc;
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    // `time_t` is 64 bits wide on every target grofe builds for.
+    let t = secs as libc::time_t;
+    // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals; localtime_r is reentrant.
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return None;
+    }
+    Some(format!(
+        "{} {}{:3} {:02}:{:02}:{:02} {}",
+        DAYS.get(usize::try_from(tm.tm_wday).ok()?)?,
+        MONTHS.get(usize::try_from(tm.tm_mon).ok()?)?,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        i64::from(tm.tm_year) + 1900,
+    ))
+}
+
+/// `#{m/r:pattern,string}`: an extended regular expression search, as
+/// tmux's `regexec`; a pattern that does not compile matches nothing.
+// ponytail: compiled on every expansion; cache if a status format shows
+// up in a profile.
+fn regex_match(pattern: &str, s: &str) -> bool {
+    regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s))
+}
+
+/// `fnmatch(3)` with no flags, as tmux's `#{m:}`: `*` and `?` also match
+/// `/` and a leading `.`, `[...]` takes ranges and `!` or `^` to negate,
+/// and a backslash quotes the next character.
+fn fnmatch(pattern: &[u8], s: &[u8]) -> bool {
+    let Some((&p, rest)) = pattern.split_first() else {
+        return s.is_empty();
+    };
+    match p {
+        b'*' => (0..=s.len()).any(|i| fnmatch(rest, &s[i..])),
+        b'?' => !s.is_empty() && fnmatch(rest, &s[1..]),
+        b'[' => match (s.first(), bracket(rest)) {
+            (Some(&c), Some((set, after))) => set.matches(c) && fnmatch(after, &s[1..]),
+            // An unclosed `[` is an ordinary character.
+            (Some(&c), None) => c == b'[' && fnmatch(rest, &s[1..]),
+            (None, _) => false,
+        },
+        b'\\' if !rest.is_empty() => s.first() == Some(&rest[0]) && fnmatch(&rest[1..], &s[1..]),
+        _ => s.first() == Some(&p) && fnmatch(rest, &s[1..]),
+    }
+}
+
+/// A `[...]` set, parsed from just after its `[`.
+struct Bracket<'a> {
+    negated: bool,
+    body: &'a [u8],
+}
+
+impl Bracket<'_> {
+    fn matches(&self, c: u8) -> bool {
+        let b = self.body;
+        let mut i = 0;
+        let mut hit = false;
+        while i < b.len() {
+            let lo = b[i];
+            if i + 2 < b.len() && b[i + 1] == b'-' {
+                hit |= (lo..=b[i + 2]).contains(&c);
+                i += 3;
+            } else {
+                hit |= lo == c;
+                i += 1;
+            }
+        }
+        hit != self.negated
+    }
+}
+
+/// Splits a `[...]` set (after its `[`) from the pattern that follows its
+/// `]`; a `]` right after the `[` (or the negation) is a member. `None`
+/// when the set never closes.
+fn bracket(p: &[u8]) -> Option<(Bracket<'_>, &[u8])> {
+    let negated = matches!(p.first(), Some(b'!' | b'^'));
+    let start = usize::from(negated);
+    let close = p
+        .iter()
+        .skip(start + 1)
+        .position(|&c| c == b']')
+        .map(|i| i + start + 1)?;
+    Some((
+        Bracket {
+            negated,
+            body: &p[start..close],
+        },
+        &p[close + 1..],
+    ))
 }
 
 /// `#{b:var}`: tmux only applies the basename transform to a bare
@@ -151,17 +289,23 @@ fn expand_ternary(rest: &str, original_body: &str, vars: &dyn FormatVars) -> Str
     }
 }
 
-/// `#{==:a,b}`: both sides are literal text that may itself contain
-/// nested `#{...}` (mixed-text, like a `then`/`else` branch), not a bare
-/// variable lookup -- so `#{==:#{window_name},bash}` compares the
-/// window's name against the literal word `bash`.
-fn expand_eq(rest: &str, original_body: &str, vars: &dyn FormatVars) -> String {
+/// `#{==:a,b}` and the other [`COMPARISONS`]: both sides are literal text
+/// that may itself contain nested `#{...}` (mixed-text, like a
+/// `then`/`else` branch), not a bare variable lookup -- so
+/// `#{==:#{window_name},bash}` compares the window's name against the
+/// literal word `bash`.
+fn expand_comparison(
+    rest: &str,
+    original_body: &str,
+    op: Comparison,
+    vars: &dyn FormatVars,
+) -> String {
     let Some(c) = find_unnested(rest, b',') else {
         return format!("#{{{original_body}}}");
     };
     let a = expand(&rest[..c], vars);
     let b = expand(&rest[c + 1..], vars);
-    if a == b { "1" } else { "0" }.to_string()
+    if op(&a, &b) { "1" } else { "0" }.to_string()
 }
 
 /// tmux's truthiness for a format value: present, non-empty and not `"0"`.
@@ -374,5 +518,90 @@ mod tests {
         // and returned as-is, even though it looks like a path.
         assert_eq!(expand("#{b:#{@p}}", &vars(&[("@p", "/a/b/c")])), "/a/b/c");
         assert_eq!(expand("#{b:x#{@p}}", &vars(&[("@p", "/a/b/c")])), "x/a/b/c");
+    }
+
+    /// TC.3's modifiers, one true and one false case each, with the
+    /// results tmux 3.7b gives for the same text.
+    #[test]
+    fn comparison_modifiers() {
+        let v = vars(&[("one", "1"), ("name", "alpha")]);
+        for (fmt, want) in [
+            ("#{!=:a,b}", "1"),
+            ("#{!=:a,a}", "0"),
+            ("#{>:b,a}", "1"),
+            ("#{>:10,9}", "0"),
+            ("#{>=:a,a}", "1"),
+            ("#{>=:a,b}", "0"),
+            ("#{&&:1,x}", "1"),
+            ("#{&&:#{one},0}", "0"),
+            ("#{||:0,x}", "1"),
+            ("#{||:0,}", "0"),
+            ("#{m:*ab*,xaby}", "1"),
+            ("#{m:A*,abc}", "0"),
+            ("#{m/r:^a.c$,abc}", "1"),
+            ("#{m/r:(copy|view)-mode,}", "0"),
+            ("#{m/r:(,abc}", "0"),
+            ("#{m:al*,#{name}}", "1"),
+            // Bare names are literal text in a comparison, as in `==:`.
+            ("#{&&:name,1}", "1"),
+            ("#{==:name,alpha}", "0"),
+        ] {
+            assert_eq!(expand(fmt, &v), want, "{fmt}");
+        }
+    }
+
+    #[test]
+    fn comparison_missing_comma_passes_through() {
+        assert_eq!(expand("#{!=:onlyone}", &vars(&[])), "#{!=:onlyone}");
+        assert_eq!(expand("#{m/r:x}", &vars(&[])), "#{m/r:x}");
+    }
+
+    #[test]
+    fn fnmatch_matches_as_fnmatch_with_no_flags() {
+        for (pattern, s, want) in [
+            ("", "", true),
+            ("", "a", false),
+            ("*", "", true),
+            ("*", "a/b", true),
+            ("*.rs", ".x.rs", true),
+            ("a?c", "abc", true),
+            ("a?c", "ac", false),
+            ("[a-c]x", "bx", true),
+            ("[a-c]x", "dx", false),
+            ("[!x]b", "ab", true),
+            ("[!x]b", "xb", false),
+            ("[^a]x", "bx", true),
+            ("[]]", "]", true),
+            ("[ab", "[ab", true),
+            ("s\\*", "s*", true),
+            ("s\\*", "sx", false),
+            ("*net*", "wifi-net-1", true),
+        ] {
+            assert_eq!(
+                fnmatch(pattern.as_bytes(), s.as_bytes()),
+                want,
+                "{pattern} ~ {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn time_modifier_needs_a_positive_number() {
+        let v = vars(&[("stamp", "1700000000"), ("word", "soon"), ("zero", "0")]);
+        let t = expand("#{t:stamp}", &v);
+        assert_eq!(t, ctime(1_700_000_000).expect("ctime"));
+        // `Wed Nov 15 00:13:20 2023` in UTC; the day and time move with
+        // the zone, the shape does not.
+        assert_eq!(t.len(), 24, "{t}");
+        assert_eq!(&t[19..], " 2023", "{t}");
+        assert_eq!(expand("[#{t:word}]", &v), "[]");
+        assert_eq!(expand("[#{t:zero}]", &v), "[]");
+        assert_eq!(expand("[#{t:nope}]", &v), "[]");
+        assert_eq!(expand("#{t:#{stamp}}", &v), "1700000000");
+    }
+
+    #[test]
+    fn a_job_is_literal_text() {
+        assert_eq!(expand("#(date)", &vars(&[])), "#(date)");
     }
 }
