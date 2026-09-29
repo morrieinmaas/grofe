@@ -71,6 +71,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
 pub const LIST_NAMES: &[(&str, &str)] = &[
     ("status.rows", "status-format"),
     ("command-alias", "command-alias"),
+    ("update-environment", "update-environment"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -192,6 +193,18 @@ pub struct KeyBinding {
     pub source: Source,
 }
 
+/// One `[hooks]` entry (TC.5): a grofe event and the command string it
+/// runs, from the last layer that set it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigHook {
+    /// The command string as written.
+    pub command: String,
+    /// `command` split by `cmd::split_command_string`, each command
+    /// checked. Empty means the hook is removed in this layer.
+    pub cmds: Vec<Vec<String>>,
+    pub source: Source,
+}
+
 /// A fully loaded and validated config.
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -200,6 +213,8 @@ pub struct Resolved {
     pub options: BTreeMap<&'static str, String>,
     /// Bindings in load order.
     pub keys: Vec<KeyBinding>,
+    /// `[hooks]` by event name (TC.5).
+    pub hooks: BTreeMap<String, ConfigHook>,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// Who set each option and list.

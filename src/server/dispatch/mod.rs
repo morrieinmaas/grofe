@@ -106,7 +106,7 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
     let mut out = String::new();
     let mut result = Ok(());
     for cmd in cmds {
-        match route(state, ctx, cmd) {
+        match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
                 result = Err(e);
@@ -155,7 +155,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
 /// the handler returns is ignored. From a binding the answer is dropped.
 // ponytail: one deferred answer per request; a second call replaces the
 // first, whose sender then fails.
-pub fn defer_reply(state: &mut State) -> oneshot::Sender<Result<String, String>> {
+pub fn defer_reply(state: &mut State) -> oneshot::Sender<Result<String, crate::protocol::Failure>> {
     let (tx, rx) = oneshot::channel();
     state.deferred_reply = Some(rx);
     tx

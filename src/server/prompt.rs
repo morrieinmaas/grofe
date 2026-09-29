@@ -24,15 +24,15 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
-use crate::cmd::{self, CommandPrompt, RunShell};
-use crate::protocol::{ClientCtx, Dialect};
-use crate::server::State;
+use crate::cmd::{self, CommandPrompt, Resolve, RunShell};
+use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::clients::{self, ClientVars};
 use crate::server::dispatch::{self, options::FormatCtx};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::status;
+use crate::server::{State, hooks};
 use crate::types::ClientId;
 
 /// tmux's `prompt-history-limit`.
@@ -52,7 +52,7 @@ pub struct Prompts {
     open: BTreeMap<ClientId, Prompt>,
     /// The CLI replies of `command-prompt`s waiting for their prompt to
     /// close.
-    waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, String>>>,
+    waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, Failure>>>,
     /// Lines entered at any prompt, newest last.
     history: Vec<String>,
 }
@@ -537,30 +537,72 @@ fn verb(template: &str) -> String {
 /// `run-shell` (R23): `/bin/sh -c` in a task of its own, never waited on
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
-/// runs in the session's cwd and its output is dropped.
-// ponytail: a failing command's output comes before the error, as in tmux,
-// but on stderr with exit 1: tmux prints it on stdout and exits with the
-// command's status, which the reply protocol cannot carry yet. From a
-// binding the output would go to view mode (M5). No `-b`, `-d`, `-C`
-// (`-b` is TC.5's).
+/// runs in the session's cwd and its output is dropped. With `-b` (TC.5)
+/// the reply is empty and immediate, and the output is dropped. The shell
+/// gets the server environment and the session's (`hooks::shell_env`).
+/// A failing command's output and tmux's message go to the CLI's stdout,
+/// and the CLI exits with the command's status (D20, as tmux 3.7b).
+// ponytail: from a binding the output would go to view mode (M5). No
+// `-d`, `-C`.
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
-    let session_cwd = ctx
+    let client_session = ctx
         .client
         .and_then(|id| state.clients.get(&id))
-        .map(|client| client.session)
+        .map(|client| client.session);
+    let session_cwd = client_session
         .and_then(|s| state.model.sessions.get(&s))
         .map(|s| s.cwd.clone());
     let from_binding = session_cwd.is_some();
     let cwd = pane::usable_cwd(session_cwd.unwrap_or_else(|| ctx.cwd.clone()));
-    let reply = (!from_binding).then(|| dispatch::defer_reply(state));
+    let session =
+        client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
+    let env = hooks::shell_env(state, session);
+    let script = expand_command(state, ctx, &c.cmd);
+    // Inside a hook the queue waits for the shell, even from a binding.
+    let waits = !from_binding || hooks::in_hook(state);
+    let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     tokio::spawn(async move {
-        let result = shell(&c.cmd, cwd, socket, reply.is_some()).await;
+        let result = shell(&script, cwd, env, socket, reply.is_some()).await;
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
     });
     Ok(String::new())
+}
+
+/// `run-shell`'s command, format-expanded as tmux 3.7b expands it: against
+/// the current pane and client, and inside a hook its `#{hook*}`
+/// variables.
+fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> String {
+    use crate::server::dispatch::options::ServerVars;
+    let model = &state.model;
+    let hook = hooks::current_formats(state);
+    let with_hook = |inner: &dyn cmd::FormatVars| match hook {
+        Some(formats) => cmd::expand(text, &hooks::HookVars { formats, inner }),
+        None => cmd::expand(text, inner),
+    };
+    let Ok(pane) = model.resolve_pane(&cmd::Target::Current, ctx) else {
+        return with_hook(&NoVars);
+    };
+    match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => {
+            let vars = ClientVars::new(model, client, Some(FormatCtx::new(model, pane)));
+            with_hook(&ServerVars::new(state, pane, &vars))
+        }
+        None => {
+            let vars = FormatCtx::new(model, pane);
+            with_hook(&ServerVars::new(state, pane, &vars))
+        }
+    }
+}
+
+struct NoVars;
+
+impl cmd::FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Runs `script` to completion: its stdout (ending in a newline) when
@@ -570,9 +612,10 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
 async fn shell(
     script: &str,
     cwd: PathBuf,
+    env: Vec<(String, String)>,
     socket: PathBuf,
     capture: bool,
-) -> Result<String, String> {
+) -> Result<String, Failure> {
     let stdout = if capture {
         Stdio::piped()
     } else {
@@ -584,6 +627,8 @@ async fn shell(
             .arg("-c")
             .arg(script)
             .current_dir(cwd)
+            .env_clear()
+            .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
@@ -596,23 +641,31 @@ async fn shell(
     let out = child
         .wait_with_output()
         .await
-        .map_err(|e| format!("'{script}' failed: {e}"))?;
+        .map_err(|e| Failure::from(format!("'{script}' failed: {e}")))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
     match exit_result(script, out.status) {
         Ok(()) => Ok(text),
-        Err(e) => Err(text + &e),
+        // As tmux 3.7b (recorded): the output, then the message, both on
+        // stdout, and the CLI exits with the command's status.
+        Err((message, status)) => Err(Failure {
+            err: String::new(),
+            out: format!("{text}{message}\n"),
+            status: Some(status),
+        }),
     }
 }
 
-fn exit_result(script: &str, status: ExitStatus) -> Result<(), String> {
+/// tmux's message for a failed shell and the status its CLI exits with
+/// (128 plus the signal for a killed one).
+fn exit_result(script: &str, status: ExitStatus) -> Result<(), (String, i32)> {
     match (status.code(), status.signal()) {
         (Some(0), _) => Ok(()),
-        (Some(n), _) => Err(format!("'{script}' returned {n}")),
-        (None, Some(sig)) => Err(format!("'{script}' terminated by signal {sig}")),
-        (None, None) => Err(format!("'{script}' failed")),
+        (Some(n), _) => Err((format!("'{script}' returned {n}"), n)),
+        (None, Some(sig)) => Err((format!("'{script}' terminated by signal {sig}"), 128 + sig)),
+        (None, None) => Err((format!("'{script}' failed"), 1)),
     }
 }
 
@@ -859,12 +912,20 @@ mod tests {
         assert_eq!(exit_result("true", ExitStatus::from_raw(0)), Ok(()));
         assert_eq!(
             exit_result("false", ExitStatus::from_raw(1 << 8)),
-            Err("'false' returned 1".to_string())
+            Err(("'false' returned 1".to_string(), 1))
         );
         assert_eq!(
             exit_result("kill", ExitStatus::from_raw(15)),
-            Err("'kill' terminated by signal 15".to_string())
+            Err(("'kill' terminated by signal 15".to_string(), 143))
         );
+    }
+
+    fn failed(out: &str, status: i32) -> Failure {
+        Failure {
+            err: String::new(),
+            out: out.to_string(),
+            status: Some(status),
+        }
     }
 
     #[tokio::test]
@@ -875,6 +936,7 @@ mod tests {
             shell(
                 "echo hi; echo two >&1; echo no >&2",
                 dir.clone(),
+                Vec::new(),
                 socket.clone(),
                 true
             )
@@ -882,36 +944,50 @@ mod tests {
             Ok("hi\ntwo\n".to_string())
         );
         assert_eq!(
-            shell("printf abc", dir.clone(), socket.clone(), true).await,
+            shell("printf abc", dir.clone(), Vec::new(), socket.clone(), true).await,
             Ok("abc\n".to_string())
         );
         assert_eq!(
-            shell("true", dir.clone(), socket.clone(), true).await,
+            shell("true", dir.clone(), Vec::new(), socket.clone(), true).await,
             Ok(String::new())
         );
-        let pwd = shell("pwd -P", dir.clone(), socket.clone(), true).await;
+        let pwd = shell("pwd -P", dir.clone(), Vec::new(), socket.clone(), true).await;
         assert_eq!(pwd, Ok(format!("{}\n", dir.display())));
         assert_eq!(
-            shell("echo \"$GROFE\"", dir.clone(), socket, true).await,
+            shell("echo \"$GROFE\"", dir.clone(), Vec::new(), socket, true).await,
             Ok("/nonexistent.sock\n".to_string())
         );
         assert_eq!(
-            shell("exit 3", dir.clone(), PathBuf::from("/x"), true).await,
-            Err("'exit 3' returned 3".to_string())
+            shell("exit 3", dir.clone(), Vec::new(), PathBuf::from("/x"), true).await,
+            Err(failed("'exit 3' returned 3\n", 3))
         );
         assert_eq!(
-            shell("echo a; exit 3", dir, PathBuf::from("/x"), true).await,
-            Err("a\n'echo a; exit 3' returned 3".to_string())
+            shell("echo a; exit 3", dir, Vec::new(), PathBuf::from("/x"), true).await,
+            Err(failed("a\n'echo a; exit 3' returned 3\n", 3))
         );
         // Without capture (a binding) stdout goes nowhere.
         let dir = std::env::temp_dir();
         assert_eq!(
-            shell("echo dropped", dir.clone(), PathBuf::from("/x"), false).await,
+            shell(
+                "echo dropped",
+                dir.clone(),
+                Vec::new(),
+                PathBuf::from("/x"),
+                false
+            )
+            .await,
             Ok(String::new())
         );
         assert_eq!(
-            shell("echo a; exit 2", dir, PathBuf::from("/x"), false).await,
-            Err("'echo a; exit 2' returned 2".to_string())
+            shell(
+                "echo a; exit 2",
+                dir,
+                Vec::new(),
+                PathBuf::from("/x"),
+                false
+            )
+            .await,
+            Err(failed("'echo a; exit 2' returned 2\n", 2))
         );
     }
 }

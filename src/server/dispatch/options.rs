@@ -1378,6 +1378,27 @@ const LISTS: &[ListBuiltin] = &[
         scope: OptionScope::Session,
         default: &[""],
     },
+    // TC.5: the client variables a session takes at new-session, attach
+    // and switch-client, tmux 3.7b's default (recorded).
+    ListBuiltin {
+        name: "update-environment",
+        scope: OptionScope::Session,
+        default: &[
+            "DISPLAY",
+            "KRB5CCNAME",
+            "MSYSTEM",
+            "SSH_ASKPASS",
+            "SSH_AUTH_SOCK",
+            "SSH_AGENT_PID",
+            "SSH_CONNECTION",
+            "WAYLAND_DISPLAY",
+            "WINDOWID",
+            "XAUTHORITY",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+        ],
+    },
 ];
 
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {

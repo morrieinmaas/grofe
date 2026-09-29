@@ -180,7 +180,11 @@ fn a_tmux_start_gives_panes_tmux_identity() {
 /// `TERM_PROGRAM`, and still sets `TMUX` in tmux's format.
 #[test]
 fn a_grofe_start_keeps_the_outer_term_program() {
-    let srv = TestServer::start();
+    // The server starts from the outer terminal: panes take `TERM_PROGRAM`
+    // from its environment, as tmux's take theirs (`update-environment`
+    // does not name it, TC.5).
+    let srv = TestServer::unstarted();
+    grofe(&srv, &["start-server"]).expect("start-server");
     let env = pane_env(&srv, &["new-session", "-d", "-s", "g"], "env-g");
     assert_eq!(var(&env, "TERM_PROGRAM"), "outer-term");
     assert_eq!(var(&env, "TERM_PROGRAM_VERSION"), "9.9");

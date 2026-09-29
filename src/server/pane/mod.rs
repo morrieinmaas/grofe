@@ -85,8 +85,10 @@ pub struct PaneSpawn {
     /// `None` starts the user's shell (`$SHELL`, else `/bin/sh`) as a login shell.
     pub argv: Option<Vec<String>>,
     pub cwd: PathBuf,
-    /// Applied over the server's own environment; grofe's `TERM`, `COLORTERM`,
-    /// `GROFE` and `GROFE_PANE` are applied after it and always win.
+    /// The child's whole environment (the server's own is not inherited;
+    /// `dispatch::pane_env` builds it from the server environment, TC.5);
+    /// grofe's `TERM`, `COLORTERM`, `GROFE` and `GROFE_PANE` are applied
+    /// after it and always win.
     pub env: Vec<(String, String)>,
     pub cols: u16,
     pub rows: u16,
@@ -672,17 +674,18 @@ fn cursor_state(term: &Term<Listener>) -> CursorState {
     }
 }
 
-/// The environment a pane's child gets on top of the server's own: the spawn
-/// env, a UTF-8 locale if none is set, then grofe's variables.
+/// The environment a pane's child gets: the spawn env, a UTF-8 locale if
+/// it sets none, then grofe's variables.
 fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> =
         spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
     let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| {
         let set = |v: &str| !v.is_empty();
-        match spec.env.iter().rev().find(|(name, _)| name == k) {
-            Some((_, v)) => set(v),
-            None => std::env::var(k).is_ok_and(|v| set(&v)),
-        }
+        spec.env
+            .iter()
+            .rev()
+            .find(|(name, _)| name == k)
+            .is_some_and(|(_, v)| set(v))
     });
     if !has_locale {
         let utf8 = if cfg!(target_os = "macos") {
@@ -776,7 +779,7 @@ fn spawn_child(
             cmd
         }
     };
-    cmd.current_dir(&spec.cwd).envs(child_env(spec));
+    cmd.current_dir(&spec.cwd).env_clear().envs(child_env(spec));
 
     let _guard = spawn_lock();
     let pty = openpty(&size.winsize(spec.cell_px), None)?;

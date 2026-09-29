@@ -179,7 +179,7 @@ pub struct State {
     pub jobs: mpsc::Sender<Job>,
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
-    pub deferred_reply: Option<oneshot::Receiver<Result<String, String>>>,
+    pub deferred_reply: Option<oneshot::Receiver<Result<String, protocol::Failure>>>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -269,9 +269,10 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
     }
     match kind {
         PaneEventKind::Exited(status) => {
-            let uid = p.uid.clone();
+            let (uid, window) = (p.uid.clone(), p.window);
             state.events.emit(Event::PaneExited { pane, uid, status });
             state.model.pane_exited(pane, status);
+            hooks::pane_exited(state, pane, window);
             if state.model.closed() {
                 state.exit = true;
             }
@@ -292,6 +293,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
 /// Runs one [`Job`] on the actor, then sends the events it caused.
 fn run_job(state: &mut State, job: Job) {
     job(state);
+    // A job is no CLI request: nothing waits for its hooks.
+    drop(hooks::take_reply_hold(state));
     state.events.flush();
 }
 
@@ -445,7 +448,7 @@ async fn serve(
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
-        hooks: hooks::Hooks::default(),
+        hooks: hooks::Hooks::for_server(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
@@ -695,13 +698,20 @@ fn finish(
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }
-    match (state.deferred_reply.take(), result) {
-        (Some(later), Ok(_)) => reply_later(id, later, reply),
-        (_, Ok(out)) => {
+    // Waits for the request's `after-*` hooks, as tmux 3.7b's CLI does.
+    let hold = hooks::take_reply_hold(state);
+    match (state.deferred_reply.take(), result, hold) {
+        (Some(later), Ok(_), hold) => reply_later(id, later, reply, hold),
+        (_, Ok(out), None) => {
             let _ = reply.send(Reply::Ok { id, out });
         }
-        (_, Err(err)) => {
-            let _ = reply.send(Reply::Err { id, err });
+        (_, Err(err), None) => {
+            let _ = reply.send(Reply::err(id, err));
+        }
+        (_, result, Some(hold)) => {
+            let (tx, later) = oneshot::channel();
+            let _ = tx.send(result.map_err(protocol::Failure::from));
+            reply_later(id, later, reply, Some(hold));
         }
     }
     state.events.flush();
@@ -711,13 +721,23 @@ fn finish(
 /// waiting; a handler that drops its sender answers with an error.
 fn reply_later(
     id: u64,
-    later: oneshot::Receiver<Result<String, String>>,
+    later: oneshot::Receiver<Result<String, protocol::Failure>>,
     reply: oneshot::Sender<Reply>,
+    hold: Option<oneshot::Receiver<String>>,
 ) {
     tokio::spawn(async move {
-        let reply_msg = match later.await {
-            Ok(Ok(out)) => Reply::Ok { id, out },
-            Ok(Err(err)) => Reply::Err { id, err },
+        let answer = later.await;
+        // The rest of what the request's hooks printed follows its output.
+        let more = match hold {
+            Some(hold) => hold.await.unwrap_or_default(),
+            None => String::new(),
+        };
+        let reply_msg = match answer {
+            Ok(Ok(out)) => Reply::Ok {
+                id,
+                out: out + &more,
+            },
+            Ok(Err(failure)) => Reply::failed(id, failure),
             Err(_) => error_reply(id, "command ended without an answer"),
         };
         let _ = reply.send(reply_msg);
@@ -923,10 +943,7 @@ async fn refuse(mut lines: Framed<UnixStream, LinesCodec>, err: &str) {
 }
 
 fn error_reply(id: u64, err: &str) -> Reply {
-    Reply::Err {
-        id,
-        err: err.to_string(),
-    }
+    Reply::err(id, err)
 }
 
 async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyhow::Result<()> {
@@ -1064,7 +1081,7 @@ mod tests {
         finish(&mut state, 3, Err("spawn failed: boom".to_string()), reply);
         let got = reply_rx.try_recv().expect("answered now");
         assert!(
-            matches!(got, Reply::Err { id: 3, ref err } if err == "spawn failed: boom"),
+            matches!(got, Reply::Err { id: 3, ref err, .. } if err == "spawn failed: boom"),
             "{got:?}"
         );
         assert!(state.deferred_reply.is_none());
@@ -1101,7 +1118,7 @@ mod tests {
     async fn a_deferred_reply_is_sent_when_the_handler_answers() {
         let (answer, later) = oneshot::channel();
         let (reply, mut reply_rx) = oneshot::channel();
-        reply_later(7, later, reply);
+        reply_later(7, later, reply, None);
         tokio::task::yield_now().await;
         assert!(reply_rx.try_recv().is_err(), "nothing before the answer");
         let _ = answer.send(Ok("hi\n".to_string()));
@@ -1115,9 +1132,9 @@ mod tests {
         );
 
         // A handler that gives up still answers the request.
-        let (answer, later) = oneshot::channel::<Result<String, String>>();
+        let (answer, later) = oneshot::channel::<Result<String, protocol::Failure>>();
         let (reply, reply_rx) = oneshot::channel();
-        reply_later(8, later, reply);
+        reply_later(8, later, reply, None);
         drop(answer);
         let got = reply_rx.await.expect("a reply");
         assert!(matches!(got, Reply::Err { id: 8, .. }), "{got:?}");

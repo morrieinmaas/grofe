@@ -48,7 +48,7 @@ use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
 use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
-use crate::server::{State, dispatch, graphics};
+use crate::server::{State, dispatch, graphics, hooks};
 use crate::types::{ClientId, PaneId, Rect, SessionId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
@@ -352,6 +352,12 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     touch_session(&mut state.model, session);
     sync_attached(state);
     changed(state);
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
+    // As tmux 3.7b (recorded): an attach is a session change, then a resize.
+    hooks::client_session_changed(state, id);
+    hooks::client_resized(state, id);
     Ok(Accepted { id, output, exit })
 }
 
@@ -444,6 +450,10 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     state.registry.owners.insert(session, SizeOwner::new(id));
     touch_session(&mut state.model, session);
     sync_attached(state);
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
+    hooks::client_session_changed(state, id);
 }
 
 /// Session activity (tmux's `session_update_activity`): what makes it the
@@ -500,6 +510,7 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
             };
             c.pending_size = Some(clamp_size((cols, rows)));
             request_render(state, Instant::now());
+            hooks::client_resized(state, id);
         }
         Frame::Detach => detach(state, id),
         // Server-to-client kinds: ignored if a client sends them.

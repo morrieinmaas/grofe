@@ -11,8 +11,8 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
 use super::{
-    ConfigError, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES, Provenance, Resolved, Source,
-    Ty, closest, tmux_name, toml_type,
+    ConfigError, ConfigHook, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES, Provenance,
+    Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
@@ -89,6 +89,7 @@ struct Loader {
     lists: BTreeMap<&'static str, Vec<String>>,
     provenance: Provenance,
     keys: Vec<KeyBinding>,
+    hooks: BTreeMap<String, ConfigHook>,
     errors: Vec<ConfigError>,
     warnings: Vec<String>,
     /// The include chain being loaded, for cycle detection.
@@ -156,6 +157,7 @@ impl Loader {
             lists,
             provenance,
             keys: Vec::new(),
+            hooks: BTreeMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             stack: Vec::new(),
@@ -170,6 +172,7 @@ impl Loader {
             options: self.options,
             lists: self.lists,
             keys: self.keys,
+            hooks: self.hooks,
             provenance: self.provenance,
             warnings: self.warnings,
         })
@@ -244,6 +247,7 @@ impl Loader {
                 "requires" => {}
                 "source-file" => self.include_list(&f, line, v.get_ref(), &mut includes),
                 "keys" => self.key_tables(&f, line, v.get_ref()),
+                "hooks" => self.hooks(&f, line, v.get_ref()),
                 _ => self.option_entry(&f, "", k, v),
             }
         }
@@ -383,7 +387,7 @@ impl Loader {
                     .iter()
                     .chain(LIST_NAMES)
                     .map(|(t, _)| *t)
-                    .chain(["requires", "source-file", "keys"]);
+                    .chain(["requires", "source-file", "keys", "hooks"]);
                 if let Some(s) = closest(&full, known) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
@@ -444,6 +448,52 @@ impl Loader {
                     self.error(f.path, f.line(name.span().start), &key, msg);
                 }
             }
+        }
+    }
+
+    /// `[hooks]`: `<event> = "<command>"` (TC.5). The event must be one of
+    /// grofe's (`server::hooks::EVENTS`) and every command must parse, as
+    /// `set-hook -g` checks; a later layer replaces an earlier one's, and an
+    /// empty string removes it.
+    fn hooks(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table of hooks, found {}", v.type_str());
+            return self.error(f.path, line, "hooks", msg);
+        };
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let path = format!("hooks.{name}");
+            let line = f.line(k.span().start);
+            if crate::server::hooks::event(&name).is_none() {
+                let mut msg = "unknown hook".to_string();
+                let names = crate::server::hooks::EVENTS.iter().map(|e| e.name);
+                if let Some(s) = closest(&name, names) {
+                    msg.push_str(&format!(", did you mean {s}?"));
+                }
+                self.error(f.path, line, &path, msg);
+                continue;
+            }
+            let Some(command) = v.get_ref().as_str() else {
+                let msg = format!(
+                    "expected a command string, found {}",
+                    v.get_ref().type_str()
+                );
+                self.error(f.path, line, &path, msg);
+                continue;
+            };
+            let cmds = match crate::server::hooks::check_command(command) {
+                Ok(cmds) => cmds,
+                Err(msg) => {
+                    self.error(f.path, line, &path, msg);
+                    continue;
+                }
+            };
+            let hook = ConfigHook {
+                command: command.to_string(),
+                cmds,
+                source: f.source(line),
+            };
+            self.hooks.insert(name, hook);
         }
     }
 

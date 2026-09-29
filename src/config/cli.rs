@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest, list_tmux_name, load,
-    load_with_file, tmux_name, toml_type,
+    ConfigHook, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest, list_tmux_name,
+    load, load_with_file, tmux_name, toml_type,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
@@ -100,6 +100,13 @@ fn run(args: &[String]) -> Result<String, String> {
             out.push_str(&format!("  set by {}\n", b.source.describe(home)));
         }
     };
+    let hook = |out: &mut String, event: &str, h: &ConfigHook| {
+        let command = toml::Value::String(h.command.clone());
+        out.push_str(&format!("hooks.{event} = {command}\n"));
+        if explain {
+            out.push_str(&format!("  set by {}\n", h.source.describe(home)));
+        }
+    };
     match key {
         None => {
             for (k, _) in OPTION_NAMES {
@@ -111,6 +118,9 @@ fn run(args: &[String]) -> Result<String, String> {
             for b in sorted_keys(&r) {
                 binding(&mut out, b);
             }
+            for (event, h) in &r.hooks {
+                hook(&mut out, event, h);
+            }
         }
         Some(k) if tmux_name(k).is_some() => option(&mut out, k),
         Some(k) if list_tmux_name(k).is_some() => list(&mut out, k),
@@ -118,6 +128,14 @@ fn run(args: &[String]) -> Result<String, String> {
             let b = find_binding(&r, &k["keys.".len()..])
                 .ok_or_else(|| format!("show-config: no binding {k}"))?;
             binding(&mut out, b);
+        }
+        Some(k) if k.starts_with("hooks.") => {
+            let event = &k["hooks.".len()..];
+            let h = r
+                .hooks
+                .get(event)
+                .ok_or_else(|| format!("show-config: no hook {k}"))?;
+            hook(&mut out, event, h);
         }
         Some(k) => {
             let mut msg = format!("show-config: unknown key {k}");

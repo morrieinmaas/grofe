@@ -264,9 +264,56 @@ pub struct Request {
 /// no `id`/`ok` at all, hence the manual impls below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    Ok { id: u64, out: String },
-    Err { id: u64, err: String },
+    Ok {
+        id: u64,
+        out: String,
+    },
+    /// A failure. `out` and `status` (TC.5, D20) are left off the wire
+    /// when empty, so older replies still parse: `out` is what the command
+    /// printed before it failed (the CLI prints it on stdout), `status` the
+    /// exit status the CLI exits with (1 when absent).
+    Err {
+        id: u64,
+        err: String,
+        out: String,
+        status: Option<i32>,
+    },
     Event(Event),
+}
+
+/// A failed command's answer, as a deferred handler sends it: the error,
+/// and for `run-shell` the output and the command's own exit status.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Failure {
+    pub err: String,
+    pub out: String,
+    pub status: Option<i32>,
+}
+
+impl From<String> for Failure {
+    fn from(err: String) -> Failure {
+        Failure {
+            err,
+            ..Failure::default()
+        }
+    }
+}
+
+impl Reply {
+    /// The error reply for request `id`, with no output and status 1.
+    pub fn err(id: u64, err: impl Into<String>) -> Reply {
+        Reply::failed(id, Failure::from(err.into()))
+    }
+
+    /// The reply for request `id` that failed with `f`.
+    pub fn failed(id: u64, f: Failure) -> Reply {
+        Reply::Err {
+            id,
+            err: f.err,
+            out: f.out,
+            status: f.status,
+        }
+    }
 }
 
 impl Serialize for Reply {
@@ -282,11 +329,22 @@ impl Serialize for Reply {
                 map.serialize_entry("out", out)?;
                 map.end()
             }
-            Reply::Err { id, err } => {
-                let mut map = serializer.serialize_map(Some(3))?;
+            Reply::Err {
+                id,
+                err,
+                out,
+                status,
+            } => {
+                let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("id", id)?;
                 map.serialize_entry("ok", &false)?;
                 map.serialize_entry("err", err)?;
+                if !out.is_empty() {
+                    map.serialize_entry("out", out)?;
+                }
+                if let Some(status) = status {
+                    map.serialize_entry("status", status)?;
+                }
                 map.end()
             }
             Reply::Event(event) => event.serialize(serializer),
@@ -314,6 +372,10 @@ impl<'de> Deserialize<'de> for Reply {
         struct ErrPayload {
             id: u64,
             err: String,
+            #[serde(default)]
+            out: String,
+            #[serde(default)]
+            status: Option<i32>,
         }
         match value.get("ok").and_then(serde_json::Value::as_bool) {
             Some(true) => serde_json::from_value::<OkPayload>(value)
@@ -326,6 +388,8 @@ impl<'de> Deserialize<'de> for Reply {
                 .map(|p| Reply::Err {
                     id: p.id,
                     err: p.err,
+                    out: p.out,
+                    status: p.status,
                 })
                 .map_err(DeError::custom),
             None => Err(DeError::custom("reply has neither \"ok\" nor \"event\"")),
@@ -730,16 +794,33 @@ mod tests {
 
     #[test]
     fn reply_err_matches_spec_wire_shape() {
-        let reply = Reply::Err {
-            id: 8,
-            err: "can't find pane: %99".to_string(),
-        };
+        let reply = Reply::err(8, "can't find pane: %99");
         assert_eq!(
             serde_json::to_string(&reply).unwrap(),
             r#"{"id":8,"ok":false,"err":"can't find pane: %99"}"#
         );
         let line = r#"{"id":8,"ok":false,"err":"can't find pane: %99"}"#;
         assert_eq!(serde_json::from_str::<Reply>(line).unwrap(), reply);
+    }
+
+    /// D20: a failure may carry output and an exit status; both stay off
+    /// the wire when empty, and an older reader ignores them.
+    #[test]
+    fn reply_err_carries_output_and_status() {
+        let reply = Reply::failed(
+            9,
+            Failure {
+                err: String::new(),
+                out: "a\n'x' returned 3\n".to_string(),
+                status: Some(3),
+            },
+        );
+        let json = serde_json::to_string(&reply).unwrap();
+        assert_eq!(
+            json,
+            r#"{"id":9,"ok":false,"err":"","out":"a\n'x' returned 3\n","status":3}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
     }
 
     #[test]

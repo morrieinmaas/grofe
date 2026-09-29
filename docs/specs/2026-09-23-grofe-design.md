@@ -158,11 +158,14 @@ Server
   Setting an option to its current value is a no-op and emits no
   `option-changed` event, so hooks that re-set state on every tool call cost
   nothing downstream.
-- **Environment:** a session holds an environment captured from the client that
-  created it. On attach, variables named by `update-environment` (default
-  `SSH_AUTH_SOCK SSH_CONNECTION DISPLAY WAYLAND_DISPLAY TERM_PROGRAM
-  TERM_PROGRAM_VERSION`) are refreshed from the attaching client, as in tmux.
-  `TERM_PROGRAM` passes through so apps can detect the outer terminal; `TERM`
+- **Environment:** a session holds the variables `update-environment` names
+  (tmux 3.7b's default: `DISPLAY KRB5CCNAME MSYSTEM SSH_ASKPASS SSH_AUTH_SOCK
+  SSH_AGENT_PID SSH_CONNECTION WAYLAND_DISPLAY WINDOWID XAUTHORITY
+  XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE`), taken from the
+  client that created it and refreshed on attach and switch-client, as in tmux;
+  one the client lacks is marked removed and hides the global value. Everything
+  else a pane gets from the server comes from the server environment, so
+  `TERM_PROGRAM` is the outer terminal's when the server started from it; `TERM`
   itself stays the honest inner value (D7). Panes get a UTF-8 locale forced if none is set,
   plus `TERM`, `COLORTERM`, `GROFE` (socket path) and `GROFE_PANE` (`%N`).
   From M3.6 they also get `TMUX` and `TMUX_PANE` (D12), and on a server with
