@@ -609,7 +609,7 @@ impl cmd::FormatVars for NoVars {
 /// `capture` is set, or the error tmux words for a nonzero exit or a
 /// signal. stderr is discarded, as in tmux; without `capture` so is
 /// stdout, so a chatty bound command costs no server memory.
-async fn shell(
+pub(crate) async fn shell(
     script: &str,
     cwd: PathBuf,
     env: Vec<(String, String)>,
