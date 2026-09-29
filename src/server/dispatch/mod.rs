@@ -7,16 +7,29 @@
 //! commands) to [`options`]. M3's commands route the same way: key
 //! bindings and config (`bind-key`, `unbind-key`, `list-keys`,
 //! `source-file`, `reload`) to [`options`], `command-prompt` and
-//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. After
-//! every command it checks the lifecycle cascade: once the last session is
-//! gone the server exits.
+//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
+//! verbs route to one file per owning task: [`structure`] (TC.8),
+//! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
+//! (TC.10) and [`hooks`] (TC.5). After every command it runs the pending
+//! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
+//! last session is gone the server exits.
+//!
+//! Parsing goes through `compat` (the request's dialect decides between
+//! the native parser and the tmux front end), after grofe aliases are
+//! expanded ([`menu::expand_aliases`]). No M3.6 task edits this file.
 //!
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
 
+pub mod bindings;
+pub mod client;
+pub mod hooks;
+pub mod menu;
 pub mod options;
 pub mod pane;
+pub mod popup;
 pub mod session;
+pub mod structure;
 pub mod window;
 
 use std::path::{Path, PathBuf};
@@ -30,6 +43,7 @@ use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, clients, graphics, prompt};
 use crate::types::{PaneId, SessionId, WindowId};
+use crate::{compat, server};
 
 /// Runs a request's argv (`argv[0]` is the verb) against the server
 /// state, returning its stdout or its error message.
@@ -43,15 +57,17 @@ pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String
     if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
         return clients::attach_check(state, ctx, &argv[1..]);
     }
-    let cmds = cmd::parse_sequence(argv).map_err(|e| e.to_string())?;
+    let expanded = menu::expand_aliases(state, argv);
+    let cmds = compat::parse_request(ctx, expanded.as_deref().unwrap_or(argv))?;
     run_commands(state, ctx, cmds)
 }
 
 /// Runs one command whose argv is already split (a binding, the prompt,
 /// the mouse): a `;` argument in it is literal, never a separator.
 pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
-    run_commands(state, ctx, vec![cmd])
+    let expanded = menu::expand_aliases(state, argv);
+    let cmds = compat::parse_split(ctx, expanded.as_deref().unwrap_or(argv))?;
+    run_commands(state, ctx, cmds)
 }
 
 fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Result<String, String> {
@@ -71,6 +87,7 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
             }
         }
     }
+    server::hooks::run_pending(state);
     if state.model.closed() {
         state.exit = true;
     }
@@ -83,11 +100,11 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
 /// requests count as changing something.
 // ponytail: an explicit list. The upgrade path is a per-command "changed"
 // result from dispatch, so each handler says what it touched.
-pub fn read_only(argv: &[String]) -> bool {
+pub fn read_only(ctx: &ClientCtx, argv: &[String]) -> bool {
     if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
         return true;
     }
-    let Ok(cmds) = cmd::parse_sequence(argv) else {
+    let Ok(cmds) = compat::parse_request(ctx, argv) else {
         return false;
     };
     cmds.iter().all(|c| {
@@ -178,6 +195,36 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::CommandPrompt(c) => prompt::command_prompt(state, ctx, c),
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),
+
+        // M3.6: stubs until each owning task lands (the stub edit).
+        Command::JoinPane(c) => structure::join_pane(state, ctx, c),
+        Command::SwapPane(c) => structure::swap_pane(state, ctx, c),
+        Command::SwapWindow(c) => structure::swap_window(state, ctx, c),
+        Command::BreakPane(c) => structure::break_pane(state, ctx, c),
+        Command::ResizeWindow(c) => structure::resize_window(state, ctx, c),
+        Command::LastPane(c) => structure::last_pane(state, ctx, c),
+        Command::RotateWindow(c) => structure::rotate_window(state, ctx, c),
+        Command::MoveWindow(c) => structure::move_window(state, ctx, c),
+        Command::MovePane(c) => structure::move_pane(state, ctx, c),
+        Command::NextLayout(c) => structure::next_layout(state, ctx, c),
+        Command::RespawnWindow(c) => structure::respawn_window(state, ctx, c),
+        Command::RefreshClient(c) => client::refresh_client(state, ctx, c),
+        Command::ShowMessages(c) => client::show_messages(state, ctx, c),
+        Command::ChooseClient(c) => client::choose_client(state, ctx, c),
+        Command::SuspendClient(c) => client::suspend_client(state, ctx, c),
+        Command::FindWindow(c) => client::find_window(state, ctx, c),
+        Command::ChooseTree(c) => client::choose_tree(state, ctx, c),
+        Command::WaitFor(c) => client::wait_for(state, ctx, c),
+        Command::DisplayPopup(c) => popup::display_popup(state, ctx, c),
+        Command::NewPane(c) => popup::new_pane(state, ctx, c),
+        Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
+        Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
+        Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),
+        Command::If(c) => bindings::if_shell(state, ctx, c),
+        Command::SetHook(c) => hooks::set_hook(state, ctx, c),
+        Command::ShowHooks(c) => hooks::show_hooks(state, ctx, c),
+        Command::SetEnvironment(c) => hooks::set_environment(state, ctx, c),
+        Command::ShowEnvironment(c) => hooks::show_environment(state, ctx, c),
     }
 }
 
@@ -287,6 +334,7 @@ mod tests {
 
     #[test]
     fn only_listed_commands_are_read_only() {
+        let ctx = crate::server::test_ctx();
         for words in [
             &["list-sessions"][..],
             &["lsw"],
@@ -296,7 +344,7 @@ mod tests {
             &["capture-pane", "-p"],
             &[ATTACH_CHECK, "-t", "main"],
         ] {
-            assert!(read_only(&argv(words)), "{words:?}");
+            assert!(read_only(&ctx, &argv(words)), "{words:?}");
         }
         for words in [
             &["display-message", "hello"][..],
@@ -306,7 +354,7 @@ mod tests {
             &["no-such-command"],
             &[],
         ] {
-            assert!(!read_only(&argv(words)), "{words:?}");
+            assert!(!read_only(&ctx, &argv(words)), "{words:?}");
         }
     }
 }

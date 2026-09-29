@@ -546,6 +546,9 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
         return;
     };
     crate::server::prompt::client_gone(state, id);
+    crate::server::menu::client_gone(state, id);
+    crate::server::popup::client_gone(state, id);
+    crate::server::tree::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
     }
@@ -1501,38 +1504,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use tokio::sync::Notify;
-
     use super::*;
-    use crate::server::{StartOptions, events, pane};
 
     /// A server state with no sessions and one client, as the actor
     /// would hold it.
     fn state_with_client() -> (State, ClientId) {
-        let (pane_events, _) = mpsc::channel(1);
-        let mut state = State {
-            socket: PathBuf::from("/nonexistent/grofe-test.sock"),
-            options: StartOptions {
-                restore_on_start: false,
-                remain_on_exit: false,
-            },
-            model: Model::new(false),
-            inner_term: pane::inner_term(),
-            pane_events,
-            wake: Arc::new(Notify::new()),
-            events: events::Events::default(),
-            clients: BTreeMap::new(),
-            registry: Registry::default(),
-            prompts: Default::default(),
-            mouse: Default::default(),
-            passthrough: Default::default(),
-            graphics: Default::default(),
-            deferred_reply: None,
-            exit: false,
-            exit_when_empty: false,
-            connections: 0,
-            socket_id: None,
-        };
+        let mut state = crate::server::test_state();
         let id = ClientId(1);
         let (outbox, _) = Outbox::new();
         state.clients.insert(
@@ -1545,6 +1522,7 @@ mod tests {
                     pane: None,
                     env: Vec::new(),
                     client: Some(id),
+                    dialect: crate::protocol::Dialect::Grofe,
                 },
                 size: (80, 24),
                 pending_size: None,
@@ -1584,15 +1562,16 @@ mod tests {
         assert!(state.clients[&id].dirty);
     }
 
-    /// R1/R2 and item 3: the M3 hooks and overlays are registered in
-    /// priority order, and until their tasks land every hook passes every
-    /// kind of input on and every overlay leaves the screen alone.
+    /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
+    /// popup, chooser, mouse) are registered in priority order, and with
+    /// nothing open every hook passes every kind of input on and every
+    /// overlay leaves the screen alone.
     #[test]
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 2);
-        assert_eq!(state.registry.overlays.len(), 2);
+        assert_eq!(state.registry.input_hooks.len(), 5);
+        assert_eq!(state.registry.overlays.len(), 5);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),
@@ -1737,6 +1716,7 @@ mod tests {
             pane: None,
             env: Vec::new(),
             client: None,
+            dialect: crate::protocol::Dialect::Grofe,
         };
         let run = |state: &mut State, words: &[&str]| {
             let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();

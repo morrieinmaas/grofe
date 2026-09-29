@@ -59,6 +59,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
+    ("compat-identity", "compat-identity"),
 ];
 
 /// The TOML type an option takes.

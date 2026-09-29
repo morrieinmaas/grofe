@@ -1,5 +1,5 @@
 //! `Command`, per-command argument shapes, and `ParseError` for the M1,
-//! M2 and M3 command sets (spec §4.5). [`parse::parse`] turns argv into a `Command`;
+//! M2 and M3 command sets, plus M3.6's verbs as empty stubs (spec §4.5). [`parse::parse`] turns argv into a `Command`;
 //! `target`, `format` and `keys` hold the target grammar, `#{...}`
 //! expansion and the key-name table that a command's flags may reference.
 //!
@@ -370,6 +370,118 @@ pub struct SelectLayout {
     pub name: String,
 }
 
+// M3.6 verbs (the stub edit). Each struct is empty until TC.2 gives it the
+// fields its §4.5 row names; its handler lives in the owning task's
+// `server/dispatch` file and answers `not implemented: <verb>` until then.
+
+/// `join-pane` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct JoinPane {}
+
+/// `swap-pane` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SwapPane {}
+
+/// `swap-window` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SwapWindow {}
+
+/// `break-pane` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BreakPane {}
+
+/// `resize-window` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResizeWindow {}
+
+/// `last-pane` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LastPane {}
+
+/// `rotate-window` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RotateWindow {}
+
+/// `move-window` (TC.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MoveWindow {}
+
+/// `move-pane` (TC.8, M36-R6).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MovePane {}
+
+/// `next-layout` (TC.8, M36-R6).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NextLayout {}
+
+/// `refresh-client` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RefreshClient {}
+
+/// `show-messages` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShowMessages {}
+
+/// `choose-client` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChooseClient {}
+
+/// `suspend-client` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SuspendClient {}
+
+/// `find-window` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FindWindow {}
+
+/// `choose-tree` (TC.9).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChooseTree {}
+
+/// `wait-for` (TC.9, M36-R1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WaitFor {}
+
+/// `display-popup` (TC.6).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DisplayPopup {}
+
+/// `new-pane`, a floating pane at a caller's cell position (TC.6, M36-R1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewPane {}
+
+/// `display-menu` (TC.7).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DisplayMenu {}
+
+/// `display-panes` (TC.7).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DisplayPanes {}
+
+/// `confirm-before` (TC.7).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfirmBefore {}
+
+/// grofe's conditional, `if-shell` (TC.10): a format form and a shell form.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct If {}
+
+/// `set-hook` (TC.5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SetHook {}
+
+/// `show-hooks` (TC.5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShowHooks {}
+
+/// `set-environment` (TC.5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SetEnvironment {}
+
+/// `show-environment` (TC.5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShowEnvironment {}
+
 /// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -414,4 +526,36 @@ pub enum Command {
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
     SelectLayout(SelectLayout),
+    // M3.6 (the stub edit adds them; TC.2 parses their flags, the task
+    // named on each struct implements it). No `list-commands`: it is
+    // front-end only (M36-R1).
+    JoinPane(JoinPane),
+    SwapPane(SwapPane),
+    SwapWindow(SwapWindow),
+    BreakPane(BreakPane),
+    ResizeWindow(ResizeWindow),
+    LastPane(LastPane),
+    RotateWindow(RotateWindow),
+    MoveWindow(MoveWindow),
+    MovePane(MovePane),
+    NextLayout(NextLayout),
+    /// `respawn-window` (TC.8): `respawn-pane`'s shape with a window target.
+    RespawnWindow(RespawnPane),
+    RefreshClient(RefreshClient),
+    ShowMessages(ShowMessages),
+    ChooseClient(ChooseClient),
+    SuspendClient(SuspendClient),
+    FindWindow(FindWindow),
+    ChooseTree(ChooseTree),
+    WaitFor(WaitFor),
+    DisplayPopup(DisplayPopup),
+    NewPane(NewPane),
+    DisplayMenu(DisplayMenu),
+    DisplayPanes(DisplayPanes),
+    ConfirmBefore(ConfirmBefore),
+    If(If),
+    SetHook(SetHook),
+    ShowHooks(ShowHooks),
+    SetEnvironment(SetEnvironment),
+    ShowEnvironment(ShowEnvironment),
 }

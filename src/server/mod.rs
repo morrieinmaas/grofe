@@ -14,15 +14,20 @@ pub mod clients;
 pub mod dispatch;
 pub mod events;
 pub mod graphics;
+pub mod hooks;
 pub mod input;
 pub mod layout;
+pub mod menu;
 pub mod model;
 pub mod mouse;
 pub mod pane;
 pub mod passthrough;
+pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod sources;
 pub mod status;
+pub mod tree;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -116,6 +121,13 @@ impl StartOptions {
     }
 }
 
+/// Work for the actor, sent from a task off it (a status source's result,
+/// TC.4; a popup's pty, TC.6; a shell condition's answer, TC.10). It runs
+/// between messages with the whole state, then the events it caused are
+/// flushed; what it changed on screen it marks itself
+/// (`clients::mark_dirty`, `clients::changed`).
+pub type Job = Box<dyn FnOnce(&mut State) + Send>;
+
 /// Everything the actor owns.
 pub struct State {
     /// This server's socket; panes get it as `GROFE`.
@@ -144,6 +156,21 @@ pub struct State {
     pub passthrough: passthrough::Passthrough,
     /// Kitty graphics: id remap and image cache (T3.8).
     pub graphics: graphics::Graphics,
+    /// Status sources (TC.4).
+    pub sources: sources::Sources,
+    /// Event hooks and the server environment (TC.5).
+    pub hooks: hooks::Hooks,
+    /// Open popups (TC.6).
+    pub popups: popup::Popups,
+    /// Open menus and the aliases (TC.7).
+    pub menus: menu::Menus,
+    /// Open choosers (TC.9).
+    pub trees: tree::Trees,
+    /// Sends a [`Job`] to the actor; any task may hold a clone. The actor
+    /// keeps this one, so the channel never closes while it runs.
+    // ponytail: unbounded; a job is small and each producer (one source
+    // run in flight, one popup pty) is bounded by its own design.
+    pub jobs: mpsc::UnboundedSender<Job>,
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
     pub deferred_reply: Option<oneshot::Receiver<Result<String, String>>>,
@@ -192,15 +219,23 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
     state.registry.input_hooks.push(hook);
 }
 
-/// The server's own overlays and input hooks, every M3 one (T3.0), in
-/// priority order, highest first. The rule: input hooks run in
-/// registration order and the first to answer `Some` wins; overlays draw in
-/// reverse order, so the highest-priority one ends on top. A prompt that is
-/// open therefore sees keys before the mouse and draws over the scrollback
-/// view. New ones (popups, menus) are placed by that rule.
+/// The server's own overlays and input hooks, every M3 (T3.0) and M3.6
+/// (stub edit) one, in priority order, highest first. The rule: input
+/// hooks run in registration order and the first to answer `Some` wins;
+/// overlays draw in reverse order, so the highest-priority one ends on top.
+/// So an open prompt sees keys first and draws over everything; a menu
+/// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
+/// command opens takes the keys and draws on top of it; then a chooser
+/// (TC.9) over its pane; then the mouse and the scrollback view.
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
+    register_input_hook(state, Arc::new(menu::MenuHook));
+    register_overlay(state, Arc::new(menu::MenuOverlay));
+    register_input_hook(state, Arc::new(popup::PopupHook));
+    register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_input_hook(state, Arc::new(tree::TreeHook));
+    register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
 }
@@ -244,6 +279,13 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
+    hooks::run_pending(state);
+    state.events.flush();
+}
+
+/// Runs one [`Job`] on the actor, then sends the events it caused.
+fn run_job(state: &mut State, job: Job) {
+    job(state);
     state.events.flush();
 }
 
@@ -381,6 +423,7 @@ async fn serve(
     eprintln!("grofe server listening on {}", socket.display());
 
     let (pane_tx, pane_rx) = mpsc::channel(256);
+    let (jobs_tx, jobs_rx) = mpsc::unbounded_channel();
     let mut state = State {
         socket,
         model: model::Model::new(options.remain_on_exit),
@@ -395,6 +438,12 @@ async fn serve(
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
+        sources: sources::Sources::default(),
+        hooks: hooks::Hooks::default(),
+        popups: popup::Popups::default(),
+        menus: menu::Menus::default(),
+        trees: tree::Trees::default(),
+        jobs: jobs_tx,
         deferred_reply: None,
         exit: false,
         exit_when_empty,
@@ -412,11 +461,12 @@ async fn serve(
     };
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
+    crate::compat::server_started(&mut state);
     signal_ready(&mut ready, "ok");
 
     // The actor owns the listener (dropped when it returns: no more
     // accepts) and `conns`, the last `alive` sender outside connections.
-    let mut state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
+    let mut state = actor(state, listener, conns, msg_rx, pane_rx, jobs_rx, signals).await;
     state.remove_socket();
     clients::shutdown(&mut state, "server exited");
     // Hang up the panes and let go of the subscribers' queues before the
@@ -466,6 +516,7 @@ async fn actor(
     conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
+    mut jobs: mpsc::UnboundedReceiver<Job>,
     (mut sigterm, mut sigint, mut sighup): (
         tokio::signal::unix::Signal,
         tokio::signal::unix::Signal,
@@ -486,6 +537,7 @@ async fn actor(
                 None => break,
             },
             Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            Some(job) = jobs.recv() => run_job(&mut state, job),
             accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
                 Ok((stream, _)) => {
                     state.connections += 1;
@@ -591,7 +643,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
-            let read_only = dispatch::read_only(&req.argv);
+            let read_only = dispatch::read_only(&ctx, &req.argv);
             let result = dispatch(state, &ctx, &req.argv);
             finish(state, req.id, result, reply);
             if !read_only {
@@ -874,39 +926,89 @@ async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyh
     Ok(())
 }
 
+/// A server state with nothing in it, as the actor starts, on a socket
+/// path nothing listens on, for unit tests.
+#[cfg(test)]
+pub(crate) fn test_state() -> State {
+    test_state_at(PathBuf::from("/nonexistent/grofe-test.sock")).0
+}
+
+/// A request context from the CLI, run in `/`, for unit tests.
+#[cfg(test)]
+pub(crate) fn test_ctx() -> ClientCtx {
+    ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: protocol::Dialect::Grofe,
+    }
+}
+
+/// [`test_state`] on `socket`, with the receiving end of its job channel.
+#[cfg(test)]
+fn test_state_at(socket: PathBuf) -> (State, mpsc::UnboundedReceiver<Job>) {
+    let (pane_events, _) = mpsc::channel(1);
+    let (jobs, jobs_rx) = mpsc::unbounded_channel();
+    let socket_id = fs::symlink_metadata(&socket)
+        .ok()
+        .map(|m| (m.dev(), m.ino()));
+    let state = State {
+        socket,
+        options: StartOptions {
+            restore_on_start: false,
+            remain_on_exit: false,
+        },
+        model: model::Model::new(false),
+        inner_term: pane::inner_term(),
+        pane_events,
+        wake: Arc::new(Notify::new()),
+        events: events::Events::default(),
+        clients: BTreeMap::new(),
+        registry: clients::Registry::default(),
+        prompts: prompt::Prompts::default(),
+        mouse: mouse::MouseState::default(),
+        passthrough: passthrough::Passthrough::default(),
+        graphics: graphics::Graphics::default(),
+        sources: sources::Sources::default(),
+        hooks: hooks::Hooks::default(),
+        popups: popup::Popups::default(),
+        menus: menu::Menus::default(),
+        trees: tree::Trees::default(),
+        jobs,
+        deferred_reply: None,
+        exit: false,
+        exit_when_empty: false,
+        connections: 0,
+        socket_id,
+    };
+    (state, jobs_rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A server state with nothing in it, as the actor starts, on `socket`.
     fn state_at(socket: PathBuf) -> State {
-        let (pane_events, _) = mpsc::channel(1);
-        let socket_id = fs::symlink_metadata(&socket)
-            .ok()
-            .map(|m| (m.dev(), m.ino()));
-        State {
-            socket,
-            options: StartOptions {
-                restore_on_start: false,
-                remain_on_exit: false,
-            },
-            model: model::Model::new(false),
-            inner_term: pane::inner_term(),
-            pane_events,
-            wake: Arc::new(Notify::new()),
-            events: events::Events::default(),
-            clients: BTreeMap::new(),
-            registry: clients::Registry::default(),
-            prompts: prompt::Prompts::default(),
-            mouse: mouse::MouseState::default(),
-            passthrough: passthrough::Passthrough::default(),
-            graphics: graphics::Graphics::default(),
-            deferred_reply: None,
-            exit: false,
-            exit_when_empty: false,
-            connections: 0,
-            socket_id,
-        }
+        test_state_at(socket).0
+    }
+
+    /// The stub edit's job channel: a job sent from another thread runs
+    /// on the actor with the whole state.
+    #[test]
+    fn a_job_from_another_thread_runs_with_the_state() {
+        let (mut state, mut jobs) = test_state_at(PathBuf::from("/nonexistent/grofe-job.sock"));
+        let tx = state.jobs.clone();
+        std::thread::spawn(move || {
+            let job: Job = Box::new(|state: &mut State| state.exit = true);
+            tx.send(job).map_err(|_| "closed").expect("send");
+        })
+        .join()
+        .expect("sender thread");
+        let job = jobs.try_recv().expect("a job");
+        assert!(!state.exit);
+        run_job(&mut state, job);
+        assert!(state.exit);
     }
 
     /// Fix round 1: a handler that deferred its answer and then failed is

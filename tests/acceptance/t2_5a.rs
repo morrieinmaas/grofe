@@ -20,7 +20,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::{TestServer, wait_until};
-use grofe::protocol::{Caps, ClientCtx, Frame, FrameCodec, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{
+    Caps, ClientCtx, Dialect, Frame, FrameCodec, Hello, Reply, Request, encode_hello,
+};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -332,6 +334,7 @@ fn raw_attach(
             pane: None,
             env: Vec::new(),
             client: None,
+            dialect: Dialect::Grofe,
         },
         cols,
         rows,

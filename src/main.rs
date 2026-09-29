@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use grofe::client;
 use grofe::paths::{self, Env};
-use grofe::protocol::{ATTACH_CHECK, ClientCtx, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -42,6 +42,11 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
+    // Run as `tmux`: the front end has the whole argv (spec D1).
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    if grofe::compat::invoked_as_tmux(&argv0) {
+        return grofe::compat::tmux::cli(&args);
+    }
     let (globals, rest) = match parse_globals(&args) {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -438,6 +443,7 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
         client: None,
+        dialect: Dialect::Grofe,
     };
     let opts = client::AttachOptions {
         target: client::raw_target(&argv[1..]),
@@ -660,6 +666,7 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
         client: None,
+        dialect: Dialect::Grofe,
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }

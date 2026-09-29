@@ -257,6 +257,14 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "bottom",
     },
+    // M3.6 (the stub edit): the server's identity override (spec D12).
+    // TC.1 reads it once at start; until then nothing does.
+    Builtin {
+        name: "compat-identity",
+        kind: Kind::Choice(&["auto", "tmux", "grofe"]),
+        scope: OptionScope::Global,
+        default: "auto",
+    },
 ];
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
@@ -718,7 +726,8 @@ fn join_errors(errors: &[config::ConfigError]) -> String {
 /// the config set before (R10): runtime values and bindings stay. Options
 /// change through the store as `set` changes them, emitting
 /// `option-changed`; the caller's `clients::changed` then re-syncs mouse
-/// modes and repaints.
+/// modes and repaints. The config's sources (TC.4), hooks (TC.5) and
+/// aliases (TC.7) are applied last, by their own modules.
 fn apply_config(state: &mut State, resolved: &Resolved) {
     let model = &mut state.model;
     let events = &mut state.events;
@@ -753,6 +762,9 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     if !resolved.keys.is_empty() || tables.is_configured() {
         *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
     }
+    crate::server::sources::configure(state, resolved);
+    crate::server::hooks::configure(state, resolved);
+    crate::server::menu::configure(state, resolved);
 }
 
 /// Sets a global option, emitting `option-changed` on a change. The

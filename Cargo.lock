@@ -386,6 +386,7 @@ dependencies = [
  "insta",
  "nix 0.31.3",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
