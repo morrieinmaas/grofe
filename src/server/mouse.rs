@@ -141,7 +141,10 @@ pub struct MouseTarget {
     pub target: String,
     /// `Some` on the status line: the range under the pointer, if any.
     pub range: Option<Option<RangeKind>>,
-    /// The 0-based cell inside `pane`, when the pointer is in it.
+    /// `mouse_x` and `mouse_y`: the 0-based cell inside `pane` when the
+    /// pointer is in it; on the status line the client column and the
+    /// status row's index (recorded on tmux 3.7b: `5,0`, `5,1` with two
+    /// rows, top or bottom).
     pub pane_cell: Option<(u16, u16)>,
 }
 
@@ -313,13 +316,14 @@ fn border_pane(panes: &[(PaneId, Rect)], (x, y): (u32, u32)) -> Option<PaneId> {
 enum Hit {
     Pane(PaneId, u16, u16),
     Border(PaneId),
-    Status(Option<RangeKind>),
+    /// The status row's index among the status rows, and the range.
+    Status(u16, Option<RangeKind>),
     Nothing,
 }
 
 fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
-    if let Some(range) = clients::status_at(state, client, cell.0, cell.1) {
-        return Hit::Status(range);
+    if let Some((line, range)) = clients::status_at(state, client, cell.0, cell.1) {
+        return Hit::Status(line, range);
     }
     let (Some(cx), Some(w)) = (
         clients::overlay_ctx(state, client),
@@ -344,10 +348,10 @@ fn place(hit: &Hit) -> Option<MousePlace> {
     Some(match hit {
         Hit::Pane(..) => MousePlace::Pane,
         Hit::Border(_) => MousePlace::Border,
-        Hit::Status(None) => MousePlace::StatusDefault,
-        Hit::Status(Some(RangeKind::Left)) => MousePlace::StatusLeft,
-        Hit::Status(Some(RangeKind::Right)) => MousePlace::StatusRight,
-        Hit::Status(Some(_)) => MousePlace::Status,
+        Hit::Status(_, None) => MousePlace::StatusDefault,
+        Hit::Status(_, Some(RangeKind::Left)) => MousePlace::StatusLeft,
+        Hit::Status(_, Some(RangeKind::Right)) => MousePlace::StatusRight,
+        Hit::Status(_, Some(_)) => MousePlace::Status,
         Hit::Nothing => return None,
     })
 }
@@ -367,7 +371,7 @@ fn target(state: &State, client: ClientId, cell: (u16, u16), hit: &Hit) -> Optio
     let (pane, target, range, pane_cell) = match hit {
         Hit::Pane(p, x, y) => (*p, p.to_string(), None, Some((*x, *y))),
         Hit::Border(p) => (*p, p.to_string(), None, None),
-        Hit::Status(range) => {
+        Hit::Status(line, range) => {
             let (pane, target) = match range {
                 Some(RangeKind::Window(index)) => state
                     .model
@@ -382,7 +386,7 @@ fn target(state: &State, client: ClientId, cell: (u16, u16), hit: &Hit) -> Optio
                 _ => None,
             }
             .or_else(|| window_target(current))?;
-            (pane, target, Some(range.clone()), None)
+            (pane, target, Some(range.clone()), Some((cell.0, *line)))
         }
         Hit::Nothing => return None,
     };
@@ -796,7 +800,7 @@ pub fn resolve_targets(state: &State, argv: &[String]) -> Vec<String> {
 /// A format variable the mouse answers: while a mouse key's commands run,
 /// `mouse_status_range` (tmux's words for the range clicked, empty off the
 /// status line or outside a range), `mouse_pane`, and `mouse_x`/`mouse_y`
-/// (the cell inside the pane, when the pointer is in one); and always
+/// ([`MouseTarget::pane_cell`]); and always
 /// `pane_in_mode` for `pane` (1 while its scrollback view is open). `None`
 /// lets the caller's own variables answer.
 pub fn format_var(state: &State, pane: Option<PaneId>, name: &str) -> Option<String> {

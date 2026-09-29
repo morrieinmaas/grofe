@@ -107,6 +107,13 @@ pub enum MousePlace {
     StatusLeft,
     StatusRight,
     StatusDefault,
+    /// tmux 3.7's pane scrollbar parts and pane border controls (`Control0`
+    /// to `Control9`): the names parse and bind, grofe draws neither, so
+    /// they never fire.
+    ScrollbarUp,
+    ScrollbarSlider,
+    ScrollbarDown,
+    Control(u8),
 }
 
 const MOUSE_ACTIONS: &[(&str, MouseAction)] = &[
@@ -129,6 +136,9 @@ const MOUSE_PLACES: &[(&str, MousePlace)] = &[
     ("StatusLeft", MousePlace::StatusLeft),
     ("StatusRight", MousePlace::StatusRight),
     ("StatusDefault", MousePlace::StatusDefault),
+    ("ScrollbarUp", MousePlace::ScrollbarUp),
+    ("ScrollbarSlider", MousePlace::ScrollbarSlider),
+    ("ScrollbarDown", MousePlace::ScrollbarDown),
 ];
 
 impl MouseKey {
@@ -150,9 +160,17 @@ impl MouseKey {
             (1..=11).contains(&n).then_some(n)?
         };
         let place = &rest[digits..];
-        let &(_, place) = MOUSE_PLACES
-            .iter()
-            .find(|(p, _)| p.eq_ignore_ascii_case(place))?;
+        let place = match place.strip_prefix("control") {
+            Some(n) if n.len() == 1 && n.as_bytes()[0].is_ascii_digit() => {
+                MousePlace::Control(n.as_bytes()[0] - b'0')
+            }
+            _ => {
+                MOUSE_PLACES
+                    .iter()
+                    .find(|(p, _)| p.eq_ignore_ascii_case(place))?
+                    .1
+            }
+        };
         Some(MouseKey {
             action: *action,
             button,
@@ -167,10 +185,14 @@ impl fmt::Display for MouseKey {
             .iter()
             .find(|(_, a)| *a == self.action)
             .map_or("", |(w, _)| w);
-        let place = MOUSE_PLACES
-            .iter()
-            .find(|(_, p)| *p == self.place)
-            .map_or("", |(w, _)| w);
+        let place = match self.place {
+            MousePlace::Control(n) => format!("Control{n}"),
+            other => MOUSE_PLACES
+                .iter()
+                .find(|(_, p)| *p == other)
+                .map_or("", |(w, _)| w)
+                .to_string(),
+        };
         if self.button == 0 {
             write!(f, "{action}{place}")
         } else {
@@ -3187,6 +3209,14 @@ mod tests {
             ("SecondClick1Pane", "SecondClick1Pane"),
             ("M-MouseDown3Pane", "M-MouseDown3Pane"),
             ("C-MouseDown1Status", "C-MouseDown1Status"),
+            // tmux 3.7's names, recorded binding on a private server.
+            ("MouseDown1ScrollbarUp", "MouseDown1ScrollbarUp"),
+            ("MouseDrag1ScrollbarSlider", "MouseDrag1ScrollbarSlider"),
+            ("MouseDown1ScrollbarDown", "MouseDown1ScrollbarDown"),
+            ("WheelUpScrollbarUp", "WheelUpScrollbarUp"),
+            ("MouseDown1Control0", "MouseDown1Control0"),
+            ("mousedown1control9", "MouseDown1Control9"),
+            ("MouseUp3Control5", "MouseUp3Control5"),
         ] {
             let key = parse_key(name).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(matches!(key.code, KeyCode::Mouse(_)), "{name}");
@@ -3207,6 +3237,9 @@ mod tests {
             "MouseDown12Pane",
             "WheelUp1Pane",
             "MouseDown1Window",
+            // tmux 3.7b: `unknown key: MouseDown1Control10`.
+            "MouseDown1Control10",
+            "MouseDown1Control",
         ] {
             assert_eq!(parse_key(bad), Err(format!("bad key: {bad}")), "{bad}");
         }

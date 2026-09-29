@@ -346,7 +346,7 @@ fn owner_status_binding(srv: &TestServer) {
             "#{m:*net*,#{mouse_status_range}}",
             // As the owner's `display-popup "net-popup.sh #{mouse_status_range}"`:
             // a command's formats see the range (here run-shell's).
-            "set -g @hit net ; run-shell -b 'printf %s #{mouse_status_range} > \"$GROFE_TC10_LOG\"'",
+            "set -g @hit net ; run-shell -b 'printf %s #{mouse_status_range}:#{mouse_x},#{mouse_y} > \"$GROFE_TC10_LOG\"'",
             "switch-client -t =",
         ],
     );
@@ -355,6 +355,14 @@ fn owner_status_binding(srv: &TestServer) {
 /// Where the owner-shaped binding's shell writes the range it saw.
 fn log_path(srv: &TestServer) -> std::path::PathBuf {
     srv.log_path().with_file_name("tc10-range.log")
+}
+
+/// Waits until the owner-shaped binding's shell has written `want`.
+fn wait_log(srv: &TestServer, want: &str) {
+    let log = log_path(srv);
+    let read = || std::fs::read_to_string(&log).unwrap_or_default();
+    let got = wait_until(|| read() == want, WAIT);
+    assert!(got.is_ok(), "want {want:?}, got {:?}", read());
 }
 
 /// Cases 3 and 7: `MouseDown1Status` conditioned on the range fires its
@@ -374,12 +382,9 @@ fn a_status_click_dispatches_on_its_range() {
     let net = status_col(&mut a, 23, "NET");
     click_alone(&mut a, 1, net + 1, 24);
     wait_opt(&srv, "@hit", "net");
-    let log = log_path(&srv);
-    let shell = wait_until(
-        || std::fs::read_to_string(&log).unwrap_or_default() == "net",
-        WAIT,
-    );
-    assert!(shell.is_ok(), "{:?}", std::fs::read_to_string(&log));
+    // `mouse_x` is the client column and `mouse_y` the status row, as
+    // tmux 3.7b gives them (recorded: `5,0`).
+    wait_log(&srv, &format!("net:{net},0"));
     assert_eq!(var(&srv, "main", "#{window_index}"), "1", "cpu switched");
 
     // Window 2's entry in the list: the else branch switches to it.
@@ -422,6 +427,7 @@ fn clicks_map_with_the_status_line_on_top() {
     let net = status_col(&mut a, 0, "NET");
     click_alone(&mut a, 1, net, 1);
     wait_opt(&srv, "@hit", "net");
+    wait_log(&srv, &format!("net:{},0", net - 1));
     // Row 2 is the window's first row: the left pane.
     click_alone(&mut a, 1, 3, 2);
     let focused = wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
@@ -723,4 +729,41 @@ fn a_mouse_menu_opens_at_the_pointer() {
     );
     a.send("t");
     wait_opt(&srv, "@m", "two");
+}
+
+/// Fix round 1: what the client types after a binding whose shell
+/// condition is still running waits for the branch, in order, as tmux's
+/// per-client queue does (recorded on tmux 3.7b: `Xab`); a failing branch
+/// shows its error on the status line.
+#[test]
+fn keys_after_a_shell_condition_wait_for_its_branch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("log");
+    let srv = start(&format!("stty raw -echo; exec cat > '{}'", log.display()));
+    bind(
+        &srv,
+        &[
+            "-n",
+            "C-h",
+            "if-shell",
+            "sleep 0.5",
+            "send-keys X",
+            "send-keys Y",
+        ],
+    );
+    bind(&srv, &["-n", "C-g", "if-shell", "true", "splat-window"]);
+    let mut a = attach(&srv, 80, 24);
+    std::thread::sleep(Duration::from_millis(300));
+    a.send(b"\x08ab\r");
+    let read = || std::fs::read(&log).unwrap_or_default();
+    let got = wait_until(|| read().ends_with(b"\r"), WAIT);
+    assert!(got.is_ok(), "{:?}", String::from_utf8_lossy(&read()));
+    assert_eq!(read(), b"Xab\r");
+
+    a.send(b"\x07");
+    a.wait_until("the branch's error", WAIT, |t| {
+        t.lines()
+            .last()
+            .is_some_and(|l| l.contains("unknown command: splat-window"))
+    });
 }

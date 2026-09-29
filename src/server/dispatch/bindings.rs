@@ -9,8 +9,10 @@
 //!   actor, through `run-shell`'s spawn (`prompt::shell`); it is true when
 //!   the shell exits 0. The branch runs on the actor once the shell is
 //!   done (a [`Job`]). Without `-b` the request's reply waits for the
-//!   branch, as tmux's CLI waits; with `-b`, or from a binding, nothing
-//!   waits, so no client stalls behind the shell.
+//!   branch, as tmux's CLI waits, and from a binding that client's later
+//!   input waits for it too, in order, as tmux's per-client queue does;
+//!   with `-b` nothing waits. No other client stalls behind the shell.
+//!   A failing branch's error shows on a binding's client's status line.
 //!
 //! The branches are stored command strings, split when they run and run
 //! in the request's dialect with the request's context, as tmux runs them
@@ -84,6 +86,14 @@ fn shell_form(
     let socket = state.socket.clone();
     let jobs = state.jobs.clone();
     let event = state.mouse.current().cloned();
+    // A binding's client types on behind the condition, as tmux's
+    // per-client queue waits: its input is held until the branch has run.
+    let held = ctx
+        .client
+        .filter(|id| !background && state.clients.contains_key(id) && !hooks::in_hook(state));
+    if let Some(id) = held {
+        clients::hold_input(state, id);
+    }
     let ctx = ctx.clone();
     tokio::spawn(async move {
         let yes = prompt::shell(&script, cwd, env, socket, false)
@@ -97,6 +107,13 @@ fn shell_form(
             let inner = state.deferred_reply.take();
             state.events.flush();
             clients::changed(state);
+            // As tmux shows a binding's error: on the client's status line.
+            if let (Err(e), Some(id)) = (&result, ctx.client) {
+                clients::show_message(state, id, e.trim_end());
+            }
+            if let Some(id) = held {
+                clients::release_input(state, id);
+            }
             match (reply, inner) {
                 // A branch that answers later (`run-shell`) answers for us.
                 (Some(reply), Some(inner)) if result.is_ok() => {
@@ -108,11 +125,7 @@ fn shell_form(
                 (Some(reply), _) => {
                     let _ = reply.send(result.map_err(Failure::from));
                 }
-                (None, _) => {
-                    if let (Err(e), Some(id)) = (result, ctx.client) {
-                        clients::show_message(state, id, e.trim_end());
-                    }
-                }
+                (None, _) => {}
             }
         });
         let _ = jobs.send(job).await;
