@@ -254,13 +254,13 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         Some(command) => command_argv(Some(command)),
         None => p.resume.clone(),
     };
+    let session = model.windows[&p.window].session;
     let spec = PaneSpawn {
         id: pane,
+        session,
         argv: argv.clone(),
         cwd: usable_cwd(p.cwd.clone()),
-        env: model.sessions[&model.windows[&p.window].session]
-            .env
-            .clone(),
+        env: super::pane_env(state, session, pane, model.sessions[&session].env.clone()),
         cols: p.cols,
         rows: p.rows,
         history_limit: model.history_limit(model.windows[&p.window].session),

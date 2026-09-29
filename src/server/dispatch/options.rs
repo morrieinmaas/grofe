@@ -257,6 +257,14 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "bottom",
     },
+    // M3.6 (the stub edit): the server's identity override (spec D12).
+    // TC.1 reads it once at start; until then nothing does.
+    Builtin {
+        name: "compat-identity",
+        kind: Kind::Choice(&["auto", "tmux", "grofe"]),
+        scope: OptionScope::Global,
+        default: "auto",
+    },
 ];
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
@@ -718,7 +726,8 @@ fn join_errors(errors: &[config::ConfigError]) -> String {
 /// the config set before (R10): runtime values and bindings stay. Options
 /// change through the store as `set` changes them, emitting
 /// `option-changed`; the caller's `clients::changed` then re-syncs mouse
-/// modes and repaints.
+/// modes and repaints. The config's sources (TC.4), hooks (TC.5) and
+/// aliases (TC.7) are applied last, by their own modules.
 fn apply_config(state: &mut State, resolved: &Resolved) {
     let model = &mut state.model;
     let events = &mut state.events;
@@ -753,6 +762,9 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     if !resolved.keys.is_empty() || tables.is_configured() {
         *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
     }
+    crate::server::sources::configure(state, resolved);
+    crate::server::hooks::configure(state, resolved);
+    crate::server::menu::configure(state, resolved);
 }
 
 /// Sets a global option, emitting `option-changed` on a change. The
@@ -772,8 +784,9 @@ fn set_global(model: &mut Model, events: &mut Events, name: &str, value: &str) {
 /// several are split at `;` arguments as the CLI splits argv (tmux 3.7b:
 /// `bind y split-window '\;' select-pane -L` binds both). Each command
 /// must parse, as tmux checks at bind time; no command at all changes
-/// nothing, as in tmux.
-pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
+/// nothing, as in tmux. The binding keeps the request's dialect (spec
+/// §4.5), so a key bound through the tmux front end runs through it.
+pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String, String> {
     let key = parse_key(&c.key).map_err(|_| format!("unknown key: {}", c.key))?;
     let cmds = match c.command.as_slice() {
         [one] => split_command_string(one).map_err(|e| e.to_string())?,
@@ -784,10 +797,11 @@ pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
         return Ok(String::new());
     }
     for argv in &cmds {
-        crate::cmd::parse(argv).map_err(|e| e.to_string())?;
+        crate::compat::parse_split(ctx, argv)?;
     }
     let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
     b.desc = c.note;
+    b.dialect = ctx.dialect;
     state.registry.key_tables.insert(&c.table, key, b);
     Ok(String::new())
 }
@@ -1092,7 +1106,33 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
+
+    /// The stub edit: `bind-key` checks the command in the request's
+    /// dialect and keeps that dialect on the binding.
+    #[test]
+    fn bind_key_keeps_the_requests_dialect() {
+        let mut state = crate::server::test_state();
+        let bind = |key: &str| BindKey {
+            table: "root".to_string(),
+            repeat: false,
+            note: None,
+            key: key.to_string(),
+            command: vec!["list-sessions".to_string()],
+        };
+        let grofe = crate::server::test_ctx();
+        bind_key(&mut state, &grofe, bind("F5")).expect("native bind");
+        let f5 = parse_key("F5").expect("key");
+        let b = state.registry.key_tables.exact("root", &f5).expect("bound");
+        assert_eq!(b.dialect, Dialect::Grofe);
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..grofe
+        };
+        let err = bind_key(&mut state, &tmux, bind("F6")).unwrap_err();
+        assert!(err.contains("tmux front end"), "{err}");
+    }
 
     #[test]
     fn same_value_set_is_a_no_op() {

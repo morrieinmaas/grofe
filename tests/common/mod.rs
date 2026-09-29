@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use grofe::event::Event;
 use grofe::paths::{self, Env};
-use grofe::protocol::{ClientCtx, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::server::{START_MARKER, StartOptions};
 use tempfile::TempDir;
 
@@ -206,6 +206,7 @@ impl TestServer {
             pane: None,
             env: vec![("HOME".to_string(), self.home.display().to_string())],
             client: None,
+            dialect: Dialect::Grofe,
         }
     }
 

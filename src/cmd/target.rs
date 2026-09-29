@@ -507,6 +507,7 @@ mod tests {
             pane,
             env: Vec::new(),
             client: None,
+            dialect: crate::protocol::Dialect::Grofe,
         }
     }
 

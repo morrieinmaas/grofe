@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use grofe::client;
 use grofe::paths::{self, Env};
-use grofe::protocol::{ATTACH_CHECK, ClientCtx, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -42,13 +42,31 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let (globals, rest) = match parse_globals(&args) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            eprintln!("grofe: {e}\n{USAGE}");
-            return ExitCode::FAILURE;
+    // Run as `tmux`, the front end reads the argv (spec D1); the transport
+    // below is shared, with the dialect the front end chose in every hello.
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    let (globals, rest) = if grofe::compat::invoked_as_tmux(&argv0) {
+        match grofe::compat::tmux::cli(&args) {
+            Ok(cli) => {
+                let _ = DIALECT.set(cli.dialect);
+                let globals = Globals {
+                    socket: cli.socket,
+                    name: cli.name,
+                };
+                (globals, cli.argv)
+            }
+            Err(e) => return fail(&e),
+        }
+    } else {
+        match parse_globals(&args) {
+            Ok((globals, rest)) => (globals, rest.to_vec()),
+            Err(e) => {
+                eprintln!("grofe: {e}\n{USAGE}");
+                return ExitCode::FAILURE;
+            }
         }
     };
+    let rest = rest.as_slice();
     let Some(verb) = rest.first() else {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -81,6 +99,14 @@ fn main() -> ExitCode {
             one_shot(&socket, own_dir, rest)
         }
     }
+}
+
+/// The dialect every hello this process sends carries: grofe, unless the
+/// tmux front end chose otherwise.
+static DIALECT: OnceLock<Dialect> = OnceLock::new();
+
+fn dialect() -> Dialect {
+    DIALECT.get().copied().unwrap_or_default()
 }
 
 /// The instance a panic report is written for, and the process's role
@@ -440,6 +466,7 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
         client: None,
+        dialect: dialect(),
     };
     let opts = client::AttachOptions {
         target: client::raw_target(&argv[1..]),
@@ -662,6 +689,7 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
         client: None,
+        dialect: dialect(),
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }

@@ -37,7 +37,9 @@ use crate::protocol::Caps;
 use crate::server::passthrough::Scanner;
 use crate::server::render::write_sgr;
 use crate::server::status::Style;
-use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
+use crate::types::{
+    CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
+};
 use io::{InputQueue, Listener};
 use procinfo::ProcSample;
 
@@ -78,6 +80,8 @@ pub enum PaneEventKind {
 #[derive(Debug, Clone)]
 pub struct PaneSpawn {
     pub id: PaneId,
+    /// The session the pane's window belongs to (for `TMUX`, TC.1).
+    pub session: SessionId,
     /// `None` starts the user's shell (`$SHELL`, else `/bin/sh`) as a login shell.
     pub argv: Option<Vec<String>>,
     pub cwd: PathBuf,
@@ -794,6 +798,7 @@ mod tests {
     fn spec_with_term(term: &'static str) -> PaneSpawn {
         PaneSpawn {
             id: PaneId(0),
+            session: SessionId(0),
             argv: None,
             cwd: PathBuf::from("/"),
             env: Vec::new(),

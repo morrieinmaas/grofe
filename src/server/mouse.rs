@@ -24,6 +24,7 @@ use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
+use crate::protocol::Dialect;
 use crate::server::State;
 use crate::server::clients;
 use crate::server::input::{
@@ -193,7 +194,7 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     let in_view = state.mouse.is_open(pane);
     let wants = modes.mouse != MouseMode::Off && !in_view;
     let focus = vec![vec!["select-pane".into(), "-t".into(), pane.to_string()]];
-    let select = || Routed::Command(focus.clone());
+    let select = || Routed::Command(focus.clone(), Dialect::Grofe);
     let wheel = match m.kind {
         MouseKind::WheelUp => Some(WHEEL_LINES as isize),
         MouseKind::WheelDown => Some(-(WHEEL_LINES as isize)),
@@ -220,7 +221,7 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     // As tmux (`select-pane -t = \; send-keys -M`): the pane is active
     // before its click arrives.
     if pressed {
-        clients::run_binding(state, client, &focus);
+        clients::run_binding(state, client, &focus, Dialect::Grofe);
     }
     let p = state.model.panes.get(&pane)?;
     if p.handle.enqueue_input(bytes).is_err() {

@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
 use crate::cmd::{self, CommandPrompt, RunShell};
-use crate::protocol::ClientCtx;
+use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
 use crate::server::clients::{self, ClientVars};
 use crate::server::dispatch::{self, options::FormatCtx};
@@ -384,7 +384,9 @@ impl InputHook for PromptHook {
                 state.prompts.remember(&line);
                 let command = replace_template(&prompt.template, &line);
                 match cmd::split_command_string(&command) {
-                    Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds),
+                    // ponytail: grofe's dialect; `:` prompt text on a server
+                    // with tmux identity is tmux's (spec D12), TC.1's to set.
+                    Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, Dialect::Grofe),
                     Ok(_) => Routed::Consumed,
                     Err(e) => {
                         clients::show_message(state, client, &e.to_string());

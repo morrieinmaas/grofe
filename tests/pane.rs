@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::vte::ansi::{Color, Rgb};
 use grofe::server::pane::{CursorShape, PaneEvent, PaneEventKind, PaneHandle, PaneSpawn};
-use grofe::types::{CaptureBound, CaptureOpts, PaneId};
+use grofe::types::{CaptureBound, CaptureOpts, PaneId, SessionId};
 use tokio::sync::{Notify, mpsc};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -21,6 +21,7 @@ struct Pane {
 fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
     PaneSpawn {
         id: PaneId(id),
+        session: SessionId(0),
         argv: Some(argv.iter().map(|s| s.to_string()).collect()),
         cwd: std::env::temp_dir(),
         env: Vec::new(),

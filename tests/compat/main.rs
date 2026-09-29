@@ -4,13 +4,19 @@
 //! `record::record_goldens`, which `scripts/record-compat-goldens.sh` runs
 //! inside a container.
 //!
-//! FE tasks add their golden tests as modules here, next to
-//! `grofe_example`, which shows the pattern.
+//! FE tasks write their golden tests in their own modules here (`fe_1` to
+//! `fe_4`, stubbed by the M3.6 stub edit), next to `grofe_example`, which
+//! shows the pattern; TC.13's scenarios live in `scenarios`.
 
+mod fe_1;
+mod fe_2;
+mod fe_3;
+mod fe_4;
 mod grofe_example;
 mod normalize;
 mod record;
 mod replay;
+mod scenarios;
 
 use std::collections::BTreeSet;
 use std::fs;

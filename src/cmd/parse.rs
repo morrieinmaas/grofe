@@ -1318,8 +1318,55 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
         "select-layout" => parse_select_layout(rest),
-        _ => Err(ParseError::UnknownCommand(name.clone())),
+        other => parse_m36_stub(other).ok_or_else(|| ParseError::UnknownCommand(name.clone())),
     }
+}
+
+/// The M3.6 verbs the stub edit routes (m36-addendum, "Stub edit"): the
+/// verb alone, its arguments ignored until TC.2 parses each verb's flags
+/// into its struct (and moves the verb up into [`parse`]'s table).
+fn parse_m36_stub(name: &str) -> Option<Command> {
+    use super::{
+        BreakPane, ChooseClient, ChooseTree, ConfirmBefore, DisplayMenu, DisplayPanes,
+        DisplayPopup, FindWindow, If, JoinPane, LastPane, MovePane, MoveWindow, NewPane,
+        NextLayout, RefreshClient, ResizeWindow, RotateWindow, SetEnvironment, SetHook,
+        ShowEnvironment, ShowHooks, ShowMessages, SuspendClient, SwapPane, SwapWindow, WaitFor,
+    };
+    Some(match name {
+        "join-pane" => Command::JoinPane(JoinPane::default()),
+        "swap-pane" => Command::SwapPane(SwapPane::default()),
+        "swap-window" => Command::SwapWindow(SwapWindow::default()),
+        "break-pane" => Command::BreakPane(BreakPane::default()),
+        "resize-window" => Command::ResizeWindow(ResizeWindow::default()),
+        "last-pane" => Command::LastPane(LastPane::default()),
+        "rotate-window" => Command::RotateWindow(RotateWindow::default()),
+        "move-window" => Command::MoveWindow(MoveWindow::default()),
+        "move-pane" => Command::MovePane(MovePane::default()),
+        "next-layout" => Command::NextLayout(NextLayout::default()),
+        "respawn-window" => Command::RespawnWindow(RespawnPane {
+            kill: false,
+            target: Target::Current,
+            command: None,
+        }),
+        "refresh-client" => Command::RefreshClient(RefreshClient::default()),
+        "show-messages" => Command::ShowMessages(ShowMessages::default()),
+        "choose-client" => Command::ChooseClient(ChooseClient::default()),
+        "suspend-client" => Command::SuspendClient(SuspendClient::default()),
+        "find-window" => Command::FindWindow(FindWindow::default()),
+        "choose-tree" => Command::ChooseTree(ChooseTree::default()),
+        "wait-for" => Command::WaitFor(WaitFor::default()),
+        "display-popup" => Command::DisplayPopup(DisplayPopup::default()),
+        "new-pane" => Command::NewPane(NewPane::default()),
+        "display-menu" => Command::DisplayMenu(DisplayMenu::default()),
+        "display-panes" => Command::DisplayPanes(DisplayPanes::default()),
+        "confirm-before" => Command::ConfirmBefore(ConfirmBefore::default()),
+        "if-shell" => Command::If(If::default()),
+        "set-hook" => Command::SetHook(SetHook::default()),
+        "show-hooks" => Command::ShowHooks(ShowHooks::default()),
+        "set-environment" => Command::SetEnvironment(SetEnvironment::default()),
+        "show-environment" => Command::ShowEnvironment(ShowEnvironment::default()),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -2565,5 +2612,102 @@ mod tests {
             }))
         );
         assert!(parse(&argv(&["select-layout"])).is_err());
+    }
+
+    /// The stub edit: every M3.6 verb parses to its variant's empty struct
+    /// (TC.2 replaces this with each verb's flag table); their tmux short
+    /// names are not native (FE.1's alias table), and neither is
+    /// `list-commands` (M36-R1).
+    #[test]
+    fn m36_verbs_parse_to_their_stub_structs() {
+        use crate::cmd::*;
+        let cases = [
+            ("join-pane", Command::JoinPane(JoinPane::default())),
+            ("swap-pane", Command::SwapPane(SwapPane::default())),
+            ("swap-window", Command::SwapWindow(SwapWindow::default())),
+            ("break-pane", Command::BreakPane(BreakPane::default())),
+            (
+                "resize-window",
+                Command::ResizeWindow(ResizeWindow::default()),
+            ),
+            ("last-pane", Command::LastPane(LastPane::default())),
+            (
+                "rotate-window",
+                Command::RotateWindow(RotateWindow::default()),
+            ),
+            ("move-window", Command::MoveWindow(MoveWindow::default())),
+            ("move-pane", Command::MovePane(MovePane::default())),
+            ("next-layout", Command::NextLayout(NextLayout::default())),
+            (
+                "respawn-window",
+                Command::RespawnWindow(RespawnPane {
+                    kill: false,
+                    target: Target::Current,
+                    command: None,
+                }),
+            ),
+            (
+                "refresh-client",
+                Command::RefreshClient(RefreshClient::default()),
+            ),
+            (
+                "show-messages",
+                Command::ShowMessages(ShowMessages::default()),
+            ),
+            (
+                "choose-client",
+                Command::ChooseClient(ChooseClient::default()),
+            ),
+            (
+                "suspend-client",
+                Command::SuspendClient(SuspendClient::default()),
+            ),
+            ("find-window", Command::FindWindow(FindWindow::default())),
+            ("choose-tree", Command::ChooseTree(ChooseTree::default())),
+            ("wait-for", Command::WaitFor(WaitFor::default())),
+            (
+                "display-popup",
+                Command::DisplayPopup(DisplayPopup::default()),
+            ),
+            ("new-pane", Command::NewPane(NewPane::default())),
+            ("display-menu", Command::DisplayMenu(DisplayMenu::default())),
+            (
+                "display-panes",
+                Command::DisplayPanes(DisplayPanes::default()),
+            ),
+            (
+                "confirm-before",
+                Command::ConfirmBefore(ConfirmBefore::default()),
+            ),
+            ("if-shell", Command::If(If::default())),
+            ("set-hook", Command::SetHook(SetHook::default())),
+            ("show-hooks", Command::ShowHooks(ShowHooks::default())),
+            (
+                "set-environment",
+                Command::SetEnvironment(SetEnvironment::default()),
+            ),
+            (
+                "show-environment",
+                Command::ShowEnvironment(ShowEnvironment::default()),
+            ),
+        ];
+        for (verb, want) in cases {
+            assert_eq!(parse(&argv(&[verb])), Ok(want), "{verb}");
+        }
+        for tmux_only in [
+            "joinp",
+            "swapp",
+            "breakp",
+            "if",
+            "popup",
+            "menu",
+            "list-commands",
+        ] {
+            assert_eq!(
+                parse(&argv(&[tmux_only])),
+                Err(ParseError::UnknownCommand(tmux_only.to_string())),
+                "{tmux_only}"
+            );
+        }
     }
 }

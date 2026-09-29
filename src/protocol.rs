@@ -65,6 +65,27 @@ pub struct ClientCtx {
     /// for one-shot CLI and control requests. Never on the wire.
     #[serde(skip)]
     pub client: Option<ClientId>,
+    /// Which command language the request's argv is in (spec D12, §4.6).
+    /// Absent on the wire means grofe, so old hellos still parse; TC.1
+    /// decides it, and `compat` routes a tmux one to the front end.
+    #[serde(default, skip_serializing_if = "Dialect::is_grofe")]
+    pub dialect: Dialect,
+}
+
+/// A request's command language (spec D12): grofe's own, or tmux's as the
+/// tmux front end (`compat::tmux`) translates it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Dialect {
+    #[default]
+    Grofe,
+    Tmux,
+}
+
+impl Dialect {
+    fn is_grofe(&self) -> bool {
+        *self == Dialect::Grofe
+    }
 }
 
 /// (De)serializes [`ClientCtx::env`] as a JSON object, per spec §4.6.
@@ -443,6 +464,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             client: None,
+            dialect: Dialect::Grofe,
         }
     }
 
@@ -457,6 +479,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
             client: None,
+            dialect: Dialect::Grofe,
         });
         let err = encode_hello(&hello).unwrap_err().to_string();
         assert!(
@@ -494,6 +517,38 @@ mod tests {
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
+    }
+
+    /// The stub edit's `dialect` field: a grofe hello's wire form is
+    /// unchanged, a hello without it parses as grofe, and a tmux one
+    /// round-trips, in both hello modes.
+    #[test]
+    fn dialect_is_grofe_unless_the_hello_says_tmux() {
+        let grofe = Hello::Control(ctx("/", None, &[]));
+        let line = encode_hello(&grofe).unwrap();
+        assert!(!line.contains("dialect"), "{line}");
+        let old = r#"{"grofe":1,"mode":"control","cwd":"/","pane":null,"env":{}}"#;
+        assert_eq!(decode_hello(old).unwrap(), grofe);
+
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..ctx("/", None, &[])
+        };
+        let line = encode_hello(&Hello::Control(tmux.clone())).unwrap();
+        assert!(line.contains(r#""dialect":"tmux""#), "{line}");
+        assert_eq!(decode_hello(&line).unwrap(), Hello::Control(tmux.clone()));
+        let attach = Hello::Attach {
+            ctx: tmux,
+            cols: 80,
+            rows: 24,
+            term: "xterm".to_string(),
+            caps: Caps::default(),
+            target: None,
+            detach_others: false,
+            nest: false,
+        };
+        let line = encode_hello(&attach).unwrap();
+        assert_eq!(decode_hello(&line).unwrap(), attach);
     }
 
     #[test]
