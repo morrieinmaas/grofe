@@ -1034,14 +1034,44 @@ fn flag(b: bool) -> String {
     if b { "1" } else { "0" }.to_string()
 }
 
+/// The tmux version a server with tmux identity reports (`#{version}`,
+/// `tmux -V`'s number): the release the compat suite is recorded against.
+const TMUX_COMPAT_VERSION: &str = "3.7b";
+
 impl FormatVars for FormatCtx<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        use crate::compat::Identity;
+        use crate::types::MouseMode;
         let m = self.model;
         if name.starts_with('@') || builtin(name).is_some() {
             return m
                 .options
                 .lookup(name, &chain(m, self.pane))
                 .map(str::to_string);
+        }
+        match name {
+            "version" => {
+                return Some(
+                    match m.identity {
+                        Identity::Grofe => env!("CARGO_PKG_VERSION"),
+                        Identity::Tmux => TMUX_COMPAT_VERSION,
+                    }
+                    .to_string(),
+                );
+            }
+            "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
+            "pid" => return Some(std::process::id().to_string()),
+            // Session groups are out of scope (spec §4.5).
+            "session_grouped" => return Some("0".to_string()),
+            // ponytail: tmux's layout string (with its checksum) is FE.2's
+            // codec; there is no native one.
+            "window_layout" => return Some(String::new()),
+            // ponytail: stubs until the features exist: copy mode (M5),
+            // floating panes (`new-pane`, TC.6), and the status range under
+            // the mouse, which only a mouse-bound command sees (TC.10).
+            "copy_cursor_word" | "pane_mode" | "mouse_status_range" => return Some(String::new()),
+            "pane_in_mode" | "pane_floating_flag" => return Some("0".to_string()),
+            _ => {}
         }
         let p = m.panes.get(&self.pane)?;
         let w = m.windows.get(&p.window)?;
@@ -1081,10 +1111,99 @@ impl FormatVars for FormatCtx<'_> {
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
+            // Empty for a live pane and for one a signal killed, as tmux.
+            "pane_dead_status" => p.dead.flatten()?.to_string(),
+            "pane_start_command" => p
+                .argv
+                .as_deref()
+                .map(|argv| {
+                    argv.iter()
+                        .map(|a| escape_arg(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default(),
+            "alternate_on" => flag(p.handle.modes().alt_screen),
+            "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
+            "history_size" => p.handle.history_size().to_string(),
+            "window_flags" => window_flags(s, w),
             // ponytail: `client_width`/`client_height` need clients (M2);
             // `host_short` needs nix's `hostname` feature (not enabled).
             _ => return None,
         })
+    }
+}
+
+/// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in
+/// tmux's order. grofe tracks no activity, silence or marked pane, so
+/// `#`, `~` and `M` never show.
+fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Window) -> String {
+    [
+        (w.bell_flag, '!'),
+        (s.active == w.id, '*'),
+        (s.last_windows.last() == Some(&w.id), '-'),
+        (w.zoomed, 'Z'),
+    ]
+    .into_iter()
+    .filter_map(|(on, c)| on.then_some(c))
+    .collect()
+}
+
+/// One word of `pane_start_command`, quoted as tmux's `args_escape`
+/// quotes it (checked against tmux 3.7b): double quotes around a word
+/// with any of ` #';${}%`, else single quotes around one with a space or
+/// `"`; a lone special character, or a leading `~`, gets a backslash;
+/// control characters and backslashes are escaped C-style.
+fn escape_arg(s: &str) -> String {
+    const DQUOTED: &str = " #';${}%";
+    const SQUOTED: &str = " \"";
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let quote = if s.contains(|c| DQUOTED.contains(c)) {
+        Some('"')
+    } else if s.contains(|c| SQUOTED.contains(c)) {
+        Some('\'')
+    } else {
+        None
+    };
+    let mut chars = s.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && c != ' '
+        && (quote.is_some() || c == '~')
+    {
+        return format!("\\{c}");
+    }
+    let bytes = s.as_bytes();
+    let mut body = String::with_capacity(s.len());
+    for (i, c) in s.char_indices() {
+        match c {
+            '\\' => body.push_str("\\\\"),
+            '\n' => body.push_str("\\n"),
+            '\t' => body.push_str("\\t"),
+            '\r' => body.push_str("\\r"),
+            '\x07' => body.push_str("\\a"),
+            '\x08' => body.push_str("\\b"),
+            '\x0b' => body.push_str("\\v"),
+            '\x0c' => body.push_str("\\f"),
+            c if c.is_ascii_control() => body.push_str(&format!("\\{:03o}", c as u32)),
+            '"' if quote == Some('"') => body.push_str("\\\""),
+            // `$` only where a shell would start a variable after it.
+            '$' if quote == Some('"')
+                && bytes.get(i + 1).is_some_and(|&n| {
+                    n == b'_' || n == b'{' || n.is_ascii_alphabetic() || n >= 0x80
+                }) =>
+            {
+                body.push_str("\\$")
+            }
+            c => body.push(c),
+        }
+    }
+    let tilde = if body.starts_with('~') { "\\" } else { "" };
+    match quote {
+        Some('\'') => format!("'{body}'"),
+        Some(q) => format!("{q}{tilde}{body}{q}"),
+        None => format!("{tilde}{body}"),
     }
 }
 
@@ -1132,6 +1251,19 @@ mod tests {
         };
         let err = bind_key(&mut state, &tmux, bind("F6")).unwrap_err();
         assert!(err.contains("tmux front end"), "{err}");
+    }
+
+    /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);
+    /// `#{grofe_version}` does not. Neither needs a pane.
+    #[test]
+    fn version_follows_the_identity() {
+        let mut model = Model::new(false);
+        let grofe = env!("CARGO_PKG_VERSION");
+        let get = |m: &Model, name: &str| FormatCtx::new(m, PaneId(99)).get(name);
+        assert_eq!(get(&model, "version").as_deref(), Some(grofe));
+        model.identity = crate::compat::Identity::Tmux;
+        assert_eq!(get(&model, "version").as_deref(), Some("3.7b"));
+        assert_eq!(get(&model, "grofe_version").as_deref(), Some(grofe));
     }
 
     #[test]
