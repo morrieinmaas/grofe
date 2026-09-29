@@ -73,6 +73,12 @@ fn each_modifier_has_a_true_and_a_false_case() {
         ("#{||:0,x}", "1"),
         ("#{||:0,}", "0"),
         ("#{||:#{@nope},#{session_windows}}", "1"),
+        ("#{<:a,b}", "1"),
+        ("#{<:9,10}", "0"),
+        ("#{<=:a,a}", "1"),
+        ("#{<=:b,a}", "0"),
+        ("#{!:#{@nope}}", "1"),
+        ("#{!:#{session_name}}", "0"),
         ("#{m:al*,alpha}", "1"),
         ("#{m:be?a,alpha}", "0"),
         ("#{m:[!x]lpha,alpha}", "1"),
@@ -204,6 +210,8 @@ fn pane_variables_of_a_plain_pane() {
         ("[#{pane_dead_status}]", "[]"),
         ("[#{copy_cursor_word}]", "[]"),
         ("[#{mouse_status_range}]", "[]"),
+        ("[#{session_group}]", "[]"),
+        ("[#{client_tty}]", "[]"),
     ];
     for (fmt, want) in table {
         assert_eq!(display(&srv, t, fmt), want, "{fmt}");
@@ -309,4 +317,58 @@ fn window_flags_mark_current_last_zoom_and_bell() {
     .expect("new-window");
     wait_display(&srv, "alpha:3", "[#{window_flags}]", "[!]");
     assert_eq!(display(&srv, "alpha:2", "#{window_flags}"), "*Z");
+}
+
+#[test]
+fn socket_path_is_the_servers_socket() {
+    let srv = scripted();
+    let want = srv.socket.display().to_string();
+    assert_eq!(display(&srv, "alpha:1", "#{socket_path}"), want);
+    let listed = srv
+        .cmd(&["list-sessions", "-F", "#{socket_path}"])
+        .expect("list-sessions");
+    assert_eq!(listed, format!("{want}\n"));
+}
+
+/// `hostname`'s answer, which is what tmux titles a new pane with.
+fn host() -> String {
+    let out = Command::new("hostname").output().expect("hostname");
+    String::from_utf8_lossy(&out.stdout).trim_end().to_string()
+}
+
+#[test]
+fn pane_title_is_the_host_until_the_pane_sets_one() {
+    let srv = scripted();
+    assert_eq!(display(&srv, "alpha:1", "#{pane_title}"), host());
+    srv.cmd(&[
+        "new-window",
+        "-t",
+        "alpha",
+        "sh",
+        "-c",
+        "printf '\\033]2;my title\\007'; sleep 30",
+    ])
+    .expect("new-window");
+    wait_display(&srv, "alpha:3", "#{pane_title}", "my title");
+    let listed = srv
+        .cmd(&["list-panes", "-t", "alpha:3", "-F", "#{pane_title}"])
+        .expect("list-panes");
+    assert_eq!(listed, "my title\n");
+}
+
+#[test]
+fn pane_tty_is_the_panes_own_terminal() {
+    let srv = scripted();
+    let file = srv.home.join("tty.txt");
+    let script = format!("tty > '{}'; sleep 30", file.display());
+    srv.cmd(&["new-window", "-t", "alpha", "sh", "-c", &script])
+        .expect("new-window");
+    common::wait_until(
+        || std::fs::read_to_string(&file).is_ok_and(|s| s.ends_with('\n')),
+        WAIT,
+    )
+    .expect("the pane wrote its tty");
+    let want = std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(want.starts_with("/dev/"), "{want}");
+    assert_eq!(display(&srv, "alpha:3", "#{pane_tty}"), want.trim_end());
 }

@@ -65,6 +65,13 @@ pub struct Passthrough {
     focus: BTreeMap<SessionId, PaneId>,
 }
 
+impl Passthrough {
+    /// The title `pane` set, if it set one (`#{pane_title}`, TC.3).
+    pub(crate) fn title(&self, pane: PaneId) -> Option<&str> {
+        self.titles.get(&pane).map(String::as_str)
+    }
+}
+
 /// A client's title and cursor colour as last sent; the defaults are the
 /// outer terminal's own (no colour set, no title set).
 #[derive(Debug, Default)]

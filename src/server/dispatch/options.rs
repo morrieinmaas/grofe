@@ -513,9 +513,9 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
         Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
         Command::ShowOptions(c) => show_options(model, ctx, c),
         Command::DisplayMessage(c) => display_message(state, ctx, c),
-        Command::ListSessions(c) => list_sessions(model, c),
-        Command::ListWindows(c) => list_windows(model, ctx, c),
-        Command::ListPanes(c) => list_panes(model, ctx, c),
+        Command::ListSessions(c) => list_sessions(state, c),
+        Command::ListWindows(c) => list_windows(state, ctx, c),
+        Command::ListPanes(c) => list_panes(state, ctx, c),
         _ => Err("not an option command".to_string()),
     }
 }
@@ -972,15 +972,21 @@ fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
     let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
-        Some(client) => expand(text, &clients::ClientVars::new(model, client, Some(vars))),
-        None => expand(text, &vars),
+        Some(client) => {
+            let client = clients::ClientVars::new(model, client, Some(vars));
+            expand(text, &ServerVars::new(state, pane, &client))
+        }
+        None => expand(text, &ServerVars::new(state, pane, &vars)),
     };
     Ok(format!("{out}\n"))
 }
 
-fn lines(model: &Model, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
+fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
     panes
-        .map(|p| format!("{}\n", expand(fmt, &FormatCtx::new(model, p))))
+        .map(|p| {
+            let vars = FormatCtx::new(&state.model, p);
+            format!("{}\n", expand(fmt, &ServerVars::new(state, p, &vars)))
+        })
         .collect()
 }
 
@@ -989,30 +995,33 @@ fn active_pane(model: &Model, window: WindowId) -> Option<PaneId> {
     model.windows.get(&window).map(|w| w.active)
 }
 
-fn list_sessions(model: &Model, c: ListSessions) -> Result<String, String> {
+fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
+    let model = &state.model;
     let fmt = c.format.unwrap_or_default();
     let panes = model
         .sessions
         .values()
         .filter_map(|s| active_pane(model, s.active));
-    Ok(lines(model, &fmt, panes))
+    Ok(lines(state, &fmt, panes))
 }
 
-fn list_windows(model: &Model, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
+fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
+    let model = &state.model;
     let session = model.resolve_session(&c.target, ctx)?;
     let fmt = c.format.unwrap_or_default();
     let panes = model.sessions[&session]
         .windows
         .iter()
         .filter_map(|w| active_pane(model, *w));
-    Ok(lines(model, &fmt, panes))
+    Ok(lines(state, &fmt, panes))
 }
 
-fn list_panes(model: &Model, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
+fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
+    let model = &state.model;
     let window = model.resolve_window(&c.target, ctx)?;
     let fmt = c.format.unwrap_or_default();
     Ok(lines(
-        model,
+        state,
         &fmt,
         model.windows[&window].pane_ids().into_iter(),
     ))
@@ -1032,6 +1041,54 @@ impl<'a> FormatCtx<'a> {
 
 fn flag(b: bool) -> String {
     if b { "1" } else { "0" }.to_string()
+}
+
+/// Format variables that need the server state, not only the model
+/// (`socket_path`, `pane_title`, `pane_tty`), over `inner` for the rest.
+/// Built where dispatch holds `&State`, the way `ClientVars` layers the
+/// client's variables.
+pub struct ServerVars<'a> {
+    state: &'a State,
+    pane: PaneId,
+    inner: &'a dyn FormatVars,
+}
+
+impl<'a> ServerVars<'a> {
+    pub fn new(state: &'a State, pane: PaneId, inner: &'a dyn FormatVars) -> ServerVars<'a> {
+        ServerVars { state, pane, inner }
+    }
+}
+
+impl FormatVars for ServerVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        match name {
+            "socket_path" => Some(self.state.socket.display().to_string()),
+            // tmux titles every new pane with the host name.
+            "pane_title" => Some(
+                self.state
+                    .passthrough
+                    .title(self.pane)
+                    .map_or_else(hostname, str::to_string),
+            ),
+            "pane_tty" => {
+                let p = self.state.model.panes.get(&self.pane)?;
+                Some(p.handle.tty_path()?.display().to_string())
+            }
+            _ => self.inner.get(name),
+        }
+    }
+}
+
+/// `gethostname(3)`, empty if it fails.
+fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: the pointer and length describe `buf`, which outlives the call.
+    let rc = unsafe { nix::libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return String::new();
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
 /// The tmux version a server with tmux identity reports (`#{version}`,
@@ -1069,7 +1126,10 @@ impl FormatVars for FormatCtx<'_> {
             // ponytail: stubs until the features exist: copy mode (M5),
             // floating panes (`new-pane`, TC.6), and the status range under
             // the mouse, which only a mouse-bound command sees (TC.10).
-            "copy_cursor_word" | "pane_mode" | "mouse_status_range" => return Some(String::new()),
+            // `session_group` is empty with no groups. `client_tty` needs
+            // the tty in the attach hello (FE.2).
+            "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
+            | "client_tty" => return Some(String::new()),
             "pane_in_mode" | "pane_floating_flag" => return Some("0".to_string()),
             _ => {}
         }
