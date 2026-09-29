@@ -2,17 +2,18 @@
 //!
 //! File layers only: it never starts or contacts a server, even when one
 //! is running (R8).
-// ponytail: runtime provenance (a value changed by `set-option`, and the
-// no-effect marker) is TC.2b's; this shows what the files resolve to.
+// ponytail: runtime provenance (a value changed by `set-option`) is not
+// shown; this shows what the files resolve to.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    Env, KeyBinding, OPTION_NAMES, Resolved, Ty, closest, load, load_with_file, tmux_name,
-    toml_type,
+    Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest, list_tmux_name, load,
+    load_with_file, tmux_name, toml_type,
 };
+use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
 
 const USAGE: &str = "usage: show-config [--explain] [--file <path>]... [<key>]";
@@ -74,7 +75,16 @@ fn run(args: &[String]) -> Result<String, String> {
     let mut out = String::new();
     let option = |out: &mut String, k: &str| {
         let value = r.get(k).unwrap_or_default();
-        out.push_str(&format!("{k} = {}\n", literal(k, value)));
+        let no_effect = explain && tmux_name(k).is_some_and(has_no_effect);
+        out.push_str(&value_line(k, &literal(k, value), no_effect));
+        if explain && let Some(src) = r.provenance.get(k) {
+            out.push_str(&format!("  set by {}\n", src.describe(home)));
+        }
+    };
+    let list = |out: &mut String, k: &str| {
+        let items = r.lists.get(k).cloned().unwrap_or_default();
+        let items = toml::Value::Array(items.into_iter().map(toml::Value::String).collect());
+        out.push_str(&format!("{k} = {items}\n"));
         if explain && let Some(src) = r.provenance.get(k) {
             out.push_str(&format!("  set by {}\n", src.describe(home)));
         }
@@ -95,11 +105,15 @@ fn run(args: &[String]) -> Result<String, String> {
             for (k, _) in OPTION_NAMES {
                 option(&mut out, k);
             }
+            for (k, _) in LIST_NAMES {
+                list(&mut out, k);
+            }
             for b in sorted_keys(&r) {
                 binding(&mut out, b);
             }
         }
         Some(k) if tmux_name(k).is_some() => option(&mut out, k),
+        Some(k) if list_tmux_name(k).is_some() => list(&mut out, k),
         Some(k) if k.starts_with("keys.") => {
             let b = find_binding(&r, &k["keys.".len()..])
                 .ok_or_else(|| format!("show-config: no binding {k}"))?;
@@ -107,13 +121,20 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some(k) => {
             let mut msg = format!("show-config: unknown key {k}");
-            if let Some(s) = closest(k, OPTION_NAMES.iter().map(|(t, _)| *t)) {
+            if let Some(s) = closest(k, OPTION_NAMES.iter().chain(LIST_NAMES).map(|(t, _)| *t)) {
                 msg.push_str(&format!(", did you mean {s}?"));
             }
             return Err(msg);
         }
     }
     Ok(out)
+}
+
+/// One option's line; `--explain` marks an option grofe stores but never
+/// reads (spec §4.5).
+fn value_line(key: &str, literal: &str, no_effect: bool) -> String {
+    let marker = if no_effect { "  (no effect)" } else { "" };
+    format!("{key} = {literal}{marker}\n")
 }
 
 fn sorted_keys(r: &Resolved) -> Vec<&KeyBinding> {
@@ -169,4 +190,18 @@ fn binding_value(b: &KeyBinding) -> String {
         fields.push("repeat = true".to_string());
     }
     format!("{{ {} }}", fields.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explain_marks_a_no_effect_option() {
+        assert_eq!(
+            value_line("default-terminal", "\"tmux-256color\"", true),
+            "default-terminal = \"tmux-256color\"  (no effect)\n"
+        );
+        assert_eq!(value_line("mouse", "true", false), "mouse = true\n");
+    }
 }

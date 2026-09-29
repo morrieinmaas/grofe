@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use crate::cmd;
 use crate::config::provenance::tilde;
 use crate::config::{self, ConfigError, Ty, toml_type};
-use crate::server::dispatch::options::{Options, Owner};
+use crate::server::dispatch::options::{ListOp, Options, Owner, split_index};
 use crate::server::input::{Key, parse_key};
 
 const USAGE: &str = "usage: import-tmux [<tmux.conf>] [-o <path>]";
@@ -650,6 +650,9 @@ struct Importer {
     /// `%if` starts currently open, innermost last.
     if_stack: Vec<(PathBuf, usize)>,
     options: BTreeMap<&'static str, OptionEntry>,
+    /// List options (TC.2b) by TOML key, with every line that shaped the
+    /// list; the elements themselves live in `store`.
+    lists: BTreeMap<&'static str, Vec<(PathBuf, usize)>>,
     /// In first-bound order; a later directive updates an existing entry
     /// in place rather than pushing a new one (rule 7).
     keys: Vec<BindingEntry>,
@@ -666,6 +669,7 @@ impl Importer {
             read_files: HashSet::new(),
             if_stack: Vec::new(),
             options: BTreeMap::new(),
+            lists: BTreeMap::new(),
             keys: Vec::new(),
             reports: Vec::new(),
         }
@@ -809,6 +813,22 @@ impl Importer {
             };
             return self.report(file, line, reason, text);
         }
+        let (base, index) = match split_index(&name) {
+            Ok(split) => split,
+            Err(msg) => return self.report(file, line, &msg, text),
+        };
+        if let Some(toml_key) = reverse_list_name(base) {
+            let base = base.to_string();
+            let set = ListSet {
+                toml_key,
+                name: &base,
+                index,
+                append,
+                unset,
+                scope_flag,
+            };
+            return self.handle_set_list(file, line, text, words.get(i + 1), set);
+        }
         let Some(toml_key) = reverse_tmux_name(&name) else {
             return self.report(file, line, "option grofe does not have", text);
         };
@@ -907,6 +927,84 @@ impl Importer {
             }
             Err(msg) => self.report(file, line, &msg, text),
         }
+    }
+
+    /// A `set` of a list option (tmux's array options): an index sets a
+    /// position, `-a` appends, `-u` removes a position or the whole list,
+    /// exactly as the option store does.
+    fn handle_set_list(
+        &mut self,
+        file: &Path,
+        line: usize,
+        text: &str,
+        value: Option<&Word>,
+        set: ListSet,
+    ) {
+        let ListSet {
+            toml_key,
+            name,
+            index,
+            append,
+            unset,
+            scope_flag,
+        } = set;
+        // A TOML array spells every position up to the last one.
+        if index.is_some_and(|i| i >= MAX_LIST_INDEX) {
+            return self.report(file, line, "list index too large for a TOML array", text);
+        }
+        let op = if unset {
+            index.map_or(ListOp::Reset, ListOp::Remove)
+        } else {
+            let Some(w) = value else {
+                return self.report(file, line, "command not converted", text);
+            };
+            if w.value.contains("#(") {
+                return self.report(file, line, "#() in a format (D8)", text);
+            }
+            if has_bare_dollar(&w.raw) {
+                return self.report(file, line, "environment variable in a value", text);
+            }
+            let value = w.value.clone();
+            match index {
+                Some(index) => ListOp::Set {
+                    index,
+                    value,
+                    append,
+                },
+                None if append => ListOp::Push(value),
+                None => ListOp::Replace(value),
+            }
+        };
+        let reset = op == ListOp::Reset;
+        if let Err(msg) = self.store.edit_list(Owner::Global, name, op, false) {
+            return self.report(file, line, &msg, text);
+        }
+        if reset {
+            for (old_file, old_line) in self.lists.remove(toml_key).unwrap_or_default() {
+                self.note(
+                    &old_file,
+                    old_line,
+                    format!(
+                        "{toml_key} is unset by set -u at {}:{line}",
+                        tilde(file, self.home.as_deref())
+                    ),
+                );
+            }
+            return self.note(file, line, format!("{toml_key} unset here (-u)"));
+        }
+        if !scope_flag {
+            self.note(
+                file,
+                line,
+                format!(
+                    "{toml_key} has no -g/-s/-w; grofe's config is global, so it is treated as -g"
+                ),
+            );
+        }
+        self.lists
+            .entry(toml_key)
+            .or_default()
+            .push((file.to_path_buf(), line));
     }
 
     // ---- bind-key / unbind-key ----
@@ -1430,31 +1528,67 @@ impl Importer {
         ));
         out.push_str("# A starting config.toml or user.toml: edit it; it is not kept in sync.\n");
 
-        let mut current_section: Option<String> = None;
-        let mut started = false;
+        // Each option as (TOML key, its comment and assignment lines).
+        let mut items: Vec<(&str, String)> = Vec::new();
         for (toml_key, _) in config::OPTION_NAMES {
             let Some(entry) = self.options.get(toml_key) else {
                 continue;
             };
-            let section = section_of(toml_key);
-            if !started || section != current_section {
-                out.push('\n');
-                if let Some(s) = &section {
-                    out.push_str(&format!("[{s}]\n"));
-                }
-                current_section = section;
-                started = true;
-            }
-            out.push_str(&format!(
-                "# {}:{}\n",
-                tilde(&entry.file, self.home.as_deref()),
-                entry.line
+            items.push((
+                toml_key,
+                format!(
+                    "# {}:{}\n{} = {}\n",
+                    tilde(&entry.file, self.home.as_deref()),
+                    entry.line,
+                    local_key(toml_key),
+                    literal(toml_key, &entry.value)
+                ),
             ));
-            out.push_str(&format!(
+        }
+        for (toml_key, tmux) in config::LIST_NAMES {
+            let Some(sources) = self.lists.get(toml_key) else {
+                continue;
+            };
+            let mut text: String = sources
+                .iter()
+                .map(|(f, l)| format!("# {}:{l}\n", tilde(f, self.home.as_deref())))
+                .collect();
+            let items_map = self
+                .store
+                .list(Owner::Global, tmux)
+                .map(|l| l.items.clone())
+                .unwrap_or_default();
+            text.push_str(&format!(
                 "{} = {}\n",
                 local_key(toml_key),
-                literal(toml_key, &entry.value)
+                list_literal(&items_map)
             ));
+            items.push((toml_key, text));
+        }
+        // Top-level keys first, then each table once, in first-seen order:
+        // a top-level key after a `[table]` header would land inside it.
+        let mut sections: Vec<Option<String>> = vec![None];
+        for (k, _) in &items {
+            let s = section_of(k);
+            if !sections.contains(&s) {
+                sections.push(s);
+            }
+        }
+        for section in &sections {
+            let mut first = true;
+            for (k, text) in &items {
+                if section_of(k) != *section {
+                    continue;
+                }
+                if first {
+                    out.push('\n');
+                    if let Some(s) = section {
+                        out.push_str(&format!("[{s}]\n"));
+                    }
+                    first = false;
+                }
+                out.push_str(text);
+            }
         }
 
         for table in ["prefix", "root"] {
@@ -1606,6 +1740,40 @@ fn section_of(toml_key: &str) -> Option<String> {
         .map(|(section, _)| section.to_string())
 }
 
+/// The TOML key of a list option's tmux name.
+fn reverse_list_name(tmux: &str) -> Option<&'static str> {
+    config::LIST_NAMES
+        .iter()
+        .find(|(_, n)| *n == tmux)
+        .map(|(t, _)| *t)
+}
+
+/// The first list index `import-tmux` will not write out.
+const MAX_LIST_INDEX: u32 = 1000;
+
+/// One `set` of a list option, as `handle_set` read it.
+struct ListSet<'a> {
+    toml_key: &'static str,
+    name: &'a str,
+    index: Option<u32>,
+    append: bool,
+    unset: bool,
+    scope_flag: bool,
+}
+
+/// A list as the TOML array a config writes: element N at position N. A
+/// TOML array has no holes, so a hole in tmux's list is an empty string.
+fn list_literal(items: &BTreeMap<u32, String>) -> String {
+    let len = items
+        .keys()
+        .next_back()
+        .map_or(0, |last| *last as usize + 1);
+    let values: Vec<toml::Value> = (0..len)
+        .map(|i| toml::Value::String(items.get(&(i as u32)).cloned().unwrap_or_default()))
+        .collect();
+    toml::Value::Array(values).to_string()
+}
+
 fn local_key(toml_key: &str) -> &str {
     toml_key.rsplit_once('.').map_or(toml_key, |(_, k)| k)
 }
@@ -1667,6 +1835,86 @@ mod tests {
 
     fn words(s: &str) -> Vec<String> {
         tokenize_words(s).into_iter().map(|w| w.value).collect()
+    }
+
+    fn import(text: &str) -> (String, Vec<ConfigError>) {
+        let mut imp = Importer::new(None);
+        for l in &read_lines(text) {
+            imp.dispatch(Path::new("t.conf"), l);
+        }
+        imp.finish(Path::new("t.conf"))
+    }
+
+    /// Every top-level key comes before the first `[table]`, whatever its
+    /// row order, so it never lands inside a table.
+    #[test]
+    fn top_level_keys_come_before_every_table() {
+        let (out, _) = import("set -g pane-border-style fg=red\nset -g compat-identity grofe\n");
+        let key = out.find("compat-identity = \"grofe\"").expect("imported");
+        let table = out.find("[pane-border]").expect("table");
+        assert!(key < table, "{out}");
+        let parsed: toml::Table = out.parse().expect("valid TOML");
+        assert_eq!(parsed["compat-identity"].as_str(), Some("grofe"));
+        assert_eq!(parsed["pane-border"]["style"].as_str(), Some("fg=red"));
+    }
+
+    /// TC.2b: tmux's array options become list keys. An index sets a
+    /// position (holes as empty strings), `-a` appends, `-u` removes.
+    #[test]
+    fn list_options_import_as_toml_arrays() {
+        let (out, reports) = import(concat!(
+            "set -g status-format[2] two\n",
+            "set -ag command-alias a=list-sessions\n",
+            "set -ag command-alias b=list-windows\n",
+            "set -gu command-alias[0]\n",
+            "set -ag command-alias c=x\n",
+            "set -ag status-format[2] +\n",
+        ));
+        let parsed: toml::Table = out.parse().expect("valid TOML");
+        let strings = |v: &toml::Value| -> Vec<String> {
+            v.as_array()
+                .expect("array")
+                .iter()
+                .map(|s| s.as_str().expect("string").to_string())
+                .collect()
+        };
+        assert_eq!(strings(&parsed["status"]["rows"]), ["", "", "two+"]);
+        assert_eq!(strings(&parsed["command-alias"]), ["c=x", "b=list-windows"]);
+        assert!(out.contains("# t.conf:1\n# t.conf:6\nrows = "), "{out}");
+        assert!(
+            reports.iter().all(|r| r.key == "note"),
+            "nothing reported: {reports:?}"
+        );
+    }
+
+    #[test]
+    fn a_list_unset_and_bad_indices() {
+        let (out, reports) = import(concat!(
+            "set -g status-format[1] x\n",
+            "set -gu status-format\n",
+            "set -g status-format[-1] y\n",
+            "set -g status-format[5000] z\n",
+            "set -g status-left[0] w\n",
+        ));
+        assert!(!out.contains("rows"), "{out}");
+        let messages: Vec<&str> = reports.iter().map(|r| r.key.as_str()).collect();
+        assert!(
+            messages.contains(&"ambiguous option: status-format[-1]"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"list index too large for a TOML array"),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&"option grofe does not have"),
+            "{messages:?}"
+        );
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.line == 1 && r.message.contains("unset by set -u at t.conf:2"))
+        );
     }
 
     #[test]

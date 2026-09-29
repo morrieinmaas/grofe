@@ -11,8 +11,8 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
 use super::{
-    ConfigError, Env, KeyBinding, Layer, OPTION_NAMES, Provenance, Resolved, Source, Ty, closest,
-    tmux_name, toml_type,
+    ConfigError, Env, KeyBinding, LIST_NAMES, Layer, OPTION_NAMES, Provenance, Resolved, Source,
+    Ty, closest, tmux_name, toml_type,
 };
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
@@ -86,6 +86,7 @@ struct Loader {
     /// config value is refused exactly as `set-option` would refuse it.
     store: Options,
     options: BTreeMap<&'static str, String>,
+    lists: BTreeMap<&'static str, Vec<String>>,
     provenance: Provenance,
     keys: Vec<KeyBinding>,
     errors: Vec<ConfigError>,
@@ -141,10 +142,18 @@ impl Loader {
                 provenance.set(toml, Source::defaults());
             }
         }
+        let mut lists = BTreeMap::new();
+        for (toml, tmux) in LIST_NAMES.iter().filter(|_| defaults) {
+            if let Some(l) = store.list(Owner::Global, tmux) {
+                lists.insert(*toml, l.items.values().cloned().collect());
+                provenance.set(toml, Source::defaults());
+            }
+        }
         Loader {
             home: env.home.clone(),
             store,
             options,
+            lists,
             provenance,
             keys: Vec::new(),
             errors: Vec::new(),
@@ -159,6 +168,7 @@ impl Loader {
         }
         Ok(Resolved {
             options: self.options,
+            lists: self.lists,
             keys: self.keys,
             provenance: self.provenance,
             warnings: self.warnings,
@@ -358,6 +368,9 @@ impl Loader {
         if let Some(toml) = OPTION_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
             return self.set_option(f, line, toml, v.get_ref());
         }
+        if let Some(toml) = LIST_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
+            return self.set_list(f, line, toml, v.get_ref());
+        }
         match v.get_ref() {
             DeValue::Table(t) if is_section(&full) || !t.is_empty() => {
                 for (k, v) in entries(t) {
@@ -366,11 +379,11 @@ impl Loader {
             }
             _ => {
                 let mut msg = "unknown key".to_string();
-                let known =
-                    OPTION_NAMES
-                        .iter()
-                        .map(|(t, _)| *t)
-                        .chain(["requires", "source-file", "keys"]);
+                let known = OPTION_NAMES
+                    .iter()
+                    .chain(LIST_NAMES)
+                    .map(|(t, _)| *t)
+                    .chain(["requires", "source-file", "keys"]);
                 if let Some(s) = closest(&full, known) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
@@ -393,6 +406,26 @@ impl Loader {
         if let Some(e) = self.store.get(Owner::Global, tmux) {
             self.options.insert(toml, e.value.clone());
         }
+        self.provenance.set(toml, f.source(line));
+    }
+
+    /// A list option (TC.2b): an array of strings, the whole list.
+    fn set_list(&mut self, f: &FileCtx, line: usize, toml: &'static str, v: &DeValue) {
+        let bad = |found: &str| format!("expected an array of strings, found {found}");
+        let DeValue::Array(a) = v else {
+            return self.error(f.path, line, toml, bad(v.type_str()));
+        };
+        let mut items = Vec::new();
+        for item in a {
+            match item.get_ref() {
+                DeValue::String(s) => items.push(s.to_string()),
+                other => {
+                    let item_line = f.line(item.span().start);
+                    return self.error(f.path, item_line, toml, bad(other.type_str()));
+                }
+            }
+        }
+        self.lists.insert(toml, items);
         self.provenance.set(toml, f.source(line));
     }
 

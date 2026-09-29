@@ -277,6 +277,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "auto",
     },
+    // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
+    // any string; `select-layout` reads cells or `N%`). ponytail:
+    // `main-vertical` reads it once TC.8 wires `dispatch/window.rs`.
+    Builtin {
+        name: "main-pane-width",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "80",
+    },
 ];
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
@@ -315,6 +324,12 @@ pub struct Options {
     /// Global options set at runtime (`set -g`, `source-file`): the config
     /// no longer touches them (spec §5.1 layer 6, R10).
     runtime: BTreeSet<String>,
+    /// List options (TC.2b), beside the scalar store so [`Entry`] keeps
+    /// its shape.
+    lists: BTreeMap<Owner, BTreeMap<String, ListEntry>>,
+    /// Global lists the config set, each with the elements it had before,
+    /// as `config_base` for scalars.
+    config_list_base: BTreeMap<String, BTreeMap<u32, String>>,
 }
 
 impl Options {
@@ -336,6 +351,7 @@ impl Options {
         }
         Options {
             values: BTreeMap::from([(Owner::Global, global)]),
+            lists: BTreeMap::from([(Owner::Global, default_lists())]),
             ..Options::default()
         }
     }
@@ -344,6 +360,7 @@ impl Options {
     /// leaves alone.
     fn mark_runtime(&mut self, name: &str) {
         self.config_base.remove(name);
+        self.config_list_base.remove(name);
         self.runtime.insert(name.to_string());
     }
 
@@ -420,6 +437,12 @@ impl Options {
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
         });
+        self.lists.retain(|owner, _| match owner {
+            Owner::Global => true,
+            Owner::Session(id) => model.sessions.contains_key(id),
+            Owner::Window(id) => model.windows.contains_key(id),
+            Owner::Pane(id) => model.panes.contains_key(id),
+        });
     }
 }
 
@@ -480,9 +503,12 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
 /// (user options default to session scope, as in tmux).
 fn default_scope(scope: Option<OptionScope>, name: Option<&str>) -> OptionScope {
     scope.unwrap_or_else(|| {
-        name.and_then(builtin)
-            .map(|b| b.scope)
-            .unwrap_or(OptionScope::Session)
+        name.and_then(|n| {
+            builtin(n)
+                .map(|b| b.scope)
+                .or_else(|| list_builtin(n).map(|l| l.scope))
+        })
+        .unwrap_or(OptionScope::Session)
     })
 }
 
@@ -538,6 +564,11 @@ fn set_option(
     ctx: &ClientCtx,
     c: SetOption,
 ) -> Result<String, String> {
+    let (base, index) = split_index(&c.name)?;
+    if index.is_some() || list_builtin(base).is_some() {
+        let base = base.to_string();
+        return set_list(model, events, ctx, &c, &base, index);
+    }
     let scope = default_scope(c.scope, Some(&c.name));
     let owner = owner(model, scope, &c.target, ctx)?;
     // A runtime value at global scope takes the option out of the
@@ -617,6 +648,12 @@ fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
 }
 
 fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String, String> {
+    if let Some(name) = &c.name {
+        let (base, index) = split_index(name)?;
+        if index.is_some() || list_builtin(base).is_some() {
+            return show_list(model, ctx, &c, name, base, index);
+        }
+    }
     let scope = default_scope(c.scope, c.name.as_deref());
     let owner = owner(model, scope, &c.target, ctx)?;
     if let Some(name) = &c.name {
@@ -626,12 +663,22 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             return Err(format!("invalid option: {name}"));
         }
     }
-    Ok(model
+    let mut lines: Vec<(&str, String)> = model
         .options
         .at(owner)
         .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name))
-        .map(|(name, e)| format!("{name} {}\n", quote(&e.value)))
-        .collect())
+        .map(|(name, e)| (name.as_str(), format!("{name} {}\n", quote(&e.value))))
+        .collect();
+    if c.name.is_none() {
+        lines.extend(
+            model
+                .options
+                .lists_at(owner)
+                .map(|(name, l)| (name.as_str(), list_lines(name, l, false))),
+        );
+        lines.sort_by(|a, b| a.0.cmp(b.0));
+    }
+    Ok(lines.into_iter().map(|(_, l)| l).collect())
 }
 
 /// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
@@ -774,6 +821,7 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     if !resolved.keys.is_empty() || tables.is_configured() {
         *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
     }
+    apply_config_lists(model, events, resolved);
     crate::server::sources::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
@@ -916,6 +964,10 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let model = &mut state.model;
     for (name, value, _) in resolved.configured() {
         set_global(model, &mut state.events, name, value);
+        model.options.mark_runtime(name);
+    }
+    for (name, items, _) in resolved.configured_lists() {
+        set_global_list(model, &mut state.events, name, list_items(items));
         model.options.mark_runtime(name);
     }
     let tables = &mut state.registry.key_tables;
@@ -1279,6 +1331,438 @@ fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u
         .map(|(_, r)| (r.x, r.y))
 }
 
+// TC.2b: list-valued options.
+//
+// A list option is tmux's array option: a sparse map from index to text,
+// read and written with the same grammar tmux 3.7b uses, so the native
+// form and FE.3's tmux form are one form:
+//
+// - `set name[N] value` sets element N; the list may have holes.
+// - `set name value` replaces the whole list with element 0.
+// - `set -a name value` fills the lowest free index (a hole first);
+//   `set -a name[N] value` appends the text to element N.
+// - `set -u name[N]` removes element N and leaves a hole: later indices
+//   do not shift (tmux's answer, recorded). `set -u name` puts a global
+//   list back to its default and removes a list set anywhere else.
+// - `show name` prints `name[N] value` per element (none for an empty
+//   list: the bare name); `show name[N]` prints `''` for a hole; `-v`
+//   drops the names.
+// - The index is read as C's `%u` (blanks, a sign, digits, wrapping
+//   modulo 2^32); anything malformed, or above `i32::MAX`, is
+//   `ambiguous option: <name>`. An index on a scalar is `not an array`
+//   for `set` and shows the scalar's value for `show`.
+//
+// A lookup takes the whole list from the first owner that has one (a
+// session's list hides the global one entirely), as tmux's does.
+
+/// A built-in list option: the scope used when no flag is given, and its
+/// global default, element by element from index 0.
+struct ListBuiltin {
+    name: &'static str,
+    scope: OptionScope,
+    default: &'static [&'static str],
+}
+
+// ponytail: `status-format`'s default row 0 is empty, which TC.11 renders
+// as the built-in row (status-left, window list, status-right), since the
+// native format language has no window-list loop to spell it with.
+// grofe's own aliases have no default (tmux's six name verbs grofe lacks).
+const LISTS: &[ListBuiltin] = &[
+    ListBuiltin {
+        name: "command-alias",
+        scope: OptionScope::Global,
+        default: &[],
+    },
+    ListBuiltin {
+        name: "status-format",
+        scope: OptionScope::Session,
+        default: &[""],
+    },
+];
+
+fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
+    LISTS.iter().find(|l| l.name == name)
+}
+
+/// Every built-in list option's name, in table order.
+pub fn list_names() -> impl Iterator<Item = &'static str> {
+    LISTS.iter().map(|l| l.name)
+}
+
+/// Options grofe accepts and stores but never reads (spec §4.5, "Options
+/// by tmux name"), by tmux name. `show-config --explain` marks them
+/// `(no effect)`. FE.1 adds its rows (`terminal-features`,
+/// `extended-keys-format`, `default-terminal`) with their `BUILTINS`
+/// entries; the list stays here so no later task edits this contract.
+const NO_EFFECT: &[&str] = &[];
+
+/// Whether grofe stores `name` without ever acting on it.
+pub fn has_no_effect(name: &str) -> bool {
+    NO_EFFECT.contains(&name)
+}
+
+/// One list option's elements at one owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListEntry {
+    pub items: BTreeMap<u32, String>,
+    /// Set with `--persist`, as [`Entry::persist`].
+    pub persist: bool,
+}
+
+fn default_list(l: &ListBuiltin) -> ListEntry {
+    ListEntry {
+        items: (0..).zip(l.default.iter().map(|s| s.to_string())).collect(),
+        persist: false,
+    }
+}
+
+fn default_lists() -> BTreeMap<String, ListEntry> {
+    LISTS
+        .iter()
+        .map(|l| (l.name.to_string(), default_list(l)))
+        .collect()
+}
+
+/// One change to a list option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListOp {
+    /// Element `index` becomes the text, or gains it at its end.
+    Set {
+        index: u32,
+        value: String,
+        append: bool,
+    },
+    /// The text fills the lowest free index.
+    Push(String),
+    /// The list becomes just the text at index 0.
+    Replace(String),
+    /// The list becomes exactly these elements.
+    Items(BTreeMap<u32, String>),
+    /// Element `index` goes; later ones keep their indices.
+    Remove(u32),
+    /// Back to the default (global) or gone (elsewhere).
+    Reset,
+}
+
+impl Options {
+    /// The list `name` set at exactly `owner`.
+    pub fn list(&self, owner: Owner, name: &str) -> Option<&ListEntry> {
+        self.lists.get(&owner)?.get(name)
+    }
+
+    /// Every list set at exactly `owner`, by name.
+    pub fn lists_at(&self, owner: Owner) -> impl Iterator<Item = (&String, &ListEntry)> {
+        self.lists.get(&owner).into_iter().flatten()
+    }
+
+    /// The whole list from the first owner in `chain`, then global, that
+    /// has one.
+    pub fn lookup_list(&self, name: &str, chain: &[Owner]) -> Option<&BTreeMap<u32, String>> {
+        chain
+            .iter()
+            .chain([&Owner::Global])
+            .find_map(|o| self.list(*o, name))
+            .map(|l| &l.items)
+    }
+
+    /// Applies `op` to the list `name` at `owner`. Returns whether the
+    /// list changed; an unknown list name is an error.
+    pub fn edit_list(
+        &mut self,
+        owner: Owner,
+        name: &str,
+        op: ListOp,
+        persist: bool,
+    ) -> Result<bool, String> {
+        let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        // As tmux: removing from a list this owner doesn't have changes
+        // nothing, and must not create an empty one that hides the parent's.
+        if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
+            return Ok(false);
+        }
+        let at = self.lists.entry(owner).or_default();
+        if op == ListOp::Reset {
+            let changed = if owner == Owner::Global {
+                let default = default_list(l);
+                at.insert(name.to_string(), default.clone())
+                    .map(|o| o.items)
+                    != Some(default.items)
+            } else {
+                at.remove(name).is_some()
+            };
+            if at.is_empty() {
+                self.lists.remove(&owner);
+            }
+            return Ok(changed);
+        }
+        let entry = at.entry(name.to_string()).or_default();
+        // An unset keeps the list's `--persist`; a set stores it.
+        if !matches!(op, ListOp::Remove(_)) {
+            entry.persist = persist;
+        }
+        let before = entry.items.clone();
+        let items = &mut entry.items;
+        match op {
+            ListOp::Set {
+                index,
+                value,
+                append,
+            } => {
+                let item = items.entry(index).or_default();
+                if append {
+                    item.push_str(&value);
+                } else {
+                    *item = value;
+                }
+            }
+            ListOp::Push(value) => {
+                let free = (0..).find(|i| !items.contains_key(i)).unwrap_or(u32::MAX);
+                items.insert(free, value);
+            }
+            ListOp::Replace(value) => *items = BTreeMap::from([(0, value)]),
+            ListOp::Items(new) => *items = new,
+            ListOp::Remove(index) => {
+                items.remove(&index);
+            }
+            ListOp::Reset => {}
+        }
+        Ok(*items != before)
+    }
+}
+
+/// `name` split into its base and `[N]` index, as tmux 3.7b's
+/// `options_parse` reads it.
+pub fn split_index(name: &str) -> Result<(&str, Option<u32>), String> {
+    let Some(open) = name.find('[') else {
+        return Ok((name, None));
+    };
+    let bad = || format!("ambiguous option: {name}");
+    let inner = name[open + 1..]
+        .strip_suffix(']')
+        .filter(|s| !s.contains(']') && s.ends_with(|c: char| c.is_ascii_digit()))
+        .ok_or_else(bad)?;
+    let index = c_unsigned(inner).filter(|i| *i <= i32::MAX as u32);
+    match index {
+        Some(i) if open > 0 => Ok((&name[..open], Some(i))),
+        _ => Err(bad()),
+    }
+}
+
+/// C's `sscanf("%u")`: leading blanks, an optional sign, then digits up
+/// to the first non-digit, wrapping modulo 2^32 (so `-1` is `u32::MAX`).
+fn c_unsigned(s: &str) -> Option<u32> {
+    let s = s.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
+    let (negative, s) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    let n = s[..end].bytes().fold(0u32, |n, d| {
+        n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'))
+    });
+    Some(if negative { n.wrapping_neg() } else { n })
+}
+
+/// The error for an index on a name that is not a list: `set` says
+/// `not an array` for a known scalar, else the name is unknown.
+fn not_a_list(base: &str, full: &str) -> String {
+    if base.starts_with('@') || builtin(base).is_some() {
+        format!("not an array: {full}")
+    } else {
+        format!("invalid option: {full}")
+    }
+}
+
+/// `set-option` on a list option, or on any name given an index.
+// ponytail: `-F`, `-o` and `-q` are TC.11's, for lists as for scalars.
+fn set_list(
+    model: &mut Model,
+    events: &mut Events,
+    ctx: &ClientCtx,
+    c: &SetOption,
+    base: &str,
+    index: Option<u32>,
+) -> Result<String, String> {
+    if list_builtin(base).is_none() {
+        return Err(not_a_list(base, &c.name));
+    }
+    let scope = default_scope(c.scope, Some(base));
+    let owner = owner(model, scope, &c.target, ctx)?;
+    let op = match (c.unset, index, c.value.clone()) {
+        (true, Some(i), _) => ListOp::Remove(i),
+        (true, None, _) => ListOp::Reset,
+        (false, _, None) => return Err("empty value".to_string()),
+        (false, Some(index), Some(value)) => ListOp::Set {
+            index,
+            value,
+            append: c.append,
+        },
+        (false, None, Some(value)) if c.append => ListOp::Push(value),
+        (false, None, Some(value)) => ListOp::Replace(value),
+    };
+    let changed = model.options.edit_list(owner, base, op, c.persist)?;
+    if owner == Owner::Global {
+        model.options.mark_runtime(base);
+    }
+    if changed {
+        let (name, value) = match index {
+            Some(i) => (
+                format!("{base}[{i}]"),
+                model
+                    .options
+                    .list(owner, base)
+                    .and_then(|l| l.items.get(&i).cloned()),
+            ),
+            None => (base.to_string(), None),
+        };
+        events.emit(Event::OptionChanged {
+            scope: scope_name(owner),
+            name,
+            value,
+        });
+    }
+    Ok(String::new())
+}
+
+/// A config list's elements, element N at index N.
+fn list_items(items: &[String]) -> BTreeMap<u32, String> {
+    (0..).zip(items.iter().cloned()).collect()
+}
+
+/// Sets a whole global list, emitting `option-changed` (value-less, as
+/// for any whole-list change) on a change.
+fn set_global_list(
+    model: &mut Model,
+    events: &mut Events,
+    name: &str,
+    items: BTreeMap<u32, String>,
+) {
+    match model
+        .options
+        .edit_list(Owner::Global, name, ListOp::Items(items), false)
+    {
+        Ok(true) => events.emit(Event::OptionChanged {
+            scope: scope_name(Owner::Global),
+            name: name.to_string(),
+            value: None,
+        }),
+        Ok(false) => {}
+        Err(e) => eprintln!("grofe config: {name}: {e}"),
+    }
+}
+
+/// `apply_config` for lists (R10): a list the config no longer sets goes
+/// back to what it was before the config set it; one set at runtime is
+/// left alone.
+fn apply_config_lists(model: &mut Model, events: &mut Events, resolved: &Resolved) {
+    let configured: Vec<(&str, &[String])> = resolved
+        .configured_lists()
+        .map(|(n, v, _)| (n, v))
+        .collect();
+    let dropped: Vec<(String, BTreeMap<u32, String>)> = model
+        .options
+        .config_list_base
+        .iter()
+        .filter(|(name, _)| !configured.iter().any(|(n, _)| n == name))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    for (name, base) in dropped {
+        model.options.config_list_base.remove(&name);
+        set_global_list(model, events, &name, base);
+    }
+    for (name, items) in configured {
+        if model.options.runtime.contains(name) {
+            continue;
+        }
+        if !model.options.config_list_base.contains_key(name) {
+            let base = model
+                .options
+                .list(Owner::Global, name)
+                .map(|l| l.items.clone())
+                .unwrap_or_default();
+            model
+                .options
+                .config_list_base
+                .insert(name.to_string(), base);
+        }
+        set_global_list(model, events, name, list_items(items));
+    }
+}
+
+fn scope_name(owner: Owner) -> String {
+    match owner {
+        Owner::Global => "global".to_string(),
+        Owner::Session(id) => id.to_string(),
+        Owner::Window(id) => id.to_string(),
+        Owner::Pane(id) => id.to_string(),
+    }
+}
+
+/// A list as `show-options` prints it: one line per element, or the bare
+/// name for an empty list; with `value_only`, values only and nothing for
+/// an empty list.
+fn list_lines(name: &str, l: &ListEntry, value_only: bool) -> String {
+    if l.items.is_empty() {
+        return if value_only {
+            String::new()
+        } else {
+            format!("{name}\n")
+        };
+    }
+    l.items
+        .iter()
+        .map(|(i, v)| {
+            if value_only {
+                format!("{v}\n")
+            } else {
+                format!("{name}[{i}] {}\n", quote(v))
+            }
+        })
+        .collect()
+}
+
+/// `show-options` of a list option, or of any name given an index.
+// ponytail: `-v` here covers lists and indexed names only; a plain
+// scalar's `-v` and every `-q` are TC.4's.
+fn show_list(
+    model: &Model,
+    ctx: &ClientCtx,
+    c: &ShowOptions,
+    full: &str,
+    base: &str,
+    index: Option<u32>,
+) -> Result<String, String> {
+    let scope = default_scope(c.scope, Some(base));
+    let owner = owner(model, scope, &c.target, ctx)?;
+    let line = |value: &str| {
+        if c.value_only {
+            format!("{value}\n")
+        } else {
+            format!("{full} {}\n", quote(value))
+        }
+    };
+    if list_builtin(base).is_none() {
+        // As tmux: a scalar at an index shows its value under that name.
+        check_name(base).map_err(|_| format!("invalid option: {full}"))?;
+        return match model.options.get(owner, base) {
+            Some(e) => Ok(line(&e.value)),
+            None if base.starts_with('@') => Err(format!("invalid option: {full}")),
+            None => Ok(String::new()),
+        };
+    }
+    let Some(l) = model.options.list(owner, base) else {
+        return Ok(String::new());
+    };
+    Ok(match index {
+        Some(i) => line(l.items.get(&i).map_or("", String::as_str)),
+        None => list_lines(base, l, c.value_only),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -1475,6 +1959,87 @@ mod tests {
             validate("set-titles", "maybe"),
             Err("bad value: maybe".to_string())
         );
+    }
+
+    /// TC.2b: tmux 3.7b's index grammar (recorded on a private socket).
+    #[test]
+    fn list_indices_read_as_tmux_reads_them() {
+        for (name, want) in [
+            ("status-format", Some(("status-format", None))),
+            ("status-format[1]", Some(("status-format", Some(1)))),
+            ("status-format[+3]", Some(("status-format", Some(3)))),
+            ("status-format[ 5]", Some(("status-format", Some(5)))),
+            ("status-format[0x6]", Some(("status-format", Some(0)))),
+            (
+                "status-format[4294967296]",
+                Some(("status-format", Some(0))),
+            ),
+            (
+                "status-format[99999999999]",
+                Some(("status-format", Some(1_215_752_191))),
+            ),
+            (
+                "status-format[2147483647]",
+                Some(("status-format", Some(i32::MAX as u32))),
+            ),
+            ("status-format[2147483648]", None),
+            ("status-format[-1]", None),
+            ("status-format[1a]", None),
+            ("status-format[a1]", None),
+            ("status-format[1]]", None),
+            ("status-format[[1]", None),
+            ("status-format[1][2]", None),
+            ("[1]", None),
+        ] {
+            let got = split_index(name);
+            match want {
+                Some(w) => assert_eq!(got, Ok(w), "{name}"),
+                None => assert_eq!(got, Err(format!("ambiguous option: {name}")), "{name}"),
+            }
+        }
+    }
+
+    /// A session's list hides the global one as a whole, as in tmux.
+    #[test]
+    fn a_list_lookup_takes_the_first_owner_with_a_list() {
+        let mut o = Options::new(false);
+        let s = Owner::Session(SessionId(0));
+        let set = |index, value: &str| ListOp::Set {
+            index,
+            value: value.to_string(),
+            append: false,
+        };
+        o.edit_list(Owner::Global, "status-format", set(1, "g"), false)
+            .unwrap();
+        let global = o.lookup_list("status-format", &[s]).cloned();
+        assert_eq!(
+            global,
+            Some(BTreeMap::from([(0, String::new()), (1, "g".to_string())]))
+        );
+        assert_eq!(o.edit_list(s, "status-format", set(1, "s"), true), Ok(true));
+        assert_eq!(
+            o.edit_list(s, "status-format", set(1, "s"), true),
+            Ok(false)
+        );
+        assert_eq!(
+            o.lookup_list("status-format", &[s]),
+            Some(&BTreeMap::from([(1, "s".to_string())]))
+        );
+        assert!(o.list(s, "status-format").unwrap().persist);
+        assert_eq!(
+            o.edit_list(s, "status-format", ListOp::Reset, false),
+            Ok(true)
+        );
+        assert_eq!(o.lookup_list("status-format", &[s]).cloned(), global);
+        assert_eq!(
+            o.edit_list(Owner::Global, "status-format", ListOp::Reset, false),
+            Ok(true)
+        );
+        assert_eq!(
+            o.edit_list(Owner::Global, "nosuch", ListOp::Reset, false),
+            Err("invalid option: nosuch".to_string())
+        );
+        assert!(list_names().all(|n| builtin(n).is_none()));
     }
 
     #[test]

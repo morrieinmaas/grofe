@@ -23,6 +23,8 @@ allow-rename = false
 set-clipboard = "on"
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:28
 focus-events = true
+# ~/.config/canopy/user.conf:1
+main-pane-width = "50%"
 
 [status]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:70
@@ -37,6 +39,8 @@ left-length = 40
 right-length = 120
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:74
 interval = 5
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:71
+rows = ["", ""]
 
 [status.window]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:86
