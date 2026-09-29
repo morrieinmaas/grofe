@@ -44,9 +44,15 @@ fn main() -> ExitCode {
         .collect();
     // Run as `tmux`, the front end reads the argv (spec D1); the transport
     // below is shared, with the dialect the front end chose in every hello.
+    // The server re-exec (`__server`) is grofe's own, whatever the name.
     let argv0 = std::env::args_os().next().unwrap_or_default();
-    let (globals, rest) = if grofe::compat::invoked_as_tmux(&argv0) {
+    let is_server = args.first().is_some_and(|a| a == "__server");
+    let (globals, rest) = if grofe::compat::invoked_as_tmux(&argv0) && !is_server {
         match grofe::compat::tmux::cli(&args) {
+            Ok(cli) if cli.version => {
+                println!("tmux {}", grofe::compat::compat_level());
+                return ExitCode::SUCCESS;
+            }
             Ok(cli) => {
                 let _ = DIALECT.set(cli.dialect);
                 let globals = Globals {
@@ -286,8 +292,9 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     Ok((globals, &args[i..]))
 }
 
-/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]`: the
-/// detached server process.
+/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
+/// [--identity tmux]`: the detached server process. `--identity tmux`
+/// says the CLI that started it ran as `tmux` (spec D12).
 fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     let mut socket = globals.socket.clone();
     let mut ready_fd = None;
@@ -300,6 +307,9 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
         }
         match (arg.as_str(), it.next()) {
             ("-S", Some(path)) => socket = Some(PathBuf::from(path)),
+            ("--identity", Some(name)) if name == "tmux" => {
+                grofe::compat::set_started_as(grofe::compat::Identity::Tmux)
+            }
             ("--ready-fd", Some(fd)) => match fd.parse() {
                 Ok(fd) => ready_fd = Some(fd),
                 Err(_) => return fail(&format!("bad --ready-fd: {fd}")),
@@ -371,7 +381,7 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
             println!("[exited]");
             ExitCode::SUCCESS
         }
-        Err(e) => fail(&e),
+        Err(e) => fail(&grofe::compat::attach_error(dialect(), e)),
     }
 }
 
@@ -420,7 +430,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
-    match attach_to(socket, argv) {
+    match attach_to(socket, argv).map_err(|e| grofe::compat::attach_error(dialect(), e)) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -577,6 +587,11 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
         .stderr(Stdio::null());
     if exit_when_empty {
         cmd.arg("--exit-when-empty");
+    }
+    // The identity is the starting CLI's (spec D12): only a CLI run as
+    // `tmux` sends a tmux dialect.
+    if dialect() == Dialect::Tmux {
+        cmd.args(["--identity", "tmux"]);
     }
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork
     // and exec. It detaches the server from our session and terminal.
