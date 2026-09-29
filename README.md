@@ -129,6 +129,23 @@ cargo install --locked --path .
 
 That puts `grofe` in `~/.cargo/bin`, which needs to be on your `PATH`.
 
+To have grofe answer to `tmux` (see [Switching from tmux](#switching-from-tmux)),
+link it under that name in a directory that comes before real tmux on your
+`PATH`:
+
+```sh
+mkdir -p ~/.local/bin
+ln -s ~/.cargo/bin/grofe ~/.local/bin/tmux
+```
+
+A server started through that link has tmux identity: its panes get
+`TERM_PROGRAM=tmux` and `tmux -V` prints the tmux release grofe is compatible
+with. You can also set `compat-identity = "tmux"` in `config.toml` to get the
+same from a server started as `grofe`. Sockets stay in grofe's own directory,
+so a real tmux server on the same machine is never reached. To fall back to
+real tmux, remove the link, or call it by its full path; from inside a grofe
+pane use `env -u TMUX /path/to/tmux`.
+
 ## First steps
 
 Start a session in the background and check that it is there:
