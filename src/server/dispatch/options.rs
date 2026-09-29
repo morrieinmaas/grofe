@@ -1063,13 +1063,7 @@ impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
         match name {
             "socket_path" => Some(self.state.socket.display().to_string()),
-            // tmux titles every new pane with the host name.
-            "pane_title" => Some(
-                self.state
-                    .passthrough
-                    .title(self.pane)
-                    .map_or_else(hostname, str::to_string),
-            ),
+            "pane_title" => Some(self.state.passthrough.title(self.pane)),
             "pane_tty" => {
                 let p = self.state.model.panes.get(&self.pane)?;
                 Some(p.handle.tty_path()?.display().to_string())
@@ -1077,18 +1071,6 @@ impl FormatVars for ServerVars<'_> {
             _ => self.inner.get(name),
         }
     }
-}
-
-/// `gethostname(3)`, empty if it fails.
-fn hostname() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: the pointer and length describe `buf`, which outlives the call.
-    let rc = unsafe { nix::libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    if rc != 0 {
-        return String::new();
-    }
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
 /// The tmux version a server with tmux identity reports (`#{version}`,
@@ -1149,6 +1131,11 @@ impl FormatVars for FormatCtx<'_> {
             "window_height" => w.rows.to_string(),
             "window_panes" => w.layout.compute(w.area()).len().to_string(),
             "session_windows" => s.windows.len().to_string(),
+            "session_created" => s
+                .created
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+                .to_string(),
             "session_attached" => s.attached.to_string(),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),

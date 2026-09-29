@@ -62,6 +62,8 @@ pub struct Session {
     pub activity: Instant,
     /// How many clients show the session (`session_attached`).
     pub attached: usize,
+    /// When the session was created (`session_created`).
+    pub created: std::time::SystemTime,
 }
 
 pub struct Window {
@@ -681,6 +683,7 @@ mod tests {
             last_windows: Vec::new(),
             activity: Instant::now(),
             attached: 0,
+            created: std::time::SystemTime::now(),
         });
         id
     }

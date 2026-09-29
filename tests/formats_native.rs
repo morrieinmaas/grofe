@@ -79,6 +79,22 @@ fn each_modifier_has_a_true_and_a_false_case() {
         ("#{<=:b,a}", "0"),
         ("#{!:#{@nope}}", "1"),
         ("#{!:#{session_name}}", "0"),
+        ("#{||:0,0,0}", "0"),
+        ("#{&&:1,0,1}", "0"),
+        ("#{&&:1,1,1}", "1"),
+        (
+            "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}",
+            "0",
+        ),
+        (
+            "#{||:#{alternate_on},#{pane_in_mode},#{session_windows}}",
+            "1",
+        ),
+        ("#{m/i:AL*,alpha}", "1"),
+        ("#{m/ri:^AL.HA$,alpha}", "1"),
+        ("#{!!:#{session_name}}", "1"),
+        ("#{!!:#{@nope}}", "0"),
+        ("[#{!=:alpha}]", "[]"),
         ("#{m:al*,alpha}", "1"),
         ("#{m:be?a,alpha}", "0"),
         ("#{m:[!x]lpha,alpha}", "1"),
@@ -371,4 +387,24 @@ fn pane_tty_is_the_panes_own_terminal() {
     let want = std::fs::read_to_string(&file).unwrap_or_default();
     assert!(want.starts_with("/dev/"), "{want}");
     assert_eq!(display(&srv, "alpha:3", "#{pane_tty}"), want.trim_end());
+}
+
+#[test]
+fn session_created_is_when_the_session_was_made() {
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let srv = scripted();
+    let created: u64 = display(&srv, "alpha:1", "#{session_created}")
+        .parse()
+        .expect("a number");
+    assert!(
+        (before.saturating_sub(1)..=before + 10).contains(&created),
+        "{created} vs {before}"
+    );
+    let shown = display(&srv, "alpha:1", "#{t:session_created}");
+    if let Some(want) = date_ctime(created as i64) {
+        assert_eq!(shown, want);
+    }
 }

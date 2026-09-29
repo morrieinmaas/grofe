@@ -60,6 +60,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         last_windows: Vec::new(),
         activity: Instant::now(),
         attached: 0,
+        created: std::time::SystemTime::now(),
     });
     model.insert_window(Window {
         id: window,

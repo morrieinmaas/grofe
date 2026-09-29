@@ -66,10 +66,19 @@ pub struct Passthrough {
 }
 
 impl Passthrough {
-    /// The title `pane` set, if it set one (`#{pane_title}`, TC.3).
-    pub(crate) fn title(&self, pane: PaneId) -> Option<&str> {
-        self.titles.get(&pane).map(String::as_str)
+    /// `pane`'s title (`#{pane_title}`, `#T`): the one it set, else the
+    /// host name, which tmux titles every new pane with.
+    pub(crate) fn title(&self, pane: PaneId) -> String {
+        pane_title(&self.titles, pane)
     }
+}
+
+/// [`Passthrough::title`], for callers that hold only the titles.
+fn pane_title(titles: &BTreeMap<PaneId, String>, pane: PaneId) -> String {
+    titles
+        .get(&pane)
+        .cloned()
+        .unwrap_or_else(|| hostname().to_string())
 }
 
 /// A client's title and cursor colour as last sent; the defaults are the
@@ -540,7 +549,7 @@ fn outer_title(model: &Model, titles: &BTreeMap<PaneId, String>, pane: PaneId) -
         .options
         .lookup("set-titles-string", &chain)
         .unwrap_or_default();
-    let title = titles.get(&pane).cloned().unwrap_or_default();
+    let title = pane_title(titles, pane);
     let vars = TitleVars {
         base: FormatCtx::new(model, pane),
         title: &title,
@@ -601,6 +610,16 @@ fn osc0(title: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TC.3: one default for `#{pane_title}` and `#T`, the host name,
+    /// until the pane sets a title.
+    #[test]
+    fn a_pane_title_defaults_to_the_host_name() {
+        let mut pt = Passthrough::default();
+        assert_eq!(pt.title(PaneId(4)), hostname());
+        pt.titles.insert(PaneId(4), "mine".to_string());
+        assert_eq!(pt.title(PaneId(4)), "mine");
+    }
     use proptest::prelude::*;
 
     const APC: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";
