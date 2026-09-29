@@ -315,6 +315,17 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
     );
     assert!(own.ends_with("rc=1\n"), "{own}");
 
+    // Bare `tmux` is `new-session`; the front end refuses it until FE.1.
+    type_line(
+        &srv,
+        "outer",
+        &format!("{link} 2> {home}/bare; echo rc=$? >> {home}/bare"),
+    );
+    assert_eq!(
+        wait_file(&srv.home.join("bare")),
+        "tmux front end is not implemented: new-session\nrc=1\n"
+    );
+
     grofe(&srv, &["bind-key", ":", "command-prompt"]).expect("bind :");
     type_line(
         &srv,
@@ -378,6 +389,124 @@ fn a_grofe_server_logs_no_misses() {
     let srv = TestServer::start();
     assert!(!tmux(&srv, &["no-such-verb"]).status.success());
     assert!(miss_lines(&srv).is_empty());
+}
+
+/// Bare `tmux` without a terminal fails as tmux 3.7b does, before it
+/// starts or creates anything.
+#[test]
+fn bare_tmux_without_a_terminal_fails_as_tmux_does() {
+    let srv = TestServer::unstarted();
+    let out = tmux(&srv, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.stderr, "open terminal failed: not a terminal\n");
+    assert_eq!(out.stdout, "");
+    assert!(!srv.socket.exists());
+}
+
+/// A private copy of tmux's socket layout under the harness's
+/// `TMUX_TMPDIR`: `tmux-<uid>/default` (live), `tmux-<uid>/stale`.
+fn fake_tmux_dir(srv: &TestServer) -> (PathBuf, UnixListener) {
+    let uid = nix::unistd::geteuid().as_raw();
+    let dir = tmux_tmpdir(srv).join(format!("tmux-{uid}"));
+    fs::create_dir_all(&dir).unwrap();
+    let live = UnixListener::bind(dir.join("default")).unwrap();
+    live.set_nonblocking(true).unwrap();
+    drop(UnixListener::bind(dir.join("stale")).unwrap());
+    (dir, live)
+}
+
+/// Run as `tmux`, `-S` into tmux's own socket directory is refused before
+/// any connection, and a stale socket there is left in place.
+#[test]
+fn a_socket_in_tmux_s_own_directory_is_refused() {
+    let srv = TestServer::unstarted();
+    let (dir, live) = fake_tmux_dir(&srv);
+    for name in ["default", "stale", "new", "sub/deeper"] {
+        let path = dir.join(name).display().to_string();
+        for verb in ["start-server", "new-session", "list-sessions"] {
+            let out = tmux_bare(
+                &srv,
+                &["-S", &path, verb, "-d"][..if verb == "new-session" { 4 } else { 3 }],
+            );
+            assert_eq!(out.status.code(), Some(1), "{name} {verb}");
+            assert!(
+                out.stderr.contains("in tmux's socket directory"),
+                "{name} {verb}: {}",
+                out.stderr
+            );
+        }
+    }
+    match live.accept() {
+        Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+        other => panic!("something connected to the fake tmux socket: {other:?}"),
+    }
+    let mut left: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["default", "stale"], "nothing added or removed");
+    // `$GROFE` pointing there is refused as well.
+    let mut cmd = Command::new(tmux_link(&srv));
+    isolate(&srv, &mut cmd);
+    cmd.env("GROFE", dir.join("default")).arg("list-sessions");
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(
+        out.stderr.contains("in tmux's socket directory"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Run as `tmux`, a stale socket grofe did not create is never removed,
+/// and `start-server` on a socket some other program listens on fails
+/// instead of reporting success.
+#[test]
+fn foreign_sockets_are_never_taken_over() {
+    let srv = TestServer::unstarted();
+    let stale = root(&srv).join("foreign-stale.sock");
+    drop(UnixListener::bind(&stale).unwrap());
+    let stale_arg = stale.display().to_string();
+    for verb in ["start-server", "new-session"] {
+        let out = tmux_bare(
+            &srv,
+            &["-S", &stale_arg, verb, "-d"][..if verb == "new-session" { 4 } else { 3 }],
+        );
+        assert!(!out.status.success(), "{verb}");
+        assert!(
+            out.stderr.contains("grofe did not create it"),
+            "{verb}: {}",
+            out.stderr
+        );
+        assert!(stale.exists(), "{verb} removed the foreign socket");
+    }
+
+    let foreign = root(&srv).join("foreign-live.sock");
+    let listener = UnixListener::bind(&foreign).unwrap();
+    let taker = std::thread::spawn(move || {
+        // Answers nothing and hangs up, as a non-grofe server would.
+        let (stream, _) = listener.accept().unwrap();
+        drop(stream);
+    });
+    let out = tmux_bare(
+        &srv,
+        &["-S", &foreign.display().to_string(), "start-server"],
+    );
+    taker.join().unwrap();
+    assert!(!out.status.success(), "start-server reported success");
+    assert!(
+        out.stderr.contains("is not a grofe server"),
+        "{}",
+        out.stderr
+    );
+    assert!(foreign.exists());
+
+    // A socket grofe did create, left stale by a crash, is still replaced.
+    assert!(tmux(&srv, &["start-server"]).status.success());
+    assert!(grofe(&srv, &["kill-server"]).is_ok());
+    drop(UnixListener::bind(&srv.socket).unwrap());
+    let out = tmux(&srv, &["start-server"]);
+    assert!(out.status.success(), "{}", out.stderr);
 }
 
 /// Run as `tmux`, grofe never connects to tmux's own sockets: not the one

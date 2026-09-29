@@ -379,6 +379,9 @@ fn check_target(
         && let Some(p) = model.panes.get(&pane)
         && model.windows.get(&p.window).map(|w| w.session) == Some(session)
     {
+        if ctx.dialect == crate::protocol::Dialect::Tmux {
+            return Err(crate::compat::TMUX_NESTED.to_string());
+        }
         return Err(format!(
             "refusing to attach session {} from inside itself (use --nest to force)",
             model.sessions[&session].name

@@ -129,22 +129,30 @@ cargo install --locked --path .
 
 That puts `grofe` in `~/.cargo/bin`, which needs to be on your `PATH`.
 
-To have grofe answer to `tmux` (see [Switching from tmux](#switching-from-tmux)),
-link it under that name in a directory that comes before real tmux on your
-`PATH`:
+grofe can also answer to the name `tmux`, but that is not usable yet. Until
+the tmux compatibility work (milestone M3.6) is complete, most tmux commands
+sent to a `tmux`-named grofe fail with `tmux front end is not implemented`,
+bare `tmux` included. Only `tmux -V`, the `-L` and `-S` socket flags and
+`tmux start-server` and `tmux attach` work. Keep real tmux first on your `PATH` for now. To try
+the name without replacing tmux, link it somewhere off your `PATH` and call
+it by its full path:
 
 ```sh
-mkdir -p ~/.local/bin
-ln -s ~/.cargo/bin/grofe ~/.local/bin/tmux
+mkdir -p ~/grofe-tmux
+ln -s ~/.cargo/bin/grofe ~/grofe-tmux/tmux
+~/grofe-tmux/tmux -V
 ```
 
 A server started through that link has tmux identity: its panes get
-`TERM_PROGRAM=tmux` and `tmux -V` prints the tmux release grofe is compatible
-with. You can also set `compat-identity = "tmux"` in `config.toml` to get the
-same from a server started as `grofe`. Sockets stay in grofe's own directory,
-so a real tmux server on the same machine is never reached. To fall back to
-real tmux, remove the link, or call it by its full path; from inside a grofe
-pane use `env -u TMUX /path/to/tmux`.
+`TERM_PROGRAM=tmux`, and `tmux -V` prints the tmux release grofe is compatible
+with. `compat-identity = "tmux"` in `config.toml` does the same for a server
+started as `grofe`. Under either name, `-L` sockets live in grofe's own
+directory, never in tmux's. Run as `tmux`, grofe refuses a `-S` path inside
+tmux's socket directory (`$TMUX_TMPDIR` or `/tmp`, then `tmux-<uid>`) and
+never replaces a socket it did not create. A `-S` path elsewhere that a real
+tmux server listens on is still connected to, and grofe then reports that it
+is not a grofe server. Inside a grofe pane, `$TMUX` points at grofe, so run
+real tmux there as `env -u TMUX /path/to/tmux`.
 
 ## First steps
 

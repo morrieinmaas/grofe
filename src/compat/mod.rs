@@ -107,33 +107,22 @@ pub fn pane_env(state: &State, session: SessionId, pane: PaneId) -> Vec<(String,
     env
 }
 
-/// The dialect a closed prompt's command runs in (spec D12): the dialect of
-/// the request that opened it, except that text typed at a bare `:` prompt
-/// (no template) on a tmux-identity server is tmux's.
+/// The dialect a closed prompt's command runs in (spec D12). On a grofe
+/// server it is always grofe. On a tmux-identity server, text typed at a
+/// bare `:` prompt (no template) is tmux's; a template keeps the dialect of
+/// the request or binding that opened the prompt, as stored command strings
+/// keep theirs (spec §4.5).
 pub fn prompt_dialect(state: &State, opener: Dialect, has_template: bool) -> Dialect {
-    if opener == Dialect::Tmux || (state.model.identity == Identity::Tmux && !has_template) {
-        Dialect::Tmux
-    } else {
-        Dialect::Grofe
+    match state.model.identity {
+        Identity::Grofe => Dialect::Grofe,
+        Identity::Tmux if !has_template => Dialect::Tmux,
+        Identity::Tmux => opener,
     }
 }
 
 /// tmux 3.7b's refusal to attach from inside one of its own panes
 /// (recorded: exit 1).
 pub const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";
-
-/// An attach error as the CLI prints it: grofe's self-nesting refusal
-/// becomes tmux's for a tmux-dialect request (spec §4.6), every other
-/// error is kept.
-pub fn attach_error(dialect: Dialect, err: String) -> String {
-    let self_nest =
-        err.starts_with("refusing to attach session ") && err.contains(" from inside itself");
-    if dialect == Dialect::Tmux && self_nest {
-        TMUX_NESTED.to_string()
-    } else {
-        err
-    }
-}
 
 /// `compat-miss.log` in the state directory, derived as the server log is
 /// (`paths::state_dir`), so a test's `XDG_STATE_HOME` keeps it.
@@ -143,25 +132,70 @@ pub fn miss_log_path(env: &Env) -> PathBuf {
 
 /// Appends one line for `what` (a verb, flag or format variable the tmux
 /// front end does not know) to `compat-miss.log`, on a tmux-identity
-/// server only (spec D12). Best effort: a log that cannot be written never
-/// fails the request.
-pub fn miss_log(state: &State, what: &str) {
-    if state.model.identity == Identity::Tmux {
-        append_miss(&miss_log_path(&Env::from_process()), what);
-    }
-}
-
-/// [`miss_log`] for the parse path, which has no `State`: logs only once
-/// [`server_started`] fixed a tmux identity.
-fn log_miss(what: &str) {
+/// server only (spec D12). The path is the one [`server_started`] fixed,
+/// so nothing but a started tmux-identity server ever writes it. Best
+/// effort: a log that cannot be written never fails the request.
+pub fn miss_log(_state: &State, what: &str) {
     if let Some(path) = MISS_LOG.get() {
         append_miss(path, what);
     }
 }
 
-/// One `<unix seconds> <what>` line appended to `path`, its directory
-/// created private if missing.
+/// The longest `what` a miss line keeps, in bytes.
+const MISS_MAX: usize = 256;
+
+/// `compat-miss.log` stops growing past this size.
+// ponytail: no rotation; a full log is reviewed and removed by hand.
+const MISS_LOG_CAP: u64 = 1 << 20;
+
+/// Verbs (and tmux's aliases and prefixes of them) whose arguments may
+/// carry secrets: only the verb and its flags are logged. `set` is
+/// `set-option`'s alias, not a prefix of `set-environment`.
+fn redacted(verb: &str) -> bool {
+    !verb.is_empty()
+        && verb != "set"
+        && (["send-keys", "set-environment"]
+            .iter()
+            .any(|full| full.starts_with(verb))
+            || matches!(verb, "send" | "setenv"))
+}
+
+/// What a miss line says about a request's argv: each `;`-separated
+/// command as it was sent, except that a command that may carry secrets
+/// keeps only its verb and flags. Whether any command was redacted.
+fn miss_summary(argv: &[String]) -> (String, bool) {
+    let mut out = Vec::new();
+    let mut any = false;
+    for command in argv.split(|a| a == ";") {
+        let hide = command.first().is_some_and(|v| redacted(v));
+        any |= hide;
+        let words: Vec<&str> = command
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| !hide || *i == 0 || w.starts_with('-'))
+            .map(|(_, w)| w.as_str())
+            .collect();
+        out.push(words.join(" "));
+    }
+    (out.join(" ; "), any)
+}
+
+/// `s` cut to at most `max` bytes, at a character boundary.
+fn truncate(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// One `<unix seconds> <what>` line appended to `path` (`what` cut to
+/// [`MISS_MAX`] bytes), its directory created private if missing, unless
+/// the file is already past [`MISS_LOG_CAP`].
 fn append_miss(path: &Path, what: &str) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > MISS_LOG_CAP) {
+        return;
+    }
     if let Some(dir) = path.parent()
         && paths::ensure_private_dir(dir).is_err()
     {
@@ -171,7 +205,8 @@ fn append_miss(path: &Path, what: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let line = format!("{secs} {}\n", what.replace('\n', " "));
+    let what = what.replace('\n', " ");
+    let line = format!("{secs} {}\n", truncate(&what, MISS_MAX));
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -180,6 +215,61 @@ fn append_miss(path: &Path, what: &str) {
     {
         let _ = file.write_all(line.as_bytes());
     }
+}
+
+/// tmux's own socket directories for `uid`, which grofe run as `tmux`
+/// never uses (spec D12): `$TMUX_TMPDIR/tmux-<uid>` (`TMUX_TMPDIR`
+/// defaulting to `/tmp`) and the default `/tmp/tmux-<uid>`.
+pub fn tmux_socket_dirs(tmux_tmpdir: Option<&str>, uid: u32) -> Vec<PathBuf> {
+    let name = format!("tmux-{uid}");
+    let mut dirs = vec![Path::new("/tmp").join(&name)];
+    if let Some(dir) = tmux_tmpdir.filter(|d| !d.is_empty()) {
+        dirs.push(Path::new(dir).join(&name));
+    }
+    dirs
+}
+
+/// `path` made absolute, with its deepest existing ancestor canonicalised
+/// (symlinks and `..` resolved as far as the filesystem allows).
+fn resolved(path: &Path) -> PathBuf {
+    let absolute = match path.is_absolute() {
+        true => path.to_path_buf(),
+        false => std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf()),
+    };
+    let mut rest = Vec::new();
+    let mut at = absolute.as_path();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(canon, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return absolute,
+        }
+    }
+}
+
+/// Refuses a `-S` path inside one of tmux's own socket directories
+/// ([`tmux_socket_dirs`]), so grofe run as `tmux` can never take over, or
+/// be mistaken for, a real tmux server's socket.
+pub fn refuse_tmux_socket(socket: &Path, dirs: &[PathBuf]) -> Result<(), String> {
+    let socket = resolved(socket);
+    for dir in dirs {
+        if socket.starts_with(dir) || socket.starts_with(resolved(dir)) {
+            return Err(format!(
+                "grofe: refusing -S {}: it is in tmux's socket directory {}; run as tmux, \
+                 grofe keeps its sockets in its own directory",
+                socket.display(),
+                dir.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether the CLI runs under the name `tmux`: `argv[0]`'s basename is
@@ -214,7 +304,14 @@ pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, Str
 
 fn tmux_dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, String> {
     tmux::dispatch(argv, ctx).map_err(|e| {
-        log_miss(&format!("{}: {e}", argv.join(" ")));
+        if let Some(path) = MISS_LOG.get() {
+            // A redacted command's error text may quote its values.
+            let (summary, redacted) = miss_summary(argv);
+            match redacted {
+                true => append_miss(path, &summary),
+                false => append_miss(path, &format!("{summary}: {e}")),
+            }
+        }
         e.to_string()
     })
 }
@@ -312,28 +409,20 @@ mod tests {
         );
     }
 
+    /// D12: prompt text is tmux dialect only on a tmux-identity server; a
+    /// tmux opener on a grofe server does not make it so.
     #[test]
     fn only_bare_prompt_text_takes_the_tmux_identity() {
         let mut state = crate::server::test_state();
         let (g, t) = (Dialect::Grofe, Dialect::Tmux);
-        assert_eq!(prompt_dialect(&state, g, false), g);
-        assert_eq!(prompt_dialect(&state, g, true), g);
-        assert_eq!(prompt_dialect(&state, t, true), t);
+        for (opener, template) in [(g, false), (g, true), (t, false), (t, true)] {
+            assert_eq!(prompt_dialect(&state, opener, template), g);
+        }
         state.model.identity = Identity::Tmux;
         assert_eq!(prompt_dialect(&state, g, false), t);
+        assert_eq!(prompt_dialect(&state, t, false), t);
         assert_eq!(prompt_dialect(&state, g, true), g);
         assert_eq!(prompt_dialect(&state, t, true), t);
-    }
-
-    #[test]
-    fn a_tmux_attach_says_tmux_s_self_nesting_refusal() {
-        let grofe = "refusing to attach session main from inside itself (use --nest to force)";
-        assert_eq!(attach_error(Dialect::Grofe, grofe.to_string()), grofe);
-        assert_eq!(attach_error(Dialect::Tmux, grofe.to_string()), TMUX_NESTED);
-        assert_eq!(
-            attach_error(Dialect::Tmux, "can't find session: x".to_string()),
-            "can't find session: x"
-        );
     }
 
     #[test]
@@ -355,6 +444,96 @@ mod tests {
             uid: 0,
         };
         assert_eq!(miss_log_path(&env), path);
+    }
+
+    #[test]
+    fn tmux_s_socket_dirs_are_refused_and_others_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmpdir = tmp.path().display().to_string();
+        let dirs = tmux_socket_dirs(Some(&tmpdir), 501);
+        assert_eq!(
+            dirs,
+            [PathBuf::from("/tmp/tmux-501"), tmp.path().join("tmux-501")]
+        );
+        let own = tmp.path().join("tmux-501");
+        std::fs::create_dir(&own).unwrap();
+        for bad in [
+            own.join("default"),
+            own.join("x/../default"),
+            own.join("missing/deeper"),
+            PathBuf::from("/tmp/tmux-501/default"),
+            PathBuf::from("/tmp/./tmux-501/work"),
+        ] {
+            assert!(
+                refuse_tmux_socket(&bad, &dirs).is_err(),
+                "{}",
+                bad.display()
+            );
+        }
+        // A symlink into tmux's directory is refused too.
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&own, &link).unwrap();
+        assert!(refuse_tmux_socket(&link.join("default"), &dirs).is_err());
+        for good in [
+            tmp.path().join("grofe.sock"),
+            tmp.path().join("tmux-5010/default"),
+            PathBuf::from("/tmp/tmux-502/default"),
+        ] {
+            assert!(
+                refuse_tmux_socket(&good, &dirs).is_ok(),
+                "{}",
+                good.display()
+            );
+        }
+        assert_eq!(tmux_socket_dirs(None, 7), [PathBuf::from("/tmp/tmux-7")]);
+    }
+
+    #[test]
+    fn a_miss_line_is_capped_at_256_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grofe").join("compat-miss.log");
+        append_miss(&path, &"é".repeat(300));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (_, what) = text.trim_end().split_once(' ').unwrap();
+        assert_eq!(what.len(), 256, "{what}");
+    }
+
+    #[test]
+    fn the_miss_log_stops_growing_past_its_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("compat-miss.log");
+        std::fs::write(&path, vec![b'x'; MISS_LOG_CAP as usize + 1]).unwrap();
+        append_miss(&path, "one more");
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), MISS_LOG_CAP + 1);
+    }
+
+    #[test]
+    fn secrets_in_send_keys_and_set_environment_are_not_logged() {
+        let (s, hidden) = miss_summary(&argv(&[
+            "setenv",
+            "-g",
+            "TOKEN",
+            "hunter2",
+            ";",
+            "send",
+            "-t",
+            "%1",
+            "pw",
+            "Enter",
+            ";",
+            "select-pane",
+            "-t",
+            "%1",
+        ]));
+        assert!(hidden);
+        assert_eq!(s, "setenv -g ; send -t ; select-pane -t %1");
+        for verb in ["send-keys", "set-environment", "send-k", "set-e"] {
+            let (s, hidden) = miss_summary(&argv(&[verb, "secret"]));
+            assert!(hidden && !s.contains("secret"), "{verb}: {s}");
+        }
+        let (s, hidden) = miss_summary(&argv(&["set", "-g", "@x", "1"]));
+        assert!(!hidden);
+        assert_eq!(s, "set -g @x 1");
     }
 
     #[test]

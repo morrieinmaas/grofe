@@ -59,6 +59,14 @@ fn main() -> ExitCode {
                     socket: cli.socket,
                     name: cli.name,
                 };
+                // Never a socket in tmux's own directory (spec D12).
+                let dirs = grofe::compat::tmux_socket_dirs(
+                    std::env::var("TMUX_TMPDIR").ok().as_deref(),
+                    nix::unistd::geteuid().as_raw(),
+                );
+                if let Err(e) = grofe::compat::refuse_tmux_socket(&globals.socket(), &dirs) {
+                    return fail(&e);
+                }
                 (globals, cli.argv)
             }
             Err(e) => return fail(&e),
@@ -89,8 +97,8 @@ fn main() -> ExitCode {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
-            match connect_or_start(&socket, own_dir, false) {
-                Ok(_) => ExitCode::SUCCESS,
+            match connect_or_start(&socket, own_dir, false).and_then(|s| probe(s, &socket)) {
+                Ok(()) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             }
         }
@@ -381,7 +389,7 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
             println!("[exited]");
             ExitCode::SUCCESS
         }
-        Err(e) => fail(&grofe::compat::attach_error(dialect(), e)),
+        Err(e) => fail(&e),
     }
 }
 
@@ -430,7 +438,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
-    match attach_to(socket, argv).map_err(|e| grofe::compat::attach_error(dialect(), e)) {
+    match attach_to(socket, argv) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -487,6 +495,33 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
     client::attach(stream, ctx, opts, term)
 }
 
+/// How long [`probe`] waits for an answer.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Checks that `stream` is a grofe server by asking it `list-sessions` in
+/// grofe's dialect: `start-server` must not report success on a socket
+/// that some other program (a real tmux) listens on.
+fn probe(stream: UnixStream, socket: &Path) -> Result<(), String> {
+    let not_grofe = |e: String| format!("{} is not a grofe server: {e}", socket.display());
+    stream
+        .set_read_timeout(Some(PROBE_TIMEOUT))
+        .and_then(|()| stream.set_write_timeout(Some(PROBE_TIMEOUT)))
+        .map_err(|e| not_grofe(e.to_string()))?;
+    let ctx = ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: Dialect::Grofe,
+    };
+    let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
+    match request_with(stream, &hello, &["list-sessions".to_string()]) {
+        Ok(Reply::Ok { .. } | Reply::Err { .. }) => Ok(()),
+        Ok(Reply::Event(_)) => Err(not_grofe("unexpected event reply".to_string())),
+        Err(e) => Err(not_grofe(e)),
+    }
+}
+
 /// Connects to a running server, or explains that there is none.
 ///
 /// A missing socket is retried once after a short wait: an auto-started
@@ -534,6 +569,19 @@ fn connect_or_start(
         return Ok(stream);
     }
     let lock_path = paths::lock_path(socket);
+    // Run as `tmux`, a socket grofe did not create (every one it creates
+    // has had its lock file beside it) is never replaced: it may be another
+    // program's, a real tmux's above all. Checked before the lock file is
+    // made, so a refusal leaves nothing behind.
+    if dialect() == Dialect::Tmux
+        && !lock_path.exists()
+        && std::fs::symlink_metadata(socket).is_ok()
+    {
+        return Err(format!(
+            "refusing to replace {}: grofe did not create it",
+            socket.display()
+        ));
+    }
     let lock_file = OpenOptions::new()
         .create(true)
         .write(true)

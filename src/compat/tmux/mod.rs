@@ -125,6 +125,10 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         }
     }
     out.argv = args[i..].to_vec();
+    // Bare `tmux` is `new-session`, as in tmux 3.7b.
+    if out.argv.is_empty() {
+        out.argv.push("new-session".to_string());
+    }
     Ok(out)
 }
 
@@ -163,8 +167,8 @@ mod tests {
 
         let got = cli(&args(&["--", "-x"])).unwrap();
         assert_eq!(got.argv, args(&["-x"]));
-        let got = cli(&args(&[])).unwrap();
-        assert!(got.argv.is_empty());
+        let got = cli(&args(&["-L", "x"])).unwrap();
+        assert_eq!(got.argv, args(&["new-session"]));
     }
 
     #[test]
