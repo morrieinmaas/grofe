@@ -1,20 +1,24 @@
 //! tmux compatibility, identity and entry (spec D1, D12, §4.6; TC.1): the
 //! server's identity, the `argv[0]` check the CLI makes before its own
-//! table, and the dialect decision that sends a request's argv to the
-//! native parser or to the tmux front end ([`tmux`], FE.1).
-//!
-//! The stub edit leaves it inert: the identity (`Model.identity`) stays
-//! grofe, only a request that says `dialect: tmux` (which no CLI sends
-//! yet) reaches the front end, and the front end rejects every tmux form.
+//! table, the dialect decision that sends a request's argv to the native
+//! parser or to the tmux front end ([`tmux`], FE.1), the variables a pane
+//! gets from the identity, and the `compat-miss.log` writer.
 
 pub mod tmux;
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cmd::{self, Command};
+use crate::paths::{self, Env};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
+use crate::server::dispatch::options::Owner;
 use crate::types::{PaneId, SessionId};
 
 /// Who a server says it is (spec D12): grofe, or tmux when started through
@@ -27,16 +31,245 @@ pub enum Identity {
     Tmux,
 }
 
-/// Called once in the server, after its config is applied: where TC.1
-/// fixes `state.model.identity` from the starting CLI's `argv[0]` and the
-/// `compat-identity` option. Does nothing yet.
-pub fn server_started(_state: &mut State) {}
+/// The tmux release the compat suite is recorded against (spec D12):
+/// `tmux -V`'s number, `TERM_PROGRAM_VERSION` under tmux identity.
+pub fn compat_level() -> &'static str {
+    "3.7b"
+}
+
+/// How the CLI that started this server process was invoked, set once by
+/// `main.rs` before the server runs. Unset (a unit test) is grofe.
+static STARTED_AS: OnceLock<Identity> = OnceLock::new();
+
+/// Records the starting CLI's identity for [`server_started`]. Only the
+/// first call counts.
+pub fn set_started_as(identity: Identity) {
+    let _ = STARTED_AS.set(identity);
+}
+
+/// Where a tmux-identity server appends its misses, set by
+/// [`server_started`] so the parse path, which has no `State`, can log.
+static MISS_LOG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Called once in the server, after its config is applied: fixes
+/// `state.model.identity` from the starting CLI's `argv[0]` and the
+/// `compat-identity` option. A later `set compat-identity` or `reload`
+/// does not change it (spec D12: identity is fixed at start).
+pub fn server_started(state: &mut State) {
+    let started = STARTED_AS.get().copied().unwrap_or_default();
+    let option = state
+        .model
+        .options
+        .lookup("compat-identity", &[Owner::Global])
+        .unwrap_or("auto");
+    state.model.identity = decide_identity(started, option);
+    if state.model.identity == Identity::Tmux {
+        let _ = MISS_LOG.set(miss_log_path(&Env::from_process()));
+    }
+}
+
+/// The identity a server takes: `compat-identity` when it names one,
+/// otherwise (`auto`) the starting CLI's.
+fn decide_identity(started: Identity, option: &str) -> Identity {
+    match option {
+        "tmux" => Identity::Tmux,
+        "grofe" => Identity::Grofe,
+        _ => started,
+    }
+}
+
+/// `$TMUX` as tmux 3.7b sets it: `<socket path>,<server pid>,<session id
+/// number>`, recorded against real tmux (`/tmp/tmux-501/x,86444,0`).
+pub fn tmux_value(socket: &Path, pid: u32, session: SessionId) -> String {
+    format!("{},{pid},{}", socket.display(), session.0)
+}
 
 /// Variables a new or respawned pane of `session` gets from the server's
-/// identity (TC.1: `TMUX`, `TMUX_PANE`, `TERM_PROGRAM`), applied over the
-/// session's environment. None yet.
-pub fn pane_env(_state: &State, _session: SessionId, _pane: PaneId) -> Vec<(String, String)> {
-    Vec::new()
+/// identity, applied over the session's environment (spec D12, §4.2):
+/// `TMUX` and `TMUX_PANE` under both identities, and under tmux identity
+/// `TERM_PROGRAM=tmux` with the compat level as its version, replacing the
+/// outer terminal's.
+pub fn pane_env(state: &State, session: SessionId, pane: PaneId) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            "TMUX".to_string(),
+            tmux_value(&state.socket, std::process::id(), session),
+        ),
+        ("TMUX_PANE".to_string(), pane.to_string()),
+    ];
+    if state.model.identity == Identity::Tmux {
+        env.push(("TERM_PROGRAM".to_string(), "tmux".to_string()));
+        env.push((
+            "TERM_PROGRAM_VERSION".to_string(),
+            compat_level().to_string(),
+        ));
+    }
+    env
+}
+
+/// The dialect a closed prompt's command runs in (spec D12). On a grofe
+/// server it is always grofe. On a tmux-identity server, text typed at a
+/// bare `:` prompt (no template) is tmux's; a template keeps the dialect of
+/// the request or binding that opened the prompt, as stored command strings
+/// keep theirs (spec §4.5).
+pub fn prompt_dialect(state: &State, opener: Dialect, has_template: bool) -> Dialect {
+    match state.model.identity {
+        Identity::Grofe => Dialect::Grofe,
+        Identity::Tmux if !has_template => Dialect::Tmux,
+        Identity::Tmux => opener,
+    }
+}
+
+/// tmux 3.7b's refusal to attach from inside one of its own panes
+/// (recorded: exit 1).
+pub const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";
+
+/// `compat-miss.log` in the state directory, derived as the server log is
+/// (`paths::state_dir`), so a test's `XDG_STATE_HOME` keeps it.
+pub fn miss_log_path(env: &Env) -> PathBuf {
+    paths::state_dir(env).join("compat-miss.log")
+}
+
+/// Appends one line for `what` (a verb, flag or format variable the tmux
+/// front end does not know) to `compat-miss.log`, on a tmux-identity
+/// server only (spec D12). The path is the one [`server_started`] fixed,
+/// so nothing but a started tmux-identity server ever writes it. Best
+/// effort: a log that cannot be written never fails the request.
+pub fn miss_log(_state: &State, what: &str) {
+    if let Some(path) = MISS_LOG.get() {
+        append_miss(path, what);
+    }
+}
+
+/// The longest `what` a miss line keeps, in bytes.
+const MISS_MAX: usize = 256;
+
+/// `compat-miss.log` stops growing past this size.
+// ponytail: no rotation; a full log is reviewed and removed by hand.
+const MISS_LOG_CAP: u64 = 1 << 20;
+
+/// Verbs (and tmux's aliases and prefixes of them) whose arguments may
+/// carry secrets: only the verb and its flags are logged. `set` is
+/// `set-option`'s alias, not a prefix of `set-environment`.
+fn redacted(verb: &str) -> bool {
+    !verb.is_empty()
+        && verb != "set"
+        && (["send-keys", "set-environment"]
+            .iter()
+            .any(|full| full.starts_with(verb))
+            || matches!(verb, "send" | "setenv"))
+}
+
+/// What a miss line says about a request's argv: each `;`-separated
+/// command as it was sent, except that a command that may carry secrets
+/// keeps only its verb and flags. Whether any command was redacted.
+fn miss_summary(argv: &[String]) -> (String, bool) {
+    let mut out = Vec::new();
+    let mut any = false;
+    for command in argv.split(|a| a == ";") {
+        let hide = command.first().is_some_and(|v| redacted(v));
+        any |= hide;
+        let words: Vec<&str> = command
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| !hide || *i == 0 || w.starts_with('-'))
+            .map(|(_, w)| w.as_str())
+            .collect();
+        out.push(words.join(" "));
+    }
+    (out.join(" ; "), any)
+}
+
+/// `s` cut to at most `max` bytes, at a character boundary.
+fn truncate(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// One `<unix seconds> <what>` line appended to `path` (`what` cut to
+/// [`MISS_MAX`] bytes), its directory created private if missing, unless
+/// the file is already past [`MISS_LOG_CAP`].
+fn append_miss(path: &Path, what: &str) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > MISS_LOG_CAP) {
+        return;
+    }
+    if let Some(dir) = path.parent()
+        && paths::ensure_private_dir(dir).is_err()
+    {
+        return;
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let what = what.replace('\n', " ");
+    let line = format!("{secs} {}\n", truncate(&what, MISS_MAX));
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// tmux's own socket directories for `uid`, which grofe run as `tmux`
+/// never uses (spec D12): `$TMUX_TMPDIR/tmux-<uid>` (`TMUX_TMPDIR`
+/// defaulting to `/tmp`) and the default `/tmp/tmux-<uid>`.
+pub fn tmux_socket_dirs(tmux_tmpdir: Option<&str>, uid: u32) -> Vec<PathBuf> {
+    let name = format!("tmux-{uid}");
+    let mut dirs = vec![Path::new("/tmp").join(&name)];
+    if let Some(dir) = tmux_tmpdir.filter(|d| !d.is_empty()) {
+        dirs.push(Path::new(dir).join(&name));
+    }
+    dirs
+}
+
+/// `path` made absolute, with its deepest existing ancestor canonicalised
+/// (symlinks and `..` resolved as far as the filesystem allows).
+fn resolved(path: &Path) -> PathBuf {
+    let absolute = match path.is_absolute() {
+        true => path.to_path_buf(),
+        false => std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf()),
+    };
+    let mut rest = Vec::new();
+    let mut at = absolute.as_path();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(canon, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return absolute,
+        }
+    }
+}
+
+/// Refuses a `-S` path inside one of tmux's own socket directories
+/// ([`tmux_socket_dirs`]), so grofe run as `tmux` can never take over, or
+/// be mistaken for, a real tmux server's socket.
+pub fn refuse_tmux_socket(socket: &Path, dirs: &[PathBuf]) -> Result<(), String> {
+    let socket = resolved(socket);
+    for dir in dirs {
+        if socket.starts_with(dir) || socket.starts_with(resolved(dir)) {
+            return Err(format!(
+                "grofe: refusing -S {}: it is in tmux's socket directory {}; run as tmux, \
+                 grofe keeps its sockets in its own directory",
+                socket.display(),
+                dir.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether the CLI runs under the name `tmux`: `argv[0]`'s basename is
@@ -48,11 +281,13 @@ pub fn invoked_as_tmux(argv0: &OsStr) -> bool {
 }
 
 /// The commands a request's argv means: split at `;` and parsed natively,
-/// or, for a tmux-dialect request, translated by the front end.
+/// or, for a tmux-dialect request, translated by the front end. A request
+/// the front end cannot translate is a miss, logged once (the request is
+/// parsed once, `dispatch::parse`).
 pub fn parse_request(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
     match ctx.dialect {
         Dialect::Grofe => cmd::parse_sequence(argv).map_err(|e| e.to_string()),
-        Dialect::Tmux => tmux::dispatch(argv, ctx).map_err(|e| e.to_string()),
+        Dialect::Tmux => tmux_dispatch(argv, ctx),
     }
 }
 
@@ -63,8 +298,22 @@ pub fn parse_request(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, S
 pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
     match ctx.dialect {
         Dialect::Grofe => cmd::parse(argv).map(|c| vec![c]).map_err(|e| e.to_string()),
-        Dialect::Tmux => tmux::dispatch(argv, ctx).map_err(|e| e.to_string()),
+        Dialect::Tmux => tmux_dispatch(argv, ctx),
     }
+}
+
+fn tmux_dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, String> {
+    tmux::dispatch(argv, ctx).map_err(|e| {
+        if let Some(path) = MISS_LOG.get() {
+            // A redacted command's error text may quote its values.
+            let (summary, redacted) = miss_summary(argv);
+            match redacted {
+                true => append_miss(path, &summary),
+                false => append_miss(path, &format!("{summary}: {e}")),
+            }
+        }
+        e.to_string()
+    })
 }
 
 #[cfg(test)]
@@ -83,8 +332,8 @@ mod tests {
         }
     }
 
-    /// Fix round 1: the identity lives on the model, grofe until TC.1
-    /// fixes it, and a test can set it.
+    /// The identity lives on the model. A unit test never sets
+    /// `STARTED_AS`, so a server with no `compat-identity` is grofe.
     #[test]
     fn identity_is_on_the_model_and_starts_as_grofe() {
         let mut state = crate::server::test_state();
@@ -93,6 +342,198 @@ mod tests {
         assert_eq!(state.model.identity, Identity::Grofe);
         state.model.identity = Identity::Tmux;
         assert_eq!(state.model.identity, Identity::Tmux);
+    }
+
+    #[test]
+    fn compat_identity_overrides_the_starting_name_and_auto_keeps_it() {
+        use Identity::{Grofe, Tmux};
+        assert_eq!(decide_identity(Grofe, "auto"), Grofe);
+        assert_eq!(decide_identity(Tmux, "auto"), Tmux);
+        assert_eq!(decide_identity(Grofe, "tmux"), Tmux);
+        assert_eq!(decide_identity(Tmux, "grofe"), Grofe);
+        assert_eq!(decide_identity(Tmux, "tmux"), Tmux);
+    }
+
+    /// A `compat-identity grofe` set before start is read by
+    /// `server_started` (the `tmux` case is `tests/compat_identity.rs`'s,
+    /// since a tmux identity here would log to the real state dir).
+    #[test]
+    fn server_started_reads_compat_identity() {
+        let mut state = crate::server::test_state();
+        state.model.identity = Identity::Tmux;
+        state
+            .model
+            .options
+            .set(Owner::Global, "compat-identity", "grofe", false)
+            .unwrap();
+        server_started(&mut state);
+        assert_eq!(state.model.identity, Identity::Grofe);
+    }
+
+    #[test]
+    fn the_compat_level_is_3_7b() {
+        assert_eq!(compat_level(), "3.7b");
+    }
+
+    /// Recorded against tmux 3.7b: `TMUX=/private/tmp/tmux-502/x,86444,1`
+    /// for the pane of session `$1`.
+    #[test]
+    fn tmux_value_is_socket_pid_and_session_number() {
+        assert_eq!(
+            tmux_value(Path::new("/run/grofe/default.sock"), 86444, SessionId(1)),
+            "/run/grofe/default.sock,86444,1"
+        );
+    }
+
+    #[test]
+    fn panes_get_tmux_under_both_identities_and_term_program_under_tmux() {
+        let mut state = crate::server::test_state();
+        let tmux = format!("/nonexistent/grofe-test.sock,{},3", std::process::id());
+        let grofe = pane_env(&state, SessionId(3), PaneId(7));
+        assert_eq!(
+            grofe,
+            vec![
+                ("TMUX".to_string(), tmux.clone()),
+                ("TMUX_PANE".to_string(), "%7".to_string()),
+            ]
+        );
+        state.model.identity = Identity::Tmux;
+        let env = pane_env(&state, SessionId(3), PaneId(7));
+        assert_eq!(env[..2], grofe[..]);
+        assert_eq!(
+            env[2..],
+            [
+                ("TERM_PROGRAM".to_string(), "tmux".to_string()),
+                ("TERM_PROGRAM_VERSION".to_string(), "3.7b".to_string()),
+            ]
+        );
+    }
+
+    /// D12: prompt text is tmux dialect only on a tmux-identity server; a
+    /// tmux opener on a grofe server does not make it so.
+    #[test]
+    fn only_bare_prompt_text_takes_the_tmux_identity() {
+        let mut state = crate::server::test_state();
+        let (g, t) = (Dialect::Grofe, Dialect::Tmux);
+        for (opener, template) in [(g, false), (g, true), (t, false), (t, true)] {
+            assert_eq!(prompt_dialect(&state, opener, template), g);
+        }
+        state.model.identity = Identity::Tmux;
+        assert_eq!(prompt_dialect(&state, g, false), t);
+        assert_eq!(prompt_dialect(&state, t, false), t);
+        assert_eq!(prompt_dialect(&state, g, true), g);
+        assert_eq!(prompt_dialect(&state, t, true), t);
+    }
+
+    #[test]
+    fn the_miss_log_appends_one_line_per_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grofe").join("compat-miss.log");
+        append_miss(&path, "no-such-verb");
+        append_miss(&path, "set -Z: two\nlines");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].ends_with(" no-such-verb"), "{text}");
+        assert!(lines[1].ends_with(" set -Z: two lines"), "{text}");
+        let env = Env {
+            xdg_runtime_dir: None,
+            tmpdir: None,
+            xdg_state_home: Some(dir.path().display().to_string()),
+            home: None,
+            uid: 0,
+        };
+        assert_eq!(miss_log_path(&env), path);
+    }
+
+    #[test]
+    fn tmux_s_socket_dirs_are_refused_and_others_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmpdir = tmp.path().display().to_string();
+        let dirs = tmux_socket_dirs(Some(&tmpdir), 501);
+        assert_eq!(
+            dirs,
+            [PathBuf::from("/tmp/tmux-501"), tmp.path().join("tmux-501")]
+        );
+        let own = tmp.path().join("tmux-501");
+        std::fs::create_dir(&own).unwrap();
+        for bad in [
+            own.join("default"),
+            own.join("x/../default"),
+            own.join("missing/deeper"),
+            PathBuf::from("/tmp/tmux-501/default"),
+            PathBuf::from("/tmp/./tmux-501/work"),
+        ] {
+            assert!(
+                refuse_tmux_socket(&bad, &dirs).is_err(),
+                "{}",
+                bad.display()
+            );
+        }
+        // A symlink into tmux's directory is refused too.
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&own, &link).unwrap();
+        assert!(refuse_tmux_socket(&link.join("default"), &dirs).is_err());
+        for good in [
+            tmp.path().join("grofe.sock"),
+            tmp.path().join("tmux-5010/default"),
+            PathBuf::from("/tmp/tmux-502/default"),
+        ] {
+            assert!(
+                refuse_tmux_socket(&good, &dirs).is_ok(),
+                "{}",
+                good.display()
+            );
+        }
+        assert_eq!(tmux_socket_dirs(None, 7), [PathBuf::from("/tmp/tmux-7")]);
+    }
+
+    #[test]
+    fn a_miss_line_is_capped_at_256_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grofe").join("compat-miss.log");
+        append_miss(&path, &"é".repeat(300));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (_, what) = text.trim_end().split_once(' ').unwrap();
+        assert_eq!(what.len(), 256, "{what}");
+    }
+
+    #[test]
+    fn the_miss_log_stops_growing_past_its_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("compat-miss.log");
+        std::fs::write(&path, vec![b'x'; MISS_LOG_CAP as usize + 1]).unwrap();
+        append_miss(&path, "one more");
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), MISS_LOG_CAP + 1);
+    }
+
+    #[test]
+    fn secrets_in_send_keys_and_set_environment_are_not_logged() {
+        let (s, hidden) = miss_summary(&argv(&[
+            "setenv",
+            "-g",
+            "TOKEN",
+            "hunter2",
+            ";",
+            "send",
+            "-t",
+            "%1",
+            "pw",
+            "Enter",
+            ";",
+            "select-pane",
+            "-t",
+            "%1",
+        ]));
+        assert!(hidden);
+        assert_eq!(s, "setenv -g ; send -t ; select-pane -t %1");
+        for verb in ["send-keys", "set-environment", "send-k", "set-e"] {
+            let (s, hidden) = miss_summary(&argv(&[verb, "secret"]));
+            assert!(hidden && !s.contains("secret"), "{verb}: {s}");
+        }
+        let (s, hidden) = miss_summary(&argv(&["set", "-g", "@x", "1"]));
+        assert!(!hidden);
+        assert_eq!(s, "set -g @x 1");
     }
 
     #[test]

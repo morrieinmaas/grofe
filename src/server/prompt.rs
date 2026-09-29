@@ -95,6 +95,8 @@ struct Prompt {
     template: String,
     /// While browsing history: how far back, 0 being the newest.
     back: Option<usize>,
+    /// What the command runs in (`compat::prompt_dialect`).
+    dialect: Dialect,
 }
 
 /// What a key did to a prompt.
@@ -114,6 +116,7 @@ impl Prompt {
             text,
             template,
             back: None,
+            dialect: Dialect::Grofe,
         }
     }
 
@@ -384,9 +387,7 @@ impl InputHook for PromptHook {
                 state.prompts.remember(&line);
                 let command = replace_template(&prompt.template, &line);
                 match cmd::split_command_string(&command) {
-                    // ponytail: grofe's dialect; `:` prompt text on a server
-                    // with tmux identity is tmux's (spec D12), TC.1's to set.
-                    Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, Dialect::Grofe),
+                    Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, prompt.dialect),
                     Ok(_) => Routed::Consumed,
                     Err(e) => {
                         clients::show_message(state, client, &e.to_string());
@@ -473,11 +474,13 @@ pub fn command_prompt(
         (None, None) => ":".to_string(),
     };
     let initial = c.initial.as_deref().map(expand).unwrap_or_default();
+    let dialect = crate::compat::prompt_dialect(state, ctx.dialect, c.template.is_some());
     let template = c.template.unwrap_or_else(|| "%1".to_string());
-    state
-        .prompts
-        .open
-        .insert(id, Prompt::new(label, &initial, template));
+    let prompt = Prompt {
+        dialect,
+        ..Prompt::new(label, &initial, template)
+    };
+    state.prompts.open.insert(id, prompt);
     if ctx.client.is_none() {
         let reply = dispatch::defer_reply(state);
         state.prompts.waiting.insert(id, reply);
