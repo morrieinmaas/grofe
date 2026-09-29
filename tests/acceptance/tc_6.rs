@@ -468,3 +468,31 @@ fn an_fzf_shaped_new_pane_matches_tmuxs_floating_pane() {
     a.wait_until("the floating pane to close", WAIT, |t| !t.contains("in-np"));
     assert!(read(&out).contains("got picked"));
 }
+
+/// With `mouse` on, a report inside the popup reaches a command that asked
+/// for mouse reports, at the popup cell, as tmux 3.7b forwards it
+/// (recorded); one outside the popup does not.
+#[test]
+fn a_popup_gets_mouse_reports_inside_it() {
+    let srv = start();
+    srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse on");
+    let mut a = attach(&srv, "main");
+    let child = popup(
+        &srv,
+        &[
+            "-w",
+            "30",
+            "-h",
+            "6",
+            "printf '\\033[?1000h\\033[?1006hready\\n'; stty -echo -icanon; exec cat -v",
+        ],
+    );
+    a.wait_for("│ready");
+    // The box is at (14, 4), so its inside starts at (15, 5).
+    a.send("\x1b[<0;2;2M\x1b[<0;2;2m");
+    a.send("\x1b[<0;21;7M\x1b[<0;21;7m");
+    a.wait_for("^[[<0;6;2M^[[<0;6;2m");
+    assert!(!a.text().contains(";2;2"), "a report outside the popup");
+    a.send("\x03");
+    wait_child(child, WAIT).expect("answers");
+}

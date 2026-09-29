@@ -490,15 +490,47 @@ impl InputHook for PopupHook {
             Input::Paste { data, start, end } => {
                 input::encode_paste(data, *start, *end, &handle.modes())
             }
-            // ponytail: tmux drags, resizes and forwards the mouse in a
-            // popup; grofe eats it.
-            Input::Mouse(_) => Vec::new(),
+            Input::Mouse(m) => mouse_bytes(state, client, &popup.frame, m, &handle.modes()),
         };
         if running && !bytes.is_empty() && handle.enqueue_input(bytes).is_err() {
             eprintln!("grofe server: input queue full for a popup");
         }
         Some(Routed::Consumed)
     }
+}
+
+/// A mouse report for a popup's command, as tmux 3.7b forwards one
+/// (recorded): only with `mouse` on, only inside the box's inside, at the
+/// cell there, and only when the command asked for that kind of report.
+/// Anything else is eaten.
+// ponytail: tmux also drags and resizes a popup by its border; grofe does
+// not.
+fn mouse_bytes(
+    state: &State,
+    client: ClientId,
+    frame: &Frame,
+    m: &input::Mouse,
+    modes: &crate::types::InputModes,
+) -> Vec<u8> {
+    use crate::server::dispatch::options::Owner;
+    let Some(session) = state.clients.get(&client).map(|c| c.session) else {
+        return Vec::new();
+    };
+    if state
+        .model
+        .options
+        .lookup("mouse", &[Owner::Session(session)])
+        != Some("on")
+    {
+        return Vec::new();
+    }
+    let ((x, y), (cols, rows)) = frame.inside();
+    let (dx, dy) = (i32::from(m.col) - x, i32::from(m.row) - y);
+    let inside = (0..i32::from(cols)).contains(&dx) && (0..i32::from(rows)).contains(&dy);
+    if !inside {
+        return Vec::new();
+    }
+    crate::server::mouse::encode(m, dx as u16, dy as u16, modes).unwrap_or_default()
 }
 
 /// Draws a client's popup: its box, its title, the command's screen inside
