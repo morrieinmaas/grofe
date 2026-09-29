@@ -205,8 +205,9 @@ pub struct ClientEntry {
     pub focused: bool,
     /// A message shown on the status line's first row until it expires or
     /// a key is pressed (a failed binding's error, as tmux shows it), in
-    /// the language [`status::draw`] reads.
-    message: Option<(String, Instant)>,
+    /// the language [`status::draw`] reads, and when it expires (`None`
+    /// with `display-time 0`: only a key takes it down, as in tmux).
+    message: Option<(String, Option<Instant>)>,
     /// The status rows as last drawn, top first, for their click ranges.
     status_rows: Vec<StatusRow>,
     /// The window cell drawn at the client's top-left (crop, D6), as last
@@ -510,7 +511,8 @@ fn set_message(state: &mut State, id: ClientId, text: String) {
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
     };
-    let until = now + display_time(&state.model, session);
+    let time = display_time(&state.model, session);
+    let until = (!time.is_zero()).then(|| now + time);
     if let Some(c) = state.clients.get_mut(&id) {
         c.message = Some((text, until));
         c.dirty = true;
@@ -518,7 +520,7 @@ fn set_message(state: &mut State, id: ClientId, text: String) {
     }
 }
 
-/// The session's `display-time`, or tmux's default.
+/// The session's `display-time`, or tmux's default; 0 means until a key.
 fn display_time(model: &Model, session: SessionId) -> Duration {
     model
         .options
@@ -772,7 +774,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         [
             c.decoder.deadline(escape),
             c.keys.deadline(),
-            c.message.as_ref().map(|(_, until)| *until),
+            c.message.as_ref().and_then(|(_, until)| *until),
         ]
     });
     [r.render_at, r.status_at, r.names_at]
@@ -808,7 +810,10 @@ pub fn tick(state: &mut State, now: Instant) {
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
-        if c.message.as_ref().is_some_and(|(_, until)| *until <= now) {
+        if c.message
+            .as_ref()
+            .is_some_and(|(_, until)| until.is_some_and(|u| u <= now))
+        {
             c.message = None;
             c.dirty = true;
             request_render(state, now);
@@ -1743,6 +1748,7 @@ mod tests {
         show_message(&mut state, id, "no last window");
         let shown = state.clients[&id].message.clone();
         let (text, until) = shown.expect("message shown");
+        let until = until.expect("display-time 750 expires");
         assert_eq!(text, "no last window");
         // A focus report is not a key: the message stays.
         let now = Instant::now();
@@ -1753,6 +1759,27 @@ mod tests {
         input(&mut state, id, b"x", now);
         assert!(state.clients[&id].message.is_none());
         assert!(state.clients[&id].dirty);
+    }
+
+    /// As tmux: with `display-time 0` a message stays until a key is
+    /// pressed, however long that is.
+    #[test]
+    fn display_time_zero_keeps_a_message_until_a_key() {
+        let (mut state, id) = state_with_client();
+        let session = state.clients[&id].session;
+        state
+            .model
+            .options
+            .set(Owner::Session(session), "display-time", "0", false)
+            .unwrap();
+        show_message(&mut state, id, "held");
+        assert_eq!(state.clients[&id].message, Some(("held".to_string(), None)));
+        let later = Instant::now() + Duration::from_secs(3600);
+        tick(&mut state, later);
+        assert!(state.clients[&id].message.is_some());
+        assert!(deadline(&state).is_none_or(|d| d > Instant::now() + DISPLAY_TIME));
+        input(&mut state, id, b"x", later);
+        assert!(state.clients[&id].message.is_none());
     }
 
     /// TC.11: a click maps onto the status row it lands on, at the bottom

@@ -360,9 +360,6 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
     }
 }
 
-/// Draws `line` on `row` from column 0, clipped at the screen width. Zero
-/// width characters join the cell before them; a wide char that does not
-/// fit is a space.
 /// A window's composed screen with the status rows stacked above it
 /// (`top`) or below it, as one client screen: the window's cells and
 /// cursor move down by the rows above them (TC.11, `status-position`).
@@ -391,6 +388,9 @@ pub fn draw_row(screen: &mut Screen, row: u16, line: &StyledLine) {
     }
 }
 
+/// Draws `line` on `row` from column 0, clipped at the screen width. Zero
+/// width characters join the cell before them; a wide char that does not
+/// fit is a space.
 fn draw_line(screen: &mut Screen, row: u16, line: &StyledLine) {
     let cols = screen.cols as usize;
     let base = row as usize * cols;

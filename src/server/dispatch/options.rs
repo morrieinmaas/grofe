@@ -1754,7 +1754,6 @@ fn not_a_list(base: &str, full: &str) -> String {
 }
 
 /// `set-option` on a list option, or on any name given an index.
-// ponytail: `-F`, `-o` and `-q` are TC.11's, for lists as for scalars.
 fn set_list(
     model: &mut Model,
     events: &mut Events,
