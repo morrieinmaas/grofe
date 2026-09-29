@@ -344,6 +344,8 @@ fn tree_items(state: &State, find: Option<&str>) -> Vec<Item> {
 
 /// `find-window`'s filter for one pane: the window name or the pane title
 /// as `#{m:*<pattern>*,...}`, or the pane's visible text (`#{C:...}`).
+// ponytail: evaluated on every draw of the chooser (tmux filters when it
+// rebuilds the tree); fine for the dozens of panes a server holds.
 fn matches(state: &State, pane: PaneId, find: Option<&str>) -> bool {
     let Some(pattern) = find else {
         return true;
@@ -562,8 +564,25 @@ impl InputHook for TreeHook {
             return None;
         }
         let tree_pane = state.trees.open.get(&client).map(|t| t.pane)?;
-        if !state.model.panes.contains_key(&tree_pane) {
+        let Some(window) = state.model.panes.get(&tree_pane).map(|p| p.window) else {
             close(state, client);
+            return None;
+        };
+        // Keys go to the chooser only while its pane is the client's
+        // active pane, as tmux gives a mode the keys of its own pane.
+        let model = &state.model;
+        let shown = state
+            .clients
+            .get(&client)
+            .and_then(|c| model.sessions.get(&c.session))
+            .is_some_and(|s| {
+                s.active == window
+                    && model
+                        .windows
+                        .get(&window)
+                        .is_some_and(|w| w.active == tree_pane)
+            });
+        if !shown {
             return None;
         }
         let key = match input {
