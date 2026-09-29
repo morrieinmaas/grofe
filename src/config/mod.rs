@@ -71,6 +71,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
 pub const LIST_NAMES: &[(&str, &str)] = &[
     ("status.rows", "status-format"),
     ("command-alias", "command-alias"),
+    ("update-environment", "update-environment"),
 ];
 
 /// The tmux name of a list option's TOML key.

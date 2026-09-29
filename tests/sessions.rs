@@ -140,6 +140,8 @@ fn a_server_with_no_sessions_yet_stays_up() {
     assert!(srv.is_running());
 }
 
+/// The client's `update-environment` variables (here `DISPLAY`) and cwd;
+/// since TC.5 nothing else of the client's environment, as tmux 3.7b.
 #[test]
 fn session_panes_get_the_clients_env_and_cwd() {
     let srv = TestServer::start();
@@ -147,12 +149,12 @@ fn session_panes_get_the_clients_env_and_cwd() {
     fs::create_dir(&dir).unwrap();
     let out = srv.home.join("env.out");
     let script = format!(
-        "echo \"$T15A_VAR $(pwd -P)\" > '{}'; sleep 30",
+        "echo \"$DISPLAY $(pwd -P)\" > '{}'; sleep 30",
         out.display()
     );
 
     let mut cmd = srv.command();
-    cmd.env("T15A_VAR", "from-client").args([
+    cmd.env("DISPLAY", "from-client").args([
         "new-session",
         "-d",
         "-s",

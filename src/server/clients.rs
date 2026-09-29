@@ -352,6 +352,9 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     touch_session(&mut state.model, session);
     sync_attached(state);
     changed(state);
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
     // As tmux 3.7b (recorded): an attach is a session change, then a resize.
     hooks::client_session_changed(state, id);
     hooks::client_resized(state, id);
@@ -447,6 +450,9 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     state.registry.owners.insert(session, SizeOwner::new(id));
     touch_session(&mut state.model, session);
     sync_attached(state);
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
     hooks::client_session_changed(state, id);
 }
 

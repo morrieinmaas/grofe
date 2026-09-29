@@ -557,15 +557,52 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let session =
         client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
     let env = hooks::shell_env(state, session);
-    let reply = (!from_binding && !c.background).then(|| dispatch::defer_reply(state));
+    let script = expand_command(state, ctx, &c.cmd);
+    // Inside a hook the queue waits for the shell, even from a binding.
+    let waits = !from_binding || hooks::in_hook(state);
+    let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     tokio::spawn(async move {
-        let result = shell(&c.cmd, cwd, env, socket, reply.is_some()).await;
+        let result = shell(&script, cwd, env, socket, reply.is_some()).await;
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
     });
     Ok(String::new())
+}
+
+/// `run-shell`'s command, format-expanded as tmux 3.7b expands it: against
+/// the current pane and client, and inside a hook its `#{hook*}`
+/// variables.
+fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> String {
+    use crate::server::dispatch::options::ServerVars;
+    let model = &state.model;
+    let hook = hooks::current_formats(state);
+    let with_hook = |inner: &dyn cmd::FormatVars| match hook {
+        Some(formats) => cmd::expand(text, &hooks::HookVars { formats, inner }),
+        None => cmd::expand(text, inner),
+    };
+    let Ok(pane) = model.resolve_pane(&cmd::Target::Current, ctx) else {
+        return with_hook(&NoVars);
+    };
+    match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => {
+            let vars = ClientVars::new(model, client, Some(FormatCtx::new(model, pane)));
+            with_hook(&ServerVars::new(state, pane, &vars))
+        }
+        None => {
+            let vars = FormatCtx::new(model, pane);
+            with_hook(&ServerVars::new(state, pane, &vars))
+        }
+    }
+}
+
+struct NoVars;
+
+impl cmd::FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Runs `script` to completion: its stdout (ending in a newline) when

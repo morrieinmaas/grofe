@@ -68,7 +68,8 @@ pub fn set_environment(
 }
 
 /// `show-environment [-g] [-h] [-t session] [name]`: `NAME=value` lines,
-/// by name, of the visible variables (the hidden ones with `-h`). A named
+/// by name, of the visible variables (the hidden ones with `-h`), and
+/// `-NAME` for a session variable marked removed. A named
 /// variable that does not exist is an error; one of the other kind shows
 /// nothing, as in tmux 3.7b.
 pub fn show_environment(
@@ -82,21 +83,25 @@ pub fn show_environment(
         Some(state.model.resolve_session(&c.target, ctx)?)
     };
     let vars = hooks::variables(state, session);
+    let line = |v: &hooks::Variable| match &v.value {
+        Some(value) => format!("{}={value}\n", v.name),
+        None => format!("-{}\n", v.name),
+    };
     if let Some(name) = &c.name {
-        let (_, value, hidden) = vars
+        let v = vars
             .iter()
-            .find(|(k, _, _)| k == name)
+            .find(|v| v.name == *name)
             .ok_or_else(|| format!("unknown variable: {name}"))?;
-        return Ok(if *hidden == c.hidden {
-            format!("{name}={value}\n")
+        return Ok(if v.hidden == c.hidden {
+            line(v)
         } else {
             String::new()
         });
     }
     Ok(vars
         .iter()
-        .filter(|(_, _, hidden)| *hidden == c.hidden)
-        .map(|(k, v, _)| format!("{k}={v}\n"))
+        .filter(|v| v.hidden == c.hidden)
+        .map(line)
         .collect())
 }
 

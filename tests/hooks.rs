@@ -237,22 +237,21 @@ fn client_events_fire_as_tmux() {
 
 /// A command-shaped hook runs before its command's reply (tmux 3.7b's
 /// `after-*` hooks hold the CLI), so the next command sees what it did.
+/// Formats are each command's own: `set` stores `#{pane_id}` literally
+/// (recorded), `run-shell` expands it, `#{hook}` included.
 #[test]
 fn a_command_hook_has_run_when_its_command_returns() {
-    let (srv, _) = start();
+    let (srv, log) = start();
     let first = pane_of(&srv, "a");
     ok(&srv, &["split-window", "-t", "a"]);
-    ok(
-        &srv,
-        &[
-            "set-hook",
-            "-g",
-            "pane-focused",
-            "set -g @focused #{pane_id}",
-        ],
+    let cmd = format!(
+        "set -g @focused '#{{pane_id}}' ; run-shell 'echo #{{hook}} #{{pane_id}} >> {}'",
+        log.display()
     );
+    ok(&srv, &["set-hook", "-g", "pane-focused", &cmd]);
     ok(&srv, &["select-pane", "-t", &first]);
-    assert_eq!(display(&srv, "a", "#{@focused}"), first);
+    assert_eq!(display(&srv, "a", "#{@focused}"), "#{pane_id}");
+    assert_eq!(log_lines(&log), [format!("pane-focused {first}")]);
 }
 
 /// Binds `event` to a command that appends `<event> <pane_id>` to `log`.
@@ -351,9 +350,14 @@ fn a_background_run_shell_hook_does_not_delay_the_next_command() {
 /// The environment a new pane starts with, written to a file by the pane
 /// itself.
 fn new_pane_env(srv: &TestServer, name: &str) -> Vec<String> {
+    new_pane_env_in(srv, "a", name)
+}
+
+/// [`new_pane_env`] for a new window of `session`.
+fn new_pane_env_in(srv: &TestServer, session: &str, name: &str) -> Vec<String> {
     let out = srv.home.join(format!("{name}.env"));
     let script = format!("env > {}.tmp; mv {0}.tmp {0}; sleep 30", out.display());
-    ok(srv, &["new-window", "-d", "-t", "a", &script]);
+    ok(srv, &["new-window", "-d", "-t", session, &script]);
     wait_until(|| out.exists(), WAIT).expect("the pane wrote its env");
     fs::read_to_string(&out)
         .expect("read env")
@@ -543,7 +547,8 @@ fn config_hooks_bind_and_reload_all_or_nothing() {
     let first = pane_of(srv, "a");
     ok(srv, &["split-window", "-t", "a"]);
     ok(srv, &["select-pane", "-t", &first]);
-    assert_eq!(display(srv, "a", "#{@cfg}"), format!("one:{first}"));
+    // `set` keeps the format literal, as tmux's does.
+    assert_eq!(display(srv, "a", "#{@cfg}"), "one:#{pane_id}");
     assert_eq!(
         ok(srv, &["show-hooks", "-g"]),
         "pane-focused set -g @cfg one:#{pane_id}\n"
@@ -595,4 +600,261 @@ fn config_hooks_bind_and_reload_all_or_nothing() {
     write_config(srv, "");
     ok(srv, &["reload"]);
     assert_eq!(ok(srv, &["show-hooks", "-g"]), "pane-died list-clients\n");
+}
+
+/// The CLI with `set` added to and `unset` removed from its environment.
+fn cli_with(srv: &TestServer, args: &[&str], set: &[(&str, &str)], unset: &[&str]) -> String {
+    let mut cmd = srv.command();
+    cmd.args(args).envs(set.iter().copied());
+    for name in unset {
+        cmd.env_remove(name);
+    }
+    let out = common::run_bounded(cmd, common::CMD_TIMEOUT);
+    assert!(out.status.success(), "{args:?}: {out:?}");
+    out.stdout
+}
+
+fn has(env: &[String], name: &str) -> Option<String> {
+    env.iter()
+        .find_map(|l| l.strip_prefix(&format!("{name}=")).map(str::to_string))
+}
+
+/// `update-environment` (tmux 3.7b's default list, recorded): a new
+/// session takes only the named variables from its client, and marks the
+/// ones the client lacks removed (`-NAME`), which hides a global value.
+/// A variable only the client had does not reach its panes, until it is
+/// set globally.
+#[test]
+fn a_session_takes_only_the_update_environment_variables() {
+    let (srv, _) = start();
+    let list = ok(&srv, &["show-options", "-g", "update-environment"]);
+    assert!(
+        list.starts_with("update-environment[0] DISPLAY\n"),
+        "{list}"
+    );
+    assert!(
+        list.contains("update-environment[12] XDG_SESSION_TYPE\n"),
+        "{list}"
+    );
+    ok(
+        &srv,
+        &["set-environment", "-g", "XAUTHORITY", "global-xauth"],
+    );
+    cli_with(
+        &srv,
+        &["new-session", "-d", "-s", "s"],
+        &[("DISPLAY", ":7"), ("GROFE_TC5_CLIENTONLY", "c")],
+        &["XAUTHORITY"],
+    );
+    let shown = ok(&srv, &["show-environment", "-t", "s"]);
+    assert!(shown.contains("DISPLAY=:7\n"), "{shown}");
+    assert!(shown.contains("-XAUTHORITY\n"), "{shown}");
+    assert!(!shown.contains("GROFE_TC5_CLIENTONLY"), "{shown}");
+    assert_eq!(
+        ok(&srv, &["show-environment", "-t", "s", "XAUTHORITY"]),
+        "-XAUTHORITY\n"
+    );
+    let env = new_pane_env_in(&srv, "s", "s1");
+    assert_eq!(has(&env, "DISPLAY").as_deref(), Some(":7"));
+    assert_eq!(has(&env, "GROFE_TC5_CLIENTONLY"), None);
+    assert_eq!(
+        has(&env, "XAUTHORITY"),
+        None,
+        "the removed mark hides the global"
+    );
+
+    ok(
+        &srv,
+        &["set-environment", "-g", "GROFE_TC5_CLIENTONLY", "global"],
+    );
+    let env = new_pane_env_in(&srv, "s", "s2");
+    assert_eq!(has(&env, "GROFE_TC5_CLIENTONLY").as_deref(), Some("global"));
+
+    // canopy's `set -ga update-environment TERM`, with a name of our own.
+    ok(
+        &srv,
+        &["set", "-ga", "update-environment", "GROFE_TC5_EXTRA"],
+    );
+    cli_with(
+        &srv,
+        &["new-session", "-d", "-s", "t"],
+        &[("GROFE_TC5_EXTRA", "x")],
+        &[],
+    );
+    assert_eq!(
+        ok(&srv, &["show-environment", "-t", "t", "GROFE_TC5_EXTRA"]),
+        "GROFE_TC5_EXTRA=x\n"
+    );
+}
+
+/// Attaching and switch-client take the client's `update-environment`
+/// variables into the session again (recorded on tmux 3.7b).
+#[test]
+fn attach_and_switch_refresh_the_session_environment() {
+    let (srv, _) = start();
+    cli_with(
+        &srv,
+        &["new-session", "-d", "-s", "b"],
+        &[("DISPLAY", ":1")],
+        &[],
+    );
+    let _client = Harness::spawn_attach_with_env(
+        srv.command(),
+        "a",
+        &[("DISPLAY", ":3"), ("SSH_AUTH_SOCK", "/tmp/grofe-tc5-sock")],
+        80,
+        24,
+    );
+    wait_until(
+        || ok(&srv, &["show-environment", "-t", "a", "DISPLAY"]) == "DISPLAY=:3\n",
+        WAIT,
+    )
+    .expect("attach refreshed DISPLAY");
+    assert_eq!(
+        ok(&srv, &["show-environment", "-t", "a", "SSH_AUTH_SOCK"]),
+        "SSH_AUTH_SOCK=/tmp/grofe-tc5-sock\n"
+    );
+    assert_eq!(
+        ok(&srv, &["show-environment", "-t", "b", "DISPLAY"]),
+        "DISPLAY=:1\n"
+    );
+    ok(&srv, &["switch-client", "-t", "b"]);
+    assert_eq!(
+        ok(&srv, &["show-environment", "-t", "b", "DISPLAY"]),
+        "DISPLAY=:3\n"
+    );
+}
+
+/// One queue per origin: two CLIs whose `after-select-pane` hooks each
+/// sleep 3 s wait about 3 s each, not one after the other.
+#[test]
+fn each_cli_request_waits_only_for_its_own_hooks() {
+    let (srv, _) = start();
+    ok(&srv, &["new-session", "-d", "-s", "b"]);
+    let (a0, b0) = (pane_of(&srv, "a"), pane_of(&srv, "b"));
+    ok(&srv, &["split-window", "-t", "a"]);
+    ok(&srv, &["split-window", "-t", "b"]);
+    ok(
+        &srv,
+        &["set-hook", "-g", "pane-focused", "run-shell 'sleep 3'"],
+    );
+    let started = Instant::now();
+    let spawn = |pane: &str| {
+        let mut cmd = srv.command();
+        cmd.args(["select-pane", "-t", pane])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        cmd.spawn().expect("spawn cli")
+    };
+    let (first, second) = (spawn(&a0), spawn(&b0));
+    for child in [first, second] {
+        let status = common::wait_child(child, Duration::from_secs(10)).expect("cli exits");
+        assert!(status.success());
+    }
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(2800), "took {took:?}");
+    assert!(took < Duration::from_millis(5500), "took {took:?}");
+}
+
+/// A notify hook runs on the global queue: its `sleep 2` holds no reply.
+#[test]
+fn a_waiting_notify_hook_holds_no_reply() {
+    let (srv, _) = start();
+    ok(
+        &srv,
+        &["set-hook", "-g", "session-created", "run-shell 'sleep 2'"],
+    );
+    let started = Instant::now();
+    ok(&srv, &["new-session", "-d", "-s", "b"]);
+    ok(&srv, &["new-window", "-d", "-t", "a"]);
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(1500), "took {took:?}");
+}
+
+/// Hooks on one queue keep their order: the second command's hook waits
+/// for the first's shell, and does not jump ahead of its remaining
+/// commands.
+#[test]
+fn a_later_hook_waits_behind_a_paused_one() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let second = pane_of(&srv, "a");
+    let cmd = format!(
+        "run-shell 'echo start #{{pane_id}} >> {0}; sleep 0.3' ; run-shell 'echo end #{{pane_id}} >> {0}'",
+        log.display()
+    );
+    ok(&srv, &["set-hook", "-g", "pane-focused", &cmd]);
+    ok(
+        &srv,
+        &[
+            "select-pane",
+            "-t",
+            &first,
+            ";",
+            "select-pane",
+            "-t",
+            &second,
+        ],
+    );
+    assert_eq!(
+        log_lines(&log),
+        [
+            format!("start {first}"),
+            format!("end {first}"),
+            format!("start {second}"),
+            format!("end {second}"),
+        ]
+    );
+}
+
+/// A hook a binding fires runs on that client's queue, so `#{client_*}`
+/// is its client's.
+#[test]
+fn a_hook_from_a_binding_sees_its_client() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    ok(
+        &srv,
+        &["bind-key", "-T", "root", "F9", "select-pane", "-t", &first],
+    );
+    let cmd = format!(
+        "run-shell 'echo #{{client_name}} #{{pane_id}} >> {}'",
+        log.display()
+    );
+    ok(&srv, &["set-hook", "-g", "pane-focused", &cmd]);
+    let mut client = Harness::spawn_attach_with_env(srv.command(), "a", &[], 80, 24);
+    wait_until(|| !ok(&srv, &["list-clients"]).is_empty(), WAIT).expect("attached");
+    let name = ok(&srv, &["list-clients", "-F", "#{client_name}"])
+        .trim_end()
+        .to_string();
+    client.send("\x1b[20~");
+    let mut seen = 0;
+    assert_eq!(new_lines(&log, &mut seen, 1), [format!("{name} {first}")]);
+}
+
+/// Commands inside an `after-*` hook fire notify hooks (not `after-*`
+/// ones), as tmux 3.7b's do (recorded).
+#[test]
+fn a_hooks_commands_fire_notify_hooks() {
+    let (srv, log) = start();
+    ok(
+        &srv,
+        &[
+            "set-hook",
+            "-g",
+            "window-created",
+            "new-session -d -s inner",
+        ],
+    );
+    bind_line(
+        &srv,
+        "session-created",
+        "created #{hook_session_name}",
+        &log,
+    );
+    ok(&srv, &["new-window", "-d", "-t", "a"]);
+    let mut seen = 0;
+    assert_eq!(new_lines(&log, &mut seen, 1), ["created inner"]);
 }

@@ -36,10 +36,12 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         c.height.unwrap_or(DEFAULT_SIZE.1),
     );
     let window = model.alloc_window_id();
+    // Only what `update-environment` names comes from the client (TC.5).
+    let env = crate::server::hooks::session_environment(state, id, &ctx.env);
     let pane = spawn_pane(
         state,
         (id, window),
-        ctx.env.clone(),
+        env.clone(),
         command_argv(c.command),
         cwd.clone(),
         size,
@@ -53,7 +55,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         name,
         windows: Vec::new(),
         active: window,
-        env: ctx.env.clone(),
+        env,
         cwd: cwd.clone(),
         cols: size.0,
         rows: size.1,

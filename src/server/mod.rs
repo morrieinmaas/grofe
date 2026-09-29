@@ -293,6 +293,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
 /// Runs one [`Job`] on the actor, then sends the events it caused.
 fn run_job(state: &mut State, job: Job) {
     job(state);
+    // A job is no CLI request: nothing waits for its hooks.
+    drop(hooks::take_reply_hold(state));
     state.events.flush();
 }
 
@@ -721,15 +723,20 @@ fn reply_later(
     id: u64,
     later: oneshot::Receiver<Result<String, protocol::Failure>>,
     reply: oneshot::Sender<Reply>,
-    hold: Option<oneshot::Receiver<()>>,
+    hold: Option<oneshot::Receiver<String>>,
 ) {
     tokio::spawn(async move {
         let answer = later.await;
-        if let Some(hold) = hold {
-            let _ = hold.await;
-        }
+        // The rest of what the request's hooks printed follows its output.
+        let more = match hold {
+            Some(hold) => hold.await.unwrap_or_default(),
+            None => String::new(),
+        };
         let reply_msg = match answer {
-            Ok(Ok(out)) => Reply::Ok { id, out },
+            Ok(Ok(out)) => Reply::Ok {
+                id,
+                out: out + &more,
+            },
             Ok(Err(failure)) => Reply::failed(id, failure),
             Err(_) => error_reply(id, "command ended without an answer"),
         };
