@@ -73,6 +73,8 @@ fn main() -> ExitCode {
         "attach-session" | "attach" => attach(&globals.socket(), rest),
         // File layers only: never starts or contacts a server (R8).
         "show-config" => grofe::config::show_config(&rest[1..]),
+        // Reads a tmux.conf, no server anywhere (spec 5.5).
+        "import-tmux" => grofe::import_tmux::run(&rest[1..]),
         "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
