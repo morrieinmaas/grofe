@@ -150,6 +150,8 @@ fn unknown_option_with_no_value_names_the_option() {
 fn remain_on_exit_is_looked_up_per_pane() {
     let srv = TestServer::start();
     new_session(&srv, "r");
+    // The windows keep their indexes while the panes end.
+    srv.cmd(&["set", "-g", "renumber-windows", "off"]).unwrap();
     for _ in 0..3 {
         srv.cmd(&["new-window", "-d", "-t", "r", "sleep", "30"])
             .unwrap();

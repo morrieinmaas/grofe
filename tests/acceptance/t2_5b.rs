@@ -457,11 +457,14 @@ fn killing_the_active_window_falls_back_to_the_last_window() {
 }
 
 /// The last window is a stack, as in tmux: with windows 1, 2 and 3,
-/// selecting 1 then 3 and killing 1 leaves 2 as the last window.
+/// selecting 1 then 3 and killing 1 leaves 2 as the last window (with
+/// `renumber-windows off`, so the indexes stay put).
 #[test]
 fn the_last_window_is_a_stack() {
     let srv = TestServer::start();
     new_session(&srv, "main", IDLE);
+    srv.cmd(&["set", "-g", "renumber-windows", "off"])
+        .expect("renumber off");
     srv.cmd(&["new-window", "-t", "main", IDLE]).expect("neww");
     srv.cmd(&["new-window", "-t", "main", IDLE]).expect("neww");
     srv.cmd(&["select-window", "-t", "main:1"]).expect("select");

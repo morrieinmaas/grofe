@@ -19,7 +19,8 @@
 //! **Queues.** As tmux, each CLI request and each attached client has its
 //! own hook queue, and notify hooks share a global one. A queue runs in
 //! order, and a hook's `run-shell` without `-b` holds its queue (only) until
-//! the shell exits; a CLI request's reply waits for its own queue. Commands
+//! the shell exits; a CLI request's later commands and its reply wait for
+//! its own queue ([`request_waiting`]). Commands
 //! run as they are, each expanding its own formats (`run-shell` sees the
 //! `#{hook*}` variables). Commands a hook runs fire notify hooks but no
 //! `after-*` ones, as in tmux (recorded).
@@ -42,7 +43,7 @@ use tokio::sync::oneshot;
 
 use crate::cmd::{self, Command, FormatVars, Resolve, Target};
 use crate::config::Resolved;
-use crate::protocol::{ClientCtx, Dialect};
+use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::dispatch;
 use crate::server::{Job, State};
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
@@ -159,6 +160,9 @@ pub struct Hooks {
     next_request: u64,
     /// Hook commands are running: they fire no command-shaped hooks.
     running: bool,
+    /// How deep `run_commands` is nested ([`enter`]); 1 is a request's own
+    /// commands.
+    depth: u32,
     /// The running hook's variables.
     current: Option<HookFormats>,
     /// See [`take_reply_hold`].
@@ -191,6 +195,7 @@ impl Default for Hooks {
             request: None,
             next_request: 0,
             running: false,
+            depth: 0,
             current: None,
             reply_hold: None,
             global: Arc::new(RwLock::new(env)),
@@ -433,8 +438,11 @@ pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
 /// Runs what is pending after a command sequence (before its reply) or a
 /// pane event: `session-closed` for each session the model removed (the
 /// current pane as context), and hooks a full job queue refused. At the
-/// end of a CLI request (not inside a hook), a request queue still
-/// waiting on a shell holds the reply ([`take_reply_hold`]).
+/// end of a CLI request (not inside a hook, nor at the end of a command
+/// the request runs inside another, as `if-shell -F` runs its branch), a
+/// request queue still waiting on a shell holds the reply
+/// ([`take_reply_hold`]). A nested command's hook is on the request's one
+/// queue, so the reply waits for every hook the request fired.
 pub fn run_pending(state: &mut State) {
     for (_, name) in std::mem::take(&mut state.model.closed_sessions) {
         if wanted(state, "session-closed") {
@@ -443,7 +451,7 @@ pub fn run_pending(state: &mut State) {
             notify(state, f);
         }
     }
-    if state.hooks.running {
+    if state.hooks.running || state.hooks.depth > 0 {
         return;
     }
     for job in std::mem::take(&mut state.hooks.overflow) {
@@ -726,6 +734,60 @@ fn drain(state: &mut State, origin: Origin) {
     }
 }
 
+/// `run_commands` starts: a request's commands nest (`if -F`), and only
+/// the outermost ends its request ([`run_pending`]).
+pub fn enter(state: &mut State) {
+    state.hooks.depth += 1;
+}
+
+/// How deep `run_commands` is nested now.
+pub fn depth(state: &State) -> u32 {
+    state.hooks.depth
+}
+
+/// `run_commands` ends.
+pub fn leave(state: &mut State) {
+    state.hooks.depth = state.hooks.depth.saturating_sub(1);
+}
+
+/// Whether the CLI request now running (outside a hook) has a hook
+/// waiting on a shell: its next command waits, at any depth, as tmux
+/// 3.7b runs an `after-*` hook before the next command of its queue
+/// (recorded: `select-pane ; run-shell`, inside `if -F` too).
+pub fn request_waiting(state: &State) -> bool {
+    let hooks = &state.hooks;
+    !hooks.running
+        && hooks.request.is_some_and(|r| {
+            hooks
+                .queues
+                .get(&Origin::Request(r))
+                .is_some_and(|q| q.waiting)
+        })
+}
+
+/// When [`request_waiting`], a receiver that answers with the hooks'
+/// output once their queue is idle; the held rest of the request waits
+/// for it. The reply no longer waits on this queue: the rest's answer
+/// carries its output.
+pub fn take_request_wait(state: &mut State) -> Option<oneshot::Receiver<Result<String, Failure>>> {
+    let hooks = &mut state.hooks;
+    if hooks.running {
+        return None;
+    }
+    let origin = Origin::Request(hooks.request?);
+    let q = hooks.queues.get_mut(&origin).filter(|q| q.waiting)?;
+    let (tx, rx) = oneshot::channel();
+    q.idle.push(tx);
+    hooks.request = None;
+    let (answer, wait) = oneshot::channel();
+    tokio::spawn(async move {
+        if let Ok(out) = rx.await {
+            let _ = answer.send(Ok(out));
+        }
+    });
+    Some(wait)
+}
+
 /// For the reply to the request that just ran (`finish`): when its own
 /// hook queue still waits on a shell (tmux 3.7b holds the CLI until its
 /// `after-*` hooks finish), a receiver that answers, with the rest of
@@ -771,15 +833,21 @@ pub struct HookVars<'a> {
 
 impl FormatVars for HookVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
-        let f = self.formats;
+        self.formats.get(name).or_else(|| self.inner.get(name))
+    }
+}
+
+impl HookFormats {
+    /// `#{hook}` or a `#{hook_*}` variable; `None` for any other name.
+    pub fn get(&self, name: &str) -> Option<String> {
         let text = |v: Option<String>| Some(v.unwrap_or_default());
         match name {
-            "hook" => Some(f.hook.to_string()),
-            "hook_pane" => text(f.hook_pane.map(|p| p.to_string())),
-            "hook_window" => text(f.hook_window.map(|w| w.to_string())),
-            "hook_session_name" => text(f.hook_session_name.clone()),
-            "hook_client" => text(f.hook_client.clone()),
-            _ => self.inner.get(name),
+            "hook" => Some(self.hook.to_string()),
+            "hook_pane" => text(self.hook_pane.map(|p| p.to_string())),
+            "hook_window" => text(self.hook_window.map(|w| w.to_string())),
+            "hook_session_name" => text(self.hook_session_name.clone()),
+            "hook_client" => text(self.hook_client.clone()),
+            _ => None,
         }
     }
 }

@@ -213,9 +213,14 @@ pub struct Mods {
 /// What a key turned into after routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Routed {
-    /// A bound command sequence, each command's argv, for dispatch in
-    /// order (R12), in the dialect it was stored in (spec §4.5).
+    /// A command sequence to parse when it runs (a prompt's, a menu
+    /// item's), each command's argv, for dispatch in order (R12), in the
+    /// dialect it was written in (spec §4.5). An alias expands then.
     Command(Vec<Vec<String>>, Dialect),
+    /// A key binding's stored commands, as [`Routed::Command`] but with
+    /// aliases already expanded when the key was bound, as tmux stores a
+    /// parsed command list: a press does not expand them again.
+    Bound(Vec<Vec<String>>, Dialect),
     /// Bytes for the active pane, encoded for its `InputModes`.
     ToPane(Vec<u8>),
     /// Eaten (a prefix key, an overlay's key).
@@ -1609,7 +1614,7 @@ impl KeyState {
                 } else {
                     self.set_table(ROOT_TABLE);
                 }
-                return Routed::Command(b.cmds.clone(), b.dialect);
+                return Routed::Bound(b.cmds.clone(), b.dialect);
             }
             if self.table != ROOT_TABLE || repeating {
                 self.set_table(ROOT_TABLE);
@@ -2508,7 +2513,7 @@ mod tests {
     }
 
     fn cmd(words: &[&str]) -> Routed {
-        Routed::Command(vec![argv(words)], Dialect::Grofe)
+        Routed::Bound(vec![argv(words)], Dialect::Grofe)
     }
 
     fn pane(bytes: &[u8]) -> Routed {
@@ -3333,7 +3338,7 @@ mod tests {
         assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
         assert_eq!(
             c.send(b"Z", t),
-            vec![Routed::Command(
+            vec![Routed::Bound(
                 vec![argv(&["split-window"]), argv(&["select-pane", "-L"])],
                 Dialect::Grofe
             )]
@@ -3352,7 +3357,7 @@ mod tests {
         c.tables.insert(ROOT_TABLE, k("F5"), b);
         assert_eq!(
             c.send(b"\x1b[15~", t),
-            vec![Routed::Command(vec![argv(&["neww"])], Dialect::Tmux)]
+            vec![Routed::Bound(vec![argv(&["neww"])], Dialect::Tmux)]
         );
     }
 

@@ -1,6 +1,5 @@
 ~/.tmux.conf:2: option grofe does not have: set -g default-terminal "tmux-256color"
 ~/.tmux.conf:3: option grofe does not have: set -ga terminal-overrides ",xterm-256color:Tc"
-~/.tmux.conf:12: option grofe does not have: set -g renumber-windows on
 ~/.tmux.conf:13: option grofe does not have: setw -g mode-keys vi
 ~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
 ~/.tmux.conf:24: key table copy-mode-vi: bind -T copy-mode-vi v send -X begin-selection

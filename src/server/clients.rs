@@ -232,9 +232,11 @@ pub struct ClientEntry {
     mouse_modes: Option<bool>,
     /// Input held while a binding's shell condition runs ([`hold_input`]),
     /// in order, and how many conditions hold it.
-    held: VecDeque<Input>,
+    held: VecDeque<Held>,
     held_bytes: usize,
     holds: u32,
+    /// The hold passed its cap: all input is dropped until it is released.
+    held_full: bool,
     /// Needs a new frame.
     dirty: bool,
     outbox: Outbox,
@@ -384,6 +386,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             held: VecDeque::new(),
             held_bytes: 0,
             holds: 0,
+            held_full: false,
             viewport: (0, 0),
             pan: None,
             suspended: false,
@@ -1845,7 +1848,7 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
 
 /// How much input a client may have held ([`hold_input`]): paste bytes,
 /// and one for anything else. tmux holds without limit; past this grofe
-/// drops what arrives, and logs it.
+/// drops everything that arrives until the hold is released, and logs it.
 const HELD_CAP: usize = 1 << 20;
 
 /// One decoded input from client `id`: held behind a running shell
@@ -1855,16 +1858,7 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
         return;
     };
     if c.holds > 0 {
-        let size = match &input {
-            Input::Paste { data, .. } => data.len().max(1),
-            _ => 1,
-        };
-        if c.held_bytes + size > HELD_CAP {
-            eprintln!("grofe server: input held for {} is full; dropped", c.name);
-            return;
-        }
-        c.held_bytes += size;
-        c.held.push_back(input);
+        hold_item(state, id, Held::Input(input));
         return;
     }
     // As tmux: a key press takes a message down, and still counts.
@@ -1875,6 +1869,51 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
         request_render(state, now);
     }
     route(state, id, input, now);
+}
+
+/// One thing held for a client, in the order it came.
+enum Held {
+    Input(Input),
+    /// Work queued behind the input ([`in_input_order`]).
+    Run(crate::server::Job),
+}
+
+impl Held {
+    /// What it counts against [`HELD_CAP`].
+    fn size(&self) -> usize {
+        match self {
+            Held::Input(Input::Paste { data, .. }) => data.len().max(1),
+            _ => 1,
+        }
+    }
+}
+
+/// Runs `job` for client `id` in input order: now, or after the input its
+/// hold keeps, as tmux appends a key event (the click timer's
+/// `DoubleClick`) to the client's queue behind what waits there.
+pub(crate) fn in_input_order(state: &mut State, id: ClientId, job: crate::server::Job) {
+    if state.clients.get(&id).is_some_and(|c| c.holds > 0) {
+        hold_item(state, id, Held::Run(job));
+    } else {
+        job(state);
+    }
+}
+
+/// Keeps `item` for held client `id`, unless the hold is full.
+fn hold_item(state: &mut State, id: ClientId, item: Held) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    let size = item.size();
+    if c.held_full || c.held_bytes + size > HELD_CAP {
+        if !c.held_full {
+            eprintln!("grofe server: input held for {} is full; dropped", c.name);
+        }
+        c.held_full = true;
+        return;
+    }
+    c.held_bytes += size;
+    c.held.push_back(item);
 }
 
 /// Holds client `id`'s input, in order, until [`release_input`]: a
@@ -1895,6 +1934,9 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         return;
     };
     c.holds = c.holds.saturating_sub(1);
+    if c.holds == 0 {
+        c.held_full = false;
+    }
     let now = Instant::now();
     loop {
         let Some(c) = state.clients.get_mut(&id) else {
@@ -1903,16 +1945,15 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         if c.holds > 0 {
             return;
         }
-        let Some(input) = c.held.pop_front() else {
+        let Some(item) = c.held.pop_front() else {
             c.held_bytes = 0;
             return;
         };
-        let size = match &input {
-            Input::Paste { data, .. } => data.len().max(1),
-            _ => 1,
-        };
-        c.held_bytes = c.held_bytes.saturating_sub(size);
-        deliver(state, id, input, now);
+        c.held_bytes = c.held_bytes.saturating_sub(item.size());
+        match item {
+            Held::Input(input) => deliver(state, id, input, now),
+            Held::Run(job) => job(state),
+        }
     }
 }
 
@@ -1975,6 +2016,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
+        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true),
         Routed::Consumed => {}
     }
 }
@@ -1984,8 +2026,20 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
 /// in `dialect`, the binding's own (spec §4.5), never the attaching
 /// client's: a native binding stays native under `tmux attach`. The first
 /// error stops the rest and shows on the client's status row, as tmux shows
-/// it. Output, and any deferred answer, is dropped.
+/// it. Output, and any deferred answer, is dropped. An alias in `cmds`
+/// expands as each runs; a key binding's were expanded when it was bound
+/// ([`Routed::Bound`]).
 pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
+    run_commands_for(state, id, cmds, dialect, false);
+}
+
+fn run_commands_for(
+    state: &mut State,
+    id: ClientId,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+    bound: bool,
+) {
     for argv in cmds {
         let Some(c) = state.clients.get(&id) else {
             break;
@@ -1995,7 +2049,11 @@ pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialec
             dialect,
             ..c.ctx.clone()
         };
-        let result = dispatch::run_split(state, &ctx, argv);
+        let result = if bound {
+            dispatch::run_bound(state, &ctx, argv)
+        } else {
+            dispatch::run_split(state, &ctx, argv)
+        };
         state.deferred_reply = None;
         if let Err(e) = result {
             show_message(state, id, e.trim_end());
@@ -2149,6 +2207,7 @@ mod tests {
                 held: VecDeque::new(),
                 held_bytes: 0,
                 holds: 0,
+                held_full: false,
                 viewport: (0, 0),
                 pan: None,
                 suspended: false,
@@ -2240,6 +2299,16 @@ mod tests {
         assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
     }
 
+    fn held_inputs(state: &State, id: ClientId) -> Vec<Input> {
+        let held = &state.clients[&id].held;
+        held.iter()
+            .filter_map(|h| match h {
+                Held::Input(input) => Some(input.clone()),
+                Held::Run(_) => None,
+            })
+            .collect()
+    }
+
     /// TC.10 fix round 1: a held client's input waits in order, holds
     /// nest, and past the cap new input is dropped.
     #[test]
@@ -2249,7 +2318,7 @@ mod tests {
         hold_input(&mut state, id);
         hold_input(&mut state, id);
         input(&mut state, id, b"ab", now);
-        let held: Vec<Input> = state.clients[&id].held.iter().cloned().collect();
+        let held = held_inputs(&state, id);
         assert_eq!(
             held,
             vec![
@@ -2267,6 +2336,98 @@ mod tests {
         state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP;
         input(&mut state, id, b"c", now);
         assert!(state.clients[&id].held.is_empty(), "dropped past the cap");
+    }
+
+    /// Past the cap, everything that arrives is dropped until the hold is
+    /// released, not only the input that did not fit: a later small key
+    /// would otherwise run with a gap before it.
+    #[test]
+    fn past_the_cap_held_input_is_dropped_until_release() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let key = |k: &str| Input::Key(crate::server::input::parse_key(k).unwrap());
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("a"), now);
+        state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP - 1;
+        let big = Input::Paste {
+            data: vec![b'x'; 2],
+            start: true,
+            end: true,
+        };
+        deliver(&mut state, id, big, now);
+        deliver(&mut state, id, key("b"), now);
+        assert_eq!(
+            held_inputs(&state, id),
+            vec![key("a")],
+            "b came after a dropped paste"
+        );
+        release_input(&mut state, id);
+        assert!(state.clients[&id].held.is_empty());
+        // A new hold holds again.
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("c"), now);
+        assert_eq!(state.clients[&id].held.len(), 1);
+    }
+
+    /// A job queued in input order (the click timer's `DoubleClick`) waits
+    /// behind the input a hold kept, as tmux appends it to the client's
+    /// queue, and runs at once when nothing is held.
+    #[test]
+    fn a_job_in_input_order_runs_after_the_held_input() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let job = |ran: &Arc<std::sync::Mutex<Vec<usize>>>| -> crate::server::Job {
+            let ran = Arc::clone(ran);
+            Box::new(move |state: &mut State| {
+                let held = state.clients[&id].held.len();
+                ran.lock().unwrap().push(held);
+            })
+        };
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab", now);
+        in_input_order(&mut state, id, job(&ran));
+        assert!(ran.lock().unwrap().is_empty(), "held behind a and b");
+        release_input(&mut state, id);
+        assert_eq!(*ran.lock().unwrap(), vec![0], "ran after both keys");
+        in_input_order(&mut state, id, job(&ran));
+        assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
+    }
+
+    /// tmux 3.7b (recorded): a binding keeps the alias expansion made when
+    /// it was bound, and a key press does not expand it again. With
+    /// `a=display-message` and `display-message=set @hit twice`, the key
+    /// bound to `a` runs `display-message`.
+    #[tokio::test]
+    async fn a_bound_alias_chain_expands_once() {
+        let (mut state, id) = state_with_client();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("run")
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]);
+        let session = *state.model.sessions.keys().next().expect("a session");
+        state.clients.get_mut(&id).expect("client").session = session;
+        run(
+            &mut state,
+            &["set", "-ag", "command-alias", "a=display-message"],
+        );
+        run(
+            &mut state,
+            &[
+                "set",
+                "-ag",
+                "command-alias",
+                "display-message=set -g @hit twice",
+            ],
+        );
+        run(&mut state, &["bind-key", "-n", "F5", "a"]);
+        run(&mut state, &["bind-key", "-n", "F6", "set -g @pressed yes"]);
+        input(&mut state, id, b"\x1b[15~\x1b[17~", Instant::now());
+        assert_eq!(state.model.options.lookup("@pressed", &[]), Some("yes"));
+        let hit = state.model.options.lookup("@hit", &[]);
+        assert_eq!(hit, None, "expanded a second time");
     }
 
     /// TC.11: a click maps onto the status row it lands on, at the bottom

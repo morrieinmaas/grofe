@@ -8,6 +8,7 @@
 
 pub mod io;
 pub mod procinfo;
+mod written;
 
 use std::ffi::OsString;
 use std::io as stdio;
@@ -161,6 +162,9 @@ pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
 }
+
+/// alacritty's tab stops, every 8 columns.
+const TAB_STOP: usize = 8;
 
 /// The narrowest a pane's pty and emulator ever get: alacritty_terminal
 /// 0.26 panics writing a wide character into a 1-column terminal. A
@@ -411,6 +415,11 @@ impl PaneHandle {
             cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
+        // ponytail: alacritty's reflow drops trailing blanks it counts as
+        // empty, written ones too ([`written`]), so a line shrunk narrower
+        // than its written blanks loses them and `-J` then trims them, where
+        // tmux keeps its width. Carrying widths across resizes misplaced them
+        // when lines moved or re-wrapped; the loss is the accepted divergence.
         lock(&self.emu).term.resize(size);
         self.set_winsize(size)
     }
@@ -462,10 +471,8 @@ impl PaneHandle {
     }
 
     /// [`Self::capture`] with tmux's `-J` when `join`: a row that wraps
-    /// onto the next one is joined to it, its trailing blanks kept.
-    // ponytail: tmux keeps the trailing blanks of every line that was
-    // written up to its end; the grid cannot tell written blanks from
-    // empty cells, so a line that does not wrap is still trimmed.
+    /// onto the next one is joined to it, and a row that does not ends at
+    /// its used width ([`written`]), the blanks the program wrote kept.
     pub fn capture_lines(&self, opts: &CaptureOpts, join: bool) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
@@ -496,10 +503,40 @@ impl PaneHandle {
         let mut out = String::new();
         for line in start..=end {
             let row = &grid[Line(line)];
+            let wraps = join
+                && row[Column(grid.columns() - 1)]
+                    .flags
+                    .contains(CellFlags::WRAPLINE);
+            // Without a wrap, `-J` stops at the used width; a non-blank
+            // cell the program did not write (`DECALN`) still counts.
+            let cols = grid.columns();
+            let tab_stop = |col: usize| ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
+            let end = if join && !wraps {
+                // A tab counts as far as the stop it moved to (tmux's
+                // `cellused`), a blank or not.
+                (0..cols)
+                    .map(|c| match row[Column(c)].c {
+                        ' ' => 0,
+                        '\t' => tab_stop(c),
+                        _ => c + 1,
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    .max(written::used(row))
+            } else {
+                grid.columns()
+            };
             let mut text = String::new();
-            for col in 0..grid.columns() {
+            // A tab is its `\t` alone, as tmux captures it: the blank cells
+            // it moved over, up to the next tab stop, are not printed. One
+            // written over before its stop is a blank, like those cells.
+            let mut tab_end = 0;
+            for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if col < tab_end && cell.c == ' ' && !cell.flags.contains(written::WRITTEN) {
                     continue;
                 }
                 if opts.escapes {
@@ -520,20 +557,34 @@ impl PaneHandle {
                     text.push(' ');
                     continue;
                 }
-                text.push(cell.c);
+                if cell.c == '\t' {
+                    let stop = tab_stop(col);
+                    let intact = (col + 1..stop).all(|c| {
+                        let cell = &row[Column(c)];
+                        cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
+                    });
+                    if intact {
+                        text.push('\t');
+                        tab_end = stop;
+                    } else {
+                        text.push(' ');
+                    }
+                } else {
+                    text.push(cell.c);
+                }
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);
                 }
             }
-            let wraps = join
-                && row[Column(grid.columns() - 1)]
-                    .flags
-                    .contains(CellFlags::WRAPLINE);
             if wraps {
                 out.push_str(&text);
                 continue;
             }
-            out.push_str(text.trim_end_matches(' '));
+            if join {
+                out.push_str(&text);
+            } else {
+                out.push_str(text.trim_end_matches(' '));
+            }
             out.push('\n');
         }
         out
@@ -662,7 +713,7 @@ fn snap_row(
                 c: cell.c,
                 fg: cell.fg,
                 bg: cell.bg,
-                flags: cell.flags,
+                flags: cell.flags.difference(written::WRITTEN),
                 zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                 underline_color: cell.underline_color(),
                 hyperlink: cell.hyperlink(),

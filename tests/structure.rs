@@ -1263,9 +1263,8 @@ fn respawn_c_sets_the_start_directory() {
     srv.wait_for(|| path() == two, WAIT).expect("in two");
 }
 
-/// `capture-pane -J` joins a wrapped row to the next (tmux 3.7b).
-// ponytail: tmux also keeps the written trailing blanks of `xyz  `; the
-// grid cannot tell them from empty cells, so grofe trims them.
+/// `capture-pane -J` joins a wrapped row to the next and keeps the
+/// trailing blanks a line was written with (tmux 3.7b).
 #[test]
 fn capture_pane_j_joins_wrapped_lines() {
     let srv = server();
@@ -1280,9 +1279,184 @@ fn capture_pane_j_joins_wrapped_lines() {
     let joined = srv
         .cmd(&["capture-pane", "-p", "-J", "-t", "s"])
         .expect("-J");
-    assert_eq!(joined, format!("{a29}\nxyz\n\n\n"));
+    assert_eq!(joined, format!("{a29}\nxyz  \n\n\n"));
     let plain = srv.cmd(&["capture-pane", "-p", "-t", "s"]).expect("-p");
     assert_eq!(plain, format!("{}\n{}\nxyz\n\n\n", &a29[..20], &a29[20..]));
+}
+
+/// `capture-pane -J` ends a line at its used width, as tmux 3.7b's
+/// `cellused` (recorded on a 20x8 pane): written blanks stay, a partial
+/// erase keeps the width, a coloured erase adds none, a whole-line erase
+/// empties it, a delete widens it to 19 and an insert to 20.
+#[test]
+fn capture_pane_j_ends_each_line_at_its_used_width() {
+    let srv = server();
+    let cmd = concat!(
+        "printf 'ab   \\nef   \\r\\033[3C\\033[K\\nij\\033[41m\\033[K\\033[0m\\n",
+        "cd   \\r\\033[2Kx\\ngh   \\033[2D\\033[1P\\nkl   \\r\\033[1@\\n'; sleep 300"
+    );
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "8", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains("kl"), WAIT)
+        .expect("printed");
+    let joined = srv
+        .cmd(&["capture-pane", "-p", "-J", "-t", "s"])
+        .expect("-J");
+    let want = [
+        "ab   ".to_string(),
+        "ef   ".to_string(),
+        "ij".to_string(),
+        "x".to_string(),
+        format!("gh{}", " ".repeat(17)),
+        format!(" kl{}", " ".repeat(17)),
+        String::new(),
+        String::new(),
+    ];
+    assert_eq!(joined, want.map(|l| l + "\n").concat());
+}
+
+/// `capture-pane -J` as tmux 3.7b gives it (recorded on a 20x6 pane): a
+/// line typed in insert mode is the whole width, a tab is its `\t` alone,
+/// and a wide character wrapped to the next row joins it. After a shrink
+/// to 4 columns and back the lines are the same, but written trailing
+/// blanks may be lost (the accepted divergence in `pane::written`).
+#[test]
+fn capture_pane_j_prints_insert_mode_tabs_and_wide_characters() {
+    let srv = server();
+    let cmd = concat!(
+        "printf 'ab   \\nabcdef  \\n'; printf '\\033[4hxy\\033[4l\\n'; ",
+        "printf 'a\\tb\\n'; printf '%018d\\344\\270\\255\\344\\270\\255z\\n' 0; sleep 300"
+    );
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "6", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains('z'), WAIT)
+        .expect("printed");
+    let want = [
+        "abcdef  ".to_string(),
+        format!("xy{}", " ".repeat(18)),
+        "a\tb".to_string(),
+        format!("{}中中z", "0".repeat(18)),
+        String::new(),
+    ]
+    .map(|l| l + "\n")
+    .concat();
+    let joined = |srv: &common::TestServer| {
+        srv.cmd(&["capture-pane", "-p", "-J", "-t", "s"])
+            .expect("-J")
+    };
+    assert_eq!(joined(&srv), want);
+    ok(&srv, &["resize-window", "-t", "s", "-x", "4"]);
+    ok(&srv, &["resize-window", "-t", "s", "-x", "20"]);
+    let after = joined(&srv);
+    assert_eq!(after.lines().count(), want.lines().count(), "{after:?}");
+    for (line, want) in after.lines().zip(want.lines()) {
+        assert!(
+            line == want || line == want.trim_end(),
+            "{line:?} is not {want:?}"
+        );
+    }
+}
+
+/// `renumber-windows` as tmux 3.7b (recorded): off, a killed window leaves
+/// its gap; on, the windows left are numbered again from `base-index` when
+/// one goes (killed, or its last pane joined elsewhere), not when one is
+/// made at a free index or moved to another session.
+#[test]
+fn renumber_windows_closes_the_gaps_a_removed_window_leaves() {
+    let srv = server();
+    ok(&srv, &["set", "-g", "base-index", "0"]);
+    ok(&srv, &["new-session", "-d", "-s", "s", SLEEP]);
+    for _ in 0..3 {
+        ok(&srv, &["new-window", "-t", "s", SLEEP]);
+    }
+    ok(&srv, &["new-session", "-d", "-s", "u", SLEEP]);
+    let indexes = |session: &str| {
+        let out = srv
+            .cmd(&["list-windows", "-t", session, "-F", "#{window_index}"])
+            .expect("list-windows");
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    ok(&srv, &["set", "-g", "renumber-windows", "off"]);
+    ok(&srv, &["kill-window", "-t", "s:0"]);
+    assert_eq!(indexes("s"), "1 2 3");
+    ok(&srv, &["set", "-g", "renumber-windows", "on"]);
+    ok(&srv, &["kill-window", "-t", "s:2"]);
+    assert_eq!(indexes("s"), "0 1");
+    ok(&srv, &["new-window", "-t", "s:7", SLEEP]);
+    assert_eq!(indexes("s"), "0 1 7");
+    ok(&srv, &["move-window", "-s", "s:1", "-t", "u:5"]);
+    assert_eq!(indexes("s"), "0 7");
+    ok(&srv, &["join-pane", "-s", "s:7", "-t", "s:0"]);
+    assert_eq!(indexes("s"), "0");
+}
+
+/// After a resize, `-J` gains no blank padding tmux 3.7b does not have
+/// (recorded): a height change (6 rows to 4 and back), and a 26-character
+/// line re-wrapped at 5 columns and back. Written trailing blanks may be
+/// lost across a shrink (the accepted divergence in `pane::written`).
+#[test]
+fn capture_pane_j_gains_no_padding_across_a_resize() {
+    let srv = server();
+    let cases: [(&str, &[&str], [&str; 2]); 2] = [
+        (
+            "printf 'ab   \\nx  \\n'; sleep 300",
+            &["ab   ", "x  ", "", "", "", ""],
+            ["-y", "4"],
+        ),
+        (
+            "printf 'abcdefghijklmnopqrstuvwxyz\\n'; sleep 300",
+            &["abcdefghijklmnopqrstuvwxyz", "", "", "", "", ""],
+            ["-x", "5"],
+        ),
+    ];
+    for (i, (cmd, want, shrink)) in cases.iter().enumerate() {
+        let name = format!("r{i}");
+        ok(
+            &srv,
+            &["new-session", "-d", "-s", &name, "-x", "30", "-y", "6", cmd],
+        );
+        srv.wait_for(|| srv.capture(&name).contains('x'), WAIT)
+            .expect("printed");
+        let full = if shrink[0] == "-y" { "6" } else { "30" };
+        ok(&srv, &["resize-window", "-t", &name, shrink[0], shrink[1]]);
+        ok(&srv, &["resize-window", "-t", &name, shrink[0], full]);
+        let got = srv
+            .cmd(&["capture-pane", "-p", "-J", "-t", &name])
+            .expect("-J");
+        let got: Vec<&str> = got.lines().collect();
+        assert_eq!(got.len(), want.len(), "{name}: {got:?}");
+        for (line, want) in got.iter().zip(want.iter()) {
+            assert!(
+                *line == *want || *line == want.trim_end(),
+                "{name}: {line:?} is not {want:?}"
+            );
+        }
+    }
+}
+
+/// A tab written over captures as blanks, as tmux 3.7b (recorded):
+/// `a\t\e[3Dxy` is `a    xy` with `-p`, and with `-J` keeps the tab's
+/// width, `a    xy `.
+#[test]
+fn capture_pane_prints_a_tab_written_over_as_blanks() {
+    let srv = server();
+    let cmd = "printf 'a\\t\\033[3Dxy\\n'; sleep 300";
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "3", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains("xy"), WAIT)
+        .expect("printed");
+    let first = |args: &[&str]| {
+        let out = srv.cmd(args).expect("capture");
+        out.lines().next().unwrap_or_default().to_string()
+    };
+    assert_eq!(first(&["capture-pane", "-p", "-t", "s"]), "a    xy");
+    assert_eq!(first(&["capture-pane", "-p", "-J", "-t", "s"]), "a    xy ");
 }
 
 #[test]
@@ -1487,6 +1661,8 @@ fn closing_the_current_window_falls_back_to_the_one_before() {
                 SLEEP,
             ],
         );
+        // tmux's default, as recorded: the indexes keep their gaps.
+        ok(&srv, &["set", "-g", "renumber-windows", "off"]);
         for i in 1..=3 {
             ok(&srv, &["new-window", "-d", "-t", &format!("s:{i}"), SLEEP]);
         }

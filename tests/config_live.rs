@@ -389,6 +389,23 @@ fn a_sequence_binding_runs_every_command() {
     assert_left_active(&srv);
 }
 
+/// A config key bound to a `command-alias` name runs the alias's command:
+/// the alias expands when the config's bindings load, as `bind-key`
+/// expands it, since a key press runs its commands as bound.
+#[test]
+fn a_config_binding_to_an_alias_runs_its_command() {
+    let srv = start(&[(
+        "config.toml",
+        "command-alias = [\"twopanes=split-window -h\"]\n[keys.prefix]\nz = \"twopanes\"\n",
+    )]);
+    eprintln!("KEY {:?}", key_line(&srv, "prefix", "z"));
+    let mut a = attach(&srv);
+    a.wait_for_output(b"\x1b[2J", 0);
+    a.send("\x02z");
+    srv.wait_for(|| panes(&srv).len() == 2, Duration::from_secs(10))
+        .expect("two panes");
+}
+
 /// R12: a quoted `';'` in a binding string is one literal argument.
 #[test]
 fn a_quoted_semicolon_in_a_binding_stays_literal() {
