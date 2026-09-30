@@ -141,6 +141,7 @@ display-message -p -t <target> #{window_id}
 display-message -p <$(...)>
 display-message -p <$canopy_cf_format>
 display-message -t <expr> -p #{window_id}
+display-message -t <pane> -p #{window_id}
 display-message -t <target> -p #{pane_current_path}
 display-message -t <target> -p #{window_id}
 display-message <$END_MESSAGE>
@@ -166,6 +167,7 @@ kill-pane -t <$pane>
 kill-pane -t <$pane_id>
 kill-pane -t <expr>
 kill-pane -t <name>
+kill-pane -t <pane>
 kill-server
 kill-session -t 0
 kill-session -t <expr>
@@ -197,6 +199,7 @@ list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_left}<$PANE_FIEL
 list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_title}<$PANE_FIELD_SEP>#{pane_width}<$PANE_FIELD_SEP>#{pane_left}<$PANE_FIELD_SEP>#{pane_right}<$PANE_FIELD_SEP>#{pane_active}
 list-panes -t <target> -F '#{pane_id} #{pane_title}'
 list-panes -t <target> -F <pane-format>
+list-panes -t <window> -F #{pane_id}
 list-sessions
 list-sessions -F #S
 list-sessions -F '#S: <$TMUX_FZF_SESSION_FORMAT>'
@@ -266,13 +269,16 @@ resize-pane -t <$pane_id> -x <$width>
 resize-pane -t <$session_name>:<$window_number> -U 999
 resize-pane -t <$session_name>:<$window_number> -Z
 resize-pane -t <expr> -x <expr>
+resize-pane -t <pane> -x 30%
 resize-window -t <$target> -x 200 -y 200
 respawn-pane -k -t <$canopy_ad_pane> <$canopy_ad_resume>
+respawn-pane -k -t <pane> <command>
 run-shell 'echo '"'"'<$message>'"'"''
 run-shell -b 'sleep 0.18; tmux select-pane -t <target> -P default'
 run-shell -b <$CURRENT_DIR>/scripts/<$item>.sh
 select-layout -t <$WINDOW_ID> even-horizontal
 select-layout -t <$session_name>:<$window_number> <$window_layout>
+select-layout -t <window> main-vertical
 select-layout <$target_origin>
 select-pane -t <$PANE_ID>
 select-pane -t <$active_pane>
@@ -286,6 +292,7 @@ select-pane -t <expr> -P bg=colour238
 select-pane -t <expr> -T <expr>
 select-pane -t <fmt-arg> -P default
 select-pane -t <name>
+select-pane -t <pane> -T <name>
 select-pane -t <target>
 select-window -t <$BASH_REMATCH>:<$BASH_REMATCH>
 select-window -t <$pane>
@@ -369,6 +376,11 @@ set-option -g focus-events on
 set-option -g history-limit 50000
 set-option -g status-interval 5
 set-option -g status-keys emacs
+set-option -p -t <pane> pane-active-border-style <style>
+set-option -p -t <pane> pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'
+set-option -p -t <pane> pane-border-style <style>
+set-option -p -t <pane> remain-on-exit failed
+set-option -p -t <pane> window-style <style>
 set-option -s default-terminal screen-256color
 set-option -s escape-time 0
 set-option -t <$session> @claude_origin <value>
@@ -430,6 +442,7 @@ source-file <$(...)>
 source-file <$init_file>
 source-file <file>
 split-window -c <$PWD> <$opt> 'bash -c '"'"'exec -a fzf bash <$argsf>'"'"'' <$swap> <$tmux_off_opts>
+split-window -d -t <pane> -h -l 70% -P -F #{pane_id} <command>
 split-window -h -b -f -l <width> -t <target> -P -F <pane-format> <command>
 split-window -h -f -l <width> -t <target> -P -F <pane-format> <command>
 split-window -t <$session_name>:<$window_number> -c <$dir>
