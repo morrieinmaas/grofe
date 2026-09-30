@@ -18,11 +18,12 @@ parallel worktrees without conflicts.
 | **M3** | Config, mouse, clipboard, scrollback view, prompt, key bindings, kitty graphics placeholders | **Dogfood start.** Full acceptance suite green in CI; owner daily-drives for a week in Ghostty and WezTerm, tmux as fallback | 1.5 weeks + dogfood week |
 | **M3.5** | Minimal `grofe import-tmux` (spec §5.5) | A fixture tmux.conf converts to golden TOML that loads in grofe with no errors; every unconvertible line is reported | ~3 days, during the dogfood week |
 | **M3.6** | tmux compatibility for the owner's workflow (spec D1, D12, §4.5): the `tmux` name and server identity, CLI/target/format/option breadth, cached `#()` status sources, hooks and server environment, popups and menus (moved from M5), multi-row status, all reached through a table-driven tmux front end (`src/compat/`), the owner's daily config ported (canopy, `user.conf`, navigator), compat suite | **Alias day.** The compat suite is green in CI against goldens recorded from tmux 3.7b; **[owner]** `tmux` on PATH resolves to grofe with the ported config for a week of normal work, real tmux kept as `env -u TMUX <absolute path>` as the fallback | ~6.5 weeks |
-| **M3.7** | Port the remaining TPM plugins once to grofe-native equivalents | Key parity passes for every table; each plugin row's acceptance passes; **[owner]** each daily binding used once | ~1.5 weeks alongside M4; closes with M5 (TP.5 yank and TP.9b, the parity rows that need copy mode, run there) |
-| **M4** | Native persistence and pane identity (spec §6): snapshot, restore, resume, `reboot-check` | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it; the container reboot scenario (T4.6) green; **[owner]** the same across a real reboot on each OS | ~3 weeks, beside M3.7 |
+| **M3.7** | Run the owner's remaining TPM plugins unchanged through a small loader (spec D1, §7.1); one compat check per plugin. | TP.9a and the compat suite green; **[owner]** each daily binding used once; closes with M5 (TP.11 yank, TP.9b). | ~4 days, before M5 (not beside M4). |
+| **M4** | Native persistence and pane identity (spec §6): snapshot, restore, resume, `reboot-check` | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it; the container reboot scenario (T4.6) green; **[owner]** the same across a real reboot on each OS | ~3 weeks, after the alias-day container test |
 | **M5** | Copy mode, buffers, `copy-pipe*`, OSC 52 (popups and menus moved to M3.6) | Scope doc approved first (written during M4); the 93 `copy-mode-vi` bindings match tmux 3.7b's goldens (TM.7); then the yank port (TP.5) and TP.9b's parity rows. **No-difference parity**, **[owner]** confirmed | ~5.5 weeks |
 | **M6** | Events and plugin API, Lua | Spec §7's plugin part rewritten from the dogfood log (T6.0, during M5); event catalog and protocol v1 frozen with fixtures; supervised plugins; sandboxed Lua with format functions; one out-of-process and one Lua plugin in-tree | ~2.5 weeks |
 | **M7** | agents plugin; canopy on grofe (spec §7, §7.1) | canopy's four adapters report through grofe; rollups and attention render with formats only; after a container reboot each fake agent is back in its own conversation (T7.8); **[owner]** a real reboot returns every Claude Code pane to its conversation | ~3.5 weeks (T7.1 and T7.5 during M6) |
+| **Alias-day container test** | TA.1, the owner's setup (athome + canopy + grofe as `tmux`) end-to-end in a container, scoped to M3.6+M3.7+M5. | report PASS; **[owner]** reviews it. | ~3 days |
 | **E2E** | Release gate: every suite from a clean clone, in containers; rollback drill | `scripts/release-gate.sh` green; **[owner]** alias day for good, then a week with no open `compat` or `copy` entry: **fully done** | ~1 week + the owner's week |
 | **M8** | Compatibility extras (optional) | Decided after M7: tmux `-CC` subset | unscheduled |
 
@@ -32,30 +33,29 @@ Estimate: about **7 weeks to dogfood start** (5.5 weeks of work + 30% buffer), n
 counting the dogfood week itself. M3.5 adds about 3 days after dogfood start and
 runs alongside the dogfood week; it does not move dogfood start.
 
-**Recommended order after M3.5:** M3.6, then M4 and M3.7 side by side, then M5
-(which also closes M3.7).
+**Recommended order after M3.5:** M3.6, then M3.7, then M5 (which closes
+M3.7), then the alias-day container test, then M4 and the rest.
 
-- **M3.6 first.** The owner can only do real work in grofe once their scripts
-  and tools behave the same under the `tmux` name, and every later milestone
-  (persistence above all) is proven by that daily use. Putting M3.6 right after
-  M3.5 turns the dogfood week's "tmux as fallback" into dogfooding with the
-  alias.
-- **M4 next, not after M3.7.** Persistence is the core wedge, and under the
-  alias its absence is a regression: the owner's tmux restores sessions today
-  through resurrect and continuum. M3.7's tasks mostly own files in canopy and
-  athome, disjoint from M4's, so both run as parallel waves; with one lane, M4
-  goes first.
-- **M5 last of the four,** carrying copy mode, buffers and the yank port. Its
-  exit is the "no difference" point; until then shift-drag stays the copy
-  fallback (spec §10).
-- **Rejected alternative:** M4 before M3.6 brings persistence about six weeks
-  earlier, but the owner would still be working in tmux, so nothing would
-  exercise it.
-- **Then M6, M7 and the release gate, in that order.** M7's agents plugin is
-  M6's first real user, so M6 cannot follow it. Each milestone's first,
-  docs-only or disjoint tasks start in the previous one's tail: TM.0 during
-  M4, T6.0 during M5, T7.1 and T7.5 during M6, TE.1 and TE.2 once their suites
-  exist.
+- **M3.6 first.** Unchanged reasoning: the owner can only do real work in
+  grofe once their scripts and tools behave the same under the `tmux`
+  name.
+- **M3.7 next, now that it is cheap.** Running the owner's plugins
+  unchanged through a loader is most of a week, not two, so there is no
+  reason to run it beside anything: it simply comes right after M3.6.
+- **M5 third**, closing M3.7 (TP.11's yank check, TP.9b's copy-mode
+  parity). This is alias-day's full scope: M3.6 + M3.7 + M5.
+- **The container test fourth, before M4 starts.** The owner
+  wants to see the whole stack (athome, canopy, grofe as `tmux`) work in
+  a disposable container before any real machine's persistence or agent
+  plugin exists to lose anything. M4 (persistence), M6 (events and
+  plugins, without Lua) and M7 (agents) all wait on this gate.
+- **Rejected alternative (superseded):** the original plan ran M4 beside
+  M3.7, reasoning that persistence was the core wedge and M3.7's tasks
+  were file-disjoint from M4's. The 2026-09-29 ruling overrides this: the
+  owner would rather see the container proof first than get persistence
+  six weeks earlier.
+- **Then M6, M7 and the release gate, in that order,** as before. M7's
+  agents plugin is M6's first real user, so M6 cannot follow it.
 
 **Critical path to alias day:** the dogfood-start path above, then (with TC.0
 and TC.0b already done during M1 to M3) the M3.6 stub edit → TC.2 → TC.2b →
@@ -71,12 +71,18 @@ about 69 task-days (the one-lane sum in the M3.6 section), roughly 18 weeks
 with the buffer, and alias day moves to about week 26 (splitting the front end
 saves nothing in one lane).
 
-**Critical path from alias day to fully done** (review cycles included; each
-milestone's own path is in its section): M4 (stub edit → T4.3 → T4.4 → T4.6,
-11 days) → M5 (TM.1 → TM.2 → TM.5 → TM.6 → TM.7 → TP.5 → TP.9b, 21 days; TM.0
-and its approval run during M4) → M6 (T6.4 → T6.5 → T6.6, 9 days; T6.0 during
-M5) → M7 (T7.2 → T7.4 → T7.7 → T7.8, 14 days; T7.1 and T7.5 during M6) → TE.3
-(3 days; TE.1 and TE.2 run earlier), about 58 working days.
+**Critical path from alias day to fully done:** TA.1 (about 3 days, gated on
+the owner's review) → M4 (stub edit → T4.3 → T4.4 → T4.6, 11 days) → M6
+without Lua (stub edit → T6.1 → T6.2/T6.3 → T6.6, about 8 days; T6.0 during
+M4) → M7 (T7.2 → T7.4 → T7.7 → T7.8, 14 days; T7.1 and T7.5 during M6) →
+TE.2b → TE.3 (per the m35 amendment), with M5's 21 days and M3.7's task-days
+now landing *before* alias day instead of after it. The one-lane sums for M4,
+M6 and M7 are otherwise unchanged by this amendment (M6's already-updated sum
+is in §4 above); M3.7's one-lane sum (new, since the section never had one
+before) is: TP.3 3, TP.4 1, TP.5 1, TP.6 2, TP.7 2, TP.8 1, TP.9 2, TP.10 1,
+TP.9a 2 (before M5) + TP.11 1, TP.9b 1 (in M5) = **17 task-days**, well under
+the original's "~1.5 weeks" estimate for the ported version, consistent with
+"run unchanged" being cheaper than "port."
 **Estimate, honestly, with the same three lanes:** M4 ends about week 17.5
 (M3.7's parallel tasks end inside it, about week 16), M5 about week 23, M6
 about week 25.5, M7 about week 29, the release gate about week 30, and
@@ -198,7 +204,6 @@ src/
       bindings.rs    # M3.6: if-shell, command-alias, popup and menu flags, list-keys (FE.4)
       structure.rs   # M3.6: structure and client verbs, layout codec, list-* output (FE.2)
       copy.rs        # M5: copy-mode and buffer rows (TM.7)
-  lua/               # M6: mod.rs (runtime, T6.4), api.rs (T6.4, T6.5)
   agents/            # M7: mod.rs, manifest.rs (T7.1), state.rs (T7.2), identity.rs (T7.3), adopt.rs (T7.4)
   config/
     mod.rs           # M3
@@ -227,7 +232,7 @@ TI.1 start (rule 4). The same holds for the M3.6 files above, stubbed before
 M3.6 starts, together with any dependency M3.6 needs that T0.2 did not add
 (`regex` for `#{m/r:}`), by the orchestrator on `main` (rule 3). From M4 on,
 each milestone's section opens with its own stub edit, which creates that
-milestone's files and adds its dependencies (`mlua` for M6).
+milestone's files and adds its dependencies.
 
 ---
 
@@ -729,31 +734,166 @@ logged as known gaps until then.
 
 ---
 
-## M3.7: port the remaining plugins
+## M3.7: run the remaining plugins unchanged
 
-Spec D1, §7.1. The owner's remaining TPM plugins move once to grofe-native
-equivalents; no `tmux.conf` or TPM plugin runs. Starts after M3.6's exit gate,
-as a wave beside M4 (see the recommended order), and cannot close before M5,
-because TP.5 (yank) and TP.9b (the parity rows that need copy mode) run in M5. Tasks that
-own files in canopy or athome run in those repos with their own bats tests;
-each also has a grofe-side check named in its row. TP.3, TP.4, TP.6, TP.7 and
-TP.8 in parallel; TP.9a after them; TP.5 and TP.9b in M5.
+Spec D1, §7.1, owner ruling 2026-09-29. The owner's seven still-TPM-managed
+plugins (`tmux-sensible`, `tmux-yank`, `tmux-fzf`, `tmux-sessionx`,
+`tmux-which-key`, `opensessions`, `tmux-fzf-url`, `tmux-claude-session-manager`;
+eight names, `vim-tmux-navigator` excluded per §1 of `plan-amend-2026-09-29.md`)
+run **unchanged**: no `tmux.conf`, no plugin script is rewritten or ported.
+TP.3 replaces real TPM with a small loader modeled on canopy's own
+resurrect/continuum pattern (vendored tree, absolute-path load, no clone,
+dormant with one log line when bash or the tree is missing); every other
+task is a **compat check**, one per plugin, that the plugin's own unmodified
+script, run through the tmux compatibility front end, behaves exactly as it
+does under real tmux 3.7b. A native Lua or Rust rewrite of any one plugin is
+a later, one-at-a-time decision, made only when that plugin proves slow or
+fragile under the loader, and is out of scope here. Starts after M3.6's exit
+gate. Runs **before** M5, not beside M4: M4 no longer starts until the
+alias-day container test (new section below) has run, so M3.7 and M5 are
+sequential, both ahead of M4. TP.3 first; TP.4 through TP.10 run in parallel
+after it; TP.9a closes the wave once every compat check is in. TP.11 and
+TP.9b need M5's copy-mode commands and run there, closing M3.7 for good, the
+same shape the original plan gave TP.5 and TP.9b, just renumbered. Tasks
+that own files in canopy or athome run there with their own bats tests; each
+also has a grofe-side check named in its row. Resurrect and continuum are
+**not** in this table (§2 of `plan-amend-2026-09-29.md`): they keep loading
+exactly as today, unaffected by TP.3, pending the owner's answer to Q-M37-1
+(§7 of `plan-amend-2026-09-29.md`).
 
-| Task | Plugin or piece | grofe-native replacement | Owns | Depends | Accept |
+| Task | Plugin or piece | What it verifies | Owns | Depends | Accept |
 |---|---|---|---|---|---|
-| **TP.3** tmux-which-key | nested `display-menu` built from `@wk_menu_*`, `command-alias`, `setenv -h` | `display-menu --keys <table> [group]`, a grofe long flag (like `--persist`; no tmux script sends it), building nested menus from bindings' `desc` and `group`; canopy's menu data becomes `group` fields | `--keys` in `src/server/menu.rs`, canopy's `group` fields, `tests/acceptance/tp_3.rs` | M3.6 | `prefix Space` opens a menu listing every described prefix binding grouped as in `keys.tsv`; a group item opens its submenu; an item runs its binding |
-| **TP.4** sessionx, tmux-fzf, tmux-fzf-url | fzf-tmux popups over `list-*`, `capture-pane -ep`, `swap-*`, buffers | Small scripts in canopy's grofe backend: `display-popup -E` running fzf over `list-sessions -F`, `list-windows -a -F` and `capture-pane -ep`, bound to `s`, `F` and `u`; sessionx's `unlink-window` flow dropped (spec §4.5); tmux-fzf's buffer actions land in M5 once TM.4 exists | canopy `grofe/bin/` scripts and their bats | M3.6; TM.4 for tmux-fzf's buffer actions | bats: each script, with fzf driven by `--filter`, sends the expected `switch-client`, `kill-session` or open command to a scripted server; the compat suite runs each once through a real popup |
-| **TP.5** tmux-yank | `copy-mode-vi` tables, `copy-pipe*`, `paste-buffer -p`, `set-buffer` | `y`, `Y` and `MouseDragEnd1Pane` bound to `copy-pipe-and-cancel` with `pbcopy` on macOS and `wl-copy` on Linux, plus OSC 52 | canopy's copy-mode bindings | M5 copy mode | A selection copied in copy mode reaches a stub clipboard command and the outer pty as OSC 52; `prefix ]` pastes it with bracketed paste in a pane that asked for it |
-| **TP.6** opensessions | sidebar pane, twelve hooks with `run-shell -b` curl and `tmux -S #{socket_path}`, the `opensessions` key table, `@opensessions_width` | Its tmux-side config ported to TOML hooks and a custom table; its program runs unchanged against grofe | canopy/athome port files, a `tests/compat/scenarios/` opensessions scenario | M3.6, TC.0b | Against a recording endpoint, a scripted session fires the same hook calls in the same order as tmux's golden (recorded with TC.0b); the sidebar opens through `join-pane` at `@opensessions_width` and keeps it across `resize-window` |
-| **TP.7** claude-session-manager | nested attach in `display-popup`, `switch-client -c`, `detach-client -s` | `a` and `A` open `display-popup -E` running `tmux attach -t <agent session>` | canopy/athome port files, `tests/acceptance/tp_7.rs` | M3.6 | From a pane in `main`, `prefix a` shows the agent session in a popup; detaching closes the popup and leaves `main` attached; attaching to `main` from its own popup is refused |
-| **TP.8** sensible, TPM, resurrect, continuum | sensible's options and `bind-if-unset`; TPM's `@plugin` lines and `start-server`; resurrect and continuum's save strategy and `continuum_save.sh` `#()` | sensible: grofe defaults (spec §5.3) or TP.1's settings; TPM: nothing, not ported; resurrect and continuum: M4, and `continuum_save.sh` leaves the status line | canopy port files, `scripts/check-sensible.sh` | M3.6 | The check script lists every option sensible sets and finds it at the same value in `grofe show-options -g`, or names the deliberate difference; no `@plugin`, `@resurrect-*` or `@continuum-*` line remains in the port |
-| **TP.9a** Parity without copy mode | all tables but copy mode | `scripts/key-parity.sh` compares real tmux's `list-keys` (old config, private socket, `env -u TMUX`) with `grofe list-keys` per table: `prefix` (114) without `[`, `]`, `=` and `PageUp`; `root` (22) without the wheel, drag, double-click and triple-click rows; `opensessions` (13); stock mouse bindings are matched against the built-in mouse model and stock `m` against its out-of-scope reason (spec §4.5); the rows left out are listed as TP.9b's | `scripts/key-parity.sh`, the reasons column in `docs/compat-coverage.md` | TP.3 to TP.8 | The script exits 0 on TP.9a's rows: every tmux binding has a grofe binding doing the same thing, or a listed reason; **[owner]** each daily binding (`s`, `K`, `?`, `u`, `g`, `G`, `P`, `T`, `W`, `a`, `A`) used once and ticked in `docs/dogfood.md` |
-| **TP.9b** Parity with copy mode (runs in M5) | `copy-mode-vi` (93), `prefix` `[`, `]`, `=`, `PageUp`, `root` wheel, drag, double and triple click | the same script over the rows TP.9a left out | the TP.9b rows of `scripts/key-parity.sh` | TP.9a, TM.1, TM.4, TM.6, TM.7 | The script exits 0 for every table, with no row left out |
+| **TP.3** TPM-style plugin loader | replaces TPM, `@tpm_plugins`, `~/.config/tmux/plugins/` | Extends canopy's existing vendoring (`plugins/vendor.sh`, `VERSIONS`, `CHECKSUMS`) from resurrect/continuum to the eight plugins named above: one `vendor.sh <name>` run per plugin, its tree and pin committed; a generic loader (a `lib/plugins.sh` function, called once per name in a fixed list from `30-plugins.conf`, replacing its two hand-written blocks with a loop over all ten names including resurrect/continuum) that checks bash and the vendored entry point exist, then runs it with the same `if-shell`-guarded `run-shell "<absolute path>"` pattern already in use; no network at runtime; runs once at server start and again on `source-file`/`reload`, matching TPM's own timing | canopy: the 8 new `plugins/<name>/` trees, `plugins/VERSIONS`, `plugins/CHECKSUMS`, the generalized loader in `lib/plugins.sh` and its call site (replacing `30-plugins.conf`'s two blocks), `test/plugin_loader.bats`; grofe: none (the loader is plain shell calling verbs already native since M1–M3.6) | M3.6's exit gate (bind-key, if-shell, run-shell, set-hook, set-environment, display-menu all merged) | `vendor.sh <name>` for each of the 8 reproduces a tree whose digest matches a freshly recorded `CHECKSUMS` line; `canopy doctor` reports all ten vendored trees present and unmodified; starting grofe under the `tmux` name with the ported config loads with no error and no `compat-miss.log` line from the load itself; deleting one plugin's vendored tree makes only that plugin go dormant (one log line), every other plugin still loads; the same loader run against real tmux 3.7b on a private `-L` socket loads the same set (proving the loader itself is not tmux-specific) |
+| **TP.4** compat check: tmux-sensible | `tmux-plugins/tmux-sensible` | Its `.tmux` script's `set-option -g`/`bind-if-unset` calls (escape-time, focus-events, aggressive-resize, display-time, history-limit, and the rest) land at the values it sets, or are left alone where the owner's ported config already set them first (load order matters: canopy's own config loads before the plugin layer) | `tests/acceptance/tp_4.rs` | TP.3 | Every option sensible's script sets matches a golden recorded from real tmux 3.7b loading sensible alone; no `compat-miss.log` line from sensible's own calls; `show-options -g` includes each one at the golden's value |
+| **TP.5** compat check: tmux-which-key | `alexwforsythe/tmux-which-key` | `prefix Space` opens the same nested `display-menu` (TC.7, native since M3.6) built from `@wk_menu_*`, matching the owner's `keys.tsv` groups | `tests/acceptance/tp_5.rs` | TP.3, TC.7 | `prefix Space`'s menu matches TC.0b's golden for the owner's group layout; a submenu opens and Escape closes both; an item's key runs its bound command |
+| **TP.6** compat check: tmux-sessionx | `omerxx/tmux-sessionx` | `prefix s` opens its fzf-tmux popup over `list-sessions`, zoxide mode lists directories, choosing a session switches to it | `tests/acceptance/tp_6.rs` | TP.3, TC.6, FE.1, FE.4 | `prefix s` opens the popup; selecting a session switches the client; the plugin's own no-fzf error path matches tmux's text |
+| **TP.7** compat check: tmux-fzf | `sainnhe/tmux-fzf` | `prefix F` opens the plugin's own action menu (switch window, kill pane, and the rest of its default action set) over `display-popup` | `tests/acceptance/tp_7.rs` | TP.3, TC.6, TC.8, FE.2 | Choosing an action in the menu behaves as tmux's golden for that action (a switched window, a killed pane) |
+| **TP.8** compat check: tmux-fzf-url | `wfxr/tmux-fzf-url` | `prefix u` captures the pane (`capture-pane -ep`, native since M2), extracts URLs, and opens the fzf-url picker; `@fzf-url-history-limit 2000` (already set in the ported config) is honoured | `tests/acceptance/tp_8.rs` | TP.3, TC.6 | `prefix u` over a pane with three URLs lists all three, matching the golden; choosing one runs its open command with that URL as argv |
+| **TP.9** compat check: opensessions | `Ataraxy-Labs/opensessions` | Its twelve hooks (`run-shell -b` plus `tmux -S #{socket_path}`) and its sidebar (`join-pane` at `@opensessions_width`) fire in tmux's order against a recording endpoint | `tests/compat/scenarios/opensessions.rs`, reusing TC.0b's recording-endpoint pattern | TP.3, TC.5, TC.8 | A scripted session fires the same hook calls in the same order as a golden recorded with TC.0b; the sidebar opens at `@opensessions_width` and keeps it across `resize-window` |
+| **TP.10** compat check: claude-session-manager | `craftzdog/tmux-claude-session-manager` | `prefix a`/`prefix A` (`@claude_launch_key`/`@claude_list_key`) open a nested `display-popup -E` running `tmux attach -t <agent session>` | `tests/acceptance/tp_10.rs` | TP.3, TC.6, TC.1 | From a pane in `main`, `prefix a` shows the named agent session in a popup; detaching closes the popup and leaves `main` attached; attaching to `main` from its own popup is refused, matching TC.1's nesting rule |
+| **TP.9a** Parity, all tables but copy mode | every stock, canopy and plugin binding not in `copy-mode-vi` | `scripts/key-parity.sh` compares real tmux's `list-keys` (old config, private socket, `env -u TMUX`) with `grofe list-keys` per table: `prefix` (114) without `[`, `]`, `=` and `PageUp`; `root` (22) without the wheel, drag, double-click and triple-click rows; `opensessions` (13); stock mouse bindings matched against the built-in mouse model, stock `m` against its out-of-scope reason | `scripts/key-parity.sh`, the reasons column in `docs/compat-coverage.md` | TP.3 through TP.10 | The script exits 0 on every row not deferred to TP.9b; **[owner]** each daily binding (`s`, `K`, `?`, `u`, `g`, `G`, `P`, `T`, `W`, `a`, `A`) used once and ticked in `docs/dogfood.md` |
+| **TP.11** compat check: tmux-yank *(runs in M5)* | `tmux-plugins/tmux-yank` | `y`, `Y` and `MouseDragEnd1Pane` in `copy-mode-vi`, bound by the plugin's own script to `copy-pipe-and-cancel` with the OS clipboard command it detects, plus OSC 52, the same criterion TP.5 carried in the original plan, now met by running the plugin unchanged once M5's copy-pipe targets exist, instead of hand-writing the bindings | `tests/acceptance/tp_11.rs` | TP.3, TM.5, TM.6 | A selection copied in copy mode reaches the plugin's own clipboard command and the outer pty as OSC 52; `prefix ]` pastes it with bracketed paste in a pane that asked for it |
+| **TP.9b** Parity, copy mode *(runs in M5)* | `copy-mode-vi` (93), `prefix` `[`, `]`, `=`, `PageUp`, `root` wheel/drag/click | the TP.9a rows the copy-mode table left out | the TP.9b rows of `scripts/key-parity.sh` | TP.9a, TP.11, TM.1, TM.4, TM.6, TM.7 | The script exits 0 for every table, with no row left out |
 
-**Exit gate:** reviewer runs TP.9a and the compat suite; **[owner]** a week under
-the alias with every plugin ported, `compat` entries in `docs/dogfood.md` all
-closed or scheduled. TP.9b and TP.5 close with M5,
-so M3.7 closes with M5.
+**Exit gate:** reviewer runs TP.9a (and, once M5 closes, TP.9b) and the
+compat suite; **[owner]** a week under the alias with every plugin loaded
+unchanged, `compat` entries in `docs/dogfood.md` all closed or scheduled.
+TP.11 and TP.9b close with M5, so M3.7 closes with M5, unchanged from the
+original plan's shape.
+
+---
+
+## M5: copy mode and buffers
+
+Spec §4.11 and §4.5's buffers row. Goal: copy mode, buffers and copy targets
+behave as the owner's `copy-mode-vi` table does under tmux 3.7b, so the
+shift-drag fallback (spec §10) retires. **Overlays:** `display-popup`,
+`display-menu`, `display-panes` and `choose-tree` moved to M3.6 (TC.6, TC.7,
+TC.9) and are done there; M5's only overlays are copy mode's own view and
+`choose-buffer`, which reuses TC.9's chooser. M5 also closes M3.7: TP.5 (yank)
+and TP.9b (the parity rows that need copy mode) run at its end. The wheel's read-only scrollback
+view from T3.2 is replaced by copy mode, as the owner's root `WheelUpPane`
+binding asks.
+
+**Before Wave A starts:**
+
+- TM.0's scope doc is **[owner]** approved (TM.0 itself runs at the very
+  start of M5, right after M3.7's non-M5 tasks (TP.3 through TP.9a) close;
+  M4 hasn't started yet under the new order, so 'during M4' no longer
+  applies).
+- **Stub edit** by the orchestrator on `main`: `src/server/copy/{mod,select,search,pipe}.rs`
+  (one file per task, so TM.2, TM.3 and TM.5 never share one),
+  `src/server/buffers.rs`, `src/server/dispatch/{copy,buffers}.rs` and `src/compat/tmux/copy.rs` (an
+  empty row-set function, registered in `src/compat/tmux/mod.rs`, the one line
+  there no task owns); `Command` variants `CopyMode`, `SetBuffer`,
+  `ShowBuffer`, `ListBuffers`, `DeleteBuffer`, `PasteBuffer`, `ChooseBuffer`
+  with empty flag structs, routed to stubs; the `-X`, `-N` and `-F` fields on
+  `SendKeys` (TM.1 fills them); every new built-in option registered in the
+  schema and option table with its tmux default (`mode-keys`,
+  `word-separators`, `wrap-search`, `copy-command`, `buffer-limit`,
+  `mode-style`, `copy-mode-match-style`, `copy-mode-current-match-style`);
+  `set-clipboard` already exists from T3.0 with grofe's default `on` (spec
+  §5.3); the stub does not re-register it; the `FormatVars` entries `copy_cursor_x`, `copy_cursor_y`,
+  `copy_cursor_word`, `scroll_position`, `pane_in_mode`, `pane_mode` and
+  `buffer_*`, reading accessors the owning tasks fill; and every M5 default
+  binding in `src/server/input.rs`'s default tables, as data: the 93
+  `copy-mode-vi` rows from TM.0's golden, `prefix` `[`, `PageUp`, `]` and
+  `=`, and the `root` wheel, drag, double and triple click rows. After the
+  stub edit no M5 task edits `input.rs`.
+
+**Wave 0 (during M4).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.0** Scope doc | `docs/copy-mode.md`, one page plus the keymap table. The keymap: tmux 3.7b's `list-keys -T copy-mode-vi`, recorded with TC.0b under `tmux-defaults.conf` plus `tests/fixtures/compat/copy-mode.conf` (`mode-keys vi` and the copy-mode bindings canopy and tmux-yank add, `y`, `Y` and `MouseDragEnd1Pane` to `copy-pipe-and-cancel`, reproduced from their sources, never from the owner's live server), into `tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.txt`; one row per binding: key, tmux command, the grofe copy-mode command, the task that builds it, the parity scenario id. Then, per spec §4.11: the selection model over wrapped lines, the search dialect and its differences from tmux's POSIX regex, the copy targets, the mouse, and what stays out (the emacs table, `copy-mode -M`) | `docs/copy-mode.md`, `tests/fixtures/compat/copy-mode.conf`, `tests/fixtures/compat/golden/tm_0/`, `scripts/check-copy-scope.sh` | TC.0b | The check script exits 0: every line of the recorded golden has exactly one row in the doc and every row one line, every row names an M5 task and a scenario id; the golden's count equals the inventory's 93, or the doc names each difference and its cause; **[owner]** approves the doc |
+
+**Wave A (after the stub edit; parallel; merge order TM.4, TM.1).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.1** Copy-mode core | Spec §4.11: per-pane copy mode entered with `copy-mode` (`-u`, `-e`, `-t`), stock `prefix [` and `prefix PageUp`; a view over history and screen that keeps its offset while output continues; the `[offset/size]` indicator in `mode-style`; entering and leaving the stub's `copy-mode-vi` table with the mode; `send-keys -X <command>` with `-N <count>` and `-F`, erroring outside copy mode as tmux does; every motion, scroll and cancel command whose TM.0 row names TM.1; the accessors behind `pane_in_mode`, `pane_mode`, `copy_cursor_x`, `copy_cursor_y`, `scroll_position` and `copy_cursor_word`; drawn through T2.5a's overlay API | `src/server/copy/mod.rs`, `src/server/dispatch/copy.rs`, the `-X` route in the `send-keys` handler in `src/server/dispatch/pane.rs`, one registration line in `src/server/mod.rs`, `tests/fixtures/copy/`, `tests/acceptance/tm_1.rs`, `tests/fixtures/compat/golden/tm_1/` | stub edit, TM.0 | For each TM.1 row, over a fixed fixture printed into an 80x24 pane with 500 lines of history: the keys, then `display -p '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'`, equal the golden recorded from tmux 3.7b with TC.0b; output arriving in copy mode does not move the view; `q` returns to the live pane; `send -X cursor-up` outside copy mode fails with tmux's text; `#{pane_in_mode}` is 1 only in the mode |
+| **TM.4** Buffers | Named and automatic buffers (`buffer0`, newest first) with `buffer-limit` (50) evicting the oldest automatic one; `set-buffer [-a] [-b] [-n] <data>`, `show-buffer [-b]`, `list-buffers [-F]` with tmux's default format, `delete-buffer [-b]`, `paste-buffer [-p] [-b] [-d] [-r] [-s] [-t]`, with bracketed-paste markers only under `-p` and only for a pane that set mode 2004; `choose-buffer [-Z]` through TC.9's chooser in `tree.rs`, used by its public API only (a change there goes through rule 9) (Enter pastes, `d` deletes); the stub's `]` and `=` bindings start working; the accessors behind `buffer_name`, `buffer_size`, `buffer_sample`, `buffer_created` | `src/server/buffers.rs`, `src/server/dispatch/buffers.rs`, `tests/buffers.rs`, `tests/fixtures/compat/golden/tm_4/` | stub edit, TC.9 | `list-buffers` after three `set-buffer`s equals tmux 3.7b's golden; `paste-buffer -p` into `cat -v` with bracketed paste on shows `^[[200~` around the text, and without it shows none; `-d` deletes after pasting; the 51st automatic buffer evicts the oldest; `set-buffer -a` appends; `choose-buffer` then Enter pastes the chosen buffer |
+
+**Wave B (TM.2 and TM.3 in parallel after TM.1; TM.5 after TM.2; TM.6 after
+TM.5; merge order TM.2, TM.3, TM.5, TM.6).**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.2** Selection | `begin-selection`, `select-line`, `rectangle-toggle`, `select-word` (with `word-separators`), `other-end`, `clear-selection`, `copy-selection` and its `-and-cancel` and `-no-clear` forms, `copy-end-of-line`, `append-selection` and its `-and-cancel` form; extraction per spec §4.11: soft-wrapped rows (alacritty's `WRAPLINE`) join into one logical line, hard newlines stay, trailing blanks are trimmed, wide cells whole, combining marks kept, rectangles per row; selections survive a reflowing resize | `src/server/copy/select.rs`, `tests/acceptance/tm_2.rs`, `tests/fixtures/compat/golden/tm_2/` | TM.1, TM.4 | `show-buffer` equals tmux 3.7b's golden byte for byte for: a selection over a line wrapped three times at 80 columns (one line); the same after resizing to 50 columns; a rectangle over rows mixing CJK, emoji and ASCII; `select-word` on `foo/bar-baz.rs` with the default separators; `append-selection` onto an existing buffer |
+| **TM.3** Search and jumps | `search-forward`, `search-backward` (regex, spec §4.11) and their `-text` forms, `search-again`, `search-reverse`, `#`/`*` through `-FX` with `#{copy_cursor_word}`, `/` and `?` through `command-prompt -T search` (TC.7's prompt type), `wrap-search`, `copy-mode-match-style` and `copy-mode-current-match-style`, matches across soft wraps as tmux finds them; jumps `f F t T ; ,` through `command-prompt -1`; a search scans a copy of the grid off the actor | `src/server/copy/search.rs`, `tests/acceptance/tm_3.rs`, `tests/fixtures/compat/golden/tm_3/` | TM.1 | Cursor positions equal tmux 3.7b's goldens for a regex `fo+[0-9]`, a `-text` search for `a.b`, `n` past the last match with `wrap-search` on and off, a match split by a soft wrap, and each jump key; every regex difference TM.0 lists has a test showing grofe's documented behaviour; a search over a full 50 000-line history never delays a second client's frames by more than 50 ms |
+| **TM.5** Copy targets | `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` with a command or the `copy-command` option; the command runs off the actor under the spawn lock with the server environment and the selection on stdin, and each also stores a buffer; `set-clipboard` `on`, `external` and `off`: a copy sends OSC 52 to attached clients under `on` and `external`, and a pane's own OSC 52 creates a buffer only under `on` (T3.3 already forwards it) | `src/server/copy/pipe.rs`, the OSC 52 send in `src/server/passthrough.rs` (T3.3 merged), `tests/acceptance/tm_5.rs` | TM.2 | `y` bound to `copy-pipe-and-cancel 'cat > $TMPDIR/clip'` writes the selection to the file and leaves copy mode; the outer pty stream carries OSC 52 with the selection's base64 under `on` and none under `off`; a `copy-pipe` whose command sleeps 10 s delays neither the next key nor a frame; an app's OSC 52 appears in `list-buffers` under `on` and not under `external`; with no argument the `copy-command` runs |
+| **TM.6** Mouse in copy mode | The wheel in a pane without mouse mode enters copy mode with `-e` and scrolls (`send -X -N 5 scroll-up` as tmux's stock binding), leaving at the bottom; a drag enters copy mode and selects; `MouseDragEnd1Pane` runs its binding; double and triple click select a word and a line as tmux's stock root bindings do; a click in copy mode moves the cursor; panes in mouse mode still get the wheel; T3.2's scrollback overlay is removed | additions to `src/server/mouse.rs` (T3.2, TC.10 merged; the mouse bindings themselves are the stub's), `tests/acceptance/tm_6.rs` | TM.2, TM.5 | Through SGR mouse reports in the acceptance harness: the wheel in a shell shows the indicator and history text; the wheel in Neovim scrolls Neovim; a drag from (2,3) to (20,5) and release puts that text in the newest buffer and runs the `MouseDragEnd1Pane` binding (a stub copy command gets it); a double click's buffer equals tmux 3.7b's golden for the same fixture; T3.2's and TC.10's tests change only where the overlay became copy mode, and the diff lists each |
+
+**Wave C.**
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TM.7** Front-end rows and parity | Rows in `src/compat/tmux/copy.rs`, with FE.1's rules (mapping kind, cosmetic or semantic marks, goldens): `copy-mode -u -e`, `send -X`, `send -FX`, `send -X -N`, `copy-pipe*` strings inside `bind -T copy-mode-vi`, `command-prompt -T search`, the buffer verbs and their output formats, and the options `mode-keys`, `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`, `buffer-limit`; the parity suite `tests/compat/scenarios/copy_mode/`: one scenario per TM.0 row (the same fixture, keys and a final `show-buffer` or cursor readout) recorded on tmux 3.7b with TC.0b and run on grofe through the `tmux` symlink | `src/compat/tmux/copy.rs`, `tests/compat/scenarios/copy_mode/`, `tests/fixtures/compat/golden/tm_7/` | TM.1 to TM.6, FE.1, TC.0b | All 93 scenarios are byte-identical to their goldens after normalization; `tmux list-keys -T copy-mode-vi` equals TM.0's golden; editing one golden turns the suite red; `compat-miss.log` is empty after the suite; the sockets check of "Rules for M4 onward" passes |
+
+**Then (M3.7 tasks, run here):** TP.5 (yank) on top of TM.5 and TM.6, and
+TP.9b on top of TM.1, TM.4, TM.6 and TM.7; tmux-fzf's buffer actions (TP.4)
+once TM.4 lands. Their rows in M3.7 hold as written.
+
+**Critical path inside M5** (review cycles included): TM.0 (2 d) and its
+approval (about 1 d) during M4; then stub edit → TM.1 (4 d) → TM.2 (3 d) → TM.5
+(2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) → TP.9b (2 d), about 21 working
+days after M4. TM.4 (3 d) runs beside TM.1 and TM.3 (3 d) beside TM.2
+and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
+TM.6 3, TM.7 5, TP.5 2, TP.9b 2: 29 task-days.
+
+**Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
+TM.7's suite; TP.9b exits 0 for every table; **[owner]** a week under the
+alias using copy mode instead of shift-drag, every `copy` entry in
+`docs/dogfood.md` closed (substitute: TM.7's 93 scenarios and TP.9b green).
+M3.7 closes here.
+
+---
+
+## Alias-day container test
+
+Owner ruling 2026-09-29: after M3.6, M3.7 and M5 close (alias-day scope),
+the owner's actual setup (athome, canopy and grofe as `tmux`) runs
+end-to-end in a disposable container before anything moves further. M4, M6
+(without Lua) and M7 start only once this test is green; the owner does not
+switch a real machine before seeing its results. This is deliberately
+**narrower** than the release gate's `TE.2b` (`.superpowers/sdd/m35/e2e-athome-amendment.md`),
+which runs the same shape of test again, later, with M4's persistence and
+M7's agents plugin added on top: no container restart here (M4 doesn't
+exist yet) and no agents-plugin rollup step (M7 doesn't exist yet). TA.1
+builds its own minimal container-running harness, since T4.6's shared
+`scripts/e2e.sh` is an M4 deliverable that hasn't landed; **when M4's T4.6
+lands, it generalizes TA.1's `Containerfile.alias-day` and `alias-day.sh`
+into the shared `scripts/e2e.sh` rather than building parallel
+infrastructure**, and `TE.2b` (§4 of the m35 amendment) builds on the
+result instead of starting from nothing.
+
+| Task | Scope | Owns | Depends | Accept |
+|---|---|---|---|---|
+| **TA.1** Alias-day container test | Stages 1–3 of `TE.2b`'s design (`.superpowers/sdd/m35/e2e-athome-amendment.md` §4), narrowed: **(1) inputs**, read-only, on the host: grofe at `HEAD`, athome at a named `ATHOME_ALIAS_REF` (a branch commit that pins grofe and canopy, puts the `tmux` symlink first on `PATH`, and installs grofe's ported config, the same shape as the later switch ref, but not required to be the final one), canopy at the tag containing M3.6/M3.7's port (`CANOPY_TAG`); the same secrets gate (no `.secrets/`, no `.env`, `gitleaks` clean, nothing from `~/.secrets`/`~/.config/chezmoi`/`~/.ssh`/rbw read or copied). **(2) apply**, in a systemd container, as a test user: `chezmoi init --apply --force` from the archive, the same script allowlist and skip-reason table `TE.2b` defines (persistence-only script 24 still runs; nothing here depends on it doing anything more than starting a server), the same stage-2 checks (`tmux` resolves to grofe, `tmux -V` prints the compat level, `grofe show-config` loads clean). **(3) workflow**, through a pty (`tests/e2e_alias_day.rs`, ignored by default, reusing T2.4's harness the same way `TE.2b` does): `TE.2b`'s steps W1 through W12 unchanged (splits, cockpit layout, session cycling, reload, nested tmux, tsess/keys-popup/theme-popup, the ported plugins at `s`/`Space`/`u`/`o`/`a`/`A`, vim-tmux-navigator, detach/attach), **dropping W13** (agents-plugin rollups, needs M7) and **W14** unchanged (`compat-miss.log` empty); two new steps replacing the excluded "copy mode and yank" note: W15 enters copy mode, selects text spanning a soft wrap, and reads it back with `show-buffer`, matching a TM.7 golden; W16 yanks a selection with `y` (TP.11's tmux-yank, unchanged) and checks the outer pty's OSC 52 stream and the stub clipboard command's output. Writes the same report shape `TE.2b` defines to `target/e2e/<run-id>/alias-day/report.md` | `tests/e2e/Containerfile.alias-day`, `tests/e2e/scenarios/alias-day.sh`, `tests/e2e/alias-day/` (seed config, skip list, report template, copied from `TE.2b`'s design, not re-derived), `tests/e2e_alias_day.rs`, `scripts/e2e-alias-day.sh` (a standalone runner; folded into `scripts/e2e.sh` by T4.6) | M3.7's exit gate, M5's exit gate (TP.11, TP.9b closed), athome's alias-day ref (owned outside grofe, prepared the same way §2 of the m35 amendment describes the switch ref, just not required to be final) | Every `TE.2b` pass criterion that doesn't name stage 4 or W13 holds (secrets gate passed, stage 2 checks held, W1–W12 and W14–W16 passed, each excluded step listed with its reason, no credential entered the container, the host-state check passed); **[owner]** reads the report before M4's stub edit is briefed |
+
+**Exit gate:** the report shows PASS; **[owner]** reviews it and says go;
+this is the ruling's "seen the container results" gate, and it is the thing
+that unblocks M4's stub edit, not a fixed calendar date.
 
 ---
 
@@ -785,9 +925,11 @@ execute this".
 ## M4: persistence and pane identity
 
 Spec §6. Goal: the server's state survives a kill, a crash and a reboot, with
-every pane's `uid` intact and every pane that has a `resume` running it. Under
-the alias this replaces resurrect and continuum (TP.8), so M4 starts right
-after M3.6's exit gate, beside M3.7. It builds on TC.8's layout geometry export
+every pane's `uid` intact and every pane that has a `resume` running it.
+Whether this replaces resurrect and continuum, or coexists with them running
+as plugins, is open (§2 of `plan-amend-2026-09-29.md`; owner to decide no
+later than this stub edit). M4 starts once the alias-day container test (new
+section, above) is green. It builds on TC.8's layout geometry export
 and import and on TC.5's internal events.
 
 **Before Wave A starts:**
@@ -886,89 +1028,6 @@ gate does the owner's machine drop resurrect and continuum (TP.8).
 
 ---
 
-## M5: copy mode and buffers
-
-Spec §4.11 and §4.5's buffers row. Goal: copy mode, buffers and copy targets
-behave as the owner's `copy-mode-vi` table does under tmux 3.7b, so the
-shift-drag fallback (spec §10) retires. **Overlays:** `display-popup`,
-`display-menu`, `display-panes` and `choose-tree` moved to M3.6 (TC.6, TC.7,
-TC.9) and are done there; M5's only overlays are copy mode's own view and
-`choose-buffer`, which reuses TC.9's chooser. M5 also closes M3.7: TP.5 (yank)
-and TP.9b (the parity rows that need copy mode) run at its end. The wheel's read-only scrollback
-view from T3.2 is replaced by copy mode, as the owner's root `WheelUpPane`
-binding asks.
-
-**Before Wave A starts:**
-
-- TM.0's scope doc is **[owner]** approved (TM.0 itself runs during M4).
-- **Stub edit** by the orchestrator on `main`: `src/server/copy/{mod,select,search,pipe}.rs`
-  (one file per task, so TM.2, TM.3 and TM.5 never share one),
-  `src/server/buffers.rs`, `src/server/dispatch/{copy,buffers}.rs` and `src/compat/tmux/copy.rs` (an
-  empty row-set function, registered in `src/compat/tmux/mod.rs`, the one line
-  there no task owns); `Command` variants `CopyMode`, `SetBuffer`,
-  `ShowBuffer`, `ListBuffers`, `DeleteBuffer`, `PasteBuffer`, `ChooseBuffer`
-  with empty flag structs, routed to stubs; the `-X`, `-N` and `-F` fields on
-  `SendKeys` (TM.1 fills them); every new built-in option registered in the
-  schema and option table with its tmux default (`mode-keys`,
-  `word-separators`, `wrap-search`, `copy-command`, `buffer-limit`,
-  `mode-style`, `copy-mode-match-style`, `copy-mode-current-match-style`);
-  `set-clipboard` already exists from T3.0 with grofe's default `on` (spec
-  §5.3); the stub does not re-register it; the `FormatVars` entries `copy_cursor_x`, `copy_cursor_y`,
-  `copy_cursor_word`, `scroll_position`, `pane_in_mode`, `pane_mode` and
-  `buffer_*`, reading accessors the owning tasks fill; and every M5 default
-  binding in `src/server/input.rs`'s default tables, as data: the 93
-  `copy-mode-vi` rows from TM.0's golden, `prefix` `[`, `PageUp`, `]` and
-  `=`, and the `root` wheel, drag, double and triple click rows. After the
-  stub edit no M5 task edits `input.rs`.
-
-**Wave 0 (during M4).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **TM.0** Scope doc | `docs/copy-mode.md`, one page plus the keymap table. The keymap: tmux 3.7b's `list-keys -T copy-mode-vi`, recorded with TC.0b under `tmux-defaults.conf` plus `tests/fixtures/compat/copy-mode.conf` (`mode-keys vi` and the copy-mode bindings canopy and tmux-yank add, `y`, `Y` and `MouseDragEnd1Pane` to `copy-pipe-and-cancel`, reproduced from their sources, never from the owner's live server), into `tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.txt`; one row per binding: key, tmux command, the grofe copy-mode command, the task that builds it, the parity scenario id. Then, per spec §4.11: the selection model over wrapped lines, the search dialect and its differences from tmux's POSIX regex, the copy targets, the mouse, and what stays out (the emacs table, `copy-mode -M`) | `docs/copy-mode.md`, `tests/fixtures/compat/copy-mode.conf`, `tests/fixtures/compat/golden/tm_0/`, `scripts/check-copy-scope.sh` | TC.0b | The check script exits 0: every line of the recorded golden has exactly one row in the doc and every row one line, every row names an M5 task and a scenario id; the golden's count equals the inventory's 93, or the doc names each difference and its cause; **[owner]** approves the doc |
-
-**Wave A (after the stub edit; parallel; merge order TM.4, TM.1).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **TM.1** Copy-mode core | Spec §4.11: per-pane copy mode entered with `copy-mode` (`-u`, `-e`, `-t`), stock `prefix [` and `prefix PageUp`; a view over history and screen that keeps its offset while output continues; the `[offset/size]` indicator in `mode-style`; entering and leaving the stub's `copy-mode-vi` table with the mode; `send-keys -X <command>` with `-N <count>` and `-F`, erroring outside copy mode as tmux does; every motion, scroll and cancel command whose TM.0 row names TM.1; the accessors behind `pane_in_mode`, `pane_mode`, `copy_cursor_x`, `copy_cursor_y`, `scroll_position` and `copy_cursor_word`; drawn through T2.5a's overlay API | `src/server/copy/mod.rs`, `src/server/dispatch/copy.rs`, the `-X` route in the `send-keys` handler in `src/server/dispatch/pane.rs`, one registration line in `src/server/mod.rs`, `tests/fixtures/copy/`, `tests/acceptance/tm_1.rs`, `tests/fixtures/compat/golden/tm_1/` | stub edit, TM.0 | For each TM.1 row, over a fixed fixture printed into an 80x24 pane with 500 lines of history: the keys, then `display -p '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'`, equal the golden recorded from tmux 3.7b with TC.0b; output arriving in copy mode does not move the view; `q` returns to the live pane; `send -X cursor-up` outside copy mode fails with tmux's text; `#{pane_in_mode}` is 1 only in the mode |
-| **TM.4** Buffers | Named and automatic buffers (`buffer0`, newest first) with `buffer-limit` (50) evicting the oldest automatic one; `set-buffer [-a] [-b] [-n] <data>`, `show-buffer [-b]`, `list-buffers [-F]` with tmux's default format, `delete-buffer [-b]`, `paste-buffer [-p] [-b] [-d] [-r] [-s] [-t]`, with bracketed-paste markers only under `-p` and only for a pane that set mode 2004; `choose-buffer [-Z]` through TC.9's chooser in `tree.rs`, used by its public API only (a change there goes through rule 9) (Enter pastes, `d` deletes); the stub's `]` and `=` bindings start working; the accessors behind `buffer_name`, `buffer_size`, `buffer_sample`, `buffer_created` | `src/server/buffers.rs`, `src/server/dispatch/buffers.rs`, `tests/buffers.rs`, `tests/fixtures/compat/golden/tm_4/` | stub edit, TC.9 | `list-buffers` after three `set-buffer`s equals tmux 3.7b's golden; `paste-buffer -p` into `cat -v` with bracketed paste on shows `^[[200~` around the text, and without it shows none; `-d` deletes after pasting; the 51st automatic buffer evicts the oldest; `set-buffer -a` appends; `choose-buffer` then Enter pastes the chosen buffer |
-
-**Wave B (TM.2 and TM.3 in parallel after TM.1; TM.5 after TM.2; TM.6 after
-TM.5; merge order TM.2, TM.3, TM.5, TM.6).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **TM.2** Selection | `begin-selection`, `select-line`, `rectangle-toggle`, `select-word` (with `word-separators`), `other-end`, `clear-selection`, `copy-selection` and its `-and-cancel` and `-no-clear` forms, `copy-end-of-line`, `append-selection` and its `-and-cancel` form; extraction per spec §4.11: soft-wrapped rows (alacritty's `WRAPLINE`) join into one logical line, hard newlines stay, trailing blanks are trimmed, wide cells whole, combining marks kept, rectangles per row; selections survive a reflowing resize | `src/server/copy/select.rs`, `tests/acceptance/tm_2.rs`, `tests/fixtures/compat/golden/tm_2/` | TM.1, TM.4 | `show-buffer` equals tmux 3.7b's golden byte for byte for: a selection over a line wrapped three times at 80 columns (one line); the same after resizing to 50 columns; a rectangle over rows mixing CJK, emoji and ASCII; `select-word` on `foo/bar-baz.rs` with the default separators; `append-selection` onto an existing buffer |
-| **TM.3** Search and jumps | `search-forward`, `search-backward` (regex, spec §4.11) and their `-text` forms, `search-again`, `search-reverse`, `#`/`*` through `-FX` with `#{copy_cursor_word}`, `/` and `?` through `command-prompt -T search` (TC.7's prompt type), `wrap-search`, `copy-mode-match-style` and `copy-mode-current-match-style`, matches across soft wraps as tmux finds them; jumps `f F t T ; ,` through `command-prompt -1`; a search scans a copy of the grid off the actor | `src/server/copy/search.rs`, `tests/acceptance/tm_3.rs`, `tests/fixtures/compat/golden/tm_3/` | TM.1 | Cursor positions equal tmux 3.7b's goldens for a regex `fo+[0-9]`, a `-text` search for `a.b`, `n` past the last match with `wrap-search` on and off, a match split by a soft wrap, and each jump key; every regex difference TM.0 lists has a test showing grofe's documented behaviour; a search over a full 50 000-line history never delays a second client's frames by more than 50 ms |
-| **TM.5** Copy targets | `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` with a command or the `copy-command` option; the command runs off the actor under the spawn lock with the server environment and the selection on stdin, and each also stores a buffer; `set-clipboard` `on`, `external` and `off`: a copy sends OSC 52 to attached clients under `on` and `external`, and a pane's own OSC 52 creates a buffer only under `on` (T3.3 already forwards it) | `src/server/copy/pipe.rs`, the OSC 52 send in `src/server/passthrough.rs` (T3.3 merged), `tests/acceptance/tm_5.rs` | TM.2 | `y` bound to `copy-pipe-and-cancel 'cat > $TMPDIR/clip'` writes the selection to the file and leaves copy mode; the outer pty stream carries OSC 52 with the selection's base64 under `on` and none under `off`; a `copy-pipe` whose command sleeps 10 s delays neither the next key nor a frame; an app's OSC 52 appears in `list-buffers` under `on` and not under `external`; with no argument the `copy-command` runs |
-| **TM.6** Mouse in copy mode | The wheel in a pane without mouse mode enters copy mode with `-e` and scrolls (`send -X -N 5 scroll-up` as tmux's stock binding), leaving at the bottom; a drag enters copy mode and selects; `MouseDragEnd1Pane` runs its binding; double and triple click select a word and a line as tmux's stock root bindings do; a click in copy mode moves the cursor; panes in mouse mode still get the wheel; T3.2's scrollback overlay is removed | additions to `src/server/mouse.rs` (T3.2, TC.10 merged; the mouse bindings themselves are the stub's), `tests/acceptance/tm_6.rs` | TM.2, TM.5 | Through SGR mouse reports in the acceptance harness: the wheel in a shell shows the indicator and history text; the wheel in Neovim scrolls Neovim; a drag from (2,3) to (20,5) and release puts that text in the newest buffer and runs the `MouseDragEnd1Pane` binding (a stub copy command gets it); a double click's buffer equals tmux 3.7b's golden for the same fixture; T3.2's and TC.10's tests change only where the overlay became copy mode, and the diff lists each |
-
-**Wave C.**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **TM.7** Front-end rows and parity | Rows in `src/compat/tmux/copy.rs`, with FE.1's rules (mapping kind, cosmetic or semantic marks, goldens): `copy-mode -u -e`, `send -X`, `send -FX`, `send -X -N`, `copy-pipe*` strings inside `bind -T copy-mode-vi`, `command-prompt -T search`, the buffer verbs and their output formats, and the options `mode-keys`, `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`, `buffer-limit`; the parity suite `tests/compat/scenarios/copy_mode/`: one scenario per TM.0 row (the same fixture, keys and a final `show-buffer` or cursor readout) recorded on tmux 3.7b with TC.0b and run on grofe through the `tmux` symlink | `src/compat/tmux/copy.rs`, `tests/compat/scenarios/copy_mode/`, `tests/fixtures/compat/golden/tm_7/` | TM.1 to TM.6, FE.1, TC.0b | All 93 scenarios are byte-identical to their goldens after normalization; `tmux list-keys -T copy-mode-vi` equals TM.0's golden; editing one golden turns the suite red; `compat-miss.log` is empty after the suite; the sockets check of "Rules for M4 onward" passes |
-
-**Then (M3.7 tasks, run here):** TP.5 (yank) on top of TM.5 and TM.6, and
-TP.9b on top of TM.1, TM.4, TM.6 and TM.7; tmux-fzf's buffer actions (TP.4)
-once TM.4 lands. Their rows in M3.7 hold as written.
-
-**Critical path inside M5** (review cycles included): TM.0 (2 d) and its
-approval (about 1 d) during M4; then stub edit → TM.1 (4 d) → TM.2 (3 d) → TM.5
-(2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) → TP.9b (2 d), about 21 working
-days after M4. TM.4 (3 d) runs beside TM.1 and TM.3 (3 d) beside TM.2
-and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
-TM.6 3, TM.7 5, TP.5 2, TP.9b 2: 29 task-days.
-
-**Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
-TM.7's suite; TP.9b exits 0 for every table; **[owner]** a week under the
-alias using copy mode instead of shift-drag, every `copy` entry in
-`docs/dogfood.md` closed (substitute: TM.7's 93 scenarios and TP.9b green).
-M3.7 closes here.
-
----
-
 ## M6: events and plugins
 
 Spec D9 and §7. Goal: a frozen control protocol and event catalog, supervised
@@ -982,45 +1041,41 @@ status line, which stays formats over options (D8). An event with no consumer
 does not enter v1.
 
 **Before Wave A starts:** T6.0 approved; **stub edit** by the orchestrator on
-`main`: `mlua` 0.12 in `Cargo.toml` with the features spec §8 names (`lua54`,
-`vendored`, `async`, `serde`); `src/lua/{mod,api}.rs`, `src/server/plugins.rs`
-and `src/server/dispatch/plugins.rs` with their `mod` lines; `Command` variants
-`ListPlugins` and `PluginRestart`, routed to stubs; a `control` arm stub in
-`src/main.rs`.
+`main`: `src/server/plugins.rs` and `src/server/dispatch/plugins.rs` with
+their `mod` lines; `Command` variants `ListPlugins` and `PluginRestart`,
+routed to stubs; a `control` arm stub in `src/main.rs`.
 
 **Wave 0 (during M5).**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and M7's needs (spec §7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema, the Lua API surface with its budgets, and the format-function syntax (placeholder `#{lua:name,args}`); pick the in-tree Lua plugin from the dogfood log (default: a format function rendering the agent-state pill M7's canopy fragment uses) | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, the agents plugin, or a test) and no event is listed without one; every M7 need in spec §7 maps to a catalog event or a command; **[owner]** approves the rewrite |
+| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and M7's needs (spec §7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, the agents plugin, or a test) and no event is listed without one; every M7 need in spec §7 maps to a catalog event or a command; **[owner]** approves the rewrite |
 
-**Wave A (after the stub edit; parallel; merge order T6.1, T6.4).**
+**Wave A (after the stub edit; parallel; merge order T6.1).**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
 | **T6.1** Event catalog | T6.0's catalog on the `subscribe` stream: typed variants in `event.rs`, emitted from the internal events TC.5 already raises (one emission site per event); `pane-focus` (a pane becomes the active pane of the current window of an attached client, or that client's terminal regains focus while it is); `restore-done` and `resume-changed` from M4; `subscribe <event>... [-t target]` filters; per-pane events arrive in the order of their actions; `events-dropped` unchanged | `src/event.rs`, `src/server/events.rs`, the emission sites in `src/server/mod.rs` and `src/server/hooks.rs` (TC.5 merged), `tests/events_v1.rs` | T6.0 | Each catalog event fires exactly once per triggering action with the catalog's payload (one JSON golden per event); `pane-focus` fires on `select-pane`, on switching window, on a click, and never for a session with no attached client; a `-t %3` subscription receives only `%3`'s events; T1.6's tests unchanged and green |
-| **T6.4** Lua runtime | `~/.config/grofe/init.lua` as layer 5 (spec §5.1), after `user.toml`; values it sets record provenance `init.lua:<line>`; `reload` runs it in a fresh Lua state inside reload's all-or-nothing (spec §5.4); a sandbox with `base`, `string`, `table`, `math`, `utf8`, `os.time` and `os.date` only, so no subprocess and no file I/O (D8); every callback under a budget (instruction-count hook plus wall clock, defaults from T6.0), an overrun errors with file and line and a callback that overruns three times is disabled; the state lives on the actor, callbacks are synchronous; API: `grofe.get`, `grofe.set` (option, value, scope, target), `grofe.cmd` (argv, queued after the current command, never re-entrant), `grofe.bind` (table, key, function, `desc`, `name`), `grofe.on` (catalog events, after the action) | `src/lua/mod.rs`, `src/lua/api.rs`, layer-5 loading in `src/config/`, the disabled mark in T3.5's `list-keys` handler, `tests/lua.rs` | T6.0 | An `init.lua` setting `status.left` shows as `init.lua:3` in `show-config status.left --explain`; a syntax error fails `reload` with file and line and changes nothing; `while true do end` in a bound callback returns within its budget, logs, and a second client's frames keep their cadence; `io`, `os.execute`, `io.popen` and `require` of a C module are absent; a third overrun disables the callback and `list-keys` marks it; `grofe.cmd{'split-window'}` from a callback splits once |
 
-**Wave B (T6.2 and T6.3 after T6.1, T6.5 after T6.4 and T6.1; merge order
-T6.2, T6.3, T6.5).**
+**Wave B (T6.2 and T6.3 after T6.1; merge order
+T6.2, T6.3).**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
 | **T6.2** Protocol v1 freeze | `docs/protocol-v1.md`: both hellos (`grofe: 1`, `dialect`), requests, replies, the event catalog, attach frames, errors; the rules: v1 is additive only (new optional fields, new events delivered only to subscribers that name them, new verbs), and a hello with another version gets a clean error naming the side to upgrade (spec §4.6); `tests/fixtures/protocol/v1/`, one JSON line per message and event kind; `grofe control`: a stdio bridge, JSON lines in and out, so a plugin in any language needs no socket code | `docs/protocol-v1.md`, additions to `src/protocol.rs`, the `control` arm in `src/main.rs`, `tests/protocol_v1.rs`, `tests/fixtures/protocol/v1/` | T6.1 | Every fixture parses and re-serializes byte-identically; every `Event` variant has a fixture (a test enumerates them); removing a field from one struct turns the suite red (proved once by a mutation the test applies); an unknown field in a request is ignored and an unknown verb errors; `printf '{"id":1,"argv":["list-sessions"]}\n' \| grofe control` prints one reply line; a `grofe control` subscription over 10 000 events drops only when its reader stalls, with an `events-dropped` notice |
 | **T6.3** Plugin supervision | `[plugins.<name>]` with `cmd` (argv), `env`, `enabled` and `restart` (`always` default, `on-failure`, `never`); plugins start after config load and after any restore, with the server environment plus `GROFE` and `GROFE_PLUGIN=<name>`, stdin from `/dev/null`, stdout and stderr to `<state>/plugins/<name>.log` (rotated at 1 MiB), spawned off the actor under the spawn lock; restarts back off from 1 s, doubling to 60 s, reset after 60 s alive; five crashes within 60 s disable a plugin with a log line; on server exit SIGTERM, then SIGKILL after 2 s; `reload` starts, stops or restarts plugins whose config changed; `list-plugins` (name, pid, state, restarts, since) and `plugin-restart <name>` | `src/server/plugins.rs`, `src/server/dispatch/plugins.rs`, one registration line in `src/server/mod.rs`, the `[plugins]` schema in `src/config/`, `tests/plugins.rs` | T6.1 | A test plugin starts with the server and sees `GROFE`; after SIGKILL it is back within 1.5 s, and repeated kills space its restarts 1, 2 and 4 s apart; the fifth crash within 60 s leaves it `disabled` in `list-plugins` and spawns nothing more (counted); `kill-server` leaves no plugin process; a plugin that never reads its socket does not delay `new-session`; its stderr lands in its log; `reload` without its config stops it |
-| **T6.5** Format functions | T6.0's syntax (`#{lua:name,args}`) in `cmd/format.rs` (contract edit: T6.5 co-owns `format.rs` for this), calling functions registered with `grofe.format`; each call under a per-call budget, results cached per frame per name, arguments and pane; an error or overrun renders empty and logs at most once a minute; Lua bindings listed by `list-keys` with source `init.lua:<line>` and marked outside the config table (spec §5.4) | the format hook in `src/cmd/format.rs`, additions to `src/lua/api.rs` (T6.4 merged), the `init.lua:<line>` source in T3.5's `list-keys` handler (after T6.4's mark), `tests/lua_formats.rs` | T6.1, T6.4 | `#{lua:upper,#{session_name}}` renders the upper-cased name; a looping function is cut at its budget, its segment is empty, and every frame interval stays under 50 ms with two attached clients forced to 60 Hz (TC.4's method); `list-keys` shows a Lua binding with its source line; T2.6's and TC.3's format tests unchanged and green |
 
 **Wave C.**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **T6.6** In-tree plugins | `plugins/event-log/event-log.sh`, an out-of-process plugin in POSIX sh over `grofe control` that appends the catalog's events to `<state>/events.log` (a dogfooding aid; events while it is down are not replayed, and its README says so); `examples/lua/init.lua`, the Lua plugin T6.0 picked; README's plugin section with both | `plugins/event-log/`, `examples/lua/`, README's plugin section, `tests/plugins_intree.rs` | T6.2, T6.3, T6.5 | With `[plugins.event-log]` configured, a split and a `select-pane` append their events in order within 1 s; the plugin passes `shellcheck`; the Lua example loads through `show-config --file` and its function renders the goldens for each input T6.0 lists (by default the five agent states and `restored`) |
+| **T6.6** In-tree plugins | `plugins/event-log/event-log.sh`, an out-of-process plugin in POSIX sh over `grofe control` that appends the catalog's events to `<state>/events.log` (a dogfooding aid; events while it is down are not replayed, and its README says so); README's plugin section with both | `plugins/event-log/`, `examples/lua/`, README's plugin section, `tests/plugins_intree.rs` | T6.2, T6.3 | With `[plugins.event-log]` configured, a split and a `select-pane` append their events in order within 1 s; the plugin passes `shellcheck`. |
 
 **Critical path inside M6** (review cycles included): T6.0 (2 d) and its
-approval during M5; then stub edit → T6.4 (4 d) → T6.5 (3 d) → T6.6 (2 d),
-about 9 working days. T6.1 (3 d) then T6.2 and T6.3 (3 d each, parallel) end
-on day 6. **One-lane sum:** T6.0 2, T6.1 3, T6.2 3, T6.3 3, T6.4 4, T6.5 3,
-T6.6 2: 20 task-days.
+approval during M5; then stub edit → T6.1 (3 d) → T6.2/T6.3 (3 d, parallel) →
+T6.6 (2 d), about 8 working days. T6.1 (3 d) then T6.2 and T6.3 (3 d each, parallel) end
+on day 6. **One-lane sum:** T6.0 2, T6.1 3, T6.2 3, T6.3 3, T6.6 2: 13
+task-days.
 
 **Exit gate:** reviewer runs `scripts/ci-local.sh`; `docs/protocol-v1.md` and
 its fixtures are tagged as v1 in the same merge; the owner's step was T6.0's
