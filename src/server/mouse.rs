@@ -510,16 +510,23 @@ pub(crate) fn click_timeout(state: &mut State, client: ClientId, generation: u64
         return;
     };
     p.click = None;
-    if !c.second || !mouse_on(state, client) {
+    if !c.second {
         return;
     }
-    let at = (c.event.col, c.event.row);
-    fire(
-        state,
-        client,
-        &c.event,
-        (MouseAction::DoubleClick, c.button, at),
-    );
+    // Behind any input a shell condition holds, as tmux queues the key.
+    let fire_double = move |state: &mut State| {
+        if !mouse_on(state, client) {
+            return;
+        }
+        let at = (c.event.col, c.event.row);
+        fire(
+            state,
+            client,
+            &c.event,
+            (MouseAction::DoubleClick, c.button, at),
+        );
+    };
+    clients::in_input_order(state, client, Box::new(fire_double));
 }
 
 fn mouse_on(state: &State, client: ClientId) -> bool {

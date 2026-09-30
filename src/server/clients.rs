@@ -232,7 +232,7 @@ pub struct ClientEntry {
     mouse_modes: Option<bool>,
     /// Input held while a binding's shell condition runs ([`hold_input`]),
     /// in order, and how many conditions hold it.
-    held: VecDeque<Input>,
+    held: VecDeque<Held>,
     held_bytes: usize,
     holds: u32,
     /// The hold passed its cap: all input is dropped until it is released.
@@ -1851,19 +1851,7 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
         return;
     };
     if c.holds > 0 {
-        let size = match &input {
-            Input::Paste { data, .. } => data.len().max(1),
-            _ => 1,
-        };
-        if c.held_full || c.held_bytes + size > HELD_CAP {
-            if !c.held_full {
-                eprintln!("grofe server: input held for {} is full; dropped", c.name);
-            }
-            c.held_full = true;
-            return;
-        }
-        c.held_bytes += size;
-        c.held.push_back(input);
+        hold_item(state, id, Held::Input(input));
         return;
     }
     // As tmux: a key press takes a message down, and still counts.
@@ -1874,6 +1862,51 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
         request_render(state, now);
     }
     route(state, id, input, now);
+}
+
+/// One thing held for a client, in the order it came.
+enum Held {
+    Input(Input),
+    /// Work queued behind the input ([`in_input_order`]).
+    Run(crate::server::Job),
+}
+
+impl Held {
+    /// What it counts against [`HELD_CAP`].
+    fn size(&self) -> usize {
+        match self {
+            Held::Input(Input::Paste { data, .. }) => data.len().max(1),
+            _ => 1,
+        }
+    }
+}
+
+/// Runs `job` for client `id` in input order: now, or after the input its
+/// hold keeps, as tmux appends a key event (the click timer's
+/// `DoubleClick`) to the client's queue behind what waits there.
+pub(crate) fn in_input_order(state: &mut State, id: ClientId, job: crate::server::Job) {
+    if state.clients.get(&id).is_some_and(|c| c.holds > 0) {
+        hold_item(state, id, Held::Run(job));
+    } else {
+        job(state);
+    }
+}
+
+/// Keeps `item` for held client `id`, unless the hold is full.
+fn hold_item(state: &mut State, id: ClientId, item: Held) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    let size = item.size();
+    if c.held_full || c.held_bytes + size > HELD_CAP {
+        if !c.held_full {
+            eprintln!("grofe server: input held for {} is full; dropped", c.name);
+        }
+        c.held_full = true;
+        return;
+    }
+    c.held_bytes += size;
+    c.held.push_back(item);
 }
 
 /// Holds client `id`'s input, in order, until [`release_input`]: a
@@ -1905,16 +1938,15 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         if c.holds > 0 {
             return;
         }
-        let Some(input) = c.held.pop_front() else {
+        let Some(item) = c.held.pop_front() else {
             c.held_bytes = 0;
             return;
         };
-        let size = match &input {
-            Input::Paste { data, .. } => data.len().max(1),
-            _ => 1,
-        };
-        c.held_bytes = c.held_bytes.saturating_sub(size);
-        deliver(state, id, input, now);
+        c.held_bytes = c.held_bytes.saturating_sub(item.size());
+        match item {
+            Held::Input(input) => deliver(state, id, input, now),
+            Held::Run(job) => job(state),
+        }
     }
 }
 
@@ -2243,6 +2275,16 @@ mod tests {
         assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
     }
 
+    fn held_inputs(state: &State, id: ClientId) -> Vec<Input> {
+        let held = &state.clients[&id].held;
+        held.iter()
+            .filter_map(|h| match h {
+                Held::Input(input) => Some(input.clone()),
+                Held::Run(_) => None,
+            })
+            .collect()
+    }
+
     /// TC.10 fix round 1: a held client's input waits in order, holds
     /// nest, and past the cap new input is dropped.
     #[test]
@@ -2252,7 +2294,7 @@ mod tests {
         hold_input(&mut state, id);
         hold_input(&mut state, id);
         input(&mut state, id, b"ab", now);
-        let held: Vec<Input> = state.clients[&id].held.iter().cloned().collect();
+        let held = held_inputs(&state, id);
         assert_eq!(
             held,
             vec![
@@ -2291,7 +2333,7 @@ mod tests {
         deliver(&mut state, id, big, now);
         deliver(&mut state, id, key("b"), now);
         assert_eq!(
-            state.clients[&id].held.iter().cloned().collect::<Vec<_>>(),
+            held_inputs(&state, id),
             vec![key("a")],
             "b came after a dropped paste"
         );
@@ -2301,6 +2343,31 @@ mod tests {
         hold_input(&mut state, id);
         deliver(&mut state, id, key("c"), now);
         assert_eq!(state.clients[&id].held.len(), 1);
+    }
+
+    /// A job queued in input order (the click timer's `DoubleClick`) waits
+    /// behind the input a hold kept, as tmux appends it to the client's
+    /// queue, and runs at once when nothing is held.
+    #[test]
+    fn a_job_in_input_order_runs_after_the_held_input() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let job = |ran: &Arc<std::sync::Mutex<Vec<usize>>>| -> crate::server::Job {
+            let ran = Arc::clone(ran);
+            Box::new(move |state: &mut State| {
+                let held = state.clients[&ClientId(1)].held.len();
+                ran.lock().unwrap().push(held);
+            })
+        };
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab", now);
+        in_input_order(&mut state, id, job(&ran));
+        assert!(ran.lock().unwrap().is_empty(), "held behind a and b");
+        release_input(&mut state, id);
+        assert_eq!(*ran.lock().unwrap(), vec![0], "ran after both keys");
+        in_input_order(&mut state, id, job(&ran));
+        assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
     }
 
     /// TC.11: a click maps onto the status row it lands on, at the bottom
