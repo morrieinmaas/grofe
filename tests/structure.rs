@@ -1317,6 +1317,42 @@ fn capture_pane_j_ends_each_line_at_its_used_width() {
     assert_eq!(joined, want.map(|l| l + "\n").concat());
 }
 
+/// `capture-pane -J` as tmux 3.7b gives it (recorded on a 20x6 pane):
+/// a line's written blanks survive a shrink to 4 columns and back, a line
+/// typed in insert mode is the whole width, a tab is its `\t` alone, and a
+/// wide character wrapped to the next row joins it.
+#[test]
+fn capture_pane_j_keeps_widths_across_a_resize_and_prints_tabs() {
+    let srv = server();
+    let cmd = concat!(
+        "printf 'ab   \\nabcdef  \\n'; printf '\\033[4hxy\\033[4l\\n'; ",
+        "printf 'a\\tb\\n'; printf '%018d\\344\\270\\255\\344\\270\\255z\\n' 0; sleep 300"
+    );
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "6", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains('z'), WAIT)
+        .expect("printed");
+    let want = [
+        "abcdef  ".to_string(),
+        format!("xy{}", " ".repeat(18)),
+        "a\tb".to_string(),
+        format!("{}中中z", "0".repeat(18)),
+        String::new(),
+    ]
+    .map(|l| l + "\n")
+    .concat();
+    let joined = |srv: &common::TestServer| {
+        srv.cmd(&["capture-pane", "-p", "-J", "-t", "s"])
+            .expect("-J")
+    };
+    assert_eq!(joined(&srv), want);
+    ok(&srv, &["resize-window", "-t", "s", "-x", "4"]);
+    ok(&srv, &["resize-window", "-t", "s", "-x", "20"]);
+    assert_eq!(joined(&srv), want);
+}
+
 #[test]
 fn main_horizontal_takes_main_pane_height() {
     let srv = server();

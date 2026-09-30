@@ -161,7 +161,12 @@ pub struct RowsSnapshot {
 pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
+    /// Used widths a resize could not keep on their lines ([`written`]).
+    pub(crate) widths: written::Kept,
 }
+
+/// alacritty's tab stops, every 8 columns.
+const TAB_STOP: usize = 8;
 
 /// The narrowest a pane's pty and emulator ever get: alacritty_terminal
 /// 0.26 panics writing a wide character into a 1-column terminal. A
@@ -359,6 +364,7 @@ impl PaneHandle {
         let emu = Arc::new(Mutex::new(Emu {
             term: Term::new(config, &size, Listener(Arc::clone(&events))),
             parser: Processor::new(),
+            widths: written::Kept::new(spec.history_limit),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
@@ -412,7 +418,10 @@ impl PaneHandle {
             cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
-        lock(&self.emu).term.resize(size);
+        let mut emu = lock(&self.emu);
+        let Emu { term, widths, .. } = &mut *emu;
+        widths.resize(term, size);
+        drop(emu);
         self.set_winsize(size)
     }
 
@@ -511,9 +520,15 @@ impl PaneHandle {
                 grid.columns()
             };
             let mut text = String::new();
+            // A tab is its `\t` alone, as tmux captures it: the blank cells
+            // it moved over, up to the next tab stop, are not printed.
+            let mut tab_end = 0;
             for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if col < tab_end && cell.c == ' ' && !cell.flags.contains(written::WRITTEN) {
                     continue;
                 }
                 if opts.escapes {
@@ -535,6 +550,9 @@ impl PaneHandle {
                     continue;
                 }
                 text.push(cell.c);
+                if cell.c == '\t' {
+                    tab_end = (col / TAB_STOP + 1) * TAB_STOP;
+                }
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);
                 }
