@@ -43,8 +43,8 @@ fn fragments() -> Vec<PathBuf> {
     files.sort();
     assert_eq!(
         files.len(),
-        5,
-        "00-core, 05-caps, 10-keys, 20-status, 30-plugins"
+        6,
+        "00-core, 05-caps, 10-keys, 20-status, 30-plugins, 40-nav"
     );
     files
 }
