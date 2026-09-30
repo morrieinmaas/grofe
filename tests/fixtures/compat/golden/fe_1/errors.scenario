@@ -16,3 +16,5 @@ $ kill-session -t
 $ kill-server extra
 $ has-session -t nope
 $ select-window -t main:9
+$ send-keys -M -t main
+$ send -M

@@ -112,8 +112,12 @@ pub enum GrofeTarget {
     /// A translation of the row's own.
     Translate(Translate),
     /// Not supported, for this reason (spec §4.5's out-of-scope table, or
-    /// the milestone that brings it). The command fails loudly.
+    /// the milestone that brings it). The command fails loudly, as
+    /// `<verb>: not supported (<reason>)`.
     Unsupported(&'static str),
+    /// Refused with exactly this text, tmux 3.7b's own for the form
+    /// (recorded: `send -M` is `no mouse target`). Always for good.
+    Refuse(&'static str),
     /// Read by [`cli`] before any server is reached; what it does.
     Cli(&'static str),
     /// Part of the target grammar every row shares; what it does.
@@ -174,12 +178,17 @@ impl Row {
             + self.form_positionals().len()
     }
 
-    /// Whether the row refuses its form for good: an
-    /// [`GrofeTarget::Unsupported`] row with no milestone (spec §4.5's out
-    /// of scope forms). A refusal until a later milestone (M5's copy
-    /// verbs) ranks as a mapping does, so that milestone can map the form.
+    /// Whether the row refuses its form for good: a [`GrofeTarget::Refuse`]
+    /// row, or an [`GrofeTarget::Unsupported`] one with no milestone (spec
+    /// §4.5's out of scope forms). A refusal until a later milestone (M5's
+    /// copy verbs) ranks as a mapping does, so that milestone can map the
+    /// form.
     pub fn refuses(&self) -> bool {
-        matches!(self.target, GrofeTarget::Unsupported(_)) && self.milestone.is_empty()
+        match self.target {
+            GrofeTarget::Refuse(_) => true,
+            GrofeTarget::Unsupported(_) => self.milestone.is_empty(),
+            _ => false,
+        }
     }
 
     /// Whether the command `inv` is this row's form: the same verb, with
@@ -209,7 +218,9 @@ impl Row {
 /// 1. a refusal for good ([`Row::refuses`]) wins over any mapping, so an
 ///    out of scope form (`new-session -t`, a mouse argv form) is refused
 ///    however many flags a mapping row for the same verb names, and
-///    wherever it is registered;
+///    wherever it is registered; an area row that refuses the same form
+///    replaces the core refusal (by rule 4), which is how an area gives a
+///    form tmux's own error text ([`GrofeTarget::Refuse`]);
 /// 2. then the row pinning more exact values ([`Row::pinned_values`]): a
 ///    `-x[M]` outranks a bare `-x`;
 /// 3. then the more specific row ([`Row::specificity`]);
@@ -228,6 +239,27 @@ fn select<'r>(rows: &'r [Row], inv: &Invocation<'_>) -> Option<&'r Row> {
             )
         })
         .map(|(_, row)| row)
+}
+
+/// The row that decides for `argv` (a tmux command, `argv[0]` its verb),
+/// before any rewrite: for the FE tasks' coverage tests.
+pub fn row_for(argv: &[String]) -> Option<&'static Row> {
+    let (name, args) = argv.split_first()?;
+    let spec = resolve(name).ok()?;
+    let ctx = ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: Dialect::Tmux,
+    };
+    let inv = Invocation {
+        verb: spec.name,
+        args,
+        ctx: &ctx,
+        spec,
+    };
+    select(table(), &inv)
 }
 
 /// Every row: the three area files' (FE.2, FE.3, FE.4), then this file's
@@ -786,6 +818,7 @@ fn translate_with(
             "{}: not supported ({reason})",
             spec.name
         ))),
+        Some(GrofeTarget::Refuse(text)) => Err(TmuxError(text.to_string())),
         Some(GrofeTarget::Cli(_) | GrofeTarget::Grammar(_)) | None => {
             Err(TmuxError(format!("not implemented: {}", spec.name)))
         }
@@ -1315,7 +1348,16 @@ fn core_rows() -> Vec<Row> {
         unsupported("new-session -t", LINKED, SEMANTIC),
         unsupported("link-window", LINKED, &[]),
         unsupported("unlink-window", LINKED, &[]),
-        unsupported("send-keys -M", MOUSE, SEMANTIC),
+        // tmux 3.7b's own text for a `send -M` with no mouse event
+        // (recorded).
+        row(
+            "send-keys -M",
+            Behaviour,
+            GrofeTarget::Refuse(cmd::target::NO_MOUSE_TARGET),
+            SEMANTIC,
+            "",
+            "fe_1/errors",
+        ),
         unsupported("resize-pane -M", MOUSE, SEMANTIC),
         unsupported("copy-mode -M", MOUSE, SEMANTIC),
         unsupported("pipe-pane", UNUSED, &[]),
@@ -2039,6 +2081,38 @@ mod tests {
         rows.extend(core_rows());
         let err = translate_with(&args(&["copy-mode"]), &ctx(), &rows, &[]).unwrap_err();
         assert!(err.0.contains("mapped by M5"), "{err}");
+    }
+
+    /// A refusal carries tmux's own text; an area row refusing the same
+    /// form replaces the core refusal, and a mapping never does.
+    #[test]
+    fn an_area_refusal_replaces_a_core_one() {
+        assert_eq!(one(&["send", "-M"]).unwrap_err().0, "no mouse target");
+        let area = row(
+            "resize-pane -M",
+            MappingKind::Behaviour,
+            GrofeTarget::Refuse("tmux's own text"),
+            SEMANTIC,
+            "",
+            "",
+        );
+        let mut rows = vec![area];
+        rows.extend(core_rows());
+        let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
+        assert_eq!(err.unwrap_err().0, "tmux's own text");
+        let map = row(
+            "resize-pane -M",
+            MappingKind::PassThrough,
+            GrofeTarget::Native("resize-pane"),
+            SEMANTIC,
+            "M3.6",
+            "",
+        );
+        let mut rows = vec![map];
+        rows.extend(core_rows());
+        let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
+        assert!(err.unwrap_err().0.contains("not supported"));
+        assert!(row_for(&args(&["send", "-M"])).is_some_and(Row::refuses));
     }
 
     /// Recorded on tmux 3.7b: flags are checked against tmux's usage.

@@ -873,7 +873,10 @@ pub struct ShowEnvironment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterSource {
     /// `-n`: a named source (`@<name>`); none is an inline one keyed by
-    /// the command (`@src-<hash>`, `sources::inline_key`).
+    /// the command (`@src-<hash>`, `sources::inline_key`). A named source
+    /// registered this way never expires, as a config one does not (an
+    /// inline one expires unused, `sources::INLINE_EXPIRY`); kept so,
+    /// since only `#(cmd)` rewrites register sources here.
     pub name: Option<String>,
     pub command: String,
 }

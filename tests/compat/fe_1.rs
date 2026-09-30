@@ -432,9 +432,15 @@ fn corpus_commands() -> Vec<Vec<String>> {
     out
 }
 
-/// Whether the table refuses the command on purpose (an `Unsupported` row).
-fn unsupported(e: &tmux::TmuxError) -> bool {
-    e.0.contains(": not supported (")
+/// Whether the table refuses the command on purpose: its row refuses it,
+/// for good or until a later milestone.
+fn unsupported(cmd: &[String]) -> bool {
+    tmux::row_for(cmd).is_some_and(|r| {
+        matches!(
+            r.target,
+            tmux::GrofeTarget::Unsupported(_) | tmux::GrofeTarget::Refuse(_)
+        )
+    })
 }
 
 #[test]
@@ -457,7 +463,7 @@ fn every_m1_to_m3_corpus_command_translates() {
             Ok(_) => {
                 translated.insert(form);
             }
-            Err(e) if unsupported(&e) => {}
+            Err(_) if unsupported(&cmd) => {}
             Err(e) if pending.contains_key(form.as_str()) => {
                 if seen_pending.insert(form.clone()) {
                     println!("pending {form}: {e}");
@@ -572,7 +578,9 @@ fn every_coverage_form_is_classified() {
         let standing = match result {
             Some(Ok(_)) => Standing::Mapped,
             _ if spec_row.starts_with("oos:") => Standing::Unsupported,
-            Some(Err(e)) if unsupported(&e) => Standing::Unsupported,
+            Some(Err(_)) if form_argv(form).is_some_and(|argv| unsupported(&argv)) => {
+                Standing::Unsupported
+            }
             _ => Standing::Pending,
         };
         let verb = form.split(' ').next().unwrap_or_default();

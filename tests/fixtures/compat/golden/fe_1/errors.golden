@@ -37,3 +37,9 @@ $ has-session -t nope
 $ select-window -t main:9
 ! can't find window: 9
 ? 1
+$ send-keys -M -t main
+! no mouse target
+? 1
+$ send -M
+! no mouse target
+? 1
