@@ -60,11 +60,23 @@ pub(crate) async fn sampler(master: Arc<AsyncFd<OwnedFd>>, out: Arc<Mutex<ProcSa
 }
 
 /// Name, argv and cwd of `pid`; each is `None` if it could not be read.
+/// The three reads are separate calls, so a process that execs between
+/// them would give its old name with its new argv; the name is read again
+/// after the rest, and a changed one takes the sample again.
 pub fn sample(pid: i32) -> ProcSample {
-    ProcSample {
-        command: os::command(pid),
-        argv: os::argv(pid),
-        path: os::cwd(pid),
+    let mut command = os::command(pid);
+    loop {
+        let argv = os::argv(pid);
+        let path = os::cwd(pid);
+        let after = os::command(pid);
+        if after == command {
+            return ProcSample {
+                command,
+                argv,
+                path,
+            };
+        }
+        command = after;
     }
 }
 
