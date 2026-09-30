@@ -164,6 +164,24 @@ impl Row {
         self.form_flags().len() + self.form_positionals().len()
     }
 
+    /// How many exact values the form pins: flag values (`-x[M]`) and
+    /// positionals, each more than a bare flag.
+    pub fn pinned_values(&self) -> usize {
+        self.form_flags()
+            .iter()
+            .filter(|(_, v)| v.is_some())
+            .count()
+            + self.form_positionals().len()
+    }
+
+    /// Whether the row refuses its form for good: an
+    /// [`GrofeTarget::Unsupported`] row with no milestone (spec §4.5's out
+    /// of scope forms). A refusal until a later milestone (M5's copy
+    /// verbs) ranks as a mapping does, so that milestone can map the form.
+    pub fn refuses(&self) -> bool {
+        matches!(self.target, GrofeTarget::Unsupported(_)) && self.milestone.is_empty()
+    }
+
     /// Whether the command `inv` is this row's form: the same verb, with
     /// every flag the form names (and the value it names, if any), and
     /// each pinned positional in its place.
@@ -186,22 +204,36 @@ impl Row {
     }
 }
 
-/// The row that decides for `inv`: of the rows it matches, the most
-/// specific one ([`Row::specificity`]), so `new-session -t`'s refusal wins
-/// over a flagless `new-session` row wherever each is registered. Between
-/// rows as specific, the first in `rows` ([`table`]'s order: the area files
-/// before the core rows).
+/// The row that decides for `inv`, of the rows it matches, by precedence:
+///
+/// 1. a refusal for good ([`Row::refuses`]) wins over any mapping, so an
+///    out of scope form (`new-session -t`, a mouse argv form) is refused
+///    however many flags a mapping row for the same verb names, and
+///    wherever it is registered;
+/// 2. then the row pinning more exact values ([`Row::pinned_values`]): a
+///    `-x[M]` outranks a bare `-x`;
+/// 3. then the more specific row ([`Row::specificity`]);
+/// 4. then the earlier row in `rows` ([`table`]'s order: the area files
+///    before the core rows).
 fn select<'r>(rows: &'r [Row], inv: &Invocation<'_>) -> Option<&'r Row> {
     rows.iter()
         .enumerate()
         .filter(|(_, row)| row.matches(inv))
-        .max_by_key(|(i, row)| (row.specificity(), std::cmp::Reverse(*i)))
+        .max_by_key(|(i, row)| {
+            (
+                row.refuses(),
+                row.pinned_values(),
+                row.specificity(),
+                std::cmp::Reverse(*i),
+            )
+        })
         .map(|(_, row)| row)
 }
 
 /// Every row: the three area files' (FE.2, FE.3, FE.4), then this file's
-/// own. [`select`] picks the most specific match, the earlier row between
-/// equals, so an area row can take over a core form by naming it.
+/// own. [`select`] decides between the rows a command matches (a refusal
+/// first, then pinned values, then specificity, then this order), so an
+/// area row can take over a core mapping by naming its form.
 pub fn table() -> &'static [Row] {
     static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -228,15 +260,40 @@ pub enum Arg {
 
 /// A rewrite of one argument, applied before any row sees the command
 /// (FE.3: tmux formats rewritten into grofe's in `display`, `list-* -F`
-/// and `set` values). Rows then match and translate the rewritten
-/// command, so a rewrite applies in front of FE.2's rows and the core
-/// ones alike. Rewrites of the same argument apply in [`rewrites`]' order.
+/// and `set` values, `#(cmd)` onto a status source). Rows then match and
+/// translate the rewritten command, so a rewrite applies in front of
+/// FE.2's rows and the core ones alike. Rewrites of the same argument
+/// apply in [`rewrites`]' order, each on the previous one's value.
+///
+/// `rewrite` sees the command as sent ([`Invocation`]: its verb, its flags
+/// through `getopt`, [`Invocation::option_name`] for `set`/`show`) and the
+/// argument's value, and answers the new value plus any native commands
+/// to run before the command itself ([`Rewritten::before`], such as
+/// [`cmd::RegisterSource`] for a `#(cmd)`).
 #[derive(Debug, Clone, Copy)]
 pub struct Rewrite {
     /// The verb's full tmux name.
     pub verb: &'static str,
     pub arg: Arg,
-    pub rewrite: fn(&str) -> Result<String, TmuxError>,
+    pub rewrite: fn(&Invocation<'_>, &str) -> Result<Rewritten, TmuxError>,
+}
+
+/// What a [`Rewrite`] makes of one argument.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rewritten {
+    pub value: String,
+    /// Native commands run before the rewritten command, in order.
+    pub before: Vec<Command>,
+}
+
+impl Rewritten {
+    /// Just a new value.
+    pub fn value(value: impl Into<String>) -> Rewritten {
+        Rewritten {
+            value: value.into(),
+            before: Vec::new(),
+        }
+    }
 }
 
 /// Every rewrite: the three area files', in the same order as [`table`].
@@ -251,16 +308,24 @@ pub fn rewrites() -> &'static [Rewrite] {
 }
 
 /// `inv`'s arguments with `rewrites` applied, rebuilt as separate flag and
-/// value words, or `None` when none applies to its verb.
-fn rewritten(inv: &Invocation<'_>, rewrites: &[Rewrite]) -> Result<Option<Vec<String>>, TmuxError> {
+/// value words, and the commands the rewrites run first; `None` when no
+/// rewrite is for its verb.
+/// A command's arguments after its rewrites, and the commands they run
+/// first.
+type Rewrote = (Vec<String>, Vec<Command>);
+
+fn rewritten(inv: &Invocation<'_>, rewrites: &[Rewrite]) -> Result<Option<Rewrote>, TmuxError> {
     let mine: Vec<&Rewrite> = rewrites.iter().filter(|r| r.verb == inv.verb).collect();
     if mine.is_empty() {
         return Ok(None);
     }
-    let apply = |arg: Arg, value: &str| -> Result<String, TmuxError> {
+    let mut before = Vec::new();
+    let mut apply = |arg: Arg, value: &str| -> Result<String, TmuxError> {
         let mut value = value.to_string();
         for r in mine.iter().filter(|r| r.arg == arg) {
-            value = (r.rewrite)(&value)?;
+            let got = (r.rewrite)(inv, &value)?;
+            before.extend(got.before);
+            value = got.value;
         }
         Ok(value)
     };
@@ -280,7 +345,7 @@ fn rewritten(inv: &Invocation<'_>, rewrites: &[Rewrite]) -> Result<Option<Vec<St
         let word = apply(Arg::Positional(i), word)?;
         out.push(apply(Arg::Positionals, &word)?);
     }
-    Ok(Some(out))
+    Ok(Some((out, before)))
 }
 
 // ---- tmux's command table ----------------------------------------------
@@ -510,6 +575,17 @@ impl<'a> Invocation<'a> {
         Getopt { flags, rest: i }
     }
 
+    /// The option a `set`/`show` (or `setw`/`showw`) names: its first
+    /// positional, as sent.
+    pub fn option_name(&self) -> Option<&'a str> {
+        matches!(
+            self.verb,
+            "set-option" | "show-options" | "set-window-option" | "show-window-options"
+        )
+        .then(|| self.positionals().first().map(String::as_str))
+        .flatten()
+    }
+
     /// The positionals, after the flags.
     pub fn positionals(&self) -> &'a [String] {
         &self.args[self.getopt().rest.min(self.args.len())..]
@@ -613,9 +689,9 @@ pub fn form_of(argv: &[String]) -> Option<String> {
 
 /// A command as `compat-miss.log` records it: the verb's full name and
 /// the flag letters given, never a value or a positional, so nothing a
-/// command carries is logged. An unknown verb keeps its name only if it
-/// looks like one (`[a-z-]`, at most 32 bytes), and each leading flag
-/// word only its first letter, since its value flags are unknown.
+/// command carries is logged. An unknown verb is `<unknown>`, and each
+/// leading flag word keeps only its first letter, since its value flags
+/// are unknown.
 pub fn miss_form(argv: &[String]) -> String {
     let Some((name, args)) = argv.split_first() else {
         return String::new();
@@ -641,10 +717,9 @@ pub fn miss_form(argv: &[String]) -> String {
                 out.push_str(&format!(" -{flag}"));
             }
         }
+        // An unknown verb could be anything the user typed.
         Err(_) => {
-            let word =
-                name.len() <= 32 && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
-            out.push_str(if word && !name.is_empty() { name } else { "?" });
+            out.push_str("<unknown>");
             for arg in args {
                 let Some(flag) = arg.strip_prefix('-').and_then(|f| f.chars().next()) else {
                     break;
@@ -698,10 +773,13 @@ fn translate_with(
         spec,
     };
     check_flags(&inv)?;
-    let owned = rewritten(&inv, rewrites)?;
+    let (owned, mut before) = match rewritten(&inv, rewrites)? {
+        Some((args, before)) => (Some(args), before),
+        None => (None, Vec::new()),
+    };
     let args = owned.as_deref().unwrap_or(args);
     let inv = Invocation { args, ..inv };
-    match select(rows, &inv).map(|r| r.target) {
+    let main = match select(rows, &inv).map(|r| r.target) {
         Some(GrofeTarget::Native(verb)) => inv.native(verb, args),
         Some(GrofeTarget::Translate(translate)) => translate(&inv),
         Some(GrofeTarget::Unsupported(reason)) => Err(TmuxError(format!(
@@ -711,7 +789,9 @@ fn translate_with(
         Some(GrofeTarget::Cli(_) | GrofeTarget::Grammar(_)) | None => {
             Err(TmuxError(format!("not implemented: {}", spec.name)))
         }
-    }
+    }?;
+    before.extend(main);
+    Ok(before)
 }
 
 /// tmux's own flag errors, before any row: a flag its usage does not list
@@ -838,7 +918,7 @@ fn store_name(name: &str) -> String {
 /// for the window forms; the option name (the first positional) is in the
 /// store's spelling. Scope merges (`-gw`, `-gqv`) and `-a -F -u -q -o`
 /// are native.
-fn option_args(inv: &Invocation<'_>, window: bool) -> Vec<String> {
+pub(crate) fn option_args(inv: &Invocation<'_>, window: bool) -> Vec<String> {
     let got = inv.getopt();
     let mut args = Vec::new();
     if window {
@@ -884,11 +964,21 @@ fn user_scope(inv: &Invocation<'_>, window: bool) -> Option<cmd::OptionScope> {
 
 /// The native option command for a tmux `set`/`show`, a user option kept
 /// in its own tmux scope.
-fn option_command(
+pub(crate) fn option_command(
     inv: &Invocation<'_>,
     verb: &str,
     window: bool,
 ) -> Result<Vec<Command>, TmuxError> {
+    // tmux's `-s` names the server table: a session, window or pane
+    // option there is stored where nothing reads it and shown as nothing
+    // (recorded: `set -s base-index 3` changes nothing, `show -s mouse`
+    // prints nothing, both exit 0).
+    let got = inv.getopt();
+    let base = inv.option_name().map(|n| n.split('[').next().unwrap_or(n));
+    let scope = base.and_then(crate::server::dispatch::options::builtin_scope);
+    if got.has('s') && scope.is_some_and(|s| s != cmd::OptionScope::Global) {
+        return Ok(Vec::new());
+    }
     let mut out = inv.native(verb, &option_args(inv, window))?;
     if let Some(scope) = user_scope(inv, window) {
         for c in &mut out {
@@ -1100,6 +1190,25 @@ const fn unsupported(
     )
 }
 
+/// A form refused until a later milestone brings it: unlike an
+/// out-of-scope refusal it ranks as any row does, so that milestone's
+/// area row mapping the form takes it over.
+const fn later(
+    tmux_form: &'static str,
+    reason: &'static str,
+    flags: &'static [FlagMark],
+    milestone: &'static str,
+) -> Row {
+    row(
+        tmux_form,
+        MappingKind::Behaviour,
+        GrofeTarget::Unsupported(reason),
+        flags,
+        milestone,
+        "",
+    )
+}
+
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
 
@@ -1215,16 +1324,16 @@ fn core_rows() -> Vec<Row> {
         unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
         // M5's copy mode and buffers (M36-R8).
-        unsupported("send-keys -X", COPY, SEMANTIC),
-        unsupported("copy-mode", COPY, &[]),
-        unsupported("set-buffer", COPY, &[]),
-        unsupported("paste-buffer", COPY, &[]),
-        unsupported("choose-buffer", COPY, &[]),
-        unsupported("list-buffers", COPY, &[]),
-        unsupported("show-buffer", COPY, &[]),
-        unsupported("delete-buffer", COPY, &[]),
-        unsupported("load-buffer", COPY, &[]),
-        unsupported("save-buffer", COPY, &[]),
+        later("send-keys -X", COPY, SEMANTIC, "M5"),
+        later("copy-mode", COPY, &[], "M5"),
+        later("set-buffer", COPY, &[], "M5"),
+        later("paste-buffer", COPY, &[], "M5"),
+        later("choose-buffer", COPY, &[], "M5"),
+        later("list-buffers", COPY, &[], "M5"),
+        later("show-buffer", COPY, &[], "M5"),
+        later("delete-buffer", COPY, &[], "M5"),
+        later("load-buffer", COPY, &[], "M5"),
+        later("save-buffer", COPY, &[], "M5"),
         // Front-end rows.
         row(
             "display-message -F",
@@ -1353,9 +1462,9 @@ pub struct TmuxCli {
     pub dialect: Dialect,
     /// `-V`: print `tmux <compat level>` and exit, before anything else.
     pub version: bool,
-    /// `-f <file>`: the config a server this call starts loads, alone
-    /// (`compat::start_config`).
-    pub file: Option<PathBuf>,
+    /// `-f <file>`, each one given: the config a server this call starts
+    /// loads, alone (`compat::start_config`).
+    pub files: Vec<PathBuf>,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
@@ -1382,7 +1491,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         argv: Vec::new(),
         dialect: Dialect::Tmux,
         version: false,
-        file: None,
+        files: Vec::new(),
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1416,7 +1525,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                     match flag {
                         'L' => out.name = Some(value),
                         'S' => out.socket = Some(PathBuf::from(value)),
-                        _ => out.file = Some(PathBuf::from(value)),
+                        _ => out.files.push(PathBuf::from(value)),
                     }
                     continue 'args;
                 }
@@ -1773,8 +1882,8 @@ mod tests {
     /// that pins the rewritten value sees it.
     #[test]
     fn rewrites_apply_before_the_rows() {
-        fn short_forms(v: &str) -> Result<String, TmuxError> {
-            Ok(v.replace("#S", "#{session_name}"))
+        fn short_forms(_: &Invocation<'_>, v: &str) -> Result<Rewritten, TmuxError> {
+            Ok(Rewritten::value(v.replace("#S", "#{session_name}")))
         }
         let registered = [
             Rewrite {
@@ -1809,6 +1918,127 @@ mod tests {
         };
         assert_eq!(w.format.as_deref(), Some("#S"));
         assert!(rewrites().is_empty(), "FE.3 registers the first");
+    }
+
+    /// FE.3's `#(cmd)`: a rewrite of `set`'s value, seeing the option it
+    /// is for, registers the source first and leaves the option reading
+    /// it.
+    #[test]
+    fn a_rewrite_registers_a_source_before_its_set() {
+        fn jobs(inv: &Invocation<'_>, v: &str) -> Result<Rewritten, TmuxError> {
+            assert_eq!(inv.option_name(), Some("status-right"));
+            let Some(job) = v.strip_prefix("#(").and_then(|j| j.strip_suffix(')')) else {
+                return Ok(Rewritten::value(v));
+            };
+            let key = crate::server::sources::inline_key(job);
+            Ok(Rewritten {
+                value: format!("#{{@{key}}}"),
+                before: vec![Command::RegisterSource(cmd::RegisterSource {
+                    name: None,
+                    command: job.to_string(),
+                })],
+            })
+        }
+        let registered = [Rewrite {
+            verb: "set-option",
+            arg: Arg::Positional(1),
+            rewrite: jobs,
+        }];
+        let got = translate_with(
+            &args(&["set", "-g", "status-right", "#(date)"]),
+            &ctx(),
+            &core_rows(),
+            &registered,
+        )
+        .unwrap();
+        let [Command::RegisterSource(source), Command::SetOption(set)] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert_eq!(
+            (source.name.as_deref(), source.command.as_str()),
+            (None, "date")
+        );
+        let key = crate::server::sources::inline_key("date");
+        assert_eq!(set.value.as_deref(), Some(format!("#{{@{key}}}").as_str()));
+        assert_eq!(set.name, "status-right");
+        assert_eq!(
+            cmd::parse(&args(&["__register-source", "-n", "batt", "acpi"])).unwrap(),
+            Command::RegisterSource(cmd::RegisterSource {
+                name: Some("batt".into()),
+                command: "acpi".into(),
+            })
+        );
+    }
+
+    /// A refusal for good wins over any mapping for its verb, however many
+    /// flags the mapping names and wherever it is registered; a pinned
+    /// value outranks a bare flag.
+    #[test]
+    fn refusals_and_pinned_values_come_first() {
+        let two_flags = row(
+            "new-session -d -s",
+            MappingKind::PassThrough,
+            GrofeTarget::Native("new-session"),
+            &[FlagMark::Semantic, FlagMark::Semantic],
+            "M3.6",
+            "",
+        );
+        let mut rows = vec![two_flags];
+        rows.extend(core_rows());
+        let err = translate_with(
+            &args(&["new", "-d", "-s", "x", "-t", "y"]),
+            &ctx(),
+            &rows,
+            &[],
+        );
+        assert!(err.unwrap_err().0.contains("not supported"));
+        assert!(translate_with(&args(&["new", "-d", "-s", "x"]), &ctx(), &rows, &[]).is_ok());
+
+        // A mouse refusal, in either registration order.
+        let map = row(
+            "resize-pane -M -Z",
+            MappingKind::PassThrough,
+            GrofeTarget::Native("resize-pane"),
+            &[FlagMark::Semantic, FlagMark::Semantic],
+            "M3.6",
+            "",
+        );
+        let refuse = unsupported("resize-pane -M", MOUSE, SEMANTIC);
+        for rows in [vec![map.clone(), refuse.clone()], vec![refuse, map]] {
+            let err = translate_with(&args(&["resize-pane", "-M", "-Z"]), &ctx(), &rows, &[]);
+            assert!(err.unwrap_err().0.contains("mouse"), "{rows:?}");
+        }
+
+        // `-x[M]` over a bare `-x` with more flags.
+        let bare = unsupported("display-menu -x -y", "bare", &[]);
+        let bare = Row {
+            milestone: "M3.6",
+            ..bare
+        };
+        let pinned = Row {
+            milestone: "M3.6",
+            ..unsupported("display-menu -x[M]", "pinned", &[])
+        };
+        let err = translate_with(
+            &args(&["menu", "-x", "M", "-y", "1", "a", "b", "c"]),
+            &ctx(),
+            &[bare, pinned],
+            &[],
+        );
+        assert!(err.unwrap_err().0.contains("pinned"));
+        // M5's copy refusal ranks as a mapping: M5 can take it over.
+        let m5 = row(
+            "copy-mode",
+            MappingKind::PassThrough,
+            GrofeTarget::Unsupported("mapped by M5"),
+            &[],
+            "M5",
+            "",
+        );
+        let mut rows = vec![m5];
+        rows.extend(core_rows());
+        let err = translate_with(&args(&["copy-mode"]), &ctx(), &rows, &[]).unwrap_err();
+        assert!(err.0.contains("mapped by M5"), "{err}");
     }
 
     /// Recorded on tmux 3.7b: flags are checked against tmux's usage.
@@ -1938,11 +2168,16 @@ mod tests {
         let err = cli(&args(&["-c", "true"])).unwrap_err();
         assert_eq!(err, "tmux front end is not implemented: -c");
         let got = cli(&args(&["-L", "x", "-f", "/dev/null", "ls"])).unwrap();
-        assert_eq!(got.file, Some(PathBuf::from("/dev/null")));
+        assert_eq!(got.files, [PathBuf::from("/dev/null")]);
+        let got = cli(&args(&["-f", "a.toml", "-fb.toml", "ls"])).unwrap();
+        assert_eq!(
+            got.files,
+            [PathBuf::from("a.toml"), PathBuf::from("b.toml")]
+        );
         assert_eq!(got.argv, args(&["list-sessions"]));
         assert_eq!(
-            cli(&args(&["-f/a.toml"])).unwrap().file,
-            Some(PathBuf::from("/a.toml"))
+            cli(&args(&["-f/a.toml"])).unwrap().files,
+            [PathBuf::from("/a.toml")]
         );
     }
 }

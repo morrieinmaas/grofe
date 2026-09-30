@@ -47,22 +47,26 @@ pub fn set_started_as(identity: Identity) {
     let _ = STARTED_AS.set(identity);
 }
 
-/// The config file a CLI run as `tmux -f <file>` started this server with
-/// (`__server --file`), set once by `main.rs` before the server runs.
-static START_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+/// The config files a CLI run as `tmux -f <file>...` started this server
+/// with (`__server --file`, once per file), set by `main.rs` before the
+/// server runs.
+static START_CONFIG: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
-/// Records `tmux -f <file>` for [`start_config`]. Only the first call
-/// counts.
+/// Records one `tmux -f <file>` for [`start_config`], in order.
 pub fn set_start_config(file: PathBuf) {
-    let _ = START_CONFIG.set(file);
+    if let Ok(mut files) = START_CONFIG.lock() {
+        files.push(file);
+    }
 }
 
-/// The file `tmux -f` named, if the server was started with one. As in
-/// tmux 3.7b it replaces the whole config (recorded: `-f` loads only that
-/// file, a missing file is no config and no error, `-f /dev/null` is
-/// none), and it binds only the server it starts.
-pub fn start_config() -> Option<&'static Path> {
-    START_CONFIG.get().map(PathBuf::as_path)
+/// The files `tmux -f` named, in order, or `None` if the server was
+/// started without one. As in tmux 3.7b they replace the whole config and
+/// each loads (recorded: `-f a -f b` loads both; a missing file is no
+/// config and no error; `-f /dev/null` is none), and they bind only the
+/// server they start.
+pub fn start_config() -> Option<Vec<PathBuf>> {
+    let files = START_CONFIG.lock().ok()?;
+    (!files.is_empty()).then(|| files.clone())
 }
 
 /// Where a tmux-identity server appends its misses, set by
@@ -83,6 +87,11 @@ pub fn server_started(state: &mut State) {
     state.model.identity = decide_identity(started, option);
     if state.model.identity == Identity::Tmux {
         let _ = MISS_LOG.set(miss_log_path(&Env::from_process()));
+        // tmux's built-in defaults where grofe's differ (FE.1 ruling).
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .ok();
+        state.model.options.use_tmux_defaults(editor.as_deref());
     }
 }
 
@@ -539,9 +548,10 @@ mod tests {
             (&["set", "-g", "@token", secret], "set-option -g"),
             (&["display", "-p", secret], "display-message -p"),
             (&["new", "-s", secret, "-c", secret], "new-session -s -c"),
-            (&["no-such-verb", "-x", secret], "no-such-verb -x"),
-            (&["no-such-verb", &format!("-p{secret}")], "no-such-verb -p"),
-            (&[&format!("{secret}!"), "x"], "?"),
+            (&["no-such-verb", "-x", secret], "<unknown> -x"),
+            (&["no-such-verb", &format!("-p{secret}")], "<unknown> -p"),
+            (&[&format!("{secret}!"), "x"], "<unknown>"),
+            (&[secret], "<unknown>"),
         ];
         for (words, want) in cases {
             let got = miss_summary(&argv(words));

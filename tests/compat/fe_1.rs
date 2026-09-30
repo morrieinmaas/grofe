@@ -5,8 +5,9 @@
 //!
 //! [`grofe_cli`] is the grofe side of a golden test: grofe reached through
 //! a `tmux` symlink, as the owner's scripts will reach it. FE.2 to FE.4
-//! reuse it. It passes no `-f`: grofe's built-in defaults are spec §5.3's,
-//! which `tmux-defaults.conf` gives the recorded tmux, and `-f` loads a
+//! reuse it. It passes `-f fe_1/grofe-defaults.toml`, grofe's spelling of
+//! the spec §5.3 values `tmux-defaults.conf` gives the recorded tmux: run
+//! as `tmux`, grofe's built-in defaults are tmux's own, and `-f` loads a
 //! grofe TOML file, not a tmux.conf.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,7 +59,15 @@ pub fn grofe_cli(tmpdir: &Path) -> Cli {
     );
     Cli {
         program: tmux,
-        prefix: vec!["-L".into(), SOCKET_NAME.into()],
+        prefix: vec![
+            "-L".into(),
+            SOCKET_NAME.into(),
+            "-f".into(),
+            fixtures_dir()
+                .join("golden/fe_1/grofe-defaults.toml")
+                .display()
+                .to_string(),
+        ],
         env,
         cwd: tmpdir.join("home"),
         vars: vec![
@@ -116,6 +125,43 @@ fn output_before_a_failing_command_matches_its_golden() {
 #[test]
 fn errors_match_their_golden() {
     check_golden("errors");
+}
+
+/// Options through tmux's server and global tables, a second `-f`, and
+/// `kill-window -a`.
+#[test]
+fn defaults_match_their_golden() {
+    check_golden("defaults");
+}
+
+/// The FE.1 ruling: run as `tmux` with no config at all, grofe's built-in
+/// defaults are tmux 3.7b's where they differ (recorded on `-L grofe-fe1
+/// -f /dev/null` with a clean environment); run as `grofe`, its own.
+#[test]
+fn a_tmux_server_has_tmux_s_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cli = grofe_cli(dir.path());
+    cli.prefix.truncate(2);
+    let args = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let (status, _, err) = cli.run(&args(&["new-session", "-d", "-s", "d"]));
+    assert!(status.success(), "{err}");
+    for (name, tmux) in [
+        ("base-index", "0"),
+        ("pane-base-index", "0"),
+        ("mouse", "off"),
+        ("set-clipboard", "external"),
+        ("focus-events", "off"),
+        ("escape-time", "10"),
+        ("history-limit", "2000"),
+        ("extended-keys", "off"),
+        ("mode-keys", "emacs"),
+    ] {
+        let (_, out, _) = cli.run(&args(&["show", "-gv", name]));
+        assert_eq!(out.trim_end(), tmux, "{name}");
+    }
+    let (_, out, _) = cli.run(&args(&["list-windows", "-t", "d", "-F", "#{window_index}"]));
+    assert_eq!(out, "0\n", "the first window at tmux's base-index");
+    let _ = cli.run(&args(&["kill-server"]));
 }
 
 /// `tmux attach -t =name` reads its target the tmux way (exact, and a

@@ -56,13 +56,10 @@ fn main() -> ExitCode {
             Ok(cli) => {
                 let _ = DIALECT.set(cli.dialect);
                 // `-f`: the config of a server this call starts (spec §4.5),
-                // absolute, since the server does not keep this cwd.
-                if let Some(file) = cli.file {
-                    let file = std::env::current_dir()
-                        .map(|cwd| cwd.join(&file))
-                        .unwrap_or(file);
-                    let _ = CONFIG_FILE.set(file);
-                }
+                // each file absolute, since the server does not keep this cwd.
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let files = cli.files.iter().map(|f| cwd.join(f)).collect();
+                let _ = CONFIG_FILES.set(files);
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
@@ -138,8 +135,8 @@ fn main() -> ExitCode {
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
 
-/// `tmux -f <file>`: passed to a server this process starts.
-static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
+/// `tmux -f <file>...`: passed to a server this process starts.
+static CONFIG_FILES: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 fn dialect() -> Dialect {
     DIALECT.get().copied().unwrap_or_default()
@@ -678,7 +675,7 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
     if dialect() == Dialect::Tmux {
         cmd.args(["--identity", "tmux"]);
     }
-    if let Some(file) = CONFIG_FILE.get() {
+    for file in CONFIG_FILES.get().into_iter().flatten() {
         cmd.arg("--file").arg(file);
     }
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork

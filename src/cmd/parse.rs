@@ -14,11 +14,11 @@ use super::{
     DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
     MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope,
-    ParseError, RefreshClient, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
-    RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem,
-    SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
-    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    ParseError, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
+    ResizeWindow, RespawnPane, RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow,
+    SendKeys, SendKeysItem, SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment,
+    ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient,
+    SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -265,8 +265,18 @@ fn parse_has_session(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_kill_window(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[('t', FlagKind::Value), ('a', FlagKind::Bool)],
+            long: &[],
+        },
+        "kill-window",
+    )?;
+    no_extra_positionals(&flags, "kill-window", 0)?;
     Ok(Command::KillWindow(KillWindow {
-        target: parse_target_only(argv, "kill-window")?,
+        target: target_or_current(&flags.values, 't')?,
+        all: flags.present.contains(&'a'),
     }))
 }
 
@@ -1176,6 +1186,22 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
         cmd,
         delay,
         background: flags.present.contains(&'b'),
+    }))
+}
+
+fn parse_register_source(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[('n', FlagKind::Value)],
+            long: &[],
+        },
+        "__register-source",
+    )?;
+    no_extra_positionals(&flags, "__register-source", 1)?;
+    Ok(Command::RegisterSource(RegisterSource {
+        name: flags.values.get(&'n').cloned(),
+        command: one_positional(&flags, "__register-source")?,
     }))
 }
 
@@ -2119,6 +2145,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "show-hooks" => parse_show_hooks(rest),
         "set-environment" => parse_set_environment(rest),
         "show-environment" => parse_show_environment(rest),
+        "__register-source" => parse_register_source(rest),
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }

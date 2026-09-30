@@ -224,10 +224,27 @@ pub fn last_window(state: &mut State, ctx: &ClientCtx, c: WindowStep) -> Result<
     Ok(String::new())
 }
 
+/// `kill-window`; with `-a` every other window of the target's session,
+/// the target becoming current (recorded on tmux 3.7b).
 pub fn kill_window(state: &mut State, ctx: &ClientCtx, c: KillWindow) -> Result<String, String> {
     let window = state.model.resolve_window(&c.target, ctx)?;
-    let removed = state.model.remove_window(window);
-    state.events.panes_killed(removed);
+    let doomed = match c.all {
+        true => {
+            let session = state.model.windows[&window].session;
+            state.model.select_window(window);
+            state.model.sessions[&session]
+                .windows
+                .iter()
+                .copied()
+                .filter(|w| *w != window)
+                .collect()
+        }
+        false => vec![window],
+    };
+    for w in doomed {
+        let removed = state.model.remove_window(w);
+        state.events.panes_killed(removed);
+    }
     Ok(String::new())
 }
 

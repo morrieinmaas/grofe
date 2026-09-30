@@ -385,7 +385,7 @@ fn misses_append_one_line_each_to_the_test_state_dir() {
     let lines = miss_lines(&srv);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
-        lines.iter().all(|l| l.contains("no-such-verb -x")),
+        lines.iter().all(|l| l.ends_with(" <unknown> -x")),
         "{lines:?}"
     );
 }

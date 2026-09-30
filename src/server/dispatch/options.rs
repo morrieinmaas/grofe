@@ -75,6 +75,30 @@ struct Builtin {
 // synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
 // the string translated into grofe's `#{...}`-only expander (R15).
+/// tmux 3.7b's built-in defaults where grofe's differ (recorded: `show
+/// -g`/`-s`/`-gw` on `-f /dev/null` with a clean environment), used under
+/// tmux identity ([`Options::use_tmux_defaults`]); `status-keys` and
+/// `mode-keys` follow `$EDITOR` there. Formats are tmux's where the native
+/// language can say the same thing.
+// ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
+// for `pane-active-border-style` have no native spelling, so grofe's stay.
+// `renumber-windows off` is shown but grofe always renumbers.
+const TMUX_DEFAULTS: &[(&str, &str)] = &[
+    ("base-index", "0"),
+    ("pane-base-index", "0"),
+    ("history-limit", "2000"),
+    ("escape-time", "10"),
+    ("mouse", "off"),
+    ("set-clipboard", "external"),
+    ("focus-events", "off"),
+    ("extended-keys", "off"),
+    ("renumber-windows", "off"),
+    (
+        "automatic-rename-format",
+        "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
+    ),
+];
+
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -461,6 +485,13 @@ const BUILTINS: &[Builtin] = &[
     },
 ];
 
+/// A built-in option's scope (a list's too), `None` for anything else.
+pub fn builtin_scope(name: &str) -> Option<OptionScope> {
+    builtin(name)
+        .map(|b| b.scope)
+        .or_else(|| list_builtin(name).map(|l| l.scope))
+}
+
 /// Every built-in option's name, in table order (T3.1 walks it to check
 /// its TOML name table is complete).
 pub fn builtin_names() -> impl Iterator<Item = &'static str> {
@@ -507,6 +538,9 @@ pub struct Options {
     /// Global lists the config set, each with the elements it had before,
     /// as `config_base` for scalars.
     config_list_base: BTreeMap<String, BTreeMap<u32, String>>,
+    /// Built-in defaults that differ under the server's identity
+    /// ([`Options::use_tmux_defaults`]): what `set -gu` restores.
+    identity_defaults: BTreeMap<&'static str, String>,
 }
 
 impl Options {
@@ -531,6 +565,51 @@ impl Options {
             lists: BTreeMap::from([(Owner::Global, default_lists())]),
             ..Options::default()
         }
+    }
+
+    /// Under tmux identity (spec D12 ruling, FE.1): the built-in defaults
+    /// where grofe's differ from tmux 3.7b's become tmux's
+    /// ([`TMUX_DEFAULTS`]), so a script sees what tmux would. `editor` is
+    /// the server's `$VISUAL`, else `$EDITOR`: tmux makes `status-keys`
+    /// and `mode-keys` `vi` when its basename holds `vi` (recorded).
+    /// A value the config set keeps winning, and falls back to tmux's on
+    /// `reload` once the config stops setting it; a runtime value is left
+    /// alone. Called once, at start.
+    pub fn use_tmux_defaults(&mut self, editor: Option<&str>) {
+        let keys = match editor.and_then(|e| e.rsplit('/').next()) {
+            Some(e) if e.contains("vi") => "vi",
+            _ => "emacs",
+        };
+        let defaults = TMUX_DEFAULTS
+            .iter()
+            .map(|(n, v)| (*n, v.to_string()))
+            .chain([
+                ("mode-keys", keys.to_string()),
+                ("status-keys", keys.to_string()),
+            ]);
+        for (name, value) in defaults {
+            if let Some(base) = self.config_base.get_mut(name) {
+                *base = value.clone();
+            } else if !self.runtime.contains(name)
+                && let Some(global) = self.values.get_mut(&Owner::Global)
+            {
+                global.insert(
+                    name.to_string(),
+                    Entry {
+                        value: value.clone(),
+                        persist: false,
+                    },
+                );
+            }
+            self.identity_defaults.insert(name, value);
+        }
+    }
+
+    /// `name`'s built-in default under this server's identity.
+    fn default_of(&self, b: &'static Builtin) -> &str {
+        self.identity_defaults
+            .get(b.name)
+            .map_or(b.default, String::as_str)
     }
 
     /// Marks a global option as set at runtime, which the config then
@@ -573,7 +652,8 @@ impl Options {
         if owner == Owner::Global
             && let Some(b) = builtin(name)
         {
-            return self.set(owner, name, b.default, false);
+            let default = self.default_of(b).to_string();
+            return self.set(owner, name, &default, false);
         }
         let Some(at) = self.values.get_mut(&owner) else {
             return Ok(false);
@@ -986,29 +1066,29 @@ fn config_env() -> config::Env {
     config::Env::from_process()
 }
 
-/// Applies the config chain once at server start. On any error the
-/// server keeps the built-in defaults and logs every error (R9).
-/// The config chain (spec §5.1), or with `tmux -f <file>` that file alone
-/// (`compat::start_config`): a missing file or `/dev/null` is no file, so
-/// only the built-in defaults.
+/// The config chain (spec §5.1), or with `tmux -f <file>...` those files
+/// alone, in order (`compat::start_config`): a missing file or
+/// `/dev/null` is no file, so none at all leaves the built-in defaults.
 fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
     let env = config_env();
     match crate::compat::start_config() {
         None => config::load(&env),
-        Some(file) => {
+        Some(files) => {
             let only = config::Env {
                 config_dir: None,
                 ..env
             };
-            let files: Vec<PathBuf> = std::iter::once(file)
-                .filter(|f| *f != Path::new("/dev/null") && f.exists())
-                .map(Path::to_path_buf)
+            let files: Vec<PathBuf> = files
+                .into_iter()
+                .filter(|f| f != Path::new("/dev/null") && f.exists())
                 .collect();
             config::load_with_file(&only, &files)
         }
     }
 }
 
+/// Applies the config chain once at server start. On any error the
+/// server keeps the built-in defaults and logs every error (R9).
 pub fn apply_config_at_start(state: &mut State) {
     match load_config() {
         Ok(resolved) => {
@@ -2308,6 +2388,51 @@ mod tests {
             run(&["list-keys", "-1N", "NotAKey"]),
             Err("invalid key: NotAKey".to_string())
         );
+    }
+
+    /// FE.1 ruling: under tmux identity each built-in default that differs
+    /// is tmux 3.7b's (recorded); under grofe identity grofe's stays.
+    #[test]
+    fn tmux_identity_takes_tmux_s_defaults() {
+        let recorded = [
+            ("base-index", "0", "1"),
+            ("pane-base-index", "0", "1"),
+            ("mouse", "off", "on"),
+            ("set-clipboard", "external", "on"),
+            ("focus-events", "off", "on"),
+            ("escape-time", "10", "25"),
+            ("history-limit", "2000", "50000"),
+            ("extended-keys", "off", "on"),
+            ("renumber-windows", "off", "on"),
+            ("mode-keys", "emacs", "vi"),
+            ("status-keys", "emacs", "emacs"),
+        ];
+        let grofe = Options::new(false);
+        let mut tmux = Options::new(false);
+        tmux.use_tmux_defaults(None);
+        for (name, tmux_default, grofe_default) in recorded {
+            let get = |o: &Options| o.lookup(name, &[]).map(str::to_string);
+            assert_eq!(get(&grofe).as_deref(), Some(grofe_default), "grofe {name}");
+            assert_eq!(get(&tmux).as_deref(), Some(tmux_default), "tmux {name}");
+        }
+        // `set -gu` restores the identity's default.
+        tmux.set(Owner::Global, "base-index", "5", false).unwrap();
+        tmux.unset(Owner::Global, "base-index").unwrap();
+        assert_eq!(tmux.lookup("base-index", &[]), Some("0"));
+        // tmux's `$EDITOR` rule for the key tables.
+        let mut vi = Options::new(false);
+        vi.use_tmux_defaults(Some("/usr/local/bin/nvim"));
+        assert_eq!(vi.lookup("status-keys", &[]), Some("vi"));
+        assert_eq!(vi.lookup("mode-keys", &[]), Some("vi"));
+        // A value the config set keeps winning, with tmux's as its base.
+        let mut configured = Options::new(false);
+        configured
+            .config_base
+            .insert("mouse".to_string(), "on".to_string());
+        configured.set(Owner::Global, "mouse", "on", false).unwrap();
+        configured.use_tmux_defaults(None);
+        assert_eq!(configured.lookup("mouse", &[]), Some("on"));
+        assert_eq!(configured.config_base["mouse"], "off");
     }
 
     /// The stub edit: `bind-key` checks the command in the request's

@@ -126,6 +126,8 @@ pub struct NewWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KillWindow {
     pub target: Target,
+    /// `-a` (FE.1): every window of the target's session but the target.
+    pub all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -864,6 +866,18 @@ pub struct ShowEnvironment {
     pub name: Option<String>,
 }
 
+/// `__register-source [-n name] <command>` (FE.1): grofe's own hidden
+/// verb, which registers a status source (`sources::register`). The tmux
+/// front end emits it for a `#(cmd)` a rewrite turns into `#{@src-...}`
+/// (FE.3), so the registration runs on the server with its state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterSource {
+    /// `-n`: a named source (`@<name>`); none is an inline one keyed by
+    /// the command (`@src-<hash>`, `sources::inline_key`).
+    pub name: Option<String>,
+    pub command: String,
+}
+
 /// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -940,4 +954,5 @@ pub enum Command {
     ShowHooks(ShowHooks),
     SetEnvironment(SetEnvironment),
     ShowEnvironment(ShowEnvironment),
+    RegisterSource(RegisterSource),
 }

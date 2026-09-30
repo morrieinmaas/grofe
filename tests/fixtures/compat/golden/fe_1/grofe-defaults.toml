@@ -1,0 +1,20 @@
+# grofe's side of tmux-defaults.conf: the spec 5.3 values the golden
+# recorder gives real tmux 3.7b, for a grofe run as `tmux`, whose built-in
+# defaults are tmux's own (FE.1 ruling). The compat tests pass it with -f.
+base-index = 1
+pane-base-index = 1
+escape-time-ms = 25
+mouse = true
+history-limit = 50000
+focus-events = true
+set-clipboard = "on"
+extended-keys = "on"
+renumber-windows = true
+automatic-rename = true
+mode-keys = "vi"
+terminal-features = [
+    "xterm*:clipboard:ccolour:cstyle:focus:title",
+    "screen*:title",
+    "rxvt*:ignorefkeys",
+    "*:RGB",
+]

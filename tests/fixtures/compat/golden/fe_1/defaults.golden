@@ -1,0 +1,118 @@
+$ -f /dev/null new-session -d -s d -x 200 -y 50
+? 0
+$ show -gqv base-index
+1
+? 0
+$ show -sqv base-index
+? 0
+$ show -gwqv base-index
+1
+? 0
+$ show -gqv pane-base-index
+1
+? 0
+$ show -sqv pane-base-index
+? 0
+$ show -gwqv pane-base-index
+1
+? 0
+$ show -gqv mouse
+on
+? 0
+$ show -sqv mouse
+? 0
+$ show -gwqv mouse
+on
+? 0
+$ show -gqv set-clipboard
+on
+? 0
+$ show -sqv set-clipboard
+on
+? 0
+$ show -gwqv set-clipboard
+on
+? 0
+$ show -gqv focus-events
+on
+? 0
+$ show -sqv focus-events
+on
+? 0
+$ show -gwqv focus-events
+on
+? 0
+$ show -gqv escape-time
+25
+? 0
+$ show -sqv escape-time
+25
+? 0
+$ show -gwqv escape-time
+25
+? 0
+$ show -gqv history-limit
+50000
+? 0
+$ show -sqv history-limit
+? 0
+$ show -gwqv history-limit
+50000
+? 0
+$ show -gqv extended-keys
+on
+? 0
+$ show -sqv extended-keys
+on
+? 0
+$ show -gwqv extended-keys
+on
+? 0
+$ show -gqv renumber-windows
+on
+? 0
+$ show -sqv renumber-windows
+? 0
+$ show -gwqv renumber-windows
+on
+? 0
+$ show -gqv mode-keys
+vi
+? 0
+$ show -sqv mode-keys
+? 0
+$ show -gwqv mode-keys
+vi
+? 0
+$ show -gqv status-keys
+emacs
+? 0
+$ show -sqv status-keys
+? 0
+$ show -gwqv status-keys
+emacs
+? 0
+$ show -gqv automatic-rename-format
+#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}
+? 0
+$ show -sqv automatic-rename-format
+? 0
+$ show -gwqv automatic-rename-format
+#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}
+? 0
+$ new-window -d -t d
+? 0
+$ new-window -d -t d
+? 0
+$ list-windows -t d -F '#{window_index}'
+1
+2
+3
+? 0
+$ kill-window -a -t d:1
+? 0
+$ list-windows -t d -F '#{window_index} #{window_active}'
+1 1
+? 0
+$ kill-window -a -t d:1
+? 0
