@@ -2053,8 +2053,11 @@ pub fn detach_client(
     c: DetachClient,
 ) -> Result<String, String> {
     if let Some(target) = &c.session {
-        let session = state.model.resolve_session(target, ctx)?;
-        detach_session(state, session, None);
+        // tmux 3.7b finds `-s` with CMD_FIND_CANFAIL: no such session is
+        // not an error (recorded).
+        if let Ok(session) = state.model.resolve_session(target, ctx) {
+            detach_session(state, session, None);
+        }
         return Ok(String::new());
     }
     let id = match &c.client {

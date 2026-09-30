@@ -185,6 +185,11 @@ fn detach_client_s_detaches_every_client_on_the_session() {
         .map(|c| c.split(' ').nth(1).unwrap_or_default().to_string())
         .collect();
     assert_eq!(left, ["other"]);
+    // An unknown session is no error, as in tmux 3.7b (recorded).
+    let out = srv.run(&["detach-client", "-s", "nope"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stderr, "");
+    assert_eq!(clients(&srv).len(), 1);
 }
 
 /// Case 4: after `switch-client -T mytable`, one key runs that table's
