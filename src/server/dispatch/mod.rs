@@ -435,12 +435,18 @@ pub(crate) fn spawn_pane(
 ) -> Result<PaneId, String> {
     let id = state.model.alloc_pane_id();
     let cwd = usable_cwd(cwd);
+    let mut env = pane_env(state, session, id, env);
+    // tmux starts a pane's shell from `default-shell` and exports it as
+    // `SHELL`; the last `SHELL` is the one the pane starts.
+    if let Some(shell) = state.model.default_shell(session) {
+        env.push(("SHELL".to_string(), shell));
+    }
     let spec = PaneSpawn {
         id,
         session,
         argv: argv.clone(),
         cwd: cwd.clone(),
-        env: pane_env(state, session, id, env),
+        env,
         cols,
         rows,
         history_limit: state.model.history_limit(session),

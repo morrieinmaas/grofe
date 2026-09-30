@@ -396,10 +396,11 @@ const BUILTINS: &[Builtin] = &[
     // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
     // ones; D6 sizes windows; grofe's prompt keys are emacs's.
     // `renumber-windows` itself is read (`Model::remove_window`).
-    // ponytail: `default-command`, `default-shell` and `synchronize-panes`
-    // do something in tmux; grofe stores them only, until a ported script
-    // needs one. `mode-keys` waits for M5's copy mode, and
-    // `pane-border-format` for pane border titles.
+    // ponytail: `default-command` and `synchronize-panes` do something in
+    // tmux; grofe stores them only, until a ported script needs one.
+    // `default-shell` is read when a pane starts (`Model::default_shell`).
+    // `mode-keys` waits for M5's copy mode, and `pane-border-format` for
+    // pane border titles.
     Builtin {
         name: "aggressive-resize",
         kind: Kind::Bool,
@@ -2677,7 +2678,6 @@ pub fn list_names() -> impl Iterator<Item = &'static str> {
 const NO_EFFECT: &[&str] = &[
     "aggressive-resize",
     "default-command",
-    "default-shell",
     "default-terminal",
     "extended-keys",
     "extended-keys-format",
