@@ -478,6 +478,10 @@ pub enum Owner {
     Session(SessionId),
     Window(WindowId),
     Pane(PaneId),
+    /// tmux's server and global window scopes, for user options set
+    /// through the tmux front end (FE.1): looked up after global.
+    Server,
+    GlobalWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -595,7 +599,7 @@ impl Options {
     pub fn lookup(&self, name: &str, chain: &[Owner]) -> Option<&str> {
         chain
             .iter()
-            .chain([&Owner::Global])
+            .chain([&Owner::GlobalWindow, &Owner::Global, &Owner::Server])
             .find_map(|o| self.get(*o, name))
             .map(|e| e.value.as_str())
     }
@@ -605,13 +609,13 @@ impl Options {
     /// apply to anything; this only frees them.
     pub fn retain_live(&mut self, model: &Model) {
         self.values.retain(|owner, _| match owner {
-            Owner::Global => true,
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
             Owner::Session(id) => model.sessions.contains_key(id),
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
         });
         self.lists.retain(|owner, _| match owner {
-            Owner::Global => true,
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
             Owner::Session(id) => model.sessions.contains_key(id),
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
@@ -696,6 +700,8 @@ fn owner(
         OptionScope::Session => Owner::Session(model.resolve_session(target, ctx)?),
         OptionScope::Window => Owner::Window(model.resolve_window(target, ctx)?),
         OptionScope::Pane => Owner::Pane(model.resolve_pane(target, ctx)?),
+        OptionScope::Server => Owner::Server,
+        OptionScope::GlobalWindow => Owner::GlobalWindow,
     })
 }
 
@@ -843,7 +849,7 @@ impl FormatVars for NoVars {
 fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
     events.emit(Event::OptionChanged {
         scope: match owner {
-            Owner::Global => "global".to_string(),
+            Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
             Owner::Session(id) => id.to_string(),
             Owner::Window(id) => id.to_string(),
             Owner::Pane(id) => id.to_string(),
@@ -857,7 +863,7 @@ fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) 
 /// objects above it.
 fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
     match owner {
-        Owner::Global => Vec::new(),
+        Owner::Global | Owner::Server | Owner::GlobalWindow => Vec::new(),
         Owner::Session(_) => vec![owner],
         Owner::Window(w) => {
             let mut chain = vec![owner];
@@ -1384,7 +1390,15 @@ fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
-    let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+    // `-c` names the client the format sees; tmux 3.7b's `-p` does not
+    // fail on an unknown one (recorded), it uses the current client.
+    let named = c
+        .client
+        .as_deref()
+        .and_then(|name| state.clients.iter().find(|(_, cl)| cl.name == name))
+        .map(|(id, _)| *id);
+    let client = named.or_else(|| clients::current_client(state, ctx));
+    let out = match client.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
             expand(text, &ServerVars::new(state, pane, &client))
@@ -1779,6 +1793,23 @@ const LISTS: &[ListBuiltin] = &[
     },
 ];
 
+/// The separator tmux 3.7b splits a list option's value on when it is set
+/// or appended without an index (recorded); `status-format` has none.
+fn list_separator(name: &str) -> Option<char> {
+    match name {
+        "terminal-features" | "command-alias" => Some(','),
+        "update-environment" => Some(' '),
+        _ => None,
+    }
+}
+
+fn pieces(value: &str, sep: char) -> impl Iterator<Item = String> + '_ {
+    value
+        .split(sep)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
+
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
     LISTS.iter().find(|l| l.name == name)
 }
@@ -2033,7 +2064,20 @@ fn set_list(
         (false, None, Some(value)) if c.append => ListOp::Push(value),
         (false, None, Some(value)) => ListOp::Replace(value),
     };
-    let changed = model.options.edit_list(owner, base, op, c.persist)?;
+    // As tmux 3.7b (recorded, FE.1): a list with a separator takes a value
+    // set or appended without an index as one element per piece, empty
+    // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
+    let ops = match (op, list_separator(base)) {
+        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
+        (ListOp::Replace(value), Some(sep)) => {
+            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
+        }
+        (op, _) => vec![op],
+    };
+    let mut changed = false;
+    for op in ops {
+        changed |= model.options.edit_list(owner, base, op, c.persist)?;
+    }
     if owner == Owner::Global {
         model.options.mark_runtime(base);
     }
@@ -2124,7 +2168,7 @@ fn apply_config_lists(model: &mut Model, events: &mut Events, resolved: &Resolve
 
 fn scope_name(owner: Owner) -> String {
     match owner {
-        Owner::Global => "global".to_string(),
+        Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
         Owner::Session(id) => id.to_string(),
         Owner::Window(id) => id.to_string(),
         Owner::Pane(id) => id.to_string(),

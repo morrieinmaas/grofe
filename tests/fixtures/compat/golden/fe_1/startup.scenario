@@ -6,3 +6,5 @@ $ -f /nonexistent/grofe-fe1.conf start-server \; set -g @x 1 \; show -gv @x
 $ start-server \; show -gqv @tpm_plugins
 $ -f /dev/null new-session -d -s main -x 200 -y 50
 $ has-session -t main
+$ -f missing-fe1.conf new-session -d -s rel -x 200 -y 50
+$ has-session -t rel

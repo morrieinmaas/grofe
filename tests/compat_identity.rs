@@ -351,7 +351,8 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
     type_line(&srv, "outer", "setw -g @typed at-the-prompt");
     wait_until(
         || {
-            grofe(&srv, &["show-options", "-gv", "@typed"])
+            // tmux's global window scope, which formats see.
+            grofe(&srv, &["display-message", "-p", "#{@typed}"])
                 .is_ok_and(|out| out.trim() == "at-the-prompt")
         },
         CMD_TIMEOUT,

@@ -80,6 +80,13 @@ pub struct NewSession {
     /// `-A` (M3.6, TC.9): attach to the session named by `-s` if it
     /// exists, instead of creating it.
     pub attach: bool,
+    /// `-n` (FE.1): the first window's name.
+    pub window_name: Option<String>,
+    /// `-P` (FE.1): print the new session (`-F`, else tmux's
+    /// `#{session_name}:`).
+    pub print: bool,
+    /// `-F` (FE.1).
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +267,12 @@ pub enum OptionScope {
     Session,
     Window,
     Pane,
+    /// tmux's server scope for a user option (`set -s @x`): the tmux front
+    /// end builds it (FE.1); natively `-s` is the session scope.
+    Server,
+    /// tmux's global window scope for a user option (`set -gw @x`), apart
+    /// from the global session one, as tmux keeps them (FE.1).
+    GlobalWindow,
 }
 
 /// `set-option`/`set` (`-g -s -w -p -u --persist`, and from M3.6 `-a -F
@@ -303,6 +316,8 @@ pub struct DisplayMessage {
     /// The message/format text, raw (expanded at dispatch time). `None`
     /// means tmux's default status-line format.
     pub text: Option<String>,
+    /// `-c` (FE.1): the client whose variables the format sees, raw.
+    pub client: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -448,14 +463,24 @@ pub struct CommandPrompt {
     pub single: bool,
     /// `-T`: the prompt type (accepted; grofe has no completion).
     pub prompt_type: Option<String>,
+    /// `-N` (FE.1): only digits may be typed.
+    pub numeric: bool,
+    /// `-i` (FE.1): tmux's incremental prompt (copy-mode search).
+    pub incremental: bool,
+    /// `-F` (FE.1): the template is expanded as a format when the prompt
+    /// opens.
+    pub expand: bool,
 }
 
 /// `run-shell` (a shell command; from M3.6 `-b`, TC.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunShell {
+    /// Empty only with `-d` and no command: then only the delay.
     pub cmd: String,
     /// `-b`: run in the background; the caller does not wait.
     pub background: bool,
+    /// `-d` (FE.1): seconds to wait before running.
+    pub delay: Option<std::time::Duration>,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is

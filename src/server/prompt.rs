@@ -117,6 +117,8 @@ struct Prompt {
     /// What the command runs in (`compat::prompt_dialect`).
     dialect: Dialect,
     read: Read,
+    /// `command-prompt -N`: only digits are typed.
+    numeric: bool,
 }
 
 /// What a key did to a prompt.
@@ -138,6 +140,7 @@ impl Prompt {
             back: None,
             dialect: Dialect::Grofe,
             read: Read::Line,
+            numeric: false,
         }
     }
 
@@ -151,7 +154,11 @@ impl Prompt {
     }
 
     fn insert(&mut self, s: &str) {
-        for c in s.chars().filter(|c| !c.is_control()) {
+        let numeric = self.numeric;
+        for c in s
+            .chars()
+            .filter(|c| !c.is_control() && (!numeric || c.is_ascii_digit()))
+        {
             self.text.insert(self.cursor, c);
             self.cursor += 1;
         }
@@ -544,7 +551,14 @@ pub fn command_prompt(
     };
     let initial = c.initial.as_deref().map(expand).unwrap_or_default();
     let dialect = crate::compat::prompt_dialect(state, ctx.dialect, c.template.is_some());
-    let template = c.template.unwrap_or_else(|| "%1".to_string());
+    // `-F` (FE.1): the template is a format, expanded now.
+    let template = match c.template {
+        Some(t) if c.expand => expand(&t),
+        Some(t) => t,
+        None => "%1".to_string(),
+    };
+    // ponytail: `-i` (tmux's incremental prompt, only copy-mode search in
+    // the corpus) runs its template on Enter only, until M5's copy mode.
     let read = match (c.key, c.single) {
         (true, _) => Read::Key,
         (false, true) => Read::Single,
@@ -553,6 +567,7 @@ pub fn command_prompt(
     let prompt = Prompt {
         dialect,
         read,
+        numeric: c.numeric,
         ..Prompt::new(label, &initial, template)
     };
     open(state, ctx, id, prompt, !c.background);
@@ -700,8 +715,16 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let waits = !from_binding || hooks::in_hook(state);
     let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
+    let delay = c.delay;
     tokio::spawn(async move {
-        let result = shell(&script, cwd, env, socket, reply.is_some()).await;
+        // `-d` (FE.1): wait first; with no command, only wait.
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        let result = match script.is_empty() && delay.is_some() {
+            true => Ok(String::new()),
+            false => shell(&script, cwd, env, socket, reply.is_some()).await,
+        };
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
@@ -811,6 +834,17 @@ fn exit_result(script: &str, status: ExitStatus) -> Result<(), (String, i32)> {
 mod tests {
     use super::*;
     use crate::server::input::Mods;
+
+    /// `command-prompt -N` (FE.1): only digits reach the text.
+    #[test]
+    fn a_numeric_prompt_takes_only_digits() {
+        let mut p = Prompt {
+            numeric: true,
+            ..Prompt::new(String::new(), "", "%%".to_string())
+        };
+        p.insert("a1b2 3");
+        assert_eq!(p.line(), "123");
+    }
 
     fn key(code: KeyCode) -> Key {
         Key {

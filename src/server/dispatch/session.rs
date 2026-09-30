@@ -6,7 +6,10 @@ use crate::cmd::{
     HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
 };
 use crate::protocol::ClientCtx;
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
+use crate::server::dispatch::options::Owner;
+use crate::server::dispatch::pane::print_pane;
+use crate::server::dispatch::window::{AUTOMATIC_RENAME, default_name};
+use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
 use crate::server::model::{DEFAULT_SIZE, Session, Window};
@@ -68,7 +71,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         id: window,
         session: id,
         index: model.base_index(id),
-        name: default_name(&cwd),
+        name: c.window_name.clone().unwrap_or_else(|| default_name(&cwd)),
         layout: LayoutTree::new(pane),
         active: pane,
         zoomed: false,
@@ -78,8 +81,20 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         last_panes: Vec::new(),
         floating: Vec::new(),
     });
+    // As tmux: a window named by `-n` keeps that name.
+    if c.window_name.is_some() {
+        model
+            .options
+            .set(Owner::Window(window), AUTOMATIC_RENAME, "off", false)?;
+    }
     crate::server::hooks::session_created(state, id);
-    Ok(String::new())
+    // tmux 3.7b's default `-P` format for a session (recorded: `n2:`).
+    Ok(if c.print {
+        let format = c.format.as_deref().unwrap_or("#{session_name}:");
+        print_pane(&state.model, pane, Some(format))
+    } else {
+        String::new()
+    })
 }
 
 pub fn kill_session(state: &mut State, ctx: &ClientCtx, c: KillSession) -> Result<String, String> {

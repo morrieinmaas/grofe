@@ -118,6 +118,20 @@ fn errors_match_their_golden() {
     check_golden("errors");
 }
 
+/// `tmux attach -t =name` reads its target the tmux way (exact, and a
+/// bare `=` the mouse target).
+#[test]
+fn attach_matches_its_golden() {
+    check_golden("attach");
+}
+
+/// Native flags the corpus sends (`new-session -n -P -F`, `split-window -l
+/// N%`, `display -c`, `run-shell -d`) and flags tmux lacks.
+#[test]
+fn flags_match_their_golden() {
+    check_golden("flags");
+}
+
 /// `-f` with a missing file or `/dev/null`, and `start-server` running the
 /// rest of its chain.
 #[test]
@@ -159,7 +173,7 @@ fn tmux_f_is_the_only_config_of_the_server_it_starts() {
 }
 
 /// Case 1: `-V` is decided by `argv[0]`, with no server: the `tmux` name
-/// prints tmux's compat level.
+/// prints tmux's compat level, `grofe` grofe's own version.
 #[test]
 fn tmux_v_prints_the_compat_level_without_a_server() {
     let dir = tempfile::tempdir().unwrap();
@@ -173,9 +187,11 @@ fn tmux_v_prints_the_compat_level_without_a_server() {
         .envs(cli.env.iter().map(|(k, v)| (k, v)))
         .output()
         .unwrap();
-    // grofe's own `-V` is main.rs's (see the FE.1 report); whatever it
-    // prints, it is never tmux's.
-    assert!(!String::from_utf8_lossy(&grofe.stdout).contains("tmux"));
+    assert!(grofe.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&grofe.stdout),
+        format!("grofe {}\n", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 /// Case 2: `tmux a` reaches the attach path as `attach-session`.
@@ -244,31 +260,9 @@ const FE1_VERBS: &[&str] = &[
 /// owns the missing piece. Every other one must translate.
 const PENDING: &[(&str, &str)] = &[
     (
-        "display-message -c -p",
-        "FE.2: display-message -c (a client)",
-    ),
-    (
         "list-clients -F -t",
         "FE.2: list-clients -t, left unparsed by TC.2",
     ),
-    ("new-session -c -d -F -P", "FE.2: new-session -P -F"),
-    ("new-session -c -d -F -P -s", "FE.2: new-session -P -F"),
-    ("new-session -c -d -n -P -s", "FE.2: new-session -P -n"),
-    ("new-session -c -d -n -s", "FE.2: new-session -n"),
-    ("new-session -d -F -P", "FE.2: new-session -P -F"),
-    ("new-session -d -F -P -s", "FE.2: new-session -P -F"),
-    (
-        "split-window -b -c -l -v",
-        "FE.2: split-window -l N% (invalid size natively)",
-    ),
-    (
-        "split-window -b -l -v",
-        "FE.2: split-window -l N% (invalid size natively)",
-    ),
-    ("run-shell -d", "FE.4: run-shell -d (a delay)"),
-    ("command-prompt -I -N -p", "FE.4: command-prompt -N"),
-    ("command-prompt -i -I -p -T", "FE.4: command-prompt -i"),
-    ("command-prompt -F -I", "FE.4: command-prompt -F"),
     (
         "send-keys -N",
         "M5: a repeat count in copy-mode tables (M36-R8)",
@@ -530,8 +524,8 @@ fn every_coverage_form_is_classified() {
             form_argv(form).map(|argv| tmux::dispatch_command(&argv, &ctx()).map(|_| ()))
         });
         let standing = match result {
-            _ if spec_row.starts_with("oos:") => Standing::Unsupported,
             Some(Ok(_)) => Standing::Mapped,
+            _ if spec_row.starts_with("oos:") => Standing::Unsupported,
             Some(Err(e)) if unsupported(&e) => Standing::Unsupported,
             _ => Standing::Pending,
         };

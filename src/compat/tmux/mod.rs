@@ -149,23 +149,59 @@ impl Row {
             .collect()
     }
 
+    /// The positionals the form pins, in order: its words after the verb
+    /// that are not flags (`list-commands new-pane`).
+    pub fn form_positionals(&self) -> Vec<&'static str> {
+        self.tmux_form
+            .split(' ')
+            .skip(1)
+            .filter(|w| !w.starts_with('-') && !self.verb().is_empty())
+            .collect()
+    }
+
+    /// How much of a command the form pins: its flags and positionals.
+    pub fn specificity(&self) -> usize {
+        self.form_flags().len() + self.form_positionals().len()
+    }
+
     /// Whether the command `inv` is this row's form: the same verb, with
-    /// every flag the form names (and the value it names, if any).
+    /// every flag the form names (and the value it names, if any), and
+    /// each pinned positional in its place.
     fn matches(&self, inv: &Invocation<'_>) -> bool {
         if self.verb() != inv.verb {
             return false;
         }
         let got = inv.getopt();
-        self.form_flags().iter().all(|(flag, value)| match value {
+        let flags = self.form_flags().iter().all(|(flag, value)| match value {
             None => got.has(*flag),
             Some(v) => got.flags.iter().any(|(f, x)| f == flag && *x == Some(*v)),
-        })
+        });
+        let positionals = inv.positionals();
+        flags
+            && self
+                .form_positionals()
+                .iter()
+                .enumerate()
+                .all(|(i, p)| positionals.get(i).is_some_and(|a| a == p))
     }
 }
 
+/// The row that decides for `inv`: of the rows it matches, the most
+/// specific one ([`Row::specificity`]), so `new-session -t`'s refusal wins
+/// over a flagless `new-session` row wherever each is registered. Between
+/// rows as specific, the first in `rows` ([`table`]'s order: the area files
+/// before the core rows).
+fn select<'r>(rows: &'r [Row], inv: &Invocation<'_>) -> Option<&'r Row> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.matches(inv))
+        .max_by_key(|(i, row)| (row.specificity(), std::cmp::Reverse(*i)))
+        .map(|(_, row)| row)
+}
+
 /// Every row: the three area files' (FE.2, FE.3, FE.4), then this file's
-/// own. The first row a command matches decides, so an area row can take
-/// over a core one.
+/// own. [`select`] picks the most specific match, the earlier row between
+/// equals, so an area row can take over a core form by naming it.
 pub fn table() -> &'static [Row] {
     static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -175,6 +211,76 @@ pub fn table() -> &'static [Row] {
         rows.extend(core_rows());
         rows
     })
+}
+
+// ---- Argument rewrites -------------------------------------------------
+
+/// Which argument of a command a [`Rewrite`] applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arg {
+    /// The value of this flag (`-F`).
+    Flag(char),
+    /// The positional at this index (`set`'s value is 1).
+    Positional(usize),
+    /// Every positional.
+    Positionals,
+}
+
+/// A rewrite of one argument, applied before any row sees the command
+/// (FE.3: tmux formats rewritten into grofe's in `display`, `list-* -F`
+/// and `set` values). Rows then match and translate the rewritten
+/// command, so a rewrite applies in front of FE.2's rows and the core
+/// ones alike. Rewrites of the same argument apply in [`rewrites`]' order.
+#[derive(Debug, Clone, Copy)]
+pub struct Rewrite {
+    /// The verb's full tmux name.
+    pub verb: &'static str,
+    pub arg: Arg,
+    pub rewrite: fn(&str) -> Result<String, TmuxError>,
+}
+
+/// Every rewrite: the three area files', in the same order as [`table`].
+pub fn rewrites() -> &'static [Rewrite] {
+    static REWRITES: OnceLock<Vec<Rewrite>> = OnceLock::new();
+    REWRITES.get_or_init(|| {
+        let mut all = structure::rewrites();
+        all.extend(formats::rewrites());
+        all.extend(bindings::rewrites());
+        all
+    })
+}
+
+/// `inv`'s arguments with `rewrites` applied, rebuilt as separate flag and
+/// value words, or `None` when none applies to its verb.
+fn rewritten(inv: &Invocation<'_>, rewrites: &[Rewrite]) -> Result<Option<Vec<String>>, TmuxError> {
+    let mine: Vec<&Rewrite> = rewrites.iter().filter(|r| r.verb == inv.verb).collect();
+    if mine.is_empty() {
+        return Ok(None);
+    }
+    let apply = |arg: Arg, value: &str| -> Result<String, TmuxError> {
+        let mut value = value.to_string();
+        for r in mine.iter().filter(|r| r.arg == arg) {
+            value = (r.rewrite)(&value)?;
+        }
+        Ok(value)
+    };
+    let got = inv.getopt();
+    let mut out = Vec::new();
+    for (flag, value) in &got.flags {
+        out.push(format!("-{flag}"));
+        if let Some(v) = value {
+            out.push(apply(Arg::Flag(*flag), v)?);
+        }
+    }
+    let rest = got.rest.min(inv.args.len());
+    if rest > 0 && inv.args[rest - 1] == "--" {
+        out.push("--".to_string());
+    }
+    for (i, word) in inv.args[rest..].iter().enumerate() {
+        let word = apply(Arg::Positional(i), word)?;
+        out.push(apply(Arg::Positionals, &word)?);
+    }
+    Ok(Some(out))
 }
 
 // ---- tmux's command table ----------------------------------------------
@@ -198,6 +304,17 @@ pub struct Spec {
 impl Spec {
     fn takes_value(&self, flag: char) -> bool {
         self.value_flags.contains(flag)
+    }
+
+    /// Whether tmux takes `flag` for this command: its usage lists it, or
+    /// it is one of the hidden ones.
+    fn lists(&self, flag: char) -> bool {
+        self.takes_value(flag)
+            || self.usage.split("[-").skip(1).any(|part| {
+                part.split([']', ' '])
+                    .next()
+                    .is_some_and(|l| l.contains(flag))
+            })
     }
 
     /// How many positionals the usage requires: its words outside any
@@ -494,18 +611,65 @@ pub fn form_of(argv: &[String]) -> Option<String> {
     Some(out)
 }
 
+/// A command as `compat-miss.log` records it: the verb's full name and
+/// the flag letters given, never a value or a positional, so nothing a
+/// command carries is logged. An unknown verb keeps its name only if it
+/// looks like one (`[a-z-]`, at most 32 bytes), and each leading flag
+/// word only its first letter, since its value flags are unknown.
+pub fn miss_form(argv: &[String]) -> String {
+    let Some((name, args)) = argv.split_first() else {
+        return String::new();
+    };
+    let mut out = String::new();
+    match resolve(name) {
+        Ok(spec) => {
+            out.push_str(spec.name);
+            let ctx = ClientCtx {
+                cwd: PathBuf::from("/"),
+                pane: None,
+                env: Vec::new(),
+                client: None,
+                dialect: Dialect::Tmux,
+            };
+            let inv = Invocation {
+                verb: spec.name,
+                args,
+                ctx: &ctx,
+                spec,
+            };
+            for (flag, _) in inv.getopt().flags {
+                out.push_str(&format!(" -{flag}"));
+            }
+        }
+        Err(_) => {
+            let word =
+                name.len() <= 32 && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
+            out.push_str(if word && !name.is_empty() { name } else { "?" });
+            for arg in args {
+                let Some(flag) = arg.strip_prefix('-').and_then(|f| f.chars().next()) else {
+                    break;
+                };
+                if !flag.is_ascii_alphanumeric() {
+                    break;
+                }
+                out.push_str(&format!(" -{flag}"));
+            }
+        }
+    }
+    out
+}
+
 /// Translates one tmux-dialect request (`argv[0]` is the verb) into the
 /// native commands it means, or tmux's error. The request is split into
 /// commands at `;` arguments as tmux's CLI splits them (T3.5's
 /// `cmd::parse::split_argv`), and the whole of it is translated before
 /// anything runs, as tmux parses a whole chain first.
 pub fn dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxError> {
+    // A request of nothing but `;` is no command, which tmux runs as such
+    // (recorded: `tmux \;` exits 0).
     let mut out = Vec::new();
     for words in cmd::parse::split_argv(argv) {
         out.extend(dispatch_command(&words, ctx)?);
-    }
-    if out.is_empty() && argv.iter().all(|a| a == ";") {
-        return Err(ParseError::EmptyCommand.into());
     }
     Ok(out)
 }
@@ -513,6 +677,18 @@ pub fn dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxEr
 /// Translates one command whose argv is already split (a stored command
 /// string, a binding, prompt text): a `;` argument in it is literal.
 pub fn dispatch_command(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxError> {
+    translate_with(argv, ctx, table(), rewrites())
+}
+
+/// [`dispatch_command`] over the given rows and rewrites: the verb
+/// resolves, its flags are checked against tmux's usage, the rewrites
+/// apply, then the most specific matching row decides.
+fn translate_with(
+    argv: &[String],
+    ctx: &ClientCtx,
+    rows: &[Row],
+    rewrites: &[Rewrite],
+) -> Result<Vec<Command>, TmuxError> {
     let (name, args) = argv.split_first().ok_or(ParseError::EmptyCommand)?;
     let spec = resolve(name)?;
     let inv = Invocation {
@@ -521,11 +697,11 @@ pub fn dispatch_command(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>
         ctx,
         spec,
     };
-    match table()
-        .iter()
-        .find(|row| row.matches(&inv))
-        .map(|r| r.target)
-    {
+    check_flags(&inv)?;
+    let owned = rewritten(&inv, rewrites)?;
+    let args = owned.as_deref().unwrap_or(args);
+    let inv = Invocation { args, ..inv };
+    match select(rows, &inv).map(|r| r.target) {
         Some(GrofeTarget::Native(verb)) => inv.native(verb, args),
         Some(GrofeTarget::Translate(translate)) => translate(&inv),
         Some(GrofeTarget::Unsupported(reason)) => Err(TmuxError(format!(
@@ -536,6 +712,25 @@ pub fn dispatch_command(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>
             Err(TmuxError(format!("not implemented: {}", spec.name)))
         }
     }
+}
+
+/// tmux's own flag errors, before any row: a flag its usage does not list
+/// (hidden flags it still takes, [`HIDDEN_VALUE_FLAGS`], count as listed)
+/// is `unknown flag`, a value flag with no value `expects an argument`.
+fn check_flags(inv: &Invocation<'_>) -> Result<(), TmuxError> {
+    let spec = inv.spec;
+    for (flag, value) in inv.getopt().flags {
+        if flag == '-' {
+            return Err(ParseError::UnknownLongFlag(spec.name.to_string()).into());
+        }
+        if !spec.lists(flag) {
+            return Err(ParseError::UnknownFlag(spec.name.to_string(), flag).into());
+        }
+        if spec.takes_value(flag) && value.is_none() {
+            return Err(ParseError::MissingValue(spec.name.to_string(), flag).into());
+        }
+    }
+    Ok(())
 }
 
 // ---- Options by tmux name ------------------------------------------------
@@ -668,22 +863,61 @@ fn option_args(inv: &Invocation<'_>, window: bool) -> Vec<String> {
     args
 }
 
+/// A named user option's own tmux scope: tmux keeps server (`-s`), global
+/// session (`-g`) and global window (`-gw`) user options apart (recorded:
+/// `set -s @s 1` then `show -g @s` is `invalid option: @s`). grofe's
+/// global scope is the global session one; the other two are their own.
+fn user_scope(inv: &Invocation<'_>, window: bool) -> Option<cmd::OptionScope> {
+    let got = inv.getopt();
+    let name = inv.args.get(got.rest)?;
+    if !name.starts_with('@') {
+        return None;
+    }
+    if got.has('s') {
+        Some(cmd::OptionScope::Server)
+    } else if got.has('g') && (window || got.has('w')) {
+        Some(cmd::OptionScope::GlobalWindow)
+    } else {
+        None
+    }
+}
+
+/// The native option command for a tmux `set`/`show`, a user option kept
+/// in its own tmux scope.
+fn option_command(
+    inv: &Invocation<'_>,
+    verb: &str,
+    window: bool,
+) -> Result<Vec<Command>, TmuxError> {
+    let mut out = inv.native(verb, &option_args(inv, window))?;
+    if let Some(scope) = user_scope(inv, window) {
+        for c in &mut out {
+            match c {
+                Command::SetOption(c) => c.scope = Some(scope),
+                Command::ShowOptions(c) => c.scope = Some(scope),
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn set_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native("set-option", &option_args(inv, false))
+    option_command(inv, "set-option", false)
 }
 
 fn show_options(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native("show-options", &option_args(inv, false))
+    option_command(inv, "show-options", false)
 }
 
 /// `set-window-option` (`setw`): `set-option -w` (M36-R10).
 fn set_window_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native("set-option", &option_args(inv, true))
+    option_command(inv, "set-option", true)
 }
 
 /// `show-window-options` (`showw`): `show-options -w` (M36-R10).
 fn show_window_options(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native("show-options", &option_args(inv, true))
+    option_command(inv, "show-options", true)
 }
 
 // ---- Front-end-only verbs ------------------------------------------------
@@ -707,7 +941,12 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         return Err(ParseError::TooManyArguments("list-commands".to_string(), 1).into());
     }
     let specs: Vec<&Spec> = match names.first() {
-        Some(name) => vec![resolve(name)?],
+        // Hidden commands are not listed (recorded: `list-commands info`
+        // is `unknown command: info`).
+        Some(name) => match resolve(name)? {
+            spec if spec.hidden => return Err(TmuxError(format!("unknown command: {name}"))),
+            spec => vec![spec],
+        },
         None => specs().iter().filter(|s| !s.hidden).collect(),
     };
     let lines: Vec<String> = specs
@@ -724,6 +963,7 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         print: true,
         target: Target::Current,
         text: Some(lines.join("\n")),
+        client: None,
     })])
 }
 
@@ -1166,6 +1406,13 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                     } else {
                         attached.to_string()
                     };
+                    // A socket name is a file name in grofe's own socket
+                    // directory: a path separator could leave it.
+                    if flag == 'L' && value.contains('/') {
+                        return Err(format!(
+                            "grofe: refusing -L {value}: a socket name has no path separator"
+                        ));
+                    }
                     match flag {
                         'L' => out.name = Some(value),
                         'S' => out.socket = Some(PathBuf::from(value)),
@@ -1494,6 +1741,123 @@ mod tests {
             one(&["select-pane", "-t", "%1", "-P"]).unwrap_err().0,
             "command select-pane: -P expects an argument"
         );
+    }
+
+    /// The most specific row decides, wherever it is registered: a
+    /// flagless `new-session` row ahead of the core rows (as an area row
+    /// would be) does not swallow the refusal of `new-session -t`.
+    #[test]
+    fn the_most_specific_row_decides() {
+        let mut rows = vec![pass("new-session", "M1")];
+        rows.extend(core_rows());
+        let got = translate_with(&args(&["new-session", "-t", "x"]), &ctx(), &rows, &[]);
+        assert!(got.unwrap_err().0.contains("not supported"));
+        assert!(translate_with(&args(&["new-session", "-d"]), &ctx(), &rows, &[]).is_ok());
+        // Between rows as specific, the earlier one.
+        let rows = vec![
+            unsupported("new-session", "first", &[]),
+            pass("new-session", "M1"),
+        ];
+        let err = translate_with(&args(&["new-session"]), &ctx(), &rows, &[]).unwrap_err();
+        assert_eq!(err.0, "new-session: not supported (first)");
+        // A pinned positional counts as much as a flag.
+        let rows = vec![
+            pass("list-commands", "M3.6"),
+            unsupported("list-commands new-pane", "pinned", &[]),
+        ];
+        let err = translate_with(&args(&["lscm", "new-pane"]), &ctx(), &rows, &[]);
+        assert!(err.unwrap_err().0.contains("pinned"));
+    }
+
+    /// A registered rewrite applies before any row matches, so a row
+    /// that pins the rewritten value sees it.
+    #[test]
+    fn rewrites_apply_before_the_rows() {
+        fn short_forms(v: &str) -> Result<String, TmuxError> {
+            Ok(v.replace("#S", "#{session_name}"))
+        }
+        let registered = [
+            Rewrite {
+                verb: "display-message",
+                arg: Arg::Positional(0),
+                rewrite: short_forms,
+            },
+            Rewrite {
+                verb: "list-sessions",
+                arg: Arg::Flag('F'),
+                rewrite: short_forms,
+            },
+        ];
+        let mut rows = vec![unsupported(
+            "list-sessions -F[#{session_name}]",
+            "pinned after the rewrite",
+            SEMANTIC,
+        )];
+        rows.extend(core_rows());
+        let got =
+            translate_with(&args(&["display", "-p", "#S!"]), &ctx(), &rows, &registered).unwrap();
+        let [Command::DisplayMessage(d)] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert_eq!(d.text.as_deref(), Some("#{session_name}!"));
+        let err = translate_with(&args(&["ls", "-F#S"]), &ctx(), &rows, &registered).unwrap_err();
+        assert!(err.0.contains("pinned after the rewrite"), "{err}");
+        // With no rewrite for its verb, a command is left as sent.
+        let got = translate_with(&args(&["lsw", "-F", "#S"]), &ctx(), &rows, &registered).unwrap();
+        let [Command::ListWindows(w)] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert_eq!(w.format.as_deref(), Some("#S"));
+        assert!(rewrites().is_empty(), "FE.3 registers the first");
+    }
+
+    /// Recorded on tmux 3.7b: flags are checked against tmux's usage.
+    #[test]
+    fn flags_tmux_lacks_are_refused_as_tmux_refuses_them() {
+        assert_eq!(
+            one(&["showw", "-p"]).unwrap_err().0,
+            "command show-window-options: unknown flag -p"
+        );
+        assert_eq!(
+            one(&["start-server", "-x"]).unwrap_err().0,
+            "command start-server: unknown flag -x"
+        );
+        assert_eq!(
+            one(&["kill-session", "-t"]).unwrap_err().0,
+            "command kill-session: -t expects an argument"
+        );
+        assert_eq!(
+            one(&["lscm", "info"]).unwrap_err().0,
+            "unknown command: info"
+        );
+        assert_eq!(dispatch(&args(&[";"]), &ctx()), Ok(Vec::new()));
+    }
+
+    /// tmux keeps server, global session and global window user options
+    /// apart; builtins stay in grofe's one global scope.
+    #[test]
+    fn user_options_keep_their_tmux_scope() {
+        let scope = |words: &[&str]| match one(words).unwrap() {
+            Command::SetOption(c) => c.scope,
+            Command::ShowOptions(c) => c.scope,
+            other => panic!("{other:?}"),
+        };
+        use cmd::OptionScope::{Global, GlobalWindow, Server};
+        assert_eq!(scope(&["set", "-s", "@s", "1"]), Some(Server));
+        assert_eq!(scope(&["show", "-sv", "@s"]), Some(Server));
+        assert_eq!(scope(&["set", "-gw", "@w", "1"]), Some(GlobalWindow));
+        assert_eq!(scope(&["setw", "-g", "@w", "1"]), Some(GlobalWindow));
+        assert_eq!(scope(&["showw", "-gv", "@w"]), Some(GlobalWindow));
+        assert_eq!(scope(&["set", "-g", "@g", "1"]), Some(Global));
+        assert_eq!(scope(&["set", "-s", "escape-time", "0"]), Some(Global));
+        assert_eq!(scope(&["setw", "-g", "mode-keys", "vi"]), Some(Global));
+    }
+
+    #[test]
+    fn a_socket_name_has_no_path_separator() {
+        let err = cli(&args(&["-L", "a/b", "ls"])).unwrap_err();
+        assert!(err.contains("refusing -L a/b"), "{err}");
+        assert!(cli(&args(&["-L../x", "ls"])).is_err());
     }
 
     #[test]

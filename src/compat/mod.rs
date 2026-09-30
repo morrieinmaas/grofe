@@ -172,36 +172,18 @@ const MISS_MAX: usize = 256;
 // ponytail: no rotation; a full log is reviewed and removed by hand.
 const MISS_LOG_CAP: u64 = 1 << 20;
 
-/// Verbs (and tmux's aliases and prefixes of them) whose arguments may
-/// carry secrets: only the verb and its flags are logged. `set` is
-/// `set-option`'s alias, not a prefix of `set-environment`.
-fn redacted(verb: &str) -> bool {
-    !verb.is_empty()
-        && verb != "set"
-        && (["send-keys", "set-environment"]
-            .iter()
-            .any(|full| full.starts_with(verb))
-            || matches!(verb, "send" | "setenv"))
-}
-
-/// What a miss line says about a request's argv: each `;`-separated
-/// command as it was sent, except that a command that may carry secrets
-/// keeps only its verb and flags. Whether any command was redacted.
-fn miss_summary(argv: &[String]) -> (String, bool) {
-    let mut out = Vec::new();
-    let mut any = false;
-    for command in argv.split(|a| a == ";") {
-        let hide = command.first().is_some_and(|v| redacted(v));
-        any |= hide;
-        let words: Vec<&str> = command
-            .iter()
-            .enumerate()
-            .filter(|(i, w)| !hide || *i == 0 || w.starts_with('-'))
-            .map(|(_, w)| w.as_str())
-            .collect();
-        out.push(words.join(" "));
-    }
-    (out.join(" ; "), any)
+/// What a miss line says about a request's argv (strict, so nothing a
+/// command carries is ever logged): each command's verb and flag letters
+/// only ([`tmux::miss_form`]), never a value, a positional or an error
+/// text that could quote one. A `run-shell` script, a `bind-key` body, an
+/// `if-shell` branch, a `set` value, a `display` message and `send-keys`
+/// keys all stay out.
+fn miss_summary(argv: &[String]) -> String {
+    cmd::parse::split_argv(argv)
+        .iter()
+        .map(|command| tmux::miss_form(command))
+        .collect::<Vec<_>>()
+        .join(" ; ")
 }
 
 /// `s` cut to at most `max` bytes, at a character boundary.
@@ -337,12 +319,7 @@ fn logged(
 ) -> Result<Vec<Command>, String> {
     result.map_err(|e| {
         if let Some(path) = MISS_LOG.get() {
-            // A redacted command's error text may quote its values.
-            let (summary, redacted) = miss_summary(argv);
-            match redacted {
-                true => append_miss(path, &summary),
-                false => append_miss(path, &format!("{summary}: {e}")),
-            }
+            append_miss(path, &miss_summary(argv));
         }
         e.to_string()
     })
@@ -540,32 +517,41 @@ mod tests {
     }
 
     #[test]
-    fn secrets_in_send_keys_and_set_environment_are_not_logged() {
-        let (s, hidden) = miss_summary(&argv(&[
-            "setenv",
-            "-g",
-            "TOKEN",
-            "hunter2",
-            ";",
-            "send",
-            "-t",
-            "%1",
-            "pw",
-            "Enter",
-            ";",
-            "select-pane",
-            "-t",
-            "%1",
-        ]));
-        assert!(hidden);
-        assert_eq!(s, "setenv -g ; send -t ; select-pane -t %1");
-        for verb in ["send-keys", "set-environment", "send-k", "set-e"] {
-            let (s, hidden) = miss_summary(&argv(&[verb, "secret"]));
-            assert!(hidden && !s.contains("secret"), "{verb}: {s}");
+    fn no_argument_value_is_ever_logged() {
+        let secret = "hunter2";
+        let cases: &[(&[&str], &str)] = &[
+            (&["setenv", "-g", "TOKEN", secret], "set-environment -g"),
+            (&["send", "-t", "%1", secret, "Enter"], "send-keys -t"),
+            (&["send-keys", "--", "-X", secret], "send-keys"),
+            (
+                &["run-shell", "-b", &format!("curl -H {secret}")],
+                "run-shell -b",
+            ),
+            (&["run", "-d", "1", secret], "run-shell -d"),
+            (
+                &["bind-key", "-T", "root", "F1", "run-shell", secret],
+                "bind-key -T",
+            ),
+            (
+                &["if-shell", "-F", secret, "set @x 1", secret],
+                "if-shell -F",
+            ),
+            (&["set", "-g", "@token", secret], "set-option -g"),
+            (&["display", "-p", secret], "display-message -p"),
+            (&["new", "-s", secret, "-c", secret], "new-session -s -c"),
+            (&["no-such-verb", "-x", secret], "no-such-verb -x"),
+            (&["no-such-verb", &format!("-p{secret}")], "no-such-verb -p"),
+            (&[&format!("{secret}!"), "x"], "?"),
+        ];
+        for (words, want) in cases {
+            let got = miss_summary(&argv(words));
+            assert_eq!(&got, want, "{words:?}");
+            assert!(!got.contains(secret), "{got}");
         }
-        let (s, hidden) = miss_summary(&argv(&["set", "-g", "@x", "1"]));
-        assert!(!hidden);
-        assert_eq!(s, "set -g @x 1");
+        assert_eq!(
+            miss_summary(&argv(&["set", "-g", "@a", secret, ";", "ls", "-F", secret])),
+            "set-option -g ; list-sessions -F"
+        );
     }
 
     #[test]

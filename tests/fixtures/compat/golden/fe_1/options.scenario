@@ -27,3 +27,18 @@ $ show -sv terminal-features[9]
 $ show -sv terminal-features[0]
 $ set-window-option
 $ show-options -p -t %0 synchronize-panes \; show-window-options -g remain-on-exit
+$ set -s @s 1
+$ show -s @s
+$ show -g @s
+$ show -gqv @s
+$ set -gw @w 1
+$ show -gw @w
+$ show -g @w
+$ set -g @g 1
+$ show -gw @g
+$ show -s @g
+$ display -p '#{@s} #{@w} #{@g}'
+$ set -s terminal-features 'a:RGB,b:RGB'
+$ show -s terminal-features
+$ set -as terminal-features ',c:RGB'
+$ show -s terminal-features

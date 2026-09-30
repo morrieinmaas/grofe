@@ -68,3 +68,45 @@ $ set-window-option
 $ show-options -p -t %0 synchronize-panes \; show-window-options -g remain-on-exit
 remain-on-exit off
 ? 0
+$ set -s @s 1
+? 0
+$ show -s @s
+@s 1
+? 0
+$ show -g @s
+! invalid option: @s
+? 1
+$ show -gqv @s
+? 0
+$ set -gw @w 1
+? 0
+$ show -gw @w
+@w 1
+? 0
+$ show -g @w
+! invalid option: @w
+? 1
+$ set -g @g 1
+? 0
+$ show -gw @g
+! invalid option: @g
+? 1
+$ show -s @g
+! invalid option: @g
+? 1
+$ display -p '#{@s} #{@w} #{@g}'
+1 1 1
+? 0
+$ set -s terminal-features 'a:RGB,b:RGB'
+? 0
+$ show -s terminal-features
+terminal-features[0] a:RGB
+terminal-features[1] b:RGB
+? 0
+$ set -as terminal-features ',c:RGB'
+? 0
+$ show -s terminal-features
+terminal-features[0] a:RGB
+terminal-features[1] b:RGB
+terminal-features[2] c:RGB
+? 0

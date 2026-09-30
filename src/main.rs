@@ -80,6 +80,11 @@ fn main() -> ExitCode {
             Err(e) => return fail(&e),
         }
     } else {
+        // `grofe -V`: grofe's own version, decided by `argv[0]` (spec D12).
+        if args.first().is_some_and(|a| a == "-V") {
+            println!("grofe {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         match parse_globals(&args) {
             Ok((globals, rest)) => (globals, rest.to_vec()),
             Err(e) => {

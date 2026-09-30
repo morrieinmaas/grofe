@@ -321,6 +321,11 @@ pub fn client_name(id: ClientId) -> String {
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
     let target = match &req.target {
+        // A tmux attach reads `-t` the tmux way (`=name` exact, FE.1).
+        Some(raw) if req.ctx.dialect == crate::protocol::Dialect::Tmux => {
+            cmd::target::with_tmux_targets(|| cmd::target::parse_target(raw))
+                .map_err(|e| e.to_string())?
+        }
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
@@ -421,8 +426,10 @@ pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<S
     let argv: Vec<String> = std::iter::once("attach-session".to_string())
         .chain(args.iter().cloned())
         .collect();
-    match cmd::parse(&argv).map_err(|e| e.to_string())? {
-        cmd::Command::AttachSession(c) => {
+    // In the request's dialect, so a tmux `attach -t =name` is exact (FE.1).
+    let parsed = crate::compat::parse_split(ctx, &argv)?;
+    match parsed.into_iter().next() {
+        Some(cmd::Command::AttachSession(c)) => {
             check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
         }
         _ => Err("attach-session: unexpected command".to_string()),

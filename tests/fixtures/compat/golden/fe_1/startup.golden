@@ -7,3 +7,7 @@ $ -f /dev/null new-session -d -s main -x 200 -y 50
 ? 0
 $ has-session -t main
 ? 0
+$ -f missing-fe1.conf new-session -d -s rel -x 200 -y 50
+? 0
+$ has-session -t rel
+? 0

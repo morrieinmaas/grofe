@@ -199,6 +199,9 @@ const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('c', FlagKind::Value),
     ('x', FlagKind::Value),
     ('y', FlagKind::Value),
+    ('n', FlagKind::Value),
+    ('P', FlagKind::Bool),
+    ('F', FlagKind::Value),
 ];
 
 fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
@@ -228,6 +231,9 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         height,
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
         attach: flags.present.contains(&'A'),
+        window_name: flags.values.get(&'n').cloned(),
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
     }))
 }
 
@@ -417,20 +423,32 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         .get(&'p')
         .map(|s| parse_u8(s, "percent"))
         .transpose()?;
-    let cells = flags
-        .values
-        .get(&'l')
-        .map(|s| parse_u16(s, "size"))
-        .transpose()?;
-    let size = match (percent, cells) {
-        (Some(_), Some(_)) => {
+    // tmux's `-l N%` (FE.1): a percent of the target pane, 1 to 100
+    // (recorded: `101%` and `x%` are `size or position invalid tiled
+    // geometry`).
+    let (cells, l_percent) = match flags.values.get(&'l') {
+        Some(s) if s.ends_with('%') => {
+            let p = s[..s.len() - 1]
+                .parse::<u8>()
+                .ok()
+                .filter(|p| (1..=100).contains(p))
+                .ok_or_else(|| {
+                    ParseError::Other("size or position invalid tiled geometry".to_string())
+                })?;
+            (None, Some(p))
+        }
+        Some(s) => (Some(parse_u16(s, "size")?), None),
+        None => (None, None),
+    };
+    let size = match (percent, cells, l_percent) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
             return Err(ParseError::Other(
                 "only one of -p or -l allowed".to_string(),
             ));
         }
-        (Some(p), None) => SplitSize::Percent(p),
-        (None, Some(c)) => SplitSize::Cells(c),
-        (None, None) => SplitSize::Half,
+        (Some(p), None, None) | (None, None, Some(p)) => SplitSize::Percent(p),
+        (None, Some(c), _) => SplitSize::Cells(c),
+        (None, None, None) => SplitSize::Half,
     };
     Ok(Command::SplitWindow(SplitWindow {
         dir,
@@ -776,7 +794,11 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[('p', FlagKind::Bool), ('t', FlagKind::Value)];
+const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
+    ('p', FlagKind::Bool),
+    ('t', FlagKind::Value),
+    ('c', FlagKind::Value),
+];
 
 fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -799,6 +821,7 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         print: flags.present.contains(&'p'),
         target: target_or_current(&flags.values, 't')?,
         text,
+        client: flags.values.get(&'c').cloned(),
     }))
 }
 
@@ -1095,6 +1118,9 @@ const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[
     ('k', FlagKind::Bool),
     ('1', FlagKind::Bool),
     ('T', FlagKind::Value),
+    ('N', FlagKind::Bool),
+    ('i', FlagKind::Bool),
+    ('F', FlagKind::Bool),
 ];
 
 fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
@@ -1115,6 +1141,9 @@ fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
         key: flags.present.contains(&'k'),
         single: flags.present.contains(&'1'),
         prompt_type: flags.values.get(&'T').cloned(),
+        numeric: flags.present.contains(&'N'),
+        incremental: flags.present.contains(&'i'),
+        expand: flags.present.contains(&'F'),
     }))
 }
 
@@ -1122,13 +1151,30 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: &[('b', FlagKind::Bool)],
+            short: &[('b', FlagKind::Bool), ('d', FlagKind::Value)],
             long: &[],
         },
         "run-shell",
     )?;
+    // `-d <seconds>` (FE.1), as tmux 3.7b's `strtod`: a delay with no
+    // command only waits (recorded: `invalid delay time: x`).
+    let delay = match flags.values.get(&'d') {
+        Some(s) => Some(
+            s.parse::<f64>()
+                .ok()
+                .filter(|d| d.is_finite() && *d >= 0.0)
+                .and_then(|d| std::time::Duration::try_from_secs_f64(d).ok())
+                .ok_or_else(|| ParseError::Other(format!("invalid delay time: {s}")))?,
+        ),
+        None => None,
+    };
+    let cmd = match (&delay, flags.positionals.is_empty()) {
+        (Some(_), true) => String::new(),
+        _ => one_positional(&flags, "run-shell")?,
+    };
     Ok(Command::RunShell(RunShell {
-        cmd: one_positional(&flags, "run-shell")?,
+        cmd,
+        delay,
         background: flags.present.contains(&'b'),
     }))
 }
@@ -2155,6 +2201,9 @@ mod tests {
                 height: Some(24),
                 command: Some(vec!["sleep".to_string(), "30".to_string()]),
                 attach: false,
+                window_name: None,
+                print: false,
+                format: None,
             })
         );
     }
@@ -2850,6 +2899,7 @@ mod tests {
                 print: true,
                 target: Target::Current,
                 text: Some("#{pane_uid}".to_string()),
+                client: None,
             })
         );
     }
@@ -3362,6 +3412,9 @@ mod tests {
                 key: false,
                 single: false,
                 prompt_type: None,
+                numeric: false,
+                incremental: false,
+                expand: false,
             }))
         );
         assert_eq!(
@@ -3374,6 +3427,9 @@ mod tests {
                 key: false,
                 single: false,
                 prompt_type: None,
+                numeric: false,
+                incremental: false,
+                expand: false,
             }))
         );
         assert_eq!(
@@ -3381,6 +3437,7 @@ mod tests {
             Ok(Command::RunShell(RunShell {
                 cmd: "echo hi; echo two".to_string(),
                 background: false,
+                delay: None,
             }))
         );
         assert!(parse(&argv(&["run-shell"])).is_err());
