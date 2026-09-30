@@ -84,7 +84,8 @@ fn check_golden(name: &str) {
     let steps = parse_scenario(&fs::read_to_string(&scenario).unwrap()).unwrap();
     let golden = fs::read_to_string(scenario.with_extension("golden")).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let got = replay(&grofe_cli(dir.path()), &steps).normalized(&Normalizer::load());
+    let run = crate::fe_3::exact_pids(replay(&grofe_cli(dir.path()), &steps));
+    let got = run.normalized(&Normalizer::load());
     assert_eq!(got, golden, "fe_1/{name} differs from its golden");
 }
 

@@ -15,7 +15,7 @@
 //! `State.jobs`. A run still going at its timeout has its process group
 //! killed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -287,6 +287,31 @@ pub fn register(
 /// Drops the source registered under `option` (`@batt`, `@src-<hash>`, as
 /// [`register`] returned it; the `@` is optional). Its option keeps its
 /// last value. Whether one was registered.
+/// Drops every `#(cmd)` source (an `@src-<hash>` key, FE.3) that no
+/// option's value reads any more: after a `set` overwrites or unsets the
+/// option, an `-a` changes it, or a reload replaces it. So a source runs
+/// only while the status line can show it.
+pub fn prune_unreferenced(state: &mut State) {
+    let keys: BTreeSet<String> = state
+        .sources
+        .entries
+        .values()
+        .flat_map(|e| e.keys.keys())
+        .filter(|k| k.starts_with("src-"))
+        .cloned()
+        .collect();
+    for key in keys {
+        if !state.model.options.mentions(&format!("#{{@{key}}}")) {
+            unregister(state, &key);
+        }
+    }
+}
+
+/// How many commands have a source now, for tests.
+pub fn running(state: &State) -> usize {
+    state.sources.entries.len()
+}
+
 pub fn unregister(state: &mut State, option: &str) -> bool {
     let key = option.strip_prefix('@').unwrap_or(option);
     let mut found = false;

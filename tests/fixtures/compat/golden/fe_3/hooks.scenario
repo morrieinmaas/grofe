@@ -1,0 +1,57 @@
+# FE.3: the twelve tmux hook names, each set with tmux's set-hook -g and
+# each onto its grofe event. An after-* hook prints with display -p, so
+# the golden shows where its output falls against its command's reply and
+# the next command of the request; a notify hook (session, pane, client)
+# logs #{hook}, and the log shows each fired once, in order.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ split-window -d -t main:1 cat
+$ new-window -d -t main -n second cat
+$ set-hook -g after-select-pane 'display -p "after-select-pane #{window_index}.#{pane_index}"'
+$ set-hook -g after-select-window 'display -p "after-select-window #I"'
+$ set-hook -g after-new-window 'display -p "after-new-window #{window_name}"'
+$ set-hook -g after-kill-pane 'display -p "#{hook}"'
+$ set-hook -g after-resize-pane 'display -p "after-resize-pane"'
+$ set-hook -g after-resize-window 'display -p "after-resize-window"'
+$ set-hook -g session-created 'run-shell "echo #{hook} #{hook_session_name} >> $HOME/hooks.log"'
+$ set-hook -g session-closed 'run-shell "echo #{hook} #{hook_session_name} >> $HOME/hooks.log"'
+$ set-hook -g pane-exited 'run-shell "echo #{hook} >> $HOME/hooks.log"'
+$ set-hook -g pane-died 'run-shell "echo #{hook} >> $HOME/hooks.log"'
+$ set-hook -g client-session-changed 'run-shell "echo #{hook} >> $HOME/hooks.log"'
+$ set-hook -g client-resized 'run-shell "echo #{hook} >> $HOME/hooks.log"'
+$ show-hooks -g after-select-pane
+$ show-hooks -g pane-exited
+$ show-hooks -g
+$ show-hooks -gw
+$ show-hooks -gw after-select-pane
+$ show-hooks -g after-nope
+$ select-pane -t main:1.2
+$ select-pane -t main:1.2
+$ select-window -t main:2 \; display -p next
+$ select-window -t main:2
+$ new-window -d -t main -n third -P -F 'reply #{window_index}' cat
+$ kill-pane -t main:1.2
+$ split-window -d -t main:1 cat
+$ resize-pane -t main:1.1 -x 30
+$ resize-pane -Z -t main:1.1
+$ resize-window -t main:1 -x 70
+$ new-session -d -s other cat
+$ kill-session -t other
+$ new-window -d -t main -n brief true
+$ set -g remain-on-exit on
+$ new-window -d -t main -n dies true
+$ run-shell 'sleep 1'
+$ set -g remain-on-exit off
+$ set -g status off
+client 80x24 attach -t main
+screen
+$ switch-client -t main
+$ run-shell 'sleep 1'
+$ run-shell 'cat $HOME/hooks.log'
+$ set-hook -gu after-select-window
+$ select-window -t main:1
+$ set-hook -g nope 'display x'
+$ set-hook -g alert-bell 'display x'
+$ set-hook after-select-pane 'display x'
+$ set-hook -g after-select-window 'display -p "a\tb\sc" ; display -p x\ty'
+$ select-window -t main:2
+$ show-hooks -g after-select-window

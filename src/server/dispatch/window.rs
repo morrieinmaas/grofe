@@ -152,12 +152,23 @@ pub fn automatic_rename(model: &mut Model) -> bool {
 
 /// `rename-window`: the name sticks, since it turns `automatic-rename`
 /// off for the window, as tmux does.
+///
+/// In the tmux dialect the name is a format, expanded against the window's
+/// active pane, as tmux 3.7b expands it (recorded: `rename-window 'a#Sb'`
+/// names the window `amainb`).
 pub fn rename_window(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<String, String> {
+    let window = state.model.resolve_window(&c.target, ctx)?;
+    let name = match state.model.windows.get(&window) {
+        Some(w) if ctx.dialect == crate::protocol::Dialect::Tmux => {
+            let vars = FormatCtx::new(&state.model, w.active);
+            crate::cmd::expand(&c.name, &options::ServerVars::new(state, w.active, &vars))
+        }
+        _ => c.name,
+    };
     let model = &mut state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
     stop_automatic_rename(model, window)?;
     if let Some(w) = model.windows.get_mut(&window) {
-        w.name = c.name;
+        w.name = name;
     }
     Ok(String::new())
 }

@@ -1,0 +1,435 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set -g status 2
+? 0
+$ show -g status
+status 2
+? 0
+$ set -g status-format[1] ''
+? 0
+$ show -g status-format[1]
+status-format[1] ''
+? 0
+$ show -gv status-format[1]
+
+? 0
+$ set -g status-left '#[fg=red]x y'
+? 0
+$ show -g status-left
+status-left "#[fg=red]x y"
+? 0
+$ show -gv status-left
+#[fg=red]x y
+? 0
+$ set -g status-right 'R'
+? 0
+$ set -ga status-right ' tail'
+? 0
+$ show -gv status-right
+R tail
+? 0
+$ set -g @q "it's"
+? 0
+$ show -g @q
+@q "it's"
+? 0
+$ set -g @d 'say "hi"'
+? 0
+$ show -g @d
+@d "say \"hi\""
+? 0
+$ set -g @e ''
+? 0
+$ show -g @e
+@e ''
+? 0
+$ set -g @sp 'a b'
+? 0
+$ show -g @sp
+@sp "a b"
+? 0
+$ set -g @plain word
+? 0
+$ show -g @plain
+@plain word
+? 0
+$ show -gqv @nope
+? 0
+$ show -gv @nope
+! invalid option: @nope
+? 1
+$ set -s command-alias[200] 'wk=display -p wk'
+? 0
+$ show -s command-alias[200]
+command-alias[200] "wk=display -p wk"
+? 0
+$ set -as command-alias 'zz=display -p zz'
+? 0
+$ show -sv command-alias[201]
+
+? 0
+$ wk
+wk
+? 0
+$ zz
+zz
+? 0
+$ set -g window-status-format '#I:#W'
+? 0
+$ show -g window-status-format
+window-status-format "#I:#W"
+? 0
+$ set -g status-right '#(echo job)'
+? 0
+$ show -g -v status-right
+#(echo job)
+? 0
+$ set -g set-titles-string '#S:#W'
+? 0
+$ show -g set-titles-string
+set-titles-string "#S:#W"
+? 0
+$ set -gu status-right
+? 0
+$ show -g status-right
+status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+? 0
+$ show -g window-status-current-format
+window-status-current-format "#I:#W#{?window_flags,#{window_flags}, }"
+? 0
+$ show -g
+@d "say \"hi\""
+@e ''
+@plain word
+@q "it's"
+@sp "a b"
+activity-action other
+assume-paste-time 1
+base-index 1
+bell-action any
+default-command ''
+default-shell /bin/sh
+default-size 80x24
+destroy-unattached off
+detach-on-destroy on
+display-panes-active-colour red
+display-panes-colour blue
+display-panes-time 1000
+display-time 750
+focus-follows-mouse off
+history-limit 50000
+initial-repeat-time 0
+key-table root
+lock-after-time 0
+lock-command "lock -np"
+message-command-style bg=black,fg=yellow,fill=black
+message-format "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}"
+message-line 0
+message-style bg=yellow,fg=black,fill=yellow
+mouse on
+prefix C-b
+prefix2 None
+renumber-windows on
+repeat-time 500
+set-titles off
+set-titles-string "#S:#W"
+silence-action other
+status 2
+status-bg default
+status-fg default
+status-format[0] "#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?loop_last_flag,,#{E:window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?loop_last_flag,,#{E:window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]"
+status-format[1] ''
+status-format[2] "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
+status-interval 15
+status-justify left
+status-keys emacs
+status-left "#[fg=red]x y"
+status-left-length 10
+status-left-style default
+status-position bottom
+status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+status-right-length 40
+status-right-style default
+status-style bg=green,fg=black
+prompt-cursor-colour none
+prompt-cursor-style default
+prompt-command-cursor-style default
+update-environment[0] DISPLAY
+update-environment[1] KRB5CCNAME
+update-environment[2] MSYSTEM
+update-environment[3] SSH_ASKPASS
+update-environment[4] SSH_AUTH_SOCK
+update-environment[5] SSH_AGENT_PID
+update-environment[6] SSH_CONNECTION
+update-environment[7] WAYLAND_DISPLAY
+update-environment[8] WINDOWID
+update-environment[9] XAUTHORITY
+update-environment[10] XDG_CURRENT_DESKTOP
+update-environment[11] XDG_SESSION_DESKTOP
+update-environment[12] XDG_SESSION_TYPE
+visual-activity off
+visual-bell off
+visual-silence off
+word-separators "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+? 0
+$ set -g mouse yes
+? 0
+$ show -g mouse
+mouse on
+? 0
+$ set -g history-limit 0100
+? 0
+$ show -g history-limit
+history-limit 100
+? 0
+$ set -g status-format[3] 'row #I'
+? 0
+$ show -g status-format[3]
+status-format[3] "row #I"
+? 0
+$ set -ag status-format[3] ' more'
+? 0
+$ show -gv status-format[3]
+row #I more
+? 0
+$ set -g status-format[4] 'plain'
+? 0
+$ set -ag status-format[4] ' tail'
+? 0
+$ show -g status-format[4]
+status-format[4] "plain tail"
+? 0
+$ set -g update-environment[20] FE3_VAR
+? 0
+$ show -g update-environment[20]
+update-environment[20] FE3_VAR
+? 0
+$ show -gw
+cursor-colour none
+cursor-style default
+menu-style default
+menu-selected-style bg=yellow,fg=black
+menu-border-style default
+menu-border-lines single
+pane-status-current-style default
+pane-status-style default
+session-status-current-style default
+session-status-style default
+aggressive-resize off
+allow-passthrough off
+allow-rename off
+allow-set-title on
+alternate-screen on
+automatic-rename on
+automatic-rename-format "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}"
+clock-mode-colour blue
+clock-mode-style 24
+copy-mode-match-style bg=cyan,fg=black
+copy-mode-current-match-style bg=magenta,fg=black
+copy-mode-mark-style bg=red,fg=black
+copy-mode-position-format "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}"
+copy-mode-position-style "#{E:mode-style}"
+copy-mode-selection-style "#{E:mode-style}"
+copy-mode-current-line-number-style fg=yellow
+copy-mode-line-number-style fg=white,dim
+copy-mode-line-numbers off
+fill-character ''
+main-pane-height 24
+main-pane-width 80
+mode-keys vi
+mode-style noattr,bg=yellow,fg=black
+monitor-activity off
+monitor-bell on
+monitor-silence 0
+other-pane-height 0
+other-pane-width 0
+pane-active-border-style "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}"
+pane-base-index 1
+pane-border-format "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"#{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]#[norange]#[range=control|9][x]#[norange],}"
+pane-border-indicators colour
+pane-border-lines single
+pane-border-status off
+pane-border-style default
+pane-colours
+pane-scrollbars off
+pane-scrollbars-style bg=black,fg=white,width=1,pad=0
+pane-scrollbars-position right
+popup-style default
+popup-border-style default
+popup-border-lines single
+remain-on-exit off
+remain-on-exit-format "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})"
+scroll-on-clear on
+synchronize-panes off
+tiled-layout-max-columns 0
+tree-mode-preview-format "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}"
+tree-mode-preview-style "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}"
+window-active-style default
+window-pane-current-status-format "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+window-pane-status-format "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+window-size latest
+window-style default
+window-status-activity-style reverse
+window-status-bell-style reverse
+window-status-current-format "#I:#W#{?window_flags,#{window_flags}, }"
+window-status-current-style default
+window-status-format "#I:#W"
+window-status-last-style default
+window-status-separator " "
+window-status-style default
+wrap-search on
+xterm-keys on
+? 0
+$ show -gwv
+none
+default
+default
+bg=yellow,fg=black
+default
+single
+default
+default
+default
+default
+off
+off
+off
+on
+on
+on
+#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}
+blue
+24
+bg=cyan,fg=black
+bg=magenta,fg=black
+bg=red,fg=black
+#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}
+#{E:mode-style}
+#{E:mode-style}
+fg=yellow
+fg=white,dim
+off
+
+24
+80
+vi
+noattr,bg=yellow,fg=black
+off
+on
+0
+0
+0
+#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}
+1
+#{?pane_active,#[reverse],}#{pane_index}#[default] "#{pane_title}"#{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]#[norange]#[range=control|9][x]#[norange],}
+colour
+single
+off
+default
+off
+bg=black,fg=white,width=1,pad=0
+right
+default
+default
+single
+off
+Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})
+on
+off
+0
+#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}
+fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}
+default
+#P:[#T]#{?pane_flags,#{pane_flags}, }
+#P:[#T]#{?pane_flags,#{pane_flags}, }
+latest
+default
+reverse
+reverse
+#I:#W#{?window_flags,#{window_flags}, }
+default
+#I:#W
+default
+ 
+default
+on
+on
+? 0
+$ show -gv
+say "hi"
+
+word
+it's
+a b
+other
+1
+1
+any
+
+/bin/sh
+80x24
+off
+on
+red
+blue
+1000
+750
+off
+100
+0
+root
+0
+lock -np
+bg=black,fg=yellow,fill=black
+#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}
+0
+bg=yellow,fg=black,fill=yellow
+on
+C-b
+None
+on
+500
+off
+#S:#W
+other
+2
+default
+default
+#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?loop_last_flag,,#{E:window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?loop_last_flag,,#{E:window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]
+
+#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }
+row #I more
+plain tail
+15
+left
+emacs
+#[fg=red]x y
+10
+default
+bottom
+#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}"#{=21:pane_title}" %H:%M %d-%b-%y
+40
+default
+bg=green,fg=black
+none
+default
+default
+DISPLAY
+KRB5CCNAME
+MSYSTEM
+SSH_ASKPASS
+SSH_AUTH_SOCK
+SSH_AGENT_PID
+SSH_CONNECTION
+WAYLAND_DISPLAY
+WINDOWID
+XAUTHORITY
+XDG_CURRENT_DESKTOP
+XDG_SESSION_DESKTOP
+XDG_SESSION_TYPE
+FE3_VAR
+off
+off
+off
+!"#$%&'()*+,-./:;<=>?@[\]^`{|}~
+? 0

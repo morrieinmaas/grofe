@@ -169,15 +169,30 @@ fn check_name(model: &Model, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// In the tmux dialect the name is a format, expanded against the
+/// session's current pane, as tmux 3.7b expands it.
 pub fn rename_session(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<String, String> {
+    let id = state.model.resolve_session(&c.target, ctx)?;
+    let pane = state
+        .model
+        .sessions
+        .get(&id)
+        .and_then(|s| state.model.windows.get(&s.active))
+        .map(|w| w.active);
+    let name = match pane {
+        Some(pane) if ctx.dialect == crate::protocol::Dialect::Tmux => {
+            let vars = FormatCtx::new(&state.model, pane);
+            cmd::expand(&c.name, &ServerVars::new(state, pane, &vars))
+        }
+        _ => c.name,
+    };
     let model = &mut state.model;
-    let id = model.resolve_session(&c.target, ctx)?;
-    if model.sessions[&id].name == c.name {
+    if model.sessions[&id].name == name {
         return Ok(String::new());
     }
-    check_name(model, &c.name)?;
+    check_name(model, &name)?;
     if let Some(s) = model.sessions.get_mut(&id) {
-        s.name = c.name;
+        s.name = name;
     }
     Ok(String::new())
 }

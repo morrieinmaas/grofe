@@ -1,0 +1,109 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -d -t main -n second cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ set -g @theme_bg "#fbf1c7"
+? 0
+$ set -g @theme_fg "#3c3836"
+? 0
+$ set -g @theme_blue "#458588"
+? 0
+$ set -g @theme_yellow "#b57614"
+? 0
+$ set -g @theme_green "#79740e"
+? 0
+$ set -g @theme_grey "#a8998a"
+? 0
+$ set -g @theme_muted "#7c6f64"
+? 0
+$ set -g @theme_red "#cc241d"
+? 0
+$ set -g @pill_l ""
+? 0
+$ set -g @pill_r ""
+? 0
+$ set -g @canopy_status_battery on
+? 0
+$ set -g @canopy_status_net on
+? 0
+$ set -g status 2
+? 0
+$ set -g status-format[1] ""
+? 0
+$ set -g status-position top
+? 0
+$ set -g status-justify left
+? 0
+$ set -g status-interval 5
+? 0
+$ set -g status-style "bg=default,fg=#{@theme_fg}"
+? 0
+$ set -g status-left-length 40
+? 0
+$ set -g status-left "#[fg=#{@theme_blue},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_blue},bold] #S #[fg=#{@theme_blue},bg=default,nobold]#{@pill_r} "
+? 0
+$ set -g window-status-separator ""
+? 0
+$ set -g window-status-format "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #I #W #[fg=#{@theme_grey},bg=default]#{@pill_r} "
+? 0
+$ set -g window-status-current-format "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #I #W#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} "
+? 0
+$ set -g status-right-length 120
+? 0
+$ set -g status-right "#(sh {fixtures}/gold?n/fe_3/canopy-status.sh)"
+? 0
+client 80x24 attach -t main
+screen net up
+|  main   1 first   2 second                                  bat 42 net up
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ────────────────────────────────────────────────────────────────────────────────
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ resize-pane -Z -t main:1
+? 0
+screen +
+|  main   1 first +   2 second                                bat 42 net up
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

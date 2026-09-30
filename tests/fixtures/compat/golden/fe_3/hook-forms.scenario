@@ -1,0 +1,12 @@
+# FE.3: a hook set with tmux's set-hook whose command uses tmux-only forms
+# (the neww and setw aliases, exact =x targets) runs them correctly when it
+# fires, since the stored string keeps its tmux dialect.
+$ new-session -d -s xy -n one -x 80 -y 24 cat
+$ new-session -d -s x -n one -x 80 -y 24 cat
+$ split-window -d -t x:1 cat
+$ set-hook -g pane-exited 'neww -d -t =x -n fired cat; setw -t =x:fired @via hook; select-pane -t =x:1.2'
+$ new-window -d -t xy -n brief true
+$ run-shell 'sleep 1'
+$ list-windows -t x -F '#{window_index} #{window_name} #{@via}'
+$ list-windows -t xy -F '#{window_index} #{window_name} #{@via}'
+$ display -p -t x:1 '#{pane_index}'

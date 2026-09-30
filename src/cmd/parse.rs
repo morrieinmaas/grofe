@@ -770,6 +770,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         expand: flags.present.contains(&'F'),
         quiet: flags.present.contains(&'q'),
         only_if_unset: flags.present.contains(&'o'),
+        shown: None,
     }))
 }
 
@@ -1170,7 +1171,11 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: &[('b', FlagKind::Bool), ('d', FlagKind::Value)],
+            short: &[
+                ('b', FlagKind::Bool),
+                ('d', FlagKind::Value),
+                ('t', FlagKind::Value),
+            ],
             long: &[],
         },
         "run-shell",
@@ -1195,6 +1200,7 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
         cmd,
         delay,
         background: flags.present.contains(&'b'),
+        target: target_or_current(&flags.values, 't')?,
     }))
 }
 
@@ -1753,10 +1759,15 @@ fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_show_hooks(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('g', FlagKind::Bool)], "show-hooks")?;
+    let flags = flags_for(
+        argv,
+        &[('g', FlagKind::Bool), ('w', FlagKind::Bool)],
+        "show-hooks",
+    )?;
     no_extra_positionals(&flags, "show-hooks", 1)?;
     Ok(Command::ShowHooks(ShowHooks {
         global: flags.present.contains(&'g'),
+        window: flags.present.contains(&'w'),
         hook: flags.positionals.first().cloned(),
     }))
 }
@@ -1806,7 +1817,8 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
 ///   them (`'it'"'"'s'` is one word) and may be empty (`''`);
 /// - single quotes keep everything literal;
 /// - in double quotes and bare words a backslash keeps the next character
-///   literally, `$VAR` and `${VAR}` expand (unset is empty), and a `~` or
+///   literally, or makes the escape it names ([`escape`]: `\n`, `\t` and
+///   the rest), `$VAR` and `${VAR}` expand (unset is empty), and a `~` or
 ///   `~user` that starts the word is that home directory;
 /// - a `$` before anything that can't start a name is a literal `$`, but a
 ///   `$` that ends the string is a syntax error (D17), as is an unquoted
@@ -1818,7 +1830,7 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
 /// - an unterminated quote is closed at the end of the string.
 ///
 /// Empty commands are dropped.
-// ponytail: no `\n`/`\e`/octal/`\u` escapes, `#` comments or `%if`.
+// ponytail: no octal or `\u` escapes, `#` comments or `%if`.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     let mut cmds = Vec::new();
     let mut words: Vec<String> = Vec::new();
@@ -1856,7 +1868,7 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
                 started = true;
                 let next = chars.next().unwrap_or('\\');
                 escaped_semicolon = fresh && next == ';';
-                word.push(next);
+                word.push(escape(next));
             }
             '\'' => {
                 started = true;
@@ -1876,7 +1888,7 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
                 while let Some(x) = chars.next() {
                     match x {
                         '"' => break,
-                        '\\' => word.push(chars.next().unwrap_or('\\')),
+                        '\\' => word.push(escape(chars.next().unwrap_or('\\'))),
                         '$' => expand_var(&mut chars, &mut word)?,
                         x => word.push(x),
                     }
@@ -1909,6 +1921,25 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     }
     end_command(&mut words, &mut cmds);
     Ok(cmds)
+}
+
+/// The character a backslash before `c` stands for, in a bare word or in
+/// double quotes, as tmux 3.7b's lexer reads it (recorded: `"a\tb\nc\sd\ee"`
+/// is a tab, a newline, a space and an escape): `\a \b \e \f \n \r \s \t
+/// \v`, and any other character itself.
+fn escape(c: char) -> char {
+    match c {
+        'a' => '\x07',
+        'b' => '\x08',
+        'e' => '\x1b',
+        'f' => '\x0c',
+        'n' => '\n',
+        'r' => '\r',
+        's' => ' ',
+        't' => '\t',
+        'v' => '\x0b',
+        c => c,
+    }
 }
 
 /// Where [`split_command_string`] looks a `$NAME` up.
@@ -2860,6 +2891,7 @@ mod tests {
                 expand: false,
                 quiet: false,
                 only_if_unset: false,
+                shown: None,
             })
         );
     }
@@ -2880,6 +2912,7 @@ mod tests {
                 expand: false,
                 quiet: false,
                 only_if_unset: false,
+                shown: None,
             })
         );
     }
@@ -3553,6 +3586,7 @@ mod tests {
                 cmd: "echo hi; echo two".to_string(),
                 background: false,
                 delay: None,
+                target: Target::Current,
             }))
         );
         assert!(parse(&argv(&["run-shell"])).is_err());

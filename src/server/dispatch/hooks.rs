@@ -33,11 +33,11 @@ pub fn set_hook(state: &mut State, ctx: &ClientCtx, c: SetHook) -> Result<String
 
 /// `show-hooks -g [event]`: `<event> <command>` for each bound hook.
 /// Without `-g` it shows the session's hooks, of which there are none.
-pub fn show_hooks(state: &mut State, _ctx: &ClientCtx, c: ShowHooks) -> Result<String, String> {
+pub fn show_hooks(state: &mut State, ctx: &ClientCtx, c: ShowHooks) -> Result<String, String> {
     if !c.global {
         return Ok(String::new());
     }
-    hooks::show(state, c.hook.as_deref())
+    hooks::show(state, c.hook.as_deref(), ctx.dialect, c.window)
 }
 
 /// `set-environment [-g] [-h] [-t session] name value`, or `-u name`: the

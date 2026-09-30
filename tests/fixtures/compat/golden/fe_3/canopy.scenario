@@ -1,0 +1,39 @@
+# FE.3: canopy's status theme (tests/fixtures/import-tmux/canopy,
+# conf.d/20-status.conf), set line by line as tmux reads the file: two rows
+# at the top, pill caps (U+E0B6, U+E0B4), #S/#I/#W short forms, and the
+# one #() aggregator, here a fixed script. theme_grey is a shade off
+# canopy's, whose digits the normalizer reads as a pid. Rendered on a
+# pty-attached client and compared cell for cell. The script path is a
+# glob, since the normalizer reads the word "golden" as the recorder's user.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -d -t main -n second cat
+$ split-window -d -t main:1 cat
+$ set -g @theme_bg "#fbf1c7"
+$ set -g @theme_fg "#3c3836"
+$ set -g @theme_blue "#458588"
+$ set -g @theme_yellow "#b57614"
+$ set -g @theme_green "#79740e"
+$ set -g @theme_grey "#a8998a"
+$ set -g @theme_muted "#7c6f64"
+$ set -g @theme_red "#cc241d"
+$ set -g @pill_l ""
+$ set -g @pill_r ""
+$ set -g @canopy_status_battery on
+$ set -g @canopy_status_net on
+$ set -g status 2
+$ set -g status-format[1] ""
+$ set -g status-position top
+$ set -g status-justify left
+$ set -g status-interval 5
+$ set -g status-style "bg=default,fg=#{@theme_fg}"
+$ set -g status-left-length 40
+$ set -g status-left "#[fg=#{@theme_blue},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_blue},bold] #S #[fg=#{@theme_blue},bg=default,nobold]#{@pill_r} "
+$ set -g window-status-separator ""
+$ set -g window-status-format "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #I #W #[fg=#{@theme_grey},bg=default]#{@pill_r} "
+$ set -g window-status-current-format "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #I #W#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} "
+$ set -g status-right-length 120
+$ set -g status-right "#(sh {fixtures}/gold?n/fe_3/canopy-status.sh)"
+client 80x24 attach -t main
+screen net up
+$ resize-pane -Z -t main:1
+screen +
