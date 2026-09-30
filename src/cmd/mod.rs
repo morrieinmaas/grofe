@@ -313,6 +313,9 @@ pub struct DisplayMessage {
     pub text: Option<String>,
     /// `-c` (TC.9): the client the message goes to, raw.
     pub client: Option<String>,
+    /// `-d` (TC.9): how long the message shows, in milliseconds, raw
+    /// (checked at dispatch time, as tmux does); 0 means until a key.
+    pub delay: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

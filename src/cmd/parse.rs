@@ -786,6 +786,7 @@ const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('t', FlagKind::Value),
     ('c', FlagKind::Value),
+    ('d', FlagKind::Value),
     ('F', FlagKind::Value),
 ];
 
@@ -814,6 +815,7 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         target: target_or_current(&flags.values, 't')?,
         text,
         client: flags.values.get(&'c').cloned(),
+        delay: flags.values.get(&'d').cloned(),
     }))
 }
 
@@ -2249,6 +2251,8 @@ mod tests {
                 "-p",
                 "-c",
                 "c1",
+                "-d",
+                "5",
                 "-F",
                 "#{pane_id}"
             ]))
@@ -2258,6 +2262,7 @@ mod tests {
                 target: Target::Current,
                 text: Some("#{pane_id}".to_string()),
                 client: Some("c1".to_string()),
+                delay: Some("5".to_string()),
             })
         );
         assert_eq!(
@@ -2944,6 +2949,7 @@ mod tests {
                 target: Target::Current,
                 text: Some("#{pane_uid}".to_string()),
                 client: None,
+                delay: None,
             })
         );
     }

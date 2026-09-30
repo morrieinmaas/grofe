@@ -1272,6 +1272,16 @@ fn display_message(
     ctx: &ClientCtx,
     c: DisplayMessage,
 ) -> Result<String, String> {
+    // `-d` is checked first, as tmux 3.7b's `args_strtonum` (recorded).
+    let delay = match c.delay.as_deref().map(str::parse::<i128>) {
+        None => None,
+        Some(Ok(n)) if n < 0 => return Err("delay too small".to_string()),
+        Some(Ok(n)) if n > i128::from(u32::MAX) => return Err("delay too large".to_string()),
+        Some(Ok(n)) => Some(std::time::Duration::from_millis(
+            u64::try_from(n).unwrap_or(0),
+        )),
+        Some(Err(_)) => return Err("delay invalid".to_string()),
+    };
     let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
@@ -1306,7 +1316,7 @@ fn display_message(
         return Ok(format!("{out}\n"));
     }
     if let Some(id) = current {
-        clients::display_message(state, id, &out);
+        clients::display_message(state, id, &out, delay);
     }
     Ok(String::new())
 }

@@ -534,7 +534,7 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
 /// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
     log_message(state, id, text);
-    set_message(state, id, status::escape_hashes(text));
+    set_message(state, id, status::escape_hashes(text), None);
 }
 
 /// The status-line message area (spec §4.10) for `display-message`
@@ -542,9 +542,10 @@ pub fn show_message(state: &mut State, id: ClientId, text: &str) {
 /// it are drawn, as tmux draws a `display-message`. It replaces the first
 /// status row (tmux's `message-line 0`) for `display-time`, or until a key
 /// is pressed; the rows below stay.
-pub fn display_message(state: &mut State, id: ClientId, text: &str) {
+/// `delay` overrides `display-time` (`display-message -d`).
+pub fn display_message(state: &mut State, id: ClientId, text: &str, delay: Option<Duration>) {
     log_message(state, id, text);
-    set_message(state, id, text.to_string());
+    set_message(state, id, text.to_string(), delay);
 }
 
 /// How many messages `show-messages` keeps: tmux's `message-limit`
@@ -717,12 +718,12 @@ fn prune_waits(state: &mut State) {
     });
 }
 
-fn set_message(state: &mut State, id: ClientId, text: String) {
+fn set_message(state: &mut State, id: ClientId, text: String, delay: Option<Duration>) {
     let now = Instant::now();
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
     };
-    let time = display_time(&state.model, session);
+    let time = delay.unwrap_or_else(|| display_time(&state.model, session));
     let until = (!time.is_zero()).then(|| now + time);
     if let Some(c) = state.clients.get_mut(&id) {
         c.message = Some((text, until));
@@ -1547,6 +1548,10 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
+    // tmux 3.7b hides the cursor while a message shows (`TTY_NOCURSOR`).
+    if message.is_some() {
+        screen.cursor = None;
+    }
     render::fix_wide_pairs(&mut screen);
     Some((screen, viewport, rows, geom.first_row))
 }
@@ -2196,7 +2201,7 @@ mod tests {
     #[test]
     fn messages_are_logged_and_capped() {
         let (mut state, id) = state_with_client();
-        display_message(&mut state, id, "hi");
+        display_message(&mut state, id, "hi", None);
         show_message(&mut state, id, "an #[error]");
         let log: Vec<&str> = messages(&state).map(|(_, m)| m.as_str()).collect();
         assert_eq!(
@@ -2204,7 +2209,7 @@ mod tests {
             ["client-1 message: hi", "client-1 message: an #[error]"]
         );
         for i in 0..MESSAGE_LIMIT {
-            display_message(&mut state, id, &i.to_string());
+            display_message(&mut state, id, &i.to_string(), None);
         }
         assert_eq!(messages(&state).count(), MESSAGE_LIMIT);
         assert_eq!(

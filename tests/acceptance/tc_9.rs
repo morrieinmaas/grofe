@@ -239,6 +239,32 @@ fn display_message_shows_on_the_status_line_and_in_show_messages() {
     );
 }
 
+/// `display-message -d` sets how long the message shows, 0 until a key,
+/// and the cursor hides while it shows, as tmux 3.7b's (recorded).
+#[test]
+fn display_message_d_sets_the_delay_and_hides_the_cursor() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    let from = a.output().len();
+    srv.cmd(&["display-message", "-d", "0", "held"])
+        .expect("display-message -d 0");
+    a.wait_until("the message", WAIT, |t| last_row(t).trim_end() == "held");
+    a.wait_for_output(b"\x1b[?25l", from);
+    // Past `display-time` (750 ms by default) it still shows.
+    sleep(Duration::from_millis(1500));
+    assert_eq!(last_row(&a.text()).trim_end(), "held");
+    a.send("x");
+    wait_last_row_starts(&mut a, "[main]");
+    for (delay, want) in [
+        ("nope", "delay invalid"),
+        ("-1", "delay too small"),
+        ("4294967296", "delay too large"),
+    ] {
+        let err = srv.cmd(&["display-message", "-d", delay, "x"]).unwrap_err();
+        assert_eq!(err.trim_end(), want);
+    }
+}
+
 /// Case 6: `choose-tree -Zw` zooms the pane, lists windows under their
 /// sessions, and Enter switches the client to the chosen line.
 #[test]
