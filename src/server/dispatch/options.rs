@@ -367,6 +367,84 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "latest",
     },
+    // FE.1: the corpus's tmux options grofe stores and never reads
+    // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
+    // §5.3's defaults where grofe's differ (`extended-keys`, `mode-keys`,
+    // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
+    // ones; D6 sizes windows; grofe's prompt keys are emacs's; grofe always
+    // renumbers.
+    // ponytail: `default-command`, `default-shell` and `synchronize-panes`
+    // do something in tmux; grofe stores them only, until a ported script
+    // needs one. `mode-keys` waits for M5's copy mode, and
+    // `pane-border-format` for pane border titles.
+    Builtin {
+        name: "aggressive-resize",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "default-command",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "",
+    },
+    Builtin {
+        name: "default-shell",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "/bin/sh",
+    },
+    Builtin {
+        name: "default-terminal",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "tmux-256color",
+    },
+    Builtin {
+        name: "extended-keys",
+        kind: Kind::Choice(&["off", "on", "always"]),
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "extended-keys-format",
+        kind: Kind::Choice(&["csi-u", "xterm"]),
+        scope: OptionScope::Global,
+        default: "xterm",
+    },
+    Builtin {
+        name: "mode-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Window,
+        default: "vi",
+    },
+    Builtin {
+        name: "pane-border-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"\
+                  #{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]\
+                  #[norange]#[range=control|9][x]#[norange],}",
+    },
+    Builtin {
+        name: "renumber-windows",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "status-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Session,
+        default: "emacs",
+    },
+    Builtin {
+        name: "synchronize-panes",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
 ];
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
@@ -1653,6 +1731,17 @@ const LISTS: &[ListBuiltin] = &[
             "XDG_SESSION_TYPE",
         ],
     },
+    // FE.1: tmux 3.7b's list and default (recorded); no effect, since the
+    // probe decides what the outer terminal can do (spec D7, §4.5).
+    ListBuiltin {
+        name: "terminal-features",
+        scope: OptionScope::Global,
+        default: &[
+            "xterm*:clipboard:ccolour:cstyle:focus:title",
+            "screen*:title",
+            "rxvt*:ignorefkeys",
+        ],
+    },
 ];
 
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
@@ -1666,10 +1755,22 @@ pub fn list_names() -> impl Iterator<Item = &'static str> {
 
 /// Options grofe accepts and stores but never reads (spec §4.5, "Options
 /// by tmux name"), by tmux name. `show-config --explain` marks them
-/// `(no effect)`. FE.1 adds its rows (`terminal-features`,
-/// `extended-keys-format`, `default-terminal`) with their `BUILTINS`
-/// entries; the list stays here so no later task edits this contract.
-const NO_EFFECT: &[&str] = &[];
+/// `(no effect)`. FE.1's rows: every such option in the corpus, each with
+/// its `BUILTINS` or `LISTS` entry.
+const NO_EFFECT: &[&str] = &[
+    "aggressive-resize",
+    "default-command",
+    "default-shell",
+    "default-terminal",
+    "extended-keys",
+    "extended-keys-format",
+    "mode-keys",
+    "pane-border-format",
+    "renumber-windows",
+    "status-keys",
+    "synchronize-panes",
+    "terminal-features",
+];
 
 /// Whether grofe stores `name` without ever acting on it.
 pub fn has_no_effect(name: &str) -> bool {
@@ -2140,7 +2241,8 @@ mod tests {
             key: key.to_string(),
             command: vec!["list-sessions".to_string()],
         };
-        let grofe = crate::server::test_ctx();
+        let grofe_ctx = crate::server::test_ctx;
+        let grofe = grofe_ctx();
         bind_key(&mut state, &grofe, bind("F5")).expect("native bind");
         let f5 = parse_key("F5").expect("key");
         let b = state.registry.key_tables.exact("root", &f5).expect("bound");
@@ -2149,8 +2251,17 @@ mod tests {
             dialect: Dialect::Tmux,
             ..grofe
         };
-        let err = bind_key(&mut state, &tmux, bind("F6")).unwrap_err();
-        assert!(err.contains("tmux front end"), "{err}");
+        // FE.1: a tmux-only form binds in the tmux dialect and keeps it.
+        let ls = |key: &str| BindKey {
+            command: vec!["ls".to_string()],
+            ..bind(key)
+        };
+        bind_key(&mut state, &tmux, ls("F6")).expect("tmux bind");
+        let f6 = parse_key("F6").expect("key");
+        let b = state.registry.key_tables.exact("root", &f6).expect("bound");
+        assert_eq!(b.dialect, Dialect::Tmux);
+        let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
+        assert_eq!(err, "unknown command: ls");
     }
 
     /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);

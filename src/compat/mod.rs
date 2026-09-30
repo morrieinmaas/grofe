@@ -136,6 +136,12 @@ pub fn miss_log_path(env: &Env) -> PathBuf {
 /// so nothing but a started tmux-identity server ever writes it. Best
 /// effort: a log that cannot be written never fails the request.
 pub fn miss_log(_state: &State, what: &str) {
+    note_miss(what);
+}
+
+/// [`miss_log`] for code that has no `State`: the tmux front end notes a
+/// cosmetic flag it ignores while it translates (spec §4.5).
+pub fn note_miss(what: &str) {
     if let Some(path) = MISS_LOG.get() {
         append_miss(path, what);
     }
@@ -298,12 +304,20 @@ pub fn parse_request(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, S
 pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
     match ctx.dialect {
         Dialect::Grofe => cmd::parse(argv).map(|c| vec![c]).map_err(|e| e.to_string()),
-        Dialect::Tmux => tmux_dispatch(argv, ctx),
+        Dialect::Tmux => logged(argv, tmux::dispatch_command(argv, ctx)),
     }
 }
 
 fn tmux_dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, String> {
-    tmux::dispatch(argv, ctx).map_err(|e| {
+    logged(argv, tmux::dispatch(argv, ctx))
+}
+
+/// The front end's answer for `argv`, a failure logged as a miss.
+fn logged(
+    argv: &[String],
+    result: Result<Vec<Command>, tmux::TmuxError>,
+) -> Result<Vec<Command>, String> {
+    result.map_err(|e| {
         if let Some(path) = MISS_LOG.get() {
             // A redacted command's error text may quote its values.
             let (summary, redacted) = miss_summary(argv);
@@ -554,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn grofe_requests_parse_natively_and_tmux_ones_are_refused() {
+    fn grofe_requests_parse_natively() {
         let got = parse_request(&ctx(Dialect::Grofe), &argv(&["ls", ";", "kill-server"]));
         assert!(got.is_err(), "ls is not native: {got:?}");
         let got = parse_request(
@@ -568,11 +582,30 @@ mod tests {
                 Command::KillServer(KillServer),
             ])
         );
-        let err = parse_request(&ctx(Dialect::Tmux), &argv(&["list-sessions"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: list-sessions");
         let got = parse_split(&ctx(Dialect::Grofe), &argv(&["kill-server"]));
         assert_eq!(got, Ok(vec![Command::KillServer(KillServer)]));
-        let err = parse_split(&ctx(Dialect::Tmux), &argv(&["kill-server"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: kill-server");
+    }
+
+    /// FE.1: a tmux request is split at `;` as tmux's CLI splits it, then
+    /// each command goes through the front end; an already split command
+    /// keeps a `;` argument literal.
+    #[test]
+    fn tmux_requests_go_through_the_front_end() {
+        let tmux = ctx(Dialect::Tmux);
+        let got = parse_request(&tmux, &argv(&["ls", ";", "kill-server"]));
+        assert_eq!(
+            got,
+            Ok(vec![
+                Command::ListSessions(ListSessions::default()),
+                Command::KillServer(KillServer),
+            ])
+        );
+        let err = parse_request(&tmux, &argv(&["frobnicate"])).unwrap_err();
+        assert_eq!(err, "unknown command: frobnicate");
+        let got = parse_split(&tmux, &argv(&["send-keys", ";"])).unwrap();
+        let Command::SendKeys(keys) = &got[0] else {
+            panic!("{got:?}");
+        };
+        assert_eq!(keys.items.len(), 1, "{keys:?}");
     }
 }

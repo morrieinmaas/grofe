@@ -1,0 +1,70 @@
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ set -gw main-pane-width 50%
+? 0
+$ show -gwv main-pane-width
+50%
+? 0
+$ show -gqv base-index
+1
+? 0
+$ show -gqv nope
+? 0
+$ show -gv nope
+! invalid option: nope
+? 1
+$ set -g nope 1
+! invalid option: nope
+? 1
+$ set -p -t %0 @a 1 \; set -p -t %0 @b 2
+? 0
+$ show -p -t %0
+@a 1
+@b 2
+? 0
+$ show -pv -t %0 @b
+2
+? 0
+$ show-options -p -t %0 -v @a
+1
+? 0
+$ setw -g aggressive-resize on
+? 0
+$ showw -gv aggressive-resize
+on
+? 0
+$ showw -g aggressive-resize
+aggressive-resize on
+? 0
+$ show -gw aggressive-resize
+aggressive-resize on
+? 0
+$ set-window-option -g mode-keys emacs
+? 0
+$ show-window-options -gv mode-keys
+emacs
+? 0
+$ set -g default-terminal screen-256color
+? 0
+$ show -gv default-terminal
+screen-256color
+? 0
+$ set -g status-keys vi
+? 0
+$ show -gv status-keys
+vi
+? 0
+$ set -s terminal-features[9] xterm-ghostty:RGB
+? 0
+$ show -sv terminal-features[9]
+xterm-ghostty:RGB
+? 0
+$ show -sv terminal-features[0]
+xterm*:clipboard:ccolour:cstyle:focus:title
+? 0
+$ set-window-option
+! command set-window-option: too few arguments (need at least 1)
+? 1
+$ show-options -p -t %0 synchronize-panes \; show-window-options -g remain-on-exit
+remain-on-exit off
+? 0

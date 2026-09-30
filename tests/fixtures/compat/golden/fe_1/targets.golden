@@ -1,0 +1,84 @@
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ new-session -d -s mainx -x 200 -y 50
+? 0
+$ new-window -d -t main -n two
+? 0
+$ new-window -d -t main -n three
+? 0
+$ has-session -t =mai
+! can't find session: mai
+? 1
+$ has-session -t =main
+? 0
+$ has-session -t =main:2
+? 0
+$ has-session -t =main:7
+! can't find window: 7
+? 1
+$ has-session -t =main:.1
+? 0
+$ has-session -t =
+! no mouse target
+? 1
+$ display -p -t =main:2 '#{session_name} #{window_index} #{window_name}'
+main 2 two
+? 0
+$ display -p -t =main: '#{session_name} #{window_index}'
+main 1
+? 0
+$ display -p -t =mainx: '#{session_name}'
+mainx
+? 0
+$ select-window -t main:=2
+? 0
+$ display -p -t main: '#{window_index}'
+2
+? 0
+$ select-window -t main:+1
+? 0
+$ display -p -t main: '#{window_index}'
+3
+? 0
+$ select-window -t main:+1
+? 0
+$ display -p -t main: '#{window_index}'
+1
+? 0
+$ select-window -t main:-1
+? 0
+$ display -p -t main: '#{window_index}'
+3
+? 0
+$ select-window -t main:+5
+? 0
+$ display -p -t main: '#{window_index}'
+2
+? 0
+$ split-window -d -t main:3 cat
+? 0
+$ split-window -d -t main:3 cat
+? 0
+$ select-pane -t main:3.+
+? 0
+$ display -p -t main:3 '#{pane_index}'
+2
+? 0
+$ select-pane -t main:3.+
+? 0
+$ display -p -t main:3 '#{pane_index}'
+3
+? 0
+$ select-pane -t main:3.+
+? 0
+$ display -p -t main:3 '#{pane_index}'
+1
+? 0
+$ select-pane -t main:3.-
+? 0
+$ display -p -t main:3 '#{pane_index}'
+3
+? 0
+$ display -p -t main:3.+2 '#{pane_index}'
+2
+? 0

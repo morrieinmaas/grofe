@@ -290,7 +290,8 @@ fn wait_file(path: &Path) -> String {
 /// session succeeds and attaching to the pane's own session is refused,
 /// with tmux's text for a `tmux` attach and grofe's for a `grofe` one.
 /// Text typed at the nested client's `:` prompt is tmux dialect on this
-/// tmux-identity server, so the front end (a stub until FE.1) answers it.
+/// tmux-identity server, so the front end answers it (FE.1: `setw` is
+/// tmux's, not grofe's).
 #[test]
 fn attach_from_a_pane_refuses_only_its_own_session() {
     let srv = start_as_tmux();
@@ -319,15 +320,16 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
     );
     assert!(own.ends_with("rc=1\n"), "{own}");
 
-    // Bare `tmux` is `new-session`; the front end refuses it until FE.1.
+    // Bare `tmux` is `new-session` (FE.1), which needs a terminal to
+    // attach, as in tmux 3.7b.
     type_line(
         &srv,
         "outer",
-        &format!("{link} 2> {home}/bare; echo rc=$? >> {home}/bare"),
+        &format!("{link} < /dev/null 2> {home}/bare; echo rc=$? >> {home}/bare"),
     );
     assert_eq!(
         wait_file(&srv.home.join("bare")),
-        "tmux front end is not implemented: new-session\nrc=1\n"
+        "open terminal failed: not a terminal\nrc=1\n"
     );
 
     grofe(&srv, &["bind-key", ":", "command-prompt"]).expect("bind :");
@@ -346,11 +348,11 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
     .expect("a client attached to inner from outer's pane");
 
     grofe(&srv, &["send-keys", "-t", "outer", "C-b", ":"]).unwrap();
-    type_line(&srv, "outer", "display-message typed-at-the-prompt");
+    type_line(&srv, "outer", "setw -g @typed at-the-prompt");
     wait_until(
         || {
-            srv.capture("outer")
-                .contains("tmux front end is not implemented")
+            grofe(&srv, &["show-options", "-gv", "@typed"])
+                .is_ok_and(|out| out.trim() == "at-the-prompt")
         },
         CMD_TIMEOUT,
     )
@@ -552,7 +554,8 @@ fn the_tmux_name_never_touches_a_real_tmux() {
         out.stderr
     );
     assert!(run(&["-S", &socket, "start-server"]).status.success());
-    assert!(!run(&["-S", &socket, "list-sessions"]).status.success());
+    // FE.1: the front end answers it now, from grofe's own server.
+    assert!(run(&["-S", &socket, "list-sessions"]).status.success());
 
     match listener.accept() {
         Err(e) if e.kind() == ErrorKind::WouldBlock => {}

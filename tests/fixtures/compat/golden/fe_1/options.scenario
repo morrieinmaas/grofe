@@ -1,0 +1,29 @@
+# FE.1: set and show by tmux name, setw and showw (M36-R10), the scope
+# merges (`set -gw`, `show -gqv`), the chained `set -p` canopy-agent sends,
+# and options grofe stores without acting on them.
+$ new-session -d -s main -x 200 -y 50
+$ set -gw main-pane-width 50%
+$ show -gwv main-pane-width
+$ show -gqv base-index
+$ show -gqv nope
+$ show -gv nope
+$ set -g nope 1
+$ set -p -t %0 @a 1 \; set -p -t %0 @b 2
+$ show -p -t %0
+$ show -pv -t %0 @b
+$ show-options -p -t %0 -v @a
+$ setw -g aggressive-resize on
+$ showw -gv aggressive-resize
+$ showw -g aggressive-resize
+$ show -gw aggressive-resize
+$ set-window-option -g mode-keys emacs
+$ show-window-options -gv mode-keys
+$ set -g default-terminal screen-256color
+$ show -gv default-terminal
+$ set -g status-keys vi
+$ show -gv status-keys
+$ set -s terminal-features[9] xterm-ghostty:RGB
+$ show -sv terminal-features[9]
+$ show -sv terminal-features[0]
+$ set-window-option
+$ show-options -p -t %0 synchronize-panes \; show-window-options -g remain-on-exit

@@ -1,0 +1,23 @@
+# FE.1: the invocation. -V and the no-effect -2 and -u, tmux's aliases and
+# unique prefixes, ambiguous and unknown verbs, list-commands (fzf probes
+# `list-commands new-pane`, M36-R1).
+$ -V
+$ -2 -u -V
+$ new-session -d -s main -x 200 -y 50
+$ -2 -u has -t main
+$ ls -F '#{session_name}'
+$ list-s -F '#{session_name}'
+$ lsw -F '#{window_index}'
+$ lscm has
+$ list-commands new-pane
+$ list-commands -F '#{command_list_name}|#{command_list_alias}' attach
+$ list-commands -F '#{command_list_name}|#{command_list_usage}' kill-server
+$ list-commands nope
+$ lscm a b
+$ list-commands -F
+$ s
+$ kill-s
+$ list
+$ frobnicate
+$ a -t nope
+$ list-commands

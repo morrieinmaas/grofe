@@ -46,6 +46,16 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("focus-events", "focus-events"),
     // Top-level keys stay above the sectioned ones: `import-tmux` writes
     // them in this order.
+    // FE.1: tmux options grofe stores without acting on them (spec §4.5).
+    ("aggressive-resize", "aggressive-resize"),
+    ("default-command", "default-command"),
+    ("default-shell", "default-shell"),
+    ("default-terminal", "default-terminal"),
+    ("extended-keys", "extended-keys"),
+    ("extended-keys-format", "extended-keys-format"),
+    ("mode-keys", "mode-keys"),
+    ("renumber-windows", "renumber-windows"),
+    ("synchronize-panes", "synchronize-panes"),
     ("main-pane-width", "main-pane-width"),
     ("main-pane-height", "main-pane-height"),
     ("window-size", "window-size"),
@@ -74,6 +84,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("message.display-time-ms", "display-time"),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
+    ("pane-border.format", "pane-border-format"),
+    ("status.keys", "status-keys"),
     ("compat-identity", "compat-identity"),
     ("allow-passthrough", "allow-passthrough"),
 ];
@@ -84,6 +96,7 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("status.rows", "status-format"),
     ("command-alias", "command-alias"),
     ("update-environment", "update-environment"),
+    ("terminal-features", "terminal-features"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -106,7 +119,7 @@ pub(crate) enum Ty {
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
-        | "set-titles" => Ty::Bool,
+        | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

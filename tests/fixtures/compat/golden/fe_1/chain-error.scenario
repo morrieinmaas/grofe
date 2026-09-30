@@ -1,0 +1,5 @@
+# FE.1: output printed before a command in the chain fails. tmux prints it,
+# then the error; grofe's reply drops it (dispatch/mod.rs's run_commands),
+# so this golden's test is ignored until that native gap is closed.
+$ new-session -d -s main -x 200 -y 50
+$ display -p a \; has-session -t nope \; display -p b

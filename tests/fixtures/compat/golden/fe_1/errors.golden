@@ -1,0 +1,30 @@
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ split-window -d -t main cat
+? 0
+$ display -p -t main '#{pane_index}'
+1
+? 0
+$ select-pane -P bg=colour238 -t main:1.2
+? 0
+$ display -p -t main '#{pane_index}'
+2
+? 0
+$ select-pane -t main -P
+! command select-pane: -P expects an argument
+? 1
+$ select-pane -Z -q
+! command select-pane: unknown flag -q
+? 1
+$ kill-session -t
+! command kill-session: -t expects an argument
+? 1
+$ kill-server extra
+! command kill-server: too many arguments (need at most 0)
+? 1
+$ has-session -t nope
+! can't find session: nope
+? 1
+$ select-window -t main:9
+! can't find window: 9
+? 1
