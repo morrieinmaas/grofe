@@ -23,6 +23,8 @@ allow-rename = false
 set-clipboard = "on"
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:28
 focus-events = true
+# ~/.local/share/canopy/tmux/conf.d/00-core.conf:31
+renumber-windows = true
 # ~/.config/canopy/user.conf:1
 main-pane-width = "50%"
 

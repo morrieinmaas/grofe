@@ -13,6 +13,8 @@ escape-time-ms = 10
 history-limit = 10000
 # ~/.tmux.conf:7
 mouse = true
+# ~/.tmux.conf:12
+renumber-windows = true
 
 [status]
 # ~/.tmux.conf:26
