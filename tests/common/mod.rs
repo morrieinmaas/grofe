@@ -383,22 +383,28 @@ pub fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> Result<(
 /// exit, or its output pipes do not reach EOF, within `timeout`.
 pub fn run_bounded(mut cmd: Command, timeout: Duration) -> CmdOutput {
     let deadline = Instant::now() + timeout;
+    let program = Path::new(cmd.get_program())
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn grofe");
+        .unwrap_or_else(|e| panic!("spawn {program}: {e}"));
     let stdout = drain(child.stdout.take().expect("stdout"));
     let stderr = drain(child.stderr.take().expect("stderr"));
-    let status = wait_child(child, timeout).expect("grofe CLI did not exit in time");
+    let status = wait_child(child, timeout)
+        .unwrap_or_else(|e| panic!("{program} did not exit in time: {e}"));
     let left = deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(100);
     let stdout = stdout
         .recv_timeout(left)
-        .expect("grofe CLI stdout never reached EOF (leaked to a child?)");
+        .unwrap_or_else(|_| panic!("{program} stdout never reached EOF (leaked to a child?)"));
     let stderr = stderr
         .recv_timeout(left)
-        .expect("grofe CLI stderr never reached EOF (leaked to a child?)");
+        .unwrap_or_else(|_| panic!("{program} stderr never reached EOF (leaked to a child?)"));
     CmdOutput {
         status,
         stdout,
@@ -425,8 +431,10 @@ pub fn wait_child(mut child: Child, timeout: Duration) -> Result<ExitStatus, Str
             Ok(Some(status)) => return Ok(status),
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
             Ok(None) => {
+                // Reaped if it goes within the teardown bound; a process
+                // stuck in its exit (a tty that never drains) is left.
                 let _ = child.kill();
-                let _ = child.wait();
+                let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
                 return Err(format!("process did not exit within {timeout:?}"));
             }
             Err(e) => return Err(e.to_string()),

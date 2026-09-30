@@ -22,6 +22,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::Processor;
 use expectrl::Session;
+use expectrl::process::NonBlocking;
 use expectrl::session::OsSession;
 
 /// Default bound for [`Harness::wait_for`]. Use [`Harness::wait_for_timeout`]
@@ -74,7 +75,17 @@ impl Harness {
             }
         }
 
-        let session = Session::spawn(wrapper).expect("spawn harness target");
+        // ptyprocess waits, unbounded, for its exec-status pipe to close. That
+        // pipe is not close-on-exec, so a child another test spawns meanwhile
+        // can hold it open: spawn on a thread and give up after the bound.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Session::spawn(wrapper));
+        });
+        let session = rx
+            .recv_timeout(DEFAULT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("spawning the harness target took over {DEFAULT_TIMEOUT:?}"))
+            .expect("spawn harness target");
         let term = Term::new(
             Config::default(),
             &TermSize::new(cols as usize, rows as usize),
@@ -117,18 +128,52 @@ impl Harness {
     }
 
     /// Feed raw bytes to the pty, as if typed (or pasted) at the keyboard.
+    /// Panics once the target has taken none of it for [`DEFAULT_TIMEOUT`]: a pty
+    /// holds only about 1 KiB of unread input (macOS), and a blocking write
+    /// past that would wait for ever. The target's output is drained while
+    /// waiting, so a target blocked on its own output can catch up.
     pub fn send(&mut self, bytes: impl AsRef<[u8]>) {
-        self.session
-            .write_all(bytes.as_ref())
-            .expect("write to pty");
-        self.session.flush().expect("flush pty");
+        let mut deadline = Instant::now() + DEFAULT_TIMEOUT;
+        let mut rest = bytes.as_ref();
+        while !rest.is_empty() {
+            self.session.set_blocking(false).expect("pty non-blocking");
+            let written = self.session.write(rest);
+            self.session.set_blocking(true).expect("pty blocking");
+            match written {
+                Ok(0) => panic!("the pty took no input"),
+                Ok(n) => {
+                    rest = &rest[n..];
+                    deadline = Instant::now() + DEFAULT_TIMEOUT;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    let open = self.pump();
+                    assert!(
+                        open && Instant::now() < deadline,
+                        "the target stopped reading its input ({} bytes not taken in {DEFAULT_TIMEOUT:?}); screen:\n{}",
+                        rest.len(),
+                        self.render()
+                    );
+                    sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("write to pty: {e}"),
+            }
+        }
     }
 
-    /// Drain whatever the child wrote so far into the reconstruction.
-    /// Returns false once the pty has closed.
+    /// Most time one [`Self::pump`] spends reading, so a target that never
+    /// stops writing cannot keep a caller from checking its deadline.
+    const PUMP_BUDGET: Duration = Duration::from_millis(200);
+
+    /// Drain whatever the child wrote so far (at most [`Self::PUMP_BUDGET`]
+    /// of it) into the reconstruction. Returns false once the pty has closed.
     fn pump(&mut self) -> bool {
         let mut buf = [0u8; 16 * 1024];
+        let until = Instant::now() + Self::PUMP_BUDGET;
         loop {
+            if Instant::now() >= until {
+                return true;
+            }
             match self.session.try_read(&mut buf) {
                 Ok(0) => return false,
                 Ok(n) => {
