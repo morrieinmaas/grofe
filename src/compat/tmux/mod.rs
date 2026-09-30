@@ -1003,17 +1003,21 @@ pub(crate) fn option_command(
     window: bool,
 ) -> Result<Vec<Command>, TmuxError> {
     // tmux's `-s` names the server table: a session, window or pane
-    // option there is stored where nothing reads it and shown as nothing
-    // (recorded: `set -s base-index 3` changes nothing, `show -s mouse`
-    // prints nothing, both exit 0).
+    // option set there is stored where nothing reads it, and shown by name
+    // (recorded: after `set -s base-index 3`, `show -sv base-index` is `3`
+    // and `show -gv base-index` still `0`; `show -s mouse` prints nothing),
+    // and a bare `show -s` lists the server options alone.
     let got = inv.getopt();
     let base = inv.option_name().map(|n| n.split('[').next().unwrap_or(n));
     let scope = base.and_then(crate::server::dispatch::options::builtin_scope);
-    if got.has('s') && scope.is_some_and(|s| s != cmd::OptionScope::Global) {
-        return Ok(Vec::new());
-    }
+    let server_table =
+        got.has('s') && (base.is_none() || scope.is_some_and(|s| s != cmd::OptionScope::Global));
     let mut out = inv.native(verb, &option_args(inv, window))?;
-    if let Some(scope) = user_scope(inv, window) {
+    let scope = match server_table {
+        true => Some(cmd::OptionScope::Server),
+        false => user_scope(inv, window),
+    };
+    if let Some(scope) = scope {
         for c in &mut out {
             match c {
                 Command::SetOption(c) => c.scope = Some(scope),

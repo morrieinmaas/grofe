@@ -587,3 +587,34 @@ fn other_names_behave_as_grofe() {
         assert!(out.stdout.starts_with("usage: grofe"), "{name}");
     }
 }
+
+/// tmux 3.7b (recorded): `-s` names the server table. A session option
+/// set there is stored and shown by name (`show -sv base-index` is `3`)
+/// but read by nothing, an unset one shows nothing, and a bare `show -s`
+/// lists the server options alone: no session option, no user option.
+#[test]
+fn show_s_lists_the_server_table_and_names_what_set_s_stored() {
+    let srv = start_as_tmux();
+    let ok = |args: &[&str]| {
+        let out = tmux(&srv, args);
+        assert!(out.status.success(), "{args:?}: {}", out.stderr);
+        out.stdout
+    };
+    ok(&["new-session", "-d", "-s", "s"]);
+    assert_eq!(ok(&["show", "-s", "mouse"]), "");
+    ok(&["set", "-s", "base-index", "3"]);
+    assert_eq!(ok(&["show", "-sv", "base-index"]), "3\n");
+    assert_eq!(ok(&["show", "-gv", "base-index"]), "0\n");
+    ok(&["set", "-s", "@srv", "x"]);
+    assert_eq!(ok(&["show", "-sv", "@srv"]), "x\n");
+    let table = ok(&["show", "-s"]);
+    assert!(table.contains("escape-time 10\n"), "{table}");
+    assert!(
+        table.contains("default-terminal tmux-256color\n"),
+        "{table}"
+    );
+    for absent in ["base-index", "mouse", "status", "@srv"] {
+        let listed = table.lines().any(|l| l.split(' ').next() == Some(absent));
+        assert!(!listed, "{absent} in {table}");
+    }
+}
