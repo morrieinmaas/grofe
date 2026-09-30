@@ -40,6 +40,10 @@ const NAV: &str = include_str!("../fixtures/canopy-port/conf.d/40-canopy-nav.tom
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const WAIT: Duration = Duration::from_secs(10);
 
+/// The pane shell, with a prompt of its own: `sh` as root prompts `# `.
+const SH: &str = "exec env PS1='grofe$ ' sh";
+const PROMPT: &str = "grofe$ ";
+
 const C_H: &[u8] = b"\x08";
 const C_L: &[u8] = b"\x0c";
 
@@ -306,7 +310,7 @@ fn nav_match(argv: &str) -> String {
 /// any member of the foreground group (one argv per line).
 #[test]
 fn the_match_is_the_plugins_pattern_on_argv0() {
-    let (srv, left, _) = start("exec sh", "exec sh");
+    let (srv, left, _) = start(SH, SH);
     let yes = [
         "nvim",
         "nvim -u NONE file.txt",
@@ -349,9 +353,9 @@ fn the_match_is_the_plugins_pattern_on_argv0() {
 /// Case 1: from a shell, C-h moves focus left and C-l moves it back.
 #[test]
 fn case_1_from_a_shell_the_keys_move_focus() {
-    let (srv, left, right) = start("exec sh", "exec sh");
+    let (srv, left, right) = start(SH, SH);
     let mut a = attach(&srv);
-    a.wait_for("$");
+    a.wait_for(PROMPT);
     assert_eq!(var(&srv, &right, "#{pane_active}"), "1");
     a.send(C_H);
     wait_active(&srv, &left, "C-h");
@@ -368,7 +372,7 @@ fn case_2_in_nvim_the_key_reaches_nvim_which_calls_tmux_at_its_edge() {
         return;
     }
     let nvim = Nvim::new(true, true);
-    let (srv, left, right) = start("exec sh", &nvim.command());
+    let (srv, left, right) = start(SH, &nvim.command());
     let mut a = attach(&srv);
     nvim.wait_ready(&srv, &right);
 
@@ -391,7 +395,7 @@ fn case_3_nvim_under_a_wrapper_whose_process_name_differs_still_gets_the_key() {
         return;
     }
     let nvim = Nvim::new(false, false);
-    let (srv, left, right) = start("exec sh", &nvim.wrapped_command());
+    let (srv, left, right) = start(SH, &nvim.wrapped_command());
     let mut a = attach(&srv);
     nvim.wait_ready(&srv, &right);
     assert_eq!(var(&srv, &right, "#{pane_current_command}"), "editor-bin");
@@ -421,7 +425,7 @@ fn case_4_nvim_at_its_left_edge_moves_focus_through_its_own_tmux_call() {
         return;
     }
     let nvim = Nvim::new(true, false);
-    let (srv, left, right) = start(&nvim.command(), "exec sh");
+    let (srv, left, right) = start(&nvim.command(), SH);
     srv.cmd(&["select-pane", "-t", &left]).expect("select");
     let mut a = attach(&srv);
     nvim.wait_ready(&srv, &left);
@@ -440,9 +444,9 @@ fn case_4_nvim_at_its_left_edge_moves_focus_through_its_own_tmux_call() {
 /// `@tmux_navigator_disable_when_zoomed` set to 1, nothing moves.
 #[test]
 fn case_5_zoomed_c_h_moves_by_default_and_not_when_the_plugin_says_so() {
-    let (srv, left, right) = start("exec sh", "exec sh");
+    let (srv, left, right) = start(SH, SH);
     let mut a = attach(&srv);
-    a.wait_for("$");
+    a.wait_for(PROMPT);
 
     srv.cmd(&["resize-pane", "-Z", "-t", &right]).expect("zoom");
     assert_eq!(var(&srv, &right, "#{window_zoomed_flag}"), "1");
@@ -480,9 +484,9 @@ fn a_key_right_after_nvim_starts_or_quits_sees_the_process_in_front() {
         return;
     }
     let nvim = Nvim::new(false, false);
-    let (srv, left, right) = start("exec sh", "exec sh");
+    let (srv, left, right) = start(SH, SH);
     let mut a = attach(&srv);
-    a.wait_for("$");
+    a.wait_for(PROMPT);
 
     // The quoted `''` keeps the typed line from reading `nvim-gone`.
     a.send(format!("{}; echo nvim-go''ne\r", nvim.typed()));
@@ -524,7 +528,7 @@ fn a_pipeline_matches_on_a_member_that_is_not_the_leader() {
         "exec env PATH='{}:{path}' sh -c 'cat | fzf'",
         bin.path().display()
     );
-    let (srv, left, right) = start("exec sh", &pipeline);
+    let (srv, left, right) = start(SH, &pipeline);
     let mut a = attach(&srv);
     let up = wait_until(
         || {
@@ -588,7 +592,7 @@ fn reaped_children(pid: i32) -> u64 {
 /// which shows the count sees a fork.
 #[test]
 fn case_6_the_keys_spawn_no_process() {
-    let (srv, left, right) = start("exec sh", "exec sh");
+    let (srv, left, right) = start(SH, SH);
     let keys = srv.cmd(&["list-keys", "-T", "root"]).expect("list-keys");
     for key in ["C-h", "C-j", "C-k", "C-l", "C-\\\\"] {
         let line = keys
@@ -612,7 +616,7 @@ fn case_6_the_keys_spawn_no_process() {
     .expect("bind C-g");
     let pid: i32 = var(&srv, &left, "#{pid}").parse().expect("server pid");
     let mut a = attach(&srv);
-    a.wait_for("$");
+    a.wait_for(PROMPT);
 
     let before = reaped_children(pid);
     for _ in 0..3 {
