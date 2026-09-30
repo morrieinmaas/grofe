@@ -1353,6 +1353,39 @@ fn capture_pane_j_keeps_widths_across_a_resize_and_prints_tabs() {
     assert_eq!(joined(&srv), want);
 }
 
+/// `renumber-windows` as tmux 3.7b (recorded): off, a killed window leaves
+/// its gap; on, the windows left are numbered again from `base-index` when
+/// one goes (killed, or its last pane joined elsewhere), not when one is
+/// made at a free index or moved to another session.
+#[test]
+fn renumber_windows_closes_the_gaps_a_removed_window_leaves() {
+    let srv = server();
+    ok(&srv, &["set", "-g", "base-index", "0"]);
+    ok(&srv, &["new-session", "-d", "-s", "s", SLEEP]);
+    for _ in 0..3 {
+        ok(&srv, &["new-window", "-t", "s", SLEEP]);
+    }
+    ok(&srv, &["new-session", "-d", "-s", "u", SLEEP]);
+    let indexes = |session: &str| {
+        let out = srv
+            .cmd(&["list-windows", "-t", session, "-F", "#{window_index}"])
+            .expect("list-windows");
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    ok(&srv, &["set", "-g", "renumber-windows", "off"]);
+    ok(&srv, &["kill-window", "-t", "s:0"]);
+    assert_eq!(indexes("s"), "1 2 3");
+    ok(&srv, &["set", "-g", "renumber-windows", "on"]);
+    ok(&srv, &["kill-window", "-t", "s:2"]);
+    assert_eq!(indexes("s"), "0 1");
+    ok(&srv, &["new-window", "-t", "s:7", SLEEP]);
+    assert_eq!(indexes("s"), "0 1 7");
+    ok(&srv, &["move-window", "-s", "s:1", "-t", "u:5"]);
+    assert_eq!(indexes("s"), "0 7");
+    ok(&srv, &["join-pane", "-s", "s:7", "-t", "s:0"]);
+    assert_eq!(indexes("s"), "0");
+}
+
 #[test]
 fn main_horizontal_takes_main_pane_height() {
     let srv = server();

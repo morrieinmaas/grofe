@@ -82,7 +82,6 @@ struct Builtin {
 /// language can say the same thing.
 // ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
 // for `pane-active-border-style` have no native spelling, so grofe's stay.
-// `renumber-windows off` is shown but grofe always renumbers.
 const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("base-index", "0"),
     ("pane-base-index", "0"),
@@ -395,8 +394,8 @@ const BUILTINS: &[Builtin] = &[
     // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
     // §5.3's defaults where grofe's differ (`extended-keys`, `mode-keys`,
     // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
-    // ones; D6 sizes windows; grofe's prompt keys are emacs's; grofe always
-    // renumbers.
+    // ones; D6 sizes windows; grofe's prompt keys are emacs's.
+    // `renumber-windows` itself is read (`Model::remove_window`).
     // ponytail: `default-command`, `default-shell` and `synchronize-panes`
     // do something in tmux; grofe stores them only, until a ported script
     // needs one. `mode-keys` waits for M5's copy mode, and
@@ -1964,7 +1963,6 @@ const NO_EFFECT: &[&str] = &[
     "extended-keys-format",
     "mode-keys",
     "pane-border-format",
-    "renumber-windows",
     "status-keys",
     "synchronize-panes",
     "terminal-features",

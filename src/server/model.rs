@@ -431,7 +431,27 @@ impl Model {
         let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
         let removed = self.take_panes(&ids);
         self.unlink_window(w.session, window);
+        self.renumber_after_removal(w.session);
         removed
+    }
+
+    /// With `renumber-windows` on, `session`'s windows are numbered again
+    /// from `base-index` in order, as tmux 3.7b does when one of them is
+    /// destroyed (recorded; not when one moves to another session).
+    fn renumber_after_removal(&mut self, session: SessionId) {
+        let on = self
+            .options
+            .lookup("renumber-windows", &[options::Owner::Session(session)])
+            == Some("on");
+        let Some(s) = self.sessions.get(&session).filter(|_| on) else {
+            return;
+        };
+        let base = self.base_index(session);
+        for (i, id) in s.windows.clone().iter().enumerate() {
+            if let Some(w) = self.windows.get_mut(id) {
+                w.index = base + i as u32;
+            }
+        }
     }
 
     /// Takes `window` out of `session`'s window list and last-window
