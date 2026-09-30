@@ -117,8 +117,6 @@ fn chains_match_their_golden() {
 }
 
 #[test]
-#[ignore = "native gap: output before a failing command in a chain is dropped \
-            (run_commands in server/dispatch/mod.rs); listed for FE.2"]
 fn output_before_a_failing_command_matches_its_golden() {
     check_golden("chain-error");
 }
@@ -305,16 +303,10 @@ const FE1_VERBS: &[&str] = &[
 
 /// M1 to M3 verb forms that do not translate yet, each with the task that
 /// owns the missing piece. Every other one must translate.
-const PENDING: &[(&str, &str)] = &[
-    (
-        "list-clients -F -t",
-        "FE.2: list-clients -t, left unparsed by TC.2",
-    ),
-    (
-        "send-keys -N",
-        "M5: a repeat count in copy-mode tables (M36-R8)",
-    ),
-];
+const PENDING: &[(&str, &str)] = &[(
+    "send-keys -N",
+    "M5: a repeat count in copy-mode tables (M36-R8)",
+)];
 
 /// Corpus lines whose placeholders stand for more than one word, or that
 /// are a shell alias the caller completes, so they cannot be made

@@ -156,14 +156,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "native: no cursor_y variable (TC.3's FormatVars)",
     ),
     (
-        "$ display -p -t main:1.1 '#{history_bytes}'",
-        "native: no history_bytes variable (TC.3's FormatVars)",
-    ),
-    (
-        "$ display -p -t main:1.1 '#{history_limit}'",
-        "native: no history_limit variable (TC.3's FormatVars)",
-    ),
-    (
         "$ display -p -t main:1.1 '#{log_info}'",
         "native: tmux formats fall back to the session, then the global, \
          environment; grofe's FormatVars do not",
@@ -181,20 +173,8 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
     ),
     (
-        "$ display -p -t main:1.1 '#{pane_right}'",
-        "native: no pane_right variable (TC.3's FormatVars)",
-    ),
-    (
-        "$ display -p -t main:1.1 '#{session_path}'",
-        "native: no session_path variable (TC.3's FormatVars)",
-    ),
-    (
         "$ display -p -t main:1.1 '#{start_time}'",
         "native: no start_time variable (TC.3's FormatVars)",
-    ),
-    (
-        "$ display -p -t main:1.1 '#{window_layout}'",
-        "FE.2: tmux's layout string (TC.3 left window_layout an empty stub)",
     ),
     (
         "$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'",
@@ -205,18 +185,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'",
         "native: grofe's format language has no q:, E:, T:, =N:, s///: or n: \
          (TC.3); the front end leaves them, and notes them in compat-miss.log",
-    ),
-    (
-        "$ list-panes -a -f '#{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}}' -F '#{session_name}'",
-        "FE.2: list-* -a and -f",
-    ),
-    (
-        "$ list-panes -a -f '#{==:#{pane_dead},1}' -F '#{pane_id}'",
-        "FE.2: list-* -a and -f",
-    ),
-    (
-        "$ list-panes -t main:1 -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}] #{?pane_active,[active],[inactive]}'",
-        "native: no history_limit variable (TC.3's FormatVars)",
     ),
     (
         "$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p \"not #W\"'",
@@ -251,10 +219,6 @@ fn hooks_match_their_golden() {
 }
 
 const HOOK_GAPS: &[(&str, &str)] = &[
-    (
-        "$ resize-window -t main:1 -x 70",
-        "FE.2: the resize-window row; the hook itself is mapped",
-    ),
     (
         "$ set-hook -g alert-bell 'display x'",
         "refused on purpose: grofe has no event for this tmux hook (spec 4.5 names twelve)",

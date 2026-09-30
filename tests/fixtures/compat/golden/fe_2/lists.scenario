@@ -1,0 +1,37 @@
+# FE.2: list-sessions, list-windows and list-panes with no -F print tmux's
+# default columns (D26: `(created)` and `(attached)`), with -a, -s, -t and
+# -f; list-clients (D16) by default, with -t, by tty. Panes run sleep, so
+# their history is empty on both sides (tmux's history_bytes counts cells
+# a shell prompt allocated). Windows are named, since tmux renames a new
+# window from its command only later.
+$ new-session -d -s main -n one -x 200 -y 50 'sleep 1000'
+$ split-window -h -t main 'sleep 1000'
+$ split-window -v -t main 'sleep 1000'
+$ new-window -t main -n two 'sleep 1000'
+$ new-session -d -s b -n three -x 120 -y 40 'sleep 1000'
+$ list-sessions
+$ ls
+$ list-windows -t main
+$ list-windows -a
+$ lsw -a
+$ list-panes -t main:1
+$ list-panes -s -t main
+$ list-panes -a
+$ list-sessions -f '#{==:#{session_name},b}'
+$ list-windows -a -f '#{window_active}'
+$ list-panes -a -f '#{pane_active}' -F '#{session_name} #{pane_id}'
+$ list-panes -a -f '#{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}}' -F '#{session_name}'
+$ list-sessions -F '#{session_name} #{session_windows} #{session_attached}' -f '#{!=:#{session_name},main}'
+$ list-clients
+client 80x24 attach -t main
+$ list-sessions
+$ list-clients
+$ list-clients -t b
+$ list-clients -t '=main:' -F '#{client_tty} #{client_name}'
+$ list-clients -F '#{client_name} #{session_name}'
+$ list-clients -f '#{==:#{session_name},b}'
+$ switch-client -c {client} -t b
+$ list-clients -F '#{client_name} #{session_name}'
+$ list-clients -t b
+$ detach-client -t {client}
+$ list-clients

@@ -1,0 +1,30 @@
+$ has-session -t =x
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ info
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ new-session -d -s xy -x 80 -y 24 'sleep 1000'
+? 0
+$ has-session -t =x
+! can't find session: x
+? 1
+$ has-session -t x
+? 0
+$ has-session -t =xy
+? 0
+$ new-session -d -s x -x 80 -y 24 'sleep 1000'
+? 0
+$ has-session -t =x
+? 0
+$ has-session -t =nope
+! can't find session: nope
+? 1
+$ info
+? 0
+$ server-info
+? 0
+$ show-messages -JT
+? 0
+$ show-messages -J
+? 0

@@ -1,0 +1,35 @@
+# FE.2: tmux's checksum layout string (#{window_layout}) after scripted
+# splits at 200x50, and select-layout reading layout strings back: the
+# window's own, one naming other panes, and the errors (spec §4.3).
+$ new-session -d -s main -x 200 -y 50
+$ split-window -h -t main
+$ split-window -v -t main
+$ split-window -h -t main:1.1
+$ split-window -v -l 30% -t main:1.2
+$ display -p -t main '#{window_layout}'
+$ list-panes -a -F '#{pane_id} #{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+$ select-layout -t main even-horizontal
+$ display -p -t main '#{window_layout}'
+# The golden's own string puts the geometry back.
+$ select-layout -t main '6924,200x50,0,0{50x50,0,0,0,49x50,51,0[49x34,51,0,3,49x15,51,35,4],99x50,101,0[99x25,101,0,1,99x24,101,26,2]}'
+$ display -p -t main '#{window_layout}'
+$ list-panes -a -F '#{pane_id} #{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+# The cells take the window's panes in order, whatever the string numbers.
+$ select-layout -t main 'f0df,200x50,0,0[200x10,0,0,7,200x39,0,11{60x39,0,11,8,139x39,61,11[139x19,61,11,9,139x9,61,31,10,139x9,61,41,11]}]'
+$ display -p -t main '#{window_layout}'
+$ list-panes -a -F '#{pane_id} #{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+# Errors, each leaving the layout as it was.
+$ select-layout -t main 'ffff,200x50,0,0{100x50,0,0,1,99x50,101,0,2}'
+$ select-layout -t main '4f3d,200x50,0,0{100x50,0,0,1,99x50,101,0,2}'
+$ select-layout -t main '4f3d,200x50,0,0{100x50,0,0,1,99x50,101,0,2'
+$ select-layout -t main nonsense
+$ display -p -t main '#{window_layout}'
+# More cells than panes: the bottom-right ones go.
+$ select-layout -t main '2258,200x50,0,0{100x50,0,0[100x25,0,0,1,100x24,0,26,2],99x50,101,0[99x10,101,0,3,99x10,101,11,4,99x10,101,22,5,99x10,101,33,6,99x6,101,44,7]}'
+$ display -p -t main '#{window_layout}'
+$ list-panes -a -F '#{pane_id} #{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+# One pane, and a zoomed window's layout (the unzoomed one, as tmux).
+$ new-window -t main
+$ display -p -t main:2 '#{window_layout}'
+$ resize-pane -Z -t main:1.1
+$ display -p -t main:1 '#{window_layout} #{window_zoomed_flag}'
