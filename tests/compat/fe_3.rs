@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::fe_1::grofe_cli;
 use crate::normalize::{Normalizer, fixtures_dir};
-use crate::replay::{Cli, parse_scenario, replay};
+use crate::replay::{Cli, Transcript, parse_scenario, replay};
 
 /// A transcript split into steps: each step's first line (`$ ...`,
 /// `client ...`, `screen ...`) with everything it recorded.
@@ -39,7 +39,7 @@ fn check(name: &str, diverges: &[(&str, &str)], fix: fn(String) -> String) {
     let golden = fs::read_to_string(scenario.with_extension("golden")).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cli = with_client_ttys(grofe_cli(dir.path()), dir.path());
-    let got = fix(replay(&cli, &parsed).normalized(&Normalizer::load()));
+    let got = fix(exact_pids(replay(&cli, &parsed)).normalized(&Normalizer::load()));
     let (want, got) = (steps(&golden), steps(&got));
     assert_eq!(
         want.len(),
@@ -73,6 +73,32 @@ fn check(name: &str, diverges: &[(&str, &str)], fix: fn(String) -> String) {
         stale.is_empty(),
         "fe_3/{name}: listed steps now match: {stale:#?}"
     );
+}
+
+/// `t` with its pids known exactly, in place of the replayer's pid window
+/// (`normalize.txt`): the numbers that steps asking for a pid
+/// (`#{pid}`, `#{pane_pid}`) printed. On a busy machine the window spans
+/// thousands of pids, so a number such as `history-limit`'s `50000` can
+/// fall inside it and read as a pid (the `fe_1/defaults` failure); and a
+/// window whose pids wrapped past the maximum holds none at all.
+pub fn exact_pids(mut t: Transcript) -> Transcript {
+    let mut pids = Vec::new();
+    let mut asks = false;
+    for line in t.text.lines() {
+        if line.starts_with("$ ") || line.starts_with("$& ") || line.starts_with("client ") {
+            asks = line.contains("pid}");
+            continue;
+        }
+        if asks && !line.starts_with("! ") && !line.starts_with("? ") {
+            pids.extend(
+                line.split(|c: char| !c.is_ascii_digit())
+                    .filter_map(|n| n.parse::<u64>().ok()),
+            );
+        }
+    }
+    t.ctx.pids = None;
+    t.ctx.exact_pids = pids;
+    t
 }
 
 /// `cli` behind a wrapper that answers the replayer's attach check,
@@ -427,4 +453,30 @@ fn the_shipped_option_tables_are_the_golden_s() {
             .collect();
         assert_eq!(got, want, "{section}");
     }
+}
+
+/// The root cause of the `fe_1/defaults` failure, pinned: with the pid
+/// window spanning 50000, `history-limit`'s value reads as a pid; with
+/// the pids known exactly it stays, and a real pid is still replaced.
+#[test]
+fn a_value_inside_the_pid_window_is_not_a_pid() {
+    let text = "$ show -gqv history-limit\n50000\n? 0\n$ display -p '#{pid}'\n50123\n? 0\n";
+    let ctx = crate::normalize::Context {
+        pids: Some(49_000..=51_000),
+        ..Default::default()
+    };
+    let t = Transcript {
+        text: text.to_string(),
+        ctx,
+    };
+    let normalizer = Normalizer::load();
+    assert!(
+        t.normalized(&normalizer)
+            .starts_with("$ show -gqv history-limit\n<PID>\n")
+    );
+    let fixed = exact_pids(t).normalized(&normalizer);
+    assert_eq!(
+        fixed,
+        "$ show -gqv history-limit\n50000\n? 0\n$ display -p '#{pid}'\n<PID>\n? 0\n"
+    );
 }
