@@ -392,6 +392,10 @@ fn two_rows_draw_at_the_top_in_order() {
     set(&srv, &["-g", "status", "2"]);
     set(&srv, &["-g", "status-format[1]", "second row"]);
     set(&srv, &["-g", "status-position", "top"]);
+    // The default right side holds the pane title, the host name: a long
+    // one (a CI container's `localhost.localdomain`) leaves a 40-column row
+    // no room for the window list, as in tmux.
+    set(&srv, &["-g", "status-right", "r"]);
     let mut h = attach(&srv, 40, 8);
     h.wait_until("two rows at the top", WAIT, |t| {
         let mut rows = t.lines();
