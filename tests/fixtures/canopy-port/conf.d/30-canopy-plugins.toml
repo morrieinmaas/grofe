@@ -3,18 +3,44 @@
 
 requires = "grofe >= 0.1"
 
-# canopy's plugin layer, on grofe. Nothing loads here yet.
+# canopy's plugin layer, on grofe. The tmux layer this ports is
+# tmux/conf.d/30-plugins.conf, and every setting here is that file's, with
+# the reasoning left there rather than copied.
 #
-# On tmux, tmux/conf.d/30-plugins.conf loads the vendored tmux-resurrect and
-# tmux-continuum. On grofe they run the same way, unchanged, as plugins,
+# tmux-resurrect and tmux-continuum run on grofe unchanged, as plugins,
 # until grofe's own persistence imports their last save and replaces them.
-# The key table's save-now (M-s) and restore-now (M-r) rows already run
-# resurrect's scripts.
+# The key table's save-now (M-s) and restore-now (M-r) rows run resurrect's
+# scripts.
 #
-# The plugin loader goes here: one load command over a fixed list of ten
-# vendored plugins, resurrect and continuum among them, each loaded only
-# when bash and its entry point are present. grofe runs load commands once
-# the whole config is applied, at server start and again on every `reload`,
-# as tmux ran a plugin's entry point from source-file. They run layer by
-# layer, so user.toml's own run after this one's.
-load-commands = []
+# Loading them is not here yet. The plugin loader will go into
+# load-commands below: one load command over a fixed list of ten vendored
+# plugins, resurrect and continuum among them, each loaded only when bash
+# and its entry point are present. grofe runs load commands once the whole
+# config is applied, at server start and again on every `reload`, as tmux ran
+# a plugin's entry point from source-file, and layer by layer, so user.toml's
+# own run after these. Every option below is set before any of them runs.
+
+load-commands = [
+  # Where resurrect keeps its saves: canopy's own state directory. A load
+  # command rather than a user option, because a [user-options] value is
+  # taken as written and resurrect expands only $HOME and ~ itself; here
+  # grofe expands $CANOPY_STATE from [environment] when the config loads.
+  'set-option -g @resurrect-dir "$CANOPY_STATE/resurrect"',
+  # Which saved commands resurrect may replay, generated from the installed
+  # adapters. It runs with the loader (TP.3), before resurrect loads:
+  # """if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'""",
+]
+
+[user-options]
+# Restore the last save when the server starts.
+continuum-restore = "on"
+# Minutes between automatic saves.
+continuum-save-interval = "5"
+resurrect-strategy-nvim = "session"
+# canopy's save strategy, as a path relative to resurrect's own strategies
+# directory.
+resurrect-save-command-strategy = "../../strategies/canopy_save_command"
+# resurrect's own keys, moved off C-s and C-r before it loads, so it never
+# takes canopy's prefix-send binding.
+resurrect-save = "M-s"
+resurrect-restore = "M-r"

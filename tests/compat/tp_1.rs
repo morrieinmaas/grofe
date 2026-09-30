@@ -302,13 +302,118 @@ fn case_5_save_now_and_restore_now_run_the_vendored_resurrect_scripts() {
     );
 }
 
-/// A transcript split into steps, each headed by its `$`, `client` or
-/// `screen` line.
+/// The options `30-plugins.conf` sets for resurrect and continuum, by
+/// name without the `@`, their quotes stripped.
+fn tmux_plugin_options() -> BTreeMap<String, String> {
+    let text = fs::read_to_string(port_dir().join("30-plugins.conf")).unwrap();
+    text.lines()
+        .filter_map(|l| l.strip_prefix("set -g @"))
+        .filter(|l| l.starts_with("resurrect-") || l.starts_with("continuum-"))
+        .map(|l| {
+            let (name, value) = l.split_once(' ').unwrap();
+            let value = value.trim_matches(|c| c == '"' || c == '\'');
+            (name.to_string(), value.to_string())
+        })
+        .collect()
+}
+
+/// A server running the whole ported tree as `tmux -f <file>...`, with a
+/// session, and a way to wait for a value.
+fn tree_server(dir: &Path, extra: &[PathBuf]) -> crate::replay::Cli {
+    let mut cli = grofe_cli(dir);
+    cli.prefix.truncate(2);
+    for f in whole_tree().iter().chain(extra) {
+        cli.prefix
+            .extend(["-f".to_string(), f.display().to_string()]);
+    }
+    let (status, _, err) = cli.run(&[
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        "main".into(),
+    ]);
+    assert!(status.success(), "{err}");
+    cli
+}
+
+fn run(cli: &crate::replay::Cli, args: &[&str]) -> String {
+    let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    let (status, out, err) = cli.run(&argv);
+    assert!(status.success(), "{args:?}: {err}");
+    out.trim_end_matches('\n').to_string()
+}
+
+/// Every resurrect and continuum option canopy's tmux layer sets is set on
+/// grofe, to the same value; `@resurrect-dir`'s `$CANOPY_STATE` expands
+/// from config.toml's [environment], as tmux expands it from the server's.
+#[test]
+fn the_plugin_options_are_the_tmux_layers() {
+    let want = tmux_plugin_options();
+    assert_eq!(want.len(), 7, "{want:#?}");
+    let dir = tempfile::tempdir().unwrap();
+    let cli = tree_server(dir.path(), &[]);
+    let home = cli.env.iter().find(|(k, _)| k == "HOME").unwrap().1.clone();
+    for (name, value) in &want {
+        let value = value.replace("$CANOPY_STATE", &format!("{home}/.local/state/canopy"));
+        let got = || run(&cli, &["show-options", "-gqv", &format!("@{name}")]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while got() != value && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(got(), value, "@{name}");
+    }
+    let _ = cli.run(&["kill-server".to_string()]);
+}
+
+/// A status segment shows whenever its source printed anything, `0`
+/// included, as tmux's bar did with its segments switched on; only an
+/// empty or unset value hides it. `#{?@pet,...}` would read `0` as false.
+#[test]
+fn a_segment_whose_source_prints_0_still_shows() {
+    let tree = load(&whole_tree());
+    let right = tree.get("status.right").unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    // The sources are this machine's scripts: switched off, and their
+    // values set here instead.
+    let off = dir.path().join("no-sources.toml");
+    let tables: String = ["pet", "network", "battery"]
+        .iter()
+        .map(|n| format!("[status.sources.{n}]\ncmd = \"\"\n"))
+        .collect();
+    fs::write(&off, tables).unwrap();
+    let cli = tree_server(dir.path(), &[off]);
+    let shown = |cli: &crate::replay::Cli| run(cli, &["display-message", "-p", &right]);
+    assert!(!shown(&cli).contains("#[bg=default] 0"), "{}", shown(&cli));
+    run(&cli, &["set-option", "-g", "@pet", "0"]);
+    assert!(
+        shown(&cli).starts_with("#[bg=default] 0  "),
+        "{}",
+        shown(&cli)
+    );
+    run(&cli, &["set-option", "-g", "@battery", "0"]);
+    assert!(shown(&cli).contains("#[bg=default]0  "), "{}", shown(&cli));
+    // The old spelling hides it: why the port does not use it.
+    assert_eq!(
+        run(&cli, &["display-message", "-p", "x#{?@pet,shown,}"]),
+        "x"
+    );
+    run(&cli, &["set-option", "-g", "@pet", ""]);
+    assert!(
+        !shown(&cli).starts_with("#[bg=default] "),
+        "{}",
+        shown(&cli)
+    );
+    let _ = cli.run(&["kill-server".to_string()]);
+}
+
+/// A transcript split into steps, each headed by its `$`, `client`,
+/// `screen` or `styles` line.
 fn steps(transcript: &str) -> BTreeMap<String, String> {
     let mut out: Vec<String> = Vec::new();
     for line in transcript.split_inclusive('\n') {
-        let head =
-            line.starts_with("$ ") || line.starts_with("client ") || line.starts_with("screen");
+        let head = ["$ ", "client ", "screen", "styles "]
+            .iter()
+            .any(|p| line.starts_with(p));
         match out.last_mut() {
             Some(step) if !head => step.push_str(line),
             _ => out.push(line.to_string()),
@@ -319,23 +424,26 @@ fn steps(transcript: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Case 2: FE.3's `canopy` golden is tmux 3.7b rendering canopy's
-/// 20-status.conf, set line by line, with its `#()` aggregator a fixed
-/// script. Here grofe renders the same windows from the native fragments,
-/// with the canopy-status source pointed at that script, and every step of
-/// the golden that does not set an option must come out the same.
-#[test]
-fn case_2_the_native_status_matches_tmuxs_rendering_cell_for_cell() {
-    let golden_dir = fixtures_dir().join("golden/fe_3");
-    let golden = fs::read_to_string(golden_dir.join("canopy.golden")).unwrap();
-    let golden = steps(&golden);
+/// `golden/tp_1/canopy-status`: tmux 3.7b drawing canopy's own
+/// 20-status.conf, its `#()` aggregator a fixed script.
+fn status_golden() -> BTreeMap<String, String> {
+    let path = fixtures_dir().join("golden/tp_1/canopy-status.golden");
+    steps(&fs::read_to_string(path).unwrap())
+}
 
-    // Run as `tmux -f <file>...`, which loads those files alone, in order:
-    // the harness's defaults, canopy's fragments, then the fixed source.
+/// The golden's scenario replayed on grofe run as `tmux -f <file>...`,
+/// which loads those files alone, in order: the harness's defaults,
+/// `fragments`, then the canopy-status source pointed at the fixed script.
+/// The two steps that load the tmux config are left out.
+fn grofe_status(fragments: &[PathBuf]) -> BTreeMap<String, String> {
     let dir = tempfile::tempdir().unwrap();
     let mut cli = grofe_cli(dir.path());
+    // tmux draws 24-bit colour because the harness's terminal-features say
+    // `*:RGB`; grofe learns it only from the client's $COLORTERM (or a
+    // terminal it recognises), so its client is told the same way.
+    cli.env.push(("COLORTERM".into(), "truecolor".into()));
     let fixed = dir.path().join("99-tp1-fixed-source.toml");
-    let script = golden_dir.join("canopy-status.sh");
+    let script = fixtures_dir().join("golden/fe_3/canopy-status.sh");
     fs::write(
         &fixed,
         format!(
@@ -344,22 +452,36 @@ fn case_2_the_native_status_matches_tmuxs_rendering_cell_for_cell() {
         ),
     )
     .unwrap();
-    for f in fragments().into_iter().chain([fixed]) {
+    for f in fragments.iter().cloned().chain([fixed]) {
         cli.prefix
             .extend(["-f".to_string(), f.display().to_string()]);
     }
-
-    let scenario: String = fs::read_to_string(golden_dir.join("canopy.scenario"))
+    let scenario = fixtures_dir().join("golden/tp_1/canopy-status.scenario");
+    let scenario: String = fs::read_to_string(scenario)
         .unwrap()
         .lines()
-        .filter(|l| !l.starts_with("$ set "))
+        .filter(|l| !l.starts_with("$ set ") && !l.starts_with("$ source-file "))
         .map(|l| format!("{l}\n"))
         .collect();
     let parsed = parse_scenario(&scenario).unwrap();
-    let got = replay(&cli, &parsed).normalized(&Normalizer::load());
-    let got = steps(&got);
+    steps(&replay(&cli, &parsed).normalized(&Normalizer::load()))
+}
+
+/// Case 2: grofe draws canopy's native fragments exactly as tmux 3.7b draws
+/// canopy's tmux layer: the text of every row, and the colours and
+/// attributes of both status rows, cell for cell, before and after a zoom.
+#[test]
+fn case_2_the_native_status_matches_tmuxs_rendering_cell_for_cell() {
+    let golden = status_golden();
+    let got = grofe_status(&fragments());
     let heads: Vec<&str> = got.keys().map(String::as_str).collect();
-    for want in ["client 80x24 attach -t main", "screen net up", "screen +"] {
+    for want in [
+        "client 80x24 attach -t main",
+        "screen net up",
+        "styles 0-1 net up",
+        "screen +",
+        "styles 0-1 +",
+    ] {
         assert!(heads.contains(&want), "{heads:#?}");
     }
     for (head, step) in &got {
@@ -369,4 +491,29 @@ fn case_2_the_native_status_matches_tmuxs_rendering_cell_for_cell() {
             "step {head:?} differs from tmux 3.7b's"
         );
     }
+}
+
+/// Case 2's check sees colour: one theme colour changed in the status
+/// fragment leaves the text alone and breaks the styles steps.
+#[test]
+fn case_2_a_changed_theme_colour_fails_the_comparison() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut files = fragments();
+    let status = files
+        .iter_mut()
+        .find(|f| f.ends_with("20-canopy-status.toml"))
+        .unwrap();
+    let text = fs::read_to_string(&*status).unwrap();
+    let broken = text.replace("theme_blue = \"#458588\"", "theme_blue = \"#458589\"");
+    assert_ne!(text, broken);
+    let copy = dir.path().join("20-canopy-status.toml");
+    fs::write(&copy, broken).unwrap();
+    *status = copy;
+    let golden = status_golden();
+    let got = grofe_status(&files);
+    assert_eq!(got.get("screen net up"), golden.get("screen net up"));
+    assert_ne!(
+        got.get("styles 0-1 net up"),
+        golden.get("styles 0-1 net up")
+    );
 }

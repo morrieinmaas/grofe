@@ -72,7 +72,7 @@ left = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_g
 # The pet, network and battery segments read status sources, each in its
 # own @<name>. The network pills sit in one #[range=user|net], which the
 # MouseDown1Status binding below reads.
-right = "#{?@pet,#[bg=default] #{@pet}  ,}#{?@network,#[bg=default]#[range=user|net]#{@network}#[norange]  ,}#{?@battery,#[bg=default]#{@battery}  ,}#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_grey}] %a %d %b #[fg=#{@theme_grey},bg=default]#{@pill_r}  #[fg=#{@theme_green},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_green},bold] %H:%M #[fg=#{@theme_green},bg=default,nobold]#{@pill_r} "
+right = "#{?#{!=:#{@pet},},#[bg=default] #{@pet}  ,}#{?#{!=:#{@network},},#[bg=default]#[range=user|net]#{@network}#[norange]  ,}#{?#{!=:#{@battery},},#[bg=default]#{@battery}  ,}#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_grey}] %a %d %b #[fg=#{@theme_grey},bg=default]#{@pill_r}  #[fg=#{@theme_green},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_green},bold] %H:%M #[fg=#{@theme_green},bg=default,nobold]#{@pill_r} "
 
 [status.window]
 separator = " "

@@ -65,7 +65,7 @@ if grep -n '{{' "$tmp/user.toml" "$tmp/user.conf"; then
 fi
 
 # The regenerate: canopy's generator, from the checkout, into a scratch dir.
-clean CANOPY_STORE="$canopy" sh "$canopy/bin/canopy-grofe" generate --out "$tmp/regen" ||
+clean CANOPY_STORE="$canopy" CANOPY_GROFE="$grofe" sh "$canopy/bin/canopy-grofe" generate --out "$tmp/regen" ||
   fail "canopy grofe generate failed"
 if ! diff -ru "$canopy/grofe/conf.d" "$tmp/regen"; then
   fail "canopy's grofe/conf.d is stale: run canopy grofe generate --out grofe/conf.d there"
@@ -93,6 +93,8 @@ load "$tmp/regen"
 # The copies tests/compat/tp_1.rs reads.
 copies=(
   "$canopy/tmux/keys.tsv:keys.tsv"
+  "$canopy/tmux/conf.d/20-status.conf:20-status.conf"
+  "$canopy/tmux/conf.d/30-plugins.conf:30-plugins.conf"
   "$canopy/grofe/keys.tsv:keys-grofe.tsv"
   "$dots/dot_config/grofe/config.toml:config.toml"
   "$tmp/user.toml:user.toml"

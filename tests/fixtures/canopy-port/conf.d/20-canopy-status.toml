@@ -14,9 +14,11 @@ requires = "grofe >= 0.1"
 # The rule it exists for still holds: one process per interval, not one per
 # segment.
 #
-# Nothing here has to load before a plugin. On tmux, continuum prepended its
-# autosave hook to status-right, so this layer had to run first; grofe has
-# no such hook to keep.
+# Load order does not have to protect continuum's autosave here. On tmux,
+# continuum prepends its hook to whatever status-right holds when it loads,
+# so this layer had to run before the plugin layer. On grofe the plugins
+# load as load commands, after every layer is applied, so continuum
+# prepends its hook to the final status-right, this one's or user.toml's.
 
 # Colour is data. The defaults are a light palette; a theme overwrites them
 # at runtime with `set -g @theme_*`, which wins over this layer and survives
