@@ -235,6 +235,8 @@ pub struct ClientEntry {
     held: VecDeque<Input>,
     held_bytes: usize,
     holds: u32,
+    /// The hold passed its cap: all input is dropped until it is released.
+    held_full: bool,
     /// Needs a new frame.
     dirty: bool,
     outbox: Outbox,
@@ -379,6 +381,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             held: VecDeque::new(),
             held_bytes: 0,
             holds: 0,
+            held_full: false,
             viewport: (0, 0),
             pan: None,
             suspended: false,
@@ -1838,7 +1841,7 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
 
 /// How much input a client may have held ([`hold_input`]): paste bytes,
 /// and one for anything else. tmux holds without limit; past this grofe
-/// drops what arrives, and logs it.
+/// drops everything that arrives until the hold is released, and logs it.
 const HELD_CAP: usize = 1 << 20;
 
 /// One decoded input from client `id`: held behind a running shell
@@ -1852,8 +1855,11 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
             Input::Paste { data, .. } => data.len().max(1),
             _ => 1,
         };
-        if c.held_bytes + size > HELD_CAP {
-            eprintln!("grofe server: input held for {} is full; dropped", c.name);
+        if c.held_full || c.held_bytes + size > HELD_CAP {
+            if !c.held_full {
+                eprintln!("grofe server: input held for {} is full; dropped", c.name);
+            }
+            c.held_full = true;
             return;
         }
         c.held_bytes += size;
@@ -1888,6 +1894,9 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         return;
     };
     c.holds = c.holds.saturating_sub(1);
+    if c.holds == 0 {
+        c.held_full = false;
+    }
     let now = Instant::now();
     loop {
         let Some(c) = state.clients.get_mut(&id) else {
@@ -2142,6 +2151,7 @@ mod tests {
                 held: VecDeque::new(),
                 held_bytes: 0,
                 holds: 0,
+                held_full: false,
                 viewport: (0, 0),
                 pan: None,
                 suspended: false,
@@ -2260,6 +2270,37 @@ mod tests {
         state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP;
         input(&mut state, id, b"c", now);
         assert!(state.clients[&id].held.is_empty(), "dropped past the cap");
+    }
+
+    /// Past the cap, everything that arrives is dropped until the hold is
+    /// released, not only the input that did not fit: a later small key
+    /// would otherwise run with a gap before it.
+    #[test]
+    fn past_the_cap_held_input_is_dropped_until_release() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let key = |k: &str| Input::Key(crate::server::input::parse_key(k).unwrap());
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("a"), now);
+        state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP - 1;
+        let big = Input::Paste {
+            data: vec![b'x'; 2],
+            start: true,
+            end: true,
+        };
+        deliver(&mut state, id, big, now);
+        deliver(&mut state, id, key("b"), now);
+        assert_eq!(
+            state.clients[&id].held.iter().cloned().collect::<Vec<_>>(),
+            vec![key("a")],
+            "b came after a dropped paste"
+        );
+        release_input(&mut state, id);
+        assert!(state.clients[&id].held.is_empty());
+        // A new hold holds again.
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("c"), now);
+        assert_eq!(state.clients[&id].held.len(), 1);
     }
 
     /// TC.11: a click maps onto the status row it lands on, at the bottom
