@@ -123,6 +123,9 @@ fn main() -> ExitCode {
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
+        "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
+            attach_existing(&globals.socket(), rest)
+        }
         "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
         _ => {
             let (socket, own_dir) = globals.resolve();
@@ -359,6 +362,40 @@ fn fail(msg: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// For `new-session -A -s <name>`: the id of the running session named
+/// exactly `<name>`, if there is one (no server means none).
+fn existing_for_a(socket: &Path, argv: &[String]) -> Option<String> {
+    let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv) else {
+        return None;
+    };
+    let name = c.name.filter(|_| c.attach)?;
+    let stream = UnixStream::connect(socket).ok()?;
+    let argv = ["list-sessions", "-F", "#{session_id} #{session_name}"].map(String::from);
+    let Ok(Reply::Ok { out, .. }) = request(stream, socket, &argv) else {
+        return None;
+    };
+    out.lines()
+        .filter_map(|l| l.split_once(' '))
+        .find(|(_, n)| *n == name)
+        .map(|(id, _)| id.to_string())
+}
+
+/// `new-session -A` for a session that exists: tmux 3.7b's
+/// `attach-session`, even with `-d` (recorded): the client attaches when it
+/// has a terminal, else fails as tmux does.
+fn attach_existing(socket: &Path, argv: &[String]) -> ExitCode {
+    if !io::stdin().is_terminal() {
+        return fail("open terminal failed: not a terminal");
+    }
+    match existing_for_a(socket, argv) {
+        Some(id) => attach(
+            socket,
+            &["attach-session".to_string(), "-t".to_string(), id],
+        ),
+        None => fail("no sessions"),
+    }
+}
+
 /// Whether `argv` is a `new-session` that attaches (no `-d`). One that does
 /// not parse goes to the server as usual, which reports the error.
 fn attaches(argv: &[String]) -> bool {
@@ -392,7 +429,10 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
     let id = match connect_or_start(&socket, own_dir, true)
         .and_then(|stream| request_with(stream, &hello, &create))
     {
-        Ok(Reply::Ok { out, .. }) => out.trim().to_string(),
+        // The id is the last line; `-P`'s output comes before it.
+        // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
+        // pane (recorded); grofe has no view mode until M5 and drops it.
+        Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),

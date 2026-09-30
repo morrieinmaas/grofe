@@ -3,13 +3,11 @@
 use std::time::Instant;
 
 use crate::cmd::{
-    HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
+    self, HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
 };
 use crate::protocol::ClientCtx;
-use crate::server::dispatch::options::Owner;
-use crate::server::dispatch::pane::print_pane;
-use crate::server::dispatch::window::{AUTOMATIC_RENAME, default_name};
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::dispatch::options::{FormatCtx, Owner, ServerVars};
+use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
 use crate::server::model::{DEFAULT_SIZE, Session, Window};
@@ -18,8 +16,18 @@ use crate::types::{SessionId, cap_size};
 
 /// `new-session`: a session with one window holding one pane. The server
 /// always creates it detached; without `-d` the CLI then attaches to it
-/// (`new_and_attach` in `main.rs`).
+/// (`new_and_attach` in `main.rs`). With `-A` and an existing `-s` name it
+/// attaches to that session instead ([`attach_existing`]).
 pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<String, String> {
+    if c.attach
+        && let Some(id) = c
+            .name
+            .as_deref()
+            .and_then(|n| state.model.session_by_name(n))
+    {
+        attach_existing(state, ctx, id);
+        return Ok(String::new());
+    }
     let model = &mut state.model;
     if let Some(name) = &c.name {
         check_name(model, name)?;
@@ -67,11 +75,12 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         attached: 0,
         created: std::time::SystemTime::now(),
     });
+    let named = c.window_name.is_some();
     model.insert_window(Window {
         id: window,
         session: id,
         index: model.base_index(id),
-        name: c.window_name.clone().unwrap_or_else(|| default_name(&cwd)),
+        name: c.window_name.unwrap_or_else(|| default_name(&cwd)),
         layout: LayoutTree::new(pane),
         active: pane,
         zoomed: false,
@@ -81,20 +90,46 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         last_panes: Vec::new(),
         floating: Vec::new(),
     });
-    // As tmux: a window named by `-n` keeps that name.
-    if c.window_name.is_some() {
+    // `-n` names the window for good, as `rename-window` does.
+    if named {
         model
             .options
-            .set(Owner::Window(window), AUTOMATIC_RENAME, "off", false)?;
+            .set(Owner::Window(window), "automatic-rename", "off", false)?;
     }
     crate::server::hooks::session_created(state, id);
-    // tmux 3.7b's default `-P` format for a session (recorded: `n2:`).
-    Ok(if c.print {
-        let format = c.format.as_deref().unwrap_or("#{session_name}:");
-        print_pane(&state.model, pane, Some(format))
-    } else {
-        String::new()
-    })
+    if !c.print {
+        return Ok(String::new());
+    }
+    let format = c.format.as_deref().unwrap_or(NEW_SESSION_TEMPLATE);
+    let vars = FormatCtx::new(&state.model, pane);
+    Ok(format!(
+        "{}\n",
+        cmd::expand(format, &ServerVars::new(state, pane, &vars))
+    ))
+}
+
+/// What `new-session -P` prints without `-F` (tmux's
+/// `NEW_SESSION_TEMPLATE`).
+const NEW_SESSION_TEMPLATE: &str = "#{session_name}:";
+
+/// `new-session -A` for a session that exists, as tmux 3.7b's
+/// `attach-session`: an attached client (a binding's) switches to it.
+/// From the CLI the session becomes the most recently active one, so the
+/// `display-message -p #{session_id}` `new_and_attach` sends after it names
+/// this session and the CLI attaches to it; a second `-A` call therefore
+/// makes no duplicate.
+// The CLI's own `new -A` for an existing session never gets here: `main.rs`
+// attaches to it first (despite `-d`, as tmux 3.7b), or fails without a
+// terminal. This covers a session made between that check and the create.
+fn attach_existing(state: &mut State, ctx: &ClientCtx, id: SessionId) {
+    match ctx.client.filter(|c| state.clients.contains_key(c)) {
+        Some(client) => clients::show_session(state, client, id),
+        None => {
+            if let Some(s) = state.model.sessions.get_mut(&id) {
+                s.activity = Instant::now();
+            }
+        }
+    }
 }
 
 pub fn kill_session(state: &mut State, ctx: &ClientCtx, c: KillSession) -> Result<String, String> {
@@ -147,16 +182,17 @@ pub fn rename_session(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<S
     Ok(String::new())
 }
 
-/// `switch-client` for the current client (the one whose binding ran it,
-/// else the most recently active one, as tmux picks): `-T` sets its key
-/// table; `-l` goes to its last session, `-n` / `-p` to the next or
-/// previous session by name (wrapping), otherwise to `-t`.
+/// `switch-client` for the `-c` client, else the current client (the one
+/// whose binding ran it, else the most recently active one, as tmux
+/// picks): `-T` sets its key table for its next key; `-l` goes to its last
+/// session, `-n` / `-p` to the next or previous session by name
+/// (wrapping), otherwise to `-t`.
 pub fn switch_client(
     state: &mut State,
     ctx: &ClientCtx,
     c: SwitchClient,
 ) -> Result<String, String> {
-    let id = clients::current_client(state, ctx).ok_or_else(|| "no current client".to_string())?;
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
     if let Some(table) = &c.key_table {
         if !state.registry.key_tables.exists(table) {
             return Err(format!("table {table} doesn't exist"));

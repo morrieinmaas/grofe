@@ -106,7 +106,11 @@ pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<
     run_commands(state, ctx, cmds)
 }
 
-fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Result<String, String> {
+pub(crate) fn run_commands(
+    state: &mut State,
+    ctx: &ClientCtx,
+    cmds: Vec<Command>,
+) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them. A new name is drawn even if the command only reads.
     if window::automatic_rename(&mut state.model) {
@@ -114,13 +118,22 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
     }
     let mut out = String::new();
     let mut result = Ok(());
-    for cmd in cmds {
+    let mut cmds = cmds.into_iter();
+    while let Some(cmd) = cmds.next() {
+        let waits =
+            matches!(&cmd, Command::WaitFor(w) if !w.signal) && state.deferred_reply.is_none();
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
                 result = Err(e);
                 break;
             }
+        }
+        // A `wait-for` that blocked holds the rest of the request until
+        // its channel is signalled, as tmux 3.7b's command queue does (TC.9).
+        if waits && state.deferred_reply.is_some() && cmds.len() > 0 {
+            client::hold_rest(state, ctx, cmds.collect(), std::mem::take(&mut out));
+            break;
         }
     }
     server::hooks::run_pending(state);

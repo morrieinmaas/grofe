@@ -410,6 +410,10 @@ pub enum Frame {
     Output(Vec<u8>),
     /// server -> client: `detached`, `server exited`, `session killed`, ...
     Exit(String),
+    /// server -> client (`suspend-client`, TC.9): give the terminal back and
+    /// stop with SIGTSTP; once continued, take it again and send a
+    /// `Resize`, which the server answers with a full redraw.
+    Suspend,
 }
 
 const KIND_INPUT: u8 = 0;
@@ -417,6 +421,7 @@ const KIND_RESIZE: u8 = 1;
 const KIND_DETACH: u8 = 2;
 const KIND_OUTPUT: u8 = 3;
 const KIND_EXIT: u8 = 4;
+const KIND_SUSPEND: u8 = 5;
 
 /// One kind byte plus a big-endian `u32` payload length.
 const FRAME_HEADER_LEN: usize = 5;
@@ -478,6 +483,7 @@ impl Decoder for FrameCodec {
             KIND_DETACH => Frame::Detach,
             KIND_OUTPUT => Frame::Output(payload),
             KIND_EXIT => Frame::Exit(String::from_utf8(payload)?),
+            KIND_SUSPEND => Frame::Suspend,
             other => return Err(FrameError::UnknownKind(other)),
         }))
     }
@@ -498,6 +504,7 @@ impl Encoder<Frame> for FrameCodec {
             Frame::Detach => (KIND_DETACH, Vec::new()),
             Frame::Output(bytes) => (KIND_OUTPUT, bytes),
             Frame::Exit(reason) => (KIND_EXIT, reason.into_bytes()),
+            Frame::Suspend => (KIND_SUSPEND, Vec::new()),
         };
         if payload.len() > MAX_MESSAGE_LEN {
             return Err(FrameError::TooLarge {
@@ -876,6 +883,7 @@ mod tests {
     #[test]
     fn exit_frame_round_trips() {
         frame_round_trip(Frame::Exit("detached".to_string()));
+        frame_round_trip(Frame::Suspend);
     }
 
     #[test]

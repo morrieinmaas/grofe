@@ -1462,30 +1462,62 @@ const DEFAULT_MESSAGE: &str =
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
 /// active one, as tmux's `cmd_find_best_client`), so `#{client_width}`
-/// and the other `client_*` variables work.
-// ponytail: printed with or without `-p`; showing it on the client's
-// status line without `-p` is M3.6's (spec §4.5 listing row).
-fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+/// and the other `client_*` variables work. With `-p` it is printed;
+/// without, it goes on that client's status line (`clients::
+/// display_message`, which logs it for `show-messages`), and with no
+/// client attached nothing happens, as in tmux 3.7b.
+fn display_message(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: DisplayMessage,
+) -> Result<String, String> {
+    // `-d` is checked first, as tmux 3.7b's `args_strtonum` (recorded).
+    let delay = match c.delay.as_deref().map(str::parse::<i128>) {
+        None => None,
+        Some(Ok(n)) if n < 0 => return Err("delay too small".to_string()),
+        Some(Ok(n)) if n > i128::from(u32::MAX) => return Err("delay too large".to_string()),
+        Some(Ok(n)) => Some(std::time::Duration::from_millis(
+            u64::try_from(n).unwrap_or(0),
+        )),
+        Some(Err(_)) => return Err("delay invalid".to_string()),
+    };
     let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
-    // `-c` names the client the format sees; tmux 3.7b's `-p` does not
-    // fail on an unknown one (recorded), it uses the current client.
-    let named = c
-        .client
-        .as_deref()
-        .and_then(|name| state.clients.iter().find(|(_, cl)| cl.name == name))
-        .map(|(id, _)| *id);
-    let client = named.or_else(|| clients::current_client(state, ctx));
-    let out = match client.and_then(|id| state.clients.get(&id)) {
+    // `-c` names the client for the message; one that is not there shows
+    // nothing, as tmux's `CMD_CLIENT_CANFAIL`. Formats see that client if
+    // it shows the pane's session, else the current one.
+    let current = match &c.client {
+        Some(name) => state
+            .clients
+            .iter()
+            .find(|(_, e)| &e.name == name)
+            .map(|(id, _)| *id),
+        None => clients::current_client(state, ctx),
+    };
+    let session = model
+        .panes
+        .get(&pane)
+        .and_then(|p| model.windows.get(&p.window))
+        .map(|w| w.session);
+    let for_formats = current
+        .filter(|id| state.clients.get(id).map(|e| e.session) == session)
+        .or_else(|| clients::current_client(state, ctx));
+    let out = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
             expand(text, &ServerVars::new(state, pane, &client))
         }
         None => expand(text, &ServerVars::new(state, pane, &vars)),
     };
-    Ok(format!("{out}\n"))
+    if c.print {
+        return Ok(format!("{out}\n"));
+    }
+    if let Some(id) = current {
+        clients::display_message(state, id, &out, delay);
+    }
+    Ok(String::new())
 }
 
 fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {

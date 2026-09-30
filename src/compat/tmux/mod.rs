@@ -1087,6 +1087,7 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         target: Target::Current,
         text: Some(lines.join("\n")),
         client: None,
+        delay: None,
     })])
 }
 
