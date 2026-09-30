@@ -790,7 +790,7 @@ behave as the owner's `copy-mode-vi` table does under tmux 3.7b, so the
 shift-drag fallback (spec §10) retires. **Overlays:** `display-popup`,
 `display-menu`, `display-panes` and `choose-tree` moved to M3.6 (TC.6, TC.7,
 TC.9) and are done there; M5's only overlays are copy mode's own view and
-`choose-buffer`, which reuses TC.9's chooser. M5 also closes M3.7: TP.5 (yank)
+`choose-buffer`, which reuses TC.9's chooser. M5 also closes M3.7: TP.11 (yank)
 and TP.9b (the parity rows that need copy mode) run at its end. The wheel's read-only scrollback
 view from T3.2 is replaced by copy mode, as the owner's root `WheelUpPane`
 binding asks.
