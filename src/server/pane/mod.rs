@@ -509,18 +509,27 @@ impl PaneHandle {
                     .contains(CellFlags::WRAPLINE);
             // Without a wrap, `-J` stops at the used width; a non-blank
             // cell the program did not write (`DECALN`) still counts.
+            let cols = grid.columns();
+            let tab_stop = |col: usize| ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
             let end = if join && !wraps {
-                (0..grid.columns())
-                    .rev()
-                    .find(|&c| row[Column(c)].c != ' ')
-                    .map_or(0, |c| c + 1)
+                // A tab counts as far as the stop it moved to (tmux's
+                // `cellused`), a blank or not.
+                (0..cols)
+                    .map(|c| match row[Column(c)].c {
+                        ' ' => 0,
+                        '\t' => tab_stop(c),
+                        _ => c + 1,
+                    })
+                    .max()
+                    .unwrap_or(0)
                     .max(written::used(row))
             } else {
                 grid.columns()
             };
             let mut text = String::new();
             // A tab is its `\t` alone, as tmux captures it: the blank cells
-            // it moved over, up to the next tab stop, are not printed.
+            // it moved over, up to the next tab stop, are not printed. One
+            // written over before its stop is a blank, like those cells.
             let mut tab_end = 0;
             for col in 0..end {
                 let cell = &row[Column(col)];
@@ -548,9 +557,20 @@ impl PaneHandle {
                     text.push(' ');
                     continue;
                 }
-                text.push(cell.c);
                 if cell.c == '\t' {
-                    tab_end = (col / TAB_STOP + 1) * TAB_STOP;
+                    let stop = tab_stop(col);
+                    let intact = (col + 1..stop).all(|c| {
+                        let cell = &row[Column(c)];
+                        cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
+                    });
+                    if intact {
+                        text.push('\t');
+                        tab_end = stop;
+                    } else {
+                        text.push(' ');
+                    }
+                } else {
+                    text.push(cell.c);
                 }
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);

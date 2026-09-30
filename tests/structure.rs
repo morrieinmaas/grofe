@@ -1438,6 +1438,27 @@ fn capture_pane_j_gains_no_padding_across_a_resize() {
     }
 }
 
+/// A tab written over captures as blanks, as tmux 3.7b (recorded):
+/// `a\t\e[3Dxy` is `a    xy` with `-p`, and with `-J` keeps the tab's
+/// width, `a    xy `.
+#[test]
+fn capture_pane_prints_a_tab_written_over_as_blanks() {
+    let srv = server();
+    let cmd = "printf 'a\\t\\033[3Dxy\\n'; sleep 300";
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "3", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains("xy"), WAIT)
+        .expect("printed");
+    let first = |args: &[&str]| {
+        let out = srv.cmd(args).expect("capture");
+        out.lines().next().unwrap_or_default().to_string()
+    };
+    assert_eq!(first(&["capture-pane", "-p", "-t", "s"]), "a    xy");
+    assert_eq!(first(&["capture-pane", "-p", "-J", "-t", "s"]), "a    xy ");
+}
+
 #[test]
 fn main_horizontal_takes_main_pane_height() {
     let srv = server();
