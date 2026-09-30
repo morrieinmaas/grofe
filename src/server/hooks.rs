@@ -814,15 +814,21 @@ pub struct HookVars<'a> {
 
 impl FormatVars for HookVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
-        let f = self.formats;
+        self.formats.get(name).or_else(|| self.inner.get(name))
+    }
+}
+
+impl HookFormats {
+    /// `#{hook}` or a `#{hook_*}` variable; `None` for any other name.
+    pub fn get(&self, name: &str) -> Option<String> {
         let text = |v: Option<String>| Some(v.unwrap_or_default());
         match name {
-            "hook" => Some(f.hook.to_string()),
-            "hook_pane" => text(f.hook_pane.map(|p| p.to_string())),
-            "hook_window" => text(f.hook_window.map(|w| w.to_string())),
-            "hook_session_name" => text(f.hook_session_name.clone()),
-            "hook_client" => text(f.hook_client.clone()),
-            _ => self.inner.get(name),
+            "hook" => Some(self.hook.to_string()),
+            "hook_pane" => text(self.hook_pane.map(|p| p.to_string())),
+            "hook_window" => text(self.hook_window.map(|w| w.to_string())),
+            "hook_session_name" => text(self.hook_session_name.clone()),
+            "hook_client" => text(self.hook_client.clone()),
+            _ => None,
         }
     }
 }

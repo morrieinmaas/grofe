@@ -889,6 +889,23 @@ fn a_request_waits_for_the_hooks_of_its_nested_commands() {
     );
 }
 
+/// `#{hook}` expands in every command a hook runs, not only in
+/// `run-shell`: `display-message -p` prints it and `set -F` stores it.
+#[test]
+fn display_message_and_set_f_in_a_hook_see_its_variables() {
+    let (srv, _) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let hook = "display-message -p 'shown #{hook}' ; set -gF @stored 'set #{hook}'";
+    ok(&srv, &["set-hook", "-g", "pane-focused", hook]);
+    let out = ok(&srv, &["select-pane", "-t", &first]);
+    assert_eq!(out, "shown pane-focused\n");
+    assert_eq!(
+        ok(&srv, &["show-options", "-gv", "@stored"]),
+        "set pane-focused\n"
+    );
+}
+
 /// A hook a binding fires runs on that client's queue, so `#{client_*}`
 /// is its client's.
 #[test]
