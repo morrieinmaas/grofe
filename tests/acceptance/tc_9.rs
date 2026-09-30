@@ -397,6 +397,65 @@ fn wait_for_s_releases_a_waiting_wait_for() {
     assert!(status.success(), "{status:?}");
 }
 
+/// How many file descriptors `pid` has open.
+fn open_fds(pid: i32) -> usize {
+    if let Ok(dir) = std::fs::read_dir(format!("/proc/{pid}/fd")) {
+        return dir.count();
+    }
+    let out = std::process::Command::new("lsof")
+        .args(["-n", "-P", "-p", &pid.to_string()])
+        .output()
+        .expect("lsof");
+    // Skip the header; count only numbered descriptors (not cwd, txt...).
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .skip(1)
+        .filter(|l| {
+            l.split_whitespace()
+                .nth(3)
+                .is_some_and(|fd| fd.starts_with(|c: char| c.is_ascii_digit()))
+        })
+        .count()
+}
+
+/// Killed waiters leave nothing behind: the server closes their
+/// connections, as tmux does, and a later signal still works.
+#[test]
+fn killed_waiters_close_their_connections() {
+    let srv = start();
+    let pid: i32 = display(&srv, "main", "#{pid}").parse().expect("server pid");
+    let baseline = open_fds(pid);
+    let waiters: Vec<_> = (0..50)
+        .map(|i| {
+            let mut cmd = srv.command();
+            cmd.args(["wait-for", &format!("chan{}", i % 5)])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd.spawn().expect("spawn wait-for")
+        })
+        .collect();
+    wait_until(|| open_fds(pid) >= baseline + 50, WAIT)
+        .unwrap_or_else(|_| panic!("{} fds, baseline {baseline}", open_fds(pid)));
+    for mut w in waiters {
+        w.kill().expect("kill waiter");
+        w.wait().expect("reap waiter");
+    }
+    wait_until(|| open_fds(pid) <= baseline, WAIT)
+        .unwrap_or_else(|_| panic!("{} fds, baseline {baseline}", open_fds(pid)));
+
+    let mut cmd = srv.command();
+    cmd.args(["wait-for", "chan0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let waiter = cmd.spawn().expect("spawn wait-for");
+    wait_until(|| open_fds(pid) > baseline, WAIT).expect("the waiter connects");
+    srv.cmd(&["wait-for", "-S", "chan0"]).expect("wait-for -S");
+    let status = wait_child(waiter, WAIT).expect("the waiter exits");
+    assert!(status.success(), "{status:?}");
+}
+
 /// tmux's stock `prefix s`: `choose-tree -Zs` lists the sessions
 /// collapsed, the current one selected.
 #[test]

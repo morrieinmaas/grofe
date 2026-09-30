@@ -678,9 +678,9 @@ struct WaitChannel {
 /// `wait-for -S`: every waiter on `channel` is released; with none, the
 /// channel stays woken for the next wait.
 pub(crate) fn signal_channel(state: &mut State, channel: &str) {
+    prune_waits(state);
     let waits = &mut state.registry.waits;
     let wc = waits.entry(channel.to_string()).or_default();
-    wc.waiters.retain(|tx| !tx.is_closed());
     if wc.waiters.is_empty() {
         wc.woken = true;
         return;
@@ -702,10 +702,19 @@ pub(crate) fn wait_channel(
         state.registry.waits.remove(channel);
         return;
     }
+    prune_waits(state);
     let tx = reply(state);
     let wc = state.registry.waits.entry(channel.to_string()).or_default();
-    wc.waiters.retain(|tx| !tx.is_closed());
     wc.waiters.push(tx);
+}
+
+/// Drops the waits of callers that hung up, and the channels they leave
+/// empty and unwoken.
+fn prune_waits(state: &mut State) {
+    state.registry.waits.retain(|_, wc| {
+        wc.waiters.retain(|tx| !tx.is_closed());
+        wc.woken || !wc.waiters.is_empty()
+    });
 }
 
 fn set_message(state: &mut State, id: ClientId, text: String) {
