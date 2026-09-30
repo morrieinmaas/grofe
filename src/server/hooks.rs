@@ -19,7 +19,8 @@
 //! **Queues.** As tmux, each CLI request and each attached client has its
 //! own hook queue, and notify hooks share a global one. A queue runs in
 //! order, and a hook's `run-shell` without `-b` holds its queue (only) until
-//! the shell exits; a CLI request's reply waits for its own queue. Commands
+//! the shell exits; a CLI request's later commands and its reply wait for
+//! its own queue ([`take_request_wait`]). Commands
 //! run as they are, each expanding its own formats (`run-shell` sees the
 //! `#{hook*}` variables). Commands a hook runs fire notify hooks but no
 //! `after-*` ones, as in tmux (recorded).
@@ -42,7 +43,7 @@ use tokio::sync::oneshot;
 
 use crate::cmd::{self, Command, FormatVars, Resolve, Target};
 use crate::config::Resolved;
-use crate::protocol::{ClientCtx, Dialect};
+use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::dispatch;
 use crate::server::{Job, State};
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
@@ -159,6 +160,9 @@ pub struct Hooks {
     next_request: u64,
     /// Hook commands are running: they fire no command-shaped hooks.
     running: bool,
+    /// How deep `run_commands` is nested ([`enter`]); 1 is a request's own
+    /// commands.
+    depth: u32,
     /// The running hook's variables.
     current: Option<HookFormats>,
     /// See [`take_reply_hold`].
@@ -191,6 +195,7 @@ impl Default for Hooks {
             request: None,
             next_request: 0,
             running: false,
+            depth: 0,
             current: None,
             reply_hold: None,
             global: Arc::new(RwLock::new(env)),
@@ -724,6 +729,41 @@ fn drain(state: &mut State, origin: Origin) {
         });
         return;
     }
+}
+
+/// `run_commands` starts: see [`take_request_wait`].
+pub fn enter(state: &mut State) {
+    state.hooks.depth += 1;
+}
+
+/// `run_commands` ends.
+pub fn leave(state: &mut State) {
+    state.hooks.depth = state.hooks.depth.saturating_sub(1);
+}
+
+/// After one of a CLI request's own commands (not a nested one, nor a
+/// hook's): when that command's hook now waits on a shell, a receiver that
+/// answers with the hooks' output once their queue is idle. The rest of
+/// the request waits for it, as tmux 3.7b runs an `after-*` hook before
+/// the next command (recorded: `select-pane ; run-shell`). The reply no
+/// longer waits on this queue: the rest's answer carries its output.
+pub fn take_request_wait(state: &mut State) -> Option<oneshot::Receiver<Result<String, Failure>>> {
+    let hooks = &mut state.hooks;
+    if hooks.running || hooks.depth != 1 {
+        return None;
+    }
+    let origin = Origin::Request(hooks.request?);
+    let q = hooks.queues.get_mut(&origin).filter(|q| q.waiting)?;
+    let (tx, rx) = oneshot::channel();
+    q.idle.push(tx);
+    hooks.request = None;
+    let (answer, wait) = oneshot::channel();
+    tokio::spawn(async move {
+        if let Ok(out) = rx.await {
+            let _ = answer.send(Ok(out));
+        }
+    });
+    Some(wait)
 }
 
 /// For the reply to the request that just ran (`finish`): when its own

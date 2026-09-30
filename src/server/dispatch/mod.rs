@@ -119,6 +119,7 @@ pub(crate) fn run_commands(
     let mut out = String::new();
     let mut result = Ok(());
     let mut cmds = cmds.into_iter();
+    server::hooks::enter(state);
     while let Some(cmd) = cmds.next() {
         let waits =
             matches!(&cmd, Command::WaitFor(w) if !w.signal) && state.deferred_reply.is_none();
@@ -129,13 +130,25 @@ pub(crate) fn run_commands(
                 break;
             }
         }
+        if cmds.len() == 0 {
+            break;
+        }
         // A `wait-for` that blocked holds the rest of the request until
-        // its channel is signalled, as tmux 3.7b's command queue does (TC.9).
-        if waits && state.deferred_reply.is_some() && cmds.len() > 0 {
-            client::hold_rest(state, ctx, cmds.collect(), std::mem::take(&mut out));
+        // its channel is signalled, as tmux 3.7b's command queue does (TC.9),
+        // and so does the command's hook while it waits on a shell.
+        let wait = if waits && state.deferred_reply.is_some() {
+            state.deferred_reply.take()
+        } else if state.deferred_reply.is_none() {
+            server::hooks::take_request_wait(state)
+        } else {
+            None
+        };
+        if let Some(wait) = wait {
+            client::hold_rest(state, ctx, cmds.collect(), std::mem::take(&mut out), wait);
             break;
         }
     }
+    server::hooks::leave(state);
     server::hooks::run_pending(state);
     if state.model.closed() {
         state.exit = true;

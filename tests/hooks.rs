@@ -817,6 +817,40 @@ fn a_later_hook_waits_behind_a_paused_one() {
     );
 }
 
+/// Binds `pane-focused` to a shell that logs `start<pane>`, sleeps 0.5 s
+/// and logs `end`.
+fn bind_slow_focus(srv: &TestServer, log: &Path) {
+    let hook = format!(
+        "run-shell 'echo start#{{pane_id}} >> {0}; sleep 0.5; echo end >> {0}'",
+        log.display()
+    );
+    ok(srv, &["set-hook", "-g", "pane-focused", &hook]);
+}
+
+/// tmux 3.7b (recorded): an `after-*` hook runs before the next command of
+/// the same request, so `select-pane ; run-shell` logs the hook's start
+/// and end before the later command's line.
+#[test]
+fn later_commands_of_a_request_wait_for_its_hook() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    bind_slow_focus(&srv, &log);
+    let later = format!("echo later >> {}", log.display());
+    ok(
+        &srv,
+        &["select-pane", "-t", &first, ";", "run-shell", &later],
+    );
+    assert_eq!(
+        log_lines(&log),
+        [
+            format!("start{first}"),
+            "end".to_string(),
+            "later".to_string()
+        ]
+    );
+}
+
 /// A hook a binding fires runs on that client's queue, so `#{client_*}`
 /// is its client's.
 #[test]
