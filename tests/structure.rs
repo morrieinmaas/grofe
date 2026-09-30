@@ -1588,6 +1588,8 @@ fn closing_the_current_window_falls_back_to_the_one_before() {
                 SLEEP,
             ],
         );
+        // tmux's default, as recorded: the indexes keep their gaps.
+        ok(&srv, &["set", "-g", "renumber-windows", "off"]);
         for i in 1..=3 {
             ok(&srv, &["new-window", "-d", "-t", &format!("s:{i}"), SLEEP]);
         }

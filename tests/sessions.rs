@@ -221,11 +221,12 @@ fn kill_window_removes_it_and_the_last_one_closes_session_then_server() {
     srv.cmd(&["kill-window", "-t", "a:1"]).unwrap();
     let out = lines(&srv.cmd(&["list-windows", "-t", "a"]).unwrap());
     assert_eq!(out.len(), 1, "{out:?}");
-    assert!(out[0].starts_with("2: "), "{out:?}");
+    // grofe's `renumber-windows on`: the window left is numbered again.
+    assert!(out[0].starts_with("1: "), "{out:?}");
     assert!(out[0].contains("(active)"), "{out:?}");
 
     // The last window closes its session; others are untouched.
-    srv.cmd(&["kill-window", "-t", "a:2"]).unwrap();
+    srv.cmd(&["kill-window", "-t", "a:1"]).unwrap();
     assert!(srv.cmd(&["has-session", "-t", "a"]).is_err());
     assert!(srv.is_running());
 
