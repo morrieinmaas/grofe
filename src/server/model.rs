@@ -608,6 +608,11 @@ impl Model {
                     _ => Err(format!("ambiguous session: {name}")),
                 }
             }
+            // tmux's `=name` (FE.1): never a prefix.
+            SessionRef::Exact(name) => self
+                .session_by_name(name)
+                .ok_or_else(|| format!("can't find session: {name}")),
+            SessionRef::Mouse => Err(crate::cmd::target::NO_MOUSE_TARGET.to_string()),
         }
     }
 
@@ -637,6 +642,16 @@ impl Model {
                 let sid = self.session_ref(s, ctx)?;
                 self.window_at_index(sid, *index)
                     .ok_or_else(|| format!("can't find window: {index}"))
+            }
+            // tmux's `+N`/`-N` (FE.1): from the session's current window,
+            // by index order, wrapping (recorded on tmux 3.7b).
+            (s, WindowRef::Offset(n)) => {
+                let current = match s {
+                    SessionRef::Current => self.current_window(ctx)?,
+                    s => self.sessions[&self.session_ref(s, ctx)?].active,
+                };
+                let windows = &self.sessions[&self.windows[&current].session].windows;
+                Ok(step(windows, current, *n))
             }
             (s, WindowRef::Name(name)) => {
                 let sid = self.session_ref(s, ctx)?;
@@ -679,6 +694,13 @@ impl Model {
                 }
                 Ok(id)
             }
+            // tmux's `+N`/`-N` (FE.1): from the window's active pane, by
+            // index order, wrapping (recorded on tmux 3.7b).
+            PanePart::Offset(n) => {
+                let w = self.window_ref(&r.session, &r.window, ctx)?;
+                let window = &self.windows[&w];
+                Ok(step(&window.pane_ids(), window.active, n))
+            }
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
@@ -687,6 +709,18 @@ impl Model {
                     .ok_or_else(|| format!("can't find pane: {index}"))
             }
         }
+    }
+}
+
+/// The item `n` places after `from` in `items` (before it when `n` is
+/// negative), wrapping round; `from` itself when it is not there.
+fn step<T: Copy + PartialEq>(items: &[T], from: T, n: i32) -> T {
+    match items.iter().position(|i| *i == from) {
+        Some(at) => {
+            let len = items.len() as i64;
+            items[(at as i64 + n as i64).rem_euclid(len) as usize]
+        }
+        None => from,
     }
 }
 
@@ -952,5 +986,39 @@ mod tests {
         assert!(flag(&model, w1), "the window left keeps its flag");
         model.select_window(w1);
         assert!(!flag(&model, w1));
+    }
+    /// tmux's `=name` (FE.1): only the exact name, where a plain name also
+    /// takes a unique prefix.
+    #[test]
+    fn an_exact_session_never_matches_a_prefix() {
+        let mut model = Model::new(true);
+        let xy = add_session(&mut model, "xy", WindowId(0));
+        let target = |r: SessionRef| Target::Session(r);
+        let name = |s: &str| target(SessionRef::Name(s.to_string()));
+        let exact = |s: &str| target(SessionRef::Exact(s.to_string()));
+        assert_eq!(model.resolve_session(&name("x"), &ctx()), Ok(xy));
+        assert_eq!(
+            model.resolve_session(&exact("x"), &ctx()),
+            Err("can't find session: x".to_string())
+        );
+        assert_eq!(model.resolve_session(&exact("xy"), &ctx()), Ok(xy));
+        let x = add_session(&mut model, "x", WindowId(0));
+        assert_eq!(model.resolve_session(&exact("x"), &ctx()), Ok(x));
+        assert_eq!(
+            model.resolve_session(&target(SessionRef::Mouse), &ctx()),
+            Err("no mouse target".to_string())
+        );
+    }
+
+    /// tmux's offsets wrap round in both directions.
+    #[test]
+    fn offsets_step_and_wrap() {
+        let items = [1, 2, 3];
+        assert_eq!(step(&items, 1, 1), 2);
+        assert_eq!(step(&items, 3, 1), 1);
+        assert_eq!(step(&items, 1, -1), 3);
+        assert_eq!(step(&items, 2, 5), 1);
+        assert_eq!(step(&items, 2, -7), 1);
+        assert_eq!(step(&items, 9, 1), 9);
     }
 }
