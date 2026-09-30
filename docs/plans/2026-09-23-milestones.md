@@ -856,10 +856,10 @@ once TM.4 lands. Their rows in M3.7 hold as written.
 
 **Critical path inside M5** (review cycles included): TM.0 (2 d) and its
 approval (about 1 d) right after M3.7's non-M5 tasks close; then stub edit →
-TM.1 (4 d) → TM.2 (3 d) → TM.5 (2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) →
+TM.1 (4 d) → TM.2 (3 d) → TM.5 (2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.11 (2 d) →
 TP.9b (2 d), about 21 working days. TM.4 (3 d) runs beside TM.1 and TM.3
 (3 d) beside TM.2 and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
-TM.6 3, TM.7 5, TP.5 2, TP.9b 2: 29 task-days.
+TM.6 3, TM.7 5, TP.11 2, TP.9b 2: 29 task-days.
 
 **Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
 TM.7's suite; TP.9b exits 0 for every table; **[owner]** a week under the
