@@ -23,6 +23,8 @@ allow-rename = false
 set-clipboard = "on"
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:28
 focus-events = true
+# ~/.local/share/canopy/tmux/conf.d/00-core.conf:33
+mode-keys = "vi"
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:31
 renumber-windows = true
 # ~/.config/canopy/user.conf:1
@@ -36,7 +38,9 @@ position = "top"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:75
 style = "bg=default,fg=#{@theme_fg}"
 # ~/.config/canopy/user.conf:18
-left = "#[fg=#{@theme_grey},bg=default] #h #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bold] #S "
+left = "#[fg=#{@theme_grey},bg=default] #{host_short} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bold] #{session_name} "
+# ~/.config/canopy/user.conf:19
+right = "#{@src-1e1393e78ef79e6c} %H:%M"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:78
 left-length = 40
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:92
@@ -50,11 +54,15 @@ rows = ["", ""]
 
 [status.window]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:86
-format = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #I #W #[fg=#{@theme_grey},bg=default]#{@pill_r} "
+format = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey}] #{window_index} #{window_name} #[fg=#{@theme_grey},bg=default]#{@pill_r} "
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:87
-current-format = "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #I #W#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} "
+current-format = "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #{window_index} #{window_name}#{?window_zoomed_flag, +,} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r} "
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:85
 separator = ""
+
+[status.sources.src-1e1393e78ef79e6c]
+# ~/.config/canopy/user.conf:19
+cmd = "~/.config/tmux/battery.sh"
 
 [keys.prefix]
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:22
@@ -105,3 +113,63 @@ B = "run-shell '$HOME/.local/bin/cockpit'"
 g = "display-popup -E -w 95% -h 90% 'exec gh-dash'"
 # ~/.config/canopy/user.conf:5
 "?" = "run-shell '$HOME/.config/tmux/keys-popup.sh'"
+
+[keys.root]
+# ~/.config/canopy/user.conf:6
+MouseDown1Status = """if-shell -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E "net-popup.sh #{mouse_status_range}"' 'switch-client -t ='"""
+
+# Not converted: grofe's config has no key for these commands, which tmux
+# ran as it read the file. Each is in grofe's own grammar, to run from a hook
+# or a script.
+# ~/.config/tmux/tmux.conf:1
+#   set-environment -g CANOPY_STORE "$HOME/.local/share/canopy"
+# ~/.config/tmux/tmux.conf:2
+#   set-environment -g CANOPY_STATE "$HOME/.local/state/canopy"
+# ~/.config/tmux/tmux.conf:3
+#   set-environment -g CANOPY_CONFIG "$HOME/.config/canopy"
+# ~/.local/share/canopy/tmux/conf.d/00-core.conf:6
+#   set-option -g @canopy_test_marker shipped-default
+# ~/.local/state/canopy/05-caps.conf:1
+#   set-option -g @canopy_has_wt 0
+# ~/.local/state/canopy/05-caps.conf:2
+#   set-option -g @canopy_has_fzf 1
+# ~/.local/state/canopy/05-caps.conf:3
+#   set-option -g @canopy_has_gum 0
+# ~/.local/state/canopy/05-caps.conf:4
+#   set-option -g @canopy_has_ghostty 0
+# ~/.local/state/canopy/05-caps.conf:5
+#   set-option -g @canopy_has_starship 1
+# ~/.local/state/canopy/05-caps.conf:6
+#   set-option -g @canopy_has_mise 1
+# ~/.local/state/canopy/05-caps.conf:7
+#   set-option -g @canopy_tmux_version 3.7b
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:28
+#   set-option -g @theme_bg "#fbf1c7"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:29
+#   set-option -g @theme_fg "#3c3836"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:30
+#   set-option -g @theme_blue "#458588"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:31
+#   set-option -g @theme_yellow "#b57614"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:32
+#   set-option -g @theme_green "#79740e"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:33
+#   set-option -g @theme_grey "#a89984"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:34
+#   set-option -g @theme_muted "#7c6f64"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:37
+#   set-option -g @theme_red "#cc241d"
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:59
+#   set-option -g @pill_l ""
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:60
+#   set-option -g @pill_r ""
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:64
+#   set-option -g @canopy_status_battery on
+# ~/.local/share/canopy/tmux/conf.d/20-status.conf:65
+#   set-option -g @canopy_status_net on
+# ~/.config/canopy/user.conf:9
+#   set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
+# ~/.config/canopy/user.conf:17
+#   run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'
+# ~/.config/canopy/user.conf:20
+#   if-shell '[ -r ~/.config/themes/active ]' 'run-shell "~/.config/themes/apply-tmux.sh"'

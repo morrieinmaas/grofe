@@ -13,6 +13,15 @@
 //! `cmd::split_command_string` and `cmd::parse` are still used, deliberately,
 //! to *validate* the command strings this module builds, exactly as
 //! `config/load.rs`'s loader will read them back.
+//!
+//! M3.6 (TP.0): every command string (a binding, a hook, an alias, a
+//! stored `if-shell` branch or menu item) and every option value goes
+//! through the tmux front end's own table ([`tmux::spell`]), so the
+//! converter and the live front end share one mapping: `#(cmd)` becomes a
+//! `[status.sources]` entry, tmux's short formats grofe's, `neww`/`setw`/
+//! `-t =x` grofe's spelling, `set-hook` a `[hooks]` entry. What grofe's
+//! config has no key for (user options, the environment, commands tmux ran
+//! at load time) is written as native command comments at the end.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -20,11 +29,12 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::cmd;
+use crate::cmd::{self, Command, RegisterSource};
+use crate::compat::tmux;
 use crate::config::provenance::tilde;
 use crate::config::{self, ConfigError, Ty, toml_type};
 use crate::server::dispatch::options::{ListOp, Options, Owner, split_index};
-use crate::server::input::{Key, parse_key};
+use crate::server::input::{Key, KeyCode, parse_key};
 
 const USAGE: &str = "usage: import-tmux [<tmux.conf>] [-o <path>]";
 
@@ -246,6 +256,27 @@ struct Word {
     /// time). `read_lines` splits on the bare kind before dispatch; a
     /// binding's own tail only ever sees the escaped kind.
     escaped: bool,
+}
+
+impl Word {
+    /// A word with no quoting, as if written bare.
+    fn plain(s: &str) -> Word {
+        Word {
+            raw: s.to_string(),
+            value: s.to_string(),
+            is_sep: false,
+            escaped: false,
+        }
+    }
+}
+
+/// `words` as written, joined by spaces.
+fn join_raw(words: &[Word]) -> String {
+    words
+        .iter()
+        .map(|w| w.raw.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// One logical tmux.conf line, already split into its top-level commands
@@ -656,7 +687,40 @@ struct Importer {
     /// In first-bound order; a later directive updates an existing entry
     /// in place rather than pushing a new one (rule 7).
     keys: Vec<BindingEntry>,
+    /// Status sources (TC.4) the `#(cmd)`s seen so far register, by name;
+    /// only the ones a converted value still reads are written.
+    sources: BTreeMap<String, SourceEntry>,
+    /// `[hooks]` (TC.5), in first-set order, updated in place.
+    hooks: Vec<HookEntry>,
+    /// Commands with no config key, in their native spelling, written as
+    /// comments at the end.
+    runtime: Vec<RuntimeEntry>,
     reports: Vec<ConfigError>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceEntry {
+    cmd: String,
+    file: PathBuf,
+    line: usize,
+}
+
+#[derive(Debug, Clone)]
+struct HookEntry {
+    /// grofe's event (`server::hooks::EVENTS`).
+    event: &'static str,
+    /// The command string, in grofe's own grammar.
+    command: String,
+    file: PathBuf,
+    line: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeEntry {
+    /// The command, in grofe's own grammar.
+    text: String,
+    file: PathBuf,
+    line: usize,
 }
 
 impl Importer {
@@ -671,6 +735,9 @@ impl Importer {
             options: BTreeMap::new(),
             lists: BTreeMap::new(),
             keys: Vec::new(),
+            sources: BTreeMap::new(),
+            hooks: Vec::new(),
+            runtime: Vec::new(),
             reports: Vec::new(),
         }
     }
@@ -754,10 +821,10 @@ impl Importer {
             "bind-key" => self.handle_bind(file, l.line, &l.text, rest),
             "unbind-key" => self.handle_unbind(file, l.line, &l.text, rest),
             "source-file" => self.handle_source_file(file, l.line, &l.text, rest),
-            "set-environment" => self.handle_set_environment(file, l.line, &l.text, rest),
-            "set-hook" => self.report(file, l.line, "set-hook", &l.text),
-            "if-shell" => self.report(file, l.line, "if-shell", &l.text),
-            "run-shell" => self.handle_run_shell(file, l.line, &l.text, rest),
+            "set-environment" => self.handle_set_environment(file, l.line, &l.text, &l.words),
+            "set-hook" => self.handle_set_hook(file, l.line, &l.text, &l.words),
+            "if-shell" => self.handle_if_shell(file, l.line, &l.text, &l.words),
+            "run-shell" => self.handle_run_shell(file, l.line, &l.text, &l.words),
             "command-alias" => self.report(file, l.line, "command-alias", &l.text),
             _ => self.report(file, l.line, "command not converted", &l.text),
         }
@@ -802,16 +869,23 @@ impl Importer {
         };
         let name = name_word.value.clone();
         if let Some(user) = name.strip_prefix('@') {
-            let reason = if user == "plugin"
+            if user == "plugin"
                 || user == "tpm_plugins"
                 || user.starts_with("resurrect-")
                 || user.starts_with("continuum-")
             {
-                "plugins and TPM"
+                return self.report(file, line, "plugins and TPM", text);
+            }
+            // grofe's config has no key for a user option (spec 5.2).
+            let verb = if is_setw {
+                "set-window-option"
             } else {
-                "user option"
+                "set-option"
             };
-            return self.report(file, line, reason, text);
+            let full: Vec<Word> = std::iter::once(Word::plain(verb))
+                .chain(words.iter().cloned())
+                .collect();
+            return self.keep_runtime(file, line, text, &full);
         }
         let (base, index) = match split_index(&name) {
             Ok(split) => split,
@@ -850,22 +924,43 @@ impl Importer {
             self.note(file, line, format!("{toml_key} unset here (-u)"));
             return;
         }
-        let Some(value_word) = words.get(i) else {
-            if toml_type(toml_key) == Ty::Bool {
-                return self.report(file, line, "boolean with no value (tmux toggle)", text);
+        let (value, raw) = match words.get(i) {
+            Some(w) => (w.value.clone(), w.raw.clone()),
+            None if toml_type(toml_key) == Ty::Bool => {
+                // tmux toggles a flag option given no value (recorded in
+                // TI.1): from the value set so far, else tmux's default.
+                let current = self
+                    .options
+                    .get(toml_key)
+                    .map(|e| e.value.clone())
+                    .or_else(|| tmux::formats::tmux_default(&name));
+                let toggled = if current.as_deref() == Some("on") {
+                    "off"
+                } else {
+                    "on"
+                };
+                self.note(
+                    file,
+                    line,
+                    format!("{toml_key} with no value toggles it, as tmux does, to {toggled}"),
+                );
+                (toggled.to_string(), toggled.to_string())
             }
-            return self.report(file, line, "command not converted", text);
+            None => return self.report(file, line, "command not converted", text),
         };
-        if value_word.value.contains("#(") {
-            return self.report(file, line, "#() in a format (D8)", text);
-        }
-        if has_bare_dollar(&value_word.raw) {
+        // The value in grofe's format spelling, through the front end's own
+        // `set` translation (FE.3: short forms, `#(cmd)` to a source).
+        let native = match self.front_value(file, line, &name, &value) {
+            Ok(v) => v,
+            Err(msg) => return self.report(file, line, &msg, text),
+        };
+        if has_bare_dollar(&raw) && native.contains('$') {
             return self.report(file, line, "environment variable in a value", text);
         }
         let old_entry = self.options.get(toml_key).map(|e| (e.file.clone(), e.line));
         let final_value = if append {
             match self.options.get(toml_key) {
-                Some(existing) => format!("{}{}", existing.value, value_word.value),
+                Some(existing) => format!("{}{}", existing.value, native),
                 None => {
                     return self.report(
                         file,
@@ -876,7 +971,7 @@ impl Importer {
                 }
             }
         } else {
-            value_word.value.clone()
+            native
         };
         match self.store.set(Owner::Global, &name, &final_value, false) {
             Ok(_) => {
@@ -916,6 +1011,7 @@ impl Importer {
                         format!("{toml_key} has no -g/-s/-w; grofe's config is global, so it is treated as -g"),
                     );
                 }
+                self.note_no_effect(file, line, toml_key, &name);
                 self.options.insert(
                     toml_key,
                     OptionEntry {
@@ -958,13 +1054,28 @@ impl Importer {
             let Some(w) = value else {
                 return self.report(file, line, "command not converted", text);
             };
-            if w.value.contains("#(") {
-                return self.report(file, line, "#() in a format (D8)", text);
-            }
-            if has_bare_dollar(&w.raw) {
+            let sent = match index {
+                Some(i) => format!("{name}[{i}]"),
+                None => name.to_string(),
+            };
+            let value = match self.front_value(file, line, &sent, &w.value) {
+                Ok(v) => v,
+                Err(msg) => return self.report(file, line, &msg, text),
+            };
+            if has_bare_dollar(&w.raw) && value.contains('$') {
                 return self.report(file, line, "environment variable in a value", text);
             }
-            let value = w.value.clone();
+            // An alias's command is a command string, run where the alias
+            // is used: natively, for a config's bindings.
+            let value = match (name, value.split_once('=')) {
+                ("command-alias", Some((alias, command))) => {
+                    match self.native_text(file, line, command, false) {
+                        Ok(native) => format!("{alias}={native}"),
+                        Err(msg) => return self.report(file, line, &msg, text),
+                    }
+                }
+                _ => value,
+            };
             match index {
                 Some(index) => ListOp::Set {
                     index,
@@ -1001,10 +1112,74 @@ impl Importer {
                 ),
             );
         }
+        self.note_no_effect(file, line, toml_key, name);
         self.lists
             .entry(toml_key)
             .or_default()
             .push((file.to_path_buf(), line));
+    }
+
+    /// Notes an option grofe stores and shows but does not act on (spec
+    /// 4.5's options row: the option store's `NO_EFFECT`).
+    fn note_no_effect(&mut self, file: &Path, line: usize, toml_key: &str, tmux_name: &str) {
+        if tmux::option_name(tmux_name).is_some_and(options_no_effect) {
+            self.note(
+                file,
+                line,
+                format!("{toml_key}: grofe keeps and shows it, with no effect"),
+            );
+        }
+    }
+
+    /// `value` for the option `name` (tmux's spelling, `[N]` included) as
+    /// the front end's `set` translation stores it: a tmux format in
+    /// grofe's spelling, each `#(cmd)` a status source it registers here.
+    fn front_value(
+        &mut self,
+        file: &Path,
+        line: usize,
+        name: &str,
+        value: &str,
+    ) -> Result<String, String> {
+        let argv = [
+            "set-option".to_string(),
+            "-g".to_string(),
+            name.to_string(),
+            value.to_string(),
+        ];
+        let (commands, _) = tmux::spell(&argv).map_err(|e| e.to_string())?;
+        let mut out = None;
+        for c in commands {
+            match c {
+                Command::RegisterSource(r) => self.add_source(file, line, r),
+                Command::SetOption(set) => out = set.value,
+                _ => {}
+            }
+        }
+        Ok(out.unwrap_or_else(|| value.to_string()))
+    }
+
+    /// Keeps the status source a `#(cmd)` registers (TC.4's schema), noting
+    /// a `$VAR` its command reads.
+    fn add_source(&mut self, file: &Path, line: usize, r: RegisterSource) {
+        let name = r
+            .name
+            .unwrap_or_else(|| crate::server::sources::inline_key(&r.command));
+        for var in env_refs_outside_single_quotes(&r.command) {
+            self.note(
+                file,
+                line,
+                format!(
+                    "${var} in status.sources.{name} is expanded by the source's shell, from \
+                     the server's environment"
+                ),
+            );
+        }
+        self.sources.entry(name).or_insert(SourceEntry {
+            cmd: r.command,
+            file: file.to_path_buf(),
+            line,
+        });
     }
 
     // ---- bind-key / unbind-key ----
@@ -1063,9 +1238,6 @@ impl Importer {
             (true, None) => "root".to_string(),
             (false, None) => "prefix".to_string(),
         };
-        if table_name != "prefix" && table_name != "root" {
-            return self.report(file, line, &format!("key table {table_name}"), text);
-        }
         let Some(key_word) = words.get(i) else {
             return self.report(file, line, "command not converted", text);
         };
@@ -1077,6 +1249,18 @@ impl Importer {
         let tail = &words[i..];
         if tail.is_empty() {
             return self.report(file, line, "command not converted", text);
+        }
+        if table_name == "root" && is_stock_mouse_binding(&key, tail) {
+            // TC.10's built-in mouse model already does what tmux's stock
+            // binding does, for an unbound mouse key.
+            return self.note(
+                file,
+                line,
+                format!(
+                    "keys.root.{key} is tmux's stock mouse binding, replaced by the built-in \
+                     mouse model: nothing to convert"
+                ),
+            );
         }
         let Some(cmd_string) = self.render_command_tail(file, line, text, &table_name, &key, tail)
         else {
@@ -1132,9 +1316,6 @@ impl Importer {
             (true, None) => "root".to_string(),
             (false, None) => "prefix".to_string(),
         };
-        if table_name != "prefix" && table_name != "root" {
-            return self.report(file, line, &format!("key table {table_name}"), text);
-        }
         let Some(key_word) = words.get(i) else {
             return self.report(file, line, "command not converted", text);
         };
@@ -1215,6 +1396,7 @@ impl Importer {
             self.report(file, line, "command not converted", text);
             return None;
         }
+        let mouse = matches!(key.code, KeyCode::Mouse(_));
         let mut rendered = Vec::new();
         for g in &groups {
             if let Some(rewritten) = self.try_reload_rewrite(file, g) {
@@ -1225,16 +1407,18 @@ impl Importer {
                 );
                 rendered.push(rewritten);
             } else {
-                let joined = g
-                    .iter()
-                    .map(|w| w.raw.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                rendered.push(joined);
+                let words: Vec<Word> = g.iter().map(|w| (*w).clone()).collect();
+                match self.native_command(file, line, &words, mouse) {
+                    Ok(native) => rendered.push(native),
+                    Err(msg) => {
+                        self.report(file, line, &msg, text);
+                        return None;
+                    }
+                }
             }
         }
         let cmd_string = rendered.join(" ; ");
-        if let Err(msg) = validate_command(&cmd_string) {
+        if let Err(msg) = validate_command(&cmd_string, &self.aliases()) {
             self.report(file, line, &msg, text);
             return None;
         }
@@ -1271,7 +1455,7 @@ impl Importer {
             Some(e) => format!(
                 "${var} in keys.{table}.{key} is expanded when grofe loads the config, from \
                  the server's environment; tmux read it from set-environment -g at {}:{}, which \
-                 M3.5 does not convert",
+                 grofe's config has no key for",
                 tilde(&e.file, self.home.as_deref()),
                 e.line
             ),
@@ -1474,7 +1658,11 @@ impl Importer {
 
     // ---- set-environment / run-shell ----
 
-    fn handle_set_environment(&mut self, file: &Path, line: usize, text: &str, words: &[Word]) {
+    /// `set-environment`: kept for `source-file` paths (rule 8), and as a
+    /// native command comment, since grofe's config has no environment key
+    /// (TC.5's environment is runtime state).
+    fn handle_set_environment(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        let words = &all[1..];
         let mut i = 0;
         while let Some(w) = words.get(i) {
             let v = w.value.as_str();
@@ -1496,26 +1684,239 @@ impl Importer {
                 },
             );
         }
-        self.report(file, line, "set-environment", text);
+        self.keep_runtime(file, line, text, all);
     }
 
-    fn handle_run_shell(&mut self, file: &Path, line: usize, text: &str, words: &[Word]) {
-        let mut i = 0;
-        while let Some(w) = words.get(i) {
-            if w.value == "-b" {
-                i += 1;
-            } else {
-                break;
+    /// A `run-shell` at load time: TPM and plugin scripts are reported;
+    /// anything else is kept as a native command comment.
+    fn handle_run_shell(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        if all[1..].iter().any(|w| runs_a_plugin(&w.value)) {
+            return self.report(file, line, "plugins and TPM", text);
+        }
+        self.keep_runtime(file, line, text, all);
+    }
+
+    /// An `if-shell` at load time: grofe's conditional (TC.10) in native
+    /// form, branches included, kept as a comment, since a config runs no
+    /// commands when it loads; one that loads a plugin is reported.
+    fn handle_if_shell(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        if all[1..].iter().any(|w| runs_a_plugin(&w.value)) {
+            return self.report(file, line, "plugins and TPM", text);
+        }
+        self.keep_runtime(file, line, text, all);
+    }
+
+    /// `set-hook`: a `[hooks]` entry (TC.5), keyed by the grofe event the
+    /// front end's hook-name table maps the tmux hook onto (FE.3), its
+    /// command in native form. The front end refuses what grofe has no
+    /// hook for (hook arrays, scopes other than `-g`).
+    fn handle_set_hook(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        let argv: Vec<String> = all.iter().map(|w| w.value.clone()).collect();
+        let set = match tmux::spell(&argv) {
+            Ok((commands, _)) => commands.into_iter().find_map(|c| match c {
+                Command::SetHook(set) => Some(set),
+                _ => None,
+            }),
+            Err(e) => return self.report(file, line, &e.to_string(), text),
+        };
+        let Some(set) = set else {
+            return self.report(file, line, "command not converted", text);
+        };
+        let Some(event) = set
+            .hook
+            .as_deref()
+            .and_then(crate::server::hooks::event)
+            .map(|e| e.name)
+        else {
+            return self.report(file, line, "command not converted", text);
+        };
+        let at = self.hooks.iter().position(|h| h.event == event);
+        if let Some(at) = at {
+            let old = self.hooks[at].clone();
+            self.note(
+                &old.file,
+                old.line,
+                format!(
+                    "hooks.{event} is replaced by a later set-hook at {}:{line}",
+                    tilde(file, self.home.as_deref())
+                ),
+            );
+        }
+        if set.unset {
+            if let Some(at) = at {
+                self.hooks.remove(at);
+            }
+            return self.note(file, line, format!("hooks.{event} unset here (-u)"));
+        }
+        let command = set.command.unwrap_or_default();
+        let native = match self.native_text(file, line, &command, false) {
+            Ok(n) => n,
+            Err(msg) => return self.report(file, line, &msg, text),
+        };
+        if let Err(msg) = crate::server::hooks::check_command(&native) {
+            return self.report(file, line, &msg, text);
+        }
+        let entry = HookEntry {
+            event,
+            command: native,
+            file: file.to_path_buf(),
+            line,
+        };
+        match at {
+            Some(at) => self.hooks[at] = entry,
+            None => self.hooks.push(entry),
+        }
+    }
+
+    /// A command grofe's config has no key for (spec 5.2: no user options,
+    /// no environment, nothing run at load time): its native spelling, kept
+    /// as a comment at the end of the output for the user to place (a hook,
+    /// a script), and noted. One the front end cannot translate is
+    /// reported instead.
+    fn keep_runtime(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        match self.native_command(file, line, all, false) {
+            Ok(native) => {
+                self.note(
+                    file,
+                    line,
+                    "no config key for this; kept as a native command comment".to_string(),
+                );
+                self.runtime.push(RuntimeEntry {
+                    text: native,
+                    file: file.to_path_buf(),
+                    line,
+                });
+            }
+            Err(msg) => self.report(file, line, &msg, text),
+        }
+    }
+
+    // ---- command strings through the front end ----
+
+    /// One tmux command (`words`, its verb first) in grofe's own grammar,
+    /// translated by the tmux front end's table ([`tmux::spell`]): the
+    /// native argv its rows parse, each read back by the native parser and
+    /// checked to mean the same command, and the command strings the
+    /// command stores (`if-shell` branches, a `confirm-before` command, a
+    /// prompt template, menu items) translated the same way. A command the
+    /// front end leaves as sent keeps its source text (quotes and `$VAR`
+    /// as written). `mouse` when the binding is a mouse key's, where a bare
+    /// `=` target is the pointer's (M36-R3) in either grammar.
+    fn native_command(
+        &mut self,
+        file: &Path,
+        line: usize,
+        words: &[Word],
+        mouse: bool,
+    ) -> Result<String, String> {
+        let argv: Vec<String> = words.iter().map(|w| w.value.clone()).collect();
+        // A `command-alias` name stays: grofe expands it natively (TC.7),
+        // from the converted entry.
+        let aliases = self.aliases();
+        if let Some(verb) = argv.first()
+            && aliases
+                .iter()
+                .any(|a| a.split_once('=').is_some_and(|(name, _)| name == verb))
+        {
+            return Ok(join_raw(words));
+        }
+        let (commands, spelled) = tmux::spell(&argv).map_err(|e| e.to_string())?;
+        let mut natives: Vec<Vec<String>> = Vec::new();
+        for c in &commands {
+            if let Command::RegisterSource(r) = c {
+                self.add_source(file, line, r.clone());
+                continue;
+            }
+            let Some((mut native, exact)) = spelled.iter().find_map(|a| spelled_as(a, c, mouse))
+            else {
+                return Err(format!(
+                    "no native spelling for {} (a tmux-only target or form)",
+                    tmux::miss_form(&argv)
+                ));
+            };
+            if exact {
+                self.note(
+                    file,
+                    line,
+                    "an exact =name target is spelled as the name: natively, a name no session \
+                     has exactly also matches a prefix"
+                        .to_string(),
+                );
+            }
+            for (at, stored) in stored_commands(&native, c) {
+                native[at] = self.native_text(file, line, &stored, mouse)?;
+            }
+            natives.push(native);
+        }
+        if natives.is_empty() {
+            return Err(format!(
+                "no native command: {} does nothing in grofe",
+                tmux::miss_form(&argv)
+            ));
+        }
+        if natives.len() == 1 && natives[0] == argv {
+            return Ok(join_raw(words));
+        }
+        let raw: BTreeMap<&str, &str> = words
+            .iter()
+            .map(|w| (w.value.as_str(), w.raw.as_str()))
+            .collect();
+        let rendered: Vec<String> = natives
+            .iter()
+            .map(|argv| {
+                argv.iter()
+                    .map(|w| match raw.get(w.as_str()) {
+                        Some(r) => r.to_string(),
+                        None => cmd::parse::escape_arg(w),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        Ok(rendered.join(" ; "))
+    }
+
+    /// The `command-alias` entries converted so far.
+    fn aliases(&self) -> Vec<String> {
+        self.store
+            .list(Owner::Global, "command-alias")
+            .map(|l| l.items.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// A stored tmux command string (`a ; b`, as a binding or hook stores
+    /// it) in grofe's own grammar, each command through
+    /// [`Self::native_command`]; the text as written when nothing in it
+    /// changes.
+    fn native_text(
+        &mut self,
+        file: &Path,
+        line: usize,
+        text: &str,
+        mouse: bool,
+    ) -> Result<String, String> {
+        let words = tokenize_words(text);
+        let mut groups: Vec<Vec<Word>> = vec![Vec::new()];
+        for w in words {
+            if w.is_sep {
+                groups.push(Vec::new());
+            } else if let Some(g) = groups.last_mut() {
+                g.push(w);
             }
         }
-        if let Some(cmd_word) = words.get(i) {
-            let first_token = cmd_word.value.split_whitespace().next().unwrap_or("");
-            let base = first_token.rsplit('/').next().unwrap_or(first_token);
-            if base == "tpm" {
-                return self.report(file, line, "plugins and TPM", text);
-            }
+        groups.retain(|g| !g.is_empty());
+        let mut out = Vec::new();
+        let mut changed = false;
+        for g in &groups {
+            let native = self.native_command(file, line, g, mouse)?;
+            changed |= native != join_raw(g);
+            out.push(native);
         }
-        self.report(file, line, "run-shell", text);
+        Ok(if changed {
+            out.join(" ; ")
+        } else {
+            text.to_string()
+        })
     }
 
     // ---- rendering ----
@@ -1591,13 +1992,58 @@ impl Importer {
             }
         }
 
-        for table in ["prefix", "root"] {
+        // Only the sources a converted value still reads: a `#(cmd)` a
+        // later `set` replaced registers nothing (FE.3 prunes it too).
+        let mut read: Vec<&str> = self.options.values().map(|e| e.value.as_str()).collect();
+        let list_items: Vec<String> = config::LIST_NAMES
+            .iter()
+            .filter(|(toml_key, _)| self.lists.contains_key(toml_key))
+            .filter_map(|(_, tmux)| self.store.list(Owner::Global, tmux))
+            .flat_map(|l| l.items.values().cloned())
+            .collect();
+        read.extend(list_items.iter().map(String::as_str));
+        read.extend(self.keys.iter().map(|b| b.command.as_str()));
+        read.extend(self.hooks.iter().map(|h| h.command.as_str()));
+        for (name, s) in &self.sources {
+            let option = format!("#{{@{name}}}");
+            if !read.iter().any(|v| v.contains(&option)) {
+                continue;
+            }
+            out.push_str(&format!(
+                "\n[status.sources.{name}]\n# {}:{}\ncmd = {}\n",
+                tilde(&s.file, self.home.as_deref()),
+                s.line,
+                quote(&s.cmd)
+            ));
+        }
+
+        if !self.hooks.is_empty() {
+            out.push_str("\n[hooks]\n");
+            for h in &self.hooks {
+                out.push_str(&format!(
+                    "# {}:{}\n{} = {}\n",
+                    tilde(&h.file, self.home.as_deref()),
+                    h.line,
+                    h.event,
+                    quote(&h.command)
+                ));
+            }
+        }
+
+        // Key tables in first-bound order, `prefix` and `root` first.
+        let mut tables: Vec<&str> = vec!["prefix", "root"];
+        for b in &self.keys {
+            if !tables.contains(&b.table.as_str()) {
+                tables.push(&b.table);
+            }
+        }
+        for table in tables {
             let bindings: Vec<&BindingEntry> =
                 self.keys.iter().filter(|b| b.table == table).collect();
             if bindings.is_empty() {
                 continue;
             }
-            out.push_str(&format!("\n[keys.{table}]\n"));
+            out.push_str(&format!("\n[keys.{}]\n", key_toml(table)));
             for b in bindings {
                 out.push_str(&format!(
                     "# {}:{}\n",
@@ -1611,6 +2057,22 @@ impl Importer {
                 ));
             }
         }
+
+        if !self.runtime.is_empty() {
+            out.push_str(
+                "\n# Not converted: grofe's config has no key for these commands, which tmux\n\
+                 # ran as it read the file. Each is in grofe's own grammar, to run from a hook\n\
+                 # or a script.\n",
+            );
+            for r in &self.runtime {
+                out.push_str(&format!(
+                    "# {}:{}\n#   {}\n",
+                    tilde(&r.file, self.home.as_deref()),
+                    r.line,
+                    r.text.replace('\n', "\n#   ")
+                ));
+            }
+        }
         (out, self.reports)
     }
 }
@@ -1618,7 +2080,8 @@ impl Importer {
 /// The tmux name to its TOML key: the name through the tmux front end's
 /// one option-name table (`compat::tmux::OPTION_NAMES`, FE.1), then the
 /// reverse of [`config::tmux_name`]. An option grofe stores without acting
-/// on it is still reported as one grofe does not have (TP.0 decides).
+/// on it converts too, with a note (TP.0): its TOML key loads, and a script
+/// that reads it back with `show` still finds it.
 fn reverse_tmux_name(tmux: &str) -> Option<&'static str> {
     let name = store_option(tmux)?;
     config::OPTION_NAMES
@@ -1627,10 +2090,13 @@ fn reverse_tmux_name(tmux: &str) -> Option<&'static str> {
         .map(|(t, _)| *t)
 }
 
-/// The option store's name for tmux option `tmux`, unless it has no effect.
+/// The option store's name for tmux option `tmux`.
 fn store_option(tmux: &str) -> Option<&'static str> {
-    crate::compat::tmux::option_name(tmux)
-        .filter(|name| !crate::server::dispatch::options::has_no_effect(name))
+    tmux::option_name(tmux)
+}
+
+fn options_no_effect(name: &str) -> bool {
+    crate::server::dispatch::options::has_no_effect(name)
 }
 
 /// Resolves tmux's short directive names to the canonical ones this module
@@ -1642,6 +2108,7 @@ fn canonical_directive(name: &str) -> &str {
         "unbind" | "unbind-key" => "unbind-key",
         "source" | "source-file" => "source-file",
         "set-environment" | "setenv" => "set-environment",
+        "set-hook" => "set-hook",
         "if" | "if-shell" => "if-shell",
         "run" | "run-shell" => "run-shell",
         other => other,
@@ -1649,16 +2116,147 @@ fn canonical_directive(name: &str) -> &str {
 }
 
 /// Checks a binding's built command string exactly as the config loader
-/// will read it back (`config/load.rs`'s private `commands()`).
-fn validate_command(s: &str) -> Result<(), String> {
+/// will read it back (`config/load.rs`'s private `commands()` and
+/// `expand_aliases`, with the `command-alias` entries converted so far).
+fn validate_command(s: &str, aliases: &[String]) -> Result<(), String> {
     let cmds = cmd::split_command_string(s).map_err(|e| e.to_string())?;
     if cmds.is_empty() {
         return Err(format!("no command in {s:?}"));
     }
     for argv in &cmds {
-        cmd::parse(argv).map_err(|e| e.to_string())?;
+        let expanded = crate::server::dispatch::menu::expand_alias(aliases, argv)
+            .unwrap_or_else(|| vec![argv.clone()]);
+        for argv in &expanded {
+            cmd::parse(argv).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
+}
+
+/// `spelled` (an argv the front end handed the native parser) as native
+/// text that means `command`, if it does: read back by the native parser
+/// (outside the front end, so with native targets) to the same command.
+/// tmux's exact `=name` target has no native spelling; it is spelled as
+/// the name (the flag says so), since a native name is exact whenever a
+/// session has it. In a mouse key's commands a bare `=` is the pointer's
+/// target natively too (M36-R3). `SetOption::shown` only records what a
+/// tmux-dialect `show` prints, so it is not compared.
+fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<(Vec<String>, bool)> {
+    let mut argv = spelled.to_vec();
+    let mut exact = false;
+    for i in 1..argv.len() {
+        let flag = spelled[i - 1].as_str();
+        let target_flag = flag.len() > 1
+            && flag.starts_with('-')
+            && flag[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && flag.ends_with(['t', 's']);
+        if target_flag && argv[i].len() > 1 {
+            let word = argv[i].strip_prefix('=').unwrap_or(&argv[i]);
+            let word = word.replacen(":=", ":", 1);
+            if word != argv[i] {
+                argv[i] = word;
+                exact = true;
+            }
+        }
+    }
+    let native = cmd::parse(&argv).ok()?;
+    let mut front = command.clone();
+    if let Command::SetOption(set) = &mut front {
+        set.shown = None;
+    }
+    // Compared through `Debug`: the front end's exact and mouse targets
+    // read as the native parser reads their spelling.
+    let native = format!("{native:?}");
+    let native = if mouse {
+        native.replace("Session(Name(\"=\"))", "Session(Mouse)")
+    } else {
+        native
+    };
+    let front = format!("{front:?}").replace("Exact(", "Name(");
+    (native == front).then_some((argv, exact))
+}
+
+/// The command strings `command` stores (run later, so translated too),
+/// each with its index in `argv`, found from the end: `if-shell`'s
+/// branches, `confirm-before`'s command, `command-prompt`'s template and
+/// `display-menu`'s item commands.
+// ponytail: a `bind-key` run from a binding keeps its command as written.
+fn stored_commands(argv: &[String], command: &Command) -> Vec<(usize, String)> {
+    let stored: Vec<&String> = match command {
+        Command::If(c) => c.then.iter().chain(&c.otherwise).collect(),
+        Command::ConfirmBefore(c) => c.command.iter().collect(),
+        Command::CommandPrompt(c) => c.template.iter().collect(),
+        Command::DisplayMenu(m) => m
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                cmd::MenuEntry::Item { command, .. } => Some(command),
+                cmd::MenuEntry::Separator => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut end = argv.len();
+    let mut out = Vec::new();
+    for s in stored.into_iter().rev() {
+        let Some(at) = argv[1..end].iter().rposition(|w| w == s).map(|i| i + 1) else {
+            break;
+        };
+        out.push((at, s.clone()));
+        end = at;
+    }
+    out
+}
+
+/// Whether a `run-shell`/`if-shell` word runs TPM or a plugin: a path to
+/// `tpm`, to a `*.tmux` plugin entry point, or under a `plugins/`
+/// directory.
+fn runs_a_plugin(text: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || "'\"".contains(c))
+        .any(|token| {
+            let base = token.rsplit('/').next().unwrap_or(token);
+            base == "tpm" || token.ends_with(".tmux") || token.contains("/plugins/")
+        })
+}
+
+/// tmux 3.7b's stock root mouse bindings that grofe's built-in mouse model
+/// reproduces for an unbound key (TC.10, spec 4.5's bindings row), as
+/// `list-keys` prints them (TC.0's corpus, `container-stored.argv`).
+const STOCK_MOUSE: &[(&str, &str)] = &[
+    ("MouseDown1Pane", "select-pane -t = \\; send-keys -M"),
+    ("MouseDown1Status", "switch-client -t ="),
+    ("MouseDrag1Border", "resize-pane -M"),
+    ("WheelDownStatus", "next-window"),
+    ("WheelUpStatus", "previous-window"),
+    (
+        "WheelUpPane",
+        "if-shell -F '#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' \
+         'copy-mode -e'",
+    ),
+];
+
+/// Whether `tail`, bound to root `key`, is tmux's stock binding for that
+/// mouse key (verbs compared by tmux's full name, arguments as parsed).
+fn is_stock_mouse_binding(key: &Key, tail: &[Word]) -> bool {
+    let Some((_, stock)) = STOCK_MOUSE.iter().find(|(k, _)| key.to_string() == *k) else {
+        return false;
+    };
+    fn commands(words: &[Word]) -> Vec<Vec<String>> {
+        words
+            .split(|w| w.is_sep)
+            .filter(|c| !c.is_empty())
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .map(|(i, w)| match tmux::resolve(&w.value) {
+                        Ok(spec) if i == 0 => spec.name.to_string(),
+                        _ => w.value.clone(),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+    commands(tail) == commands(&tokenize_words(stock))
 }
 
 fn is_glob_pattern(s: &str) -> bool {
@@ -1876,7 +2474,7 @@ mod tests {
             "set -ag command-alias a=list-sessions\n",
             "set -ag command-alias b=list-windows\n",
             "set -gu command-alias[0]\n",
-            "set -ag command-alias c=x\n",
+            "set -ag command-alias c=list-clients\n",
             "set -ag status-format[2] +\n",
         ));
         let parsed: toml::Table = out.parse().expect("valid TOML");
@@ -1888,7 +2486,10 @@ mod tests {
                 .collect()
         };
         assert_eq!(strings(&parsed["status"]["rows"]), ["", "", "two+"]);
-        assert_eq!(strings(&parsed["command-alias"]), ["c=x", "b=list-windows"]);
+        assert_eq!(
+            strings(&parsed["command-alias"]),
+            ["c=list-clients", "b=list-windows"]
+        );
         assert!(out.contains("# t.conf:1\n# t.conf:6\nrows = "), "{out}");
         assert!(
             reports.iter().all(|r| r.key == "note"),
@@ -2010,9 +2611,9 @@ mod tests {
                 .iter()
                 .find(|b| b.key == parse_key("x").unwrap())
                 .map(|b| b.command.as_str()),
-            Some("display a")
+            Some("display-message a")
         );
-        assert!(imp.reports.iter().any(|r| r.key == "user option"));
+        assert_eq!(imp.runtime.len(), 1, "the user option is kept as a comment");
     }
 
     #[test]
@@ -2298,5 +2899,42 @@ mod tests {
         // integration level with a real process environment): rebuilding
         // the same binding is deterministic regardless of what
         // CANOPY_STORE happens to resolve to for path purposes.
+    }
+    #[test]
+    fn a_bare_equals_target_is_spelled_only_in_a_mouse_key() {
+        let (_, reports) = import(concat!(
+            "bind -n MouseDown1Status switch-client -t =\n",
+            "bind q switch-client -t =\n",
+        ));
+        assert!(
+            !reports.iter().any(|r| r.line == 1 && r.key != "note"),
+            "{reports:?}"
+        );
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.line == 2 && r.key.starts_with("no native spelling")),
+            "{reports:?}"
+        );
+    }
+
+    #[test]
+    fn plugin_scripts_and_tpm_are_found() {
+        assert!(runs_a_plugin("run-shell ~/.tmux/plugins/tpm/tpm"));
+        assert!(runs_a_plugin(
+            "'[ -x \"$S/tmux-resurrect/resurrect.tmux\" ]'"
+        ));
+        assert!(runs_a_plugin("$STORE/plugins/strategies/x.sh"));
+        assert!(!runs_a_plugin("~/.config/tmux/wk-keys-fix.sh"));
+    }
+
+    #[test]
+    fn a_stored_branch_is_translated_too() {
+        let (out, _) = import("bind x if -F 1 'neww' 'setw -g automatic-rename off'\n");
+        let parsed: toml::Table = out.parse().expect("valid TOML");
+        assert_eq!(
+            parsed["keys"]["prefix"]["x"].as_str(),
+            Some("if-shell -F 1 new-window \"set-option -w -g automatic-rename off\"")
+        );
     }
 }
