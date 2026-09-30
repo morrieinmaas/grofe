@@ -821,7 +821,7 @@ binding asks.
   `=`, and the `root` wheel, drag, double and triple click rows. After the
   stub edit no M5 task edits `input.rs`.
 
-**Wave 0 (during M4).**
+**Wave 0 (at the start of M5, after M3.7's non-M5 tasks close).**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
@@ -850,15 +850,15 @@ TM.5; merge order TM.2, TM.3, TM.5, TM.6).**
 |---|---|---|---|---|
 | **TM.7** Front-end rows and parity | Rows in `src/compat/tmux/copy.rs`, with FE.1's rules (mapping kind, cosmetic or semantic marks, goldens): `copy-mode -u -e`, `send -X`, `send -FX`, `send -X -N`, `copy-pipe*` strings inside `bind -T copy-mode-vi`, `command-prompt -T search`, the buffer verbs and their output formats, and the options `mode-keys`, `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`, `buffer-limit`; the parity suite `tests/compat/scenarios/copy_mode/`: one scenario per TM.0 row (the same fixture, keys and a final `show-buffer` or cursor readout) recorded on tmux 3.7b with TC.0b and run on grofe through the `tmux` symlink | `src/compat/tmux/copy.rs`, `tests/compat/scenarios/copy_mode/`, `tests/fixtures/compat/golden/tm_7/` | TM.1 to TM.6, FE.1, TC.0b | All 93 scenarios are byte-identical to their goldens after normalization; `tmux list-keys -T copy-mode-vi` equals TM.0's golden; editing one golden turns the suite red; `compat-miss.log` is empty after the suite; the sockets check of "Rules for M4 onward" passes |
 
-**Then (M3.7 tasks, run here):** TP.5 (yank) on top of TM.5 and TM.6, and
-TP.9b on top of TM.1, TM.4, TM.6 and TM.7; tmux-fzf's buffer actions (TP.4)
+**Then (M3.7 tasks, run here):** TP.11 (yank) on top of TM.5 and TM.6, and
+TP.9b on top of TM.1, TM.4, TM.6 and TM.7; tmux-fzf's buffer actions (TP.7)
 once TM.4 lands. Their rows in M3.7 hold as written.
 
 **Critical path inside M5** (review cycles included): TM.0 (2 d) and its
-approval (about 1 d) during M4; then stub edit → TM.1 (4 d) → TM.2 (3 d) → TM.5
-(2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) → TP.9b (2 d), about 21 working
-days after M4. TM.4 (3 d) runs beside TM.1 and TM.3 (3 d) beside TM.2
-and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
+approval (about 1 d) right after M3.7's non-M5 tasks close; then stub edit →
+TM.1 (4 d) → TM.2 (3 d) → TM.5 (2 d) → TM.6 (3 d) → TM.7 (5 d) → TP.5 (2 d) →
+TP.9b (2 d), about 21 working days. TM.4 (3 d) runs beside TM.1 and TM.3
+(3 d) beside TM.2 and TM.5, each in its own file. **One-lane sum:** TM.0 2, TM.1 4, TM.2 3, TM.3 3, TM.4 3, TM.5 2,
 TM.6 3, TM.7 5, TP.5 2, TP.9b 2: 29 task-days.
 
 **Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
@@ -1024,7 +1024,8 @@ run beside T4.3; T4.5 (3 d) runs beside T4.4. **One-lane sum:** T4.1 3, T4.2
 from a clean clone; **[owner]** a real reboot on each OS returns every
 session with its `uid`s and every pane with a resume runs it, logged in
 `docs/dogfood.md` (substitute: T4.6 green on the Debian image; Arch optional). Only after this
-gate does the owner's machine drop resurrect and continuum (TP.8).
+gate, and the owner's answer to Q-M37-1 (`plan-amend-2026-09-29.md`), does
+the owner's machine drop resurrect and continuum.
 
 ---
 
@@ -1034,7 +1035,7 @@ Spec D9 and §7. Goal: a frozen control protocol and event catalog, supervised
 out-of-process plugins, and sandboxed Lua, shaped by what M3.6 and M3.7 turned
 out to need rather than by the candidate list in spec §4.6. The known
 consumers today: TC.5's event hooks and the twelve tmux hook names behind them
-(FE.3), which opensessions (TP.6) uses; the agents plugin (M7), which needs
+(FE.3), which opensessions (TP.9) uses; the agents plugin (M7), which needs
 option changes on pane options, pane focus, pane creation and exit, session
 and window closing, `restore-done` and `resume-changed`; and nothing in the
 status line, which stays formats over options (D8). An event with no consumer
@@ -1069,7 +1070,7 @@ T6.2, T6.3).**
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **T6.6** In-tree plugins | `plugins/event-log/event-log.sh`, an out-of-process plugin in POSIX sh over `grofe control` that appends the catalog's events to `<state>/events.log` (a dogfooding aid; events while it is down are not replayed, and its README says so); README's plugin section with both | `plugins/event-log/`, `examples/lua/`, README's plugin section, `tests/plugins_intree.rs` | T6.2, T6.3 | With `[plugins.event-log]` configured, a split and a `select-pane` append their events in order within 1 s; the plugin passes `shellcheck`. |
+| **T6.6** In-tree plugins | `plugins/event-log/event-log.sh`, an out-of-process plugin in POSIX sh over `grofe control` that appends the catalog's events to `<state>/events.log` (a dogfooding aid; events while it is down are not replayed, and its README says so); README's plugin section with both | `plugins/event-log/`, README's plugin section, `tests/plugins_intree.rs` | T6.2, T6.3 | With `[plugins.event-log]` configured, a split and a `select-pane` append their events in order within 1 s; the plugin passes `shellcheck`. |
 
 **Critical path inside M6** (review cycles included): T6.0 (2 d) and its
 approval during M5; then stub edit → T6.1 (3 d) → T6.2/T6.3 (3 d, parallel) →
