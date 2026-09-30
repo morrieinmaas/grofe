@@ -341,6 +341,48 @@ fn find_window_lists_only_matching_windows() {
     );
 }
 
+/// `find-window` matches pane text with a `*pattern*` glob per line, as
+/// tmux's `#{C:}`, and takes the pattern as text: a `,` in it is no
+/// format syntax.
+#[test]
+fn find_window_globs_the_text_and_escapes_the_pattern() {
+    let srv = start();
+    srv.cmd(&[
+        "new-window",
+        "-d",
+        "-t",
+        "main",
+        "-n",
+        "one",
+        "printf 'hello fxo there\\n'; exec cat",
+    ])
+    .expect("new-window");
+    srv.cmd(&["new-window", "-d", "-t", "main", "-n", "a,b", "cat"])
+        .expect("new-window");
+    let mut a = attach(&srv, "main");
+    let listed = |a: &mut Harness, pattern: &str| -> Vec<String> {
+        srv.cmd(&["find-window", "-Z", pattern])
+            .expect("find-window");
+        a.wait_for("(filter: ");
+        let text = a.text();
+        a.send("q");
+        a.wait_until("the chooser closed", WAIT, |t| !t.contains("(filter: "));
+        text.lines()
+            .take_while(|l| !l.starts_with('┌'))
+            .filter(|l| l.contains("─> - "))
+            .map(|l| {
+                l.split("─> - ")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            })
+            .collect()
+    };
+    assert_eq!(listed(&mut a, "f?o"), ["2: one"]);
+    assert_eq!(listed(&mut a, "a,b"), ["3: a,b"]);
+}
+
 /// `choose-client -Z` lists the attached clients; Enter detaches the
 /// chosen one, as tmux's default template does.
 #[test]

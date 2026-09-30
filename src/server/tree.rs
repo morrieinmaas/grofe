@@ -342,8 +342,11 @@ fn tree_items(state: &State, find: Option<&str>) -> Vec<Item> {
     sessions
 }
 
-/// `find-window`'s filter for one pane: the window name or the pane title
-/// as `#{m:*<pattern>*,...}`, or the pane's visible text (`#{C:...}`).
+/// `find-window`'s filter for one pane, as tmux 3.7b builds it: the window
+/// name or the pane title as `#{m:*<pattern>*,...}`, or a line of the
+/// pane's visible text as `#{C:<pattern>}` (a `*<pattern>*` glob per line,
+/// trailing blanks dropped). The pattern reaches the format through a
+/// variable, so its `#`, `,` and `}` are text, never format syntax.
 // ponytail: evaluated on every draw of the chooser (tmux filters when it
 // rebuilds the tree); fine for the dozens of panes a server holds.
 fn matches(state: &State, pane: PaneId, find: Option<&str>) -> bool {
@@ -351,10 +354,17 @@ fn matches(state: &State, pane: PaneId, find: Option<&str>) -> bool {
         return true;
     };
     let vars = FormatCtx::new(&state.model, pane);
-    let fmt =
-        format!("#{{||:#{{m:*{pattern}*,#{{window_name}}}},#{{m:*{pattern}*,#{{pane_title}}}}}}");
-    let by_name = cmd::expand(&fmt, &ServerVars::new(state, pane, &vars));
-    if !by_name.is_empty() && by_name != "0" {
+    let server = ServerVars::new(state, pane, &vars);
+    let glob = format!("*{pattern}*");
+    let by_name = cmd::expand(
+        "#{||:#{m:#{find_window_glob},#{window_name}},#{m:#{find_window_glob},#{pane_title}}}",
+        &FindVars {
+            inner: &server,
+            glob: &glob,
+            line: "",
+        },
+    );
+    if by_name == "1" {
         return true;
     }
     state.model.panes.get(&pane).is_some_and(|p| {
@@ -363,8 +373,34 @@ fn matches(state: &State, pane: PaneId, find: Option<&str>) -> bool {
             end: None,
             escapes: false,
         };
-        p.handle.capture(&visible).contains(pattern)
+        p.handle.capture(&visible).lines().any(|line| {
+            let line = line.trim_end_matches(|c: char| c.is_ascii_whitespace());
+            let vars = FindVars {
+                inner: &server,
+                glob: &glob,
+                line,
+            };
+            cmd::expand("#{m:#{find_window_glob},#{find_window_line}}", &vars) == "1"
+        })
     })
+}
+
+/// The variables `find-window`'s filter adds: its glob and the text line
+/// being tried.
+struct FindVars<'a> {
+    inner: &'a dyn cmd::FormatVars,
+    glob: &'a str,
+    line: &'a str,
+}
+
+impl cmd::FormatVars for FindVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        match name {
+            "find_window_glob" => Some(self.glob.to_string()),
+            "find_window_line" => Some(self.line.to_string()),
+            _ => self.inner.get(name),
+        }
+    }
 }
 
 fn expand(state: &State, pane: PaneId, fmt: &str) -> String {
