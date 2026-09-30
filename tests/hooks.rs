@@ -193,8 +193,17 @@ fn the_twelve_events_fire_in_tmuxs_order_with_tmuxs_context() {
             "short-lived-session" => drop(run(&["new-session", "-d", "-s", "d", "sleep 0.5"])),
             other => panic!("no step {other}"),
         }
-        let got = new_lines(&log, &mut seen, want.len());
-        assert_eq!(got, *want, "step {step}");
+        let mut got = new_lines(&log, &mut seen, want.len());
+        let mut want = want.to_vec();
+        // `pane-closed` runs on the request's queue and `session-closed` on
+        // the global one, so their shells run at once and race to the log,
+        // in tmux 3.7b too: with `sleep 0;` before pane-closed's echo, tmux
+        // logged session-closed first 30 times in 30.
+        if *step == "kill-last-pane-of-session" {
+            got.sort();
+            want.sort();
+        }
+        assert_eq!(got, want, "step {step}");
     }
 }
 
