@@ -17,6 +17,7 @@ mod normalize;
 mod record;
 mod replay;
 mod scenarios;
+mod tp_1;
 
 use std::collections::BTreeSet;
 use std::fs;

@@ -1,0 +1,20 @@
+# ~/.config/grofe/config.toml, managed by chezmoi. grofe's counterpart of
+# ~/.config/tmux/tmux.conf, and short for the same reason: everything else
+# lives in canopy.
+#
+# grofe reads its config in layers, each later one winning: this file, then
+# conf.d/*.toml in lexical order, then user.toml. canopy writes only its own
+# fragments into conf.d (`canopy grofe generate`, NN-canopy-*.toml), and
+# user.toml is this machine's own layer, the port of
+# ~/.config/canopy/user.conf.
+#
+# What stays here is what canopy's layers read from the environment and
+# cannot know themselves: where canopy lives. On tmux the entry point put
+# these three in with `set-environment -g`; [environment] does the same,
+# before any conf.d fragment loads, so canopy's status source and scripts
+# find them. $HOME is expanded from the server's own environment, so the
+# paths need no template.
+[environment]
+CANOPY_STORE = "$HOME/.local/share/canopy"
+CANOPY_STATE = "$HOME/.local/state/canopy"
+CANOPY_CONFIG = "$HOME/.config/canopy"

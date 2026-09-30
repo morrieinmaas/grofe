@@ -1,0 +1,17 @@
+# Where grofe's key layer differs from tmux/keys.tsv. `canopy grofe generate`
+# emits every row of that table into conf.d/10-canopy-keys.toml, with its
+# name, group and description, except as this file says.
+#
+# Format: tab-separated, three columns.
+#
+#   name      a name from tmux/keys.tsv
+#   command   the grofe command for that row, or - for "not bound on grofe"
+#   reason    one line, carried into the generated fragment as a comment
+#
+# A name that is not in tmux/keys.tsv is an error: a stale row here would
+# otherwise quietly stop meaning anything.
+#
+# name	command	reason
+canopy-reload	reload ; display-message "canopy: reloaded"	grofe re-reads every layer with its own reload, which validates them all first and applies all or nothing
+save-now	-	resurrect is not loaded on grofe, whose own persistence replaces it
+restore-now	-	resurrect is not loaded on grofe, whose own persistence replaces it
