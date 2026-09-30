@@ -1,11 +1,15 @@
 # FE.1: tmux's error texts for tmux-dialect requests, and opensessions'
-# `select-pane -P <style>` (M36-R4): tmux 3.7b still takes the hidden -P,
-# selects the pane and sets its style.
+# `select-pane -P <style>`: tmux 3.7b still takes the hidden -P (so
+# M36-R4's premise was wrong), selects the pane and sets the pane's
+# window-style and window-active-style.
 $ new-session -d -s main -x 200 -y 50
 $ split-window -d -t main cat
 $ display -p -t main '#{pane_index}'
 $ select-pane -P bg=colour238 -t main:1.2
 $ display -p -t main '#{pane_index}'
+$ show -p -t main:1.2
+$ select-pane -t main:1.1 -P ''
+$ show -pv -t main:1.1 window-style
 $ select-pane -t main -P
 $ select-pane -Z -q
 $ kill-session -t

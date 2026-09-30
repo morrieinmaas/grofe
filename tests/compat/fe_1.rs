@@ -108,7 +108,7 @@ fn chains_match_their_golden() {
 
 #[test]
 #[ignore = "native gap: output before a failing command in a chain is dropped \
-            (run_commands in server/dispatch/mod.rs); see the FE.1 report"]
+            (run_commands in server/dispatch/mod.rs); listed for FE.2"]
 fn output_before_a_failing_command_matches_its_golden() {
     check_golden("chain-error");
 }
@@ -116,6 +116,46 @@ fn output_before_a_failing_command_matches_its_golden() {
 #[test]
 fn errors_match_their_golden() {
     check_golden("errors");
+}
+
+/// `-f` with a missing file or `/dev/null`, and `start-server` running the
+/// rest of its chain.
+#[test]
+fn startup_matches_its_golden() {
+    check_golden("startup");
+}
+
+/// `tmux -f <file>` is the only config of the server it starts: the
+/// user's `config.toml` is not read, and a later `-f` does not change a
+/// running server, as in tmux 3.7b.
+#[test]
+fn tmux_f_is_the_only_config_of_the_server_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = grofe_cli(dir.path());
+    let config = dir.path().join("config/grofe");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(config.join("config.toml"), "[status]\nleft = \"HOME\"\n").unwrap();
+    let file = dir.path().join("only.toml");
+    fs::write(&file, "[status]\nleft = \"FILE\"\n").unwrap();
+    let other = dir.path().join("other.toml");
+    fs::write(&other, "[status]\nleft = \"OTHER\"\n").unwrap();
+    let args = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let f = file.display().to_string();
+    let (status, _, err) = cli.run(&args(&["-f", &f, "new-session", "-d", "-s", "main"]));
+    assert!(status.success(), "{err}");
+    let o = other.display().to_string();
+    let (_, out, _) = cli.run(&args(&["-f", &o, "show", "-gv", "status-left"]));
+    assert_eq!(out, "FILE\n");
+    let _ = cli.run(&args(&["kill-server"]));
+
+    let (status, _, err) = cli.run(&args(&["-f", "/dev/null", "new-session", "-d"]));
+    assert!(status.success(), "{err}");
+    let (_, out, _) = cli.run(&args(&["show", "-gv", "status-left"]));
+    assert_eq!(
+        out, "[#{session_name}] \n",
+        "built-in default, not config.toml"
+    );
+    let _ = cli.run(&args(&["kill-server"]));
 }
 
 /// Case 1: `-V` is decided by `argv[0]`, with no server: the `tmux` name

@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
@@ -444,6 +444,20 @@ const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
+    },
+    // FE.1: what `select-pane -P` sets on a pane, as tmux 3.7b does
+    // (recorded; free text, unchecked). grofe draws no pane background.
+    Builtin {
+        name: "window-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-active-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
     },
 ];
 
@@ -968,8 +982,29 @@ fn config_env() -> config::Env {
 
 /// Applies the config chain once at server start. On any error the
 /// server keeps the built-in defaults and logs every error (R9).
+/// The config chain (spec §5.1), or with `tmux -f <file>` that file alone
+/// (`compat::start_config`): a missing file or `/dev/null` is no file, so
+/// only the built-in defaults.
+fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
+    let env = config_env();
+    match crate::compat::start_config() {
+        None => config::load(&env),
+        Some(file) => {
+            let only = config::Env {
+                config_dir: None,
+                ..env
+            };
+            let files: Vec<PathBuf> = std::iter::once(file)
+                .filter(|f| *f != Path::new("/dev/null") && f.exists())
+                .map(Path::to_path_buf)
+                .collect();
+            config::load_with_file(&only, &files)
+        }
+    }
+}
+
 pub fn apply_config_at_start(state: &mut State) {
-    match config::load(&config_env()) {
+    match load_config() {
         Ok(resolved) => {
             log_warnings(&resolved);
             apply_config(state, &resolved);
@@ -993,7 +1028,7 @@ fn log_warnings(resolved: &Resolved) {
 /// of it or, on any error, none of it and answers every error, one per
 /// line.
 pub fn reload(state: &mut State, _ctx: &ClientCtx, _c: Reload) -> Result<String, String> {
-    let resolved = config::load(&config_env()).map_err(|errors| join_errors(&errors))?;
+    let resolved = load_config().map_err(|errors| join_errors(&errors))?;
     log_warnings(&resolved);
     apply_config(state, &resolved);
     Ok(String::new())
@@ -1770,6 +1805,8 @@ const NO_EFFECT: &[&str] = &[
     "status-keys",
     "synchronize-panes",
     "terminal-features",
+    "window-active-style",
+    "window-style",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.

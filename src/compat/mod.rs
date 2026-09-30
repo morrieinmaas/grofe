@@ -47,6 +47,24 @@ pub fn set_started_as(identity: Identity) {
     let _ = STARTED_AS.set(identity);
 }
 
+/// The config file a CLI run as `tmux -f <file>` started this server with
+/// (`__server --file`), set once by `main.rs` before the server runs.
+static START_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Records `tmux -f <file>` for [`start_config`]. Only the first call
+/// counts.
+pub fn set_start_config(file: PathBuf) {
+    let _ = START_CONFIG.set(file);
+}
+
+/// The file `tmux -f` named, if the server was started with one. As in
+/// tmux 3.7b it replaces the whole config (recorded: `-f` loads only that
+/// file, a missing file is no config and no error, `-f /dev/null` is
+/// none), and it binds only the server it starts.
+pub fn start_config() -> Option<&'static Path> {
+    START_CONFIG.get().map(PathBuf::as_path)
+}
+
 /// Where a tmux-identity server appends its misses, set by
 /// [`server_started`] so the parse path, which has no `State`, can log.
 static MISS_LOG: OnceLock<PathBuf> = OnceLock::new();

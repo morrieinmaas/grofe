@@ -56,6 +56,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("mode-keys", "mode-keys"),
     ("renumber-windows", "renumber-windows"),
     ("synchronize-panes", "synchronize-panes"),
+    ("window-style", "window-style"),
+    ("window-active-style", "window-active-style"),
     ("main-pane-width", "main-pane-width"),
     ("main-pane-height", "main-pane-height"),
     ("window-size", "window-size"),

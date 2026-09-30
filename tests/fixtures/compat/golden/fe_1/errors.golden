@@ -10,6 +10,15 @@ $ select-pane -P bg=colour238 -t main:1.2
 $ display -p -t main '#{pane_index}'
 2
 ? 0
+$ show -p -t main:1.2
+window-active-style bg=colour238
+window-style bg=colour238
+? 0
+$ select-pane -t main:1.1 -P ''
+? 0
+$ show -pv -t main:1.1 window-style
+
+? 0
 $ select-pane -t main -P
 ! command select-pane: -P expects an argument
 ? 1

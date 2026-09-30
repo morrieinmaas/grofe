@@ -608,6 +608,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("window-status-last-style", "window-status-last-style"),
     ("window-status-separator", "window-status-separator"),
     ("window-status-style", "window-status-style"),
+    ("window-style", "window-style"),
+    ("window-active-style", "window-active-style"),
 ];
 
 /// The option store's name for tmux option `tmux`.
@@ -781,18 +783,28 @@ fn start_server(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     Ok(Vec::new())
 }
 
-/// `select-pane -P <style>` (opensessions' pane flash): tmux 3.7b still
-/// takes the undocumented `-P`, selects the pane and sets its
-/// `window-style` (recorded). grofe has no per-pane style, so the style is
-/// cosmetic: ignored, noted, and the pane selected.
+/// `select-pane -P <style>` (opensessions' pane flash), as tmux 3.7b runs
+/// the undocumented `-P` (recorded): it selects the pane and sets the
+/// pane's `window-style` and `window-active-style` to the style, unchecked.
+/// grofe stores both pane options (so `show -p` answers as tmux's does)
+/// but draws no pane background, so they have no effect.
+// ponytail: no pane background styles; the flash is invisible until the
+// renderer reads `window-style`.
 fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     let got = inv.getopt();
-    if got.flags.contains(&('P', None)) {
+    let Some(style) = got.value('P') else {
         return Err(ParseError::MissingValue("select-pane".to_string(), 'P').into());
+    };
+    let mut out = inv.native("select-pane", &without(inv, &got, 'P'))?;
+    for name in ["window-style", "window-active-style"] {
+        let mut args = vec!["-p".to_string()];
+        if let Some(target) = got.value('t') {
+            args.extend(["-t".to_string(), target.to_string()]);
+        }
+        args.extend([name.to_string(), style.to_string()]);
+        out.extend(inv.native("set-option", &args)?);
     }
-    let args = without(inv, &got, 'P');
-    inv.ignored('P');
-    inv.native("select-pane", &args)
+    Ok(out)
 }
 
 // ---- The core rows -------------------------------------------------------
@@ -908,12 +920,10 @@ fn core_rows() -> Vec<Row> {
         row(
             "tmux -f",
             FlagRename,
-            GrofeTarget::Unsupported(
-                "loading a grofe file at server start needs main.rs and the server's config start (FE.1 report)",
-            ),
+            Cli("the only config of the server it starts; /dev/null or a missing file is none"),
             SEMANTIC,
             "M3.6",
-            "",
+            "fe_1/invocation",
         ),
         row(
             "tmux -c",
@@ -1103,6 +1113,9 @@ pub struct TmuxCli {
     pub dialect: Dialect,
     /// `-V`: print `tmux <compat level>` and exit, before anything else.
     pub version: bool,
+    /// `-f <file>`: the config a server this call starts loads, alone
+    /// (`compat::start_config`).
+    pub file: Option<PathBuf>,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
@@ -1110,13 +1123,13 @@ const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L s
             [-S socket-path] [-T features] [command [flags]]";
 
 /// tmux's other global flags, those taking a value first. Valid for tmux,
-/// not for grofe: `-f` needs the server start to load it (see the report).
-const OTHER_WITH_VALUE: &[char] = &['c', 'f', 'T'];
+/// not implemented in grofe.
+const OTHER_WITH_VALUE: &[char] = &['c', 'T'];
 const OTHER_FLAGS: &[char] = &['C', 'D', 'h', 'l', 'N', 'q', 'U', 'v'];
 
 /// Reads the argv of the CLI run as `tmux` (`args` follow `argv[0]`), or
 /// the error to print and exit 1 with. Global flags are read as tmux's
-/// `getopt` reads them (`-L x`, `-Lx`, `-2u`, `-V`, `--`). Sockets stay in
+/// `getopt` reads them (`-L x`, `-Lx`, `-f x`, `-2u`, `-V`, `--`). Sockets stay in
 /// grofe's directory (spec D12), so `-L name` never reaches tmux's own
 /// `/tmp/tmux-$UID`. `-2` and `-u` are accepted with no effect. The first
 /// command's verb goes out by its full tmux name, so `tmux a` reaches
@@ -1129,6 +1142,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         argv: Vec::new(),
         dialect: Dialect::Tmux,
         version: false,
+        file: None,
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1142,7 +1156,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         };
         for (at, flag) in flags.char_indices() {
             match flag {
-                'L' | 'S' => {
+                'L' | 'S' | 'f' => {
                     let attached = &flags[at + 1..];
                     let value = if attached.is_empty() {
                         i += 1;
@@ -1152,10 +1166,10 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                     } else {
                         attached.to_string()
                     };
-                    if flag == 'L' {
-                        out.name = Some(value);
-                    } else {
-                        out.socket = Some(PathBuf::from(value));
+                    match flag {
+                        'L' => out.name = Some(value),
+                        'S' => out.socket = Some(PathBuf::from(value)),
+                        _ => out.file = Some(PathBuf::from(value)),
                     }
                     continue 'args;
                 }
@@ -1444,13 +1458,38 @@ mod tests {
     }
 
     #[test]
-    fn select_pane_style_is_dropped_and_the_pane_selected() {
-        let Command::SelectPane(c) =
-            one(&["select-pane", "-P", "bg=colour238", "-t", "%1"]).unwrap()
+    fn select_pane_style_selects_and_sets_the_pane_styles() {
+        let got = dispatch(
+            &args(&["select-pane", "-P", "bg=colour238", "-t", "%1"]),
+            &ctx(),
+        )
+        .unwrap();
+        let [
+            Command::SelectPane(select),
+            Command::SetOption(style),
+            Command::SetOption(active),
+        ] = &got[..]
         else {
-            panic!()
+            panic!("{got:?}")
         };
-        assert_eq!(c.target, cmd::target::parse_target("%1").unwrap());
+        let pane = cmd::target::parse_target("%1").unwrap();
+        assert_eq!(select.target, pane);
+        for (set, name) in [(style, "window-style"), (active, "window-active-style")] {
+            assert_eq!(
+                (
+                    set.scope,
+                    &set.target,
+                    set.name.as_str(),
+                    set.value.as_deref()
+                ),
+                (
+                    Some(cmd::OptionScope::Pane),
+                    &pane,
+                    name,
+                    Some("bg=colour238")
+                )
+            );
+        }
         assert_eq!(
             one(&["select-pane", "-t", "%1", "-P"]).unwrap_err().0,
             "command select-pane: -P expects an argument"
@@ -1532,7 +1571,14 @@ mod tests {
         assert!(err.starts_with("tmux: unknown option -- Z\nusage: tmux [-2CDhlNuVv]"));
         let err = cli(&args(&["-L"])).unwrap_err();
         assert!(err.starts_with("tmux: option requires an argument -- L\nusage: tmux"));
-        let err = cli(&args(&["-f", "/dev/null", "ls"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: -f");
+        let err = cli(&args(&["-c", "true"])).unwrap_err();
+        assert_eq!(err, "tmux front end is not implemented: -c");
+        let got = cli(&args(&["-L", "x", "-f", "/dev/null", "ls"])).unwrap();
+        assert_eq!(got.file, Some(PathBuf::from("/dev/null")));
+        assert_eq!(got.argv, args(&["list-sessions"]));
+        assert_eq!(
+            cli(&args(&["-f/a.toml"])).unwrap().file,
+            Some(PathBuf::from("/a.toml"))
+        );
     }
 }
