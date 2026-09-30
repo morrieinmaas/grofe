@@ -630,6 +630,11 @@ impl<'a> Invocation<'a> {
         let mut argv = Vec::with_capacity(args.len() + 1);
         argv.push(verb.to_string());
         argv.extend_from_slice(args);
+        SPELLED.with_borrow_mut(|spelled| {
+            if let Some(spelled) = spelled {
+                spelled.push(argv.clone());
+            }
+        });
         cmd::target::with_tmux_targets(|| cmd::parse(&argv))
             .map(|c| vec![c])
             .map_err(|e| {
@@ -785,6 +790,34 @@ pub fn dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxEr
 /// string, a binding, prompt text): a `;` argument in it is literal.
 pub fn dispatch_command(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxError> {
     translate_with(argv, ctx, table(), rewrites())
+}
+
+thread_local! {
+    /// While [`spell`] runs: each argv [`Invocation::native`] hands the
+    /// native parser, in order.
+    static SPELLED: std::cell::RefCell<Option<Vec<Vec<String>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`dispatch_command`] for `import-tmux` (TP.0), which runs without a
+/// server and writes grofe's own command strings: the native commands one
+/// tmux command means, and each native argv this table's rows parsed to
+/// make them, in order. Those argv are the live front end's own
+/// translation, so the converter spells a command exactly as the front end
+/// reads it and keeps no table of its own. Nothing is noted in
+/// `compat-miss.log`.
+pub fn spell(argv: &[String]) -> Result<(Vec<Command>, Vec<Vec<String>>), TmuxError> {
+    let ctx = ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: Dialect::Tmux,
+    };
+    let outer = SPELLED.replace(Some(Vec::new()));
+    let got = crate::compat::quietly(|| dispatch_command(argv, &ctx));
+    let spelled = SPELLED.replace(outer).unwrap_or_default();
+    got.map(|commands| (commands, spelled))
 }
 
 /// [`dispatch_command`] over the given rows and rewrites: the verb
