@@ -15,8 +15,8 @@
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::{Dimensions, Grid};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Column;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::cursor_icon::CursorIcon;
@@ -38,89 +38,6 @@ pub fn used(row: &alacritty_terminal::grid::Row<Cell>) -> usize {
         .rev()
         .find(|&c| row[Column(c)].flags.contains(WRITTEN))
         .map_or(0, |c| c + 1)
-}
-
-/// Each line's used width, oldest first: a line is the rows a wrap joins,
-/// its width counted across them.
-fn line_widths(grid: &Grid<Cell>) -> Vec<(usize, Vec<Line>)> {
-    let cols = grid.columns();
-    let top = -(grid.history_size() as i32);
-    let mut lines = Vec::new();
-    let mut rows = Vec::new();
-    let mut width = 0;
-    for l in top..grid.screen_lines() as i32 {
-        let row = &grid[Line(l)];
-        let used = used(row);
-        if used > 0 {
-            width = rows.len() * cols + used;
-        }
-        rows.push(Line(l));
-        if !row[Column(cols - 1)].flags.contains(CellFlags::WRAPLINE) {
-            lines.push((width, std::mem::take(&mut rows)));
-            width = 0;
-        }
-    }
-    if !rows.is_empty() {
-        lines.push((width, rows));
-    }
-    lines
-}
-
-/// Used widths a resize kept for lines too short to hold them: a line
-/// shrunk to fewer rows than its width needs gets it back when it grows.
-pub struct Kept {
-    /// `(line, width)`, lines counted from the oldest.
-    lost: Vec<(usize, usize)>,
-    history_limit: usize,
-}
-
-impl Kept {
-    pub fn new(history_limit: usize) -> Kept {
-        Kept {
-            lost: Vec::new(),
-            history_limit,
-        }
-    }
-
-    /// Resizes `term`, keeping each line's used width: alacritty's reflow
-    /// drops trailing blanks it counts as empty, written ones too, where
-    /// tmux's reflow keeps the width (recorded: `abcdef  ` shrunk to 4
-    /// columns and grown back still captures with its blanks). Lines match
-    /// from the bottom, the end a reflow keeps.
-    pub fn resize<L: EventListener>(&mut self, term: &mut Term<L>, size: impl Dimensions) {
-        let mut before = line_widths(term.grid());
-        // A full history may have dropped lines since, so the lines no
-        // longer count from the same one.
-        if term.grid().history_size() < self.history_limit {
-            for &(i, width) in &self.lost {
-                if let Some(line) = before.get_mut(i) {
-                    line.0 = line.0.max(width);
-                }
-            }
-        }
-        self.lost.clear();
-        term.resize(size);
-        let cols = term.columns();
-        let after = line_widths(term.grid());
-        let shift = after.len() as isize - before.len() as isize;
-        let grid = term.grid_mut();
-        for (i, (width, _)) in before.iter().enumerate() {
-            let Ok(j) = usize::try_from(i as isize + shift) else {
-                continue;
-            };
-            let Some((now, rows)) = after.get(j) else {
-                continue;
-            };
-            if *width == 0 || width <= now {
-                continue;
-            }
-            let (row, col) = ((width - 1) / cols, (width - 1) % cols);
-            match rows.get(row) {
-                Some(&line) => grid[line][Column(col)].flags.insert(WRITTEN),
-                None => self.lost.push((j, *width)),
-            }
-        }
-    }
 }
 
 /// The emulator as the parser's handler: [`Term`], marking written cells.

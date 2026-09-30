@@ -161,8 +161,6 @@ pub struct RowsSnapshot {
 pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
-    /// Used widths a resize could not keep on their lines ([`written`]).
-    pub(crate) widths: written::Kept,
 }
 
 /// alacritty's tab stops, every 8 columns.
@@ -364,7 +362,6 @@ impl PaneHandle {
         let emu = Arc::new(Mutex::new(Emu {
             term: Term::new(config, &size, Listener(Arc::clone(&events))),
             parser: Processor::new(),
-            widths: written::Kept::new(spec.history_limit),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
@@ -418,10 +415,12 @@ impl PaneHandle {
             cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
-        let mut emu = lock(&self.emu);
-        let Emu { term, widths, .. } = &mut *emu;
-        widths.resize(term, size);
-        drop(emu);
+        // ponytail: alacritty's reflow drops trailing blanks it counts as
+        // empty, written ones too ([`written`]), so a line shrunk narrower
+        // than its written blanks loses them and `-J` then trims them, where
+        // tmux keeps its width. Carrying widths across resizes misplaced them
+        // when lines moved or re-wrapped; the loss is the accepted divergence.
+        lock(&self.emu).term.resize(size);
         self.set_winsize(size)
     }
 

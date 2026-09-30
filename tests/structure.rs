@@ -1317,12 +1317,13 @@ fn capture_pane_j_ends_each_line_at_its_used_width() {
     assert_eq!(joined, want.map(|l| l + "\n").concat());
 }
 
-/// `capture-pane -J` as tmux 3.7b gives it (recorded on a 20x6 pane):
-/// a line's written blanks survive a shrink to 4 columns and back, a line
-/// typed in insert mode is the whole width, a tab is its `\t` alone, and a
-/// wide character wrapped to the next row joins it.
+/// `capture-pane -J` as tmux 3.7b gives it (recorded on a 20x6 pane): a
+/// line typed in insert mode is the whole width, a tab is its `\t` alone,
+/// and a wide character wrapped to the next row joins it. After a shrink
+/// to 4 columns and back the lines are the same, but written trailing
+/// blanks may be lost (the accepted divergence in `pane::written`).
 #[test]
-fn capture_pane_j_keeps_widths_across_a_resize_and_prints_tabs() {
+fn capture_pane_j_prints_insert_mode_tabs_and_wide_characters() {
     let srv = server();
     let cmd = concat!(
         "printf 'ab   \\nabcdef  \\n'; printf '\\033[4hxy\\033[4l\\n'; ",
@@ -1350,7 +1351,14 @@ fn capture_pane_j_keeps_widths_across_a_resize_and_prints_tabs() {
     assert_eq!(joined(&srv), want);
     ok(&srv, &["resize-window", "-t", "s", "-x", "4"]);
     ok(&srv, &["resize-window", "-t", "s", "-x", "20"]);
-    assert_eq!(joined(&srv), want);
+    let after = joined(&srv);
+    assert_eq!(after.lines().count(), want.lines().count(), "{after:?}");
+    for (line, want) in after.lines().zip(want.lines()) {
+        assert!(
+            line == want || line == want.trim_end(),
+            "{line:?} is not {want:?}"
+        );
+    }
 }
 
 /// `renumber-windows` as tmux 3.7b (recorded): off, a killed window leaves
@@ -1384,6 +1392,50 @@ fn renumber_windows_closes_the_gaps_a_removed_window_leaves() {
     assert_eq!(indexes("s"), "0 7");
     ok(&srv, &["join-pane", "-s", "s:7", "-t", "s:0"]);
     assert_eq!(indexes("s"), "0");
+}
+
+/// After a resize, `-J` gains no blank padding tmux 3.7b does not have
+/// (recorded): a height change (6 rows to 4 and back), and a 26-character
+/// line re-wrapped at 5 columns and back. Written trailing blanks may be
+/// lost across a shrink (the accepted divergence in `pane::written`).
+#[test]
+fn capture_pane_j_gains_no_padding_across_a_resize() {
+    let srv = server();
+    let cases: [(&str, &[&str], [&str; 2]); 2] = [
+        (
+            "printf 'ab   \\nx  \\n'; sleep 300",
+            &["ab   ", "x  ", "", "", "", ""],
+            ["-y", "4"],
+        ),
+        (
+            "printf 'abcdefghijklmnopqrstuvwxyz\\n'; sleep 300",
+            &["abcdefghijklmnopqrstuvwxyz", "", "", "", "", ""],
+            ["-x", "5"],
+        ),
+    ];
+    for (i, (cmd, want, shrink)) in cases.iter().enumerate() {
+        let name = format!("r{i}");
+        ok(
+            &srv,
+            &["new-session", "-d", "-s", &name, "-x", "30", "-y", "6", cmd],
+        );
+        srv.wait_for(|| srv.capture(&name).contains('x'), WAIT)
+            .expect("printed");
+        let full = if shrink[0] == "-y" { "6" } else { "30" };
+        ok(&srv, &["resize-window", "-t", &name, shrink[0], shrink[1]]);
+        ok(&srv, &["resize-window", "-t", &name, shrink[0], full]);
+        let got = srv
+            .cmd(&["capture-pane", "-p", "-J", "-t", &name])
+            .expect("-J");
+        let got: Vec<&str> = got.lines().collect();
+        assert_eq!(got.len(), want.len(), "{name}: {got:?}");
+        for (line, want) in got.iter().zip(want.iter()) {
+            assert!(
+                *line == *want || *line == want.trim_end(),
+                "{name}: {line:?} is not {want:?}"
+            );
+        }
+    }
 }
 
 #[test]
