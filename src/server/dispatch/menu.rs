@@ -190,9 +190,18 @@ pub fn expand_aliases(state: &State, argv: &[String]) -> Option<Vec<String>> {
 /// [`super::run_split`] runs what this returns; `bind-key` stores it, as
 /// tmux expands an alias when the binding is made.
 pub fn expand_alias_command(state: &State, argv: &[String]) -> Option<Vec<Vec<String>>> {
-    let (verb, args) = argv.split_first()?;
     let aliases = state.model.options.lookup_list("command-alias", &[])?;
-    let value = aliases.values().find_map(|entry| {
+    expand_alias(aliases.values(), argv)
+}
+
+/// [`expand_alias_command`] over an explicit `command-alias` list (the
+/// config loader's, for its bindings).
+pub fn expand_alias<'a>(
+    aliases: impl IntoIterator<Item = &'a String>,
+    argv: &[String],
+) -> Option<Vec<Vec<String>>> {
+    let (verb, args) = argv.split_first()?;
+    let value = aliases.into_iter().find_map(|entry| {
         let (name, value) = entry.split_once('=')?;
         (name == verb).then_some(value)
     })?;
