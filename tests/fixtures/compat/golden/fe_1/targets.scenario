@@ -1,0 +1,39 @@
+# FE.1: tmux's target forms. `=name` is an exact session, never a prefix;
+# `=name:N` is window N of exactly that session; `:=N` is exactly window N
+# (the stock 0-9 keys, D28); a bare `=` outside a mouse key is refused;
+# `+`/`-` offsets step through windows and panes, wrapping (stock `o`,
+# the window menu's swap-window -t :+1).
+$ new-session -d -s main -x 200 -y 50
+$ new-session -d -s mainx -x 200 -y 50
+$ new-window -d -t main -n two
+$ new-window -d -t main -n three
+$ has-session -t =mai
+$ has-session -t =main
+$ has-session -t =main:2
+$ has-session -t =main:7
+$ has-session -t =main:.1
+$ has-session -t =
+$ display -p -t =main:2 '#{session_name} #{window_index} #{window_name}'
+$ display -p -t =main: '#{session_name} #{window_index}'
+$ display -p -t =mainx: '#{session_name}'
+$ select-window -t main:=2
+$ display -p -t main: '#{window_index}'
+$ select-window -t main:+1
+$ display -p -t main: '#{window_index}'
+$ select-window -t main:+1
+$ display -p -t main: '#{window_index}'
+$ select-window -t main:-1
+$ display -p -t main: '#{window_index}'
+$ select-window -t main:+5
+$ display -p -t main: '#{window_index}'
+$ split-window -d -t main:3 cat
+$ split-window -d -t main:3 cat
+$ select-pane -t main:3.+
+$ display -p -t main:3 '#{pane_index}'
+$ select-pane -t main:3.+
+$ display -p -t main:3 '#{pane_index}'
+$ select-pane -t main:3.+
+$ display -p -t main:3 '#{pane_index}'
+$ select-pane -t main:3.-
+$ display -p -t main:3 '#{pane_index}'
+$ display -p -t main:3.+2 '#{pane_index}'

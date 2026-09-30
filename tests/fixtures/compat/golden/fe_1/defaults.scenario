@@ -1,0 +1,47 @@
+# FE.1: the spec 5.3 options through tmux's three tables: -s is the server
+# table (a session or window option there shows as nothing), -g and -gw
+# the global ones. Both sides load their defaults file and /dev/null, as
+# tmux loads every -f. And kill-window -a.
+$ -f /dev/null new-session -d -s d -x 200 -y 50
+$ show -gqv base-index
+$ show -sqv base-index
+$ show -gwqv base-index
+$ show -gqv pane-base-index
+$ show -sqv pane-base-index
+$ show -gwqv pane-base-index
+$ show -gqv mouse
+$ show -sqv mouse
+$ show -gwqv mouse
+$ show -gqv set-clipboard
+$ show -sqv set-clipboard
+$ show -gwqv set-clipboard
+$ show -gqv focus-events
+$ show -sqv focus-events
+$ show -gwqv focus-events
+$ show -gqv escape-time
+$ show -sqv escape-time
+$ show -gwqv escape-time
+$ show -gqv history-limit
+$ show -sqv history-limit
+$ show -gwqv history-limit
+$ show -gqv extended-keys
+$ show -sqv extended-keys
+$ show -gwqv extended-keys
+$ show -gqv renumber-windows
+$ show -sqv renumber-windows
+$ show -gwqv renumber-windows
+$ show -gqv mode-keys
+$ show -sqv mode-keys
+$ show -gwqv mode-keys
+$ show -gqv status-keys
+$ show -sqv status-keys
+$ show -gwqv status-keys
+$ show -gqv automatic-rename-format
+$ show -sqv automatic-rename-format
+$ show -gwqv automatic-rename-format
+$ new-window -d -t d
+$ new-window -d -t d
+$ list-windows -t d -F '#{window_index}'
+$ kill-window -a -t d:1
+$ list-windows -t d -F '#{window_index} #{window_active}'
+$ kill-window -a -t d:1

@@ -1573,7 +1573,7 @@ def form_of(p: Parsed) -> str:
         elif f in "xy" and p.name in ("display-menu", "display-popup") and v in POSITION_LETTERS:
             toks.add(f"-{f}[{v}]")
         elif p.spec and f not in p.spec.bools and f not in p.spec.args:
-            toks.add(f"-{f}!")  # tmux 3.7b has no such flag: tmux itself errors
+            toks.add(f"-{f}!")  # not in tmux 3.7b's usage (it may still be a hidden flag)
         else:
             toks.add(f"-{f}")
     return " ".join([p.name] + sorted(toks, key=lambda t: (t[1].lower(), t[1].isupper(), t)))
@@ -1828,7 +1828,7 @@ def generate_section() -> str:
     out.append("### Forms")
     out.append("")
     out.append(
-        "One row per distinct form. *Lines* counts corpus lines holding it; *stored* counts those where it sits inside a stored command (a bind body, hook, `if-shell` branch, menu item). *Verb named* says whether the mapped row mentions the verb at all, and *unnamed flags* lists flags it does not mention (both an approximate text match): a **no** or a listed flag is a question for the task that owns the row, not an error. A flag marked `!` is one tmux 3.7b itself lacks, so tmux answers it with an error."
+        "One row per distinct form. *Lines* counts corpus lines holding it; *stored* counts those where it sits inside a stored command (a bind body, hook, `if-shell` branch, menu item). *Verb named* says whether the mapped row mentions the verb at all, and *unnamed flags* lists flags it does not mention (both an approximate text match): a **no** or a listed flag is a question for the task that owns the row, not an error. A flag marked `!` is one tmux 3.7b's `list-commands` usage leaves out; it may still be a hidden flag tmux accepts (`select-pane -P` is)."
     )
     out.append("")
     out.append("| Form | Lines | Stored | Files | Spec 4.5 row | Verb named | Unnamed flags | Sources |")

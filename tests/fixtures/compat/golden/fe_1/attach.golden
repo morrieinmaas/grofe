@@ -1,0 +1,14 @@
+$ new-session -d -s work -x 200 -y 50
+? 0
+$ attach -t =wor
+! can't find session: wor
+? 1
+$ attach-session -t =work:9
+! can't find window: 9
+? 1
+$ a -t =nope
+! can't find session: nope
+? 1
+$ attach -t =
+! no mouse target
+? 1

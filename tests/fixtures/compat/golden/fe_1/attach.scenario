@@ -1,0 +1,7 @@
+# FE.1: tmux attach reads -t the tmux way: `=name` is exact, never a
+# prefix (recorded without a terminal, so only the refusals).
+$ new-session -d -s work -x 200 -y 50
+$ attach -t =wor
+$ attach-session -t =work:9
+$ a -t =nope
+$ attach -t =

@@ -126,6 +126,8 @@ pub struct NewWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KillWindow {
     pub target: Target,
+    /// `-a` (FE.1): every window of the target's session but the target.
+    pub all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +269,12 @@ pub enum OptionScope {
     Session,
     Window,
     Pane,
+    /// tmux's server scope for a user option (`set -s @x`): the tmux front
+    /// end builds it (FE.1); natively `-s` is the session scope.
+    Server,
+    /// tmux's global window scope for a user option (`set -gw @x`), apart
+    /// from the global session one, as tmux keeps them (FE.1).
+    GlobalWindow,
 }
 
 /// `set-option`/`set` (`-g -s -w -p -u --persist`, and from M3.6 `-a -F
@@ -461,14 +469,24 @@ pub struct CommandPrompt {
     pub single: bool,
     /// `-T`: the prompt type (accepted; grofe has no completion).
     pub prompt_type: Option<String>,
+    /// `-N` (FE.1): only digits may be typed.
+    pub numeric: bool,
+    /// `-i` (FE.1): tmux's incremental prompt (copy-mode search).
+    pub incremental: bool,
+    /// `-F` (FE.1): the template is expanded as a format when the prompt
+    /// opens.
+    pub expand: bool,
 }
 
 /// `run-shell` (a shell command; from M3.6 `-b`, TC.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunShell {
+    /// Empty only with `-d` and no command: then only the delay.
     pub cmd: String,
     /// `-b`: run in the background; the caller does not wait.
     pub background: bool,
+    /// `-d` (FE.1): seconds to wait before running.
+    pub delay: Option<std::time::Duration>,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is
@@ -871,6 +889,21 @@ pub struct ShowEnvironment {
     pub name: Option<String>,
 }
 
+/// `__register-source [-n name] <command>` (FE.1): grofe's own hidden
+/// verb, which registers a status source (`sources::register`). The tmux
+/// front end emits it for a `#(cmd)` a rewrite turns into `#{@src-...}`
+/// (FE.3), so the registration runs on the server with its state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterSource {
+    /// `-n`: a named source (`@<name>`); none is an inline one keyed by
+    /// the command (`@src-<hash>`, `sources::inline_key`). A named source
+    /// registered this way never expires, as a config one does not (an
+    /// inline one expires unused, `sources::INLINE_EXPIRY`); kept so,
+    /// since only `#(cmd)` rewrites register sources here.
+    pub name: Option<String>,
+    pub command: String,
+}
+
 /// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -947,4 +980,5 @@ pub enum Command {
     ShowHooks(ShowHooks),
     SetEnvironment(SetEnvironment),
     ShowEnvironment(ShowEnvironment),
+    RegisterSource(RegisterSource),
 }

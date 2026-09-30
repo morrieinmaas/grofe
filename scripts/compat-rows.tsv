@@ -5,7 +5,7 @@
 # corpus defines through command-alias) followed by flags the form must all
 # have; the first matching line wins, so specific lines come first. Flag
 # tokens are as forms print them: `-t[=]` is a bare `=` target, `-x[M]` a
-# position letter, `-P!` a flag tmux 3.7b itself lacks.
+# position letter, `-P!` a flag tmux 3.7b's usage leaves out.
 #
 # Rows: `area:<name>` is a row of 4.5's front-end table; `cmd:<milestone>` is
 # a line of 4.5's command table with that milestone that names the verb;

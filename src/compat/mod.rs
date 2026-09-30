@@ -47,6 +47,28 @@ pub fn set_started_as(identity: Identity) {
     let _ = STARTED_AS.set(identity);
 }
 
+/// The config files a CLI run as `tmux -f <file>...` started this server
+/// with (`__server --file`, once per file), set by `main.rs` before the
+/// server runs.
+static START_CONFIG: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Records one `tmux -f <file>` for [`start_config`], in order.
+pub fn set_start_config(file: PathBuf) {
+    if let Ok(mut files) = START_CONFIG.lock() {
+        files.push(file);
+    }
+}
+
+/// The files `tmux -f` named, in order, or `None` if the server was
+/// started without one. As in tmux 3.7b they replace the whole config and
+/// each loads (recorded: `-f a -f b` loads both; a missing file is no
+/// config and no error; `-f /dev/null` is none), and they bind only the
+/// server they start.
+pub fn start_config() -> Option<Vec<PathBuf>> {
+    let files = START_CONFIG.lock().ok()?;
+    (!files.is_empty()).then(|| files.clone())
+}
+
 /// Where a tmux-identity server appends its misses, set by
 /// [`server_started`] so the parse path, which has no `State`, can log.
 static MISS_LOG: OnceLock<PathBuf> = OnceLock::new();
@@ -65,6 +87,11 @@ pub fn server_started(state: &mut State) {
     state.model.identity = decide_identity(started, option);
     if state.model.identity == Identity::Tmux {
         let _ = MISS_LOG.set(miss_log_path(&Env::from_process()));
+        // tmux's built-in defaults where grofe's differ (FE.1 ruling).
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .ok();
+        state.model.options.use_tmux_defaults(editor.as_deref());
     }
 }
 
@@ -136,6 +163,12 @@ pub fn miss_log_path(env: &Env) -> PathBuf {
 /// so nothing but a started tmux-identity server ever writes it. Best
 /// effort: a log that cannot be written never fails the request.
 pub fn miss_log(_state: &State, what: &str) {
+    note_miss(what);
+}
+
+/// [`miss_log`] for code that has no `State`: the tmux front end notes a
+/// cosmetic flag it ignores while it translates (spec §4.5).
+pub fn note_miss(what: &str) {
     if let Some(path) = MISS_LOG.get() {
         append_miss(path, what);
     }
@@ -148,36 +181,18 @@ const MISS_MAX: usize = 256;
 // ponytail: no rotation; a full log is reviewed and removed by hand.
 const MISS_LOG_CAP: u64 = 1 << 20;
 
-/// Verbs (and tmux's aliases and prefixes of them) whose arguments may
-/// carry secrets: only the verb and its flags are logged. `set` is
-/// `set-option`'s alias, not a prefix of `set-environment`.
-fn redacted(verb: &str) -> bool {
-    !verb.is_empty()
-        && verb != "set"
-        && (["send-keys", "set-environment"]
-            .iter()
-            .any(|full| full.starts_with(verb))
-            || matches!(verb, "send" | "setenv"))
-}
-
-/// What a miss line says about a request's argv: each `;`-separated
-/// command as it was sent, except that a command that may carry secrets
-/// keeps only its verb and flags. Whether any command was redacted.
-fn miss_summary(argv: &[String]) -> (String, bool) {
-    let mut out = Vec::new();
-    let mut any = false;
-    for command in argv.split(|a| a == ";") {
-        let hide = command.first().is_some_and(|v| redacted(v));
-        any |= hide;
-        let words: Vec<&str> = command
-            .iter()
-            .enumerate()
-            .filter(|(i, w)| !hide || *i == 0 || w.starts_with('-'))
-            .map(|(_, w)| w.as_str())
-            .collect();
-        out.push(words.join(" "));
-    }
-    (out.join(" ; "), any)
+/// What a miss line says about a request's argv (strict, so nothing a
+/// command carries is ever logged): each command's verb and flag letters
+/// only ([`tmux::miss_form`]), never a value, a positional or an error
+/// text that could quote one. A `run-shell` script, a `bind-key` body, an
+/// `if-shell` branch, a `set` value, a `display` message and `send-keys`
+/// keys all stay out.
+fn miss_summary(argv: &[String]) -> String {
+    cmd::parse::split_argv(argv)
+        .iter()
+        .map(|command| tmux::miss_form(command))
+        .collect::<Vec<_>>()
+        .join(" ; ")
 }
 
 /// `s` cut to at most `max` bytes, at a character boundary.
@@ -298,19 +313,22 @@ pub fn parse_request(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, S
 pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, String> {
     match ctx.dialect {
         Dialect::Grofe => cmd::parse(argv).map(|c| vec![c]).map_err(|e| e.to_string()),
-        Dialect::Tmux => tmux_dispatch(argv, ctx),
+        Dialect::Tmux => logged(argv, tmux::dispatch_command(argv, ctx)),
     }
 }
 
 fn tmux_dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, String> {
-    tmux::dispatch(argv, ctx).map_err(|e| {
+    logged(argv, tmux::dispatch(argv, ctx))
+}
+
+/// The front end's answer for `argv`, a failure logged as a miss.
+fn logged(
+    argv: &[String],
+    result: Result<Vec<Command>, tmux::TmuxError>,
+) -> Result<Vec<Command>, String> {
+    result.map_err(|e| {
         if let Some(path) = MISS_LOG.get() {
-            // A redacted command's error text may quote its values.
-            let (summary, redacted) = miss_summary(argv);
-            match redacted {
-                true => append_miss(path, &summary),
-                false => append_miss(path, &format!("{summary}: {e}")),
-            }
+            append_miss(path, &miss_summary(argv));
         }
         e.to_string()
     })
@@ -508,32 +526,42 @@ mod tests {
     }
 
     #[test]
-    fn secrets_in_send_keys_and_set_environment_are_not_logged() {
-        let (s, hidden) = miss_summary(&argv(&[
-            "setenv",
-            "-g",
-            "TOKEN",
-            "hunter2",
-            ";",
-            "send",
-            "-t",
-            "%1",
-            "pw",
-            "Enter",
-            ";",
-            "select-pane",
-            "-t",
-            "%1",
-        ]));
-        assert!(hidden);
-        assert_eq!(s, "setenv -g ; send -t ; select-pane -t %1");
-        for verb in ["send-keys", "set-environment", "send-k", "set-e"] {
-            let (s, hidden) = miss_summary(&argv(&[verb, "secret"]));
-            assert!(hidden && !s.contains("secret"), "{verb}: {s}");
+    fn no_argument_value_is_ever_logged() {
+        let secret = "hunter2";
+        let cases: &[(&[&str], &str)] = &[
+            (&["setenv", "-g", "TOKEN", secret], "set-environment -g"),
+            (&["send", "-t", "%1", secret, "Enter"], "send-keys -t"),
+            (&["send-keys", "--", "-X", secret], "send-keys"),
+            (
+                &["run-shell", "-b", &format!("curl -H {secret}")],
+                "run-shell -b",
+            ),
+            (&["run", "-d", "1", secret], "run-shell -d"),
+            (
+                &["bind-key", "-T", "root", "F1", "run-shell", secret],
+                "bind-key -T",
+            ),
+            (
+                &["if-shell", "-F", secret, "set @x 1", secret],
+                "if-shell -F",
+            ),
+            (&["set", "-g", "@token", secret], "set-option -g"),
+            (&["display", "-p", secret], "display-message -p"),
+            (&["new", "-s", secret, "-c", secret], "new-session -s -c"),
+            (&["no-such-verb", "-x", secret], "<unknown> -x"),
+            (&["no-such-verb", &format!("-p{secret}")], "<unknown> -p"),
+            (&[&format!("{secret}!"), "x"], "<unknown>"),
+            (&[secret], "<unknown>"),
+        ];
+        for (words, want) in cases {
+            let got = miss_summary(&argv(words));
+            assert_eq!(&got, want, "{words:?}");
+            assert!(!got.contains(secret), "{got}");
         }
-        let (s, hidden) = miss_summary(&argv(&["set", "-g", "@x", "1"]));
-        assert!(!hidden);
-        assert_eq!(s, "set -g @x 1");
+        assert_eq!(
+            miss_summary(&argv(&["set", "-g", "@a", secret, ";", "ls", "-F", secret])),
+            "set-option -g ; list-sessions -F"
+        );
     }
 
     #[test]
@@ -554,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn grofe_requests_parse_natively_and_tmux_ones_are_refused() {
+    fn grofe_requests_parse_natively() {
         let got = parse_request(&ctx(Dialect::Grofe), &argv(&["ls", ";", "kill-server"]));
         assert!(got.is_err(), "ls is not native: {got:?}");
         let got = parse_request(
@@ -568,11 +596,30 @@ mod tests {
                 Command::KillServer(KillServer),
             ])
         );
-        let err = parse_request(&ctx(Dialect::Tmux), &argv(&["list-sessions"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: list-sessions");
         let got = parse_split(&ctx(Dialect::Grofe), &argv(&["kill-server"]));
         assert_eq!(got, Ok(vec![Command::KillServer(KillServer)]));
-        let err = parse_split(&ctx(Dialect::Tmux), &argv(&["kill-server"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: kill-server");
+    }
+
+    /// FE.1: a tmux request is split at `;` as tmux's CLI splits it, then
+    /// each command goes through the front end; an already split command
+    /// keeps a `;` argument literal.
+    #[test]
+    fn tmux_requests_go_through_the_front_end() {
+        let tmux = ctx(Dialect::Tmux);
+        let got = parse_request(&tmux, &argv(&["ls", ";", "kill-server"]));
+        assert_eq!(
+            got,
+            Ok(vec![
+                Command::ListSessions(ListSessions::default()),
+                Command::KillServer(KillServer),
+            ])
+        );
+        let err = parse_request(&tmux, &argv(&["frobnicate"])).unwrap_err();
+        assert_eq!(err, "unknown command: frobnicate");
+        let got = parse_split(&tmux, &argv(&["send-keys", ";"])).unwrap();
+        let Command::SendKeys(keys) = &got[0] else {
+            panic!("{got:?}");
+        };
+        assert_eq!(keys.items.len(), 1, "{keys:?}");
     }
 }

@@ -1,0 +1,42 @@
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ new-session -d -s n1 -n named -P -F '#{session_name}:#{window_name}' cat
+n1:named
+? 0
+$ new-session -d -s n2 -P cat
+n2:
+? 0
+$ split-window -d -t main -l 30% -P -F '#{pane_height}' cat
+15
+? 0
+$ split-window -d -t main -l 101%
+! size or position invalid tiled geometry
+? 1
+$ split-window -d -t main -l x%
+! size or position invalid tiled geometry
+? 1
+$ display -p -c nope x
+x
+? 0
+$ run-shell -d 0.2 'echo hi'
+hi
+? 0
+$ run-shell -d x 'echo hi'
+! invalid delay time: x
+? 1
+$ run-shell -d 0.1
+? 0
+$ showw -p
+! command show-window-options: unknown flag -p
+? 1
+$ showw -gp remain-on-exit
+! command show-window-options: unknown flag -p
+? 1
+$ start-server -x
+! command start-server: unknown flag -x
+? 1
+$ list-commands info
+! unknown command: info
+? 1
+$ \;
+? 0
