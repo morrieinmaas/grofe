@@ -218,14 +218,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "$ list-panes -t main:1 -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}] #{?pane_active,[active],[inactive]}'",
         "native: no history_limit variable (TC.3's FormatVars)",
     ),
-    (
-        "$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p \"not #W\"'",
-        "FE.4: the if-shell row (the condition is rewritten here)",
-    ),
-    (
-        "$ if -F -t main:1 '#{m:*ai*,#S}' 'display -p match' 'display -p nomatch'",
-        "FE.4: the if-shell row (the condition is rewritten here)",
-    ),
 ];
 
 /// Case 2: canopy's two-row status theme, rendered on a pty-attached
