@@ -851,6 +851,44 @@ fn later_commands_of_a_request_wait_for_its_hook() {
     );
 }
 
+/// tmux 3.7b (recorded, 1.07 s): the hook of a command run inside another
+/// (`if -F`) is the request's too, so the reply waits for every hook and
+/// they run one after the other.
+#[test]
+fn a_request_waits_for_the_hooks_of_its_nested_commands() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let second = pane_of(&srv, "a");
+    bind_slow_focus(&srv, &log);
+    let inner = format!("select-pane -t {first}");
+    let started = Instant::now();
+    ok(
+        &srv,
+        &[
+            "if-shell",
+            "-F",
+            "1",
+            &inner,
+            ";",
+            "select-pane",
+            "-t",
+            &second,
+        ],
+    );
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(900), "took {took:?}");
+    assert_eq!(
+        log_lines(&log),
+        [
+            format!("start{first}"),
+            "end".to_string(),
+            format!("start{second}"),
+            "end".to_string(),
+        ]
+    );
+}
+
 /// A hook a binding fires runs on that client's queue, so `#{client_*}`
 /// is its client's.
 #[test]

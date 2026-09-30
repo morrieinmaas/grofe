@@ -438,8 +438,11 @@ pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
 /// Runs what is pending after a command sequence (before its reply) or a
 /// pane event: `session-closed` for each session the model removed (the
 /// current pane as context), and hooks a full job queue refused. At the
-/// end of a CLI request (not inside a hook), a request queue still
-/// waiting on a shell holds the reply ([`take_reply_hold`]).
+/// end of a CLI request (not inside a hook, nor at the end of a command
+/// the request runs inside another, as `if-shell -F` runs its branch), a
+/// request queue still waiting on a shell holds the reply
+/// ([`take_reply_hold`]). A nested command's hook is on the request's one
+/// queue, so the reply waits for every hook the request fired.
 pub fn run_pending(state: &mut State) {
     for (_, name) in std::mem::take(&mut state.model.closed_sessions) {
         if wanted(state, "session-closed") {
@@ -448,7 +451,7 @@ pub fn run_pending(state: &mut State) {
             notify(state, f);
         }
     }
-    if state.hooks.running {
+    if state.hooks.running || state.hooks.depth > 0 {
         return;
     }
     for job in std::mem::take(&mut state.hooks.overflow) {
