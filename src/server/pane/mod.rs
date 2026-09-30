@@ -8,6 +8,7 @@
 
 pub mod io;
 pub mod procinfo;
+mod written;
 
 use std::ffi::OsString;
 use std::io as stdio;
@@ -462,10 +463,8 @@ impl PaneHandle {
     }
 
     /// [`Self::capture`] with tmux's `-J` when `join`: a row that wraps
-    /// onto the next one is joined to it, its trailing blanks kept.
-    // ponytail: tmux keeps the trailing blanks of every line that was
-    // written up to its end; the grid cannot tell written blanks from
-    // empty cells, so a line that does not wrap is still trimmed.
+    /// onto the next one is joined to it, and a row that does not ends at
+    /// its used width ([`written`]), the blanks the program wrote kept.
     pub fn capture_lines(&self, opts: &CaptureOpts, join: bool) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
@@ -496,8 +495,23 @@ impl PaneHandle {
         let mut out = String::new();
         for line in start..=end {
             let row = &grid[Line(line)];
+            let wraps = join
+                && row[Column(grid.columns() - 1)]
+                    .flags
+                    .contains(CellFlags::WRAPLINE);
+            // Without a wrap, `-J` stops at the used width; a non-blank
+            // cell the program did not write (`DECALN`) still counts.
+            let end = if join && !wraps {
+                (0..grid.columns())
+                    .rev()
+                    .find(|&c| row[Column(c)].c != ' ')
+                    .map_or(0, |c| c + 1)
+                    .max(written::used(row))
+            } else {
+                grid.columns()
+            };
             let mut text = String::new();
-            for col in 0..grid.columns() {
+            for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
                     continue;
@@ -525,15 +539,15 @@ impl PaneHandle {
                     text.extend(zw);
                 }
             }
-            let wraps = join
-                && row[Column(grid.columns() - 1)]
-                    .flags
-                    .contains(CellFlags::WRAPLINE);
             if wraps {
                 out.push_str(&text);
                 continue;
             }
-            out.push_str(text.trim_end_matches(' '));
+            if join {
+                out.push_str(&text);
+            } else {
+                out.push_str(text.trim_end_matches(' '));
+            }
             out.push('\n');
         }
         out
@@ -662,7 +676,7 @@ fn snap_row(
                 c: cell.c,
                 fg: cell.fg,
                 bg: cell.bg,
-                flags: cell.flags,
+                flags: cell.flags.difference(written::WRITTEN),
                 zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                 underline_color: cell.underline_color(),
                 hyperlink: cell.hyperlink(),

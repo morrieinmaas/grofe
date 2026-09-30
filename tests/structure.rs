@@ -1263,9 +1263,8 @@ fn respawn_c_sets_the_start_directory() {
     srv.wait_for(|| path() == two, WAIT).expect("in two");
 }
 
-/// `capture-pane -J` joins a wrapped row to the next (tmux 3.7b).
-// ponytail: tmux also keeps the written trailing blanks of `xyz  `; the
-// grid cannot tell them from empty cells, so grofe trims them.
+/// `capture-pane -J` joins a wrapped row to the next and keeps the
+/// trailing blanks a line was written with (tmux 3.7b).
 #[test]
 fn capture_pane_j_joins_wrapped_lines() {
     let srv = server();
@@ -1280,9 +1279,42 @@ fn capture_pane_j_joins_wrapped_lines() {
     let joined = srv
         .cmd(&["capture-pane", "-p", "-J", "-t", "s"])
         .expect("-J");
-    assert_eq!(joined, format!("{a29}\nxyz\n\n\n"));
+    assert_eq!(joined, format!("{a29}\nxyz  \n\n\n"));
     let plain = srv.cmd(&["capture-pane", "-p", "-t", "s"]).expect("-p");
     assert_eq!(plain, format!("{}\n{}\nxyz\n\n\n", &a29[..20], &a29[20..]));
+}
+
+/// `capture-pane -J` ends a line at its used width, as tmux 3.7b's
+/// `cellused` (recorded on a 20x8 pane): written blanks stay, a partial
+/// erase keeps the width, a coloured erase adds none, a whole-line erase
+/// empties it, a delete widens it to 19 and an insert to 20.
+#[test]
+fn capture_pane_j_ends_each_line_at_its_used_width() {
+    let srv = server();
+    let cmd = concat!(
+        "printf 'ab   \\nef   \\r\\033[3C\\033[K\\nij\\033[41m\\033[K\\033[0m\\n",
+        "cd   \\r\\033[2Kx\\ngh   \\033[2D\\033[1P\\nkl   \\r\\033[1@\\n'; sleep 300"
+    );
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "s", "-x", "20", "-y", "8", cmd],
+    );
+    srv.wait_for(|| srv.capture("s").contains("kl"), WAIT)
+        .expect("printed");
+    let joined = srv
+        .cmd(&["capture-pane", "-p", "-J", "-t", "s"])
+        .expect("-J");
+    let want = [
+        "ab   ".to_string(),
+        "ef   ".to_string(),
+        "ij".to_string(),
+        "x".to_string(),
+        format!("gh{}", " ".repeat(17)),
+        format!(" kl{}", " ".repeat(17)),
+        String::new(),
+        String::new(),
+    ];
+    assert_eq!(joined, want.map(|l| l + "\n").concat());
 }
 
 #[test]
