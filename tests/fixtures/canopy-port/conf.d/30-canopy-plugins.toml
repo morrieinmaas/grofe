@@ -6,14 +6,15 @@ requires = "grofe >= 0.1"
 # canopy's plugin layer, on grofe. Nothing loads here yet.
 #
 # On tmux, tmux/conf.d/30-plugins.conf loads the vendored tmux-resurrect and
-# tmux-continuum. On grofe their future is not decided: grofe's own
-# persistence is meant to replace them, and whether they keep running as
-# plugins until then is an open question. So this layer neither sets their
-# @resurrect-* and @continuum-* options nor loads them, and the key table's
-# save-now and restore-now rows are not bound (grofe/keys.tsv).
+# tmux-continuum. On grofe they run the same way, unchanged, as plugins,
+# until grofe's own persistence imports their last save and replaces them.
+# The key table's save-now (M-s) and restore-now (M-r) rows already run
+# resurrect's scripts.
 #
-# The plugin loader goes here: a load command that grofe runs once the whole
-# config is applied, at server start and again on every `reload`, as tmux
-# ran a plugin's entry point from source-file. Load commands run layer by
+# The plugin loader goes here: one load command over a fixed list of ten
+# vendored plugins, resurrect and continuum among them, each loaded only
+# when bash and its entry point are present. grofe runs load commands once
+# the whole config is applied, at server start and again on every `reload`,
+# as tmux ran a plugin's entry point from source-file. They run layer by
 # layer, so user.toml's own run after this one's.
 load-commands = []

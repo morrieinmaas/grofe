@@ -13,5 +13,3 @@
 #
 # name	command	reason
 canopy-reload	reload ; display-message "canopy: reloaded"	grofe re-reads every layer with its own reload, which validates them all first and applies all or nothing
-save-now	-	resurrect is not loaded on grofe, whose own persistence replaces it
-restore-now	-	resurrect is not loaded on grofe, whose own persistence replaces it

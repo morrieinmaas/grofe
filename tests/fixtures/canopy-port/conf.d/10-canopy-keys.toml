@@ -6,8 +6,8 @@ requires = "grofe >= 0.1"
 # canopy's key table, on grofe. Every row comes from tmux/keys.tsv, the one
 # declaration of every binding canopy ships, and carries the row's name,
 # group and description, so grofe's list-keys and any palette read them.
-# grofe/keys.tsv names the rows whose grofe command differs, and the rows
-# grofe does not bind, each with its reason.
+# grofe/keys.tsv names the rows whose grofe command differs, each with its
+# reason.
 
 [keys.prefix]
 C-s = { cmd = "send-prefix", desc = "Send the prefix through to a nested tmux or an app that wants it", group = "prefix", name = "prefix-send" }
@@ -29,5 +29,5 @@ t = { cmd = "switch-client -l", desc = "The session you were in before this one"
 ")" = { cmd = "switch-client -n", desc = "Next session, repeatable", group = "session", name = "session-next", repeat = true }
 # canopy-reload: grofe re-reads every layer with its own reload, which validates them all first and applies all or nothing.
 r = { cmd = 'reload ; display-message "canopy: reloaded"', desc = "Re-read canopy's configuration, your user.conf included", group = "canopy", name = "canopy-reload" }
-# save-now (M-s) is not bound on grofe: resurrect is not loaded on grofe, whose own persistence replaces it.
-# restore-now (M-r) is not bound on grofe: resurrect is not loaded on grofe, whose own persistence replaces it.
+M-s = { cmd = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/save.sh"', desc = "Save every session now, without waiting for the next autosave", group = "session", name = "save-now" }
+M-r = { cmd = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/restore.sh"', desc = "Restore the last save over this server, replacing what is open", group = "session", name = "restore-now" }

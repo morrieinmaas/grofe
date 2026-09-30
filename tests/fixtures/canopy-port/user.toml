@@ -16,7 +16,12 @@
 #                   nothing takes it; once one does, the re-assert belongs in
 #                   load-commands below, which run after canopy's plugin layer
 #   continuum_save.sh at the end of status-right
-#                   continuum's autosave hook. continuum is not loaded on grofe
+#                   continuum's autosave hook. On tmux this file set status-right
+#                   after continuum had prepended its hook, so it put the hook
+#                   back by hand. On grofe, continuum loads from canopy's plugin
+#                   layer as a load command, after every file here is applied,
+#                   so it prepends its hook to this bar itself, on each start and
+#                   each reload
 #   @pet, @batt, @net switched "on"
 #                   each segment is a status source now, and a segment shows
 #                   when its source has something to say; to switch one off,

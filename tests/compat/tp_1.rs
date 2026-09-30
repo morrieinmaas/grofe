@@ -11,7 +11,8 @@
 //!   binding: the same table and key, and the commands `import-tmux` reads
 //!   the tmux line as, with `keys.tsv`'s columns carried over.
 //! - Cases 4 and 5: `canopy-reload` runs `reload`, and `save-now` and
-//!   `restore-now` are not bound.
+//!   `restore-now` run the vendored resurrect scripts (owner ruling
+//!   2026-09-30: resurrect and continuum run as plugins from alias day).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -167,10 +168,9 @@ fn case_1_the_ported_tree_loads_with_no_errors() {
 fn case_3_every_key_table_row_has_its_grofe_binding_column_for_column() {
     let rows = key_rows();
     let dropped = dropped();
-    assert_eq!(
-        dropped,
-        ["save-now", "restore-now"],
-        "spec 7.1's dropped pair"
+    assert!(
+        dropped.is_empty(),
+        "every row is bound on grofe: {dropped:?}"
     );
     let lines: Vec<String> = rows.iter().map(bind_line).collect();
     let want = imported(&lines.join("\n"));
@@ -202,7 +202,7 @@ fn case_3_every_key_table_row_has_its_grofe_binding_column_for_column() {
         }
         checked += 1;
     }
-    assert_eq!(checked, rows.len() - 2);
+    assert_eq!(checked, rows.len());
 }
 
 #[test]
@@ -215,12 +215,19 @@ fn case_3_every_user_conf_binding_has_its_grofe_binding() {
     let got = by_key(&got);
     let mut missing = Vec::new();
     for ((table, key), tmux) in by_key(&want) {
-        if ["M-s", "M-r"].contains(&key.as_str()) {
-            continue;
-        }
         match got.get(&(table.clone(), key.clone())) {
             None => missing.push(format!("{table} {key}: unbound")),
             Some(b) if key == "r" => assert_eq!(b.cmds[0], ["reload"]),
+            // `$CANOPY_STORE` expands at load: here from config.toml's
+            // [environment], in the import from nothing. The text must match.
+            Some(b) if tmux.command.contains("$CANOPY_STORE") => {
+                if b.command != tmux.command {
+                    missing.push(format!(
+                        "{table} {key}: {:?}, tmux reads {:?}",
+                        b.command, tmux.command
+                    ));
+                }
+            }
             Some(b) if b.cmds != tmux.cmds => missing.push(format!(
                 "{table} {key}: {:?}, tmux reads {:?}",
                 b.command, tmux.command
@@ -263,26 +270,36 @@ fn case_4_canopy_reload_runs_reload_not_source_file() {
 }
 
 #[test]
-fn case_5_save_now_and_restore_now_are_absent() {
-    let keys = port_dir().join("conf.d/10-canopy-keys.toml");
-    let text = fs::read_to_string(&keys).unwrap();
-    assert!(
-        !text
-            .lines()
-            .any(|l| l.starts_with("M-s") || l.starts_with("M-r"))
-    );
-    assert!(!text.contains("save.sh") && !text.contains("restore.sh"));
+fn case_5_save_now_and_restore_now_run_the_vendored_resurrect_scripts() {
+    let script = |s: &str| format!("/plugins/tmux-resurrect/scripts/{s}.sh");
     for tree in [fragments(), whole_tree()] {
         let got = load(&tree);
-        for key in ["M-s", "M-r"] {
-            assert!(
-                !by_key(&got).contains_key(&("prefix".to_string(), key.to_string())),
-                "{key} is bound"
+        let got = by_key(&got);
+        for (key, name, s) in [
+            ("M-s", "save-now", "save"),
+            ("M-r", "restore-now", "restore"),
+        ] {
+            let b = got
+                .get(&("prefix".to_string(), key.to_string()))
+                .unwrap_or_else(|| panic!("{key} is not bound"));
+            assert_eq!(b.name.as_deref(), Some(name));
+            assert_eq!(
+                b.command,
+                format!("run-shell \"$CANOPY_STORE{}\"", script(s))
             );
         }
-        let names: Vec<_> = got.keys.iter().filter_map(|b| b.name.as_deref()).collect();
-        assert!(!names.contains(&"save-now") && !names.contains(&"restore-now"));
     }
+    // With the whole tree, `$CANOPY_STORE` is config.toml's canopy store.
+    let got = load(&whole_tree());
+    let home = std::env::var("HOME").unwrap_or_default();
+    let b = by_key(&got)[&("prefix".to_string(), "M-s".to_string())];
+    assert_eq!(
+        b.cmds,
+        [[
+            "run-shell".to_string(),
+            format!("{home}/.local/share/canopy{}", script("save"))
+        ]]
+    );
 }
 
 /// A transcript split into steps, each headed by its `$`, `client` or
