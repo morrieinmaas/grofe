@@ -1,0 +1,56 @@
+$ new-session -d -s main -n main -x 200 -y 50 cat
+? 0
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+pins: canopy c0e331e8a018 athome 8bd91688ca54
+? 0
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+? 0
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+? 0
+$ setw -g main-pane-width 50%
+? 0
+$ split-window -h -t main:1 cat
+? 0
+$ display-message -p '#{pane_id} #{pane_at_left} #{pane_at_right}'
+%1 0 1
+? 0
+$ display-message -p -t %0 '#{window_zoomed_flag}'
+0
+? 0
+$ select-pane -t '%1' -L
+? 0
+$ display-message -p '#{pane_id} #{pane_at_left}'
+%0 1
+? 0
+$ select-pane -t '%0' -L
+? 0
+$ display-message -p '#{pane_id}'
+%1
+? 0
+$ select-pane -t '%1' -R
+? 0
+$ display-message -p '#{pane_id}'
+%0
+? 0
+$ resize-pane -Z -t %0
+? 0
+$ display-message -p -t %0 '#{window_zoomed_flag}'
+1
+? 0
+$ select-pane -t '%0' -R
+? 0
+$ display-message -p '#{pane_id} #{window_zoomed_flag}'
+%1 0
+? 0
+$ select-pane -t '%1' -U
+? 0
+$ select-pane -t '%1' -D
+? 0
+$ display-message -p '#{pane_id}'
+%1
+? 0
+$ select-pane -t '%1' -l
+? 0
+$ display-message -p '#{pane_id}'
+%0
+? 0

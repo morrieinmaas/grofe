@@ -1,0 +1,6 @@
+# The canopy and athome commits TC.13's goldens were recorded against, and
+# that GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME must name (the suite
+# checks both checkouts' HEAD). Both are local branches, not pushed yet:
+# canopy `grofe-backend`, athome `grofe-config`.
+canopy c0e331e8a0186acd285373ff896fedc6e6121909
+athome 8bd91688ca54c111fd1669e0cd033036b46c19ce

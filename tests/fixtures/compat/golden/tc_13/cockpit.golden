@@ -1,0 +1,41 @@
+$ new-session -d -s main -n main -x 200 -y 50 cat
+? 0
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+pins: canopy c0e331e8a018 athome 8bd91688ca54
+? 0
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+? 0
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+? 0
+$ setw -g main-pane-width 50%
+? 0
+$ new-window -c "#{pane_current_path}" \; split-window -h -c "#{pane_current_path}" \; split-window -v -c "#{pane_current_path}" \; select-layout main-vertical \; select-pane -t 1
+? 0
+$ display-message -p '#{session_name}:#{window_index}.#{pane_index} #{window_panes} panes'
+main:2.1 3 panes
+? 0
+$ list-panes -t main:2 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height} active=#{pane_active}'
+1 %1 0,0 99x50 active=1
+2 %2 100,0 100x25 active=0
+3 %3 100,26 100x24 active=0
+? 0
+$ display-message -p -t main:2 '#{window_layout}'
+7166,200x50,0,0{99x50,0,0,1,100x50,100,0[100x25,100,0,2,100x24,100,26,3]}
+? 0
+$ split-window -t main:1 -h cat
+? 0
+$ split-window -t main:1 -v cat
+? 0
+$ split-window -t main:1 -h cat
+? 0
+$ select-layout -t main:1 main-vertical
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+1 %0 0,0 99x50
+2 %4 100,0 100x16
+3 %5 100,17 100x16
+4 %6 100,34 100x16
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+c443,200x50,0,0{99x50,0,0,0,100x50,100,0[100x16,100,0,4,100x16,100,17,5,100x16,100,34,6]}
+? 0

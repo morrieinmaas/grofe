@@ -1,0 +1,28 @@
+$ new-session -d -s main -n main -x 200 -y 50 cat
+? 0
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+pins: canopy c0e331e8a018 athome 8bd91688ca54
+? 0
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+? 0
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+? 0
+$ setw -g main-pane-width 50%
+? 0
+$ set -g @canopy_status_net off
+? 0
+$ set -g @canopy_status_battery off
+? 0
+$ run-shell 'PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-status --plain'
+Thu 01 Jan 00:00 
+? 0
+$ run-shell 'PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-status'
+#[fg=#a89984,bg=default]#[fg=#fbf1c7,bg=#a89984,bold] Thu 01 Jan #[fg=#a89984,bg=default,nobold] #[fg=#79740e,bg=default]#[fg=#fbf1c7,bg=#79740e,bold] 00:00 #[fg=#79740e,bg=default,nobold] 
+? 0
+$ display-message -p '#{@theme_bg}|#{@theme_blue}|#{@theme_green}|#{@theme_grey}|#{@theme_red}|#{@pill_l}|#{@pill_r}'
+#fbf1c7|#458588|#79740e|#a89984|#cc241d||
+? 0
+$ run-shell 'PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-status --wide 2>&1; echo "exit $?"'
+canopy: canopy-status: unknown argument: --wide
+exit 1
+? 0

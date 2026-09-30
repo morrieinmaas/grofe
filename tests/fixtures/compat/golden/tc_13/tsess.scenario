@@ -1,0 +1,28 @@
+# TC.13 case 2a: tsess, athome's `prefix K` session and window picker, in
+# the modes fzf calls it in (its reload and preview commands): the session
+# list, a session's windows, every window when the name is no session, and
+# the previews of a window, a session and a pane. The interactive picker
+# itself needs fzf, which the golden container has not; the grofe side
+# runs it for real through a pty (tc_13's fzf check).
+# Each tc_13 scenario starts the same way. The pins line is the golden's
+# header: the canopy and athome commits it was recorded against (PINS).
+# On tmux, canopy's own tmux entry point is sourced, with CANOPY_STORE set
+# as canopy's installed stub sets it; on grofe that step does nothing,
+# because the port (canopy's grofe/conf.d plus athome's config.toml and
+# user.toml) is already loaded from XDG_CONFIG_HOME. main-pane-width is the
+# one line of athome's user.conf the scenarios' layouts read.
+$ new-session -d -s main -n main -x 200 -y 50 cat
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+$ setw -g main-pane-width 50%
+$ new-window -d -t main: -n logs 'echo from-logs; exec cat'
+$ new-session -d -s aux -n aux -x 200 -y 50 'echo from-aux; exec cat'
+# Wait for the panes' first output, so the previews do not race it.
+$ run-shell 'until tmux capture-pane -p -t main:2 | grep -q from-logs && tmux capture-pane -p -t aux:1 | grep -q from-aux; do sleep 0.1; done'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --sessions'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --windows main'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --windows nosuch'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --preview main:2'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --preview aux'
+$ run-shell 'bash {fixtures}/../../compat/scenarios/trees/athome/home/dot_local/bin/executable_tsess --preview nosuch; echo "exit $?"'

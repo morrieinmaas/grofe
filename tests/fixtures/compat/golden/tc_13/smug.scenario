@@ -1,0 +1,44 @@
+# TC.13 case 5: a smug-style start of containers/compat/smug.yaml's shape
+# (one main-vertical window of three panes, the shape of every smug file
+# the owner keeps), argv for argv as smug 0.3.19 sent it in TC.0's
+# container (container-cli.argv): the has-session probe, the detached
+# session with smug's placeholder window, its two environment variables,
+# the named window, two splits, the layout, the placeholder's removal and
+# the renumber, then a send-keys into each pane.
+# Each tc_13 scenario starts the same way. The pins line is the golden's
+# header: the canopy and athome commits it was recorded against (PINS).
+# On tmux, canopy's own tmux entry point is sourced, with CANOPY_STORE set
+# as canopy's installed stub sets it; on grofe that step does nothing,
+# because the port (canopy's grofe/conf.d plus athome's config.toml and
+# user.toml) is already loaded from XDG_CONFIG_HOME. main-pane-width is the
+# one line of athome's user.conf the scenarios' layouts read.
+$ new-session -d -s main -n main -x 200 -y 50 cat
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+$ setw -g main-pane-width 50%
+$ has-session -t =demo
+$ new -P -d -s demo -n smug_def -c /tmp
+$ setenv -t demo SMUG_SESSION demo
+$ setenv -t demo SMUG_SESSION_CONFIG_PATH /tmp/smug.yaml
+$ neww -P -d -t demo: -c /tmp -F '#{window_id}' -n main
+$ split-window -P -d -t @2 -c /tmp -F '#{pane_id}'
+$ split-window -P -d -t @2 -c /tmp -F '#{pane_id}'
+$ select-layout -t @2 main-vertical
+$ kill-window -t demo:smug_def
+$ move-window -r -s demo: -t demo:
+$ has-session -t =demo
+$ list-windows -t demo -F '#{window_index} #{window_id} #{window_name} #{window_panes}'
+$ list-panes -t demo:1 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+$ show-environment -t demo SMUG_SESSION
+$ respawn-pane -k -t demo:1.1 cat
+$ respawn-pane -k -t demo:1.2 cat
+$ respawn-pane -k -t demo:1.3 cat
+$ send-keys -t demo:1.1 'one' Enter
+$ send-keys -t demo:1.2 'two' Enter
+$ send-keys -t demo:1.3 -l 'three'
+$ send-keys -t demo:1.3 Enter
+# Wait until each cat has echoed its line back, so the captures do not race.
+$ run-shell 'until [ "$(tmux capture-pane -p -t demo:1.1 | grep -cx one)" = 2 ] && [ "$(tmux capture-pane -p -t demo:1.3 | grep -cx three)" = 2 ]; do sleep 0.1; done'
+$ capture-pane -p -t demo:1.1
+$ capture-pane -p -t demo:1.3
