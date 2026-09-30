@@ -2373,7 +2373,7 @@ mod tests {
         let job = |ran: &Arc<std::sync::Mutex<Vec<usize>>>| -> crate::server::Job {
             let ran = Arc::clone(ran);
             Box::new(move |state: &mut State| {
-                let held = state.clients[&ClientId(1)].held.len();
+                let held = state.clients[&id].held.len();
                 ran.lock().unwrap().push(held);
             })
         };
