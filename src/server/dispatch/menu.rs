@@ -24,6 +24,10 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         return Err(too_few_arguments("display-menu"));
     }
     let id = clients::current_client(state, ctx).ok_or("no current client")?;
+    // tmux 3.7b (recorded) does nothing while the client shows a popup.
+    if state.popups.is_open(id) {
+        return Ok(String::new());
+    }
     let mut x = position(state, ctx, c.x.as_deref(), Axis::X)?;
     let mut y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
     // From a mouse key, a menu with no position opens at the pointer

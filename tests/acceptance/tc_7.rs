@@ -548,3 +548,45 @@ fn a_menu_takes_the_keys_over_an_open_prompt() {
     // The prompt is still open, and empty.
     wait_last_row(&mut a, "(rename-window)");
 }
+
+/// tmux 3.7b (recorded): `display-menu` while the client shows a popup
+/// does nothing and returns at once; keys go on to the popup.
+#[test]
+fn a_menu_over_an_open_popup_does_nothing() {
+    let srv = start();
+    let mut a = attach(&srv);
+    let mut popup = srv.command();
+    popup
+        .args(["display-popup", "-T", "pop", "-E", "cat"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let popup = popup.spawn().expect("spawn display-popup");
+    a.wait_for("pop");
+    let mut cli = srv.command();
+    cli.args([
+        "display-menu",
+        "-T",
+        "Pick",
+        "-x",
+        "2",
+        "-y",
+        "2",
+        "One",
+        "a",
+        "rename-window one",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    let cli = cli.spawn().expect("spawn display-menu");
+    let status = common::wait_child(cli, Duration::from_secs(3)).expect("display-menu returns");
+    assert!(status.success());
+    a.send("a");
+    a.wait_for("a");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!a.text().contains("Pick"), "{}", a.text());
+    assert_ne!(window_name(&srv), "one");
+    a.send("\r\x04");
+    common::wait_child(popup, WAIT).expect("popup closes");
+}
