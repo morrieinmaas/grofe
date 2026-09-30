@@ -87,8 +87,14 @@ impl Normalizer {
                     Some(v) => out.replace(v, to),
                     None => out,
                 },
-                Rule::Word { var, to } => match var_value(ctx, var) {
-                    Some(v) => replace_words(&out, v, to),
+                Rule::Word { var, to } => match word_values(ctx, var) {
+                    Some((v, short)) => {
+                        let out = replace_words(&out, v, to);
+                        match short {
+                            Some(short) => replace_words(&out, short, to),
+                            None => out,
+                        }
+                    }
                     None => out,
                 },
                 Rule::Tty { prefix, to } => replace_tty(&out, prefix, to),
@@ -122,6 +128,23 @@ fn var_value<'a>(ctx: &'a Context, var: &str) -> Option<&'a str> {
         .get(var)
         .map(String::as_str)
         .filter(|v| !v.is_empty())
+}
+
+/// The value(s) a `word` rule replaces. `host` also covers its short form
+/// (tmux's `#h`, up to the first dot), so a dotted host name such as a
+/// container's `localhost.localdomain` normalizes in both spellings; the
+/// full name goes first. A `user` of `root` is skipped: the recorder never
+/// runs as root, so `root` in output is tmux's key table, never the user.
+fn word_values<'a>(ctx: &'a Context, var: &str) -> Option<(&'a str, Option<&'a str>)> {
+    let v = var_value(ctx, var)?;
+    match var {
+        "host" => {
+            let short = v.split('.').next().filter(|s| !s.is_empty() && *s != v);
+            Some((v, short))
+        }
+        "user" if v == "root" => None,
+        _ => Some((v, None)),
+    }
 }
 
 fn is_word_char(c: char) -> bool {
@@ -300,6 +323,20 @@ mod tests {
         let n = Normalizer::load();
         let raw = "bind-key -T root MouseDown1Pane select-pane -t =\nroot\n";
         assert_eq!(n.apply(&ctx(), raw), raw);
+    }
+
+    /// A dotted host name (a CI container's) normalizes both in full and as
+    /// `#h`'s short form, and a run as root keeps the `root` key table.
+    #[test]
+    fn a_dotted_host_and_its_short_form_normalize_and_root_is_kept() {
+        let n = Normalizer::load();
+        let mut ctx = ctx();
+        ctx.vars
+            .insert("host".into(), "localhost.localdomain".into());
+        ctx.vars.insert("user".into(), "root".into());
+        let raw = "main|localhost|localhost.localdomain|localhostx\nkey-table root\n";
+        let want = "main|<HOST>|<HOST>|localhostx\nkey-table root\n";
+        assert_eq!(n.apply(&ctx, raw), want);
     }
 
     #[test]

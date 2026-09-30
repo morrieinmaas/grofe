@@ -18,7 +18,7 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, run_bounded, wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -170,13 +170,16 @@ fn group_alive(pgid: i32) -> bool {
     nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None).is_ok()
 }
 
+/// `program args`, bounded like a CLI run: its stdout.
+fn output(program: &str, args: &[&str]) -> String {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    run_bounded(cmd, CMD_TIMEOUT).stdout
+}
+
 /// The zombie children of `pid`.
 fn zombies_of(pid: i32) -> usize {
-    let out = Command::new("ps")
-        .args(["-A", "-o", "ppid=,stat="])
-        .output()
-        .expect("ps");
-    String::from_utf8_lossy(&out.stdout)
+    output("ps", &["-A", "-o", "ppid=,stat="])
         .lines()
         .filter(|l| {
             let mut f = l.split_whitespace();
@@ -208,11 +211,7 @@ fn open_fds(pid: i32) -> usize {
 
 /// Resident memory of `pid`, in KiB.
 fn rss_kib(pid: i32) -> u64 {
-    let out = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .expect("ps");
-    String::from_utf8_lossy(&out.stdout)
+    output("ps", &["-o", "rss=", "-p", &pid.to_string()])
         .trim()
         .parse()
         .expect("rss")
