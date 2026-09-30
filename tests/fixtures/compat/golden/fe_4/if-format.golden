@@ -1,0 +1,84 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ split-window -d -h -t main 'cp "$(command -v tmux)" "$HOME/nvim"; "$HOME/nvim" wait-for -S fe4-ready; exec "$HOME/nvim" wait-for fe4-nvim'
+? 0
+$ wait-for fe4-ready
+? 0
+$ run-shell 'sleep 1.5'
+? 0
+$ display -p -t main:1.2 '#{pane_current_command}'
+nvim
+? 0
+$ select-pane -t main:1.2
+? 0
+$ if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'
+? 0
+$ display -p -t main '#{pane_index}'
+2
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ capture-pane -p -t main:1.2
+^H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ select-pane -t main:1.1
+? 0
+$ if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'
+? 0
+$ display -p -t main '#{pane_index}'
+2
+? 0
+$ if -F -t main:1.2 '#{pane_current_command}' 'display -p "then #{pane_index}"' 'display -p else'
+then 2
+? 0
+$ if -F 0 'display -p then' 'display -p else'
+else
+? 0
+$ if -F '' 'display -p then' 'display -p else'
+else
+? 0
+$ if -F 0 'display -p then'
+? 0
+$ if true 'display -p then' 'display -p else'
+then
+? 0
+$ if false 'display -p then' 'display -p else'
+else
+? 0
+$ if -b true 'display -p then'
+? 0
+$ if -F 1 'neww -d -n made ; setw -t :made automatic-rename off' 'display -p else'
+? 0
+$ list-windows -t main -F '#{window_index} #{window_name}'
+1 nvim
+2 made
+? 0
+$ show -wv -t main:made automatic-rename
+off
+? 0
+$ if-shell -F 1 "if-shell -F 1 { display -p 'a\"b\c' }"
+a"b\c
+? 0

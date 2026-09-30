@@ -1,0 +1,9 @@
+# FE.4 case 4: display-popup -b double draws tmux's double lines; an
+# unknown border-lines value is tmux's error; -s and -S (the fill and
+# border styles) change only colours, so the screen's text is tmux's.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set -g status off
+client 80x24 attach -t main
+$ display-popup -b bogus -E true
+$& display-popup -b double -S fg=red -s bg=blue -w 30 -h 5 -T title "echo in-popup; exec cat"
+screen in-popup

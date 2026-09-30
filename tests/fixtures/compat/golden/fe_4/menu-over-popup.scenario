@@ -1,0 +1,9 @@
+# FE.4: display-menu while a popup is open on the client does nothing and
+# exits 0 at once, in tmux 3.7b (recorded), and the popup stays.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set -g status off
+client 80x24 attach -t main
+$& display-popup -w 30 -h 6 "echo in-popup; exec cat"
+screen in-popup
+$ display-menu -x C -y C A a 'display hi'
+screen in-popup

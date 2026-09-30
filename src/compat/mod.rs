@@ -92,6 +92,7 @@ pub fn server_started(state: &mut State) {
             .or_else(|_| std::env::var("EDITOR"))
             .ok();
         state.model.options.use_tmux_defaults(editor.as_deref());
+        state.registry.key_tables.use_tmux_stock();
     }
 }
 

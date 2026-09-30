@@ -587,7 +587,7 @@ fn every_coverage_form_is_classified() {
         *counts.entry(standing).or_default() += 1;
     }
     println!("FE.1 coverage forms: {counts:?}");
-    assert_eq!(counts.values().sum::<usize>(), 286);
+    assert_eq!(counts.values().sum::<usize>(), 287);
     assert!(
         unexpected.is_empty(),
         "FE.1 verbs' forms that neither map nor are PENDING: {unexpected:#?}"

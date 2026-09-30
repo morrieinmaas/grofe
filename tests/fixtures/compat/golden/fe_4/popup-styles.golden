@@ -1,0 +1,34 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set -g status off
+? 0
+client 80x24 attach -t main
+$ display-popup -b bogus -E true
+! popup-border-lines unknown value: bogus
+? 1
+$& display-popup -b double -S fg=red -s bg=blue -w 30 -h 5 -T title "echo in-popup; exec cat"
+screen in-popup
+|
+|
+|
+|
+|
+|
+|
+|
+|                         ╔═title══════════════════════╗
+|                         ║in-popup                    ║
+|                         ║                            ║
+|                         ║                            ║
+|                         ╚════════════════════════════╝
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

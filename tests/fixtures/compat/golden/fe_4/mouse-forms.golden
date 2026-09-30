@@ -1,0 +1,18 @@
+$ new-session -d -s main -x 80 -y 24
+? 0
+$ send -M
+! no mouse target
+? 1
+$ send-keys -M -t main
+! no mouse target
+? 1
+$ resize-pane -M
+? 0
+$ copy-mode -M
+? 0
+$ display-menu -x M -y M A a 'display hi'
+! no current client
+? 1
+$ if -F -t = 1 'display -p yes'
+yes
+? 0

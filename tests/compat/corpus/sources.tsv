@@ -963,6 +963,7 @@ static-cli.argv	display-message -p -t <target> #{window_id}	manual:plugin:opense
 static-cli.argv	display-message -p <$(...)>	canopy:plugins/tmux-resurrect/scripts/save.sh
 static-cli.argv	display-message -p <$canopy_cf_format>	canopy:bin/canopy-config
 static-cli.argv	display-message -t <expr> -p #{window_id}	plugin:opensessions/apps/tui-rs/src/runtime_context.rs
+static-cli.argv	display-message -t <pane> -p #{window_id}	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	display-message -t <target> -p #{pane_current_path}	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	display-message -t <target> -p #{window_id}	manual:plugin:opensessions/apps/tui-rs/src/runtime_context.rs
 static-cli.argv	display-message <$END_MESSAGE>	canopy:plugins/tmux-resurrect/scripts/tmux_spinner.sh
@@ -993,6 +994,7 @@ static-cli.argv	kill-pane -t <$pane>	plugin:opensessions/integrations/tmux-plugi
 static-cli.argv	kill-pane -t <$pane_id>	canopy:plugins/tmux-resurrect/scripts/restore.sh
 static-cli.argv	kill-pane -t <expr>	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	kill-pane -t <name>	plugin:tmux-fzf/scripts/pane.sh
+static-cli.argv	kill-pane -t <pane>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	kill-server	athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl
 static-cli.argv	kill-server	athome:home/dot_config/systemd/user/tmux.service.tmpl
 static-cli.argv	kill-server	athome:home/dot_zsh/aliases.zsh
@@ -1035,6 +1037,7 @@ static-cli.argv	list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_
 static-cli.argv	list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_title}<$PANE_FIELD_SEP>#{pane_width}<$PANE_FIELD_SEP>#{pane_left}<$PANE_FIELD_SEP>#{pane_right}<$PANE_FIELD_SEP>#{pane_active}	plugin:opensessions/integrations/tmux-plugin/scripts/even-horizontal.sh
 static-cli.argv	list-panes -t <target> -F '#{pane_id} #{pane_title}'	manual:plugin:opensessions/apps/tui-rs/src/runtime_context.rs
 static-cli.argv	list-panes -t <target> -F <pane-format>	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
+static-cli.argv	list-panes -t <window> -F #{pane_id}	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	list-sessions	athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl
 static-cli.argv	list-sessions	athome:home/dot_zsh/aliases.zsh
 static-cli.argv	list-sessions	canopy:bin/canopy-doctor
@@ -1115,13 +1118,16 @@ static-cli.argv	resize-pane -t <$pane_id> -x <$width>	plugin:opensessions/integr
 static-cli.argv	resize-pane -t <$session_name>:<$window_number> -U 999	canopy:plugins/tmux-resurrect/scripts/restore.sh
 static-cli.argv	resize-pane -t <$session_name>:<$window_number> -Z	canopy:plugins/tmux-resurrect/scripts/restore.sh
 static-cli.argv	resize-pane -t <expr> -x <expr>	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
+static-cli.argv	resize-pane -t <pane> -x 30%	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	resize-window -t <$target> -x 200 -y 200	plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh
 static-cli.argv	respawn-pane -k -t <$canopy_ad_pane> <$canopy_ad_resume>	canopy:bin/canopy-adopt
+static-cli.argv	respawn-pane -k -t <pane> <command>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	run-shell 'echo '"'"'<$message>'"'"''	plugin:tpm/scripts/helpers/tmux_echo_functions.sh
 static-cli.argv	run-shell -b 'sleep 0.18; tmux select-pane -t <target> -P default'	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	run-shell -b <$CURRENT_DIR>/scripts/<$item>.sh	plugin:tmux-fzf/main.sh
 static-cli.argv	select-layout -t <$WINDOW_ID> even-horizontal	plugin:opensessions/integrations/tmux-plugin/scripts/even-horizontal.sh
 static-cli.argv	select-layout -t <$session_name>:<$window_number> <$window_layout>	canopy:plugins/tmux-resurrect/scripts/restore.sh
+static-cli.argv	select-layout -t <window> main-vertical	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	select-layout <$target_origin>	plugin:tmux-fzf/scripts/pane.sh
 static-cli.argv	select-pane -t <$PANE_ID>	plugin:opensessions/integrations/tmux-plugin/scripts/focus.sh
 static-cli.argv	select-pane -t <$active_pane>	canopy:plugins/tmux-resurrect/scripts/restore.sh
@@ -1136,6 +1142,7 @@ static-cli.argv	select-pane -t <expr> -P bg=colour238	plugin:opensessions/packag
 static-cli.argv	select-pane -t <expr> -T <expr>	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	select-pane -t <fmt-arg> -P default	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	select-pane -t <name>	plugin:tmux-fzf/scripts/pane.sh
+static-cli.argv	select-pane -t <pane> -T <name>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	select-pane -t <target>	manual:plugin:opensessions/apps/tui-rs/src/main.rs
 static-cli.argv	select-window -t <$BASH_REMATCH>:<$BASH_REMATCH>	athome:home/dot_local/bin/executable_tsess
 static-cli.argv	select-window -t <$pane>	plugin:tmux-claude-session-manager/scripts/picker.sh
@@ -1227,6 +1234,11 @@ static-cli.argv	set-option -g focus-events on	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	set-option -g history-limit 50000	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	set-option -g status-interval 5	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	set-option -g status-keys emacs	plugin:tmux-sensible/sensible.tmux
+static-cli.argv	set-option -p -t <pane> pane-active-border-style <style>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
+static-cli.argv	set-option -p -t <pane> pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
+static-cli.argv	set-option -p -t <pane> pane-border-style <style>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
+static-cli.argv	set-option -p -t <pane> remain-on-exit failed	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
+static-cli.argv	set-option -p -t <pane> window-style <style>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	set-option -s default-terminal screen-256color	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	set-option -s escape-time 0	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	set-option -t <$session> @claude_origin <value>	plugin:tmux-claude-session-manager/scripts/launch.sh
@@ -1306,6 +1318,7 @@ static-cli.argv	source-file <$init_file>	plugin:tmux-which-key/plugin.sh.tmux
 static-cli.argv	source-file <file>	athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl
 static-cli.argv	source-file <file>	plugin:tmux-sensible/sensible.tmux
 static-cli.argv	split-window -c <$PWD> <$opt> 'bash -c '"'"'exec -a fzf bash <$argsf>'"'"'' <$swap> <$tmux_off_opts>	plugin:tmux-fzf/scripts/.fzf-tmux
+static-cli.argv	split-window -d -t <pane> -h -l 70% -P -F #{pane_id} <command>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	split-window -h -b -f -l <width> -t <target> -P -F <pane-format> <command>	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	split-window -h -f -l <width> -t <target> -P -F <pane-format> <command>	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	split-window -t <$session_name>:<$window_number> -c <$dir>	canopy:plugins/tmux-resurrect/scripts/restore.sh

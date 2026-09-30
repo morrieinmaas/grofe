@@ -982,6 +982,14 @@ mod tests {
         })
         .await;
         assert!(exited.is_ok(), "seq exited");
+        // The exit can be seen before the reader has parsed the last
+        // output, so wait for it under load.
+        for _ in 0..500 {
+            if handle.history_size() == 21 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
         let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);

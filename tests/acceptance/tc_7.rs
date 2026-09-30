@@ -421,7 +421,13 @@ fn confirm_before_expands_its_prompt_and_a_cancel_exits_1() {
         let cli = cli.spawn().expect("spawn confirm-before");
         wait_last_row(a, "ok start?");
         a.send(key);
-        common::wait_child(cli, WAIT).expect("confirm-before exits")
+        let status = common::wait_child(cli, WAIT).expect("confirm-before exits");
+        // Let the prompt close, so the next one is not matched by a stale
+        // frame (its key would go to the pane).
+        a.wait_until("prompt closed", WAIT, |text| {
+            last_row(text).trim_end() != "ok start?"
+        });
+        status
     };
     let status = confirm(&mut a, "n");
     assert_eq!(status.code(), Some(1), "{status:?}");

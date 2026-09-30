@@ -1,0 +1,11 @@
+# FE.4 case 6: the mouse argv forms from the CLI. send -M has tmux's text;
+# tmux 3.7b answers resize-pane -M and copy-mode -M with nothing, which
+# grofe refuses (spec 4.5); the mouse position letters draw a menu at the
+# client's top left in tmux, so without a client both sides refuse.
+$ new-session -d -s main -x 80 -y 24
+$ send -M
+$ send-keys -M -t main
+$ resize-pane -M
+$ copy-mode -M
+$ display-menu -x M -y M A a 'display hi'
+$ if -F -t = 1 'display -p yes'

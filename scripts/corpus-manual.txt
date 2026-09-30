@@ -55,3 +55,18 @@ list-panes -t <target> -F '#{pane_id} #{pane_title}'
 -S <socket-path> select-pane -t <$TMUX_PANE> -L -Z
 -S <socket-path> if -F '#{pane_at_left}' '' 'select-pane -t <$TMUX_PANE> -L'
 -S <socket-path> run-shell 'ps -o state= -o comm= -t '\''#{pane_tty}'\'''
+
+# source: claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
+display-message -t <pane> -p '#{window_id}'
+list-panes -t <window> -F '#{pane_id}'
+split-window -d -t <pane> -h -l 70% -P -F '#{pane_id}' -- <command>
+set-option -p -t <pane> window-style <style>
+set-option -p -t <pane> pane-border-style <style>
+set-option -p -t <pane> pane-active-border-style <style>
+select-pane -t <pane> -T <name>
+set-option -p -t <pane> pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'
+select-layout -t <window> main-vertical
+resize-pane -t <pane> -x 30%
+set-option -p -t <pane> remain-on-exit failed
+respawn-pane -k -t <pane> -- <command>
+kill-pane -t <pane>

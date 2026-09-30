@@ -220,15 +220,15 @@ coverage`; do not edit them by hand.
 
 | File | Lines |
 |---|---|
-| `tests/compat/corpus/static-cli.argv` | 481 |
+| `tests/compat/corpus/static-cli.argv` | 494 |
 | `tests/compat/corpus/static-conf.argv` | 154 |
 | `tests/compat/corpus/container-cli.argv` | 62 |
 | `tests/compat/corpus/container-pane.argv` | 47 |
 | `tests/compat/corpus/container-job.argv` | 332 |
 | `tests/compat/corpus/container-stored.argv` | 343 |
-| total | 1419 |
+| total | 1432 |
 
-Distinct forms (verb plus flag set, stored commands included): **286**.
+Distinct forms (verb plus flag set, stored commands included): **287**.
 
 ### Forms
 
@@ -293,7 +293,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `display-message -F -p -t` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh |
 | `display-message -c -p` | 2 | 0 | cc1 sc1 | area:Listing and inspection | yes | `-c` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `display-message -p` | 43 | 1 | cc3 cj9 cp3 sc24 sf4 | area:Listing and inspection | yes |  | canopy:bin/canopy-config, canopy:bin/canopy-reboot-check, canopy:bin/canopy-status (+26) |
-| `display-message -p -t` | 22 | 0 | cc2 cj3 cp4 sc13 | area:Listing and inspection | yes |  | canopy:bin/canopy-adopt, canopy:bin/canopy-agent, canopy:bin/canopy-reboot-check (+11) |
+| `display-message -p -t` | 23 | 0 | cc2 cj3 cp4 sc14 | area:Listing and inspection | yes |  | canopy:bin/canopy-adopt, canopy:bin/canopy-agent, canopy:bin/canopy-reboot-check (+12) |
 | `display-panes` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
 | `display-popup -B -d -E -h -w` | 2 | 0 | cj2 | area:Overlays | yes | `-B` | container:job |
 | `display-popup -B -d -E -h -w -x[C] -y[C]` | 2 | 0 | cj2 | area:Overlays | yes | `-B` | container:job |
@@ -314,7 +314,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `join-pane -b -d -f -h -l -s -t` | 1 | 0 | cj1 | area:Windows and panes | yes | `-b`, `-f`, `-l` | container:job |
 | `join-pane -d -s -t` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `kill-pane` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
-| `kill-pane -t` | 7 | 0 | cc1 cj1 sc5 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+4) |
+| `kill-pane -t` | 8 | 0 | cc1 cj1 sc6 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+5) |
 | `kill-pane -t[=]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
 | `kill-server` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, athome:home/dot_config/systemd/user/tmux.service.tmpl, athome:home/dot_zsh/aliases.zsh (+2) |
 | `kill-session -t` | 4 | 0 | cc1 sc3 | cmd:M1 | yes | `-t` | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli (+4) |
@@ -332,7 +332,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `list-keys -1 -N` | 1 | 1 | cs1 | area:Overlays | yes | `-N` | container:list-keys |
 | `list-panes -F` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
 | `list-panes -F -s -t` | 3 | 0 | cc1 cj1 sc1 | area:Listing and inspection | yes | `-s` | container:cli, container:job, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `list-panes -F -t` | 17 | 0 | cc1 cj7 cp1 sc8 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+8) |
+| `list-panes -F -t` | 18 | 0 | cc1 cj7 cp1 sc9 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+9) |
 | `list-panes -a` | 2 | 0 | cj1 sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
 | `list-panes -a -F` | 17 | 0 | cc3 cj4 cp1 sc9 | area:Listing and inspection | yes |  | canopy:bin/canopy-adopt, canopy:bin/canopy-reboot-check, canopy:lib/pane.sh (+10) |
 | `list-panes -a -f -F` | 6 | 0 | cc1 cj4 sc1 | area:Listing and inspection | yes |  | container:cli, container:job, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs |
@@ -399,11 +399,11 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `resize-pane -Z` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `resize-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `resize-pane -t -Z` | 3 | 1 | cp1 sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh, container:pane |
-| `resize-pane -t -x` | 5 | 0 | cc1 cj1 sc3 | area:Windows and panes | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
+| `resize-pane -t -x` | 6 | 0 | cc1 cj1 sc4 | area:Windows and panes | yes |  | container:cli, container:job, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) (+3) |
 | `resize-window -t -x -y` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `respawn-pane -c -k` | 1 | 1 | sf1 | area:Windows and panes | yes | `-c` | plugin:tmux-which-key/plugin/init.tmux |
 | `respawn-pane -k` | 3 | 3 | cs3 | area:Windows and panes | yes |  | container:list-keys |
-| `respawn-pane -k -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | canopy:bin/canopy-adopt |
+| `respawn-pane -k -t` | 2 | 0 | sc2 | area:Windows and panes | yes |  | canopy:bin/canopy-adopt, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
 | `respawn-window -k` | 3 | 3 | cs3 | area:Windows and panes | **no** |  | container:list-keys |
 | `rotate-window` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `rotate-window -D` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
@@ -412,7 +412,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `run-shell -d` | 6 | 2 | cs6 | cmd:M3 | yes | `-d` | container:list-keys |
 | `select-layout` | 5 | 2 | cs2 sc1 sf2 | cmd:M3 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
 | `select-layout -E` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
-| `select-layout -t` | 11 | 0 | cc2 cj7 sc2 | cmd:M3 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+1) |
+| `select-layout -t` | 12 | 0 | cc2 cj7 sc3 | cmd:M3 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
 | `select-pane` | 12 | 12 | cs12 | cmd:M1 | yes |  | container:list-keys |
 | `select-pane -D` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
 | `select-pane -D -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
@@ -428,7 +428,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `select-pane -l -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -m` | 7 | 7 | cs7 | oos:Marked panes |  |  | container:list-keys |
 | `select-pane -t` | 14 | 0 | cj2 cp1 cs1 sc9 sf1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh, canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:tmux/keys.tsv (+10) |
-| `select-pane -t -T` | 12 | 0 | cc1 cj9 sc2 | cmd:M1 | yes | `-T` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+1) |
+| `select-pane -t -T` | 13 | 0 | cc1 cj9 sc3 | cmd:M1 | yes | `-T` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
 | `select-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -t[=]` | 5 | 5 | cs5 | oos:Mouse argv forms |  |  | container:list-keys |
 | `select-window -t` | 17 | 11 | cs11 sc6 | area:Windows and panes | yes |  | athome:home/dot_local/bin/executable_tsess, container:list-keys, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+4) |
@@ -457,7 +457,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `set-option -g -q` | 21 | 0 | cc2 cj10 sc9 | area:Options by tmux name | yes |  | canopy:plugins/tmux-continuum/scripts/helpers.sh, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:plugins/tmux-resurrect/scripts/check_tmux_version.sh (+7) |
 | `set-option -g -u` | 2 | 0 | sc2 | area:Options by tmux name | yes |  | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `set-option -p` | 1 | 0 | sc1 | area:Options by tmux name | yes |  | nvim:snacks.nvim/lua/snacks/image/terminal.lua |
-| `set-option -p -t` | 11 | 0 | cp7 sc4 | area:Options by tmux name | yes |  | canopy:bin/canopy-agent, container:pane |
+| `set-option -p -t` | 16 | 0 | cp7 sc9 | area:Options by tmux name | yes |  | canopy:bin/canopy-agent, container:pane, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
 | `set-option -s` | 2 | 0 | sc2 | area:Options by tmux name | yes |  | plugin:tmux-sensible/sensible.tmux |
 | `set-option -t` | 4 | 0 | cj2 sc2 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, plugin:tmux-claude-session-manager/scripts/launch.sh |
 | `set-option -t -u` | 4 | 0 | cj3 sc1 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
@@ -489,6 +489,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `split-window -c -h` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
 | `split-window -c -t` | 2 | 0 | sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `split-window -c -v` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
+| `split-window -d -F -h -l -P -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-d`, `-F`, `-P` | manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
 | `split-window -f -F -h -l -P -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-f`, `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `split-window -h` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `split-window -v` | 3 | 3 | cs3 | cmd:M1 | yes |  | container:list-keys |
@@ -551,10 +552,12 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `main-pane-width` | 1 | yes |
 | `mode-keys` | 3 | yes |
 | `mouse` | 1 | yes |
+| `pane-active-border-style` | 1 | no |
 | `pane-base-index` | 1 | yes |
-| `pane-border-format` | 1 | no |
+| `pane-border-format` | 2 | no |
+| `pane-border-style` | 1 | no |
 | `prefix` | 3 | yes |
-| `remain-on-exit` | 7 | yes |
+| `remain-on-exit` | 8 | yes |
 | `renumber-windows` | 1 | yes |
 | `set-clipboard` | 1 | yes |
 | `status` | 1 | yes |
@@ -574,6 +577,7 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `window-status-current-format` | 2 | yes |
 | `window-status-format` | 2 | yes |
 | `window-status-separator` | 2 | yes |
+| `window-style` | 1 | no |
 
 User options, grouped by prefix: `@batt*` (1), `@canopy_*` (15), `@claude_*` (15), `@continuum-*` (14), `@copy_*` (3), `@custom_*` (1), `@fzf-*` (9), `@net*` (1), `@opensessions-*` (6), `@opensessions_*` (3), `@override_*` (1), `@pet*` (1), `@pill_*` (6), `@resurrect-*` (33), `@sessionx-*` (84), `@theme_*` (26), `@tmux-*` (5), `@tmux_*` (1), `@tpm-*` (3), `@tpm_*` (2), `@vim_*` (8), `@wk_*` (17).
 
@@ -627,7 +631,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{pane_dead}` | 4 | yes |
 | `#{pane_floating_flag}` | 12 | no |
 | `#{pane_height}` | 8 | yes |
-| `#{pane_id}` | 65 | yes |
+| `#{pane_id}` | 67 | yes |
 | `#{pane_in_mode}` | 14 | yes |
 | `#{pane_index}` | 24 | yes |
 | `#{pane_left}` | 10 | yes |
@@ -638,7 +642,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{pane_right}` | 10 | no |
 | `#{pane_search_string}` | 2 | no |
 | `#{pane_start_command}` | 4 | yes |
-| `#{pane_title}` | 35 | yes |
+| `#{pane_title}` | 36 | yes |
 | `#{pane_tty}` | 18 | yes |
 | `#{pane_width}` | 23 | yes |
 | `#{pid}` | 2 | yes |
@@ -656,7 +660,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{window_active}` | 9 | yes |
 | `#{window_flags}` | 5 | yes |
 | `#{window_height}` | 1 | no |
-| `#{window_id}` | 46 | yes |
+| `#{window_id}` | 47 | yes |
 | `#{window_index}` | 30 | yes |
 | `#{window_layout}` | 2 | yes |
 | `#{window_name}` | 15 | yes |

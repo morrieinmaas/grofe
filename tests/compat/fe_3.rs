@@ -186,14 +186,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "native: grofe's format language has no q:, E:, T:, =N:, s///: or n: \
          (TC.3); the front end leaves them, and notes them in compat-miss.log",
     ),
-    (
-        "$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p \"not #W\"'",
-        "FE.4: the if-shell row (the condition is rewritten here)",
-    ),
-    (
-        "$ if -F -t main:1 '#{m:*ai*,#S}' 'display -p match' 'display -p nomatch'",
-        "FE.4: the if-shell row (the condition is rewritten here)",
-    ),
 ];
 
 /// Case 2: canopy's two-row status theme, rendered on a pty-attached

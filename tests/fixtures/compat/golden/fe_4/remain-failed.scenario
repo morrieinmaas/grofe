@@ -1,0 +1,14 @@
+# FE.4: remain-on-exit failed (Claude Code's agent teams set it on each
+# teammate pane) keeps a pane whose command exited non-zero or was killed
+# by a signal, and closes one that exited 0. With no value, the option
+# keeps `failed`; an unknown value is tmux's error.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set -g remain-on-exit failed
+$ split-window -d -t main 'exit 0'
+$ split-window -d -t main 'exit 3'
+$ split-window -d -t main 'kill -9 $$'
+$ run-shell 'sleep 1'
+$ list-panes -t main -F '#{pane_index} #{pane_dead}'
+$ set -g remain-on-exit
+$ show -gv remain-on-exit
+$ set -g remain-on-exit bogus

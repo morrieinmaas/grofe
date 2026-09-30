@@ -1,0 +1,35 @@
+# FE.4 case 1: vim-tmux-navigator's `if -F` test, as the owner binds it to
+# C-h, run from the CLI with the active pane chosen first: a pane whose
+# command is named nvim gets C-h, any other moves the focus left. The
+# right pane runs a process named nvim: a copy of the tmux on PATH (grofe,
+# on grofe's side) waiting on a channel, once it has signalled that it runs
+# (macOS checks a new binary on its first run). A symlink would not do
+# (macOS names a process after its target), nor a copy of a system binary
+# (macOS kills it). Then the shell form, -b, the false and empty format
+# conditions, and a branch of neww and setw.
+$ new-session -d -s main -x 80 -y 24 cat
+$ split-window -d -h -t main 'cp "$(command -v tmux)" "$HOME/nvim"; "$HOME/nvim" wait-for -S fe4-ready; exec "$HOME/nvim" wait-for fe4-nvim'
+$ wait-for fe4-ready
+# Longer than grofe's one-second foreground sample.
+$ run-shell 'sleep 1.5'
+$ display -p -t main:1.2 '#{pane_current_command}'
+$ select-pane -t main:1.2
+$ if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'
+$ display -p -t main '#{pane_index}'
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t main:1.2
+$ select-pane -t main:1.1
+$ if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'
+$ display -p -t main '#{pane_index}'
+$ if -F -t main:1.2 '#{pane_current_command}' 'display -p "then #{pane_index}"' 'display -p else'
+$ if -F 0 'display -p then' 'display -p else'
+$ if -F '' 'display -p then' 'display -p else'
+$ if -F 0 'display -p then'
+$ if true 'display -p then' 'display -p else'
+$ if false 'display -p then' 'display -p else'
+$ if -b true 'display -p then'
+$ if -F 1 'neww -d -n made ; setw -t :made automatic-rename off' 'display -p else'
+$ list-windows -t main -F '#{window_index} #{window_name}'
+$ show -wv -t main:made automatic-rename
+# A `{ }` list runs as parsed: the backslash and the quote reach display.
+$ if-shell -F 1 "if-shell -F 1 { display -p 'a\"b\c' }"

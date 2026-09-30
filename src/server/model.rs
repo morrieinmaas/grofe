@@ -301,12 +301,19 @@ impl Model {
         self.had_session && self.sessions.is_empty()
     }
 
-    /// Whether `pane` stays after its process exits: `remain-on-exit`
-    /// looked up pane over window over session over global.
-    pub fn remain_on_exit(&self, pane: PaneId) -> bool {
-        self.options
+    /// Whether `pane` stays after its process exits with `status` (its
+    /// exit code, `None` when a signal ended it): `remain-on-exit` looked
+    /// up pane over window over session over global. `failed` keeps it
+    /// unless it exited 0, as tmux 3.7b (recorded: a signal keeps it too).
+    pub fn remain_on_exit(&self, pane: PaneId, status: Option<i32>) -> bool {
+        match self
+            .options
             .lookup(REMAIN_ON_EXIT, &options::chain(self, pane))
-            == Some("on")
+        {
+            Some("on") => true,
+            Some("failed") => status != Some(0),
+            _ => false,
+        }
     }
 
     pub fn session_by_name(&self, name: &str) -> Option<SessionId> {
@@ -378,7 +385,7 @@ impl Model {
         if !self.panes.contains_key(&pane) {
             return;
         }
-        if self.remain_on_exit(pane) {
+        if self.remain_on_exit(pane, status) {
             if let Some(p) = self.panes.get_mut(&pane) {
                 p.dead = Some(status);
             }
