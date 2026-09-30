@@ -1437,7 +1437,18 @@ fn join_errors(errors: &[config::ConfigError]) -> String {
 fn apply_config(state: &mut State, resolved: &Resolved) {
     let model = &mut state.model;
     let events = &mut state.events;
-    let configured: Vec<(&str, &str)> = resolved.configured().map(|(n, v, _)| (n, v)).collect();
+    // `[user-options]` (TP.0) are global options the config sets like any
+    // other: a runtime `set` of one takes it out of the config's hands.
+    let configured: Vec<(&str, &str)> = resolved
+        .configured()
+        .map(|(n, v, _)| (n, v))
+        .chain(
+            resolved
+                .user_options
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.as_str())),
+        )
+        .collect();
     let dropped: Vec<(String, String)> = model
         .options
         .config_base
@@ -1447,6 +1458,13 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
         .collect();
     for (name, base) in dropped {
         model.options.config_base.remove(&name);
+        // A user option the config no longer sets was unset before it.
+        if name.starts_with('@') && base.is_empty() {
+            if let Ok(true) = model.options.unset(Owner::Global, &name) {
+                option_changed(model, events, Owner::Global, &name);
+            }
+            continue;
+        }
         set_global(model, events, &name, &base);
     }
     for (name, value) in configured {
@@ -1472,6 +1490,70 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     crate::server::sources::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
+    // `[environment]`, then `load-commands` (TP.0), as tmux runs a config
+    // file's `set-environment` and other commands each time it reads it.
+    for (name, value) in &resolved.environment {
+        let value = expand_env(state, value);
+        crate::server::hooks::set_global(state, name, Some(value), false);
+    }
+    let cmds: Vec<Vec<String>> = resolved
+        .load_commands
+        .iter()
+        .flat_map(|c| c.cmds.iter().cloned())
+        .collect();
+    crate::server::hooks::run_at_load(state, cmds);
+}
+
+/// `value` with `$NAME`, `${NAME}` and a leading `~` expanded from the
+/// global environment, as tmux expands a config line's words; an unset
+/// name is empty.
+fn expand_env(state: &State, value: &str) -> String {
+    let vars = crate::server::hooks::variables(state, None);
+    let get = |name: &str| {
+        vars.iter()
+            .find(|v| v.name == name)
+            .and_then(|v| v.value.clone())
+            .unwrap_or_default()
+    };
+    let mut out = String::new();
+    let mut rest = value;
+    if let Some(after) = rest.strip_prefix('~')
+        && (after.is_empty() || after.starts_with('/'))
+    {
+        out.push_str(&get("HOME"));
+        rest = after;
+    }
+    let mut chars = rest.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        let mut name = String::new();
+        if chars.peek() == Some(&'{') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c == '}' {
+                    break;
+                }
+                name.push(c);
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
+                    break;
+                }
+                name.push(c);
+                chars.next();
+            }
+        }
+        if name.is_empty() {
+            out.push('$');
+        } else {
+            out.push_str(&get(&name));
+        }
+    }
+    out
 }
 
 /// Sets a global option, emitting `option-changed` on a change. The

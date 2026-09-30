@@ -1,9 +1,5 @@
-~/.config/tmux/tmux.conf:1: note: no config key for this; kept as a native command comment
-~/.config/tmux/tmux.conf:2: note: no config key for this; kept as a native command comment
-~/.config/tmux/tmux.conf:3: note: no config key for this; kept as a native command comment
 ~/.config/tmux/tmux.conf:4: note: source-file -q found ~/.local/share/canopy/tmux/tmux.conf
 ~/.local/share/canopy/tmux/tmux.conf:39: note: source-file found ~/.local/share/canopy/tmux/conf.d/00-core.conf
-~/.local/share/canopy/tmux/conf.d/00-core.conf:6: note: no config key for this; kept as a native command comment
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:33: note: mode-keys: grofe keeps and shows it, with no effect
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: %if: %if "#{==:#{@canopy_core_appended},}"
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:52: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g default-terminal "tmux-256color"
@@ -21,30 +17,11 @@
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:102: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g @canopy_core_appended 1
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:103: %endif: %endif
 ~/.local/share/canopy/tmux/tmux.conf:40: note: source-file -q found ~/.local/state/canopy/05-caps.conf
-~/.local/state/canopy/05-caps.conf:1: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:2: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:3: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:4: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:5: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:6: note: no config key for this; kept as a native command comment
-~/.local/state/canopy/05-caps.conf:7: note: no config key for this; kept as a native command comment
 ~/.local/share/canopy/tmux/tmux.conf:41: note: source-file -q found ~/.local/state/canopy/10-keys.conf
 ~/.local/state/canopy/10-keys.conf:25: note: source-file of the imported config rewritten to reload
-~/.local/state/canopy/10-keys.conf:26: note: $CANOPY_STORE in keys.prefix.M-s is expanded when grofe loads the config, from the server's environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which grofe's config has no key for
-~/.local/state/canopy/10-keys.conf:27: note: $CANOPY_STORE in keys.prefix.M-r is expanded when grofe loads the config, from the server's environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which grofe's config has no key for
+~/.local/state/canopy/10-keys.conf:26: note: $CANOPY_STORE in keys.prefix.M-s is expanded when grofe loads the config, from the server process's own environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which [environment] sets only once the config is applied
+~/.local/state/canopy/10-keys.conf:27: note: $CANOPY_STORE in keys.prefix.M-r is expanded when grofe loads the config, from the server process's own environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which [environment] sets only once the config is applied
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/20-status.conf
-~/.local/share/canopy/tmux/conf.d/20-status.conf:28: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:29: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:30: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:31: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:32: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:33: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:34: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:37: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:59: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:60: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:64: note: no config key for this; kept as a native command comment
-~/.local/share/canopy/tmux/conf.d/20-status.conf:65: note: no config key for this; kept as a native command comment
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:93: note: $CANOPY_STORE in status.sources.src-8bd13bdceb94f361 is expanded by the source's shell, from the server's environment
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/30-plugins.conf
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:48: plugins and TPM: set -g @resurrect-dir "$CANOPY_STATE/resurrect"
@@ -59,12 +36,10 @@
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:159: plugins and TPM: if-shell 'command -v bash >/dev/null 2>&1 && [ -x "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux" ]' 'run-shell "$CANOPY_STORE/plugins/tmux-continuum/continuum.tmux"'
 ~/.local/share/canopy/tmux/tmux.conf:43: note: source-file -q found ~/.config/canopy/user.conf
 ~/.local/state/canopy/10-keys.conf:17: note: keys.prefix.K is overridden by a later binding at ~/.config/canopy/user.conf:4
-~/.config/canopy/user.conf:9: note: no config key for this; kept as a native command comment
+~/.config/canopy/user.conf:9: plugins and TPM: set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
 ~/.config/canopy/user.conf:10: plugins and TPM: set -g @tpm_plugins '            tmux-plugins/tpm               tmux-plugins/tmux-sensible   '
 ~/.config/canopy/user.conf:14: plugins and TPM: if "test ! -d ~/.config/tmux/plugins/tpm" "run 'git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm'"
 ~/.config/canopy/user.conf:15: plugins and TPM: run '~/.config/tmux/plugins/tpm/tpm'
 ~/.local/state/canopy/10-keys.conf:8: note: keys.prefix.C-s is overridden by a later binding at ~/.config/canopy/user.conf:16
-~/.config/canopy/user.conf:17: note: no config key for this; kept as a native command comment
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:79: note: status.left is overridden by a later set at ~/.config/canopy/user.conf:18
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:93: note: status.right is overridden by a later set at ~/.config/canopy/user.conf:19
-~/.config/canopy/user.conf:20: note: no config key for this; kept as a native command comment

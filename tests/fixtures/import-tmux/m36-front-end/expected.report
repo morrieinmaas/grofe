@@ -1,3 +1,3 @@
 ~/.tmux.conf:4: note: an exact =name target is spelled as the name: natively, a name no session has exactly also matches a prefix
-~/.tmux.conf:5: note: an exact =name target is spelled as the name: natively, a name no session has exactly also matches a prefix
-~/.tmux.conf:8: no native spelling for select-pane -t (a tmux-only target or form): bind O select-pane -t :.+
+~/.tmux.conf:6: an exact =name target in kill-session has no native spelling: natively a name no session has exactly matches a prefix, the wrong target for kill-session: bind Y kill-session -t =work
+~/.tmux.conf:9: no native spelling for select-pane -t (a tmux-only target or form): bind O select-pane -t :.+

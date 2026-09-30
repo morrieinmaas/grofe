@@ -8,7 +8,6 @@
 ~/.tmux.conf:7: note: mouse is overridden by a later set at ~/.tmux.conf:32
 ~/.tmux.conf:33: plugins and TPM: set -g @plugin 'tmux-plugins/tpm'
 ~/.tmux.conf:34: plugins and TPM: set -g @plugin 'tmux-plugins/tmux-sensible'
-~/.tmux.conf:36: note: no config key for this; kept as a native command comment
 ~/.tmux.conf:37: note: source-file -q found ~/.tmux/local.conf
 ~/.tmux.conf:6: note: keys.prefix.C-a is overridden by a later binding at ~/.tmux/local.conf:3
 ~/.tmux.conf:38: skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf

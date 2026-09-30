@@ -258,18 +258,6 @@ struct Word {
     escaped: bool,
 }
 
-impl Word {
-    /// A word with no quoting, as if written bare.
-    fn plain(s: &str) -> Word {
-        Word {
-            raw: s.to_string(),
-            value: s.to_string(),
-            is_sep: false,
-            escaped: false,
-        }
-    }
-}
-
 /// `words` as written, joined by spaces.
 fn join_raw(words: &[Word]) -> String {
     words
@@ -692,9 +680,13 @@ struct Importer {
     sources: BTreeMap<String, SourceEntry>,
     /// `[hooks]` (TC.5), in first-set order, updated in place.
     hooks: Vec<HookEntry>,
-    /// Commands with no config key, in their native spelling, written as
-    /// comments at the end.
-    runtime: Vec<RuntimeEntry>,
+    /// `[user-options]` (TP.0) by name, without the `@`, in name order.
+    user_options: BTreeMap<String, OptionEntry>,
+    /// `[environment]` (TP.0), in first-set order, updated in place.
+    environment: Vec<(String, OptionEntry)>,
+    /// `load-commands` (TP.0): load-time `if-shell`/`run-shell`, in order,
+    /// in grofe's own grammar.
+    load_commands: Vec<RuntimeEntry>,
     reports: Vec<ConfigError>,
 }
 
@@ -717,7 +709,7 @@ struct HookEntry {
 
 #[derive(Debug, Clone)]
 struct RuntimeEntry {
-    /// The command, in grofe's own grammar.
+    /// The command, in grofe's own grammar, as `load-commands` runs it.
     text: String,
     file: PathBuf,
     line: usize,
@@ -737,7 +729,9 @@ impl Importer {
             keys: Vec::new(),
             sources: BTreeMap::new(),
             hooks: Vec::new(),
-            runtime: Vec::new(),
+            user_options: BTreeMap::new(),
+            environment: Vec::new(),
+            load_commands: Vec::new(),
             reports: Vec::new(),
         }
     }
@@ -837,6 +831,8 @@ impl Importer {
         let mut unset = false;
         let mut unsupported_flag = false;
         let mut scope_flag = is_setw;
+        let mut other_table = is_setw;
+        let mut only_if_unset = false;
         let mut i = 0;
         while let Some(w) = words.get(i) {
             let v = w.value.as_str();
@@ -844,8 +840,13 @@ impl Importer {
             {
                 for c in v[1..].chars() {
                     match c {
-                        'g' | 's' | 'w' => scope_flag = true,
-                        'o' | 'q' => {}
+                        'g' => scope_flag = true,
+                        's' | 'w' => {
+                            scope_flag = true;
+                            other_table = true;
+                        }
+                        'o' => only_if_unset = true,
+                        'q' => {}
                         'a' => append = true,
                         'u' => unset = true,
                         _ => unsupported_flag = true,
@@ -876,16 +877,24 @@ impl Importer {
             {
                 return self.report(file, line, "plugins and TPM", text);
             }
-            // grofe's config has no key for a user option (spec 5.2).
-            let verb = if is_setw {
-                "set-window-option"
-            } else {
-                "set-option"
+            if other_table {
+                // tmux keeps server and window user options apart from the
+                // global session ones `[user-options]` sets (FE.1).
+                return self.report(
+                    file,
+                    line,
+                    "user option outside tmux's global session table (-s, -w)",
+                    text,
+                );
+            }
+            let set = UserSet {
+                name: user.to_string(),
+                value: words.get(i + 1),
+                append,
+                unset,
+                only_if_unset,
             };
-            let full: Vec<Word> = std::iter::once(Word::plain(verb))
-                .chain(words.iter().cloned())
-                .collect();
-            return self.keep_runtime(file, line, text, &full);
+            return self.handle_user_option(file, line, text, set);
         }
         let (base, index) = match split_index(&name) {
             Ok(split) => split,
@@ -1119,6 +1128,68 @@ impl Importer {
             .push((file.to_path_buf(), line));
     }
 
+    /// A global user option: `[user-options]` (TP.0), set when the config
+    /// is applied. A later set replaces it, `-a` appends, `-u` removes it,
+    /// `-o` keeps the first.
+    fn handle_user_option(&mut self, file: &Path, line: usize, text: &str, set: UserSet) {
+        let UserSet {
+            name,
+            value,
+            append,
+            unset,
+            only_if_unset,
+        } = set;
+        let old = self.user_options.get(&name).cloned();
+        if unset {
+            if let Some(old) = self.user_options.remove(&name) {
+                self.note(
+                    &old.file,
+                    old.line,
+                    format!(
+                        "user-options.{name} is unset by set -u at {}:{line}",
+                        tilde(file, self.home.as_deref())
+                    ),
+                );
+            }
+            return self.note(file, line, format!("user-options.{name} unset here (-u)"));
+        }
+        let Some(w) = value else {
+            return self.report(file, line, "command not converted", text);
+        };
+        if has_bare_dollar(&w.raw) {
+            return self.report(file, line, "environment variable in a value", text);
+        }
+        if only_if_unset && old.is_some() {
+            return self.note(
+                file,
+                line,
+                format!("user-options.{name} is already set, so -o leaves it"),
+            );
+        }
+        let value = match (&old, append) {
+            (Some(old), true) => format!("{}{}", old.value, w.value),
+            _ => w.value.clone(),
+        };
+        if let Some(old) = old {
+            self.note(
+                &old.file,
+                old.line,
+                format!(
+                    "user-options.{name} is overridden by a later set at {}:{line}",
+                    tilde(file, self.home.as_deref())
+                ),
+            );
+        }
+        self.user_options.insert(
+            name,
+            OptionEntry {
+                value,
+                file: file.to_path_buf(),
+                line,
+            },
+        );
+    }
+
     /// Notes an option grofe stores and shows but does not act on (spec
     /// 4.5's options row: the option store's `NO_EFFECT`).
     fn note_no_effect(&mut self, file: &Path, line: usize, toml_key: &str, tmux_name: &str) {
@@ -1238,6 +1309,9 @@ impl Importer {
             (true, None) => "root".to_string(),
             (false, None) => "prefix".to_string(),
         };
+        if table_name.is_empty() {
+            return self.report(file, line, "an empty key table name", text);
+        }
         let Some(key_word) = words.get(i) else {
             return self.report(file, line, "command not converted", text);
         };
@@ -1252,7 +1326,23 @@ impl Importer {
         }
         if table_name == "root" && is_stock_mouse_binding(&key, tail) {
             // TC.10's built-in mouse model already does what tmux's stock
-            // binding does, for an unbound mouse key.
+            // binding does, for an unbound mouse key; an earlier binding
+            // of the key goes, as this one replaced it in tmux.
+            if let Some(at) = self
+                .keys
+                .iter()
+                .position(|b| b.table == "root" && b.key == key)
+            {
+                let old = self.keys.remove(at);
+                self.note(
+                    &old.file,
+                    old.line,
+                    format!(
+                        "keys.root.{key} is replaced by tmux's stock binding at {}:{line}",
+                        tilde(file, self.home.as_deref())
+                    ),
+                );
+            }
             return self.note(
                 file,
                 line,
@@ -1316,6 +1406,9 @@ impl Importer {
             (true, None) => "root".to_string(),
             (false, None) => "prefix".to_string(),
         };
+        if table_name.is_empty() {
+            return self.report(file, line, "an empty key table name", text);
+        }
         let Some(key_word) = words.get(i) else {
             return self.report(file, line, "command not converted", text);
         };
@@ -1454,8 +1547,8 @@ impl Importer {
         let msg = match self.env.get(var) {
             Some(e) => format!(
                 "${var} in keys.{table}.{key} is expanded when grofe loads the config, from \
-                 the server's environment; tmux read it from set-environment -g at {}:{}, which \
-                 grofe's config has no key for",
+                 the server process's own environment; tmux read it from set-environment -g at \
+                 {}:{}, which [environment] sets only once the config is applied",
                 tilde(&e.file, self.home.as_deref()),
                 e.line
             ),
@@ -1658,9 +1751,10 @@ impl Importer {
 
     // ---- set-environment / run-shell ----
 
-    /// `set-environment`: kept for `source-file` paths (rule 8), and as a
-    /// native command comment, since grofe's config has no environment key
-    /// (TC.5's environment is runtime state).
+    /// `set-environment -g`: `[environment]` (TP.0), set when the config
+    /// is applied, and kept for `source-file` paths (rule 8). The loader
+    /// expands `$NAME` and a leading `~` as tmux does outside single
+    /// quotes, so a value holding them literally is reported.
     fn handle_set_environment(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
         let words = &all[1..];
         let mut i = 0;
@@ -1684,26 +1778,121 @@ impl Importer {
                 },
             );
         }
-        self.keep_runtime(file, line, text, all);
+        let argv: Vec<String> = all.iter().map(|w| w.value.clone()).collect();
+        let set = match tmux::spell(&argv) {
+            Ok((commands, _)) => commands.into_iter().find_map(|c| match c {
+                Command::SetEnvironment(set) => Some(set),
+                _ => None,
+            }),
+            Err(e) => return self.report(file, line, &e.to_string(), text),
+        };
+        let Some(set) = set else {
+            return self.report(file, line, "command not converted", text);
+        };
+        let Some(name) = set.name else {
+            return self.report(file, line, "command not converted", text);
+        };
+        if name == "TMUX_PLUGIN_MANAGER_PATH" {
+            return self.report(file, line, "plugins and TPM", text);
+        }
+        if !set.global {
+            return self.report(file, line, "a session's environment (no -g)", text);
+        }
+        if set.hidden {
+            return self.report(file, line, "a hidden variable (-h)", text);
+        }
+        let at = self.environment.iter().position(|(n, _)| *n == name);
+        if set.unset {
+            let Some(at) = at else {
+                return self.report(
+                    file,
+                    line,
+                    "unsets a variable the config does not set",
+                    text,
+                );
+            };
+            let (_, old) = self.environment.remove(at);
+            self.note(
+                &old.file,
+                old.line,
+                format!(
+                    "environment.{name} is unset by set-environment -u at {}:{line}",
+                    tilde(file, self.home.as_deref())
+                ),
+            );
+            return self.note(file, line, format!("environment.{name} unset here (-u)"));
+        }
+        let (value, raw) = match words.get(i + 1) {
+            Some(w) => (w.value.clone(), w.raw.clone()),
+            None => return self.report(file, line, "command not converted", text),
+        };
+        let literal_dollar = value.contains('$') && !has_bare_dollar(&raw);
+        let literal_tilde = value.starts_with('~') && !raw.starts_with('~');
+        if literal_dollar || literal_tilde {
+            return self.report(
+                file,
+                line,
+                "a literal $ or ~ has no [environment] spelling",
+                text,
+            );
+        }
+        let entry = OptionEntry {
+            value,
+            file: file.to_path_buf(),
+            line,
+        };
+        match at {
+            Some(at) => {
+                let old = self.environment[at].1.clone();
+                self.note(
+                    &old.file,
+                    old.line,
+                    format!(
+                        "environment.{name} is overridden by a later set-environment at {}:{line}",
+                        tilde(file, self.home.as_deref())
+                    ),
+                );
+                self.environment[at].1 = entry;
+            }
+            None => self.environment.push((name, entry)),
+        }
     }
 
-    /// A `run-shell` at load time: TPM and plugin scripts are reported;
-    /// anything else is kept as a native command comment.
+    /// A `run-shell` at load time: `load-commands` (TP.0) in native form;
+    /// TPM and plugin scripts are reported.
     fn handle_run_shell(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
         if all[1..].iter().any(|w| runs_a_plugin(&w.value)) {
             return self.report(file, line, "plugins and TPM", text);
         }
-        self.keep_runtime(file, line, text, all);
+        self.load_command(file, line, text, all);
     }
 
-    /// An `if-shell` at load time: grofe's conditional (TC.10) in native
-    /// form, branches included, kept as a comment, since a config runs no
-    /// commands when it loads; one that loads a plugin is reported.
+    /// An `if-shell` at load time: grofe's conditional (TC.10), branches
+    /// included, in `load-commands` (TP.0); one that loads a plugin is
+    /// reported.
     fn handle_if_shell(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
         if all[1..].iter().any(|w| runs_a_plugin(&w.value)) {
             return self.report(file, line, "plugins and TPM", text);
         }
-        self.keep_runtime(file, line, text, all);
+        self.load_command(file, line, text, all);
+    }
+
+    /// A command tmux ran as it read the file: its native spelling in
+    /// `load-commands`, run each time the config is applied. One the front
+    /// end cannot translate is reported.
+    fn load_command(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        let native = match self.native_command(file, line, all, false) {
+            Ok(native) => native,
+            Err(msg) => return self.report(file, line, &msg, text),
+        };
+        if let Err(msg) = validate_command(&native, &self.aliases()) {
+            return self.report(file, line, &msg, text);
+        }
+        self.load_commands.push(RuntimeEntry {
+            text: native,
+            file: file.to_path_buf(),
+            line,
+        });
     }
 
     /// `set-hook`: a `[hooks]` entry (TC.5), keyed by the grofe event the
@@ -1768,29 +1957,6 @@ impl Importer {
         }
     }
 
-    /// A command grofe's config has no key for (spec 5.2: no user options,
-    /// no environment, nothing run at load time): its native spelling, kept
-    /// as a comment at the end of the output for the user to place (a hook,
-    /// a script), and noted. One the front end cannot translate is
-    /// reported instead.
-    fn keep_runtime(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
-        match self.native_command(file, line, all, false) {
-            Ok(native) => {
-                self.note(
-                    file,
-                    line,
-                    "no config key for this; kept as a native command comment".to_string(),
-                );
-                self.runtime.push(RuntimeEntry {
-                    text: native,
-                    file: file.to_path_buf(),
-                    line,
-                });
-            }
-            Err(msg) => self.report(file, line, &msg, text),
-        }
-    }
-
     // ---- command strings through the front end ----
 
     /// One tmux command (`words`, its verb first) in grofe's own grammar,
@@ -1835,6 +2001,17 @@ impl Importer {
                 ));
             };
             if exact {
+                let verb = native.first().map_or("", String::as_str);
+                let destructive = verb.starts_with("kill-")
+                    || verb.starts_with("respawn-")
+                    || verb == "detach-client";
+                if destructive {
+                    return Err(format!(
+                        "an exact =name target in {verb} has no native spelling: natively a \
+                         name no session has exactly matches a prefix, the wrong target for \
+                         {verb}"
+                    ));
+                }
                 self.note(
                     file,
                     line,
@@ -1842,6 +2019,21 @@ impl Importer {
                      has exactly also matches a prefix"
                         .to_string(),
                 );
+            }
+            // A flag the front end dropped as cosmetic (FE.4: popup and
+            // menu styles, menu border lines).
+            if let (Some(sent), Some(written)) = (tmux::form_of(&argv), tmux::form_of(&native)) {
+                let written: Vec<&str> = written.split(' ').collect();
+                for flag in sent.split(' ').skip(1).filter(|f| !written.contains(f)) {
+                    self.note(
+                        file,
+                        line,
+                        format!(
+                            "{} {flag} dropped: cosmetic, grofe draws it no differently",
+                            native.first().map_or("", String::as_str)
+                        ),
+                    );
+                }
             }
             for (at, stored) in stored_commands(&native, c) {
                 native[at] = self.native_text(file, line, &stored, mouse)?;
@@ -1966,6 +2158,19 @@ impl Importer {
             ));
             items.push((toml_key, text));
         }
+        if !self.load_commands.is_empty() {
+            let mut text = "load-commands = [\n".to_string();
+            for c in &self.load_commands {
+                text.push_str(&format!(
+                    "# {}:{}\n{},\n",
+                    tilde(&c.file, self.home.as_deref()),
+                    c.line,
+                    quote(&c.text)
+                ));
+            }
+            text.push_str("]\n");
+            items.push(("load-commands", text));
+        }
         // Top-level keys first, then each table once, in first-seen order:
         // a top-level key after a `[table]` header would land inside it.
         let mut sections: Vec<Option<String>> = vec![None];
@@ -2004,6 +2209,7 @@ impl Importer {
         read.extend(list_items.iter().map(String::as_str));
         read.extend(self.keys.iter().map(|b| b.command.as_str()));
         read.extend(self.hooks.iter().map(|h| h.command.as_str()));
+        read.extend(self.load_commands.iter().map(|c| c.text.as_str()));
         for (name, s) in &self.sources {
             let option = format!("#{{@{name}}}");
             if !read.iter().any(|v| v.contains(&option)) {
@@ -2015,6 +2221,29 @@ impl Importer {
                 s.line,
                 quote(&s.cmd)
             ));
+        }
+
+        let named: [(&str, Vec<(&String, &OptionEntry)>); 2] = [
+            ("user-options", self.user_options.iter().collect()),
+            (
+                "environment",
+                self.environment.iter().map(|(n, e)| (n, e)).collect(),
+            ),
+        ];
+        for (table, entries) in named {
+            if entries.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("\n[{table}]\n"));
+            for (name, e) in entries {
+                out.push_str(&format!(
+                    "# {}:{}\n{} = {}\n",
+                    tilde(&e.file, self.home.as_deref()),
+                    e.line,
+                    key_toml(name),
+                    quote(&e.value)
+                ));
+            }
         }
 
         if !self.hooks.is_empty() {
@@ -2058,21 +2287,6 @@ impl Importer {
             }
         }
 
-        if !self.runtime.is_empty() {
-            out.push_str(
-                "\n# Not converted: grofe's config has no key for these commands, which tmux\n\
-                 # ran as it read the file. Each is in grofe's own grammar, to run from a hook\n\
-                 # or a script.\n",
-            );
-            for r in &self.runtime {
-                out.push_str(&format!(
-                    "# {}:{}\n#   {}\n",
-                    tilde(&r.file, self.home.as_deref()),
-                    r.line,
-                    r.text.replace('\n', "\n#   ")
-                ));
-            }
-        }
         (out, self.reports)
     }
 }
@@ -2134,46 +2348,54 @@ fn validate_command(s: &str, aliases: &[String]) -> Result<(), String> {
 }
 
 /// `spelled` (an argv the front end handed the native parser) as native
-/// text that means `command`, if it does: read back by the native parser
-/// (outside the front end, so with native targets) to the same command.
-/// tmux's exact `=name` target has no native spelling; it is spelled as
-/// the name (the flag says so), since a native name is exact whenever a
-/// session has it. In a mouse key's commands a bare `=` is the pointer's
-/// target natively too (M36-R3). `SetOption::shown` only records what a
-/// tmux-dialect `show` prints, so it is not compared.
+/// text that means `command`, if it does. Two structural checks: read with
+/// the front end's targets, the argv is `command` (a row that changed the
+/// command after parsing, such as a user option's tmux scope, fails this);
+/// and with tmux's exact `=name` spelled as the name (the flag says so),
+/// the native parser reads it exactly as the front end would, so no
+/// tmux-only target (an offset, a bare `=`) is left. In a mouse key's
+/// commands a bare `=` is the pointer's target in both grammars (M36-R3),
+/// checked with a pane id in its place. `SetOption::shown` only records
+/// what a tmux-dialect `show` prints, so it is not compared.
 fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<(Vec<String>, bool)> {
-    let mut argv = spelled.to_vec();
-    let mut exact = false;
-    for i in 1..argv.len() {
-        let flag = spelled[i - 1].as_str();
-        let target_flag = flag.len() > 1
-            && flag.starts_with('-')
-            && flag[1..].chars().all(|c| c.is_ascii_alphabetic())
-            && flag.ends_with(['t', 's']);
-        if target_flag && argv[i].len() > 1 {
-            let word = argv[i].strip_prefix('=').unwrap_or(&argv[i]);
-            let word = word.replacen(":=", ":", 1);
-            if word != argv[i] {
-                argv[i] = word;
-                exact = true;
-            }
-        }
-    }
-    let native = cmd::parse(&argv).ok()?;
     let mut front = command.clone();
     if let Command::SetOption(set) = &mut front {
         set.shown = None;
     }
-    // Compared through `Debug`: the front end's exact and mouse targets
-    // read as the native parser reads their spelling.
-    let native = format!("{native:?}");
-    let native = if mouse {
-        native.replace("Session(Name(\"=\"))", "Session(Mouse)")
-    } else {
-        native
+    let as_front = cmd::target::with_tmux_targets(|| cmd::parse(spelled)).ok()?;
+    if as_front != front {
+        return None;
+    }
+    let is_target_flag = |flag: &str| {
+        flag.len() > 1
+            && flag.starts_with('-')
+            && flag[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && flag.ends_with(['t', 's'])
     };
-    let front = format!("{front:?}").replace("Exact(", "Name(");
-    (native == front).then_some((argv, exact))
+    let mut argv = spelled.to_vec();
+    let mut probe = spelled.to_vec();
+    let mut exact = false;
+    for i in 1..argv.len() {
+        if !is_target_flag(&spelled[i - 1]) {
+            continue;
+        }
+        if argv[i] == "=" {
+            if mouse {
+                probe[i] = "%0".to_string();
+            }
+            continue;
+        }
+        let word = argv[i].strip_prefix('=').unwrap_or(&argv[i]);
+        let word = word.replacen(":=", ":", 1);
+        if word != argv[i] {
+            argv[i] = word.clone();
+            probe[i] = word;
+            exact = true;
+        }
+    }
+    let native = cmd::parse(&probe).ok()?;
+    let tmux = cmd::target::with_tmux_targets(|| cmd::parse(&probe)).ok()?;
+    (native == tmux).then_some((argv, exact))
 }
 
 /// The command strings `command` stores (run later, so translated too),
@@ -2353,6 +2575,16 @@ fn reverse_list_name(tmux: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, n)| *n == name)
         .map(|(t, _)| *t)
+}
+
+/// One `set` of a global user option, as `handle_set` read it.
+struct UserSet<'a> {
+    /// Without the `@`.
+    name: String,
+    value: Option<&'a Word>,
+    append: bool,
+    unset: bool,
+    only_if_unset: bool,
 }
 
 /// The first list index `import-tmux` will not write out.
@@ -2613,7 +2845,10 @@ mod tests {
                 .map(|b| b.command.as_str()),
             Some("display-message a")
         );
-        assert_eq!(imp.runtime.len(), 1, "the user option is kept as a comment");
+        assert!(
+            imp.user_options.contains_key("foo"),
+            "the user option converts"
+        );
     }
 
     #[test]

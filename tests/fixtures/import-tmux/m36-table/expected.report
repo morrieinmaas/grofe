@@ -1,0 +1,1 @@
+~/.tmux.conf:8: an empty key table name: bind -T "" x kill-pane

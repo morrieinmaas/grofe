@@ -247,6 +247,16 @@ pub struct ConfigSource {
     pub source: Source,
 }
 
+/// One `load-commands` entry (TP.0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigCommand {
+    /// The command string as written.
+    pub command: String,
+    /// `command` split by `cmd::split_command_string`, each command checked.
+    pub cmds: Vec<Vec<String>>,
+    pub source: Source,
+}
+
 /// A fully loaded and validated config.
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -261,6 +271,15 @@ pub struct Resolved {
     pub sources: BTreeMap<String, ConfigSource>,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
+    /// `[user-options]` (TP.0): global user options by name, `@` included,
+    /// from the last layer that set each.
+    pub user_options: BTreeMap<String, String>,
+    /// `[environment]` (TP.0): global environment variables, in the order
+    /// first set, each with the last layer's value.
+    pub environment: Vec<(String, String)>,
+    /// `load-commands` (TP.0): command strings run in order each time the
+    /// config is applied, every layer's after the one before.
+    pub load_commands: Vec<ConfigCommand>,
     /// Who set each option and list.
     pub provenance: Provenance,
     /// Files skipped by an unmet `requires` (R7), one line each.

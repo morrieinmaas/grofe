@@ -1,4 +1,7 @@
-~/.tmux.conf:2: note: no config key for this; kept as a native command comment
-~/.tmux.conf:3: note: no config key for this; kept as a native command comment
-~/.tmux.conf:4: note: no config key for this; kept as a native command comment
-~/.tmux.conf:5: skipped: no file matches (source-file -q): source-file -q "$HOME/missing-$EDITOR.conf"
+~/.tmux.conf:5: note: environment.TMP_VAR is unset by set-environment -u at ~/.tmux.conf:6
+~/.tmux.conf:6: note: environment.TMP_VAR unset here (-u)
+~/.tmux.conf:8: unsets a variable the config does not set: setenv -gu OLD_VAR
+~/.tmux.conf:9: a hidden variable (-h): set-environment -gh SECRET_HINT "$HOME/.hint"
+~/.tmux.conf:10: a literal $ or ~ has no [environment] spelling: set-environment -g LITERAL '$HOME'
+~/.tmux.conf:11: a session's environment (no -g): set-environment SESSION_ONLY 1
+~/.tmux.conf:12: skipped: no file matches (source-file -q): source-file -q "$HOME/missing-$EDITOR.conf"

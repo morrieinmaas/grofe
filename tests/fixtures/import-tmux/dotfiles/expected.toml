@@ -19,6 +19,10 @@ default-terminal = "tmux-256color"
 mode-keys = "vi"
 # ~/.tmux.conf:12
 renumber-windows = true
+load-commands = [
+# ~/.tmux.conf:36
+'''if-shell 'uname | grep -q Darwin' "set-option -g default-command \"reattach-to-user-namespace -l zsh\""''',
+]
 
 [status]
 # ~/.tmux.conf:26
@@ -77,9 +81,3 @@ J = { cmd = "resize-pane -D 3", repeat = true }
 M-Left = "select-pane -L"
 # ~/.tmux.conf:21
 M-Right = "select-pane -R"
-
-# Not converted: grofe's config has no key for these commands, which tmux
-# ran as it read the file. Each is in grofe's own grammar, to run from a hook
-# or a script.
-# ~/.tmux.conf:36
-#   if-shell 'uname | grep -q Darwin' "set-option -g default-command \"reattach-to-user-namespace -l zsh\""

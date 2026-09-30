@@ -816,6 +816,29 @@ fn drain(state: &mut State, origin: Origin) {
     }
 }
 
+/// The config's `load-commands` (TP.0), queued in order on the global
+/// queue, where a `run-shell` holds the rest until its shell exits, as
+/// tmux's queue runs a config file's commands. They run in grofe's own
+/// grammar with no current pane; an error ends them and goes to the log.
+pub fn run_at_load(state: &mut State, cmds: Vec<Vec<String>>) {
+    if cmds.is_empty() {
+        return;
+    }
+    let queued = Queued {
+        fired: Fired::new("load-commands", None),
+        dialect: Dialect::Grofe,
+        cmds: cmds.into_iter().collect(),
+    };
+    state
+        .hooks
+        .queues
+        .entry(Origin::Global)
+        .or_default()
+        .items
+        .push_back(queued);
+    drain(state, Origin::Global);
+}
+
 /// `run_commands` starts: a request's commands nest (`if -F`), and only
 /// the outermost ends its request ([`run_pending`]).
 pub fn enter(state: &mut State) {

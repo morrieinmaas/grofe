@@ -210,42 +210,68 @@ fn golden_m36_fixtures() {
     }
 }
 
-/// The report lines that are not notes, each without its `file:line: `.
-fn reported(stderr: &str) -> Vec<String> {
+/// Every report line, without its `file:line: `.
+fn report_lines(stderr: &str) -> Vec<String> {
     stderr
         .lines()
         .filter_map(|l| l.split_once(": ").map(|(_, rest)| rest.to_string()))
-        .filter(|rest| !rest.starts_with("note: "))
         .collect()
 }
 
-/// TP.0's acceptance: on the canopy-style fixture only plugin and TPM lines
-/// and spec 4.5's out-of-scope items (`%if`, and what it guards) are left
-/// in the report; everything else converts, or is a note.
+/// A note that accounts for a line that did convert (it was followed,
+/// replaced by a later line, spelled natively, kept with no effect), as
+/// against a line left out, which is always a report line of its own.
+fn accounting_note(rest: &str) -> bool {
+    let Some(note) = rest.strip_prefix("note: ") else {
+        return false;
+    };
+    [
+        "source-file found ",
+        "source-file -q found ",
+        "source-file of the imported config rewritten to reload",
+        " is overridden by a later ",
+        " is replaced by ",
+        " unset here (-u)",
+        " is unset by ",
+        ": grofe keeps and shows it, with no effect",
+        " is expanded ",
+        " dropped: cosmetic",
+        " toggles it, as tmux does",
+        "an exact =name target is spelled as the name",
+        " replaced by the built-in mouse model",
+        " is already set, so -o leaves it",
+    ]
+    .iter()
+    .any(|a| note.starts_with(a.trim_start()) || note.contains(a))
+}
+
+/// TP.0's acceptance: on the canopy-style fixture every report line is a
+/// plugin or TPM line, one of spec 4.5's out-of-scope items (`%if`, and
+/// what it guards), or a note accounting for a line that converted.
 #[test]
 fn the_canopy_report_is_only_plugins_and_out_of_scope_items() {
     let f = Fixture::new("canopy");
     let out = f.run(&[]);
     assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
     let allowed = ["plugins and TPM: ", "%if: ", "%endif: ", "inside %if at "];
-    let left: Vec<String> = reported(&out.stderr)
+    let left: Vec<String> = report_lines(&out.stderr)
         .into_iter()
-        .filter(|rest| !allowed.iter().any(|a| rest.starts_with(a)))
+        .filter(|rest| !allowed.iter().any(|a| rest.starts_with(a)) && !accounting_note(rest))
         .collect();
     assert!(left.is_empty(), "left in the report: {left:#?}");
 }
 
-/// The dotfiles fixture's report: plugins and TPM, plus exactly these,
-/// none a gap TP.0 closes (an option grofe does not have, M5's copy mode
-/// twice, a `-q` source-file that matched no file).
+/// The dotfiles fixture's report: plugins and TPM and accounting notes,
+/// plus exactly these, none a gap TP.0 closes (an option grofe does not
+/// have, M5's copy mode twice, a `-q` source-file that matched no file).
 #[test]
 fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
     let f = Fixture::new("dotfiles");
     let out = f.run(&[]);
     assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
-    let left: Vec<String> = reported(&out.stderr)
+    let left: Vec<String> = report_lines(&out.stderr)
         .into_iter()
-        .filter(|rest| !rest.starts_with("plugins and TPM: "))
+        .filter(|rest| !rest.starts_with("plugins and TPM: ") && !accounting_note(rest))
         .collect();
     let expected = [
         "option grofe does not have: set -ga terminal-overrides",
@@ -262,6 +288,21 @@ fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
     }
 }
 
+/// Every note in every fixture's report accounts for a converted line: a
+/// line left out is never only a note.
+#[test]
+fn no_fixture_leaves_a_line_out_as_a_note() {
+    for name in all_fixtures() {
+        let f = Fixture::new(name);
+        let out = f.run(&[]);
+        for rest in report_lines(&out.stderr) {
+            if rest.starts_with("note: ") {
+                assert!(accounting_note(&rest), "[{name}] {rest}");
+            }
+        }
+    }
+}
+
 /// Case 5: `neww`, `setw`, `display` and `-t =x` are written in grofe's
 /// own spelling, as the front end's table translates them.
 #[test]
@@ -275,6 +316,10 @@ fn front_end_forms_are_written_natively() {
     assert_eq!(cmd("N"), "new-window -n scratch");
     assert_eq!(cmd("W"), "set-option -w -g automatic-rename off");
     assert_eq!(cmd("X"), "select-pane -t work:1.2");
+    assert!(
+        !prefix.contains_key("Y"),
+        "kill-session -t =work: an exact target of a destructive verb is reported"
+    );
     assert_eq!(cmd("D"), "display-message \"on #{session_name}\"");
     assert!(
         !prefix.contains_key("O"),
@@ -627,6 +672,15 @@ fn case10_every_binding_round_trips_through_split_command_string() {
                 }
                 checked += 1;
             }
+        }
+        let load = doc.get("load-commands").and_then(toml::Value::as_array);
+        for v in load.into_iter().flatten() {
+            let cmd = v.as_str().expect("a load command string");
+            for words in grofe::cmd::split_command_string(cmd).expect("split") {
+                grofe::cmd::parse(&words)
+                    .unwrap_or_else(|e| panic!("[{name}] load-commands {cmd:?}: {e}"));
+            }
+            checked += 1;
         }
         let hooks = doc.get("hooks").and_then(toml::Value::as_table);
         for (event, v) in hooks.into_iter().flatten() {
