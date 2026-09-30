@@ -180,6 +180,9 @@ pub struct State {
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
     pub deferred_reply: Option<oneshot::Receiver<Result<String, protocol::Failure>>>,
+    /// The rest of the request now running, held behind a wait
+    /// ([`dispatch::client::Held`]).
+    pub(crate) held: Option<dispatch::client::Held>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -454,6 +457,7 @@ async fn serve(
         trees: tree::Trees::default(),
         jobs: jobs_tx,
         deferred_reply: None,
+        held: None,
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -1043,6 +1047,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         trees: tree::Trees::default(),
         jobs,
         deferred_reply: None,
+        held: None,
         exit: false,
         exit_when_empty: false,
         connections: 0,

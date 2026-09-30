@@ -82,7 +82,6 @@ struct Builtin {
 /// language can say the same thing.
 // ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
 // for `pane-active-border-style` have no native spelling, so grofe's stay.
-// `renumber-windows off` is shown but grofe always renumbers.
 const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("base-index", "0"),
     ("pane-base-index", "0"),
@@ -395,8 +394,8 @@ const BUILTINS: &[Builtin] = &[
     // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
     // §5.3's defaults where grofe's differ (`extended-keys`, `mode-keys`,
     // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
-    // ones; D6 sizes windows; grofe's prompt keys are emacs's; grofe always
-    // renumbers.
+    // ones; D6 sizes windows; grofe's prompt keys are emacs's.
+    // `renumber-windows` itself is read (`Model::remove_window`).
     // ponytail: `default-command`, `default-shell` and `synchronize-panes`
     // do something in tmux; grofe stores them only, until a ported script
     // needs one. `mode-keys` waits for M5's copy mode, and
@@ -807,7 +806,14 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     options.retain_live(model);
     model.options = options;
     match cmd {
-        Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
+        Command::SetOption(mut c) => {
+            if c.expand
+                && let Some(value) = &c.value
+            {
+                c.value = Some(expand_value(state, ctx, &c.target, value));
+            }
+            set_option(&mut state.model, &mut state.events, ctx, c)
+        }
         Command::ShowOptions(c) => show_options(model, ctx, c),
         Command::DisplayMessage(c) => display_message(state, ctx, c),
         Command::ListSessions(c) => list_sessions(state, c),
@@ -817,11 +823,29 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     }
 }
 
+/// `set -F`'s value, expanded as `display-message` expands a format:
+/// against the target pane, with the current client's and the server's
+/// variables (the mouse event's and a running hook's among them) over it.
+fn expand_value(state: &State, ctx: &ClientCtx, target: &Target, value: &str) -> String {
+    let model = &state.model;
+    let Ok(pane) = model.resolve_pane(target, ctx) else {
+        return expand(value, &NoVars);
+    };
+    let vars = FormatCtx::new(model, pane);
+    match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => {
+            let client = clients::ClientVars::new(model, client, Some(vars));
+            expand(value, &ServerVars::new(state, pane, &client))
+        }
+        None => expand(value, &ServerVars::new(state, pane, &vars)),
+    }
+}
+
 fn set_option(
     model: &mut Model,
     events: &mut Events,
     ctx: &ClientCtx,
-    mut c: SetOption,
+    c: SetOption,
 ) -> Result<String, String> {
     // TC.11, as tmux 3.7b (recorded): `-q` hides an unknown or ambiguous
     // name and a target that does not resolve, never a bad value.
@@ -832,17 +856,6 @@ fn set_option(
     };
     if index.is_none() && list_builtin(base).is_none() && check_name(base).is_err() {
         return quiet(check_name(base).map(|_| String::new()));
-    }
-    if c.expand
-        && let Some(value) = &c.value
-    {
-        // ponytail: `-F` expands against the target pane's `FormatCtx`,
-        // without the server's and client's variables over it.
-        let pane = model.resolve_pane(&c.target, ctx).ok();
-        c.value = Some(match pane {
-            Some(p) => expand(value, &FormatCtx::new(model, p)),
-            None => expand(value, &NoVars),
-        });
     }
     if index.is_some() || list_builtin(base).is_some() {
         let base = base.to_string();
@@ -989,17 +1002,36 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             format!("{name} {}\n", quote(value))
         }
     };
+    // The server table listed whole (tmux's bare `show -s`) is the
+    // server's own options, which grofe keeps at global scope, and the
+    // user options set with `-s`; what `-s` stored for any other option
+    // shows only by name, as in tmux 3.7b.
+    let (listed, only_server) = match (owner, &c.name) {
+        (Owner::Server, None) => (Owner::Global, true),
+        _ => (owner, false),
+    };
+    let wanted = |name: &str| !only_server || builtin_scope(name) == Some(OptionScope::Global);
     let mut lines: Vec<(&str, String)> = model
         .options
-        .at(owner)
-        .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name))
+        .at(listed)
+        .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name) && wanted(name))
         .map(|(name, e)| (name.as_str(), line(name, &e.value)))
         .collect();
+    if only_server {
+        lines.extend(
+            model
+                .options
+                .at(Owner::Server)
+                .filter(|(name, _)| name.starts_with('@'))
+                .map(|(name, e)| (name.as_str(), line(name, &e.value))),
+        );
+    }
     if c.name.is_none() {
         lines.extend(
             model
                 .options
-                .lists_at(owner)
+                .lists_at(listed)
+                .filter(|(name, _)| wanted(name))
                 .map(|(name, l)| (name.as_str(), list_lines(name, l, c.value_only))),
         );
         lines.sort_by(|a, b| a.0.cmp(b.0));
@@ -1583,8 +1615,9 @@ fn flag(b: bool) -> String {
 }
 
 /// Format variables that need the server state, not only the model
-/// (`socket_path`, `pane_title`, `pane_tty`, and TC.11's `host` and
-/// `host_short`), over `inner` for the rest.
+/// (`socket_path`, `pane_title`, `pane_tty`, TC.11's `host` and
+/// `host_short`, the mouse's, and a running hook's `#{hook*}`), over
+/// `inner` for the rest.
 /// Built where dispatch holds `&State`, the way `ClientVars` layers the
 /// client's variables.
 pub struct ServerVars<'a> {
@@ -1603,6 +1636,11 @@ impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
         // The mouse event a mouse key's commands run for, and the view (TC.10).
         if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+            return Some(v);
+        }
+        // Inside a hook, its `#{hook*}` variables (TC.5).
+        let hook = crate::server::hooks::current_formats(self.state);
+        if let Some(v) = hook.and_then(|f| f.get(name)) {
             return Some(v);
         }
         match name {
@@ -1944,7 +1982,6 @@ const NO_EFFECT: &[&str] = &[
     "extended-keys-format",
     "mode-keys",
     "pane-border-format",
-    "renumber-windows",
     "status-keys",
     "synchronize-panes",
     "terminal-features",
@@ -2419,6 +2456,36 @@ mod tests {
         assert_eq!(
             run(&["list-keys", "-1N", "NotAKey"]),
             Err("invalid key: NotAKey".to_string())
+        );
+    }
+
+    /// `set -F` expands with the server's variables, as `display-message`
+    /// does: a mouse key's command sees the mouse event (TC.10).
+    #[tokio::test]
+    async fn set_f_sees_the_mouse_variables() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv)
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]).expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("a pane");
+        let target = crate::server::mouse::MouseTarget {
+            client: crate::types::ClientId(1),
+            cell: (3, 4),
+            pane,
+            target: pane.to_string(),
+            range: None,
+            pane_cell: Some((3, 4)),
+        };
+        crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
+            run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])
+        })
+        .expect("set -F");
+        assert_eq!(
+            run(&mut state, &["show-options", "-gv", "@m"]),
+            Ok(format!("{pane} 3\n"))
         );
     }
 

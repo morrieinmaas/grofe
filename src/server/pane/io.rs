@@ -13,6 +13,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
+use super::written::Written;
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::server::graphics;
 use crate::server::passthrough::Scanner;
@@ -237,10 +238,10 @@ impl Reader {
     fn flush_sync(&self) {
         let pending = {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser } = &mut *emu;
+            let Emu { term, parser, .. } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
-                parser.stop_sync(term);
+                parser.stop_sync(&mut Written(term));
             }
             pending
         };
@@ -267,8 +268,8 @@ impl Reader {
         found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
         {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser } = &mut *emu;
-            parser.advance(term, &bytes);
+            let Emu { term, parser, .. } = &mut *emu;
+            parser.advance(&mut Written(term), &bytes);
         }
         self.after_parse();
         found

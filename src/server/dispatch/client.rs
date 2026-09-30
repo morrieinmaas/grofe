@@ -9,7 +9,7 @@ use crate::cmd::{
     SuspendClient, WaitFor,
 };
 use crate::protocol::{ClientCtx, Failure};
-use crate::server::{Job, State, clients, dispatch, tree};
+use crate::server::{Job, State, clients, dispatch, hooks, tree};
 
 /// `refresh-client`: the client (`-t`, else the current one) redraws, only
 /// its status line with `-S`; `-c/-L/-R/-U/-D [n]` (tmux's stock pan keys)
@@ -127,16 +127,43 @@ pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<Strin
     Ok(String::new())
 }
 
-/// The rest of a request behind a blocked `wait-for`: it runs on the actor
-/// once the channel is signalled, and the request's answer is everything
-/// it printed. A CLI caller that hangs up first drops it, as tmux frees a
-/// dead client's queue; a binding's rest runs whatever happens to its
-/// (dropped) answer.
-pub(crate) fn hold_rest(state: &mut State, ctx: &ClientCtx, rest: Vec<Command>, out: String) {
-    let Some(wait) = state.deferred_reply.take() else {
-        return;
-    };
-    let mut tx = dispatch::defer_reply(state);
+/// The rest of a request held behind a wait: the rest of each command
+/// sequence it was in when it stopped, innermost first (a command inside
+/// `if -F` stops that body and the request's own commands after it), and
+/// what it waits for (a blocked `wait-for`; `None`: a hook's shell).
+#[derive(Default)]
+pub(crate) struct Held {
+    pub frames: Vec<(ClientCtx, Vec<Command>)>,
+    pub wait: Option<oneshot::Receiver<Result<String, Failure>>>,
+    /// The wait is a `run-shell`'s: its status is the request's so far.
+    pub shell: bool,
+}
+
+type Answer = oneshot::Sender<Result<String, Failure>>;
+
+/// Holds `held` until its wait answers, then runs its rest on the actor;
+/// the request's answer (`tx`, else a new deferred reply) is everything it
+/// printed, what the wait answered included. A CLI caller that hangs up
+/// first drops it, as tmux frees a dead client's queue; a binding's rest
+/// runs whatever happens to its (dropped) answer.
+pub(crate) fn hold_rest(
+    state: &mut State,
+    ctx: &ClientCtx,
+    held: Held,
+    out: String,
+    failed: Option<Failure>,
+    tx: Option<Answer>,
+) {
+    let wait = held
+        .wait
+        .or_else(|| hooks::take_request_wait(state))
+        .unwrap_or_else(|| {
+            let (ready, wait) = oneshot::channel();
+            let _ = ready.send(Ok(String::new()));
+            wait
+        });
+    let (frames, shell) = (held.frames, held.shell);
+    let mut tx = tx.unwrap_or_else(|| dispatch::defer_reply(state));
     let jobs = state.jobs.clone();
     let ctx = ctx.clone();
     let cli = ctx.client.is_none();
@@ -149,55 +176,118 @@ pub(crate) fn hold_rest(state: &mut State, ctx: &ClientCtx, rest: Vec<Command>, 
         } else {
             wait.await
         };
-        match woken {
-            Ok(Ok(_)) => {}
-            Ok(Err(failure)) => {
-                let _ = tx.send(Err(failure));
-                return;
-            }
+        // A failed command (`run-shell` exiting non-zero) does not stop
+        // the rest, as in tmux 3.7b (recorded); the request fails at the end.
+        let (out, failed) = match woken {
+            // The last `run-shell`'s status is the request's (tmux 3.7b).
+            Ok(Ok(text)) => (out + &text, failed.filter(|_| !shell)),
+            Ok(Err(failure)) => (out + &failure.out, Some(failure)),
             // The server is going away; the dropped answer says so.
             Err(_) => return,
-        }
-        let job: Job = Box::new(move |state: &mut State| resume(state, &ctx, rest, out, tx));
+        };
+        let job: Job =
+            Box::new(move |state: &mut State| resume(state, &ctx, frames, out, failed, tx));
         let _ = jobs.send(job).await;
     });
 }
 
-/// Runs a held request's rest and answers it, or holds it again behind
-/// the next blocked `wait-for`.
+/// Runs a held request's rest, one sequence after another, and answers it
+/// once the rest's own hooks are done (as `finish` answers a request), or
+/// holds what is left again behind the next wait.
 fn resume(
     state: &mut State,
     ctx: &ClientCtx,
-    rest: Vec<Command>,
+    frames: Vec<(ClientCtx, Vec<Command>)>,
     out: String,
-    tx: oneshot::Sender<Result<String, Failure>>,
+    failed: Option<Failure>,
+    tx: Answer,
 ) {
-    let result = dispatch::run_commands(state, ctx, rest);
-    let later = state.deferred_reply.take();
-    state.events.flush();
-    clients::changed(state);
-    match (result, later) {
-        (Ok(more), Some(later)) => {
-            let mut tx = tx;
-            tokio::spawn(async move {
-                let answer = tokio::select! {
-                    answer = later => answer,
-                    () = tx.closed() => return,
-                };
-                let _ = tx.send(match answer {
-                    Ok(Ok(last)) => Ok(out + &more + &last),
-                    Ok(Err(failure)) => Err(failure),
-                    Err(_) => return,
-                });
-            });
+    let mut frames = std::collections::VecDeque::from(frames);
+    let mut more = String::new();
+    let mut result = Ok(());
+    // The sequences run as the request's own nested commands: a wait in
+    // one comes back here rather than holding on its own.
+    hooks::enter(state);
+    while let Some((fctx, cmds)) = frames.pop_front() {
+        match dispatch::run_commands(state, &fctx, cmds) {
+            Ok(text) => more.push_str(&text),
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
         }
-        (Ok(more), None) => {
-            let _ = tx.send(Ok(out + &more));
-        }
-        (Err(e), _) => {
-            let _ = tx.send(Err(Failure::from(e)));
+        let hook_waits =
+            !frames.is_empty() && state.deferred_reply.is_none() && hooks::request_waiting(state);
+        if state.held.is_some() || hook_waits {
+            state
+                .held
+                .get_or_insert_default()
+                .frames
+                .extend(frames.drain(..));
+            break;
         }
     }
+    hooks::leave(state);
+    let held = state.held.take().filter(|_| result.is_ok());
+    if let Some(held) = held {
+        hold_rest(state, ctx, held, out + &more, failed, Some(tx));
+        hooks::run_pending(state);
+        state.events.flush();
+        clients::changed(state);
+        return;
+    }
+    hooks::run_pending(state);
+    let result = result.map(|()| more);
+    let later = state.deferred_reply.take().filter(|_| result.is_ok());
+    let hold = hooks::take_reply_hold(state);
+    state.events.flush();
+    clients::changed(state);
+    // Everything printed, as the request's answer; failed if a held
+    // command failed.
+    let answer = move |out: String| match failed {
+        Some(f) => Err(Failure { out, ..f }),
+        None => Ok(out),
+    };
+    if later.is_none() && hold.is_none() {
+        let _ = tx.send(match result {
+            Ok(more) => answer(out + &more),
+            Err(e) => Err(Failure::from(e)),
+        });
+        return;
+    }
+    let mut tx = tx;
+    tokio::spawn(async move {
+        let answer = async {
+            // A command that answered last decides the status, as the
+            // last `run-shell` does in tmux.
+            let answered_last = later.is_some();
+            let last = match later {
+                Some(later) => later.await.ok()?,
+                None => Ok(String::new()),
+            };
+            let hooked = match hold {
+                Some(hold) => hold.await.unwrap_or_default(),
+                None => String::new(),
+            };
+            Some(match (result, last) {
+                (Ok(more), Ok(last)) if answered_last => Ok(out + &more + &last + &hooked),
+                (Ok(more), Ok(last)) => answer(out + &more + &last + &hooked),
+                (Ok(more), Err(f)) => Err(Failure {
+                    out: out + &more + &f.out + &hooked,
+                    ..f
+                }),
+                (Err(e), _) => Err(Failure::from(e)),
+            })
+        };
+        let answer = tokio::select! {
+            answer = answer => answer,
+            () = tx.closed() => return,
+        };
+        // `None`: the server is going away; the dropped answer says so.
+        if let Some(answer) = answer {
+            let _ = tx.send(answer);
+        }
+    });
 }
 
 #[cfg(test)]

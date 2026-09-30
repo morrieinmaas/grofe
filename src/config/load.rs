@@ -569,7 +569,7 @@ impl Loader {
                 continue;
             }
             seen.push((key, spelled, line));
-            let b = match binding(v.get_ref()) {
+            let b = match binding(v.get_ref()).and_then(|b| self.expand_aliases(b)) {
                 Ok(b) => b,
                 Err(msg) => {
                     self.error(f.path, line, &path, msg);
@@ -590,6 +590,28 @@ impl Loader {
                 source: f.source(line),
             });
         }
+    }
+
+    /// A binding's commands with a `command-alias` verb expanded, as
+    /// `bind-key` expands it when the key is bound (a key press runs them
+    /// as bound), with the aliases the config has set so far, then checked:
+    /// each must parse.
+    fn expand_aliases(&self, mut b: Parsed) -> Result<Parsed, String> {
+        let aliases = self
+            .lists
+            .get("command-alias")
+            .map_or(&[][..], Vec::as_slice);
+        b.cmds = std::mem::take(&mut b.cmds)
+            .into_iter()
+            .flat_map(|argv| {
+                crate::server::dispatch::menu::expand_alias(aliases, &argv)
+                    .unwrap_or_else(|| vec![argv])
+            })
+            .collect();
+        for argv in &b.cmds {
+            cmd::parse(argv).map_err(|e| e.to_string())?;
+        }
+        Ok(b)
     }
 
     /// A `name` is unique across the merged config (R6).
@@ -797,9 +819,7 @@ fn commands(s: &str) -> Result<Vec<Vec<String>>, String> {
     if cmds.is_empty() {
         return Err(format!("no command in {s:?}"));
     }
-    for argv in &cmds {
-        cmd::parse(argv).map_err(|e| e.to_string())?;
-    }
+    // Each must parse, checked once aliases are known (`expand_aliases`).
     Ok(cmds)
 }
 
