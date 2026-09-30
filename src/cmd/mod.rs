@@ -80,6 +80,13 @@ pub struct NewSession {
     /// `-A` (M3.6, TC.9): attach to the session named by `-s` if it
     /// exists, instead of creating it.
     pub attach: bool,
+    /// `-P` (TC.9): print the new session (`-F`, else tmux's
+    /// `#{session_name}:`).
+    pub print: bool,
+    /// `-F` (TC.9).
+    pub format: Option<String>,
+    /// `-n` (TC.9): the first window's name.
+    pub window_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,9 +307,15 @@ pub struct ShowOptions {
 pub struct DisplayMessage {
     pub print: bool,
     pub target: Target,
-    /// The message/format text, raw (expanded at dispatch time). `None`
-    /// means tmux's default status-line format.
+    /// The message/format text, raw (expanded at dispatch time), from the
+    /// argument or else `-F`. `None` means tmux's default status-line
+    /// format.
     pub text: Option<String>,
+    /// `-c` (TC.9): the client the message goes to, raw.
+    pub client: Option<String>,
+    /// `-d` (TC.9): how long the message shows, in milliseconds, raw
+    /// (checked at dispatch time, as tmux does); 0 means until a key.
+    pub delay: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -599,6 +612,23 @@ pub struct RefreshClient {
     pub client: Option<String>,
     /// `-S`: redraw only the status line.
     pub status: bool,
+    /// `-c`, `-L`, `-R`, `-U` or `-D` (tmux's stock pan keys): which way
+    /// the visible part of a window larger than the client moves; the first
+    /// given in that order wins, as in tmux.
+    pub pan: Option<Pan>,
+    /// The pan's cells, raw (tmux checks it is 1 or more when it runs).
+    pub adjustment: Option<String>,
+}
+
+/// `refresh-client`'s pan flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pan {
+    /// `-c`: back to following the cursor.
+    Reset,
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// `show-messages` (TC.9; tmux's `info` is `show-messages -JT`).
@@ -641,6 +671,8 @@ pub struct FindWindow {
 pub struct ChooseTree {
     /// `-Z`.
     pub zoom: bool,
+    /// `-s`: start with sessions collapsed (tmux's stock `prefix s`).
+    pub sessions: bool,
     /// `-w`: start with windows expanded under their sessions.
     pub windows: bool,
 }

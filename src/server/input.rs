@@ -1192,10 +1192,9 @@ impl KeyTables {
 /// and windows open in the active pane's cwd (spec §5.3), which tmux leaves
 /// to a `-c '#{pane_current_path}'` in the user's config, and prompts and
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
-/// `o` (needs `+`/`-` target offsets, FE.1's), `s` (needs `choose-tree
-/// -s`, TC.9's), `m`/`M` (marking), `C` and `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus), `*`
-/// (`new-pane`), `r`'s neighbours `DC` and `S-arrows` (`refresh-client`
-/// panning), and copy mode and buffers (`[ ] = # - PPage`, M5).
+/// `o` (needs `+`/`-` target offsets, FE.1's), `m`/`M` (marking), `C` and
+/// `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus),
+/// `*` (`new-pane`), and copy mode and buffers (`[ ] = # - PPage`, M5).
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
@@ -1434,6 +1433,26 @@ pub fn default_bindings() -> KeyTables {
     bind("Space", &["next-layout"], false, "Select next layout");
     bind("?", &["list-keys", "-N"], false, "List key bindings");
     bind("r", &["refresh-client"], false, "Redraw the current client");
+    bind(
+        "s",
+        &["choose-tree", "-Zs"],
+        false,
+        "Choose a session from a list",
+    );
+    for (key, flag, note) in [
+        ("S-Up", "-U", "Move the visible part of the window up"),
+        ("S-Down", "-D", "Move the visible part of the window down"),
+        ("S-Left", "-L", "Move the visible part of the window left"),
+        ("S-Right", "-R", "Move the visible part of the window right"),
+    ] {
+        bind(key, &["refresh-client", flag, "10"], true, note);
+    }
+    bind(
+        "DC",
+        &["refresh-client", "-c"],
+        true,
+        "Reset so the visible part of the window follows the cursor",
+    );
     for (key, layout, verb) in [
         ("M-1", "even-horizontal", "Set"),
         ("M-2", "even-vertical", "Set"),
@@ -3070,7 +3089,7 @@ mod tests {
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
         // Stock keys grofe leaves unbound (out of scope, or M5's).
-        for name in ["o", "s", "m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
+        for name in ["o", "m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }

@@ -229,6 +229,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::RefreshClient(RefreshClient {
                 client: None,
                 status: true,
+                pan: None,
+                adjustment: None,
             }),
         ),
         (
@@ -236,6 +238,17 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::RefreshClient(RefreshClient {
                 client: s("/dev/ttys001"),
                 status: false,
+                pan: None,
+                adjustment: None,
+            }),
+        ),
+        (
+            vec!["refresh-client", "-R", "-L", "10"],
+            Command::RefreshClient(RefreshClient {
+                client: None,
+                status: false,
+                pan: Some(Pan::Left),
+                adjustment: s("10"),
             }),
         ),
         (
@@ -266,6 +279,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
             vec!["choose-tree", "-Zw"],
             Command::ChooseTree(ChooseTree {
                 zoom: true,
+                sessions: false,
                 windows: true,
             }),
         ),
@@ -853,8 +867,8 @@ fn bad_values_and_argument_counts_are_errors() {
         "command wait-for: unknown flag -L"
     );
     assert_eq!(
-        err(&["refresh-client", "-D", "10"]),
-        "command refresh-client: unknown flag -D"
+        err(&["refresh-client", "-A", "%1:on"]),
+        "command refresh-client: unknown flag -A"
     );
 }
 

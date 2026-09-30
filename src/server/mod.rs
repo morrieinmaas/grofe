@@ -726,19 +726,28 @@ fn reply_later(
     hold: Option<oneshot::Receiver<String>>,
 ) {
     tokio::spawn(async move {
-        let answer = later.await;
-        // The rest of what the request's hooks printed follows its output.
-        let more = match hold {
-            Some(hold) => hold.await.unwrap_or_default(),
-            None => String::new(),
+        let mut reply = reply;
+        let answer = async {
+            let answer = later.await;
+            // The rest of what the request's hooks printed follows its output.
+            let more = match hold {
+                Some(hold) => hold.await.unwrap_or_default(),
+                None => String::new(),
+            };
+            match answer {
+                Ok(Ok(out)) => Reply::Ok {
+                    id,
+                    out: out + &more,
+                },
+                Ok(Err(failure)) => Reply::failed(id, failure),
+                Err(_) => error_reply(id, "command ended without an answer"),
+            }
         };
-        let reply_msg = match answer {
-            Ok(Ok(out)) => Reply::Ok {
-                id,
-                out: out + &more,
-            },
-            Ok(Err(failure)) => Reply::failed(id, failure),
-            Err(_) => error_reply(id, "command ended without an answer"),
+        // A caller that hung up (a killed `wait-for`) drops the pending
+        // answer, so its handler sees the sender closed.
+        let reply_msg = tokio::select! {
+            msg = answer => msg,
+            () = reply.closed() => return,
         };
         let _ = reply.send(reply_msg);
     });
@@ -799,8 +808,13 @@ async fn connection(
     // This connection's event queue; the actor holds a sender once it
     // subscribes.
     let (events_tx, mut events_rx) = mpsc::channel(events::QUEUE);
+    // A request that arrived while an earlier one waited for its answer.
+    let mut next: Option<String> = None;
     loop {
-        let line = tokio::select! {
+        let line = if let Some(line) = next.take() {
+            Some(Ok(line))
+        } else {
+            tokio::select! {
             biased;
             _ = shutdown.changed() => {
                 // Events the actor queued before it stopped (a
@@ -819,6 +833,7 @@ async fn connection(
                 continue;
             }
             line = lines.next() => line,
+            }
         };
         let Some(Ok(line)) = line else { break };
         let req: Request = match serde_json::from_str(&line) {
@@ -848,7 +863,19 @@ async fn connection(
         if msgs.send(msg).await.is_err() {
             break;
         }
-        let Ok(reply) = reply_rx.await else { break };
+        // The socket is read while the answer is pending, so a caller that
+        // hangs up during a long wait (`wait-for`) ends the connection.
+        let mut reply_rx = reply_rx;
+        let reply = loop {
+            tokio::select! {
+                reply = &mut reply_rx => break reply,
+                line = lines.next(), if next.is_none() => match line {
+                    Some(Ok(line)) => next = Some(line),
+                    _ => return,
+                },
+            }
+        };
+        let Ok(reply) = reply else { break };
         if send(&mut lines, &reply).await.is_err() {
             break;
         }
@@ -922,7 +949,21 @@ async fn write_frames(
     mut out: FramedWrite<tokio::net::unix::OwnedWriteHalf, FrameCodec>,
     mut accepted: clients::Accepted,
 ) {
-    while let Some(bytes) = accepted.output.recv().await {
+    loop {
+        // Output first, so a suspend goes out after what was drawn before it.
+        let bytes = tokio::select! {
+            biased;
+            bytes = accepted.output.recv() => match bytes {
+                Some(bytes) => bytes,
+                None => break,
+            },
+            Some(()) = accepted.suspend.recv() => {
+                if out.send(Frame::Suspend).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
         // A redraw of a huge client can pass the frame cap: it goes out as
         // consecutive frames, which the client just writes in order.
         for chunk in bytes.chunks(protocol::MAX_MESSAGE_LEN) {

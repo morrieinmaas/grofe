@@ -433,6 +433,9 @@ static SAVED: OnceLock<Saved> = OnceLock::new();
 /// The bytes that undo the setup; set once the handshake succeeds.
 static TEARDOWN: OnceLock<Vec<u8>> = OnceLock::new();
 
+/// The setup bytes, written again when the client resumes from a suspend.
+static SETUP: OnceLock<Vec<u8>> = OnceLock::new();
+
 /// True while the tty is ours. Held for every tty write, so nothing lands
 /// after the teardown.
 static ACTIVE: Mutex<bool> = Mutex::new(false);
@@ -666,8 +669,8 @@ fn run(
         (MOK_ON, MOK_OFF)
     };
     let _ = TEARDOWN.set([keys_off, PASTE_OFF, RESET_TAIL, ALT_SCREEN_OFF].concat());
-    write_tty(&[ALT_SCREEN_ON, PASTE_ON, FOCUS_ON, keys_on].concat())
-        .map_err(|e| format!("writing to the terminal: {e}"))?;
+    let setup = SETUP.get_or_init(|| [ALT_SCREEN_ON, PASTE_ON, FOCUS_ON, keys_on].concat());
+    write_tty(setup).map_err(|e| format!("writing to the terminal: {e}"))?;
 
     let writer = stream
         .try_clone()
@@ -685,12 +688,13 @@ fn run(
     }
     // Late probe replies are filtered until DA1's arrives.
     let filter = (!probe.done()).then_some(probe);
+    let wake = out_tx.clone();
     std::thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || stdin_loop(out_tx, filter))
         .map_err(|e| format!("starting the input thread: {e}"))?;
 
-    read_frames(stream)
+    read_frames(stream, &wake)
 }
 
 /// Writes the probe and collects replies until DA1's or the timeout.
@@ -744,7 +748,7 @@ fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
 }
 
 /// Server frames to the tty until an `exit` frame or the server hangs up.
-fn read_frames(stream: UnixStream) -> Result<String, String> {
+fn read_frames(stream: UnixStream, wake: &SyncSender<Out>) -> Result<String, String> {
     let mut buf = BytesMut::with_capacity(64 * 1024);
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
@@ -757,6 +761,7 @@ fn read_frames(stream: UnixStream) -> Result<String, String> {
                     write_tty(&bytes).map_err(|e| format!("writing to the terminal: {e}"))?
                 }
                 Frame::Exit(reason) => return Ok(reason),
+                Frame::Suspend => suspend(wake),
                 // Client-to-server kinds: ignored if a server sends them.
                 Frame::Input(_) | Frame::Resize(..) | Frame::Detach => {}
             }
@@ -768,6 +773,37 @@ fn read_frames(stream: UnixStream) -> Result<String, String> {
             Err(e) => return Err(format!("lost server: {e}")),
         }
     }
+}
+
+/// `suspend-client` (tmux's MSG_SUSPEND): the terminal is given back as at
+/// exit and the process stops with SIGTSTP, so the shell's job control
+/// takes over; once continued (`fg`), raw mode and the setup come back and
+/// the size is sent, which the server answers with a full redraw.
+fn suspend(wake: &SyncSender<Out>) {
+    {
+        let mut active = lock(&ACTIVE);
+        if !*active {
+            return;
+        }
+        undo(None);
+        *active = false;
+    }
+    let _ = nix::sys::signal::kill(nix::unistd::Pid::this(), Signal::SIGTSTP);
+    // Continued.
+    {
+        let mut active = lock(&ACTIVE);
+        if let Some(saved) = SAVED.get() {
+            let mut raw = Termios::from(saved.0);
+            termios::cfmakeraw(&mut raw);
+            let _ = termios::tcsetattr(stdin_fd(), SetArg::TCSANOW, &raw);
+        }
+        *active = true;
+        if let Some(setup) = SETUP.get() {
+            let _ = write_all(stdout_fd(), setup, None);
+        }
+    }
+    RESIZE_PENDING.store(true, Ordering::SeqCst);
+    let _ = wake.try_send(Out::Wake);
 }
 
 /// How long a held-back ESC (a lone Escape key, or the start of a late

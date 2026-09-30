@@ -1,87 +1,268 @@
 //! Client and session verbs (TC.9, M36-R1): `refresh-client`,
 //! `show-messages`, the choosers (their UI in `server::tree`),
-//! `suspend-client`, `find-window` and `wait-for`. TC.9 fills the
-//! handlers; each answers `not implemented: <verb>` until then.
+//! `suspend-client`, `find-window` and `wait-for`.
+
+use tokio::sync::oneshot;
 
 use crate::cmd::{
-    ChooseClient, ChooseTree, FindWindow, RefreshClient, ShowMessages, SuspendClient, WaitFor,
+    ChooseClient, ChooseTree, Command, FindWindow, ParseError, RefreshClient, ShowMessages,
+    SuspendClient, WaitFor,
 };
-use crate::protocol::ClientCtx;
-use crate::server::State;
+use crate::protocol::{ClientCtx, Failure};
+use crate::server::{Job, State, clients, dispatch, tree};
 
-use super::not_implemented;
-
-/// `refresh-client`.
+/// `refresh-client`: the client (`-t`, else the current one) redraws, only
+/// its status line with `-S`; `-c/-L/-R/-U/-D [n]` (tmux's stock pan keys)
+/// move the visible part of a window larger than the client instead.
 pub fn refresh_client(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: RefreshClient,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: RefreshClient,
 ) -> Result<String, String> {
-    not_implemented("refresh-client")
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    if let Some(pan) = c.pan {
+        let by = match c.adjustment.as_deref() {
+            None => 1,
+            Some(s) => match s.parse::<i64>() {
+                Ok(n) if n < 1 => return Err("adjustment too small".to_string()),
+                Ok(n) if n > i64::from(i32::MAX) => return Err("adjustment too large".to_string()),
+                Ok(n) => u16::try_from(n).unwrap_or(u16::MAX),
+                Err(_) => return Err("adjustment invalid".to_string()),
+            },
+        };
+        clients::pan(state, id, pan, by);
+        return Ok(String::new());
+    }
+    clients::refresh(state, id, c.status);
+    Ok(String::new())
 }
 
-/// `show-messages`.
+/// `show-messages`: the message log, newest first, each line as tmux's
+/// `#{t/p:message_time}: #{message_text}`.
+// ponytail: `-J` (the job list) and `-T` (the terminal descriptions) print
+// nothing; grofe keeps neither table.
 pub fn show_messages(
-    _state: &mut State,
+    state: &mut State,
     _ctx: &ClientCtx,
-    _c: ShowMessages,
+    c: ShowMessages,
 ) -> Result<String, String> {
-    not_implemented("show-messages")
+    if c.jobs || c.terminals {
+        return Ok(String::new());
+    }
+    Ok(clients::messages(state)
+        .rev()
+        .map(|(time, text)| format!("{}: {text}\n", clients::pretty_time(*time)))
+        .collect())
 }
 
-/// `choose-client`.
+/// `choose-client`: the client chooser over the current pane.
 pub fn choose_client(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: ChooseClient,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: ChooseClient,
 ) -> Result<String, String> {
-    not_implemented("choose-client")
+    tree::open_clients(state, ctx, c.zoom)
 }
 
-/// `suspend-client`.
+/// `suspend-client`: the client (`-t`, else the current one) stops itself
+/// with SIGTSTP, as tmux 3.7b's; `fg` in its shell brings it back.
 pub fn suspend_client(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: SuspendClient,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SuspendClient,
 ) -> Result<String, String> {
-    not_implemented("suspend-client")
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    clients::suspend(state, id);
+    Ok(String::new())
 }
 
-/// `find-window`.
-pub fn find_window(_state: &mut State, _ctx: &ClientCtx, _c: FindWindow) -> Result<String, String> {
-    not_implemented("find-window")
+/// `find-window`: the tree chooser, showing only the windows whose name,
+/// a pane's title or a pane's visible text holds the pattern.
+pub fn find_window(state: &mut State, ctx: &ClientCtx, c: FindWindow) -> Result<String, String> {
+    let Some(pattern) = c.pattern else {
+        return Err(ParseError::TooFewArguments("find-window".to_string(), 1).to_string());
+    };
+    tree::open_tree(
+        state,
+        ctx,
+        &c.target,
+        tree::Opts {
+            zoom: c.zoom,
+            sessions: false,
+            windows: false,
+            find: Some(pattern),
+        },
+    )
 }
 
-/// `choose-tree`.
-pub fn choose_tree(_state: &mut State, _ctx: &ClientCtx, _c: ChooseTree) -> Result<String, String> {
-    not_implemented("choose-tree")
+/// `choose-tree`: sessions, windows and panes as a tree over the target
+/// pane; Enter switches the client to the chosen one.
+pub fn choose_tree(state: &mut State, ctx: &ClientCtx, c: ChooseTree) -> Result<String, String> {
+    tree::open_tree(
+        state,
+        ctx,
+        &crate::cmd::Target::Current,
+        tree::Opts {
+            zoom: c.zoom,
+            sessions: c.sessions,
+            windows: c.windows,
+            find: None,
+        },
+    )
 }
 
-/// `wait-for`.
-pub fn wait_for(_state: &mut State, _ctx: &ClientCtx, _c: WaitFor) -> Result<String, String> {
-    not_implemented("wait-for")
+/// `wait-for`: blocks the caller until another call signals the channel;
+/// with `-S`, signals it.
+// ponytail: tmux's `-L`/`-U` (channel locks) are not parsed natively; the
+// corpus sends only the wait and the signal (fzf's `--tmux`).
+pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<String, String> {
+    let Some(channel) = c.channel else {
+        return Err(ParseError::TooFewArguments("wait-for".to_string(), 1).to_string());
+    };
+    if c.signal {
+        clients::signal_channel(state, &channel);
+    } else {
+        clients::wait_channel(state, &channel, dispatch::defer_reply);
+    }
+    Ok(String::new())
+}
+
+/// The rest of a request behind a blocked `wait-for`: it runs on the actor
+/// once the channel is signalled, and the request's answer is everything
+/// it printed. A CLI caller that hangs up first drops it, as tmux frees a
+/// dead client's queue; a binding's rest runs whatever happens to its
+/// (dropped) answer.
+pub(crate) fn hold_rest(state: &mut State, ctx: &ClientCtx, rest: Vec<Command>, out: String) {
+    let Some(wait) = state.deferred_reply.take() else {
+        return;
+    };
+    let mut tx = dispatch::defer_reply(state);
+    let jobs = state.jobs.clone();
+    let ctx = ctx.clone();
+    let cli = ctx.client.is_none();
+    tokio::spawn(async move {
+        let woken = if cli {
+            tokio::select! {
+                woken = wait => woken,
+                () = tx.closed() => return,
+            }
+        } else {
+            wait.await
+        };
+        match woken {
+            Ok(Ok(_)) => {}
+            Ok(Err(failure)) => {
+                let _ = tx.send(Err(failure));
+                return;
+            }
+            // The server is going away; the dropped answer says so.
+            Err(_) => return,
+        }
+        let job: Job = Box::new(move |state: &mut State| resume(state, &ctx, rest, out, tx));
+        let _ = jobs.send(job).await;
+    });
+}
+
+/// Runs a held request's rest and answers it, or holds it again behind
+/// the next blocked `wait-for`.
+fn resume(
+    state: &mut State,
+    ctx: &ClientCtx,
+    rest: Vec<Command>,
+    out: String,
+    tx: oneshot::Sender<Result<String, Failure>>,
+) {
+    let result = dispatch::run_commands(state, ctx, rest);
+    let later = state.deferred_reply.take();
+    state.events.flush();
+    clients::changed(state);
+    match (result, later) {
+        (Ok(more), Some(later)) => {
+            let mut tx = tx;
+            tokio::spawn(async move {
+                let answer = tokio::select! {
+                    answer = later => answer,
+                    () = tx.closed() => return,
+                };
+                let _ = tx.send(match answer {
+                    Ok(Ok(last)) => Ok(out + &more + &last),
+                    Ok(Err(failure)) => Err(failure),
+                    Err(_) => return,
+                });
+            });
+        }
+        (Ok(more), None) => {
+            let _ = tx.send(Ok(out + &more));
+        }
+        (Err(e), _) => {
+            let _ = tx.send(Err(Failure::from(e)));
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::server::{dispatch, test_ctx, test_state};
 
-    /// The stub edit's contract, replaced as each verb lands.
+    fn run(state: &mut crate::server::State, words: &[&str]) -> Result<String, String> {
+        let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        dispatch::run(state, &test_ctx(), &argv)
+    }
+
     #[test]
-    fn stubs_answer_not_implemented() {
+    fn bare_verbs_need_their_argument() {
         let mut state = test_state();
-        let ctx = test_ctx();
-        for verb in [
-            "refresh-client",
-            "show-messages",
-            "choose-client",
-            "suspend-client",
-            "find-window",
-            "choose-tree",
-            "wait-for",
-        ] {
-            let got = dispatch::run(&mut state, &ctx, &[verb.to_string()]);
-            assert_eq!(got, Err(format!("not implemented: {verb}")));
-        }
+        assert_eq!(
+            run(&mut state, &["wait-for"]),
+            Err("command wait-for: too few arguments (need at least 1)".to_string())
+        );
+        assert_eq!(
+            run(&mut state, &["find-window"]),
+            Err("command find-window: too few arguments (need at least 1)".to_string())
+        );
+    }
+
+    /// A signal with nobody waiting wakes the channel for the next wait
+    /// only, as tmux's `wait_channel.woken`.
+    #[test]
+    fn a_signal_before_the_wait_is_kept_for_one_wait() {
+        let mut state = test_state();
+        assert_eq!(run(&mut state, &["wait-for", "-S", "c"]), Ok(String::new()));
+        assert_eq!(run(&mut state, &["wait-for", "c"]), Ok(String::new()));
+        assert!(
+            state.deferred_reply.is_none(),
+            "the woken wait returns at once"
+        );
+        assert_eq!(run(&mut state, &["wait-for", "c"]), Ok(String::new()));
+        let mut rx = state.deferred_reply.take().expect("the second wait waits");
+        assert!(rx.try_recv().is_err());
+        assert_eq!(run(&mut state, &["wait-for", "-S", "c"]), Ok(String::new()));
+        assert_eq!(rx.try_recv(), Ok(Ok(String::new())));
+        // Released waiters leave the channel unwoken.
+        assert_eq!(run(&mut state, &["wait-for", "c"]), Ok(String::new()));
+        assert!(state.deferred_reply.is_some());
+    }
+
+    #[test]
+    fn show_messages_with_nothing_logged_prints_nothing() {
+        let mut state = test_state();
+        assert_eq!(run(&mut state, &["show-messages"]), Ok(String::new()));
+        assert_eq!(
+            run(&mut state, &["show-messages", "-JT"]),
+            Ok(String::new())
+        );
+    }
+
+    #[test]
+    fn client_verbs_without_a_client_fail() {
+        let mut state = test_state();
+        assert_eq!(
+            run(&mut state, &["refresh-client", "-S"]),
+            Err("no current client".to_string())
+        );
+        assert_eq!(
+            run(&mut state, &["refresh-client", "-t", "client-9"]),
+            Err("can't find client: client-9".to_string())
+        );
     }
 }
