@@ -1544,11 +1544,18 @@ impl Importer {
     }
 
     fn note_env_var(&mut self, file: &Path, line: usize, table: &str, key: &Key, var: &str) {
+        let converted = self.environment.iter().any(|(n, _)| n == var);
         let msg = match self.env.get(var) {
+            Some(e) if converted => format!(
+                "${var} in keys.{table}.{key} is expanded when grofe loads the config, from \
+                 environment.{var} (set-environment -g at {}:{})",
+                tilde(&e.file, self.home.as_deref()),
+                e.line
+            ),
             Some(e) => format!(
                 "${var} in keys.{table}.{key} is expanded when grofe loads the config, from \
-                 the server process's own environment; tmux read it from set-environment -g at \
-                 {}:{}, which [environment] sets only once the config is applied",
+                 the server's environment; tmux read it from set-environment -g at {}:{}, \
+                 which did not convert",
                 tilde(&e.file, self.home.as_deref()),
                 e.line
             ),

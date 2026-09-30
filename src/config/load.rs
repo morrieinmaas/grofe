@@ -95,6 +95,9 @@ struct Loader {
     user_options: BTreeMap<String, String>,
     environment: Vec<(String, String)>,
     load_commands: Vec<ConfigCommand>,
+    /// `environment` so far with each value expanded: what a later
+    /// binding's, hook's or load command's `$NAME` reads (TP.0).
+    env_expanded: Vec<(String, String)>,
     errors: Vec<ConfigError>,
     warnings: Vec<String>,
     /// The include chain being loaded, for cycle detection.
@@ -167,6 +170,7 @@ impl Loader {
             user_options: BTreeMap::new(),
             environment: Vec::new(),
             load_commands: Vec::new(),
+            env_expanded: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             stack: Vec::new(),
@@ -509,7 +513,10 @@ impl Loader {
                 self.error(f.path, line, &path, msg);
                 continue;
             };
-            let cmds = match crate::server::hooks::check_command(command) {
+            let vars = &self.env_expanded;
+            let checked =
+                cmd::parse::with_variables(vars, || crate::server::hooks::check_command(command));
+            let cmds = match checked {
                 Ok(cmds) => cmds,
                 Err(msg) => {
                     self.error(f.path, line, &path, msg);
@@ -548,6 +555,11 @@ impl Loader {
                 self.error(f.path, line, &format!("environment.{name}"), msg);
                 continue;
             }
+            let vars = self.env_expanded.clone();
+            let get = |n: &str| cmd::parse::with_variables(&vars, || cmd::parse::env_var(n));
+            let expanded = super::expand_value(&value, &get);
+            self.env_expanded.retain(|(n, _)| *n != name);
+            self.env_expanded.push((name.clone(), expanded));
             match self.environment.iter_mut().find(|(n, _)| *n == name) {
                 Some(entry) => entry.1 = value,
                 None => self.environment.push((name, value)),
@@ -603,7 +615,8 @@ impl Loader {
                 self.error(f.path, item_line, "load-commands", msg);
                 continue;
             };
-            let checked = commands(s).and_then(|cmds| {
+            let split = cmd::parse::with_variables(&self.env_expanded, || commands(s));
+            let checked = split.and_then(|cmds| {
                 let b = Parsed {
                     command: s.to_string(),
                     cmds,
@@ -691,7 +704,9 @@ impl Loader {
                 continue;
             }
             seen.push((key, spelled, line));
-            let b = match binding(v.get_ref()).and_then(|b| self.expand_aliases(b)) {
+            let vars = &self.env_expanded;
+            let parsed = cmd::parse::with_variables(vars, || binding(v.get_ref()));
+            let b = match parsed.and_then(|b| self.expand_aliases(b)) {
                 Ok(b) => b,
                 Err(msg) => {
                     self.error(f.path, line, &path, msg);

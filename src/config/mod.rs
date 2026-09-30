@@ -247,6 +247,51 @@ pub struct ConfigSource {
     pub source: Source,
 }
 
+/// An `[environment]` value (TP.0) with `$NAME`, `${NAME}` and a leading
+/// `~` expanded through `get`, as tmux expands a config line's words; an
+/// unset name is empty.
+pub fn expand_value(value: &str, get: &dyn Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    if let Some(after) = rest.strip_prefix('~')
+        && (after.is_empty() || after.starts_with('/'))
+    {
+        out.push_str(&get("HOME"));
+        rest = after;
+    }
+    let mut chars = rest.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        let mut name = String::new();
+        if chars.peek() == Some(&'{') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c == '}' {
+                    break;
+                }
+                name.push(c);
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
+                    break;
+                }
+                name.push(c);
+                chars.next();
+            }
+        }
+        if name.is_empty() {
+            out.push('$');
+        } else {
+            out.push_str(&get(&name));
+        }
+    }
+    out
+}
+
 /// One `load-commands` entry (TP.0).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigCommand {

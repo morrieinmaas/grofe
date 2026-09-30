@@ -19,8 +19,8 @@
 ~/.local/share/canopy/tmux/tmux.conf:40: note: source-file -q found ~/.local/state/canopy/05-caps.conf
 ~/.local/share/canopy/tmux/tmux.conf:41: note: source-file -q found ~/.local/state/canopy/10-keys.conf
 ~/.local/state/canopy/10-keys.conf:25: note: source-file of the imported config rewritten to reload
-~/.local/state/canopy/10-keys.conf:26: note: $CANOPY_STORE in keys.prefix.M-s is expanded when grofe loads the config, from the server process's own environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which [environment] sets only once the config is applied
-~/.local/state/canopy/10-keys.conf:27: note: $CANOPY_STORE in keys.prefix.M-r is expanded when grofe loads the config, from the server process's own environment; tmux read it from set-environment -g at ~/.config/tmux/tmux.conf:1, which [environment] sets only once the config is applied
+~/.local/state/canopy/10-keys.conf:26: note: $CANOPY_STORE in keys.prefix.M-s is expanded when grofe loads the config, from environment.CANOPY_STORE (set-environment -g at ~/.config/tmux/tmux.conf:1)
+~/.local/state/canopy/10-keys.conf:27: note: $CANOPY_STORE in keys.prefix.M-r is expanded when grofe loads the config, from environment.CANOPY_STORE (set-environment -g at ~/.config/tmux/tmux.conf:1)
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/20-status.conf
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:93: note: $CANOPY_STORE in status.sources.src-8bd13bdceb94f361 is expanded by the source's shell, from the server's environment
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/30-plugins.conf

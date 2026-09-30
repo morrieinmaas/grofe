@@ -785,3 +785,73 @@ fn git_user_email() -> Option<String> {
     }
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
+
+/// A `$VAR` in a converted binding expands from `[environment]`, as tmux
+/// expands it from the `set-environment -g` it read first: canopy's `M-s`
+/// finds `$CANOPY_STORE`.
+#[test]
+fn a_binding_reads_canopy_store_from_the_converted_environment() {
+    let f = Fixture::new("canopy");
+    let out_path = f.tmp.path().join("out.toml");
+    let out = f.run(&["-o", out_path.to_str().expect("utf8 path")]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let env = grofe::config::Env {
+        config_dir: None,
+        home: None,
+    };
+    let r = grofe::config::load_with_file(&env, std::slice::from_ref(&out_path))
+        .unwrap_or_else(|e| panic!("load: {e:?}"));
+    let home = std::env::var("HOME").expect("HOME");
+    let m_s = r
+        .keys
+        .iter()
+        .find(|b| b.table == "prefix" && b.key.to_string() == "M-s")
+        .expect("keys.prefix.M-s");
+    assert_eq!(
+        m_s.cmds,
+        [vec![
+            "run-shell".to_string(),
+            format!("{home}/.local/share/canopy/plugins/tmux-resurrect/scripts/save.sh"),
+        ]]
+    );
+}
+
+/// `show-config` lists `[user-options]`, `[environment]` and
+/// `load-commands` too, and what it prints loads back to the same.
+#[test]
+fn show_config_round_trips_the_new_keys() {
+    let f = Fixture::new("canopy");
+    let out_path = f.tmp.path().join("out.toml");
+    let out = f.run(&["-o", out_path.to_str().expect("utf8 path")]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let show = |path: &Path| {
+        let none = f.tmp.path().join("xdg-none");
+        fs::create_dir_all(&none).expect("mkdir");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.arg("-S")
+            .arg(f.tmp.path().join("none.sock"))
+            .arg("show-config")
+            .arg("--file")
+            .arg(path)
+            .env("HOME", &f.home)
+            .env("XDG_CONFIG_HOME", &none);
+        let got = run_bounded(cmd, TIMEOUT);
+        assert_eq!(got.status.code(), Some(0), "stderr:\n{}", got.stderr);
+        got.stdout
+    };
+    let first = show(&out_path);
+    for want in [
+        "user-options.theme_blue = \"#458588\"\n",
+        "environment.CANOPY_STORE = \"$HOME/.local/share/canopy\"\n",
+        "load-commands = [\"run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'\"",
+    ] {
+        assert!(first.contains(want), "{want:?} missing from:\n{first}");
+    }
+    let again = f.tmp.path().join("again.toml");
+    fs::write(&again, &first).expect("write");
+    assert_eq!(
+        show(&again),
+        first,
+        "show-config's output loads back to itself"
+    );
+}

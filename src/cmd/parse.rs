@@ -2139,10 +2139,35 @@ pub fn set_variable_source(source: VariableSource) {
     let _ = VARIABLES.set(source);
 }
 
+thread_local! {
+    /// Variables [`with_variables`] lays over the source, last one first.
+    static OVERLAY: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `f` with `vars` over [`split_command_string`]'s variable source:
+/// the config loader's `[environment]`, which tmux would already have set
+/// with `set-environment -g` when it read a later line (TP.0).
+pub fn with_variables<R>(vars: &[(String, String)], f: impl FnOnce() -> R) -> R {
+    let outer = OVERLAY.replace(vars.to_vec());
+    let out = f();
+    OVERLAY.set(outer);
+    out
+}
+
 /// A variable's value for [`split_command_string`], empty when unset:
-/// from [`set_variable_source`]'s source, else (outside a server) the
-/// process environment.
-fn env_var(name: &str) -> String {
+/// from [`with_variables`]'s overlay, then [`set_variable_source`]'s
+/// source, else (outside a server) the process environment.
+pub fn env_var(name: &str) -> String {
+    let overlaid = OVERLAY.with_borrow(|vars| {
+        vars.iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+    });
+    if let Some(value) = overlaid {
+        return value;
+    }
     match VARIABLES.get() {
         Some(source) => source(name),
         None => std::env::var(name).ok(),

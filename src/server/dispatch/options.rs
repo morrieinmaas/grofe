@@ -1515,45 +1515,7 @@ fn expand_env(state: &State, value: &str) -> String {
             .and_then(|v| v.value.clone())
             .unwrap_or_default()
     };
-    let mut out = String::new();
-    let mut rest = value;
-    if let Some(after) = rest.strip_prefix('~')
-        && (after.is_empty() || after.starts_with('/'))
-    {
-        out.push_str(&get("HOME"));
-        rest = after;
-    }
-    let mut chars = rest.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '$' {
-            out.push(c);
-            continue;
-        }
-        let mut name = String::new();
-        if chars.peek() == Some(&'{') {
-            chars.next();
-            for c in chars.by_ref() {
-                if c == '}' {
-                    break;
-                }
-                name.push(c);
-            }
-        } else {
-            while let Some(&c) = chars.peek() {
-                if !(c.is_ascii_alphanumeric() || c == '_') {
-                    break;
-                }
-                name.push(c);
-                chars.next();
-            }
-        }
-        if name.is_empty() {
-            out.push('$');
-        } else {
-            out.push_str(&get(&name));
-        }
-    }
-    out
+    config::expand_value(value, &get)
 }
 
 /// Sets a global option, emitting `option-changed` on a change. The

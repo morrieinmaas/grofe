@@ -117,6 +117,41 @@ fn run(args: &[String]) -> Result<String, String> {
             out.push_str(&format!("  set by {}\n", s.source.describe(home)));
         }
     };
+    let user_option = |out: &mut String, name: &str, value: &str| {
+        let name = name.strip_prefix('@').unwrap_or(name);
+        out.push_str(&format!(
+            "user-options.{} = {}\n",
+            bare_or_quoted(name),
+            quote(value)
+        ));
+    };
+    let variable = |out: &mut String, name: &str, value: &str| {
+        out.push_str(&format!(
+            "environment.{} = {}\n",
+            bare_or_quoted(name),
+            quote(value)
+        ));
+    };
+    let load_commands = |out: &mut String| {
+        if r.load_commands.is_empty() {
+            return;
+        }
+        let items = r
+            .load_commands
+            .iter()
+            .map(|c| toml::Value::String(c.command.clone()));
+        out.push_str(&format!(
+            "load-commands = {}\n",
+            toml::Value::Array(items.collect())
+        ));
+        if explain {
+            for c in &r.load_commands {
+                out.push_str(&format!("  set by {}\n", c.source.describe(home)));
+            }
+        }
+    };
+    // ponytail: `--explain` names no file for a user option or variable;
+    // the loader keeps no provenance for them.
     match key {
         None => {
             for (k, _) in OPTION_NAMES {
@@ -134,7 +169,42 @@ fn run(args: &[String]) -> Result<String, String> {
             for (name, s) in &r.sources {
                 status_source(&mut out, name, s);
             }
+            for (name, value) in &r.user_options {
+                user_option(&mut out, name, value);
+            }
+            for (name, value) in &r.environment {
+                variable(&mut out, name, value);
+            }
+            load_commands(&mut out);
         }
+        Some("user-options") => {
+            for (name, value) in &r.user_options {
+                user_option(&mut out, name, value);
+            }
+        }
+        Some(k) if k.starts_with("user-options.") => {
+            let name = format!("@{}", &k["user-options.".len()..]);
+            let value = r
+                .user_options
+                .get(&name)
+                .ok_or_else(|| format!("show-config: no user option {k}"))?;
+            user_option(&mut out, &name, value);
+        }
+        Some("environment") => {
+            for (name, value) in &r.environment {
+                variable(&mut out, name, value);
+            }
+        }
+        Some(k) if k.starts_with("environment.") => {
+            let name = &k["environment.".len()..];
+            let (_, value) = r
+                .environment
+                .iter()
+                .find(|(n, _)| n == name)
+                .ok_or_else(|| format!("show-config: no variable {k}"))?;
+            variable(&mut out, name, value);
+        }
+        Some("load-commands") => load_commands(&mut out),
         Some("status.sources") => {
             for (name, s) in &r.sources {
                 status_source(&mut out, name, s);
