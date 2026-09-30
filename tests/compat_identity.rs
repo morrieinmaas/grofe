@@ -591,7 +591,8 @@ fn other_names_behave_as_grofe() {
 /// tmux 3.7b (recorded): `-s` names the server table. A session option
 /// set there is stored and shown by name (`show -sv base-index` is `3`)
 /// but read by nothing, an unset one shows nothing, and a bare `show -s`
-/// lists the server options alone: no session option, no user option.
+/// lists the server options and the user options set with `-s`, no
+/// session option.
 #[test]
 fn show_s_lists_the_server_table_and_names_what_set_s_stored() {
     let srv = start_as_tmux();
@@ -613,7 +614,8 @@ fn show_s_lists_the_server_table_and_names_what_set_s_stored() {
         table.contains("default-terminal tmux-256color\n"),
         "{table}"
     );
-    for absent in ["base-index", "mouse", "status", "@srv"] {
+    assert!(table.starts_with("@srv x\n"), "{table}");
+    for absent in ["base-index", "mouse", "status"] {
         let listed = table.lines().any(|l| l.split(' ').next() == Some(absent));
         assert!(!listed, "{absent} in {table}");
     }

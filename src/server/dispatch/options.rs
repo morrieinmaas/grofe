@@ -1003,8 +1003,9 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         }
     };
     // The server table listed whole (tmux's bare `show -s`) is the
-    // server's own options, which grofe keeps at global scope; what `-s`
-    // stored for any other option shows only by name, as in tmux 3.7b.
+    // server's own options, which grofe keeps at global scope, and the
+    // user options set with `-s`; what `-s` stored for any other option
+    // shows only by name, as in tmux 3.7b.
     let (listed, only_server) = match (owner, &c.name) {
         (Owner::Server, None) => (Owner::Global, true),
         _ => (owner, false),
@@ -1016,6 +1017,15 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name) && wanted(name))
         .map(|(name, e)| (name.as_str(), line(name, &e.value)))
         .collect();
+    if only_server {
+        lines.extend(
+            model
+                .options
+                .at(Owner::Server)
+                .filter(|(name, _)| name.starts_with('@'))
+                .map(|(name, e)| (name.as_str(), line(name, &e.value))),
+        );
+    }
     if c.name.is_none() {
         lines.extend(
             model
