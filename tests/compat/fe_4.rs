@@ -131,24 +131,13 @@ fn if_format_matches_its_golden() {
     check("if-format", &[]);
 }
 
-/// Case 6: `send -M` is tmux's `no mouse target`. tmux 3.7b answers
-/// `resize-pane -M` and `copy-mode -M` with nothing; spec 4.5 refuses
-/// them, since grofe's built-in mouse model replaces the stock bindings
-/// that send them.
+/// Case 6: `send -M` is tmux's `no mouse target`; `resize-pane -M` and
+/// `copy-mode -M` do nothing and exit 0, as in tmux 3.7b.
 #[test]
 fn mouse_forms_match_their_golden() {
     check(
         "mouse-forms",
         &[
-            (
-                "$ resize-pane -M",
-                "refused on purpose: a stock mouse argv form (spec 4.5); a no-op row cannot \
-                 outrank FE.1's permanent refusal",
-            ),
-            (
-                "$ copy-mode -M",
-                "refused on purpose: a stock mouse argv form (spec 4.5)",
-            ),
             (
                 "$ display-menu -x M -y M A a 'display hi'",
                 "refused on purpose (M36-R5): tmux says `no current client` only because no \
@@ -174,66 +163,26 @@ fn fzf_argv_matches_its_golden() {
 /// Claude Code's agent-teams sequence, as the tuios shim test pins it.
 #[test]
 fn claude_teams_match_their_golden() {
-    check(
-        "claude-teams",
-        &[(
-            "$ set-option -p -t %1 remain-on-exit failed",
-            REMAIN_ON_EXIT_FAILED,
-        )],
-    );
+    check("claude-teams", &[]);
 }
 
-/// The one step of Claude Code's sequence grofe refuses.
-const REMAIN_ON_EXIT_FAILED: &str = "native gap: remain-on-exit takes on/off only; tmux 3.7b's \
-                                     `failed` (keep the pane only when its command fails) needs \
-                                     the option store and the pane-exit path, outside FE.4";
+/// `remain-on-exit failed`, which Claude Code sets on each teammate pane.
+#[test]
+fn remain_on_exit_failed_matches_its_golden() {
+    check("remain-failed", &[]);
+}
 
+/// `command-alias`, with tmux's six default entries under tmux identity.
 #[test]
 fn aliases_match_their_golden() {
-    check(
-        "aliases",
-        &[
-            (
-                "$ show -gv command-alias",
-                "tmux's six default command-alias entries are not set under tmux identity \
-                 (Options::use_tmux_defaults, outside FE.4)",
-            ),
-            (
-                "$ splitp -d -t main",
-                "`splitp` is one of tmux's default aliases, which grofe lacks (above)",
-            ),
-            (
-                "$ list-panes -t main -F '#{pane_index}'",
-                "follows from the missing `splitp`",
-            ),
-        ],
-    );
+    check("aliases", &[]);
 }
 
-/// Case 5. tmux prints bindings in its own columns, from its own stock
-/// table, with every command re-printed from its parse tree; grofe's
-/// `list-keys` prints its native lines and its native stock table.
+/// Case 5: tmux's columns, key order, stock prefix table and command
+/// printing; one binding goes to a client's status line, not the output.
 #[test]
 fn list_keys_matches_its_golden() {
-    check(
-        "list-keys",
-        &[
-            (
-                "$ list-keys -T prefix",
-                "tmux's columns, key order and command re-printing, and tmux's stock prefix \
-                 table under tmux identity, need the list-keys handler (options.rs, TC.7) and \
-                 the default table (input.rs, TC.10); outside FE.4",
-            ),
-            (
-                "$ list-keys -T prefix y",
-                "tmux 3.7b's CLI prints nothing for a key; grofe lists it (options.rs, TC.7)",
-            ),
-            (
-                "$ list-keys -1N x",
-                "tmux 3.7b's CLI prints nothing for a key; grofe lists it (options.rs, TC.7)",
-            ),
-        ],
-    );
+    check("list-keys", &[]);
 }
 
 /// Case 3: a genuine popup's environment.
@@ -789,8 +738,7 @@ fn fzf_tmux_selection_reaches_the_caller() {
 /// `TestClaudeCodeTeammateSequence` pins it, over `-S $socket` as Claude
 /// Code sends it: the ids come back in tmux's shape, the teammate pane
 /// never takes the focus, and `respawn-pane -k` replaces the placeholder
-/// with the teammate's command. Every step but `remain-on-exit failed`
-/// ([`REMAIN_ON_EXIT_FAILED`]) runs.
+/// with the teammate's command.
 #[test]
 fn claude_code_teammate_sequence_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -886,19 +834,16 @@ fn claude_code_teammate_sequence_runs() {
     ] {
         out(&cli, w);
     }
-    // The known gap: require success here once `failed` lands.
-    let (status, _, err) = cli.run(&words(&[
-        "set-option",
-        "-p",
-        "-t",
-        teammate,
-        "remain-on-exit",
-        "failed",
-    ]));
-    assert_eq!(
-        (status.code(), err.as_str()),
-        (Some(1), "unknown value: failed\n"),
-        "{REMAIN_ON_EXIT_FAILED}"
+    out(
+        &cli,
+        &[
+            "set-option",
+            "-p",
+            "-t",
+            teammate,
+            "remain-on-exit",
+            "failed",
+        ],
     );
     assert_eq!(
         out(
@@ -950,12 +895,15 @@ const ELSEWHERE: &[(&str, &str)] = &[
         "list-keys",
         "FE.1's pass-through row; its output is TC.7's handler",
     ),
-    ("copy-mode", "M5 (M36-R8), FE.1's refusal"),
+    (
+        "copy-mode",
+        "M5 (M36-R8), FE.1's refusal; `-M` does nothing, as in tmux",
+    ),
     (
         "send-keys",
         "FE.1's rows: `-M` is tmux's text, `-X` is M5's",
     ),
-    ("resize-pane", "FE.1's refusal of `-M` (spec 4.5)"),
+    ("resize-pane", "FE.1's row: `-M` does nothing, as in tmux"),
     (
         "kill-pane",
         "FE.1's pass-through; `-t =` resolves in a mouse key",
@@ -972,11 +920,7 @@ const ELSEWHERE: &[(&str, &str)] = &[
 
 /// FE.4-area forms that do not translate yet, each with the owner of the
 /// missing piece. Every other one must map or be refused with a reason.
-const PENDING: &[(&str, &str)] = &[(
-    "command-prompt -F -I",
-    "native: a `{ ... }` command-list argument in a stored string (tmux's stock window \
-     menu, as its list-keys prints it) is split word by word; cmd::split_command_string, TC.2",
-)];
+const PENDING: &[(&str, &str)] = &[];
 
 fn ctx() -> ClientCtx {
     ClientCtx {

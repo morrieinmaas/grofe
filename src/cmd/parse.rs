@@ -1817,9 +1817,27 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
 ///   except a trailing one, which is dropped;
 /// - an unterminated quote is closed at the end of the string.
 ///
+/// - a `{` that starts a word opens a command list, up to its `}`, which is
+///   one argument: the list's commands, printed as tmux prints a list
+///   (`cmd_list_print`: each word escaped as [`escape_arg`] escapes it,
+///   commands joined by ` ; `), which is the string tmux hands a command
+///   that runs it (a prompt template, an `if-shell` branch, a menu item);
+///   an unclosed `{`, or an unquoted `}` with no list open, is a syntax
+///   error; a `}` closing a `#{` is part of its word.
+///
 /// Empty commands are dropped.
-// ponytail: no `\n`/`\e`/octal/`\u` escapes, `#` comments or `%if`.
+// ponytail: no `\n`/`\e`/octal/`\u` escapes, `#` comments or `%if`; a list
+// prints its verbs and flags as written, not in tmux's canonical order.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
+    split_commands(&mut s.chars().peekable(), false)
+}
+
+/// [`split_command_string`] from `chars`, up to the end or, `in_list`, up
+/// to the `}` that closes the list.
+fn split_commands(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    in_list: bool,
+) -> Result<Vec<Vec<String>>, ParseError> {
     let mut cmds = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
@@ -1827,7 +1845,9 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     let mut started = false;
     // The word so far is exactly one `\;`.
     let mut escaped_semicolon = false;
-    let mut chars = s.chars().peekable();
+    // Open `#{` in the word so far, whose `}` is part of the word.
+    let mut formats = 0usize;
+    let mut closed = false;
 
     let end_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
         if *started {
@@ -1846,8 +1866,31 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
         if !c.is_whitespace() && !(c == '\\' && fresh) {
             escaped_semicolon = false;
         }
+        if fresh {
+            formats = 0;
+        }
         match c {
             c if c.is_whitespace() => end_word(&mut word, &mut started, &mut words),
+            '{' if fresh => {
+                let list = split_commands(chars, true)?;
+                word = print_command_list(&list);
+                started = true;
+            }
+            '}' if in_list && formats == 0 => {
+                closed = true;
+                break;
+            }
+            '}' if formats > 0 => {
+                formats -= 1;
+                word.push('}');
+            }
+            // tmux 3.7b (recorded): an unquoted `}` with no list open is a
+            // syntax error (`display }`, `display a}`).
+            '}' => return Err(syntax_error()),
+            '{' if word.ends_with('#') => {
+                formats += 1;
+                word.push('{');
+            }
             ';' => {
                 end_word(&mut word, &mut started, &mut words);
                 end_command(&mut words, &mut cmds);
@@ -1871,13 +1914,13 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
                 started = true;
                 if fresh && chars.peek() == Some(&'~') {
                     chars.next();
-                    expand_tilde(&mut chars, &mut word);
+                    expand_tilde(chars, &mut word);
                 }
                 while let Some(x) = chars.next() {
                     match x {
                         '"' => break,
                         '\\' => word.push(chars.next().unwrap_or('\\')),
-                        '$' => expand_var(&mut chars, &mut word)?,
+                        '$' => expand_var(chars, &mut word)?,
                         x => word.push(x),
                     }
                 }
@@ -1890,17 +1933,20 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
                 if ahead.next() == Some(';') && ahead.next().is_none() {
                     return Err(syntax_error());
                 }
-                expand_var(&mut chars, &mut word)?;
+                expand_var(chars, &mut word)?;
             }
             '~' if fresh => {
                 started = true;
-                expand_tilde(&mut chars, &mut word);
+                expand_tilde(chars, &mut word);
             }
             c => {
                 word.push(c);
                 started = true;
             }
         }
+    }
+    if in_list && !closed {
+        return Err(syntax_error());
     }
     end_word(&mut word, &mut started, &mut words);
     // A trailing `\;` word is dropped, as tmux drops it.
@@ -1909,6 +1955,88 @@ pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     }
     end_command(&mut words, &mut cmds);
     Ok(cmds)
+}
+
+/// A command list as tmux 3.7b prints one inside `{ }` (`cmd_list_print`
+/// with no flags): each command's words escaped ([`escape_arg`]), the
+/// commands joined by ` ; `.
+pub fn print_command_list(cmds: &[Vec<String>]) -> String {
+    cmds.iter()
+        .map(|argv| {
+            argv.iter()
+                .map(|w| escape_arg(w))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" ; ")
+}
+
+/// One argument as tmux 3.7b's `args_escape` prints it: `''` when empty;
+/// double quotes around a word holding any of ` #';${}%`, else single
+/// quotes around one holding a space or `"`; a single such character
+/// (or `~`) as a backslash and itself; inside, `\\`, `\"` (in double
+/// quotes), `\$` before a name, C escapes (`\n`, `\t`, ...) and octal
+/// for other control characters; a leading `~` escaped.
+pub fn escape_arg(s: &str) -> String {
+    const DQUOTED: &[char] = &[' ', '#', '\'', ';', '$', '{', '}', '%'];
+    const SQUOTED: &[char] = &[' ', '"'];
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let quote = if s.contains(DQUOTED) {
+        Some('"')
+    } else if s.contains(SQUOTED) {
+        Some('\'')
+    } else {
+        None
+    };
+    let mut chars = s.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && c != ' '
+        && (quote.is_some() || c == '~')
+    {
+        return format!("\\{c}");
+    }
+    let dq = quote == Some('"');
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '$' if dq => {
+                if it
+                    .peek()
+                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{')
+                {
+                    out.push('\\');
+                }
+                out.push('$');
+            }
+            '"' if dq => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{7}' => out.push_str("\\a"),
+            '\u{b}' => out.push_str("\\v"),
+            '\u{c}' => out.push_str("\\f"),
+            '\0' => {
+                out.push_str("\\0");
+                if it.peek().is_some_and(|n| ('0'..='7').contains(n)) {
+                    out.push_str("00");
+                }
+            }
+            c if c.is_ascii_control() => out.push_str(&format!("\\{:03o}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    match quote {
+        Some(q) if out.starts_with('~') => format!("{q}\\{out}{q}"),
+        Some(q) => format!("{q}{out}{q}"),
+        None if out.starts_with('~') => format!("\\{out}"),
+        None => out,
+    }
 }
 
 /// Where [`split_command_string`] looks a `$NAME` up.
@@ -3345,6 +3473,44 @@ mod tests {
                 vec![argv(&["display", "no \\escape"])],
             ),
             ("a\\ b\tc", vec![argv(&["a b", "c"])]),
+            // A `{ }` list is one argument, printed as tmux prints a list
+            // (recorded with `bind X '<string>'` then `list-keys`).
+            (
+                "command-prompt -I \"#S\" { rename-session -- \"%%\" }",
+                vec![argv(&[
+                    "command-prompt",
+                    "-I",
+                    "#S",
+                    "rename-session -- \"%%\"",
+                ])],
+            ),
+            (
+                "if -F 1 { display -p \"a b\" } { display c ; neww -n 'x;y' }",
+                vec![argv(&[
+                    "if",
+                    "-F",
+                    "1",
+                    "display -p \"a b\"",
+                    "display c ; neww -n \"x;y\"",
+                ])],
+            ),
+            (
+                "if -F 1 {display x}",
+                vec![argv(&["if", "-F", "1", "display x"])],
+            ),
+            (
+                "if -F 1 { if -F 0 { display x } } ; ls",
+                vec![
+                    argv(&["if", "-F", "1", "if -F 0 \"display x\""]),
+                    argv(&["ls"]),
+                ],
+            ),
+            ("if -F 1 {}", vec![argv(&["if", "-F", "1", ""])]),
+            (
+                "if -F 1 { display \"#{pane_id}\" }",
+                vec![argv(&["if", "-F", "1", "display \"#{pane_id}\""])],
+            ),
+            ("display a{b", vec![argv(&["display", "a{b"])]),
             ("display \"a\\\\b\"", vec![argv(&["display", "a\\b"])]),
             // An unterminated quote closes at the end.
             (
@@ -3383,6 +3549,41 @@ mod tests {
         ];
         for (input, want) in cases {
             assert_eq!(split_command_string(input), Ok(want), "{input:?}");
+        }
+        // tmux 3.7b's syntax errors: an unclosed list, a stray `}`.
+        for input in ["if 1 { display", "display }", "display a}"] {
+            assert_eq!(
+                split_command_string(input),
+                Err(syntax_error()),
+                "{input:?}"
+            );
+        }
+    }
+
+    /// `args_escape` as tmux 3.7b prints arguments (recorded in
+    /// `list-keys` of tmux's stock table and of bound strings).
+    #[test]
+    fn escape_arg_is_tmux_s() {
+        for (arg, want) in [
+            ("", "''"),
+            ("kill-pane", "kill-pane"),
+            ("#S", "\"#S\""),
+            ("%%", "\"%%\""),
+            ("a b", "\"a b\""),
+            ("a\"b", "'a\"b'"),
+            ("say \"hi\" #x", "\"say \\\"hi\\\" #x\""),
+            ("$", "\\$"),
+            ("\"", "\\\""),
+            (";", "\\;"),
+            ("~", "\\~"),
+            ("~/x", "\\~/x"),
+            ("$HOME x", "\"\\$HOME x\""),
+            ("$1 x", "\"$1 x\""),
+            ("a\\b", "a\\\\b"),
+            ("a\tb", "a\\tb"),
+            (":=0", ":=0"),
+        ] {
+            assert_eq!(escape_arg(arg), want, "{arg:?}");
         }
     }
 

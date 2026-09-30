@@ -1022,6 +1022,10 @@ pub struct Binding {
     /// The language `cmds` are in (spec §4.5: a stored command keeps the
     /// dialect it was bound in). Grofe until the front end binds (FE.1).
     pub dialect: Dialect,
+    /// The commands exactly as a tmux-dialect `list-keys` shows them, when
+    /// they cannot be printed back from `cmds`: tmux's stock bindings, whose
+    /// `{ }` lists `cmds` holds as strings.
+    pub shown: Option<String>,
 }
 
 impl Binding {
@@ -1034,6 +1038,7 @@ impl Binding {
             desc: None,
             name: None,
             dialect: Dialect::Grofe,
+            shown: None,
         }
     }
 }
@@ -1047,6 +1052,12 @@ pub struct KeyTables {
     runtime_unbound: Vec<(String, Key)>,
     /// Built by [`KeyTables::from_config`] from at least one binding.
     configured: bool,
+    /// Keys the config unbinds (a binding with no commands), which the
+    /// tmux stock table leaves unbound too.
+    config_unbound: Vec<(String, Key)>,
+    /// The default prefix table is tmux 3.7b's stock one (a server with
+    /// tmux identity, [`KeyTables::use_tmux_stock`]); `reload` keeps it.
+    tmux_stock: bool,
 }
 
 impl KeyTables {
@@ -1134,6 +1145,7 @@ impl KeyTables {
         for k in keys {
             if k.cmds.is_empty() {
                 t.unbind(&k.table, &k.key);
+                t.config_unbound.push((k.table.clone(), k.key));
                 continue;
             }
             let source = match &k.source.file {
@@ -1155,6 +1167,9 @@ impl KeyTables {
     /// plugin bindings, and runtime unbinds, carry over.
     pub fn with_config_from(&self, fresh: KeyTables) -> KeyTables {
         let mut t = fresh;
+        if self.tmux_stock {
+            t.use_tmux_stock();
+        }
         for (table, key) in &self.runtime_unbound {
             t.unbind(table, key);
         }
@@ -1165,6 +1180,45 @@ impl KeyTables {
             }
         }
         t
+    }
+
+    /// Makes the default prefix table tmux 3.7b's stock one, for a server
+    /// with tmux identity: grofe's default prefix bindings go, and each
+    /// stock key the config and the runtime neither bound nor unbound gets
+    /// tmux's binding, in tmux's dialect, with its note ([`TMUX_STOCK`]).
+    /// A stock command grofe lacks (copy mode, buffers, marking, the clock)
+    /// fails with the front end's reason when pressed.
+    pub fn use_tmux_stock(&mut self) {
+        self.tmux_stock = true;
+        if let Some(t) = self.tables.get_mut(PREFIX_TABLE) {
+            t.retain(|_, b| b.source != BindingSource::Default);
+        }
+        let unbound = |key: &Key| {
+            self.config_unbound
+                .iter()
+                .chain(&self.runtime_unbound)
+                .any(|(t, k)| t == PREFIX_TABLE && k == key)
+        };
+        let mut add = Vec::new();
+        for (name, repeat, note, text) in TMUX_STOCK {
+            let Ok(key) = parse_key(name) else {
+                continue;
+            };
+            if unbound(&key) || self.exact(PREFIX_TABLE, &key).is_some() {
+                continue;
+            }
+            let Ok(cmds) = crate::cmd::split_command_string(text) else {
+                continue;
+            };
+            let mut b = Binding::new(cmds, *repeat, BindingSource::Default);
+            b.desc = Some(note.to_string());
+            b.dialect = Dialect::Tmux;
+            b.shown = Some(text.to_string());
+            add.push((key, b));
+        }
+        for (key, b) in add {
+            self.insert(PREFIX_TABLE, key, b);
+        }
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
@@ -1486,6 +1540,491 @@ pub fn default_bindings() -> KeyTables {
     }
     t
 }
+
+/// tmux 3.7b's stock prefix table (`list-keys -T prefix` on a `-f
+/// /dev/null` server, the `fe_4/list-keys` golden; notes from its
+/// `key-bindings.c`): the key, whether it repeats, its note, and its
+/// commands as tmux prints them.
+pub const TMUX_STOCK: &[(&str, bool, &str, &str)] = &[
+    (r#"Space"#, false, r#"Select next layout"#, r#"next-layout"#),
+    (
+        r#"!"#,
+        false,
+        r#"Break pane to a new window"#,
+        r#"break-pane"#,
+    ),
+    (
+        r#"""#,
+        false,
+        r#"Split window vertically"#,
+        r#"split-window"#,
+    ),
+    (
+        r#"#"#,
+        false,
+        r#"List all paste buffers"#,
+        r#"list-buffers"#,
+    ),
+    (
+        r#"$"#,
+        false,
+        r#"Rename current session"#,
+        r##"command-prompt -I "#S" { rename-session "%%" }"##,
+    ),
+    (
+        r#"%"#,
+        false,
+        r#"Split window horizontally"#,
+        r#"split-window -h"#,
+    ),
+    (
+        r#"&"#,
+        false,
+        r#"Kill current window"#,
+        r#"confirm-before -p "kill-window #W? (y/n)" kill-window"#,
+    ),
+    (
+        r#"'"#,
+        false,
+        r#"Prompt for window index to select"#,
+        r#"command-prompt -T window-target -p index { select-window -t ":%%" }"#,
+    ),
+    (
+        r#"("#,
+        false,
+        r#"Switch to previous client"#,
+        r#"switch-client -p"#,
+    ),
+    (
+        r#")"#,
+        false,
+        r#"Switch to next client"#,
+        r#"switch-client -n"#,
+    ),
+    (r#"*"#, false, r#"New floating pane"#, r#"new-pane"#),
+    (
+        r#","#,
+        false,
+        r#"Rename current window"#,
+        r##"command-prompt -I "#W" { rename-window "%%" }"##,
+    ),
+    (
+        r#"-"#,
+        false,
+        r#"Delete the most recent paste buffer"#,
+        r#"delete-buffer"#,
+    ),
+    (
+        r#"."#,
+        false,
+        r#"Move the current window"#,
+        r#"command-prompt -T target { move-window -t "%%" }"#,
+    ),
+    (
+        r#"/"#,
+        false,
+        r#"Describe key binding"#,
+        r#"command-prompt -k -p key { list-keys -1N "%%" }"#,
+    ),
+    (
+        r#"0"#,
+        false,
+        r#"Select window 0"#,
+        r#"select-window -t :=0"#,
+    ),
+    (
+        r#"1"#,
+        false,
+        r#"Select window 1"#,
+        r#"select-window -t :=1"#,
+    ),
+    (
+        r#"2"#,
+        false,
+        r#"Select window 2"#,
+        r#"select-window -t :=2"#,
+    ),
+    (
+        r#"3"#,
+        false,
+        r#"Select window 3"#,
+        r#"select-window -t :=3"#,
+    ),
+    (
+        r#"4"#,
+        false,
+        r#"Select window 4"#,
+        r#"select-window -t :=4"#,
+    ),
+    (
+        r#"5"#,
+        false,
+        r#"Select window 5"#,
+        r#"select-window -t :=5"#,
+    ),
+    (
+        r#"6"#,
+        false,
+        r#"Select window 6"#,
+        r#"select-window -t :=6"#,
+    ),
+    (
+        r#"7"#,
+        false,
+        r#"Select window 7"#,
+        r#"select-window -t :=7"#,
+    ),
+    (
+        r#"8"#,
+        false,
+        r#"Select window 8"#,
+        r#"select-window -t :=8"#,
+    ),
+    (
+        r#"9"#,
+        false,
+        r#"Select window 9"#,
+        r#"select-window -t :=9"#,
+    ),
+    (
+        r#":"#,
+        false,
+        r#"Prompt for a command"#,
+        r#"command-prompt"#,
+    ),
+    (
+        r#";"#,
+        false,
+        r#"Move to the previously active pane"#,
+        r#"last-pane"#,
+    ),
+    (
+        r#"<"#,
+        false,
+        r#"Display window menu"#,
+        r##"display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }"##,
+    ),
+    (
+        r#"="#,
+        false,
+        r#"Choose a paste buffer from a list"#,
+        r#"choose-buffer -Z"#,
+    ),
+    (
+        r#">"#,
+        false,
+        r#"Display pane menu"#,
+        r##"display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }"##,
+    ),
+    (r#"?"#, false, r#"List key bindings"#, r#"list-keys -N"#),
+    (
+        r#"C"#,
+        false,
+        r#"Customize options"#,
+        r#"customize-mode -Z"#,
+    ),
+    (
+        r#"D"#,
+        false,
+        r#"Choose and detach a client from a list"#,
+        r#"choose-client -Z"#,
+    ),
+    (
+        r#"E"#,
+        false,
+        r#"Spread panes out evenly"#,
+        r#"select-layout -E"#,
+    ),
+    (
+        r#"L"#,
+        false,
+        r#"Switch to the last client"#,
+        r#"switch-client -l"#,
+    ),
+    (
+        r#"M"#,
+        false,
+        r#"Clear the marked pane"#,
+        r#"select-pane -M"#,
+    ),
+    (r#"["#, false, r#"Enter copy mode"#, r#"copy-mode"#),
+    (
+        r#"]"#,
+        false,
+        r#"Paste the most recent paste buffer"#,
+        r#"paste-buffer -p"#,
+    ),
+    (r#"c"#, false, r#"Create a new window"#, r#"new-window"#),
+    (
+        r#"d"#,
+        false,
+        r#"Detach the current client"#,
+        r#"detach-client"#,
+    ),
+    (
+        r#"f"#,
+        false,
+        r#"Search for a pane"#,
+        r#"command-prompt { find-window -Z "%%" }"#,
+    ),
+    (
+        r#"i"#,
+        false,
+        r#"Display window information"#,
+        r#"display-message"#,
+    ),
+    (
+        r#"l"#,
+        false,
+        r#"Select the previously current window"#,
+        r#"last-window"#,
+    ),
+    (
+        r#"m"#,
+        false,
+        r#"Toggle the marked pane"#,
+        r#"select-pane -m"#,
+    ),
+    (r#"n"#, false, r#"Select the next window"#, r#"next-window"#),
+    (
+        r#"o"#,
+        false,
+        r#"Select the next pane"#,
+        r#"select-pane -t :.+"#,
+    ),
+    (
+        r#"p"#,
+        false,
+        r#"Select the previous window"#,
+        r#"previous-window"#,
+    ),
+    (r#"q"#, false, r#"Display pane numbers"#, r#"display-panes"#),
+    (
+        r#"r"#,
+        false,
+        r#"Redraw the current client"#,
+        r#"refresh-client"#,
+    ),
+    (
+        r#"s"#,
+        false,
+        r#"Choose a session from a list"#,
+        r#"choose-tree -Zs"#,
+    ),
+    (r#"t"#, false, r#"Show a clock"#, r#"clock-mode"#),
+    (
+        r#"w"#,
+        false,
+        r#"Choose a window from a list"#,
+        r#"choose-tree -Zw"#,
+    ),
+    (
+        r#"x"#,
+        false,
+        r#"Kill the active pane"#,
+        r#"confirm-before -p "kill-pane #P? (y/n)" kill-pane"#,
+    ),
+    (
+        r#"z"#,
+        false,
+        r#"Zoom the active pane"#,
+        r#"resize-pane -Z"#,
+    ),
+    (
+        r#"{"#,
+        false,
+        r#"Swap the active pane with the pane above"#,
+        r#"swap-pane -U"#,
+    ),
+    (
+        r#"}"#,
+        false,
+        r#"Swap the active pane with the pane below"#,
+        r#"swap-pane -D"#,
+    ),
+    (r#"~"#, false, r#"Show messages"#, r#"show-messages"#),
+    (
+        r#"DC"#,
+        true,
+        r#"Reset so the visible part of the window follows the cursor"#,
+        r#"refresh-client -c"#,
+    ),
+    (
+        r#"PPage"#,
+        false,
+        r#"Enter copy mode and scroll up"#,
+        r#"copy-mode -u"#,
+    ),
+    (
+        r#"Up"#,
+        true,
+        r#"Select the pane above the active pane"#,
+        r#"select-pane -U"#,
+    ),
+    (
+        r#"Down"#,
+        true,
+        r#"Select the pane below the active pane"#,
+        r#"select-pane -D"#,
+    ),
+    (
+        r#"Left"#,
+        true,
+        r#"Select the pane to the left of the active pane"#,
+        r#"select-pane -L"#,
+    ),
+    (
+        r#"Right"#,
+        true,
+        r#"Select the pane to the right of the active pane"#,
+        r#"select-pane -R"#,
+    ),
+    (
+        r#"M-1"#,
+        false,
+        r#"Set the even-horizontal layout"#,
+        r#"select-layout even-horizontal"#,
+    ),
+    (
+        r#"M-2"#,
+        false,
+        r#"Set the even-vertical layout"#,
+        r#"select-layout even-vertical"#,
+    ),
+    (
+        r#"M-3"#,
+        false,
+        r#"Set the main-horizontal layout"#,
+        r#"select-layout main-horizontal"#,
+    ),
+    (
+        r#"M-4"#,
+        false,
+        r#"Set the main-vertical layout"#,
+        r#"select-layout main-vertical"#,
+    ),
+    (
+        r#"M-5"#,
+        false,
+        r#"Select the tiled layout"#,
+        r#"select-layout tiled"#,
+    ),
+    (
+        r#"M-6"#,
+        false,
+        r#"Set the main-horizontal-mirrored layout"#,
+        r#"select-layout main-horizontal-mirrored"#,
+    ),
+    (
+        r#"M-7"#,
+        false,
+        r#"Set the main-vertical-mirrored layout"#,
+        r#"select-layout main-vertical-mirrored"#,
+    ),
+    (
+        r#"M-n"#,
+        false,
+        r#"Select the next window with an alert"#,
+        r#"next-window -a"#,
+    ),
+    (
+        r#"M-o"#,
+        false,
+        r#"Rotate through the panes in reverse"#,
+        r#"rotate-window -D"#,
+    ),
+    (
+        r#"M-p"#,
+        false,
+        r#"Select the previous window with an alert"#,
+        r#"previous-window -a"#,
+    ),
+    (
+        r#"M-Up"#,
+        true,
+        r#"Resize the pane up by 5"#,
+        r#"resize-pane -U 5"#,
+    ),
+    (
+        r#"M-Down"#,
+        true,
+        r#"Resize the pane down by 5"#,
+        r#"resize-pane -D 5"#,
+    ),
+    (
+        r#"M-Left"#,
+        true,
+        r#"Resize the pane left by 5"#,
+        r#"resize-pane -L 5"#,
+    ),
+    (
+        r#"M-Right"#,
+        true,
+        r#"Resize the pane right by 5"#,
+        r#"resize-pane -R 5"#,
+    ),
+    (r#"C-b"#, false, r#"Send the prefix key"#, r#"send-prefix"#),
+    (
+        r#"C-o"#,
+        false,
+        r#"Rotate through the panes"#,
+        r#"rotate-window"#,
+    ),
+    (
+        r#"C-z"#,
+        false,
+        r#"Suspend the current client"#,
+        r#"suspend-client"#,
+    ),
+    (
+        r#"C-Up"#,
+        true,
+        r#"Resize the pane up"#,
+        r#"resize-pane -U"#,
+    ),
+    (
+        r#"C-Down"#,
+        true,
+        r#"Resize the pane down"#,
+        r#"resize-pane -D"#,
+    ),
+    (
+        r#"C-Left"#,
+        true,
+        r#"Resize the pane left"#,
+        r#"resize-pane -L"#,
+    ),
+    (
+        r#"C-Right"#,
+        true,
+        r#"Resize the pane right"#,
+        r#"resize-pane -R"#,
+    ),
+    (
+        r#"S-Up"#,
+        true,
+        r#"Move the visible part of the window up"#,
+        r#"refresh-client -U 10"#,
+    ),
+    (
+        r#"S-Down"#,
+        true,
+        r#"Move the visible part of the window down"#,
+        r#"refresh-client -D 10"#,
+    ),
+    (
+        r#"S-Left"#,
+        true,
+        r#"Move the visible part of the window left"#,
+        r#"refresh-client -L 10"#,
+    ),
+    (
+        r#"S-Right"#,
+        true,
+        r#"Move the visible part of the window right"#,
+        r#"refresh-client -R 10"#,
+    ),
+];
 
 /// The session options routing depends on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3040,6 +3579,53 @@ mod tests {
         assert_eq!(encode_paste(b"hi", true, false, &bracketed), b"\x1b[200~hi");
         assert_eq!(encode_paste(b"hi", false, false, &bracketed), b"hi");
         assert_eq!(encode_paste(b"hi", false, true, &bracketed), b"hi\x1b[201~");
+    }
+
+    /// Under tmux identity the prefix table is tmux 3.7b's stock one, in
+    /// tmux's dialect with its notes; a key bound at runtime stays, and
+    /// `reload` keeps the stock table.
+    #[test]
+    fn the_tmux_stock_table_replaces_grofe_s_defaults_and_survives_reload() {
+        let mut t = default_bindings();
+        t.insert(
+            PREFIX_TABLE,
+            k("y"),
+            Binding::new(
+                vec![vec!["list-sessions".into()]],
+                false,
+                BindingSource::Runtime,
+            ),
+        );
+        t.use_tmux_stock();
+        let split = t.exact(PREFIX_TABLE, &k("\"")).expect("stock \"");
+        assert_eq!(split.cmds, vec![vec!["split-window".to_string()]]);
+        assert_eq!(split.dialect, Dialect::Tmux);
+        assert_eq!(split.desc.as_deref(), Some("Split window vertically"));
+        let rename = t.exact(PREFIX_TABLE, &k("$")).expect("stock $");
+        assert_eq!(
+            rename.cmds,
+            vec![vec![
+                "command-prompt".to_string(),
+                "-I".into(),
+                "#S".into(),
+                "rename-session \"%%\"".into(),
+            ]]
+        );
+        assert!(
+            t.exact(PREFIX_TABLE, &k("[")).is_some(),
+            "tmux's copy-mode key"
+        );
+        assert!(
+            t.exact(PREFIX_TABLE, &k("y")).is_some(),
+            "runtime binding kept"
+        );
+        assert_eq!(t.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
+        let reloaded = t.with_config_from(KeyTables::from_config(&[]));
+        assert_eq!(reloaded.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
+        assert_eq!(
+            reloaded.exact(PREFIX_TABLE, &k("\"")).map(|b| b.dialect),
+            Some(Dialect::Tmux)
+        );
     }
 
     // ---- default key table (T2.5b) ----

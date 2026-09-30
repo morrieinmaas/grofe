@@ -10,7 +10,8 @@
 $ new-session -d -s main -x 80 -y 24 cat
 $ split-window -d -h -t main 'cp "$(command -v tmux)" "$HOME/nvim"; "$HOME/nvim" wait-for -S fe4-ready; exec "$HOME/nvim" wait-for fe4-nvim'
 $ wait-for fe4-ready
-$ run-shell 'sleep 0.5'
+# Longer than grofe's one-second foreground sample.
+$ run-shell 'sleep 1.5'
 $ display -p -t main:1.2 '#{pane_current_command}'
 $ select-pane -t main:1.2
 $ if -F '#{m/r:^n?vim$,#{pane_current_command}}' 'send C-h' 'select-pane -L'

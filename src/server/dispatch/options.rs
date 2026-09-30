@@ -125,10 +125,10 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
-        // A choice in tmux 3.7b (`off`, `on`, `failed`), so `yes` is refused
-        // and a bad value is `unknown value`. ponytail: `failed` is not
-        // supported until something needs it.
-        kind: Kind::Choice(&["off", "on"]),
+        // A choice in tmux 3.7b, so `yes` is refused and a bad value is
+        // `unknown value`; `failed` keeps a pane only when its command
+        // failed (Claude Code's agent teams set it).
+        kind: Kind::Choice(&["off", "on", "failed"]),
         scope: OptionScope::Window,
         default: "off",
     },
@@ -540,7 +540,20 @@ pub struct Options {
     /// Built-in defaults that differ under the server's identity
     /// ([`Options::use_tmux_defaults`]): what `set -gu` restores.
     identity_defaults: BTreeMap<&'static str, String>,
+    /// The same for list options.
+    identity_list_defaults: BTreeMap<&'static str, Vec<String>>,
 }
+
+/// tmux 3.7b's default `command-alias` entries (recorded: `show -gv
+/// command-alias` on a `-f /dev/null` server), grofe's under tmux identity.
+const TMUX_COMMAND_ALIASES: &[&str] = &[
+    "split-pane=split-window",
+    "splitp=split-window",
+    "server-info=show-messages -JT",
+    "info=show-messages -JT",
+    "choose-window=choose-tree -w",
+    "choose-session=choose-tree -s",
+];
 
 impl Options {
     /// The built-in defaults, with the global `remain-on-exit` seeded from
@@ -602,6 +615,24 @@ impl Options {
             }
             self.identity_defaults.insert(name, value);
         }
+        let aliases: BTreeMap<u32, String> = (0..)
+            .zip(TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()))
+            .collect();
+        if let Some(base) = self.config_list_base.get_mut("command-alias") {
+            *base = aliases.clone();
+        } else if !self.runtime.contains("command-alias") {
+            self.lists.entry(Owner::Global).or_default().insert(
+                "command-alias".to_string(),
+                ListEntry {
+                    items: aliases,
+                    persist: false,
+                },
+            );
+        }
+        self.identity_list_defaults.insert(
+            "command-alias",
+            TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()).collect(),
+        );
     }
 
     /// `name`'s built-in default under this server's identity.
@@ -1294,6 +1325,9 @@ pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<Stri
     {
         return Err(format!("table {t} doesn't exist"));
     }
+    if ctx.dialect == crate::protocol::Dialect::Tmux {
+        return list_keys_tmux(state, ctx, &c, only);
+    }
     if c.notes {
         return list_notes(state, ctx, &c, only);
     }
@@ -1379,6 +1413,225 @@ fn list_notes(
         .iter()
         .map(|(key, note)| format!("{key:<width$} {note}\n"))
         .collect())
+}
+
+/// `list-keys` for a tmux-dialect request, as tmux 3.7b prints it
+/// (`cmd-list-keys.c`, recorded on `-L grofe-fe4 -f /dev/null`):
+///
+/// - which bindings: `-T`'s table, or with `-N` the prefix then the root
+///   table, or every table by name; each table in tmux's key order
+///   ([`tmux_key_order`]); a key given keeps only its binding, `-N` only
+///   bindings with a note, `-1` only the first;
+/// - a line: `bind-key [-r] -T <table> <key> <commands>`, the table and
+///   the key (escaped as tmux escapes an argument) padded to the widest,
+///   `-r` or two blanks only when some binding repeats; with `-N`,
+///   `<prefix> <key> <note>`;
+/// - one binding (a key given, or `-1`) goes to the current client's
+///   status line, not to the output.
+///
+/// The commands are tmux's stock text for a stock binding, else each one
+/// printed as tmux prints a parsed command ([`tmux_command_line`]).
+// ponytail: no `-a`, `-F`, `-O`, `-P` or `-r` (none parse natively).
+fn list_keys_tmux(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: &ListKeys,
+    only: Option<Key>,
+) -> Result<String, String> {
+    let tables = &state.registry.key_tables;
+    let names: Vec<String> = match &c.table {
+        Some(t) => vec![t.clone()],
+        None if c.notes => vec!["prefix".to_string(), "root".to_string()],
+        None => tables.table_names().map(str::to_string).collect(),
+    };
+    let mut rows: Vec<(String, Key, Binding)> = Vec::new();
+    for table in &names {
+        let mut keys = tables.keys(table);
+        keys.sort_by_key(tmux_key_order);
+        for key in keys {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
+            let Some(b) = tables.exact(table, &key) else {
+                continue;
+            };
+            if c.notes && b.desc.as_deref().is_none_or(str::is_empty) {
+                continue;
+            }
+            rows.push((table.clone(), key, b.clone()));
+        }
+    }
+    if c.first {
+        rows.truncate(1);
+    }
+    let prefix = match state.model.options.lookup("prefix", &[]) {
+        Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
+        _ => String::new(),
+    };
+    let key_width = rows
+        .iter()
+        .map(|(_, k, _)| k.to_string().chars().count())
+        .max()
+        .unwrap_or(0);
+    let table_width = rows
+        .iter()
+        .map(|(t, _, _)| t.chars().count())
+        .max()
+        .unwrap_or(0);
+    let has_repeat = rows.iter().any(|(_, _, b)| b.repeat);
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(table, key, b)| {
+            let command = b
+                .shown
+                .clone()
+                .unwrap_or_else(|| tmux_command_line(&b.cmds));
+            if c.notes {
+                let key = key.to_string();
+                let note = b.desc.clone().unwrap_or(command);
+                return format!("{prefix} {key:<key_width$} {note}");
+            }
+            let repeat = match (has_repeat, b.repeat) {
+                (false, _) => "",
+                (true, true) => "-r",
+                (true, false) => "  ",
+            };
+            let key = crate::cmd::parse::escape_arg(&key.to_string());
+            format!("bind-key {repeat} -T {table:<table_width$} {key:<key_width$} {command}")
+        })
+        .collect();
+    if lines.len() == 1 || c.first {
+        if let (Some(line), Some(id)) = (lines.first(), clients::current_client(state, ctx)) {
+            clients::show_message(state, id, line);
+        }
+        return Ok(String::new());
+    }
+    Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+}
+
+/// Where tmux 3.7b's key codes put `key` (its key tables are ordered by
+/// code): no modifier, then Meta, Ctrl and Shift as the high bits (`M-`
+/// 1, `C-` 2, `S-` 4); within one, characters by code point (Enter, Tab
+/// and Escape are C0 characters), then tmux's special keys in its own
+/// order, then the mouse keys.
+fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
+    use crate::server::input::KeyCode;
+    let m = &key.mods;
+    let mods = u8::from(m.alt) | u8::from(m.ctrl) << 1 | u8::from(m.shift) << 2;
+    const SPECIAL: &[KeyCode] = &[
+        KeyCode::Backspace,
+        KeyCode::Insert,
+        KeyCode::Delete,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::PageDown,
+        KeyCode::PageUp,
+        KeyCode::BackTab,
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Right,
+    ];
+    match key.code {
+        KeyCode::Char(c) => (mods, 0, c as u32, String::new()),
+        KeyCode::Enter => (mods, 0, 13, String::new()),
+        KeyCode::Tab => (mods, 0, 9, String::new()),
+        KeyCode::Escape => (mods, 0, 27, String::new()),
+        // F1 to F12 sit between BSpace and IC.
+        KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
+        KeyCode::Mouse(_) => (mods, 2, 0, key.to_string()),
+        code => {
+            let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
+            let at = if at == 0 { 0 } else { at + 12 };
+            (mods, 1, at, String::new())
+        }
+    }
+}
+
+/// A binding's commands as tmux 3.7b prints a parsed command list in
+/// `list-keys` (`cmd_list_print` escaped): each command by its full tmux
+/// name, its flags without values first in one word, then each flag with
+/// a value, both in tmux's flag order (ASCII: digits, upper, lower case),
+/// then the arguments, every value escaped as tmux escapes one; commands
+/// joined by ` \; `.
+pub(crate) fn tmux_command_line(cmds: &[Vec<String>]) -> String {
+    cmds.iter()
+        .map(|argv| tmux_command(argv))
+        .collect::<Vec<_>>()
+        .join(" \\; ")
+}
+
+fn tmux_command(argv: &[String]) -> String {
+    use crate::cmd::parse::escape_arg;
+    let Some((name, args)) = argv.split_first() else {
+        return String::new();
+    };
+    let Ok(spec) = crate::compat::tmux::resolve(name) else {
+        // A native-only verb: as it is.
+        let mut out = vec![name.clone()];
+        out.extend(args.iter().map(|a| escape_arg(a)));
+        return out.join(" ");
+    };
+    // Flags taking a value: `[-c word]` in the usage (and `select-pane
+    // -P`, which tmux hides).
+    let mut takes_value: Vec<char> = spec
+        .usage
+        .split("[-")
+        .skip(1)
+        .filter_map(|part| {
+            let mut chars = part.chars();
+            let flag = chars.next()?;
+            (chars.next() == Some(' ')).then_some(flag)
+        })
+        .collect();
+    if spec.name == "select-pane" {
+        takes_value.push('P');
+    }
+    let mut bools: BTreeMap<char, usize> = BTreeMap::new();
+    let mut values: BTreeMap<char, Vec<String>> = BTreeMap::new();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
+            break;
+        };
+        i += 1;
+        for (at, flag) in letters.char_indices() {
+            if !takes_value.contains(&flag) {
+                *bools.entry(flag).or_default() += 1;
+                continue;
+            }
+            let attached = &letters[at + flag.len_utf8()..];
+            let value = if attached.is_empty() {
+                i += 1;
+                args.get(i - 1).cloned().unwrap_or_default()
+            } else {
+                attached.to_string()
+            };
+            values.entry(flag).or_default().push(value);
+            break;
+        }
+    }
+    let mut out = spec.name.to_string();
+    if !bools.is_empty() {
+        out.push_str(" -");
+        for (flag, n) in &bools {
+            out.extend(std::iter::repeat_n(*flag, *n));
+        }
+    }
+    for (flag, vals) in &values {
+        for v in vals {
+            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+        }
+    }
+    for a in &args[i.min(args.len())..] {
+        out.push(' ');
+        out.push_str(&escape_arg(a));
+    }
+    out
 }
 
 fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> String {
@@ -2073,10 +2326,13 @@ impl Options {
         if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
             return Ok(false);
         }
+        let mut default = default_list(l);
+        if let Some(items) = self.identity_list_defaults.get(l.name) {
+            default.items = (0..).zip(items.iter().cloned()).collect();
+        }
         let at = self.lists.entry(owner).or_default();
         if op == ListOp::Reset {
             let changed = if owner == Owner::Global {
-                let default = default_list(l);
                 at.insert(name.to_string(), default.clone())
                     .map(|o| o.items)
                     != Some(default.items)

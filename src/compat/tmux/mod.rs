@@ -1151,6 +1151,13 @@ fn start_server(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     Ok(Vec::new())
 }
 
+/// `resize-pane -M` and `copy-mode -M` outside a mouse event: nothing, as
+/// tmux 3.7b does (a stock mouse binding's drag is grofe's built-in mouse
+/// model's).
+fn mouse_no_op(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    Ok(Vec::new())
+}
+
 /// `select-pane -P <style>` (opensessions' pane flash), as tmux 3.7b runs
 /// the undocumented `-P` (recorded): it selects the pane and sets the
 /// pane's `window-style` and `window-active-style` to the style, unchecked.
@@ -1177,8 +1184,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 
 // ---- The core rows -------------------------------------------------------
 
-const MOUSE: &str = "a stock mouse argv form; grofe's built-in mouse model replaces tmux's \
-                     stock mouse bindings (spec 4.5)";
 const MARKED: &str = "marked panes (spec 4.5)";
 const LINKED: &str = "a window belongs to one session in grofe (spec 4.5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
@@ -1363,8 +1368,24 @@ fn core_rows() -> Vec<Row> {
             "",
             "fe_1/errors",
         ),
-        unsupported("resize-pane -M", MOUSE, SEMANTIC),
-        unsupported("copy-mode -M", MOUSE, SEMANTIC),
+        // tmux 3.7b accepts these with no mouse event and does nothing,
+        // exit 0 (recorded); grofe's built-in mouse model does the drag.
+        row(
+            "resize-pane -M",
+            Behaviour,
+            Translate(mouse_no_op),
+            SEMANTIC,
+            "M3.6",
+            "fe_4/mouse-forms",
+        ),
+        row(
+            "copy-mode -M",
+            Behaviour,
+            Translate(mouse_no_op),
+            SEMANTIC,
+            "M3.6",
+            "fe_4/mouse-forms",
+        ),
         unsupported("pipe-pane", UNUSED, &[]),
         unsupported("lock-server", UNUSED, &[]),
         unsupported("clock-mode", UNUSED, &[]),
@@ -1614,6 +1635,10 @@ mod tests {
             dialect: Dialect::Tmux,
             ..crate::server::test_ctx()
         }
+    }
+
+    fn one_or_none(words: &[&str]) -> Result<Vec<Command>, TmuxError> {
+        dispatch(&args(words), &ctx())
     }
 
     fn one(words: &[&str]) -> Result<Command, TmuxError> {
@@ -2050,7 +2075,7 @@ mod tests {
             "M3.6",
             "",
         );
-        let refuse = unsupported("resize-pane -M", MOUSE, SEMANTIC);
+        let refuse = unsupported("resize-pane -M", "a mouse form", SEMANTIC);
         for rows in [vec![map.clone(), refuse.clone()], vec![refuse, map]] {
             let err = translate_with(&args(&["resize-pane", "-M", "-Z"]), &ctx(), &rows, &[]);
             assert!(err.unwrap_err().0.contains("mouse"), "{rows:?}");
@@ -2106,17 +2131,20 @@ mod tests {
         let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
-            "resize-pane -M",
+            "select-pane -m",
             MappingKind::PassThrough,
-            GrofeTarget::Native("resize-pane"),
+            GrofeTarget::Native("select-pane"),
             SEMANTIC,
             "M3.6",
             "",
         );
         let mut rows = vec![map];
         rows.extend(core_rows());
-        let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
+        let err = translate_with(&args(&["select-pane", "-m"]), &ctx(), &rows, &[]);
         assert!(err.unwrap_err().0.contains("not supported"));
+        // tmux 3.7b's own answer to these outside a mouse event: nothing.
+        assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));
+        assert_eq!(one_or_none(&["copy-mode", "-M"]), Ok(Vec::new()));
         assert!(row_for(&args(&["send", "-M"])).is_some_and(Row::refuses));
     }
 

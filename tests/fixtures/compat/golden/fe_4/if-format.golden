@@ -4,7 +4,7 @@ $ split-window -d -h -t main 'cp "$(command -v tmux)" "$HOME/nvim"; "$HOME/nvim"
 ? 0
 $ wait-for fe4-ready
 ? 0
-$ run-shell 'sleep 0.5'
+$ run-shell 'sleep 1.5'
 ? 0
 $ display -p -t main:1.2 '#{pane_current_command}'
 nvim
