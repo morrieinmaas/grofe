@@ -786,7 +786,8 @@ pub fn run_mouse_binding(
                 ..c.ctx.clone()
             };
             let argv = resolve_targets(state, argv);
-            let result = dispatch::run_split(state, &ctx, &argv);
+            // Bound commands: their aliases expanded at bind time.
+            let result = dispatch::run_bound(state, &ctx, &argv);
             state.deferred_reply = None;
             if let Err(e) = result {
                 clients::show_message(state, id, e.trim_end());

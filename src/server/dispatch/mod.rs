@@ -106,6 +106,14 @@ pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<
     run_commands(state, ctx, cmds)
 }
 
+/// Runs one command of a key binding: as [`run_split`], without
+/// expanding an alias, since `bind-key` expanded it when the key was
+/// bound, as tmux 3.7b does (a chain `a=b`, `b=...` expands once).
+pub fn run_bound(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let cmds = compat::parse_split(ctx, argv)?;
+    run_commands(state, ctx, cmds)
+}
+
 pub(crate) fn run_commands(
     state: &mut State,
     ctx: &ClientCtx,

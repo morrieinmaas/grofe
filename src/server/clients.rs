@@ -2009,6 +2009,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
+        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true),
         Routed::Consumed => {}
     }
 }
@@ -2018,8 +2019,20 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
 /// in `dialect`, the binding's own (spec §4.5), never the attaching
 /// client's: a native binding stays native under `tmux attach`. The first
 /// error stops the rest and shows on the client's status row, as tmux shows
-/// it. Output, and any deferred answer, is dropped.
+/// it. Output, and any deferred answer, is dropped. An alias in `cmds`
+/// expands as each runs; a key binding's were expanded when it was bound
+/// ([`Routed::Bound`]).
 pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
+    run_commands_for(state, id, cmds, dialect, false);
+}
+
+fn run_commands_for(
+    state: &mut State,
+    id: ClientId,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+    bound: bool,
+) {
     for argv in cmds {
         let Some(c) = state.clients.get(&id) else {
             break;
@@ -2029,7 +2042,11 @@ pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialec
             dialect,
             ..c.ctx.clone()
         };
-        let result = dispatch::run_split(state, &ctx, argv);
+        let result = if bound {
+            dispatch::run_bound(state, &ctx, argv)
+        } else {
+            dispatch::run_split(state, &ctx, argv)
+        };
         state.deferred_reply = None;
         if let Err(e) = result {
             show_message(state, id, e.trim_end());
@@ -2368,6 +2385,42 @@ mod tests {
         assert_eq!(*ran.lock().unwrap(), vec![0], "ran after both keys");
         in_input_order(&mut state, id, job(&ran));
         assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
+    }
+
+    /// tmux 3.7b (recorded): a binding keeps the alias expansion made when
+    /// it was bound, and a key press does not expand it again. With
+    /// `a=display-message` and `display-message=set @hit twice`, the key
+    /// bound to `a` runs `display-message`.
+    #[tokio::test]
+    async fn a_bound_alias_chain_expands_once() {
+        let (mut state, id) = state_with_client();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("run")
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]);
+        let session = *state.model.sessions.keys().next().expect("a session");
+        state.clients.get_mut(&id).expect("client").session = session;
+        run(
+            &mut state,
+            &["set", "-ag", "command-alias", "a=display-message"],
+        );
+        run(
+            &mut state,
+            &[
+                "set",
+                "-ag",
+                "command-alias",
+                "display-message=set -g @hit twice",
+            ],
+        );
+        run(&mut state, &["bind-key", "-n", "F5", "a"]);
+        run(&mut state, &["bind-key", "-n", "F6", "set -g @pressed yes"]);
+        input(&mut state, id, b"\x1b[15~\x1b[17~", Instant::now());
+        assert_eq!(state.model.options.lookup("@pressed", &[]), Some("yes"));
+        let hit = state.model.options.lookup("@hit", &[]);
+        assert_eq!(hit, None, "expanded a second time");
     }
 
     /// TC.11: a click maps onto the status row it lands on, at the bottom
