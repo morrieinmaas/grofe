@@ -408,7 +408,10 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
     let id = match connect_or_start(&socket, own_dir, true)
         .and_then(|stream| request_with(stream, &hello, &create))
     {
-        Ok(Reply::Ok { out, .. }) => out.trim().to_string(),
+        // The id is the last line; `-P`'s output comes before it.
+        // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
+        // pane (recorded); grofe has no view mode until M5 and drops it.
+        Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),

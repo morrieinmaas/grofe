@@ -494,6 +494,27 @@ fn new_session_p_prints_it_and_n_names_the_window() {
     assert_eq!(display(&srv, "x", "#{window_name}"), "w");
 }
 
+/// `new-session -P` without `-d` attaches, as tmux 3.7b's does.
+#[test]
+fn new_session_p_without_d_attaches() {
+    let srv = start();
+    let mut cmd = srv.command();
+    cmd.args([
+        "new-session",
+        "-P",
+        "-F",
+        "#{session_name}",
+        "-s",
+        "x",
+        "cat",
+    ])
+    .env("TERM", "xterm-256color")
+    .env_remove("COLORTERM");
+    let mut a = Harness::spawn(cmd, 80, 24);
+    wait_last_row_starts(&mut a, "[x]");
+    assert_eq!(lines(&srv, &["list-sessions"]).len(), 2);
+}
+
 /// `display-message -c` shows the message on that client only.
 #[test]
 fn display_message_c_goes_to_that_client() {
