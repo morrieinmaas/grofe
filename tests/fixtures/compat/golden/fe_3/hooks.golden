@@ -210,3 +210,12 @@ $ set-hook -g alert-bell 'display x'
 ? 0
 $ set-hook after-select-pane 'display x'
 ? 0
+$ set-hook -g after-select-window 'display -p "a\tb\sc" ; display -p x\ty'
+? 0
+$ select-window -t main:2
+a	b c
+x	y
+? 0
+$ show-hooks -g after-select-window
+after-select-window[0] display-message -p "a\tb c" ; display-message -p x\ty
+? 0

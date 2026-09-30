@@ -171,6 +171,11 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "FE.2: tmux's layout string (TC.3 left window_layout an empty stub)",
     ),
     (
+        "$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'",
+        "native: grofe's format language has no p: padding (TC.3); left for \
+         the expander, which gives nothing",
+    ),
+    (
         "$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'",
         "native: grofe's format language has no q:, E:, T:, =N:, s///: or n: \
          (TC.3); the front end leaves them, and notes them in compat-miss.log",
@@ -360,5 +365,66 @@ fn every_fe3_corpus_form_translates() {
                 .count();
             assert_eq!(sources, 2, "{cmds:?}");
         }
+    }
+}
+
+/// A pane title can never become a command: tmux 3.7b stores an OSC 2
+/// `#(` as `_(` (recorded), so a title pulled into a status format
+/// through `#{pane_title}` stays text. The reviewer's repro.
+#[test]
+fn a_pane_title_never_runs_as_a_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = grofe_cli(dir.path());
+    let marker = dir.path().join("X");
+    let args = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let title = format!(
+        "printf '\\033]2;#(touch {})\\033\\\\'; exec cat",
+        marker.display()
+    );
+    let (status, _, err) = cli.run(&args(&["new-session", "-d", "-s", "t", &title]));
+    assert!(status.success(), "{err}");
+    let mut shown = String::new();
+    for _ in 0..50 {
+        shown = cli
+            .run(&args(&["display", "-p", "-t", "t", "#{pane_title}"]))
+            .1;
+        if shown.contains("touch") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(shown.starts_with("_(touch "), "{shown:?}");
+    let _ = cli.run(&args(&["set", "-g", "status-interval", "1"]));
+    let _ = cli.run(&args(&["set", "-g", "status-right", shown.trim_end()]));
+    let _ = cli.run(&args(&["set", "-gF", "status-left", "#{pane_title}"]));
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let _ = cli.run(&args(&["kill-server"]));
+    assert!(!marker.exists(), "the title ran as a command");
+}
+
+/// The front end's copy of tmux's option tables
+/// (`src/compat/tmux/tmux-options.txt`) is the recorded golden's.
+#[test]
+fn the_shipped_option_tables_are_the_golden_s() {
+    let golden = fs::read_to_string(fixtures_dir().join("golden/fe_3/tmux-tables.golden")).unwrap();
+    let data = fs::read_to_string(fixtures_dir().join("../../../src/compat/tmux/tmux-options.txt"))
+        .unwrap();
+    for (step, section) in [
+        ("$ show -g\n", "[session]"),
+        ("$ show -gw\n", "[window]"),
+        ("$ show -s\n", "[server]"),
+    ] {
+        let at = golden.find(step).unwrap() + step.len();
+        let want: Vec<&str> = golden[at..]
+            .lines()
+            .take_while(|l| !l.starts_with("? "))
+            .collect();
+        let got: Vec<&str> = data
+            .lines()
+            .skip_while(|l| *l != section)
+            .skip(1)
+            .take_while(|l| !l.starts_with('['))
+            .collect();
+        assert_eq!(got, want, "{section}");
     }
 }

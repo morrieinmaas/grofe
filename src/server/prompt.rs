@@ -710,7 +710,18 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let session =
         client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
     let env = hooks::shell_env(state, session);
-    let script = expand_command(state, ctx, &c.cmd);
+    // `-t` (FE.3): the formats expand against that pane, as in tmux.
+    let script = match c.target {
+        cmd::Target::Current => expand_command(state, ctx, &c.cmd),
+        ref target => {
+            let pane = state.model.resolve_pane(target, ctx)?;
+            let at = ClientCtx {
+                pane: Some(pane),
+                ..ctx.clone()
+            };
+            expand_command(state, &at, &c.cmd)
+        }
+    };
     // Inside a hook the queue waits for the shell, even from a binding.
     let waits = !from_binding || hooks::in_hook(state);
     let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));

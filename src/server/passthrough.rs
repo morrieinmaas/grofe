@@ -95,6 +95,14 @@ impl Passthrough {
     }
 }
 
+/// A pane title as stored: each `#(` becomes `_(`, as tmux 3.7b stores it
+/// (recorded: an OSC 2 title `a#(touch X)` shows as `a_(touch X)`), so a
+/// title a program sets can never become a command when a format reads
+/// `#{pane_title}`.
+fn safe_title(title: &str) -> String {
+    title.replace("#(", "_(")
+}
+
 /// [`Passthrough::title`], for callers that hold only the titles.
 fn pane_title(titles: &BTreeMap<PaneId, String>, pane: PaneId) -> String {
     titles
@@ -519,7 +527,7 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             send(state, clients_on(state, session), &osc52(&text));
         }
         PaneEventKind::Title(title) => {
-            state.passthrough.titles.insert(pane, title);
+            state.passthrough.titles.insert(pane, safe_title(&title));
             refresh_session(state, session);
         }
         PaneEventKind::Osc(body) if body.starts_with(b"12;") || body.starts_with(b"112") => {

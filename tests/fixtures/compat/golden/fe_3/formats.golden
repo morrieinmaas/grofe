@@ -241,6 +241,15 @@ home 1 0 1 0
 $ display -p -t main:1 '#{?window_active,#{?pane_active,both,window},none}'
 both
 ? 0
+$ display -p -t main:1 '#{?session_name,a}|#{?,b}|#{?,,,}|#{?,a,session_name,b,c}|#{?,a,,b}|#{?@nope,a,@opt,b,c}'
+a|||b||b
+? 0
+$ display -p -t main:1 '#{l:a##b#,c#}d}|#{?session_name,a#}b,c}|#{?session_name,#{l:x#}y#,z},n}'
+a#b,c}d|a}b|x}y,z
+? 0
+$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'
+Xmain X mainX
+? 0
 $ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'
 main|value|value|mai|mAin|4
 ? 0
@@ -316,6 +325,11 @@ match
 ? 0
 $ run-shell 'echo "#S #{window_index} ##{pane_id}"'
 main 1 #{pane_id}
+? 0
+$ run-shell -t main:2 'echo "#I #{window_name}" > $HOME/rs.out'
+? 0
+$ run-shell 'cat $HOME/rs.out'
+2 second
 ? 0
 $ set -gF @expanded '#S-#W'
 ? 0

@@ -131,9 +131,7 @@ impl Rewriter {
                 }
                 '}' => {
                     if in_body {
-                        // ponytail: grofe's language has no escape for a
-                        // brace inside a `#{...}`; it is dropped.
-                        crate::compat::note_miss("format escape #} inside #{}");
+                        out.push_str(self.rbrace());
                     } else {
                         out.push('}');
                     }
@@ -175,7 +173,11 @@ impl Rewriter {
     /// One `#{body}`, rewritten whole.
     fn brace(&mut self, body: &str, in_body: bool) -> String {
         if let Some(text) = body.strip_prefix("l:") {
-            return literal(text, in_body);
+            return self.literal(text, in_body);
+        }
+        if let Some(rest) = body.strip_prefix('?') {
+            let parts = split_top(rest);
+            return self.branches(&parts);
         }
         if let Some(m) = NATIVE_MODIFIERS.iter().find(|m| body.starts_with(**m)) {
             let rest = &body[m.len()..];
@@ -187,6 +189,69 @@ impl Rewriter {
         format!("#{{{}}}", self.convert(body, true))
     }
 
+    /// tmux's `#{?c1,v1,c2,v2,...,else}` as nested grofe conditions: the
+    /// first true condition's value, else the last part when the count is
+    /// odd, else nothing (recorded: `#{?1,a}` and `#{?,,,}` are empty,
+    /// `#{?,a,session_name,b,c}` is `b`).
+    fn branches(&mut self, parts: &[&str]) -> String {
+        match parts {
+            [] => String::new(),
+            [last] => self.convert(last, true),
+            [cond, value, rest @ ..] => {
+                let cond = self.convert(cond, true);
+                let value = self.convert(value, true);
+                let rest = self.branches(rest);
+                format!("#{{?{cond},{value},{rest}}}")
+            }
+        }
+    }
+
+    /// `#{l:text}`: `text` with tmux's escapes (`##`, `#,`, `#}`) undone and
+    /// nothing else expanded (recorded: `#{l:a##b#,c#}d}` is `a#b,c}d`), as
+    /// a grofe format that expands to it.
+    fn literal(&mut self, text: &str, in_body: bool) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            let ch = match (ch, chars.peek()) {
+                ('#', Some(&n)) if "#,}".contains(n) => {
+                    chars.next();
+                    n
+                }
+                _ => ch,
+            };
+            match ch {
+                '#' => out.push_str("##"),
+                ',' if in_body => out.push_str(COMMA),
+                '}' if in_body => out.push_str(self.rbrace()),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// A `}` inside a `#{...}`, which grofe's language has no escape for:
+    /// a user option holding one, set first.
+    fn rbrace(&mut self) -> &'static str {
+        let set = Command::SetOption(crate::cmd::SetOption {
+            scope: Some(crate::cmd::OptionScope::Global),
+            unset: false,
+            persist: false,
+            target: crate::cmd::Target::Current,
+            name: RBRACE_OPTION.to_string(),
+            value: Some("}".to_string()),
+            append: false,
+            expand: false,
+            quiet: false,
+            only_if_unset: false,
+            shown: None,
+        });
+        if !self.before.contains(&set) {
+            self.before.push(set);
+        }
+        RBRACE
+    }
+
     /// A `#(cmd)`: its source's option, or nothing.
     // ponytail: tmux expands `cmd` as a format before it runs it; a source
     // runs it as written.
@@ -196,12 +261,10 @@ impl Rewriter {
         }
         let key = crate::server::sources::inline_key(cmd);
         let register = Command::RegisterSource(RegisterSource {
-            // Named, so it never expires while the option still reads it
+            // Named, so it does not expire while an option still reads it
             // (an inline source expires an hour after it was last
-            // registered, and nothing registers it again).
-            // ponytail: a named source outlives every option that read
-            // it, and keeps running at status-interval until the server
-            // exits.
+            // registered, and nothing registers it again); it stops as
+            // soon as no option reads it (`sources::prune_unreferenced`).
             name: Some(key.clone()),
             command: cmd.to_string(),
         });
@@ -216,18 +279,38 @@ impl Rewriter {
 /// condition is everything after its second comma.
 const COMMA: &str = "#{?,,,}";
 
-/// `text`, unexpanded, as a grofe format that expands to it.
-fn literal(text: &str, in_body: bool) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '#' => out.push_str("##"),
-            ',' if in_body => out.push_str(COMMA),
-            '}' if in_body => crate::compat::note_miss("format escape } inside #{l:}"),
-            c => out.push(c),
+/// The user option that holds a `}` for [`Rewriter::rbrace`]; `@src-`
+/// options are the front end's own, and tmux's `show` leaves them out.
+const RBRACE_OPTION: &str = "@src-rbrace";
+const RBRACE: &str = "#{@src-rbrace}";
+
+/// A `#{?...}` body's parts, split at each comma outside a nested `#{`
+/// and not escaped (`#,`), as tmux's `format_skip` splits them.
+fn split_top(s: &str) -> Vec<&str> {
+    let b = s.as_bytes();
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut i) = (0usize, 0, 0);
+    while i < b.len() {
+        match b[i] {
+            b'#' if b.get(i + 1) == Some(&b'{') => {
+                depth += 1;
+                i += 2;
+            }
+            b'#' if b.get(i + 1).is_some_and(|c| b",#}:".contains(c)) => i += 2,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+                i += 1;
+            }
+            _ => i += 1,
         }
     }
-    out
+    parts.push(&s[start..]);
+    parts
 }
 
 /// The length of a `#{...}` body, `s` starting just after its `#{`, as
@@ -576,10 +659,10 @@ fn set_hook(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 // ---- tmux's option tables ------------------------------------------------------
 
 /// tmux 3.7b's `show -g`, `show -gw` and `show -s` on a fresh server
-/// (TC.0b's container, with `tmux-defaults.conf`): the names, their order
-/// and the default texts the tmux dialect's `show` prints.
-const TMUX_TABLES: &str =
-    include_str!("../../../tests/fixtures/compat/golden/fe_3/tmux-tables.golden");
+/// (recorded in TC.0b's container as the golden `fe_3/tmux-tables`, which
+/// `tests/compat/fe_3.rs` keeps this file equal to): the names, their
+/// order and the default texts the tmux dialect's `show` prints.
+const TMUX_TABLES: &str = include_str!("tmux-options.txt");
 
 /// One of tmux's three option tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -595,17 +678,16 @@ pub enum Table {
 /// `table`'s lines as tmux prints them, each split into its name (with
 /// `[N]` for an element) and its quoted value text.
 pub fn tmux_table(table: Table) -> Vec<(&'static str, &'static str)> {
-    let step = match table {
-        Table::Session => "$ show -g\n",
-        Table::Window => "$ show -gw\n",
-        Table::Server => "$ show -s\n",
+    let section = match table {
+        Table::Session => "[session]",
+        Table::Window => "[window]",
+        Table::Server => "[server]",
     };
-    let Some(at) = TMUX_TABLES.find(step) else {
-        return Vec::new();
-    };
-    TMUX_TABLES[at + step.len()..]
+    TMUX_TABLES
         .lines()
-        .take_while(|l| !l.starts_with("? "))
+        .skip_while(|l| *l != section)
+        .skip(1)
+        .take_while(|l| !l.starts_with('['))
         .map(|l| l.split_once(' ').unwrap_or((l, "")))
         .collect()
 }
@@ -819,6 +901,9 @@ mod tests {
             native("#{?session_name,a#,b,c}"),
             "#{?session_name,a#{?,,,}b,c}"
         );
+        assert_eq!(native("#{?1,a}"), "#{?1,a,}");
+        assert_eq!(native("#{?,,,}"), "#{?,,#{?,,}}");
+        assert_eq!(native("#{?@x,a,@y,b,c}"), "#{?@x,a,#{?@y,b,c}}");
         assert_eq!(native("x#"), "x");
         assert_eq!(native("a#{?1,b"), "a");
         assert_eq!(native("a#(echo x"), "a");
@@ -837,6 +922,7 @@ mod tests {
     #[test]
     fn a_literal_stays_unexpanded() {
         assert_eq!(native("#{l:#S}"), "##S");
+        assert_eq!(native("#{l:a##b#,c#}d}"), "a##b,c}d");
         assert_eq!(native("#{?1,#{l:a,b},c}"), "#{?1,a#{?,,,}b,c}");
     }
 
@@ -865,6 +951,35 @@ mod tests {
         assert_eq!(foreign_modifier("=21:pane_title"), Some('='));
         assert_eq!(foreign_modifier("session_name"), None);
         assert_eq!(foreign_modifier("?a,b:c,d"), None);
+    }
+
+    /// A `#(cmd)` source stops once no option reads it: a `set` that
+    /// overwrites, `-u`, and `-a` that keeps the old one.
+    #[test]
+    fn old_job_sources_stop_once_no_option_reads_them() {
+        use crate::protocol::{ClientCtx, Dialect};
+        fn run(state: &mut crate::server::State, words: &[&str]) {
+            let ctx = ClientCtx {
+                dialect: Dialect::Tmux,
+                ..crate::server::test_ctx()
+            };
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("runs");
+        }
+        let mut state = crate::server::test_state();
+        for i in 0..25 {
+            run(
+                &mut state,
+                &["set", "-g", "status-right", &format!("#(echo {i})")],
+            );
+        }
+        run(&mut state, &["set", "-ag", "status-right", "#(echo more)"]);
+        run(&mut state, &["set", "-g", "status-left", "#(echo left)"]);
+        run(&mut state, &["set", "-gu", "status-left"]);
+        let running = crate::server::sources::running(&state);
+        assert_eq!(running, 2, "the last and the append");
+        run(&mut state, &["set", "-g", "status-right", "plain"]);
+        assert_eq!(crate::server::sources::running(&state), 0);
     }
 
     #[test]

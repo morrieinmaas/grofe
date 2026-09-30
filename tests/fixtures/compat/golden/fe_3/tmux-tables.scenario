@@ -1,6 +1,6 @@
 # FE.3: tmux 3.7b's three option tables as show lists them on a fresh
-# server (with tmux-defaults.conf). The front end reads this golden for
-# tmux's names, order and default texts (compat::tmux::formats).
+# server (with tmux-defaults.conf). src/compat/tmux/tmux-options.txt, the
+# front end's copy, must equal this golden (tests/compat/fe_3.rs).
 $ new-session -d -s main -x 80 -y 24 cat
 $ show -g
 $ show -gw

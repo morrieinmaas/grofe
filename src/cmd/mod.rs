@@ -491,6 +491,8 @@ pub struct RunShell {
     pub background: bool,
     /// `-d` (FE.1): seconds to wait before running.
     pub delay: Option<std::time::Duration>,
+    /// `-t` (FE.3): the pane the command's formats expand against.
+    pub target: Target,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is

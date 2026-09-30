@@ -52,3 +52,6 @@ $ select-window -t main:1
 $ set-hook -g nope 'display x'
 $ set-hook -g alert-bell 'display x'
 $ set-hook after-select-pane 'display x'
+$ set-hook -g after-select-window 'display -p "a\tb\sc" ; display -p x\ty'
+$ select-window -t main:2
+$ show-hooks -g after-select-window

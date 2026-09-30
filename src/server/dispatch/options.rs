@@ -610,6 +610,20 @@ impl Options {
         }
     }
 
+    /// Whether any value, at any owner, scalar or list element, holds
+    /// `needle`.
+    pub fn mentions(&self, needle: &str) -> bool {
+        let scalars = self
+            .values
+            .values()
+            .flat_map(|m| m.values().map(|e| &e.value));
+        let lists = self
+            .lists
+            .values()
+            .flat_map(|m| m.values().flat_map(|l| l.items.values()));
+        scalars.chain(lists).any(|v| v.contains(needle))
+    }
+
     /// Records the text a tmux-dialect request sent for `name`'s value
     /// at `owner` (see `shown`); `None`, or the value itself, forgets it.
     pub fn set_shown(&mut self, owner: Owner, name: &str, value: &str, sent: Option<String>) {
@@ -941,18 +955,22 @@ fn set_option(
     // `-a` appends to a string's value at this scope (tmux: style options
     // join with a comma); any other kind takes the value as given.
     let separator = if c.name.ends_with("-style") { "," } else { "" };
-    // In the tmux dialect, the text as sent, for `show` (FE.3): appended
-    // to what `show` printed before.
-    let sent = (ctx.dialect == Dialect::Tmux).then(|| c.shown.clone().unwrap_or(value.clone()));
+    // In the tmux dialect, the text as sent, for `show` (FE.3), kept only
+    // when the front end rewrote the value, or when an append extends
+    // text `show` already prints in place of the value. Any other value
+    // shows as stored, normalized as tmux normalizes it (`mouse yes` is
+    // `on`).
+    let tmux = ctx.dialect == Dialect::Tmux;
     let (value, sent) = match model.options.get(owner, &c.name) {
         Some(old) if c.append && is_text(&c.name) => {
             let before = tmux_text(&model.options, owner, &c.name, &old.value);
-            (
-                format!("{}{separator}{value}", old.value),
-                sent.map(|s| format!("{before}{separator}{s}")),
-            )
+            let recorded = before != old.value;
+            let piece = c.shown.clone().unwrap_or_else(|| value.clone());
+            let sent = (tmux && (recorded || c.shown.is_some()))
+                .then(|| format!("{before}{separator}{piece}"));
+            (format!("{}{separator}{value}", old.value), sent)
         }
-        _ => (value, sent),
+        _ => (value, c.shown.clone().filter(|_| tmux)),
     };
     let did = model.options.set(owner, &c.name, &value, c.persist)?;
     let stored = model
@@ -2445,7 +2463,7 @@ fn set_list(
     let element = index.map(|i| format!("{base}[{i}]"));
     let before = element.as_ref().and_then(|full| {
         let old = model.options.list(owner, base)?.items.get(&index?)?;
-        Some(tmux_text(&model.options, owner, full, old))
+        Some((old.clone(), tmux_text(&model.options, owner, full, old)))
     });
     let mut changed = false;
     for op in ops {
@@ -2458,13 +2476,16 @@ fn set_list(
             .list(owner, base)
             .and_then(|l| l.items.get(&i).cloned())
             .unwrap_or_default();
-        let sent = (ctx.dialect == Dialect::Tmux && !c.unset).then(|| {
-            let s = c.shown.clone().or(c.value.clone()).unwrap_or_default();
-            match (&before, c.append) {
-                (Some(before), true) => format!("{before}{s}"),
-                _ => s,
+        // Kept only for a rewritten value, or an append to text `show`
+        // already prints in place of the value, as for a scalar.
+        let piece = c.shown.clone().or(c.value.clone()).unwrap_or_default();
+        let sent = match (&before, c.append) {
+            (Some((raw, text)), true) if raw != text || c.shown.is_some() => {
+                Some(format!("{text}{piece}"))
             }
-        });
+            _ => c.shown.clone(),
+        }
+        .filter(|_| ctx.dialect == Dialect::Tmux && !c.unset);
         model.options.set_shown(owner, full, &stored, sent);
     }
     if owner == Owner::Global {

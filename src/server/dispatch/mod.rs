@@ -246,8 +246,14 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::SendKeys(_)
         | Command::CapturePane(_) => pane::run(state, ctx, cmd),
 
-        Command::SetOption(_)
-        | Command::ShowOptions(_)
+        // A status source a `#(cmd)` registered stops once no option
+        // reads it any more (FE.3).
+        Command::SetOption(_) => {
+            let out = options::run(state, ctx, cmd);
+            server::sources::prune_unreferenced(state);
+            out
+        }
+        Command::ShowOptions(_)
         | Command::DisplayMessage(_)
         | Command::ListSessions(_)
         | Command::ListWindows(_)
@@ -280,8 +286,16 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::BindKey(c) => options::bind_key(state, ctx, c),
         Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
         Command::ListKeys(c) => options::list_keys(state, ctx, c),
-        Command::SourceFile(c) => options::source_file(state, ctx, c),
-        Command::Reload(c) => options::reload(state, ctx, c),
+        Command::SourceFile(c) => {
+            let out = options::source_file(state, ctx, c);
+            server::sources::prune_unreferenced(state);
+            out
+        }
+        Command::Reload(c) => {
+            let out = options::reload(state, ctx, c);
+            server::sources::prune_unreferenced(state);
+            out
+        }
         Command::CommandPrompt(c) => prompt::command_prompt(state, ctx, c),
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),

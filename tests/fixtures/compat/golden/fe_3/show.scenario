@@ -41,6 +41,19 @@ $ set -gu status-right
 $ show -g status-right
 $ show -g window-status-current-format
 $ show -g
+$ set -g mouse yes
+$ show -g mouse
+$ set -g history-limit 0100
+$ show -g history-limit
+$ set -g status-format[3] 'row #I'
+$ show -g status-format[3]
+$ set -ag status-format[3] ' more'
+$ show -gv status-format[3]
+$ set -g status-format[4] 'plain'
+$ set -ag status-format[4] ' tail'
+$ show -g status-format[4]
+$ set -g update-environment[20] FE3_VAR
+$ show -g update-environment[20]
 $ show -gw
 $ show -gwv
 $ show -gv
