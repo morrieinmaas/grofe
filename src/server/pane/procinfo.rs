@@ -59,24 +59,29 @@ pub(crate) async fn sampler(master: Arc<AsyncFd<OwnedFd>>, out: Arc<Mutex<ProcSa
     }
 }
 
-/// A pane's foreground process group, read at the moment it is asked for
-/// rather than from the last sample: what a key binding's conditional
-/// tests, as vim-tmux-navigator's `ps -t <tty>` does on every keypress.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Foreground {
-    /// The group leader's name, argv and cwd; empty once the leader has
-    /// exited (the first command of a pipeline often has).
-    pub leader: ProcSample,
-    /// The argv of every live member, the leader first, then by pid.
-    pub members: Vec<Vec<String>>,
+/// The foreground process group of the pty behind `master`, read now
+/// (`tcgetpgrp`): what a key binding's conditional tests, as
+/// vim-tmux-navigator's `ps -t <tty>` does on every keypress. The reads
+/// below use syscalls alone, never a fork.
+pub fn foreground_group(master: impl std::os::fd::AsFd) -> Option<i32> {
+    Some(nix::unistd::tcgetpgrp(master).ok()?.as_raw())
 }
 
-/// The foreground process group of the pty behind `master`, read now with
-/// syscalls alone (`tcgetpgrp`, then the OS's process tables): never a
-/// fork. A forked child that has not exec'd yet (still the server's own
-/// image) is left out, as [`sampler`] leaves it out.
-pub fn foreground(master: impl std::os::fd::AsFd) -> Option<Foreground> {
-    let pgrp = nix::unistd::tcgetpgrp(master).ok()?.as_raw();
+/// The name, argv and cwd of group `pgrp`'s leader, read now; empty once
+/// the leader has exited (the first command of a pipeline often has), or
+/// while it is a forked child that has not exec'd yet (still the server's
+/// own image), which [`sampler`] leaves out too.
+pub fn leader(pgrp: i32) -> ProcSample {
+    let leader = sample(pgrp);
+    if leader.argv.as_deref() == Some(server_argv()) {
+        return ProcSample::default();
+    }
+    leader
+}
+
+/// The argv of every live member of group `pgrp`, the leader first, then
+/// by pid, read now.
+pub fn members(pgrp: i32) -> Vec<Vec<String>> {
     let mut pids = os::group(pgrp);
     pids.sort_unstable();
     pids.dedup();
@@ -84,17 +89,30 @@ pub fn foreground(master: impl std::os::fd::AsFd) -> Option<Foreground> {
         pids.remove(at);
         pids.insert(0, pgrp);
     }
-    let members = pids
-        .into_iter()
+    pids.into_iter()
         .filter_map(os::argv)
         .filter(|argv| argv != server_argv())
-        .collect();
-    let mut leader = sample(pgrp);
-    if leader.argv.as_deref() == Some(server_argv()) {
-        leader = ProcSample::default();
-    }
-    Some(Foreground { leader, members })
+        .collect()
 }
+
+/// `members` as `#{pane_foreground_argv}` shows them: one argv per line,
+/// its words joined by spaces. A newline inside a word becomes a space, so
+/// no argument can pass for a member of its own.
+pub fn argv_lines(members: &[Vec<String>]) -> String {
+    members
+        .iter()
+        .map(|argv| {
+            argv.iter()
+                .map(|w| w.replace(['\n', '\r'], " "))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// How many times [`sample`] reads again after the name changed under it.
+const SAMPLE_TRIES: usize = 4;
 
 /// Name, argv and cwd of `pid`; each is `None` if it could not be read.
 /// The three reads are separate calls, so a process that execs between
@@ -102,13 +120,17 @@ pub fn foreground(master: impl std::os::fd::AsFd) -> Option<Foreground> {
 /// after the rest, and a changed one takes the sample again.
 pub fn sample(pid: i32) -> ProcSample {
     let mut command = os::command(pid);
+    let mut tries = 0;
     loop {
         let argv = os::argv(pid);
         let path = os::cwd(pid);
         let after = os::command(pid);
-        if after == command {
+        tries += 1;
+        // A process that keeps exec'ing is read at most SAMPLE_TRIES times;
+        // the last read stands.
+        if after == command || tries == SAMPLE_TRIES {
             return ProcSample {
-                command,
+                command: after,
                 argv,
                 path,
             };
@@ -331,6 +353,15 @@ mod tests {
         let _ = child.wait();
         assert!(members.contains(&me), "{members:?}");
         assert!(members.contains(&(child.id() as i32)), "{members:?}");
+    }
+
+    #[test]
+    fn a_newline_in_an_argument_is_not_a_member_of_its_own() {
+        let members = vec![
+            vec!["sh".to_string(), "-c".to_string(), "x\nnvim".to_string()],
+            vec!["cat".to_string(), "a\r\nb".to_string()],
+        ];
+        assert_eq!(argv_lines(&members), "sh -c x nvim\ncat a  b");
     }
 
     #[cfg(target_os = "macos")]

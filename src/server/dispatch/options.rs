@@ -11,6 +11,7 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use crate::protocol::{ClientCtx, Dialect};
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
+use crate::server::pane::procinfo::{self, ProcSample};
 use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
@@ -2286,6 +2288,11 @@ pub struct ServerVars<'a> {
     inner: &'a dyn FormatVars,
     /// Read the foreground process now, not from the last sample.
     fresh: bool,
+    /// What a fresh expansion has read so far: each is read at most once
+    /// per expansion, and the members only when a format asks for them.
+    group: OnceCell<Option<i32>>,
+    leader: OnceCell<ProcSample>,
+    members: OnceCell<Vec<Vec<String>>>,
 }
 
 impl<'a> ServerVars<'a> {
@@ -2297,6 +2304,9 @@ impl<'a> ServerVars<'a> {
             pane,
             inner,
             fresh: false,
+            group: OnceCell::new(),
+            leader: OnceCell::new(),
+            members: OnceCell::new(),
         }
     }
 
@@ -2313,18 +2323,19 @@ impl<'a> ServerVars<'a> {
     }
 
     fn foreground(&self, name: &str) -> Option<String> {
-        let p = self.state.model.panes.get(&self.pane)?;
-        let fg = p.handle.foreground_now()?;
+        let group = *self.group.get_or_init(|| {
+            let p = self.state.model.panes.get(&self.pane)?;
+            p.handle.foreground_group()
+        });
+        let group = group?;
+        let leader = || self.leader.get_or_init(|| procinfo::leader(group));
         match name {
-            "pane_current_command" => fg.leader.command,
-            "pane_current_argv" => fg.leader.argv.map(|a| a.join(" ")),
-            _ => (!fg.members.is_empty()).then(|| {
-                fg.members
-                    .iter()
-                    .map(|a| a.join(" "))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
+            "pane_current_command" => leader().command.clone(),
+            "pane_current_argv" => leader().argv.as_ref().map(|a| a.join(" ")),
+            _ => {
+                let members = self.members.get_or_init(|| procinfo::members(group));
+                (!members.is_empty()).then(|| procinfo::argv_lines(members))
+            }
         }
     }
 }
@@ -2439,7 +2450,7 @@ impl FormatVars for FormatCtx<'_> {
             // Every member of the foreground group, one argv per line; the
             // sample holds only the leader's (a command reads them all,
             // `ServerVars::fresh`).
-            "pane_foreground_argv" => p.handle.current_argv()?.join(" "),
+            "pane_foreground_argv" => procinfo::argv_lines(&[p.handle.current_argv()?]),
             "pane_current_path" => p
                 .handle
                 .current_path()
