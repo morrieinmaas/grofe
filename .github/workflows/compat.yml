@@ -1,0 +1,82 @@
+name: compat
+
+# TC.13's compat acceptance suite (plan M3.6): the owner's canopy and athome
+# scripts and every corpus line, run against grofe as `tmux` with the Wave C
+# port loaded. It checks canopy and athome out at the commits the goldens in
+# tests/fixtures/compat/golden/tc_13/ were recorded against (that directory's
+# PINS file; the suite fails if a checkout is at another commit).
+#
+# Written for the record and for `act`: GitHub Actions is disabled, and the
+# gate is scripts/ci-local.sh. This job cannot pass on GitHub yet, because
+# both pinned commits are on local branches that are not pushed (canopy
+# `grofe-backend`, athome `grofe-config`). There is no workflow_dispatch
+# trigger, so `scripts/ci-local.sh` (`act workflow_dispatch`) leaves it out
+# until they are.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CANOPY_SHA: c0e331e8a0186acd285373ff896fedc6e6121909
+  ATHOME_SHA: 8bd91688ca54c111fd1669e0cd033036b46c19ce
+
+jobs:
+  compat:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: canopy at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: morrieinmaas/canopy
+          ref: ${{ env.CANOPY_SHA }}
+          path: compat-trees/canopy
+
+      - name: athome at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: morrieinmaas/athome
+          ref: ${{ env.ATHOME_SHA }}
+          path: compat-trees/athome
+
+      - name: The pins match golden/tc_13/PINS
+        run: |
+          grep -qx "canopy $CANOPY_SHA" tests/fixtures/compat/golden/tc_13/PINS
+          grep -qx "athome $ATHOME_SHA" tests/fixtures/compat/golden/tc_13/PINS
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y neovim fzf bash
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim fzf bash
+
+      - name: The TC.13 suite
+        env:
+          GROFE_COMPAT_CANOPY: ${{ github.workspace }}/compat-trees/canopy
+          GROFE_COMPAT_ATHOME: ${{ github.workspace }}/compat-trees/athome
+        run: cargo test --test compat scenarios -- --nocapture
+
+      - name: canopy's port loads and its copies are current
+        run: |
+          cargo build
+          scripts/check-canopy-port.sh compat-trees/canopy compat-trees/athome
