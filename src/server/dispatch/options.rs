@@ -909,9 +909,9 @@ fn expand_value(state: &State, ctx: &ClientCtx, target: &Target, value: &str) ->
     match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            expand(value, &ServerVars::new(state, pane, &client))
+            expand(value, &ServerVars::fresh(state, pane, &client))
         }
-        None => expand(value, &ServerVars::new(state, pane, &vars)),
+        None => expand(value, &ServerVars::fresh(state, pane, &vars)),
     }
 }
 
@@ -2070,9 +2070,9 @@ fn display_message(
     let out = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            expand(text, &ServerVars::new(state, pane, &client))
+            expand(text, &ServerVars::fresh(state, pane, &client))
         }
-        None => expand(text, &ServerVars::new(state, pane, &vars)),
+        None => expand(text, &ServerVars::fresh(state, pane, &vars)),
     };
     if c.print {
         return Ok(format!("{out}\n"));
@@ -2087,7 +2087,7 @@ fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> Strin
     panes
         .map(|p| {
             let vars = FormatCtx::new(&state.model, p);
-            format!("{}\n", expand(fmt, &ServerVars::new(state, p, &vars)))
+            format!("{}\n", expand(fmt, &ServerVars::fresh(state, p, &vars)))
         })
         .collect()
 }
@@ -2284,11 +2284,48 @@ pub struct ServerVars<'a> {
     state: &'a State,
     pane: PaneId,
     inner: &'a dyn FormatVars,
+    /// Read the foreground process now, not from the last sample.
+    fresh: bool,
 }
 
 impl<'a> ServerVars<'a> {
+    /// The status line's and hooks' form: the foreground process comes
+    /// from the pane's 1 s sample, so a redraw costs no syscalls for it.
     pub fn new(state: &'a State, pane: PaneId, inner: &'a dyn FormatVars) -> ServerVars<'a> {
-        ServerVars { state, pane, inner }
+        ServerVars {
+            state,
+            pane,
+            inner,
+            fresh: false,
+        }
+    }
+
+    /// A command's form (a binding's conditional, `display-message`, `set
+    /// -F`, `list-* -F`): `pane_current_command`, `pane_current_argv` and
+    /// `pane_foreground_argv` read the pane's foreground process group at
+    /// this moment, with syscalls and no fork, so a key pressed just after
+    /// a program starts or exits sees the one in front.
+    pub fn fresh(state: &'a State, pane: PaneId, inner: &'a dyn FormatVars) -> ServerVars<'a> {
+        ServerVars {
+            fresh: true,
+            ..ServerVars::new(state, pane, inner)
+        }
+    }
+
+    fn foreground(&self, name: &str) -> Option<String> {
+        let p = self.state.model.panes.get(&self.pane)?;
+        let fg = p.handle.foreground_now()?;
+        match name {
+            "pane_current_command" => fg.leader.command,
+            "pane_current_argv" => fg.leader.argv.map(|a| a.join(" ")),
+            _ => (!fg.members.is_empty()).then(|| {
+                fg.members
+                    .iter()
+                    .map(|a| a.join(" "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+        }
     }
 }
 
@@ -2315,6 +2352,9 @@ impl FormatVars for ServerVars<'_> {
             "pane_tty" => {
                 let p = self.state.model.panes.get(&self.pane)?;
                 Some(p.handle.tty_path()?.display().to_string())
+            }
+            "pane_current_command" | "pane_current_argv" | "pane_foreground_argv" if self.fresh => {
+                self.foreground(name).or_else(|| self.inner.get(name))
             }
             _ => self.inner.get(name),
         }
@@ -2396,6 +2436,10 @@ impl FormatVars for FormatCtx<'_> {
             "pane_pid" => p.handle.pid()?.to_string(),
             "pane_current_command" => p.handle.current_command()?,
             "pane_current_argv" => p.handle.current_argv()?.join(" "),
+            // Every member of the foreground group, one argv per line; the
+            // sample holds only the leader's (a command reads them all,
+            // `ServerVars::fresh`).
+            "pane_foreground_argv" => p.handle.current_argv()?.join(" "),
             "pane_current_path" => p
                 .handle
                 .current_path()

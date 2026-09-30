@@ -168,11 +168,11 @@ fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> S
     match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let vars = ClientVars::new(model, client, Some(FormatCtx::new(model, pane)));
-            with(&ServerVars::new(state, pane, &vars))
+            with(&ServerVars::fresh(state, pane, &vars))
         }
         None => {
             let vars = FormatCtx::new(model, pane);
-            with(&ServerVars::new(state, pane, &vars))
+            with(&ServerVars::fresh(state, pane, &vars))
         }
     }
 }

@@ -609,6 +609,13 @@ impl PaneHandle {
         lock(&self.sample).argv.clone()
     }
 
+    /// The foreground process group, read now rather than sampled
+    /// ([`procinfo::foreground`]): for a command's formats, which must see
+    /// the process that is in front at the moment the key is pressed.
+    pub fn foreground_now(&self) -> Option<procinfo::Foreground> {
+        procinfo::foreground(self.master.get_ref())
+    }
+
     /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
     /// else the foreground process's, from the last sample.
     pub fn current_path(&self) -> Option<PathBuf> {

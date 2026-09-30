@@ -59,6 +59,43 @@ pub(crate) async fn sampler(master: Arc<AsyncFd<OwnedFd>>, out: Arc<Mutex<ProcSa
     }
 }
 
+/// A pane's foreground process group, read at the moment it is asked for
+/// rather than from the last sample: what a key binding's conditional
+/// tests, as vim-tmux-navigator's `ps -t <tty>` does on every keypress.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Foreground {
+    /// The group leader's name, argv and cwd; empty once the leader has
+    /// exited (the first command of a pipeline often has).
+    pub leader: ProcSample,
+    /// The argv of every live member, the leader first, then by pid.
+    pub members: Vec<Vec<String>>,
+}
+
+/// The foreground process group of the pty behind `master`, read now with
+/// syscalls alone (`tcgetpgrp`, then the OS's process tables): never a
+/// fork. A forked child that has not exec'd yet (still the server's own
+/// image) is left out, as [`sampler`] leaves it out.
+pub fn foreground(master: impl std::os::fd::AsFd) -> Option<Foreground> {
+    let pgrp = nix::unistd::tcgetpgrp(master).ok()?.as_raw();
+    let mut pids = os::group(pgrp);
+    pids.sort_unstable();
+    pids.dedup();
+    if let Some(at) = pids.iter().position(|&p| p == pgrp) {
+        pids.remove(at);
+        pids.insert(0, pgrp);
+    }
+    let members = pids
+        .into_iter()
+        .filter_map(os::argv)
+        .filter(|argv| argv != server_argv())
+        .collect();
+    let mut leader = sample(pgrp);
+    if leader.argv.as_deref() == Some(server_argv()) {
+        leader = ProcSample::default();
+    }
+    Some(Foreground { leader, members })
+}
+
 /// Name, argv and cwd of `pid`; each is `None` if it could not be read.
 /// The three reads are separate calls, so a process that execs between
 /// them would give its old name with its new argv; the name is read again
@@ -96,6 +133,24 @@ mod os {
 
     pub fn cwd(pid: i32) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    /// Every pid in process group `pgrp`, from each `/proc/<pid>/stat`.
+    pub fn group(pgrp: i32) -> Vec<i32> {
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|pid| stat_pgrp(*pid) == Some(pgrp))
+            .collect()
+    }
+
+    /// Field 5 of `/proc/<pid>/stat`, after the parenthesised name, which
+    /// may itself hold spaces and parentheses.
+    fn stat_pgrp(pid: i32) -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rest = stat.get(stat.rfind(')')? + 2..)?;
+        rest.split(' ').nth(2)?.parse().ok()
     }
 
     fn split_nul(raw: &[u8]) -> Option<Vec<String>> {
@@ -160,6 +215,34 @@ mod os {
             return None;
         }
         Some(PathBuf::from(std::ffi::OsStr::from_bytes(path)))
+    }
+
+    /// `proc_listpids`'s type for "the members of one process group"
+    /// (libproc.h); the libc crate does not name it.
+    const PROC_PGRP_ONLY: u32 = 2;
+
+    /// Every pid in process group `pgrp`.
+    pub fn group(pgrp: i32) -> Vec<i32> {
+        let Ok(pgrp) = u32::try_from(pgrp) else {
+            return Vec::new();
+        };
+        // A group larger than the buffer is cut short; a foreground group
+        // of a thousand processes is not one a pane holds.
+        let mut pids = vec![0 as libc::c_int; 1024];
+        let size = (pids.len() * mem::size_of::<libc::c_int>()) as libc::c_int;
+        // SAFETY: `pids` is valid for `size` bytes.
+        let n = unsafe {
+            libc::proc_listpids(
+                PROC_PGRP_ONLY,
+                pgrp,
+                pids.as_mut_ptr().cast::<c_void>(),
+                size,
+            )
+        };
+        let n = usize::try_from(n).unwrap_or(0) / mem::size_of::<libc::c_int>();
+        pids.truncate(n.min(pids.len()));
+        pids.retain(|&p| p > 0);
+        pids
     }
 
     /// The full argv from `KERN_PROCARGS2`: `argc` as an i32, the exec path,
@@ -231,6 +314,23 @@ mod tests {
         assert!(!s.argv.unwrap_or_default().is_empty());
         let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
         assert_eq!(s.path.map(|p| p.canonicalize().unwrap()), Some(cwd));
+    }
+
+    /// [`os::group`] lists this process's own group: this process, and a
+    /// child spawned into it.
+    #[test]
+    fn lists_a_process_group() {
+        let me = std::process::id() as i32;
+        let pgrp = nix::unistd::getpgrp().as_raw();
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let members = os::group(pgrp);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(members.contains(&me), "{members:?}");
+        assert!(members.contains(&(child.id() as i32)), "{members:?}");
     }
 
     #[cfg(target_os = "macos")]
