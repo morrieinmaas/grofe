@@ -384,8 +384,23 @@ fn find_window_globs_the_text_and_escapes_the_pattern() {
             })
             .collect()
     };
-    assert_eq!(listed(&mut a, "f?o"), ["2: one"]);
-    assert_eq!(listed(&mut a, "a,b"), ["3: a,b"]);
+    // A one-pane window shows its pane's title, which starts as the full
+    // host name, unless that is `host_short`, as in tmux: so a dotted host
+    // name (a container's `localhost.localdomain`) adds `: "<host>"`.
+    let host = srv
+        .cmd(&["display-message", "-p", "#{host}"])
+        .expect("host");
+    let host = host.trim_end();
+    let short = host.split('.').next().unwrap_or(host);
+    let titled = |name: &str| {
+        if host.is_empty() || host == short {
+            name.to_string()
+        } else {
+            format!("{name}: \"{host}\"")
+        }
+    };
+    assert_eq!(listed(&mut a, "f?o"), [titled("2: one")]);
+    assert_eq!(listed(&mut a, "a,b"), [titled("3: a,b")]);
 }
 
 /// `choose-client -Z` lists the attached clients; Enter detaches the

@@ -39,6 +39,9 @@ use grofe::protocol::{ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::server::{START_MARKER, StartOptions};
 use tempfile::TempDir;
 
+/// The prompt a pane's shell shows (see [`TestServer::command`]).
+pub const PROMPT: &str = "$ ";
+
 /// How long a single CLI invocation may take before the test fails.
 pub const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -107,6 +110,11 @@ impl TestServer {
 
     /// A `grofe -S <socket>` command with the isolated environment applied.
     /// For tests that need custom stdio or spawning; prefer [`Self::cmd`].
+    ///
+    /// A server it starts hands its environment to panes, so a pane's
+    /// shell prompts [`PROMPT`] whoever runs the tests: `sh` would print
+    /// `# ` as root (a CI container) and `$ ` otherwise. `ENV` is cleared so
+    /// no startup file sets another prompt.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
         cmd.arg("-S")
@@ -118,6 +126,8 @@ impl TestServer {
             .env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_STATE_HOME", &self.state_home)
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
+            .env("PS1", PROMPT)
+            .env("ENV", "")
             .env(StartOptions::RESTORE_ON_START_ENV, "0")
             .env(StartOptions::REMAIN_ON_EXIT_ENV, "1");
         cmd
