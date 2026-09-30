@@ -1,2 +1,387 @@
 //! FE.3: format, option, status and hook rows, against goldens in
-//! `golden/fe_3/`. Empty until FE.3 lands.
+//! `golden/fe_3/`. Each scenario is compared step by step: every step
+//! must equal its golden except those a scenario's divergence list names,
+//! each with its reason and owner, and a listed step must still differ
+//! (so the list shrinks as the gaps close).
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+use crate::fe_1::grofe_cli;
+use crate::normalize::{Normalizer, fixtures_dir};
+use crate::replay::{Cli, parse_scenario, replay};
+
+/// A transcript split into steps: each step's first line (`$ ...`,
+/// `client ...`, `screen ...`) with everything it recorded.
+fn steps(transcript: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in transcript.split_inclusive('\n') {
+        let starts = line.starts_with("$ ")
+            || line.starts_with("$& ")
+            || line.starts_with("client ")
+            || line == "screen\n"
+            || line.starts_with("screen ");
+        match out.last_mut() {
+            Some(step) if !starts => step.push_str(line),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out
+}
+
+/// The grofe side of `fe_3/<name>` against its golden, after `fix`
+/// (harness differences only), allowing the listed steps to differ.
+fn check(name: &str, diverges: &[(&str, &str)], fix: fn(String) -> String) {
+    let scenario = fixtures_dir().join(format!("golden/fe_3/{name}.scenario"));
+    let parsed = parse_scenario(&fs::read_to_string(&scenario).unwrap()).unwrap();
+    let golden = fs::read_to_string(scenario.with_extension("golden")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cli = with_client_ttys(grofe_cli(dir.path()), dir.path());
+    let got = fix(replay(&cli, &parsed).normalized(&Normalizer::load()));
+    let (want, got) = (steps(&golden), steps(&got));
+    assert_eq!(
+        want.len(),
+        got.len(),
+        "fe_3/{name}: step count\n{}",
+        got.join("")
+    );
+    let listed: BTreeMap<&str, &str> = diverges.iter().copied().collect();
+    let mut wrong = Vec::new();
+    let mut stale = Vec::new();
+    for (w, g) in want.iter().zip(&got) {
+        let head = w.lines().next().unwrap_or_default();
+        match (listed.contains_key(head), w == g) {
+            (false, false) => wrong.push(format!("--- golden\n{w}+++ grofe\n{g}")),
+            (true, true) => stale.push(head.to_string()),
+            _ => {}
+        }
+    }
+    for head in listed.keys() {
+        assert!(
+            want.iter().any(|w| w.lines().next() == Some(head)),
+            "fe_3/{name}: listed step {head:?} is not in the scenario"
+        );
+    }
+    assert!(
+        wrong.is_empty(),
+        "fe_3/{name} differs:\n{}",
+        wrong.join("\n")
+    );
+    assert!(
+        stale.is_empty(),
+        "fe_3/{name}: listed steps now match: {stale:#?}"
+    );
+}
+
+/// `cli` behind a wrapper that answers the replayer's attach check,
+/// `list-clients -F '#{client_tty}'`, with the ttys of this run's attach
+/// clients once the server lists a client, since grofe's `client_tty` is
+/// still empty (TC.3 left it a stub for FE.2, which sends the tty in the
+/// attach hello). Every other command reaches grofe as it is.
+// ponytail: harness only; drop it once FE.2 fills client_tty.
+fn with_client_ttys(mut cli: Cli, dir: &Path) -> Cli {
+    let wrap = dir.join("wrap");
+    fs::create_dir_all(&wrap).unwrap();
+    let script = wrap.join("tmux");
+    let grofe = cli.program.display().to_string();
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *'list-clients -F #{{client_tty}}')\n\
+             \x20 [ \"$('{grofe}' \"$@\" | wc -l)\" -gt 0 ] || exit 0\n\
+             \x20 ps -A -o tty= -o args= | awk -v g='{grofe}' 'index($0, g \" \") && / attach/ {{ print \"/dev/\" $1 }}'\n\
+             \x20 exit 0 ;;\n\
+             esac\n\
+             exec '{grofe}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    cli.program = script;
+    cli
+}
+
+fn same(s: String) -> String {
+    s
+}
+
+/// macOS gives a pane's cwd through `/private`, where the harness's
+/// temporary directory really is; the container has no such link.
+fn realpath(s: String) -> String {
+    s.replace("/private<TMPDIR>", "<TMPDIR>")
+}
+
+/// Case 1, 6: the format vocabulary, short forms, escapes, `#()` and the
+/// corpus's own format strings; `#{version}` is `3.7b`.
+#[test]
+fn formats_match_their_golden() {
+    check("formats", FORMAT_GAPS, realpath);
+}
+
+const FORMAT_GAPS: &[(&str, &str)] = &[
+    (
+        "$ display -p -t main:1.1 '#{cursor_y}'",
+        "native: no cursor_y variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{history_bytes}'",
+        "native: no history_bytes variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{history_limit}'",
+        "native: no history_limit variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{log_info}'",
+        "native: tmux formats fall back to the session, then the global, \
+         environment; grofe's FormatVars do not",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{pane_at_left}'",
+        "native: no pane_at_left variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{pane_marked_set}'",
+        "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{pane_marked}'",
+        "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{pane_right}'",
+        "native: no pane_right variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{session_path}'",
+        "native: no session_path variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{start_time}'",
+        "native: no start_time variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ display -p -t main:1.1 '#{window_layout}'",
+        "FE.2: tmux's layout string (TC.3 left window_layout an empty stub)",
+    ),
+    (
+        "$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'",
+        "native: grofe's format language has no q:, E:, T:, =N:, s///: or n: \
+         (TC.3); the front end leaves them, and notes them in compat-miss.log",
+    ),
+    (
+        "$ list-panes -a -f '#{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}}' -F '#{session_name}'",
+        "FE.2: list-* -a and -f",
+    ),
+    (
+        "$ list-panes -a -f '#{==:#{pane_dead},1}' -F '#{pane_id}'",
+        "FE.2: list-* -a and -f",
+    ),
+    (
+        "$ list-panes -t main:1 -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}] #{?pane_active,[active],[inactive]}'",
+        "native: no history_limit variable (TC.3's FormatVars)",
+    ),
+    (
+        "$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p \"not #W\"'",
+        "FE.4: the if-shell row (the condition is rewritten here)",
+    ),
+    (
+        "$ if -F -t main:1 '#{m:*ai*,#S}' 'display -p match' 'display -p nomatch'",
+        "FE.4: the if-shell row (the condition is rewritten here)",
+    ),
+];
+
+/// Case 2: canopy's two-row status theme, rendered on a pty-attached
+/// client, cell for cell, with its `#()` aggregator fixed.
+#[test]
+fn the_canopy_status_matches_its_golden() {
+    check("canopy", &[], same);
+}
+
+/// Case 3: `show` output, arrays and appends.
+#[test]
+fn show_options_match_their_golden() {
+    check("show", SHOW_GAPS, same);
+}
+
+const SHOW_GAPS: &[(&str, &str)] = &[
+    ("$ show -g window-status-format", AS_SENT),
+    ("$ show -g -v status-right", AS_SENT),
+    ("$ show -g set-titles-string", AS_SENT),
+    ("$ show -g status-right", TMUX_DEFAULT),
+    ("$ show -g window-status-current-format", TMUX_DEFAULT),
+    (
+        "$ show -g",
+        "blocked: tmux's show -g is its session table (68 options, window and server \
+         options apart); grofe lists its own options in one table, and the sources' \
+         @src- options (the option store, dispatch/options.rs)",
+    ),
+];
+
+/// A value the front end rewrote is stored, and shown, in grofe's spelling.
+const AS_SENT: &str = "blocked: show prints a rewritten value in grofe's spelling \
+                       (#{window_index}, #{@src-<hash>}), not as tmux was sent it; needs \
+                       the option store to keep the text as sent";
+
+/// grofe's format defaults are its own spelling of tmux's.
+const TMUX_DEFAULT: &str = "blocked: under tmux identity the default shows in grofe's \
+                            spelling, not tmux's text (Options::use_tmux_defaults); the \
+                            same seam as a value as sent";
+
+/// Case 4: each of the twelve hooks fires once, its output where tmux
+/// puts it against its command's reply.
+#[test]
+fn hooks_match_their_golden() {
+    check("hooks", HOOK_GAPS, same);
+}
+
+const HOOK_GAPS: &[(&str, &str)] = &[
+    ("$ show-hooks -g after-select-pane", SHOW_HOOKS),
+    ("$ show-hooks -g pane-exited", SHOW_HOOKS),
+    (
+        "$ resize-window -t main:1 -x 70",
+        "FE.2: the resize-window row; the hook itself is mapped",
+    ),
+    (
+        "$ set-hook -g alert-bell 'display x'",
+        "refused on purpose: grofe has no event for this tmux hook (spec 4.5 names twelve)",
+    ),
+    (
+        "$ set-hook after-select-pane 'display x'",
+        "refused on purpose: grofe's hooks are global only (TC.5)",
+    ),
+];
+
+const SHOW_HOOKS: &str = "blocked: show-hooks prints grofe's event name and the command as \
+                          set; tmux prints its hook name with an index and the command \
+                          re-printed from its parse (server::hooks::show, TC.5's)";
+
+/// Case 7: a hook whose command uses tmux-only forms runs them when it
+/// fires.
+#[test]
+fn a_hook_s_tmux_forms_run_when_it_fires() {
+    check("hook-forms", &[], same);
+}
+
+const ENV_GAPS: &[(&str, &str)] = &[(
+    "$ show-environment -g",
+    "native: tmux's global environment also holds PWD, the server's start \
+     directory (the environment's seed, server::hooks, TC.5's)",
+)];
+
+/// Case 5: `show-environment -g` and the environment flags. The grofe
+/// side's harness adds its own runtime directories and a `bin` dir on
+/// `PATH` to the server's environment; those lines are dropped first.
+#[test]
+fn the_environment_matches_its_golden() {
+    fn harness(s: String) -> String {
+        s.lines()
+            .filter(|l| !l.starts_with("XDG_") && !l.starts_with("GROFE_"))
+            .map(|l| l.replace("PATH=<TMPDIR>/bin:", "PATH="))
+            .map(|l| format!("{l}\n"))
+            .collect()
+    }
+    check("environment", ENV_GAPS, harness);
+}
+
+/// Every corpus form of FE.3's verbs (`docs/compat-coverage.md`'s Forms
+/// table) translates, and each format-bearing argument is rewritten.
+#[test]
+fn every_fe3_corpus_form_translates() {
+    use grofe::cmd::Command;
+    use grofe::compat::tmux;
+    use grofe::protocol::{ClientCtx, Dialect};
+    let ctx = ClientCtx {
+        cwd: std::path::PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: Dialect::Tmux,
+    };
+    let forms: &[&[&str]] = &[
+        &["set-environment", "-g", "OPENSESSIONS_DIR", "/x"],
+        &["set-environment", "-g", "-u", "OPENSESSIONS_WIDTH"],
+        &["set-environment", "-h", "log_info", "x"],
+        &["set-environment", "-t", "main", "SMUG_SESSION", "x"],
+        &["set-hook", "-g", "after-select-pane", "display -p #S"],
+        &["set-hook", "-g", "-u", "after-select-pane"],
+        &[
+            "set-option",
+            "-F",
+            "-g",
+            "command-alias[200]",
+            "wk=#{@wk_cmd_show}",
+        ],
+        &["set-option", "-a", "-g", "status-right", "#(x)"],
+        &["set-option", "-a", "-s", "terminal-features", ",x:RGB"],
+        &["set-option", "-g", "status-left", "#S"],
+        &["set-option", "-g", "-q", "status-right", "#(a)#(b)"],
+        &["set-option", "-g", "-u", "status-right"],
+        &["set-option", "-p", "@a", "1"],
+        &[
+            "set-option",
+            "-p",
+            "-t",
+            "%1",
+            "pane-border-format",
+            "#{@fzf-border-label}",
+        ],
+        &["set-option", "-s", "escape-time", "10"],
+        &["set-option", "-t", "main", "@a", "1"],
+        &["set-option", "-t", "main", "-u", "@a"],
+        &[
+            "set-window-option",
+            "-g",
+            "automatic-rename-format",
+            "#{b:pane_current_path}",
+        ],
+        &[
+            "set-window-option",
+            "-t",
+            "main:1",
+            "automatic-rename",
+            "on",
+        ],
+        &["show-environment", "-g", "OPENSESSIONS_DIR"],
+        &["show-options", "-g", "status"],
+        &["show-options", "-g", "-q", "@x"],
+        &["show-options", "-g", "-q", "-v", "@tpm_plugins"],
+        &["show-options", "-g", "-v", "status-right"],
+        &["show-options", "-g", "-v", "-w", "main-pane-width"],
+        &["show-options", "-g", "-w", "mode-keys"],
+        &["show-options", "-p"],
+        &["show-options", "-q", "-t", "%1", "-v", "@a"],
+        &["show-options", "-s", "-v", "escape-time"],
+        &["show-window-options"],
+        &[
+            "show-window-options",
+            "-t",
+            "main:1",
+            "-v",
+            "automatic-rename",
+        ],
+    ];
+    for form in forms {
+        let argv: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+        let got = tmux::dispatch_command(&argv, &ctx);
+        let cmds = got.unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        let text = format!("{cmds:?}");
+        // A hook keeps its command as sent, translated when it fires.
+        let stored = form[0] == "set-hook";
+        assert!(
+            stored || (!text.contains("#S") && !text.contains("#(")),
+            "{argv:?}: {text}"
+        );
+        if form.contains(&"#(a)#(b)") {
+            let sources = cmds
+                .iter()
+                .filter(|c| matches!(c, Command::RegisterSource(_)))
+                .count();
+            assert_eq!(sources, 2, "{cmds:?}");
+        }
+    }
+}

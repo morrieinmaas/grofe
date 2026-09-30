@@ -1,0 +1,332 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat -u
+? 0
+$ split-window -d -t main:1 cat -u
+? 0
+$ new-window -d -t main -n second cat -u
+? 0
+$ set -g @opt value
+? 0
+$ set -g @empty ''
+? 0
+$ setenv -g log_info INFO
+? 0
+$ display -p -t main:1.1 '#{@opt}'
+value
+? 0
+$ display -p -t main:1.1 '#{alternate_on}'
+0
+? 0
+$ display -p -t main:1.1 '#{buffer_size}'
+
+? 0
+$ display -p -t main:1.1 '#{client_last_session}'
+
+? 0
+$ display -p -t main:1.1 '#{client_name}'
+
+? 0
+$ display -p -t main:1.1 '#{client_prefix}'
+
+? 0
+$ display -p -t main:1.1 '#{client_session}'
+
+? 0
+$ display -p -t main:1.1 '#{client_termname}'
+
+? 0
+$ display -p -t main:1.1 '#{client_tty}'
+
+? 0
+$ display -p -t main:1.1 '#{copy_cursor_word}'
+
+? 0
+$ display -p -t main:1.1 '#{cursor_y}'
+0
+? 0
+$ display -p -t main:1.1 '#{history_bytes}'
+480
+? 0
+$ display -p -t main:1.1 '#{history_limit}'
+50000
+? 0
+$ display -p -t main:1.1 '#{history_size}'
+0
+? 0
+$ display -p -t main:1.1 '#{log_info}'
+INFO
+? 0
+$ display -p -t main:1.1 '#{mouse_any_flag}'
+0
+? 0
+$ display -p -t main:1.1 '#{mouse_hyperlink}'
+
+? 0
+$ display -p -t main:1.1 '#{mouse_line}'
+
+? 0
+$ display -p -t main:1.1 '#{mouse_status_range}'
+
+? 0
+$ display -p -t main:1.1 '#{mouse_word}'
+
+? 0
+$ display -p -t main:1.1 '#{pane_active}'
+1
+? 0
+$ display -p -t main:1.1 '#{pane_at_left}'
+1
+? 0
+$ display -p -t main:1.1 '#{pane_current_command}'
+cat
+? 0
+$ display -p -t main:1.1 '#{pane_current_path}'
+<TMPDIR>/home
+? 0
+$ display -p -t main:1.1 '#{pane_dead}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_floating_flag}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_height}'
+12
+? 0
+$ display -p -t main:1.1 '#{pane_id}'
+%0
+? 0
+$ display -p -t main:1.1 '#{pane_in_mode}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_index}'
+1
+? 0
+$ display -p -t main:1.1 '#{pane_left}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_marked_set}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_marked}'
+0
+? 0
+$ display -p -t main:1.1 '#{pane_mode}'
+
+? 0
+$ display -p -t main:1.1 '#{pane_pid}'
+<PID>
+? 0
+$ display -p -t main:1.1 '#{pane_right}'
+79
+? 0
+$ display -p -t main:1.1 '#{pane_search_string}'
+
+? 0
+$ display -p -t main:1.1 '#{pane_start_command}'
+cat -u
+? 0
+$ display -p -t main:1.1 '#{pane_title}'
+<HOST>
+? 0
+$ display -p -t main:1.1 '#{pane_tty}'
+<TTY>
+? 0
+$ display -p -t main:1.1 '#{pane_width}'
+80
+? 0
+$ display -p -t main:1.1 '#{pid}'
+<PID>
+? 0
+$ display -p -t main:1.1 '#{session_attached}'
+0
+? 0
+$ display -p -t main:1.1 '#{session_created}'
+<EPOCH>
+? 0
+$ display -p -t main:1.1 '#{session_grouped}'
+0
+? 0
+$ display -p -t main:1.1 '#{session_group}'
+
+? 0
+$ display -p -t main:1.1 '#{session_id}'
+$0
+? 0
+$ display -p -t main:1.1 '#{session_name}'
+main
+? 0
+$ display -p -t main:1.1 '#{session_path}'
+<TMPDIR>/home
+? 0
+$ display -p -t main:1.1 '#{session_windows}'
+2
+? 0
+$ display -p -t main:1.1 '#{socket_path}'
+<SOCKET>
+? 0
+$ display -p -t main:1.1 '#{start_time}'
+<EPOCH>
+? 0
+$ display -p -t main:1.1 '#{version}'
+3.7b
+? 0
+$ display -p -t main:1.1 '#{window_active}'
+1
+? 0
+$ display -p -t main:1.1 '#{window_flags}'
+*
+? 0
+$ display -p -t main:1.1 '#{window_height}'
+24
+? 0
+$ display -p -t main:1.1 '#{window_id}'
+@0
+? 0
+$ display -p -t main:1.1 '#{window_index}'
+1
+? 0
+$ display -p -t main:1.1 '#{window_layout}'
+c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1]
+? 0
+$ display -p -t main:1.1 '#{window_name}'
+first
+? 0
+$ display -p -t main:1.1 '#{window_panes}'
+2
+? 0
+$ display -p -t main:1.1 '#{window_width}'
+80
+? 0
+$ display -p -t main:1.1 '#{window_zoomed_flag}'
+0
+? 0
+$ display -p -t main:1.1 '#S|#I|#P|#W|#F|#h|#D|#T|#H'
+main|1|1|first|*|<HOST>|%0|<HOST>|<HOST>
+? 0
+$ display -p -t main:2 '#S:#I: #{window_name}'
+main:2: second
+? 0
+$ display -p -t main:1.2 '#S:#{window_index}.#{pane_index}'
+main:1.2
+? 0
+$ display -p -t main:1 '#{?#W,[#W],none} #{?#{==:#S,main},yes,no}'
+[first] yes
+? 0
+$ display -p -t main:1 '#{?@opt,set,unset} #{?@empty,set,unset} #{?@nope,set,unset} #{?session_name,a,b} #{?window_zoomed_flag,z,-}'
+set unset unset a -
+? 0
+$ display -p -t main:1 '## ##{pane_id} ##S #,#} a#{?session_name,x#,y,z} #{l:#S,#{x}} end#'
+# #{pane_id} #S ,} ax,y #S,#{x} end
+? 0
+$ display -p -t main:1 '#Q#1#-#!#a #[fg=red,bold]#S#[default] #[align=right]#[range=user|net]x#[norange]'
+#Q#1#-#!#a #[fg=red,bold]main#[default] #[align=right]#[range=user|net]x#[norange]
+? 0
+$ display -p -t main:1 'a#(echo job)b'
+ab
+? 0
+$ display -p -t main:1 'a#(echo job'
+a
+? 0
+$ display -p -t main:1 'a#{?session_name,b'
+a
+? 0
+$ display -p -t main:1 '#{!=:#{session_name},x} #{==:#{window_panes},2} #{>:#{window_panes},1} #{>=:#{window_panes},3} #{>:10,9}'
+1 1 1 0 0
+? 0
+$ display -p -t main:1 '#{&&:#{window_active},#{!=:#{pane_title},sidebar}} #{&&:1,0,1} #{||:0,0,1} #{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}'
+1 0 1 0
+? 0
+$ display -p -t main:1 '#{b:pane_current_path} #{m:*ai*,#{session_name}} #{m:x*,#{session_name}} #{m/r:^ma.n$,#{session_name}} #{m/r:^n?vim$,#{pane_current_command}}'
+home 1 0 1 0
+? 0
+$ display -p -t main:1 '#{?window_active,#{?pane_active,both,window},none}'
+both
+? 0
+$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'
+main|value|value|mai|mAin|4
+? 0
+$ list-panes -t main:1 -F '#{session_name}|#{window_index}|#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_left}|#{pane_top}'
+main|1|1|1|cat|80|12|0|0
+main|1|2|0|cat|80|11|0|13
+? 0
+$ list-panes -t main:1 -F 'pane|#{session_name}|#{window_index}|#{window_active}|:#{window_flags}|#{pane_index}|#{pane_title}|#{pane_active}|#{pane_current_command}|#{history_size}'
+pane|main|1|1|:*|1|<HOST>|1|cat|0
+pane|main|1|1|:*|2|<HOST>|0|cat|0
+? 0
+$ list-panes -a -f '#{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}}' -F '#{session_name}|#{pane_index}'
+main|1
+main|2
+? 0
+$ list-panes -a -f '#{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}}' -F '#{session_name}'
+? 0
+$ list-panes -a -f '#{==:#{pane_dead},1}' -F '#{pane_id}'
+? 0
+$ list-panes -t main:1 -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}] #{?pane_active,[active],[inactive]}'
+main:1.1: [first:<HOST>] cat  [80x12] [history 0/50000] [active]
+main:1.2: [first:<HOST>] cat  [80x11] [history 0/50000] [inactive]
+? 0
+$ list-panes -t main:1 -F '#F'
+*
+*
+? 0
+$ list-sessions -F '#S'
+main
+? 0
+$ list-sessions -F '#S: sessions'
+main: sessions
+? 0
+$ list-sessions -F '#{session_grouped}|#{session_group}|#{session_id}|#{session_name}'
+0||$0|main
+? 0
+$ list-sessions -F '#{session_id}' -f '#{==:#{session_name},main}'
+$0
+? 0
+$ list-windows -t main -F '#{session_name}:#{window_index} #{window_name}'
+main:1 first
+main:2 second
+? 0
+$ list-windows -t main -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'
+▶ 1:first (2p)
+  2:second (1p)
+? 0
+$ list-windows -t main -F '#{window_flags} #{window_index}'
+* 1
+ 2
+? 0
+$ list-windows -t main -F 'window|#{session_name}|#{window_index}|:#{window_name}|#{window_active}|:#{window_flags}'
+window|main|1|:first|1|:*
+window|main|2|:second|0|:
+? 0
+$ display-message -p -t main:1 '#S:#I:'
+main:1:
+? 0
+$ display-message -p -F '#{pane_index}' -t main:1.2
+2
+? 0
+$ new-window -d -t main -n third -P -F '#S:#I #{window_name}' cat -u
+main:3 third
+? 0
+$ split-window -d -t main:3 -P -F '#{session_name}:#{window_index}.#{pane_index}' cat -u
+main:3.2
+? 0
+$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p "not #W"'
+not first
+? 0
+$ if -F -t main:1 '#{m:*ai*,#S}' 'display -p match' 'display -p nomatch'
+match
+? 0
+$ run-shell 'echo "#S #{window_index} ##{pane_id}"'
+main 1 #{pane_id}
+? 0
+$ set -gF @expanded '#S-#W'
+? 0
+$ show -gv @expanded
+main-first
+? 0
+$ set -g @kept '#S'
+? 0
+$ show -gv @kept
+#S
+? 0
+$ display -p -t main:1 '#{@kept}'
+#S
+? 0

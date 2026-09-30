@@ -1,21 +1,711 @@
 //! Format, option, status and hook rows (FE.3): tmux format strings
-//! rewritten into grofe's, `#()` to status sources, array options, hook
-//! names onto grofe events.
+//! rewritten into grofe's, `#()` to status sources, hook names onto grofe
+//! events, the environment verbs.
 //!
 //! Rows and rewrites only: the schema, the dispatcher and the helpers a
 //! translation uses ([`super::Invocation`]) are `mod.rs`'s. The most
 //! specific matching row decides, and between rows as specific this
 //! file's come before the core rows, so a row here naming a core form
 //! takes it over. Rewrites ([`super::Rewrite`]) apply before any row.
+//!
+//! **Formats.** [`to_native`] rewrites a tmux 3.7b format into grofe's
+//! format language (spec §4.5's Formats row, D22); grofe's own expander
+//! (`cmd::format::expand`) then runs on the result, so nothing here
+//! expands a format. tmux's syntax and grofe's differ in these places
+//! (each recorded on tmux 3.7b):
+//!
+//! - the short forms `#D #F #H #I #P #S #T #W #h` become `#{pane_id}` and
+//!   the rest; any other `#x` stays `#x`, as tmux prints it;
+//! - `##` is `#` in both, and `##{` a literal `#{`;
+//! - `#,` is a literal comma and `#}` a literal brace; outside a `#{...}`
+//!   they become the plain character, inside one `#,` becomes a nested
+//!   format that expands to a comma, so grofe's expander does not split on
+//!   it;
+//! - `#{l:text}` is `text`, unexpanded;
+//! - a trailing `#` is dropped, and an unterminated `#{` or `#(` drops
+//!   the rest of the format;
+//! - `#(cmd)` in an option the status line reads becomes `#{@src-<hash>}`,
+//!   the option a status source for `cmd` keeps its last output line in
+//!   (D8, TC.4), registered by a `__register-source` run first. Anywhere
+//!   else (`display -p`, `list-* -F`, `if -F`, `run-shell`) it is empty,
+//!   as tmux's CLI prints it: a job tmux starts for a CLI client is never
+//!   read back.
+//!
+//! tmux's modifiers grofe's language lacks (`E:`, `T:`, `q:`, `=N:`,
+//! `s/a/b/:`, `n:`, `w:` and the rest) are left for the expander, which
+//! gives them nothing, and noted in `compat-miss.log` by their first
+//! letter only (a modifier can carry user text).
+//!
+//! **Where formats are.** Every argument tmux expands as a format gets
+//! [`to_native`]: `display-message`'s message and `-F`; `list-*`'s `-F`
+//! and `-f`; `-P -F` of the creating verbs; `-c`/`-d` start directories;
+//! `if-shell`'s condition and `run-shell`'s command; prompt, popup and
+//! menu texts; `select-pane -T`; and the value of `set` for the options
+//! tmux reads as formats, or for any option with `-F`.
 
-use super::{Rewrite, Row};
+use std::fmt::Write as _;
 
-/// This area's rows.
-pub(crate) fn rows() -> Vec<Row> {
-    Vec::new()
+use super::{
+    Arg, FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Rewritten, Row, SEMANTIC,
+    TmuxError, row,
+};
+use crate::cmd::{Command, RegisterSource};
+
+// ---- Format rewriting ------------------------------------------------------
+
+/// What a `#(cmd)` becomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Jobs {
+    /// A status source's option, registered first: an option value the
+    /// status line reads.
+    Sources,
+    /// Nothing: a format expanded once, for a CLI reply or a condition.
+    Empty,
+}
+
+/// tmux 3.7b's one-letter short forms (`format_upper`, `format_lower`).
+const SHORT_FORMS: &[(char, &str)] = &[
+    ('D', "pane_id"),
+    ('F', "window_flags"),
+    ('H', "host"),
+    ('I', "window_index"),
+    ('P', "pane_index"),
+    ('S', "session_name"),
+    ('T', "pane_title"),
+    ('W', "window_name"),
+    ('h', "host_short"),
+];
+
+/// The modifier prefixes grofe's expander knows (TC.3), longest first.
+const NATIVE_MODIFIERS: &[&str] = &[
+    "?", "==:", "!=:", ">=:", ">:", "<=:", "<:", "&&:", "||:", "!!:", "!:", "m:", "m/", "b:", "t:",
+];
+
+/// `fmt`, a tmux format, in grofe's format language, with the status
+/// sources its `#(cmd)`s need registered first ([`Rewritten::before`]).
+pub fn to_native(fmt: &str, jobs: Jobs) -> Rewritten {
+    let mut r = Rewriter {
+        jobs,
+        before: Vec::new(),
+    };
+    let value = r.convert(fmt, false);
+    Rewritten {
+        value,
+        before: r.before,
+    }
+}
+
+struct Rewriter {
+    jobs: Jobs,
+    before: Vec<Command>,
+}
+
+impl Rewriter {
+    /// `s` rewritten; `in_body` when it is (part of) the body of a
+    /// `#{...}`, where a bare comma or brace would end a piece.
+    fn convert(&mut self, s: &str, in_body: bool) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        while let Some(ch) = s[i..].chars().next() {
+            if ch != '#' {
+                out.push(ch);
+                i += ch.len_utf8();
+                continue;
+            }
+            // tmux drops a trailing `#`.
+            let Some(next) = s[i + 1..].chars().next() else {
+                break;
+            };
+            match next {
+                '#' => {
+                    out.push_str("##");
+                    i += 2;
+                }
+                ',' => {
+                    out.push_str(if in_body { COMMA } else { "," });
+                    i += 2;
+                }
+                '}' => {
+                    if in_body {
+                        // ponytail: grofe's language has no escape for a
+                        // brace inside a `#{...}`; it is dropped.
+                        crate::compat::note_miss("format escape #} inside #{}");
+                    } else {
+                        out.push('}');
+                    }
+                    i += 2;
+                }
+                '{' => {
+                    // An unterminated `#{` drops the rest, as in tmux.
+                    let Some(len) = brace_len(&s[i + 2..]) else {
+                        break;
+                    };
+                    let body = &s[i + 2..i + 2 + len];
+                    out.push_str(&self.brace(body, in_body));
+                    i += 2 + len + 1;
+                }
+                '(' => {
+                    let Some(len) = job_len(&s[i + 2..]) else {
+                        break;
+                    };
+                    out.push_str(&self.job(&s[i + 2..i + 2 + len]));
+                    i += 2 + len + 1;
+                }
+                c => {
+                    match SHORT_FORMS.iter().find(|(f, _)| *f == c) {
+                        Some((_, name)) => {
+                            let _ = write!(out, "#{{{name}}}");
+                        }
+                        None => {
+                            out.push('#');
+                            out.push(c);
+                        }
+                    }
+                    i += 1 + c.len_utf8();
+                }
+            }
+        }
+        out
+    }
+
+    /// One `#{body}`, rewritten whole.
+    fn brace(&mut self, body: &str, in_body: bool) -> String {
+        if let Some(text) = body.strip_prefix("l:") {
+            return literal(text, in_body);
+        }
+        if let Some(m) = NATIVE_MODIFIERS.iter().find(|m| body.starts_with(**m)) {
+            let rest = &body[m.len()..];
+            return format!("#{{{m}{}}}", self.convert(rest, true));
+        }
+        if let Some(modifier) = foreign_modifier(body) {
+            crate::compat::note_miss(&format!("format modifier {modifier}"));
+        }
+        format!("#{{{}}}", self.convert(body, true))
+    }
+
+    /// A `#(cmd)`: its source's option, or nothing.
+    // ponytail: tmux expands `cmd` as a format before it runs it; a source
+    // runs it as written.
+    fn job(&mut self, cmd: &str) -> String {
+        if self.jobs == Jobs::Empty {
+            return String::new();
+        }
+        let key = crate::server::sources::inline_key(cmd);
+        let register = Command::RegisterSource(RegisterSource {
+            // Named, so it never expires while the option still reads it
+            // (an inline source expires an hour after it was last
+            // registered, and nothing registers it again).
+            name: Some(key.clone()),
+            command: cmd.to_string(),
+        });
+        if !self.before.contains(&register) {
+            self.before.push(register);
+        }
+        format!("#{{@{key}}}")
+    }
+}
+
+/// A nested format that expands to a comma: the else branch of a false
+/// condition is everything after its second comma.
+const COMMA: &str = "#{?,,,}";
+
+/// `text`, unexpanded, as a grofe format that expands to it.
+fn literal(text: &str, in_body: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '#' => out.push_str("##"),
+            ',' if in_body => out.push_str(COMMA),
+            '}' if in_body => crate::compat::note_miss("format escape } inside #{l:}"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The length of a `#{...}` body, `s` starting just after its `#{`, as
+/// tmux's `format_skip` finds its end: `#{` opens a level, `}` closes one,
+/// and `#` escapes a following `,#{}:`. `None` when it never closes.
+fn brace_len(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut depth = 1usize;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'#' if b.get(i + 1) == Some(&b'{') => {
+                depth += 1;
+                i += 2;
+            }
+            b'#' if b.get(i + 1).is_some_and(|c| b",#}:".contains(c)) => i += 2,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The length of a `#(...)` command, `s` starting just after its `#(`:
+/// parentheses nest, as tmux counts them. `None` when it never closes.
+fn job_len(s: &str) -> Option<usize> {
+    let mut depth = 1usize;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The first letter of a tmux modifier grofe's language lacks, when
+/// `body` starts with one: a `:` before any nested format or comma.
+fn foreign_modifier(body: &str) -> Option<char> {
+    let head = body.split(['#', ',']).next().unwrap_or_default();
+    head.contains(':').then(|| head.chars().next()).flatten()
+}
+
+// ---- Where formats are -------------------------------------------------------
+
+/// Options tmux reads as formats, by base name (`status-format[N]` is
+/// `status-format`).
+const FORMAT_OPTIONS: &[&str] = &[
+    "automatic-rename-format",
+    "pane-border-format",
+    "set-titles-string",
+    "status-format",
+    "status-left",
+    "status-right",
+    "window-status-current-format",
+    "window-status-format",
+];
+
+/// An argument tmux expands once, for a reply or a condition.
+fn format_arg(_: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxError> {
+    Ok(to_native(value, Jobs::Empty))
+}
+
+/// `set`'s value: rewritten for an option tmux reads as a format, for a
+/// style that holds a format (tmux expands a style only then, so a
+/// `#F5F5F5` colour stays a colour), and for any option with `-F`, which
+/// expands it now. A user option's value is text: tmux never expands it
+/// when a format reads it.
+fn option_value(inv: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxError> {
+    if inv.getopt().has('F') {
+        return Ok(to_native(value, Jobs::Empty));
+    }
+    let Some(name) = inv.option_name() else {
+        return Ok(Rewritten::value(value));
+    };
+    let base = name.split('[').next().unwrap_or(name);
+    let style = base.ends_with("-style") && value.contains("#{");
+    if FORMAT_OPTIONS.contains(&base) || style {
+        Ok(to_native(value, Jobs::Sources))
+    } else {
+        Ok(Rewritten::value(value))
+    }
+}
+
+const fn rewrite(verb: &'static str, arg: Arg) -> Rewrite {
+    Rewrite {
+        verb,
+        arg,
+        rewrite: format_arg,
+    }
 }
 
 /// This area's argument rewrites, applied before any row matches.
 pub(crate) fn rewrites() -> Vec<Rewrite> {
-    Vec::new()
+    use Arg::{Flag, Positional};
+    let mut out = vec![
+        rewrite("display-message", Positional(0)),
+        rewrite("display-message", Flag('F')),
+        rewrite("if-shell", Positional(0)),
+        rewrite("run-shell", Positional(0)),
+        rewrite("list-commands", Flag('F')),
+        rewrite("select-pane", Flag('T')),
+        rewrite("confirm-before", Flag('p')),
+        rewrite("command-prompt", Flag('I')),
+        rewrite("command-prompt", Flag('p')),
+        rewrite("display-popup", Flag('T')),
+        rewrite("display-popup", Flag('d')),
+        rewrite("display-menu", Flag('T')),
+        rewrite("respawn-pane", Flag('c')),
+        rewrite("respawn-window", Flag('c')),
+    ];
+    for verb in [
+        "list-sessions",
+        "list-windows",
+        "list-panes",
+        "list-clients",
+    ] {
+        out.push(rewrite(verb, Flag('F')));
+        out.push(rewrite(verb, Flag('f')));
+    }
+    for verb in [
+        "new-session",
+        "new-window",
+        "split-window",
+        "new-pane",
+        "break-pane",
+    ] {
+        out.push(rewrite(verb, Flag('F')));
+        out.push(rewrite(verb, Flag('c')));
+    }
+    for verb in ["set-option", "set-window-option"] {
+        out.push(Rewrite {
+            verb,
+            arg: Positional(1),
+            rewrite: option_value,
+        });
+    }
+    out
+}
+
+// ---- Hooks -------------------------------------------------------------------
+
+/// Every hook name tmux 3.7b knows (recorded: `show-hooks -g`, and the
+/// window and pane hooks it shows by name).
+const TMUX_HOOKS: &[&str] = &[
+    "after-bind-key",
+    "after-capture-pane",
+    "after-copy-mode",
+    "after-display-message",
+    "after-display-panes",
+    "after-kill-pane",
+    "after-list-buffers",
+    "after-list-clients",
+    "after-list-keys",
+    "after-list-panes",
+    "after-list-sessions",
+    "after-list-windows",
+    "after-load-buffer",
+    "after-lock-server",
+    "after-new-session",
+    "after-new-window",
+    "after-paste-buffer",
+    "after-pipe-pane",
+    "after-queue",
+    "after-refresh-client",
+    "after-rename-session",
+    "after-rename-window",
+    "after-resize-pane",
+    "after-resize-window",
+    "after-save-buffer",
+    "after-select-layout",
+    "after-select-pane",
+    "after-select-window",
+    "after-send-keys",
+    "after-set-buffer",
+    "after-set-environment",
+    "after-set-hook",
+    "after-set-option",
+    "after-show-environment",
+    "after-show-messages",
+    "after-show-options",
+    "after-split-window",
+    "after-unbind-key",
+    "alert-activity",
+    "alert-bell",
+    "alert-silence",
+    "client-active",
+    "client-attached",
+    "client-detached",
+    "client-focus-in",
+    "client-focus-out",
+    "client-resized",
+    "client-session-changed",
+    "client-light-theme",
+    "client-dark-theme",
+    "command-error",
+    "session-closed",
+    "session-created",
+    "session-renamed",
+    "session-window-changed",
+    "window-linked",
+    "window-unlinked",
+    "pane-died",
+    "pane-exited",
+    "pane-focus-in",
+    "pane-focus-out",
+    "pane-mode-changed",
+    "pane-set-clipboard",
+    "pane-title-changed",
+    "window-layout-changed",
+    "window-pane-changed",
+    "window-renamed",
+    "window-resized",
+];
+
+/// The grofe event a tmux hook name fires on (TC.5's `EVENTS`, each of
+/// which names its tmux hook), or tmux's error for a name that is no
+/// hook, or grofe's refusal for a tmux hook with no grofe event.
+pub fn hook_event(tmux: &str) -> Result<&'static str, TmuxError> {
+    if let Some(e) = crate::server::hooks::EVENTS.iter().find(|e| e.tmux == tmux) {
+        return Ok(e.name);
+    }
+    let base = tmux.split('[').next().unwrap_or(tmux);
+    if TMUX_HOOKS.contains(&base) {
+        let why = if base == tmux {
+            "grofe has no event for this hook (spec 4.5)"
+        } else {
+            "hook arrays; a hook holds one command in grofe"
+        };
+        return Err(TmuxError(format!("set-hook: not supported ({why})")));
+    }
+    Err(TmuxError(format!("invalid option: {tmux}")))
+}
+
+/// The native `set-hook`/`show-hooks` argv for a tmux one: the same flags,
+/// the hook named by its grofe event.
+fn hook_args(inv: &Invocation<'_>) -> Result<Vec<String>, TmuxError> {
+    let got = inv.getopt();
+    let mut args: Vec<String> = got.flags.iter().map(|(f, _)| format!("-{f}")).collect();
+    let mut positionals = inv.positionals().iter();
+    if let Some(name) = positionals.next() {
+        args.push("--".to_string());
+        args.push(hook_event(name)?.to_string());
+    }
+    args.extend(positionals.cloned());
+    Ok(args)
+}
+
+/// `set-hook -g[u] <tmux hook> [command]`: onto grofe's event. The
+/// command is stored as written, tagged tmux dialect, and translated
+/// through this front end each time it fires (FE.1's stored strings).
+fn set_hook(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    let args = hook_args(inv)?;
+    inv.native("set-hook", &args)
+}
+
+/// `show-hooks -g [<tmux hook>]`.
+fn show_hooks(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    let args = hook_args(inv)?;
+    inv.native("show-hooks", &args)
+}
+
+// ---- Rows --------------------------------------------------------------------
+
+const HOOK_SCOPES: &str = "session, window and pane hooks; grofe's hooks are global (set-hook -g)";
+const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
+
+/// A form grofe refuses for good, whatever else the command names.
+const fn refuse(tmux_form: &'static str, reason: &'static str) -> Row {
+    row(
+        tmux_form,
+        MappingKind::Behaviour,
+        GrofeTarget::Unsupported(reason),
+        SEMANTIC,
+        "",
+        "",
+    )
+}
+
+/// This area's rows.
+pub(crate) fn rows() -> Vec<Row> {
+    use GrofeTarget::{Native, Translate, Unsupported};
+    use MappingKind::{Behaviour, PassThrough};
+    vec![
+        row(
+            "set-hook -g",
+            Behaviour,
+            Translate(set_hook),
+            SEMANTIC,
+            "M3.6",
+            "fe_3/hooks",
+        ),
+        row(
+            "set-hook",
+            Behaviour,
+            Unsupported(HOOK_SCOPES),
+            &[],
+            "M3.6",
+            "",
+        ),
+        refuse(
+            "set-hook -a",
+            "hook arrays; a hook holds one command in grofe",
+        ),
+        refuse("set-hook -R", "running a hook by hand"),
+        refuse("set-hook -p", HOOK_SCOPES),
+        refuse("set-hook -w", HOOK_SCOPES),
+        refuse("set-hook -t", HOOK_SCOPES),
+        row(
+            "show-hooks -g",
+            Behaviour,
+            Translate(show_hooks),
+            SEMANTIC,
+            "M3.6",
+            "fe_3/hooks",
+        ),
+        row(
+            "show-hooks",
+            Behaviour,
+            Native("show-hooks"),
+            &[],
+            "M3.6",
+            "",
+        ),
+        row(
+            "set-environment",
+            PassThrough,
+            Native("set-environment"),
+            &[],
+            "M3.6",
+            "fe_3/environment",
+        ),
+        row(
+            "set-environment -F",
+            Behaviour,
+            Unsupported("a value expanded as a format"),
+            SEMANTIC,
+            "M3.6",
+            "",
+        ),
+        row(
+            "set-environment -r",
+            Behaviour,
+            Unsupported("a variable removed from new panes' environment"),
+            SEMANTIC,
+            "M3.6",
+            "",
+        ),
+        row(
+            "show-environment",
+            PassThrough,
+            Native("show-environment"),
+            &[],
+            "M3.6",
+            "fe_3/environment",
+        ),
+        row(
+            "show-environment -s",
+            Behaviour,
+            Unsupported("output as shell commands"),
+            COSMETIC,
+            "M3.6",
+            "",
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn native(fmt: &str) -> String {
+        let got = to_native(fmt, Jobs::Empty);
+        assert!(got.before.is_empty());
+        got.value
+    }
+
+    #[test]
+    fn short_forms_become_variables() {
+        assert_eq!(
+            native("#S:#I.#P #W #T #D #F #H #h"),
+            "#{session_name}:#{window_index}.#{pane_index} #{window_name} #{pane_title} \
+             #{pane_id} #{window_flags} #{host} #{host_short}"
+        );
+        // Any other letter stays as tmux prints it.
+        assert_eq!(native("#Q#1#-#!#a"), "#Q#1#-#!#a");
+        assert_eq!(
+            native("#[fg=red]#S#[default]"),
+            "#[fg=red]#{session_name}#[default]"
+        );
+    }
+
+    #[test]
+    fn escapes_are_grofe_s() {
+        assert_eq!(native("## ##{pane_id} ##S"), "## ##{pane_id} ##S");
+        assert_eq!(native("a#,b#}c"), "a,b}c");
+        assert_eq!(
+            native("#{?session_name,a#,b,c}"),
+            "#{?session_name,a#{?,,,}b,c}"
+        );
+        assert_eq!(native("x#"), "x");
+        assert_eq!(native("a#{?1,b"), "a");
+        assert_eq!(native("a#(echo x"), "a");
+    }
+
+    #[test]
+    fn short_forms_inside_bodies_and_conditions() {
+        assert_eq!(native("#{?#W, #W,}"), "#{?#{window_name}, #{window_name},}");
+        assert_eq!(native("#{==:#S,main}"), "#{==:#{session_name},main}");
+        assert_eq!(
+            native("#{?#{==:#W,x},#[bold]#I,}"),
+            "#{?#{==:#{window_name},x},#[bold]#{window_index},}"
+        );
+    }
+
+    #[test]
+    fn a_literal_stays_unexpanded() {
+        assert_eq!(native("#{l:#S}"), "##S");
+        assert_eq!(native("#{?1,#{l:a,b},c}"), "#{?1,a#{?,,,}b,c}");
+    }
+
+    #[test]
+    fn a_job_is_a_named_source_where_the_status_reads_it() {
+        let key = crate::server::sources::inline_key("date");
+        let got = to_native("a#(date)b#(date)", Jobs::Sources);
+        assert_eq!(got.value, format!("a#{{@{key}}}b#{{@{key}}}"));
+        assert_eq!(
+            got.before,
+            vec![Command::RegisterSource(RegisterSource {
+                name: Some(key.clone()),
+                command: "date".into(),
+            })]
+        );
+        let nested = to_native("#{?@pet,#(pet (x)) ,}", Jobs::Sources);
+        let pet = crate::server::sources::inline_key("pet (x)");
+        assert_eq!(nested.value, format!("#{{?@pet,#{{@{pet}}} ,}}"));
+        assert_eq!(native("a#(date)b"), "ab");
+    }
+
+    #[test]
+    fn foreign_modifiers_are_left_for_the_expander() {
+        assert_eq!(native("#{E:status-left}"), "#{E:status-left}");
+        assert_eq!(native("#{=21:pane_title}"), "#{=21:pane_title}");
+        assert_eq!(foreign_modifier("=21:pane_title"), Some('='));
+        assert_eq!(foreign_modifier("session_name"), None);
+        assert_eq!(foreign_modifier("?a,b:c,d"), None);
+    }
+
+    #[test]
+    fn the_twelve_hooks_map_onto_grofe_events() {
+        for tmux in [
+            "after-select-pane",
+            "after-select-window",
+            "after-new-window",
+            "after-kill-pane",
+            "after-resize-pane",
+            "after-resize-window",
+            "client-resized",
+            "client-session-changed",
+            "session-created",
+            "session-closed",
+            "pane-exited",
+            "pane-died",
+        ] {
+            let event = hook_event(tmux).unwrap();
+            assert!(crate::server::hooks::event(event).is_some(), "{tmux}");
+        }
+        assert_eq!(hook_event("nope").unwrap_err().0, "invalid option: nope");
+        assert!(
+            hook_event("alert-bell")
+                .unwrap_err()
+                .0
+                .contains("not supported")
+        );
+    }
 }

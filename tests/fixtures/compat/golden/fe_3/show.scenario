@@ -1,0 +1,43 @@
+# FE.3: show-options output, tmux's `name value` listing with -g, -q, -v,
+# quoting for values with spaces or quotes, array options (status-format,
+# command-alias) and appends (-ga, -as).
+$ new-session -d -s main -x 80 -y 24 cat
+$ set -g status 2
+$ show -g status
+$ set -g status-format[1] ''
+$ show -g status-format[1]
+$ show -gv status-format[1]
+$ set -g status-left '#[fg=red]x y'
+$ show -g status-left
+$ show -gv status-left
+$ set -g status-right 'R'
+$ set -ga status-right ' tail'
+$ show -gv status-right
+$ set -g @q "it's"
+$ show -g @q
+$ set -g @d 'say "hi"'
+$ show -g @d
+$ set -g @e ''
+$ show -g @e
+$ set -g @sp 'a b'
+$ show -g @sp
+$ set -g @plain word
+$ show -g @plain
+$ show -gqv @nope
+$ show -gv @nope
+$ set -s command-alias[200] 'wk=display -p wk'
+$ show -s command-alias[200]
+$ set -as command-alias 'zz=display -p zz'
+$ show -sv command-alias[201]
+$ wk
+$ zz
+$ set -g window-status-format '#I:#W'
+$ show -g window-status-format
+$ set -g status-right '#(echo job)'
+$ show -g -v status-right
+$ set -g set-titles-string '#S:#W'
+$ show -g set-titles-string
+$ set -gu status-right
+$ show -g status-right
+$ show -g window-status-current-format
+$ show -g
