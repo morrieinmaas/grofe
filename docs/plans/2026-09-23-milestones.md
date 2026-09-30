@@ -20,7 +20,7 @@ parallel worktrees without conflicts.
 | **M3.6** | tmux compatibility for the owner's workflow (spec D1, D12, §4.5): the `tmux` name and server identity, CLI/target/format/option breadth, cached `#()` status sources, hooks and server environment, popups and menus (moved from M5), multi-row status, all reached through a table-driven tmux front end (`src/compat/`), the owner's daily config ported (canopy, `user.conf`, navigator), compat suite | **Alias day.** The compat suite is green in CI against goldens recorded from tmux 3.7b; **[owner]** `tmux` on PATH resolves to grofe with the ported config for a week of normal work, real tmux kept as `env -u TMUX <absolute path>` as the fallback | ~6.5 weeks |
 | **M3.7** | Run the owner's remaining TPM plugins unchanged through a small loader (spec D1, §7.1); one compat check per plugin. | TP.9a and the compat suite green; **[owner]** each daily binding used once; closes with M5 (TP.11 yank, TP.9b). | ~4 days, before M5 (not beside M4). |
 | **M4** | Native persistence and pane identity (spec §6): snapshot, restore, resume, `reboot-check` | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it; the container reboot scenario (T4.6) green; **[owner]** the same across a real reboot on each OS | ~3 weeks, after the alias-day container test |
-| **M5** | Copy mode, buffers, `copy-pipe*`, OSC 52 (popups and menus moved to M3.6) | Scope doc approved first (written during M4); the 93 `copy-mode-vi` bindings match tmux 3.7b's goldens (TM.7); then the yank port (TP.5) and TP.9b's parity rows. **No-difference parity**, **[owner]** confirmed | ~5.5 weeks |
+| **M5** | Copy mode, buffers, `copy-pipe*`, OSC 52 (popups and menus moved to M3.6) | Scope doc approved first (written at the start of M5); the 93 `copy-mode-vi` bindings match tmux 3.7b's goldens (TM.7); then the yank compat check (TP.11) and TP.9b's parity rows. **No-difference parity**, **[owner]** confirmed | ~5.5 weeks |
 | **M6** | Events and plugin API, Lua | Spec §7's plugin part rewritten from the dogfood log (T6.0, during M5); event catalog and protocol v1 frozen with fixtures; supervised plugins; sandboxed Lua with format functions; one out-of-process and one Lua plugin in-tree | ~2.5 weeks |
 | **M7** | agents plugin; canopy on grofe (spec §7, §7.1) | canopy's four adapters report through grofe; rollups and attention render with formats only; after a container reboot each fake agent is back in its own conversation (T7.8); **[owner]** a real reboot returns every Claude Code pane to its conversation | ~3.5 weeks (T7.1 and T7.5 during M6) |
 | **Alias-day container test** | TA.1, the owner's setup (athome + canopy + grofe as `tmux`) end-to-end in a container, scoped to M3.6+M3.7+M5. | report PASS; **[owner]** reviews it. | ~3 days |
@@ -91,7 +91,7 @@ about week 25.5, M7 about week 29, the release gate about week 30, and
 breakdown found the rest: M4's restore engine, resume binding and container
 reboot harness, and M5's 93 parity scenarios and the mouse model's move into
 copy mode. With one lane, M4 to the release gate is about 103 task-days (M4
-20, M5 29 with TP.5 and TP.9b, M6 20, M7 26, E2E 8), roughly 27 weeks with the
+20, M5 29 with TP.11 and TP.9b, M6 20, M7 26, E2E 8), roughly 27 weeks with the
 buffer, so fully done moves from the one-lane alias day at
 about week 26, plus M3.7's 1.5 weeks, to about week 55.
 
