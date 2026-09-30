@@ -20,7 +20,7 @@
 //! own hook queue, and notify hooks share a global one. A queue runs in
 //! order, and a hook's `run-shell` without `-b` holds its queue (only) until
 //! the shell exits; a CLI request's later commands and its reply wait for
-//! its own queue ([`take_request_wait`]). Commands
+//! its own queue ([`request_waiting`]). Commands
 //! run as they are, each expanding its own formats (`run-shell` sees the
 //! `#{hook*}` variables). Commands a hook runs fire notify hooks but no
 //! `after-*` ones, as in tmux (recorded).
@@ -734,9 +734,15 @@ fn drain(state: &mut State, origin: Origin) {
     }
 }
 
-/// `run_commands` starts: see [`take_request_wait`].
+/// `run_commands` starts: a request's commands nest (`if -F`), and only
+/// the outermost ends its request ([`run_pending`]).
 pub fn enter(state: &mut State) {
     state.hooks.depth += 1;
+}
+
+/// How deep `run_commands` is nested now.
+pub fn depth(state: &State) -> u32 {
+    state.hooks.depth
 }
 
 /// `run_commands` ends.
@@ -744,15 +750,28 @@ pub fn leave(state: &mut State) {
     state.hooks.depth = state.hooks.depth.saturating_sub(1);
 }
 
-/// After one of a CLI request's own commands (not a nested one, nor a
-/// hook's): when that command's hook now waits on a shell, a receiver that
-/// answers with the hooks' output once their queue is idle. The rest of
-/// the request waits for it, as tmux 3.7b runs an `after-*` hook before
-/// the next command (recorded: `select-pane ; run-shell`). The reply no
-/// longer waits on this queue: the rest's answer carries its output.
+/// Whether the CLI request now running (outside a hook) has a hook
+/// waiting on a shell: its next command waits, at any depth, as tmux
+/// 3.7b runs an `after-*` hook before the next command of its queue
+/// (recorded: `select-pane ; run-shell`, inside `if -F` too).
+pub fn request_waiting(state: &State) -> bool {
+    let hooks = &state.hooks;
+    !hooks.running
+        && hooks.request.is_some_and(|r| {
+            hooks
+                .queues
+                .get(&Origin::Request(r))
+                .is_some_and(|q| q.waiting)
+        })
+}
+
+/// When [`request_waiting`], a receiver that answers with the hooks'
+/// output once their queue is idle; the held rest of the request waits
+/// for it. The reply no longer waits on this queue: the rest's answer
+/// carries its output.
 pub fn take_request_wait(state: &mut State) -> Option<oneshot::Receiver<Result<String, Failure>>> {
     let hooks = &mut state.hooks;
-    if hooks.running || hooks.depth != 1 {
+    if hooks.running {
         return None;
     }
     let origin = Origin::Request(hooks.request?);

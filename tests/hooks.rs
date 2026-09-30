@@ -889,6 +889,70 @@ fn a_request_waits_for_the_hooks_of_its_nested_commands() {
     );
 }
 
+/// Binds `pane-focused` to a shell that sleeps 0.3 s, then logs `hook`.
+fn bind_late_focus(srv: &TestServer, log: &Path) {
+    let hook = format!("run-shell 'sleep 0.3; echo hook >> {}'", log.display());
+    ok(srv, &["set-hook", "-g", "pane-focused", &hook]);
+}
+
+fn log_cmd(log: &Path, word: &str) -> String {
+    format!("run-shell 'echo {word} >> {}'", log.display())
+}
+
+/// tmux 3.7b (recorded): the wait holds at any depth. Inside an `if -F`
+/// body the body's next command waits for the hook, and the request's
+/// own next command waits for the body: `hook inner outer`, and with a
+/// second `if -F` inside, `hook a b c`.
+#[test]
+fn a_hook_holds_nested_commands_and_what_follows_them() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let second = pane_of(&srv, "a");
+    bind_late_focus(&srv, &log);
+    let body = format!("select-pane -t {first} ; {}", log_cmd(&log, "inner"));
+    let outer = format!("echo outer >> {}", log.display());
+    ok(
+        &srv,
+        &["if-shell", "-F", "1", &body, ";", "run-shell", &outer],
+    );
+    assert_eq!(log_lines(&log), ["hook", "inner", "outer"]);
+
+    fs::remove_file(&log).expect("rm log");
+    let inner = format!(
+        "select-pane -t {second} ; run-shell \"echo a >> {}\"",
+        log.display()
+    );
+    let body = format!("if-shell -F 1 '{inner}' ; {}", log_cmd(&log, "b"));
+    let c = format!("echo c >> {}", log.display());
+    ok(&srv, &["if-shell", "-F", "1", &body, ";", "run-shell", &c]);
+    assert_eq!(log_lines(&log), ["hook", "a", "b", "c"]);
+}
+
+/// tmux 3.7b (recorded, a sourced file's lines): a sequence that fires the
+/// hook twice waits for each in turn, `hook line2 hook line3 after`. grofe
+/// has no command file to source yet (a tmux `source-file` is the front
+/// end's), so the lines run as one `if -F` body, the same nested sequence.
+#[test]
+fn each_line_of_a_sequence_waits_for_its_hook() {
+    let (srv, log) = start();
+    let first = pane_of(&srv, "a");
+    ok(&srv, &["split-window", "-t", "a"]);
+    let second = pane_of(&srv, "a");
+    bind_late_focus(&srv, &log);
+    let lines = format!(
+        "select-pane -t {first} ; {} ; select-pane -t {second} ; {}",
+        log_cmd(&log, "line2"),
+        log_cmd(&log, "line3")
+    );
+    let after = format!("echo after >> {}", log.display());
+    ok(
+        &srv,
+        &["if-shell", "-F", "1", &lines, ";", "run-shell", &after],
+    );
+    assert_eq!(log_lines(&log), ["hook", "line2", "hook", "line3", "after"]);
+}
+
 /// `#{hook}` expands in every command a hook runs, not only in
 /// `run-shell`: `display-message -p` prints it and `set -F` stores it.
 #[test]
@@ -955,4 +1019,32 @@ fn a_hooks_commands_fire_notify_hooks() {
     ok(&srv, &["new-window", "-d", "-t", "a"]);
     let mut seen = 0;
     assert_eq!(new_lines(&log, &mut seen, 1), ["created inner"]);
+}
+
+/// tmux 3.7b (recorded): a `run-shell` holds the next command until its
+/// shell exits, and one that fails does not stop it; the CLI still exits
+/// with the shell's status.
+#[test]
+fn run_shell_holds_the_next_command_and_a_failure_does_not_stop_it() {
+    let (srv, log) = start();
+    let slow = format!("sleep 0.3; echo slow >> {}", log.display());
+    let after = format!("echo after >> {}", log.display());
+    ok(&srv, &["run-shell", &slow, ";", "run-shell", &after]);
+    assert_eq!(log_lines(&log), ["slow", "after"]);
+    let out = srv
+        .command()
+        .args([
+            "run-shell",
+            "echo one; exit 3",
+            ";",
+            "display-message",
+            "-p",
+            "two",
+        ])
+        .output()
+        .expect("cli");
+    assert_eq!(out.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("one\n"), "{stdout:?}");
+    assert!(stdout.contains("two\n"), "{stdout:?}");
 }

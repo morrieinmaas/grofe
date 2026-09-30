@@ -93,17 +93,24 @@ pub fn run_parsed(
 /// the mouse): a `;` argument in it is literal, never a separator. An
 /// alias verb may stand for several commands ([`menu::expand_alias_command`]).
 pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    let cmds = match menu::expand_alias_command(state, argv) {
-        Some(expanded) => {
-            let mut cmds = Vec::new();
-            for argv in &expanded {
-                cmds.extend(compat::parse_split(ctx, argv)?);
-            }
-            cmds
-        }
-        None => compat::parse_split(ctx, argv)?,
-    };
+    let cmds = parse_split(state, ctx, argv)?;
     run_commands(state, ctx, cmds)
+}
+
+/// [`run_split`]'s parse: one split command, an alias verb expanded.
+pub(crate) fn parse_split(
+    state: &State,
+    ctx: &ClientCtx,
+    argv: &[String],
+) -> Result<Vec<Command>, String> {
+    let Some(expanded) = menu::expand_alias_command(state, argv) else {
+        return compat::parse_split(ctx, argv);
+    };
+    let mut cmds = Vec::new();
+    for argv in &expanded {
+        cmds.extend(compat::parse_split(ctx, argv)?);
+    }
+    Ok(cmds)
 }
 
 /// Runs one command of a key binding: as [`run_split`], without
@@ -129,8 +136,7 @@ pub(crate) fn run_commands(
     let mut cmds = cmds.into_iter();
     server::hooks::enter(state);
     while let Some(cmd) = cmds.next() {
-        let waits =
-            matches!(&cmd, Command::WaitFor(w) if !w.signal) && state.deferred_reply.is_none();
+        let answered = state.deferred_reply.is_none();
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
@@ -138,25 +144,37 @@ pub(crate) fn run_commands(
                 break;
             }
         }
-        if cmds.len() == 0 {
-            break;
+        // A command that answers later (a blocked `wait-for`, `run-shell`)
+        // holds the rest of the request until it answers, as tmux 3.7b's
+        // command queue waits (TC.9), and so does a hook waiting on its
+        // shell. Inside another command (`if -F`) the rest of that one is
+        // held too, after this rest.
+        // A hook's own commands wait on its queue instead (`hooks::drain`).
+        if server::hooks::in_hook(state) {
+            continue;
         }
-        // A `wait-for` that blocked holds the rest of the request until
-        // its channel is signalled, as tmux 3.7b's command queue does (TC.9),
-        // and so does the command's hook while it waits on a shell.
-        let wait = if waits && state.deferred_reply.is_some() {
-            state.deferred_reply.take()
-        } else if state.deferred_reply.is_none() {
-            server::hooks::take_request_wait(state)
-        } else {
-            None
-        };
-        if let Some(wait) = wait {
-            client::hold_rest(state, ctx, cmds.collect(), std::mem::take(&mut out), wait);
+        let nested = server::hooks::depth(state) > 1;
+        if answered && state.deferred_reply.is_some() && (cmds.len() > 0 || nested) {
+            state.held.get_or_insert_default().wait = state.deferred_reply.take();
+        }
+        let hook_waits = cmds.len() > 0
+            && state.deferred_reply.is_none()
+            && server::hooks::request_waiting(state);
+        if state.held.is_some() || hook_waits {
+            let rest: Vec<Command> = cmds.collect();
+            let held = state.held.get_or_insert_default();
+            if !rest.is_empty() {
+                held.frames.push((ctx.clone(), rest));
+            }
             break;
         }
     }
     server::hooks::leave(state);
+    if server::hooks::depth(state) == 0
+        && let Some(held) = state.held.take()
+    {
+        client::hold_rest(state, ctx, held, std::mem::take(&mut out), None, None);
+    }
     server::hooks::run_pending(state);
     if state.model.closed() {
         state.exit = true;

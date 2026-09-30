@@ -29,7 +29,7 @@ use crate::server::mouse::{self, MouseState};
 use crate::server::{Job, State, hooks, pane, prompt};
 use crate::types::PaneId;
 
-use super::run_split;
+use super::{parse_split, run_commands};
 
 /// `if-shell`.
 pub fn if_shell(state: &mut State, ctx: &ClientCtx, c: If) -> Result<String, String> {
@@ -132,16 +132,17 @@ fn shell_form(
     });
 }
 
-/// Runs a branch's command string in `ctx`, each command in turn; the
+/// Runs a branch's command string in `ctx`, parsed whole first as tmux
+/// parses it, then each command in turn as one sequence, so a hook's
+/// shell or a `wait-for` holds the rest of it (and of the request); the
 /// first error stops the rest.
 fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, String> {
-    let cmds = cmd::split_command_string(text).map_err(|e| e.to_string())?;
-    let mut out = String::new();
-    for argv in cmds {
+    let mut cmds = Vec::new();
+    for argv in cmd::split_command_string(text).map_err(|e| e.to_string())? {
         let argv = mouse::resolve_targets(state, &argv);
-        out.push_str(&run_split(state, ctx, &argv)?);
+        cmds.extend(parse_split(state, ctx, &argv)?);
     }
-    Ok(out)
+    run_commands(state, ctx, cmds)
 }
 
 /// `text` expanded against `pane`, with the client's and the server's
