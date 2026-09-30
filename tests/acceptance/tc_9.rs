@@ -521,7 +521,7 @@ fn display_message_c_goes_to_that_client() {
 
 /// tmux's stock pan keys: `refresh-client -L` moves the visible part of a
 /// window larger than the client, and `-c` goes back to following the
-/// cursor.
+/// cursor from offset 0.
 #[test]
 fn refresh_client_pans_a_window_larger_than_the_client() {
     let srv = start();
@@ -529,17 +529,22 @@ fn refresh_client_pans_a_window_larger_than_the_client() {
         "new-window",
         "-t",
         "main",
-        "printf '\\033[1;100HFARRIGHT'; exec cat",
+        "printf '\\033[5;10HX'; exec cat",
     ])
     .expect("new-window");
     srv.cmd(&["resize-window", "-t", "main", "-x", "120", "-y", "40"])
         .expect("resize-window");
     let mut a = attach(&srv, "main");
-    a.wait_for("FARRIGHT");
-    srv.cmd(&["refresh-client", "-L", "50"]).expect("pan left");
-    a.wait_until("the text panned off", WAIT, |t| !t.contains("FARRIGHT"));
+    let x_at = |t: &str| t.lines().nth(4).and_then(|l| l.find('X'));
+    a.wait_until("X at column 9", WAIT, |t| x_at(t) == Some(9));
+    srv.cmd(&["refresh-client", "-R", "30"]).expect("pan right");
+    a.wait_until("X panned off", WAIT, |t| x_at(t).is_none());
+    srv.cmd(&["refresh-client", "-L", "25"]).expect("pan left");
+    a.wait_until("X panned to column 4", WAIT, |t| x_at(t) == Some(4));
+    // tmux 3.7b goes back to offset 0 while the cursor is on the first
+    // screenful (recorded).
     srv.cmd(&["refresh-client", "-c"]).expect("reset");
-    a.wait_for("FARRIGHT");
+    a.wait_until("X back at column 9", WAIT, |t| x_at(t) == Some(9));
     let err = srv.cmd(&["refresh-client", "-R", "nope"]).unwrap_err();
     assert_eq!(err.trim_end(), "adjustment invalid");
     let keys = srv.cmd(&["list-keys", "-T", "prefix"]).expect("list-keys");

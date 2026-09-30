@@ -1205,7 +1205,12 @@ pub(crate) fn pan(state: &mut State, id: ClientId, pan: cmd::Pan, by: u16) {
         return;
     };
     if pan == cmd::Pan::Reset {
+        // tmux 3.7b recomputes the offset from the cursor, which is 0 while
+        // the cursor is within the first screenful (recorded).
+        // ponytail: past that tmux centres the cursor; `follow` scrolls
+        // only as far as it must.
         c.pan = None;
+        c.viewport = (0, 0);
     } else {
         let (_, mut x, mut y) = match c.pan {
             Some(p) if p.0 == wid => p,
