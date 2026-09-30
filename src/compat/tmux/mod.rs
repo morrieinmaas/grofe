@@ -33,7 +33,7 @@
 //! sends `argv` with the dialect [`cli`] chose.
 
 mod bindings;
-mod formats;
+pub(crate) mod formats;
 mod structure;
 
 use std::fmt;
@@ -1989,7 +1989,6 @@ mod tests {
             panic!("{got:?}")
         };
         assert_eq!(w.format.as_deref(), Some("#S"));
-        assert!(rewrites().is_empty(), "FE.3 registers the first");
     }
 
     /// FE.3's `#(cmd)`: a rewrite of `set`'s value, seeing the option it

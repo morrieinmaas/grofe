@@ -174,10 +174,22 @@ pub struct Hooks {
     session_removed: BTreeMap<SessionId, BTreeSet<String>>,
 }
 
+/// The server's start directory as tmux's `find_cwd` gives it: `$PWD`
+/// when it names the same directory, else the real path.
+fn start_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let pwd = std::env::var("PWD")
+        .ok()
+        .filter(|p| std::fs::canonicalize(p).ok() == std::fs::canonicalize(&cwd).ok());
+    pwd.or_else(|| cwd.to_str().map(str::to_string))
+}
+
 impl Default for Hooks {
-    /// No hooks, and the global environment seeded from the process's.
+    /// No hooks, and the global environment seeded from the process's,
+    /// with `PWD` the server's start directory, as tmux 3.7b sets it
+    /// (recorded: `show-environment -g` holds `PWD`).
     fn default() -> Hooks {
-        let env = std::env::vars_os()
+        let mut env: Env = std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .map(|(k, value)| {
                 let var = Var {
@@ -187,6 +199,13 @@ impl Default for Hooks {
                 (k, var)
             })
             .collect();
+        if let Some(cwd) = start_cwd() {
+            let var = Var {
+                value: cwd,
+                hidden: false,
+            };
+            env.insert("PWD".to_string(), var);
+        }
         Hooks {
             bound: BTreeMap::new(),
             runtime: BTreeSet::new(),
@@ -305,8 +324,17 @@ pub fn unbind(state: &mut State, event: &'static EventSpec) {
 }
 
 /// `show-hooks -g`: `<event> <command>` for each bound event, or for
-/// `name` alone (a bare `<event>` when nothing is bound to it).
-pub fn show(state: &State, name: Option<&str>) -> Result<String, String> {
+/// `name` alone (a bare `<event>` when nothing is bound to it). In the
+/// tmux dialect, tmux 3.7b's listing ([`show_tmux`]).
+pub fn show(
+    state: &State,
+    name: Option<&str>,
+    dialect: Dialect,
+    window: bool,
+) -> Result<String, String> {
+    if dialect == Dialect::Tmux {
+        return show_tmux(state, name, window);
+    }
     let bound = &state.hooks.bound;
     let Some(name) = name else {
         return Ok(bound
@@ -319,6 +347,53 @@ pub fn show(state: &State, name: Option<&str>) -> Result<String, String> {
         Some(s) => format!("{} {}\n", spec.name, s.text),
         None => format!("{}\n", spec.name),
     })
+}
+
+/// tmux 3.7b's `show-hooks -g[w] [hook]` (recorded): the hooks of its
+/// session table (`-w`: its window and pane table) in tmux's order, a
+/// bound one as `<hook>[0] <commands>`, the rest by name alone; the
+/// commands printed from their parse, with full verb names, each argument
+/// quoted as `show-options` quotes a value, and ` ; ` between them. A
+/// named hook shows its binding from either table.
+fn show_tmux(state: &State, name: Option<&str>, window: bool) -> Result<String, String> {
+    use crate::compat::tmux::formats::tmux_hook_names;
+    let line = |hook: &str| -> String {
+        let bound = EVENTS
+            .iter()
+            .find(|e| e.tmux == hook)
+            .and_then(|e| state.hooks.bound.get(e.name));
+        match bound {
+            Some(s) => format!("{hook}[0] {}\n", tmux_commands(&s.cmds)),
+            None => format!("{hook}\n"),
+        }
+    };
+    match name {
+        None => Ok(tmux_hook_names(window).iter().map(|h| line(h)).collect()),
+        Some(hook)
+            if !tmux_hook_names(false).contains(&hook)
+                && !tmux_hook_names(true).contains(&hook) =>
+        {
+            Err(format!("invalid option: {hook}"))
+        }
+        Some(hook) => Ok(line(hook)),
+    }
+}
+
+/// A hook's commands as tmux prints them.
+fn tmux_commands(cmds: &[Vec<String>]) -> String {
+    let one = |argv: &Vec<String>| -> String {
+        let mut words = Vec::with_capacity(argv.len());
+        if let Some((verb, args)) = argv.split_first() {
+            let verb = crate::compat::tmux::resolve(verb).map_or(verb.as_str(), |s| s.name);
+            words.push(verb.to_string());
+            words.extend(
+                args.iter()
+                    .map(|a| crate::server::dispatch::options::quote(a)),
+            );
+        }
+        words.join(" ")
+    };
+    cmds.iter().map(one).collect::<Vec<_>>().join(" ; ")
 }
 
 // ---- emission ----
@@ -619,8 +694,15 @@ fn enqueue(state: &mut State, origin: Origin, f: &Fired) {
     let Some(stored) = state.hooks.bound.get(f.event).cloned() else {
         return;
     };
+    let mut fired = f.clone();
+    // A hook set in the tmux dialect sees tmux's name in `#{hook}`.
+    if stored.dialect == Dialect::Tmux
+        && let Some(spec) = event(f.event)
+    {
+        fired.vars.hook = spec.tmux;
+    }
     let queued = Queued {
-        fired: f.clone(),
+        fired,
         dialect: stored.dialect,
         cmds: stored.cmds.into_iter().collect(),
     };
@@ -1095,7 +1177,10 @@ mod tests {
         );
         let cmd = "select-pane -t #{hook_pane} ; list-sessions";
         assert_eq!(bind(&mut state, &ctx, spec, cmd), Ok(()));
-        assert_eq!(show(&state, None), Ok(format!("pane-focused {cmd}\n")));
+        assert_eq!(
+            show(&state, None, Dialect::Grofe, false),
+            Ok(format!("pane-focused {cmd}\n"))
+        );
         assert_eq!(check_command(cmd).map(|c| c.len()), Ok(2));
         assert_eq!(check_command("  "), Ok(Vec::new()));
     }

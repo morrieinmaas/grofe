@@ -22,7 +22,7 @@ use crate::cmd::{
 };
 use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
-use crate::protocol::ClientCtx;
+use crate::protocol::{ClientCtx, Dialect};
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
@@ -542,6 +542,12 @@ pub struct Options {
     identity_defaults: BTreeMap<&'static str, String>,
     /// The same for list options.
     identity_list_defaults: BTreeMap<&'static str, Vec<String>>,
+    /// What the tmux front end was sent for a value it rewrote into
+    /// grofe's format spelling (FE.3), by owner and name (`status-format[1]`
+    /// for an element): the stored value it stands for, and the text as
+    /// sent. A tmux-dialect `show` prints the text while the value is
+    /// still that one (continuum and canopy read values back).
+    shown: BTreeMap<(Owner, String), (String, String)>,
 }
 
 /// tmux 3.7b's default `command-alias` entries (recorded: `show -gv
@@ -633,6 +639,42 @@ impl Options {
             "command-alias",
             TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()).collect(),
         );
+    }
+
+    /// Whether any value, at any owner, scalar or list element, holds
+    /// `needle`.
+    pub fn mentions(&self, needle: &str) -> bool {
+        let scalars = self
+            .values
+            .values()
+            .flat_map(|m| m.values().map(|e| &e.value));
+        let lists = self
+            .lists
+            .values()
+            .flat_map(|m| m.values().flat_map(|l| l.items.values()));
+        scalars.chain(lists).any(|v| v.contains(needle))
+    }
+
+    /// Records the text a tmux-dialect request sent for `name`'s value
+    /// at `owner` (see `shown`); `None`, or the value itself, forgets it.
+    pub fn set_shown(&mut self, owner: Owner, name: &str, value: &str, sent: Option<String>) {
+        let key = (owner, name.to_string());
+        match sent {
+            Some(sent) if sent != value => {
+                self.shown.insert(key, (value.to_string(), sent));
+            }
+            _ => {
+                self.shown.remove(&key);
+            }
+        }
+    }
+
+    /// The text sent for `name` at `owner`, while its value is `value`.
+    pub fn shown(&self, owner: Owner, name: &str, value: &str) -> Option<&str> {
+        self.shown
+            .get(&(owner, name.to_string()))
+            .filter(|(v, _)| v == value)
+            .map(|(_, sent)| sent.as_str())
     }
 
     /// `name`'s built-in default under this server's identity.
@@ -912,6 +954,7 @@ fn set_option(
     };
     if c.unset {
         let did = model.options.unset(owner, &c.name)?;
+        model.options.set_shown(owner, &c.name, "", None);
         changed(model, events, did);
         return Ok(String::new());
     }
@@ -942,14 +985,31 @@ fn set_option(
     };
     // `-a` appends to a string's value at this scope (tmux: style options
     // join with a comma); any other kind takes the value as given.
-    let value = match model.options.get(owner, &c.name) {
+    let separator = if c.name.ends_with("-style") { "," } else { "" };
+    // In the tmux dialect, the text as sent, for `show` (FE.3), kept only
+    // when the front end rewrote the value, or when an append extends
+    // text `show` already prints in place of the value. Any other value
+    // shows as stored, normalized as tmux normalizes it (`mouse yes` is
+    // `on`).
+    let tmux = ctx.dialect == Dialect::Tmux;
+    let (value, sent) = match model.options.get(owner, &c.name) {
         Some(old) if c.append && is_text(&c.name) => {
-            let separator = if c.name.ends_with("-style") { "," } else { "" };
-            format!("{}{separator}{value}", old.value)
+            let before = tmux_text(&model.options, owner, &c.name, &old.value);
+            let recorded = before != old.value;
+            let piece = c.shown.clone().unwrap_or_else(|| value.clone());
+            let sent = (tmux && (recorded || c.shown.is_some()))
+                .then(|| format!("{before}{separator}{piece}"));
+            (format!("{}{separator}{value}", old.value), sent)
         }
-        _ => value,
+        _ => (value, c.shown.clone().filter(|_| tmux)),
     };
     let did = model.options.set(owner, &c.name, &value, c.persist)?;
+    let stored = model
+        .options
+        .get(owner, &c.name)
+        .map(|e| e.value.clone())
+        .unwrap_or_default();
+    model.options.set_shown(owner, &c.name, &stored, sent);
     changed(model, events, did);
     Ok(String::new())
 }
@@ -1025,8 +1085,22 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             known => known?,
         }
     }
-    // `-v` (tmux 3.7b): each value alone and unquoted.
+    let tmux = ctx.dialect == Dialect::Tmux;
+    if tmux
+        && c.name.is_none()
+        && matches!(owner, Owner::Global | Owner::Server | Owner::GlobalWindow)
+    {
+        return Ok(tmux_listing(model, owner, c.value_only));
+    }
+    // `-v` (tmux 3.7b): each value alone and unquoted; in the tmux
+    // dialect, a value as it was sent.
     let line = |name: &str, value: &str| {
+        let value = if tmux {
+            tmux_text(&model.options, owner, name, value)
+        } else {
+            value.to_string()
+        };
+        let value = value.as_str();
         if c.value_only {
             format!("{value}\n")
         } else {
@@ -1070,12 +1144,175 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
     Ok(lines.into_iter().map(|(_, l)| l).collect())
 }
 
+// ---- The tmux dialect's show (FE.3) -------------------------------------
+
+/// Options whose default the tmux dialect shows as tmux's own text: grofe
+/// spells the same default another way (`#{window_index}` for `#I`), or
+/// has none of that shape (`status-format`'s rows).
+const SPELLED_DEFAULTS: &[&str] = &[
+    "pane-active-border-style",
+    "set-titles-string",
+    "status-format",
+    "status-right",
+    "window-status-current-format",
+    "window-status-format",
+];
+
+/// tmux's default text for `name` (`base[N]` for an element) when the
+/// global `value` (`None`: no such element) is grofe's default for it.
+fn spelled_default(options: &Options, name: &str, value: Option<&str>) -> Option<String> {
+    let (base, index) = split_index(name).ok()?;
+    if !SPELLED_DEFAULTS.contains(&base) {
+        return None;
+    }
+    let default = match index {
+        None => builtin(base).map(|b| options.default_of(b)),
+        Some(i) => list_builtin(base)?
+            .default
+            .get(usize::try_from(i).ok()?)
+            .copied(),
+    };
+    if index.is_none() && default.is_none() {
+        return None;
+    }
+    (default == value)
+        .then(|| crate::compat::tmux::formats::tmux_default(name))
+        .flatten()
+}
+
+/// `value`, `name`'s at `owner`, as the tmux dialect shows it: the text a
+/// tmux request sent for it, tmux's own default text for a default grofe
+/// spells another way, else the value.
+fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
+    if let Some(sent) = options.shown(owner, name, value) {
+        return sent.to_string();
+    }
+    if owner == Owner::Global
+        && let Some(text) = spelled_default(options, name, Some(value))
+    {
+        return text;
+    }
+    value.to_string()
+}
+
+/// One `show` line for a value already in the tmux dialect's text.
+fn line_raw(name: &str, value: &str, value_only: bool) -> String {
+    if value_only {
+        format!("{value}\n")
+    } else {
+        format!("{name} {}\n", quote(value))
+    }
+}
+
+/// A global list's lines in the tmux dialect: grofe's elements as sent,
+/// plus tmux's default rows grofe's list lacks, by index. `tmux_rows` are
+/// tmux's own indices for the list, when a table lists them.
+fn tmux_list_lines(
+    model: &Model,
+    base: &str,
+    tmux_rows: Option<&[u32]>,
+    value_only: bool,
+) -> String {
+    let o = &model.options;
+    let items = o
+        .list(Owner::Global, base)
+        .map(|l| l.items.clone())
+        .unwrap_or_default();
+    let mut indices: BTreeSet<u32> = items.keys().copied().collect();
+    if SPELLED_DEFAULTS.contains(&base) {
+        indices.extend(tmux_rows.unwrap_or_default());
+        if tmux_rows.is_none() {
+            let table = crate::compat::tmux::formats::Table::Session;
+            indices.extend(list_rows(table, base));
+        }
+    }
+    if indices.is_empty() {
+        return if value_only {
+            String::new()
+        } else {
+            format!("{base}\n")
+        };
+    }
+    indices
+        .into_iter()
+        .filter_map(|i| {
+            let full = format!("{base}[{i}]");
+            let text = match items.get(&i) {
+                Some(v) => tmux_text(o, Owner::Global, &full, v),
+                None => spelled_default(o, &full, None)?,
+            };
+            Some(line_raw(&full, &text, value_only))
+        })
+        .collect()
+}
+
+/// The indices tmux's `table` lists for the list `base`.
+fn list_rows(table: crate::compat::tmux::formats::Table, base: &str) -> Vec<u32> {
+    crate::compat::tmux::formats::tmux_table(table)
+        .into_iter()
+        .filter_map(|(name, _)| {
+            let (b, i) = split_index(name).ok()?;
+            (b == base).then_some(i).flatten()
+        })
+        .collect()
+}
+
+/// tmux 3.7b's `show -g`, `show -gw` or `show -s` (`owner` Global,
+/// GlobalWindow or Server) with no name: the user options set there
+/// first, by name (the status sources' `@src-` options left out); then
+/// tmux's table in its order, each option grofe keeps with grofe's value
+/// as the tmux dialect shows it, each one grofe lacks with tmux's default.
+fn tmux_listing(model: &Model, owner: Owner, value_only: bool) -> String {
+    use crate::compat::tmux::formats::{Table, tmux_table, unquote};
+    let table = match owner {
+        Owner::Server => Table::Server,
+        Owner::GlobalWindow => Table::Window,
+        _ => Table::Session,
+    };
+    let o = &model.options;
+    let mut out = String::new();
+    for (name, e) in o.at(owner) {
+        if name.starts_with('@') && !name.starts_with("@src-") {
+            out.push_str(&line_raw(
+                name,
+                &tmux_text(o, owner, name, &e.value),
+                value_only,
+            ));
+        }
+    }
+    let mut lists_done: BTreeSet<&str> = BTreeSet::new();
+    for (name, text) in tmux_table(table) {
+        let Ok((base, index)) = split_index(name) else {
+            continue;
+        };
+        if list_builtin(base).is_some() {
+            if lists_done.insert(base) {
+                let rows = list_rows(table, base);
+                out.push_str(&tmux_list_lines(model, base, Some(&rows), value_only));
+            }
+            continue;
+        }
+        match o.get(Owner::Global, base) {
+            Some(e) if index.is_none() && builtin(base).is_some() => {
+                let text = tmux_text(o, Owner::Global, base, &e.value);
+                out.push_str(&line_raw(base, &text, value_only));
+            }
+            // An empty list shows by name alone, and `-v` prints nothing.
+            _ if text.is_empty() && value_only => {}
+            _ if text.is_empty() => out.push_str(&format!("{name}\n")),
+            _ if value_only => out.push_str(&format!("{}\n", unquote(text))),
+            _ => out.push_str(&format!("{name} {text}\n")),
+        }
+    }
+    out
+}
+
 /// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
 /// `''` when empty; double quotes when it holds any of `` #';${}%`` (with
 /// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
 /// a lone special character or `~` backslash-escaped; a leading `~`
 /// escaped; control characters C-style or octal.
-fn quote(value: &str) -> String {
+pub(crate) fn quote(value: &str) -> String {
     const DOUBLE: &str = " #';${}%";
     if value.is_empty() {
         return "''".to_string();
@@ -2479,9 +2716,33 @@ fn set_list(
         }
         (op, _) => vec![op],
     };
+    let element = index.map(|i| format!("{base}[{i}]"));
+    let before = element.as_ref().and_then(|full| {
+        let old = model.options.list(owner, base)?.items.get(&index?)?;
+        Some((old.clone(), tmux_text(&model.options, owner, full, old)))
+    });
     let mut changed = false;
     for op in ops {
         changed |= model.options.edit_list(owner, base, op, c.persist)?;
+    }
+    // In the tmux dialect, an element's text as sent, for `show` (FE.3).
+    if let (Some(full), Some(i)) = (&element, index) {
+        let stored = model
+            .options
+            .list(owner, base)
+            .and_then(|l| l.items.get(&i).cloned())
+            .unwrap_or_default();
+        // Kept only for a rewritten value, or an append to text `show`
+        // already prints in place of the value, as for a scalar.
+        let piece = c.shown.clone().or(c.value.clone()).unwrap_or_default();
+        let sent = match (&before, c.append) {
+            (Some((raw, text)), true) if raw != text || c.shown.is_some() => {
+                Some(format!("{text}{piece}"))
+            }
+            _ => c.shown.clone(),
+        }
+        .filter(|_| ctx.dialect == Dialect::Tmux && !c.unset);
+        model.options.set_shown(owner, full, &stored, sent);
     }
     if owner == Owner::Global {
         model.options.mark_runtime(base);
@@ -2616,7 +2877,14 @@ fn show_list(
 ) -> Result<String, String> {
     let scope = default_scope(c.scope, Some(base));
     let owner = owner(model, scope, &c.target, ctx)?;
+    let tmux = ctx.dialect == Dialect::Tmux;
     let line = |value: &str| {
+        let value = if tmux {
+            tmux_text(&model.options, owner, full, value)
+        } else {
+            value.to_string()
+        };
+        let value = value.as_str();
         if c.value_only {
             format!("{value}\n")
         } else {
@@ -2646,7 +2914,15 @@ fn show_list(
         return Ok(String::new());
     };
     Ok(match index {
+        // tmux's default for an element grofe's list lacks (FE.3).
+        Some(i) if tmux && owner == Owner::Global && !l.items.contains_key(&i) => {
+            match spelled_default(&model.options, full, None) {
+                Some(text) => line_raw(full, &text, c.value_only),
+                None => line(""),
+            }
+        }
         Some(i) => line(l.items.get(&i).map_or("", String::as_str)),
+        None if tmux && owner == Owner::Global => tmux_list_lines(model, base, None, c.value_only),
         None => list_lines(base, l, c.value_only),
     })
 }

@@ -297,6 +297,10 @@ pub struct SetOption {
     pub quiet: bool,
     /// `-o`: set only if the option is not already set.
     pub only_if_unset: bool,
+    /// The value as the tmux front end was sent it, when it rewrote it
+    /// into grofe's format spelling (FE.3): what a tmux-dialect `show`
+    /// prints. Never parsed; `None` natively.
+    pub shown: Option<String>,
 }
 
 /// `show-options`/`show` (`-g -s -w -p -t`, and from M3.6 `-v -q`).
@@ -487,6 +491,8 @@ pub struct RunShell {
     pub background: bool,
     /// `-d` (FE.1): seconds to wait before running.
     pub delay: Option<std::time::Duration>,
+    /// `-t` (FE.3): the pane the command's formats expand against.
+    pub target: Target,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is
@@ -858,6 +864,8 @@ pub struct SetHook {
 pub struct ShowHooks {
     /// `-g`.
     pub global: bool,
+    /// `-w`: tmux's window and pane hooks, listed apart from the rest.
+    pub window: bool,
     pub hook: Option<String>,
 }
 

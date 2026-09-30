@@ -1,0 +1,22 @@
+$ new-session -d -s xy -n one -x 80 -y 24 cat
+? 0
+$ new-session -d -s x -n one -x 80 -y 24 cat
+? 0
+$ split-window -d -t x:1 cat
+? 0
+$ set-hook -g pane-exited 'neww -d -t =x -n fired cat; setw -t =x:fired @via hook; select-pane -t =x:1.2'
+? 0
+$ new-window -d -t xy -n brief true
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ list-windows -t x -F '#{window_index} #{window_name} #{@via}'
+1 one 
+2 fired hook
+? 0
+$ list-windows -t xy -F '#{window_index} #{window_name} #{@via}'
+1 one 
+? 0
+$ display -p -t x:1 '#{pane_index}'
+2
+? 0

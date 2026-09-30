@@ -1,0 +1,60 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ show-environment -g
+HOME=<TMPDIR>/home
+LANG=C.UTF-8
+PATH=/usr/local/bin:/usr/bin:/bin
+PWD=<TMPDIR>/home
+SHELL=/bin/sh
+TERM=xterm-256color
+TMUX_TMPDIR=<TMPDIR>
+? 0
+$ set-environment -g OPENSESSIONS_DIR /opt/os
+? 0
+$ show-environment -g OPENSESSIONS_DIR
+OPENSESSIONS_DIR=/opt/os
+? 0
+$ set-environment -g -u OPENSESSIONS_DIR
+? 0
+$ show-environment -g OPENSESSIONS_DIR
+! unknown variable: OPENSESSIONS_DIR
+? 1
+$ set-environment -g OPENSESSIONS_WIDTH 30
+? 0
+$ set-environment -gu OPENSESSIONS_WIDTH
+? 0
+$ show-environment -g OPENSESSIONS_WIDTH
+! unknown variable: OPENSESSIONS_WIDTH
+? 1
+$ setenv -h log_info INFO
+? 0
+$ showenv -h log_info
+log_info=INFO
+? 0
+$ showenv log_info
+? 0
+$ setenv -t main SMUG_SESSION work
+? 0
+$ showenv -t main SMUG_SESSION
+SMUG_SESSION=work
+? 0
+$ showenv -g SMUG_SESSION
+! unknown variable: SMUG_SESSION
+? 1
+$ start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+! unknown variable: TMUX_PLUGIN_MANAGER_PATH
+? 1
+$ set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
+? 0
+$ start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+TMUX_PLUGIN_MANAGER_PATH=~/.config/tmux/plugins/
+? 0
+$ setenv -g A=B c
+! variable name contains =
+? 1
+$ setenv -gu X y
+! can't specify a value with -u
+? 1
+$ setenv -g ONLY
+! no value specified
+? 1
