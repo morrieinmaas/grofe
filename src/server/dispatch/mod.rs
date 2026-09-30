@@ -137,6 +137,7 @@ pub(crate) fn run_commands(
     server::hooks::enter(state);
     while let Some(cmd) = cmds.next() {
         let answered = state.deferred_reply.is_none();
+        let shell = matches!(cmd, Command::RunShell(_));
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
@@ -155,7 +156,9 @@ pub(crate) fn run_commands(
         }
         let nested = server::hooks::depth(state) > 1;
         if answered && state.deferred_reply.is_some() && (cmds.len() > 0 || nested) {
-            state.held.get_or_insert_default().wait = state.deferred_reply.take();
+            let held = state.held.get_or_insert_default();
+            held.wait = state.deferred_reply.take();
+            held.shell = shell;
         }
         let hook_waits = cmds.len() > 0
             && state.deferred_reply.is_none()

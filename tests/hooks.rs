@@ -1048,3 +1048,34 @@ fn run_shell_holds_the_next_command_and_a_failure_does_not_stop_it() {
     assert!(stdout.starts_with("one\n"), "{stdout:?}");
     assert!(stdout.contains("two\n"), "{stdout:?}");
 }
+
+/// tmux 3.7b (recorded): a request's CLI exits with the status of its last
+/// `run-shell`: `run-shell false ; run-shell true` exits 0, the other way
+/// round 1, and a later non-shell command keeps a failed shell's status.
+#[test]
+fn the_cli_exits_with_the_last_run_shells_status() {
+    let (srv, _) = start();
+    let status = |args: &[&str]| {
+        let out = srv.command().args(args).output().expect("cli");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, _) = status(&["run-shell", "false", ";", "run-shell", "true"]);
+    assert_eq!(code, Some(0));
+    let (code, _) = status(&["run-shell", "echo a", ";", "run-shell", "echo b; exit 1"]);
+    assert_eq!(code, Some(1));
+    let (code, out) = status(&[
+        "run-shell",
+        "echo a; false",
+        ";",
+        "run-shell",
+        "echo b",
+        ";",
+        "run-shell",
+        "echo c",
+    ]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.starts_with("a\n") && out.ends_with("b\nc\n"), "{out:?}");
+}

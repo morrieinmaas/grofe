@@ -135,6 +135,8 @@ pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<Strin
 pub(crate) struct Held {
     pub frames: Vec<(ClientCtx, Vec<Command>)>,
     pub wait: Option<oneshot::Receiver<Result<String, Failure>>>,
+    /// The wait is a `run-shell`'s: its status is the request's so far.
+    pub shell: bool,
 }
 
 type Answer = oneshot::Sender<Result<String, Failure>>;
@@ -160,7 +162,7 @@ pub(crate) fn hold_rest(
             let _ = ready.send(Ok(String::new()));
             wait
         });
-    let frames = held.frames;
+    let (frames, shell) = (held.frames, held.shell);
     let mut tx = tx.unwrap_or_else(|| dispatch::defer_reply(state));
     let jobs = state.jobs.clone();
     let ctx = ctx.clone();
@@ -177,7 +179,8 @@ pub(crate) fn hold_rest(
         // A failed command (`run-shell` exiting non-zero) does not stop
         // the rest, as in tmux 3.7b (recorded); the request fails at the end.
         let (out, failed) = match woken {
-            Ok(Ok(text)) => (out + &text, failed),
+            // The last `run-shell`'s status is the request's (tmux 3.7b).
+            Ok(Ok(text)) => (out + &text, failed.filter(|_| !shell)),
             Ok(Err(failure)) => (out + &failure.out, Some(failure)),
             // The server is going away; the dropped answer says so.
             Err(_) => return,
@@ -255,6 +258,9 @@ fn resume(
     let mut tx = tx;
     tokio::spawn(async move {
         let answer = async {
+            // A command that answered last decides the status, as the
+            // last `run-shell` does in tmux.
+            let answered_last = later.is_some();
             let last = match later {
                 Some(later) => later.await.ok()?,
                 None => Ok(String::new()),
@@ -264,8 +270,12 @@ fn resume(
                 None => String::new(),
             };
             Some(match (result, last) {
+                (Ok(more), Ok(last)) if answered_last => Ok(out + &more + &last + &hooked),
                 (Ok(more), Ok(last)) => answer(out + &more + &last + &hooked),
-                (Ok(_), Err(failure)) => Err(failure),
+                (Ok(more), Err(f)) => Err(Failure {
+                    out: out + &more + &f.out + &hooked,
+                    ..f
+                }),
                 (Err(e), _) => Err(Failure::from(e)),
             })
         };
