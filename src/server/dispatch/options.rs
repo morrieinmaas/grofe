@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
@@ -75,6 +75,30 @@ struct Builtin {
 // synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
 // the string translated into grofe's `#{...}`-only expander (R15).
+/// tmux 3.7b's built-in defaults where grofe's differ (recorded: `show
+/// -g`/`-s`/`-gw` on `-f /dev/null` with a clean environment), used under
+/// tmux identity ([`Options::use_tmux_defaults`]); `status-keys` and
+/// `mode-keys` follow `$EDITOR` there. Formats are tmux's where the native
+/// language can say the same thing.
+// ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
+// for `pane-active-border-style` have no native spelling, so grofe's stay.
+// `renumber-windows off` is shown but grofe always renumbers.
+const TMUX_DEFAULTS: &[(&str, &str)] = &[
+    ("base-index", "0"),
+    ("pane-base-index", "0"),
+    ("history-limit", "2000"),
+    ("escape-time", "10"),
+    ("mouse", "off"),
+    ("set-clipboard", "external"),
+    ("focus-events", "off"),
+    ("extended-keys", "off"),
+    ("renumber-windows", "off"),
+    (
+        "automatic-rename-format",
+        "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
+    ),
+];
+
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -367,7 +391,106 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "latest",
     },
+    // FE.1: the corpus's tmux options grofe stores and never reads
+    // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
+    // §5.3's defaults where grofe's differ (`extended-keys`, `mode-keys`,
+    // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
+    // ones; D6 sizes windows; grofe's prompt keys are emacs's; grofe always
+    // renumbers.
+    // ponytail: `default-command`, `default-shell` and `synchronize-panes`
+    // do something in tmux; grofe stores them only, until a ported script
+    // needs one. `mode-keys` waits for M5's copy mode, and
+    // `pane-border-format` for pane border titles.
+    Builtin {
+        name: "aggressive-resize",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "default-command",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "",
+    },
+    Builtin {
+        name: "default-shell",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "/bin/sh",
+    },
+    Builtin {
+        name: "default-terminal",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "tmux-256color",
+    },
+    Builtin {
+        name: "extended-keys",
+        kind: Kind::Choice(&["off", "on", "always"]),
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "extended-keys-format",
+        kind: Kind::Choice(&["csi-u", "xterm"]),
+        scope: OptionScope::Global,
+        default: "xterm",
+    },
+    Builtin {
+        name: "mode-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Window,
+        default: "vi",
+    },
+    Builtin {
+        name: "pane-border-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"\
+                  #{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]\
+                  #[norange]#[range=control|9][x]#[norange],}",
+    },
+    Builtin {
+        name: "renumber-windows",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "status-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Session,
+        default: "emacs",
+    },
+    Builtin {
+        name: "synchronize-panes",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    // FE.1: what `select-pane -P` sets on a pane, as tmux 3.7b does
+    // (recorded; free text, unchecked). grofe draws no pane background.
+    Builtin {
+        name: "window-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-active-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
 ];
+
+/// A built-in option's scope (a list's too), `None` for anything else.
+pub fn builtin_scope(name: &str) -> Option<OptionScope> {
+    builtin(name)
+        .map(|b| b.scope)
+        .or_else(|| list_builtin(name).map(|l| l.scope))
+}
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
 /// its TOML name table is complete).
@@ -386,6 +509,10 @@ pub enum Owner {
     Session(SessionId),
     Window(WindowId),
     Pane(PaneId),
+    /// tmux's server and global window scopes, for user options set
+    /// through the tmux front end (FE.1): looked up after global.
+    Server,
+    GlobalWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +538,9 @@ pub struct Options {
     /// Global lists the config set, each with the elements it had before,
     /// as `config_base` for scalars.
     config_list_base: BTreeMap<String, BTreeMap<u32, String>>,
+    /// Built-in defaults that differ under the server's identity
+    /// ([`Options::use_tmux_defaults`]): what `set -gu` restores.
+    identity_defaults: BTreeMap<&'static str, String>,
 }
 
 impl Options {
@@ -435,6 +565,51 @@ impl Options {
             lists: BTreeMap::from([(Owner::Global, default_lists())]),
             ..Options::default()
         }
+    }
+
+    /// Under tmux identity (spec D12 ruling, FE.1): the built-in defaults
+    /// where grofe's differ from tmux 3.7b's become tmux's
+    /// ([`TMUX_DEFAULTS`]), so a script sees what tmux would. `editor` is
+    /// the server's `$VISUAL`, else `$EDITOR`: tmux makes `status-keys`
+    /// and `mode-keys` `vi` when its basename holds `vi` (recorded).
+    /// A value the config set keeps winning, and falls back to tmux's on
+    /// `reload` once the config stops setting it; a runtime value is left
+    /// alone. Called once, at start.
+    pub fn use_tmux_defaults(&mut self, editor: Option<&str>) {
+        let keys = match editor.and_then(|e| e.rsplit('/').next()) {
+            Some(e) if e.contains("vi") => "vi",
+            _ => "emacs",
+        };
+        let defaults = TMUX_DEFAULTS
+            .iter()
+            .map(|(n, v)| (*n, v.to_string()))
+            .chain([
+                ("mode-keys", keys.to_string()),
+                ("status-keys", keys.to_string()),
+            ]);
+        for (name, value) in defaults {
+            if let Some(base) = self.config_base.get_mut(name) {
+                *base = value.clone();
+            } else if !self.runtime.contains(name)
+                && let Some(global) = self.values.get_mut(&Owner::Global)
+            {
+                global.insert(
+                    name.to_string(),
+                    Entry {
+                        value: value.clone(),
+                        persist: false,
+                    },
+                );
+            }
+            self.identity_defaults.insert(name, value);
+        }
+    }
+
+    /// `name`'s built-in default under this server's identity.
+    fn default_of(&self, b: &'static Builtin) -> &str {
+        self.identity_defaults
+            .get(b.name)
+            .map_or(b.default, String::as_str)
     }
 
     /// Marks a global option as set at runtime, which the config then
@@ -477,7 +652,8 @@ impl Options {
         if owner == Owner::Global
             && let Some(b) = builtin(name)
         {
-            return self.set(owner, name, b.default, false);
+            let default = self.default_of(b).to_string();
+            return self.set(owner, name, &default, false);
         }
         let Some(at) = self.values.get_mut(&owner) else {
             return Ok(false);
@@ -503,7 +679,7 @@ impl Options {
     pub fn lookup(&self, name: &str, chain: &[Owner]) -> Option<&str> {
         chain
             .iter()
-            .chain([&Owner::Global])
+            .chain([&Owner::GlobalWindow, &Owner::Global, &Owner::Server])
             .find_map(|o| self.get(*o, name))
             .map(|e| e.value.as_str())
     }
@@ -513,13 +689,13 @@ impl Options {
     /// apply to anything; this only frees them.
     pub fn retain_live(&mut self, model: &Model) {
         self.values.retain(|owner, _| match owner {
-            Owner::Global => true,
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
             Owner::Session(id) => model.sessions.contains_key(id),
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
         });
         self.lists.retain(|owner, _| match owner {
-            Owner::Global => true,
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
             Owner::Session(id) => model.sessions.contains_key(id),
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
@@ -604,6 +780,8 @@ fn owner(
         OptionScope::Session => Owner::Session(model.resolve_session(target, ctx)?),
         OptionScope::Window => Owner::Window(model.resolve_window(target, ctx)?),
         OptionScope::Pane => Owner::Pane(model.resolve_pane(target, ctx)?),
+        OptionScope::Server => Owner::Server,
+        OptionScope::GlobalWindow => Owner::GlobalWindow,
     })
 }
 
@@ -765,7 +943,7 @@ impl FormatVars for NoVars {
 fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
     events.emit(Event::OptionChanged {
         scope: match owner {
-            Owner::Global => "global".to_string(),
+            Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
             Owner::Session(id) => id.to_string(),
             Owner::Window(id) => id.to_string(),
             Owner::Pane(id) => id.to_string(),
@@ -779,7 +957,7 @@ fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) 
 /// objects above it.
 fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
     match owner {
-        Owner::Global => Vec::new(),
+        Owner::Global | Owner::Server | Owner::GlobalWindow => Vec::new(),
         Owner::Session(_) => vec![owner],
         Owner::Window(w) => {
             let mut chain = vec![owner];
@@ -902,10 +1080,31 @@ fn config_env() -> config::Env {
     config::Env::from_process()
 }
 
+/// The config chain (spec §5.1), or with `tmux -f <file>...` those files
+/// alone, in order (`compat::start_config`): a missing file or
+/// `/dev/null` is no file, so none at all leaves the built-in defaults.
+fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
+    let env = config_env();
+    match crate::compat::start_config() {
+        None => config::load(&env),
+        Some(files) => {
+            let only = config::Env {
+                config_dir: None,
+                ..env
+            };
+            let files: Vec<PathBuf> = files
+                .into_iter()
+                .filter(|f| f != Path::new("/dev/null") && f.exists())
+                .collect();
+            config::load_with_file(&only, &files)
+        }
+    }
+}
+
 /// Applies the config chain once at server start. On any error the
 /// server keeps the built-in defaults and logs every error (R9).
 pub fn apply_config_at_start(state: &mut State) {
-    match config::load(&config_env()) {
+    match load_config() {
         Ok(resolved) => {
             log_warnings(&resolved);
             apply_config(state, &resolved);
@@ -929,7 +1128,7 @@ fn log_warnings(resolved: &Resolved) {
 /// of it or, on any error, none of it and answers every error, one per
 /// line.
 pub fn reload(state: &mut State, _ctx: &ClientCtx, _c: Reload) -> Result<String, String> {
-    let resolved = config::load(&config_env()).map_err(|errors| join_errors(&errors))?;
+    let resolved = load_config().map_err(|errors| join_errors(&errors))?;
     log_warnings(&resolved);
     apply_config(state, &resolved);
     Ok(String::new())
@@ -1713,7 +1912,35 @@ const LISTS: &[ListBuiltin] = &[
             "XDG_SESSION_TYPE",
         ],
     },
+    // FE.1: tmux 3.7b's list and default (recorded); no effect, since the
+    // probe decides what the outer terminal can do (spec D7, §4.5).
+    ListBuiltin {
+        name: "terminal-features",
+        scope: OptionScope::Global,
+        default: &[
+            "xterm*:clipboard:ccolour:cstyle:focus:title",
+            "screen*:title",
+            "rxvt*:ignorefkeys",
+        ],
+    },
 ];
+
+/// The separator tmux 3.7b splits a list option's value on when it is set
+/// or appended without an index (recorded); `status-format` has none.
+fn list_separator(name: &str) -> Option<char> {
+    match name {
+        "terminal-features" | "command-alias" => Some(','),
+        "update-environment" => Some(' '),
+        _ => None,
+    }
+}
+
+fn pieces(value: &str, sep: char) -> impl Iterator<Item = String> + '_ {
+    value
+        .split(sep)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
 
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
     LISTS.iter().find(|l| l.name == name)
@@ -1726,10 +1953,24 @@ pub fn list_names() -> impl Iterator<Item = &'static str> {
 
 /// Options grofe accepts and stores but never reads (spec §4.5, "Options
 /// by tmux name"), by tmux name. `show-config --explain` marks them
-/// `(no effect)`. FE.1 adds its rows (`terminal-features`,
-/// `extended-keys-format`, `default-terminal`) with their `BUILTINS`
-/// entries; the list stays here so no later task edits this contract.
-const NO_EFFECT: &[&str] = &[];
+/// `(no effect)`. FE.1's rows: every such option in the corpus, each with
+/// its `BUILTINS` or `LISTS` entry.
+const NO_EFFECT: &[&str] = &[
+    "aggressive-resize",
+    "default-command",
+    "default-shell",
+    "default-terminal",
+    "extended-keys",
+    "extended-keys-format",
+    "mode-keys",
+    "pane-border-format",
+    "renumber-windows",
+    "status-keys",
+    "synchronize-panes",
+    "terminal-features",
+    "window-active-style",
+    "window-style",
+];
 
 /// Whether grofe stores `name` without ever acting on it.
 pub fn has_no_effect(name: &str) -> bool {
@@ -1955,7 +2196,20 @@ fn set_list(
         (false, None, Some(value)) if c.append => ListOp::Push(value),
         (false, None, Some(value)) => ListOp::Replace(value),
     };
-    let changed = model.options.edit_list(owner, base, op, c.persist)?;
+    // As tmux 3.7b (recorded, FE.1): a list with a separator takes a value
+    // set or appended without an index as one element per piece, empty
+    // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
+    let ops = match (op, list_separator(base)) {
+        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
+        (ListOp::Replace(value), Some(sep)) => {
+            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
+        }
+        (op, _) => vec![op],
+    };
+    let mut changed = false;
+    for op in ops {
+        changed |= model.options.edit_list(owner, base, op, c.persist)?;
+    }
     if owner == Owner::Global {
         model.options.mark_runtime(base);
     }
@@ -2046,7 +2300,7 @@ fn apply_config_lists(model: &mut Model, events: &mut Events, resolved: &Resolve
 
 fn scope_name(owner: Owner) -> String {
     match owner {
-        Owner::Global => "global".to_string(),
+        Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
         Owner::Session(id) => id.to_string(),
         Owner::Window(id) => id.to_string(),
         Owner::Pane(id) => id.to_string(),
@@ -2218,6 +2472,51 @@ mod tests {
         );
     }
 
+    /// FE.1 ruling: under tmux identity each built-in default that differs
+    /// is tmux 3.7b's (recorded); under grofe identity grofe's stays.
+    #[test]
+    fn tmux_identity_takes_tmux_s_defaults() {
+        let recorded = [
+            ("base-index", "0", "1"),
+            ("pane-base-index", "0", "1"),
+            ("mouse", "off", "on"),
+            ("set-clipboard", "external", "on"),
+            ("focus-events", "off", "on"),
+            ("escape-time", "10", "25"),
+            ("history-limit", "2000", "50000"),
+            ("extended-keys", "off", "on"),
+            ("renumber-windows", "off", "on"),
+            ("mode-keys", "emacs", "vi"),
+            ("status-keys", "emacs", "emacs"),
+        ];
+        let grofe = Options::new(false);
+        let mut tmux = Options::new(false);
+        tmux.use_tmux_defaults(None);
+        for (name, tmux_default, grofe_default) in recorded {
+            let get = |o: &Options| o.lookup(name, &[]).map(str::to_string);
+            assert_eq!(get(&grofe).as_deref(), Some(grofe_default), "grofe {name}");
+            assert_eq!(get(&tmux).as_deref(), Some(tmux_default), "tmux {name}");
+        }
+        // `set -gu` restores the identity's default.
+        tmux.set(Owner::Global, "base-index", "5", false).unwrap();
+        tmux.unset(Owner::Global, "base-index").unwrap();
+        assert_eq!(tmux.lookup("base-index", &[]), Some("0"));
+        // tmux's `$EDITOR` rule for the key tables.
+        let mut vi = Options::new(false);
+        vi.use_tmux_defaults(Some("/usr/local/bin/nvim"));
+        assert_eq!(vi.lookup("status-keys", &[]), Some("vi"));
+        assert_eq!(vi.lookup("mode-keys", &[]), Some("vi"));
+        // A value the config set keeps winning, with tmux's as its base.
+        let mut configured = Options::new(false);
+        configured
+            .config_base
+            .insert("mouse".to_string(), "on".to_string());
+        configured.set(Owner::Global, "mouse", "on", false).unwrap();
+        configured.use_tmux_defaults(None);
+        assert_eq!(configured.lookup("mouse", &[]), Some("on"));
+        assert_eq!(configured.config_base["mouse"], "off");
+    }
+
     /// The stub edit: `bind-key` checks the command in the request's
     /// dialect and keeps that dialect on the binding.
     #[test]
@@ -2230,7 +2529,8 @@ mod tests {
             key: key.to_string(),
             command: vec!["list-sessions".to_string()],
         };
-        let grofe = crate::server::test_ctx();
+        let grofe_ctx = crate::server::test_ctx;
+        let grofe = grofe_ctx();
         bind_key(&mut state, &grofe, bind("F5")).expect("native bind");
         let f5 = parse_key("F5").expect("key");
         let b = state.registry.key_tables.exact("root", &f5).expect("bound");
@@ -2239,8 +2539,17 @@ mod tests {
             dialect: Dialect::Tmux,
             ..grofe
         };
-        let err = bind_key(&mut state, &tmux, bind("F6")).unwrap_err();
-        assert!(err.contains("tmux front end"), "{err}");
+        // FE.1: a tmux-only form binds in the tmux dialect and keeps it.
+        let ls = |key: &str| BindKey {
+            command: vec!["ls".to_string()],
+            ..bind(key)
+        };
+        bind_key(&mut state, &tmux, ls("F6")).expect("tmux bind");
+        let f6 = parse_key("F6").expect("key");
+        let b = state.registry.key_tables.exact("root", &f6).expect("bound");
+        assert_eq!(b.dialect, Dialect::Tmux);
+        let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
+        assert_eq!(err, "unknown command: ls");
     }
 
     /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);

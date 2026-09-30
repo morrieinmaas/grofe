@@ -312,6 +312,11 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::ShowHooks(c) => hooks::show_hooks(state, ctx, c),
         Command::SetEnvironment(c) => hooks::set_environment(state, ctx, c),
         Command::ShowEnvironment(c) => hooks::show_environment(state, ctx, c),
+        // FE.1: a status source a tmux `#(cmd)` rewrite registers first.
+        Command::RegisterSource(c) => {
+            server::sources::register(state, c.name.as_deref(), &c.command, None, None);
+            Ok(String::new())
+        }
     }
 }
 

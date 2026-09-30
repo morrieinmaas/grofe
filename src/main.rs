@@ -55,6 +55,11 @@ fn main() -> ExitCode {
             }
             Ok(cli) => {
                 let _ = DIALECT.set(cli.dialect);
+                // `-f`: the config of a server this call starts (spec §4.5),
+                // each file absolute, since the server does not keep this cwd.
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let files = cli.files.iter().map(|f| cwd.join(f)).collect();
+                let _ = CONFIG_FILES.set(files);
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
@@ -72,6 +77,11 @@ fn main() -> ExitCode {
             Err(e) => return fail(&e),
         }
     } else {
+        // `grofe -V`: grofe's own version, decided by `argv[0]` (spec D12).
+        if args.first().is_some_and(|a| a == "-V") {
+            println!("grofe {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         match parse_globals(&args) {
             Ok((globals, rest)) => (globals, rest.to_vec()),
             Err(e) => {
@@ -98,6 +108,12 @@ fn main() -> ExitCode {
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
             match connect_or_start(&socket, own_dir, false).and_then(|s| probe(s, &socket)) {
+                // tmux runs the rest of a `start-server \; ...` chain (TPM's
+                // `start-server \; show-option -gqv @tpm_plugins`); the
+                // front end answers `start-server` itself with nothing.
+                Ok(()) if dialect() == Dialect::Tmux && rest.len() > 1 => {
+                    one_shot(&socket, own_dir, rest)
+                }
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => fail(&e),
             }
@@ -121,6 +137,9 @@ fn main() -> ExitCode {
 /// The dialect every hello this process sends carries: grofe, unless the
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
+
+/// `tmux -f <file>...`: passed to a server this process starts.
+static CONFIG_FILES: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 fn dialect() -> Dialect {
     DIALECT.get().copied().unwrap_or_default()
@@ -304,8 +323,9 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
 }
 
 /// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
-/// [--identity tmux]`: the detached server process. `--identity tmux`
-/// says the CLI that started it ran as `tmux` (spec D12).
+/// [--identity tmux] [--file <path>]`: the detached server process.
+/// `--identity tmux` says the CLI that started it ran as `tmux` (spec
+/// D12); `--file` is that CLI's `tmux -f`.
 fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     let mut socket = globals.socket.clone();
     let mut ready_fd = None;
@@ -321,6 +341,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
             ("--identity", Some(name)) if name == "tmux" => {
                 grofe::compat::set_started_as(grofe::compat::Identity::Tmux)
             }
+            ("--file", Some(path)) => grofe::compat::set_start_config(PathBuf::from(path)),
             ("--ready-fd", Some(fd)) => match fd.parse() {
                 Ok(fd) => ready_fd = Some(fd),
                 Err(_) => return fail(&format!("bad --ready-fd: {fd}")),
@@ -693,6 +714,9 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
     // `tmux` sends a tmux dialect.
     if dialect() == Dialect::Tmux {
         cmd.args(["--identity", "tmux"]);
+    }
+    for file in CONFIG_FILES.get().into_iter().flatten() {
+        cmd.arg("--file").arg(file);
     }
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork
     // and exec. It detaches the server from our session and terminal.

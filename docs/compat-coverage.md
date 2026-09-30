@@ -198,9 +198,12 @@ owners should settle. As recorded on 2026-09-28 (tmux 3.7b, fzf 0.74.4):
   `show-window-options`; and the copy-mode and buffer verbs beyond the three
   the M5 row names (`copy-mode` and its flags, `send-keys -X`,
   `delete-buffer`, `list-buffers`, `load-buffer`, `show-buffer`).
-- **A flag tmux 3.7b itself rejects:** opensessions' pane flash sends
-  `select-pane -P bg=colour238` (removed from tmux long ago); tmux answers
-  with an error, and so should the front end.
+- **A hidden flag, not a rejected one:** opensessions' pane flash sends
+  `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
+  3.7b still takes it (recorded by FE.1): it selects the pane and sets the
+  pane's `window-style` and `window-active-style`, with no check on the
+  style. The front end does the same; grofe draws no pane background, so
+  the two options have no effect.
 - **Session groups and linked windows** are out of scope (spec), and sessionx
   sends both: `new-session -d -s <name> -t <session>` and `link-window`.
 - **Options and format variables** the spec does not name are listed in the
@@ -229,7 +232,7 @@ Distinct forms (verb plus flag set, stored commands included): **286**.
 
 ### Forms
 
-One row per distinct form. *Lines* counts corpus lines holding it; *stored* counts those where it sits inside a stored command (a bind body, hook, `if-shell` branch, menu item). *Verb named* says whether the mapped row mentions the verb at all, and *unnamed flags* lists flags it does not mention (both an approximate text match): a **no** or a listed flag is a question for the task that owns the row, not an error. A flag marked `!` is one tmux 3.7b itself lacks, so tmux answers it with an error.
+One row per distinct form. *Lines* counts corpus lines holding it; *stored* counts those where it sits inside a stored command (a bind body, hook, `if-shell` branch, menu item). *Verb named* says whether the mapped row mentions the verb at all, and *unnamed flags* lists flags it does not mention (both an approximate text match): a **no** or a listed flag is a question for the task that owns the row, not an error. A flag marked `!` is one tmux 3.7b's `list-commands` usage leaves out; it may still be a hidden flag tmux accepts (`select-pane -P` is).
 
 | Form | Lines | Stored | Files | Spec 4.5 row | Verb named | Unnamed flags | Sources |
 |---|---|---|---|---|---|---|---|

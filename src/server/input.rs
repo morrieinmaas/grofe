@@ -1474,6 +1474,16 @@ pub fn default_bindings() -> KeyTables {
             &format!("{verb} the {layout} layout"),
         );
     }
+    // FE.1: stock `o`. Its `:.+` offset has no native spelling, so the
+    // binding is tmux dialect, run through the front end (recorded on tmux
+    // 3.7b: `select-pane -t :.+`, "Select the next pane").
+    if let Ok(key) = parse_key("o") {
+        let argv = ["select-pane", "-t", ":.+"].map(String::from).to_vec();
+        let mut b = Binding::new(vec![argv], false, BindingSource::Default);
+        b.desc = Some("Select the next pane".to_string());
+        b.dialect = Dialect::Tmux;
+        t.insert(PREFIX_TABLE, key, b);
+    }
     t
 }
 
@@ -3094,7 +3104,7 @@ mod tests {
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
         // Stock keys grofe leaves unbound (out of scope, or M5's).
-        for name in ["o", "m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
+        for name in ["m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }
@@ -3203,6 +3213,11 @@ mod tests {
             assert_eq!(words(b), *argv, "{name}");
             assert_eq!(b.desc.as_deref(), Some(*note), "{name}");
         }
+        // Stock `o` is tmux dialect: its offset target has no native form.
+        let o = t.get(PREFIX_TABLE, &k("o")).expect("o bound");
+        assert_eq!(words(o), ["select-pane", "-t", ":.+"]);
+        assert_eq!(o.desc.as_deref(), Some("Select the next pane"));
+        assert_eq!(o.dialect, Dialect::Tmux);
         // Every default carries a note, as every tmux stock binding does.
         let unnoted: Vec<String> = t
             .keys(PREFIX_TABLE)
@@ -3294,14 +3309,17 @@ mod tests {
     #[test]
     fn every_default_binding_parses_as_a_command() {
         let t = default_bindings();
-        for argv in t
-            .tables
-            .values()
-            .flat_map(|t| t.values())
-            .flat_map(|b| &b.cmds)
-        {
-            if let Err(e) = crate::cmd::parse(argv) {
-                panic!("{argv:?}: {e}");
+        let ctx = crate::server::test_ctx();
+        for b in t.tables.values().flat_map(|t| t.values()) {
+            // Each in its own dialect: stock `o` is tmux's.
+            let ctx = crate::protocol::ClientCtx {
+                dialect: b.dialect,
+                ..ctx.clone()
+            };
+            for argv in &b.cmds {
+                if let Err(e) = crate::compat::parse_split(&ctx, argv) {
+                    panic!("{argv:?}: {e}");
+                }
             }
         }
     }

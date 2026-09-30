@@ -1,0 +1,9 @@
+# FE.1: what display -p returns in the middle of a \; chain. The whole
+# chain is parsed before anything runs, so a bad verb anywhere prints
+# nothing.
+$ new-session -d -s main -x 200 -y 50
+$ set -g @x 1 \; display -p '#{@x}' \; set -g @x 2 \; display -p '#{@x}'
+$ display -p a \; display -p b
+$ split-window -d -t main cat \; display -p -t main '#{window_panes}'
+$ display -p a \; frobnicate \; display -p b
+$ set -g @y 1 \; display -p '#{@y}' \; set -gu @y \; display -p '[#{@y}]'

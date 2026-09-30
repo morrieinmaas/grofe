@@ -1615,14 +1615,22 @@ impl Importer {
     }
 }
 
-/// The tmux name to its TOML key (the reverse of
-/// [`config::tmux_name`]): a private helper over `OPTION_NAMES`, per the
-/// task brief (no second copy in `config/mod.rs`).
+/// The tmux name to its TOML key: the name through the tmux front end's
+/// one option-name table (`compat::tmux::OPTION_NAMES`, FE.1), then the
+/// reverse of [`config::tmux_name`]. An option grofe stores without acting
+/// on it is still reported as one grofe does not have (TP.0 decides).
 fn reverse_tmux_name(tmux: &str) -> Option<&'static str> {
+    let name = store_option(tmux)?;
     config::OPTION_NAMES
         .iter()
-        .find(|(_, n)| *n == tmux)
+        .find(|(_, n)| *n == name)
         .map(|(t, _)| *t)
+}
+
+/// The option store's name for tmux option `tmux`, unless it has no effect.
+fn store_option(tmux: &str) -> Option<&'static str> {
+    crate::compat::tmux::option_name(tmux)
+        .filter(|name| !crate::server::dispatch::options::has_no_effect(name))
 }
 
 /// Resolves tmux's short directive names to the canonical ones this module
@@ -1742,9 +1750,10 @@ fn section_of(toml_key: &str) -> Option<String> {
 
 /// The TOML key of a list option's tmux name.
 fn reverse_list_name(tmux: &str) -> Option<&'static str> {
+    let name = store_option(tmux)?;
     config::LIST_NAMES
         .iter()
-        .find(|(_, n)| *n == tmux)
+        .find(|(_, n)| *n == name)
         .map(|(t, _)| *t)
 }
 
