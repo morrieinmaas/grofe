@@ -33,7 +33,7 @@
 //! sends `argv` with the dialect [`cli`] chose.
 
 mod bindings;
-mod formats;
+pub(crate) mod formats;
 mod structure;
 
 use std::fmt;

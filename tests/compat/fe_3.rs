@@ -79,7 +79,8 @@ fn check(name: &str, diverges: &[(&str, &str)], fix: fn(String) -> String) {
 /// `list-clients -F '#{client_tty}'`, with the ttys of this run's attach
 /// clients once the server lists a client, since grofe's `client_tty` is
 /// still empty (TC.3 left it a stub for FE.2, which sends the tty in the
-/// attach hello). Every other command reaches grofe as it is.
+/// attach hello). Every other command reaches grofe as it is, without the
+/// variables the wrapper's own shell adds (`SHLVL`, `OLDPWD`, `_`).
 // ponytail: harness only; drop it once FE.2 fills client_tty.
 fn with_client_ttys(mut cli: Cli, dir: &Path) -> Cli {
     let wrap = dir.join("wrap");
@@ -90,13 +91,14 @@ fn with_client_ttys(mut cli: Cli, dir: &Path) -> Cli {
         &script,
         format!(
             "#!/bin/sh\n\
+             unset OLDPWD _\n\
              case \"$*\" in\n\
              *'list-clients -F #{{client_tty}}')\n\
              \x20 [ \"$('{grofe}' \"$@\" | wc -l)\" -gt 0 ] || exit 0\n\
              \x20 ps -A -o tty= -o args= | awk -v g='{grofe}' 'index($0, g \" \") && / attach/ {{ print \"/dev/\" $1 }}'\n\
              \x20 exit 0 ;;\n\
              esac\n\
-             exec '{grofe}' \"$@\"\n"
+             exec env -u SHLVL '{grofe}' \"$@\"\n"
         ),
     )
     .unwrap();
@@ -208,29 +210,7 @@ fn show_options_match_their_golden() {
     check("show", SHOW_GAPS, same);
 }
 
-const SHOW_GAPS: &[(&str, &str)] = &[
-    ("$ show -g window-status-format", AS_SENT),
-    ("$ show -g -v status-right", AS_SENT),
-    ("$ show -g set-titles-string", AS_SENT),
-    ("$ show -g status-right", TMUX_DEFAULT),
-    ("$ show -g window-status-current-format", TMUX_DEFAULT),
-    (
-        "$ show -g",
-        "blocked: tmux's show -g is its session table (68 options, window and server \
-         options apart); grofe lists its own options in one table, and the sources' \
-         @src- options (the option store, dispatch/options.rs)",
-    ),
-];
-
-/// A value the front end rewrote is stored, and shown, in grofe's spelling.
-const AS_SENT: &str = "blocked: show prints a rewritten value in grofe's spelling \
-                       (#{window_index}, #{@src-<hash>}), not as tmux was sent it; needs \
-                       the option store to keep the text as sent";
-
-/// grofe's format defaults are its own spelling of tmux's.
-const TMUX_DEFAULT: &str = "blocked: under tmux identity the default shows in grofe's \
-                            spelling, not tmux's text (Options::use_tmux_defaults); the \
-                            same seam as a value as sent";
+const SHOW_GAPS: &[(&str, &str)] = &[];
 
 /// Case 4: each of the twelve hooks fires once, its output where tmux
 /// puts it against its command's reply.
@@ -240,8 +220,6 @@ fn hooks_match_their_golden() {
 }
 
 const HOOK_GAPS: &[(&str, &str)] = &[
-    ("$ show-hooks -g after-select-pane", SHOW_HOOKS),
-    ("$ show-hooks -g pane-exited", SHOW_HOOKS),
     (
         "$ resize-window -t main:1 -x 70",
         "FE.2: the resize-window row; the hook itself is mapped",
@@ -256,10 +234,6 @@ const HOOK_GAPS: &[(&str, &str)] = &[
     ),
 ];
 
-const SHOW_HOOKS: &str = "blocked: show-hooks prints grofe's event name and the command as \
-                          set; tmux prints its hook name with an index and the command \
-                          re-printed from its parse (server::hooks::show, TC.5's)";
-
 /// Case 7: a hook whose command uses tmux-only forms runs them when it
 /// fires.
 #[test]
@@ -267,11 +241,7 @@ fn a_hook_s_tmux_forms_run_when_it_fires() {
     check("hook-forms", &[], same);
 }
 
-const ENV_GAPS: &[(&str, &str)] = &[(
-    "$ show-environment -g",
-    "native: tmux's global environment also holds PWD, the server's start \
-     directory (the environment's seed, server::hooks, TC.5's)",
-)];
+const ENV_GAPS: &[(&str, &str)] = &[];
 
 /// Case 5: `show-environment -g` and the environment flags. The grofe
 /// side's harness adds its own runtime directories and a `bin` dir on
@@ -282,6 +252,7 @@ fn the_environment_matches_its_golden() {
         s.lines()
             .filter(|l| !l.starts_with("XDG_") && !l.starts_with("GROFE_"))
             .map(|l| l.replace("PATH=<TMPDIR>/bin:", "PATH="))
+            .map(|l| realpath(l.to_string()))
             .map(|l| format!("{l}\n"))
             .collect()
     }
@@ -369,7 +340,13 @@ fn every_fe3_corpus_form_translates() {
         let argv: Vec<String> = form.iter().map(|s| s.to_string()).collect();
         let got = tmux::dispatch_command(&argv, &ctx);
         let cmds = got.unwrap_or_else(|e| panic!("{argv:?}: {e}"));
-        let text = format!("{cmds:?}");
+        let text: String = cmds
+            .iter()
+            .map(|c| match c {
+                Command::SetOption(set) => format!("{:?}", set.value),
+                c => format!("{c:?}"),
+            })
+            .collect();
         // A hook keeps its command as sent, translated when it fires.
         let stored = form[0] == "set-hook";
         assert!(

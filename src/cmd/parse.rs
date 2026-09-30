@@ -770,6 +770,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         expand: flags.present.contains(&'F'),
         quiet: flags.present.contains(&'q'),
         only_if_unset: flags.present.contains(&'o'),
+        shown: None,
     }))
 }
 
@@ -1753,10 +1754,15 @@ fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_show_hooks(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('g', FlagKind::Bool)], "show-hooks")?;
+    let flags = flags_for(
+        argv,
+        &[('g', FlagKind::Bool), ('w', FlagKind::Bool)],
+        "show-hooks",
+    )?;
     no_extra_positionals(&flags, "show-hooks", 1)?;
     Ok(Command::ShowHooks(ShowHooks {
         global: flags.present.contains(&'g'),
+        window: flags.present.contains(&'w'),
         hook: flags.positionals.first().cloned(),
     }))
 }
@@ -2860,6 +2866,7 @@ mod tests {
                 expand: false,
                 quiet: false,
                 only_if_unset: false,
+                shown: None,
             })
         );
     }
@@ -2880,6 +2887,7 @@ mod tests {
                 expand: false,
                 quiet: false,
                 only_if_unset: false,
+                shown: None,
             })
         );
     }

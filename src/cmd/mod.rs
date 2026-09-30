@@ -297,6 +297,10 @@ pub struct SetOption {
     pub quiet: bool,
     /// `-o`: set only if the option is not already set.
     pub only_if_unset: bool,
+    /// The value as the tmux front end was sent it, when it rewrote it
+    /// into grofe's format spelling (FE.3): what a tmux-dialect `show`
+    /// prints. Never parsed; `None` natively.
+    pub shown: Option<String>,
 }
 
 /// `show-options`/`show` (`-g -s -w -p -t`, and from M3.6 `-v -q`).
@@ -858,6 +862,8 @@ pub struct SetHook {
 pub struct ShowHooks {
     /// `-g`.
     pub global: bool,
+    /// `-w`: tmux's window and pane hooks, listed apart from the rest.
+    pub window: bool,
     pub hook: Option<String>,
 }
 

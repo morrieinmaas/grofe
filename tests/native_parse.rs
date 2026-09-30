@@ -524,6 +524,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
             vec!["show-hooks", "-g"],
             Command::ShowHooks(ShowHooks {
                 global: true,
+                window: false,
                 hook: None,
             }),
         ),

@@ -122,3 +122,7 @@ $ show -gv @expanded
 $ set -g @kept '#S'
 $ show -gv @kept
 $ display -p -t main:1 '#{@kept}'
+$ rename-window -t main:2 'w#S#{window_index}'
+$ list-windows -t main -F '#{window_index} #W'
+$ rename-session -t main '#S-#I'
+$ list-sessions -F '#S'

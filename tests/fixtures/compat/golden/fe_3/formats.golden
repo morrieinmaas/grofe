@@ -330,3 +330,15 @@ $ show -gv @kept
 $ display -p -t main:1 '#{@kept}'
 #S
 ? 0
+$ rename-window -t main:2 'w#S#{window_index}'
+? 0
+$ list-windows -t main -F '#{window_index} #W'
+1 first
+2 wmain2
+3 third
+? 0
+$ rename-session -t main '#S-#I'
+? 0
+$ list-sessions -F '#S'
+main-1
+? 0

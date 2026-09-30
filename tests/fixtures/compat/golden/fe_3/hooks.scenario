@@ -9,7 +9,7 @@ $ new-window -d -t main -n second cat
 $ set-hook -g after-select-pane 'display -p "after-select-pane #{window_index}.#{pane_index}"'
 $ set-hook -g after-select-window 'display -p "after-select-window #I"'
 $ set-hook -g after-new-window 'display -p "after-new-window #{window_name}"'
-$ set-hook -g after-kill-pane 'display -p "after-kill-pane"'
+$ set-hook -g after-kill-pane 'display -p "#{hook}"'
 $ set-hook -g after-resize-pane 'display -p "after-resize-pane"'
 $ set-hook -g after-resize-window 'display -p "after-resize-window"'
 $ set-hook -g session-created 'run-shell "echo #{hook} #{hook_session_name} >> $HOME/hooks.log"'
@@ -20,6 +20,10 @@ $ set-hook -g client-session-changed 'run-shell "echo #{hook} >> $HOME/hooks.log
 $ set-hook -g client-resized 'run-shell "echo #{hook} >> $HOME/hooks.log"'
 $ show-hooks -g after-select-pane
 $ show-hooks -g pane-exited
+$ show-hooks -g
+$ show-hooks -gw
+$ show-hooks -gw after-select-pane
+$ show-hooks -g after-nope
 $ select-pane -t main:1.2
 $ select-pane -t main:1.2
 $ select-window -t main:2 \; display -p next

@@ -10,7 +10,7 @@ $ set-hook -g after-select-window 'display -p "after-select-window #I"'
 ? 0
 $ set-hook -g after-new-window 'display -p "after-new-window #{window_name}"'
 ? 0
-$ set-hook -g after-kill-pane 'display -p "after-kill-pane"'
+$ set-hook -g after-kill-pane 'display -p "#{hook}"'
 ? 0
 $ set-hook -g after-resize-pane 'display -p "after-resize-pane"'
 ? 0
@@ -34,6 +34,84 @@ after-select-pane[0] display-message -p "after-select-pane #{window_index}.#{pan
 $ show-hooks -g pane-exited
 pane-exited[0] run-shell "echo #{hook} >> <TMPDIR>/home/hooks.log"
 ? 0
+$ show-hooks -g
+after-bind-key
+after-capture-pane
+after-copy-mode
+after-display-message
+after-display-panes
+after-kill-pane[0] display-message -p "#{hook}"
+after-list-buffers
+after-list-clients
+after-list-keys
+after-list-panes
+after-list-sessions
+after-list-windows
+after-load-buffer
+after-lock-server
+after-new-session
+after-new-window[0] display-message -p "after-new-window #{window_name}"
+after-paste-buffer
+after-pipe-pane
+after-queue
+after-refresh-client
+after-rename-session
+after-rename-window
+after-resize-pane[0] display-message -p after-resize-pane
+after-resize-window[0] display-message -p after-resize-window
+after-save-buffer
+after-select-layout
+after-select-pane[0] display-message -p "after-select-pane #{window_index}.#{pane_index}"
+after-select-window[0] display-message -p "after-select-window #I"
+after-send-keys
+after-set-buffer
+after-set-environment
+after-set-hook
+after-set-option
+after-show-environment
+after-show-messages
+after-show-options
+after-split-window
+after-unbind-key
+alert-activity
+alert-bell
+alert-silence
+client-active
+client-attached
+client-detached
+client-focus-in
+client-focus-out
+client-resized[0] run-shell "echo #{hook} >> <TMPDIR>/home/hooks.log"
+client-session-changed[0] run-shell "echo #{hook} >> <TMPDIR>/home/hooks.log"
+client-light-theme
+client-dark-theme
+command-error
+session-closed[0] run-shell "echo #{hook} #{hook_session_name} >> <TMPDIR>/home/hooks.log"
+session-created[0] run-shell "echo #{hook} #{hook_session_name} >> <TMPDIR>/home/hooks.log"
+session-renamed
+session-window-changed
+window-linked
+window-unlinked
+? 0
+$ show-hooks -gw
+pane-died[0] run-shell "echo #{hook} >> <TMPDIR>/home/hooks.log"
+pane-exited[0] run-shell "echo #{hook} >> <TMPDIR>/home/hooks.log"
+pane-focus-in
+pane-focus-out
+pane-mode-changed
+pane-set-clipboard
+pane-title-changed
+window-layout-changed
+window-pane-changed
+window-renamed
+window-resized
+? 0
+$ show-hooks -gw after-select-pane
+after-select-pane[0] display-message -p "after-select-pane #{window_index}.#{pane_index}"
+? 0
+$ show-hooks -g after-nope
+! invalid option: after-nope
+? 1
 $ select-pane -t main:1.2
 after-select-pane 1.2
 ? 0

@@ -40,8 +40,12 @@
 //! [`to_native`]: `display-message`'s message and `-F`; `list-*`'s `-F`
 //! and `-f`; `-P -F` of the creating verbs; `-c`/`-d` start directories;
 //! `if-shell`'s condition and `run-shell`'s command; prompt, popup and
-//! menu texts; `select-pane -T`; and the value of `set` for the options
-//! tmux reads as formats, or for any option with `-F`.
+//! menu texts; `select-pane -T`; `rename-window`/`rename-session`; and
+//! the value of `set` for the options tmux reads as formats, or for any
+//! option with `-F`. `set` keeps the value as sent (`SetOption::shown`),
+//! which a tmux-dialect `show` prints; with no option name, `show` names
+//! tmux's table (session, window or server), listed from
+//! `fe_3/tmux-tables.golden`.
 
 use std::fmt::Write as _;
 
@@ -195,6 +199,9 @@ impl Rewriter {
             // Named, so it never expires while the option still reads it
             // (an inline source expires an hour after it was last
             // registered, and nothing registers it again).
+            // ponytail: a named source outlives every option that read
+            // it, and keeps running at status-interval until the server
+            // exits.
             name: Some(key.clone()),
             command: cmd.to_string(),
         });
@@ -363,14 +370,80 @@ pub(crate) fn rewrites() -> Vec<Rewrite> {
         out.push(rewrite(verb, Flag('F')));
         out.push(rewrite(verb, Flag('c')));
     }
-    for verb in ["set-option", "set-window-option"] {
-        out.push(Rewrite {
-            verb,
-            arg: Positional(1),
-            rewrite: option_value,
-        });
-    }
+    out.push(rewrite("rename-window", Positional(0)));
+    out.push(rewrite("rename-session", Positional(0)));
     out
+}
+
+/// `set`/`setw`: the option command with its value rewritten
+/// ([`option_value`]), the sources that needs registered first, and the
+/// value as sent kept for a tmux-dialect `show` (`SetOption::shown`).
+fn set_value(inv: &Invocation<'_>, window: bool) -> Result<Vec<Command>, TmuxError> {
+    let verb = "set-option";
+    let at = inv.getopt().rest.min(inv.args.len()) + 1;
+    let Some(sent) = inv.args.get(at) else {
+        return super::option_command(inv, verb, window);
+    };
+    let got = option_value(inv, sent)?;
+    let mut args = inv.args.to_vec();
+    args[at] = got.value.clone();
+    let rewritten = Invocation {
+        verb: inv.verb,
+        args: &args,
+        ctx: inv.ctx,
+        spec: inv.spec,
+    };
+    let mut out = got.before;
+    for mut c in super::option_command(&rewritten, verb, window)? {
+        // With `-F` the value is expanded, and shows as expanded.
+        if let Command::SetOption(set) = &mut c
+            && got.value != *sent
+            && !set.expand
+        {
+            set.shown = Some(sent.clone());
+        }
+        out.push(c);
+    }
+    Ok(out)
+}
+
+fn set_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    set_value(inv, false)
+}
+
+fn set_window_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    set_value(inv, true)
+}
+
+/// `show`/`showw` with no option name: tmux's table the flags name
+/// (`-s` the server's, `-gw` the global window one, `-g` the session
+/// one), which a tmux-dialect `show` lists as tmux does.
+fn show_value(inv: &Invocation<'_>, window: bool) -> Result<Vec<Command>, TmuxError> {
+    let got = inv.getopt();
+    let mut out = super::option_command(inv, "show-options", window)?;
+    if inv.option_name().is_none() {
+        let scope = if got.has('s') {
+            Some(crate::cmd::OptionScope::Server)
+        } else if got.has('g') && (window || got.has('w')) {
+            Some(crate::cmd::OptionScope::GlobalWindow)
+        } else {
+            None
+        };
+        for c in &mut out {
+            if let (Command::ShowOptions(show), Some(scope)) = (c, scope) {
+                show.scope = Some(scope);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn show_options(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    show_value(inv, false)
+}
+
+fn show_window_options(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    show_value(inv, true)
 }
 
 // ---- Hooks -------------------------------------------------------------------
@@ -448,6 +521,17 @@ const TMUX_HOOKS: &[&str] = &[
     "window-resized",
 ];
 
+/// tmux's hook names in its order: its session table, or with `window`
+/// its window and pane table (the last eleven of [`TMUX_HOOKS`]).
+pub(crate) fn tmux_hook_names(window: bool) -> &'static [&'static str] {
+    let at = TMUX_HOOKS.len() - 11;
+    if window {
+        &TMUX_HOOKS[at..]
+    } else {
+        &TMUX_HOOKS[..at]
+    }
+}
+
 /// The grofe event a tmux hook name fires on (TC.5's `EVENTS`, each of
 /// which names its tmux hook), or tmux's error for a name that is no
 /// hook, or grofe's refusal for a tmux hook with no grofe event.
@@ -489,10 +573,80 @@ fn set_hook(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     inv.native("set-hook", &args)
 }
 
-/// `show-hooks -g [<tmux hook>]`.
-fn show_hooks(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    let args = hook_args(inv)?;
-    inv.native("show-hooks", &args)
+// ---- tmux's option tables ------------------------------------------------------
+
+/// tmux 3.7b's `show -g`, `show -gw` and `show -s` on a fresh server
+/// (TC.0b's container, with `tmux-defaults.conf`): the names, their order
+/// and the default texts the tmux dialect's `show` prints.
+const TMUX_TABLES: &str =
+    include_str!("../../../tests/fixtures/compat/golden/fe_3/tmux-tables.golden");
+
+/// One of tmux's three option tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Table {
+    /// `show -g`.
+    Session,
+    /// `show -gw`.
+    Window,
+    /// `show -s`.
+    Server,
+}
+
+/// `table`'s lines as tmux prints them, each split into its name (with
+/// `[N]` for an element) and its quoted value text.
+pub fn tmux_table(table: Table) -> Vec<(&'static str, &'static str)> {
+    let step = match table {
+        Table::Session => "$ show -g\n",
+        Table::Window => "$ show -gw\n",
+        Table::Server => "$ show -s\n",
+    };
+    let Some(at) = TMUX_TABLES.find(step) else {
+        return Vec::new();
+    };
+    TMUX_TABLES[at + step.len()..]
+        .lines()
+        .take_while(|l| !l.starts_with("? "))
+        .map(|l| l.split_once(' ').unwrap_or((l, "")))
+        .collect()
+}
+
+/// tmux's default for `name` (`status-format[0]` for an element), as the
+/// text a `show -v` prints: from the first table that holds it.
+pub fn tmux_default(name: &str) -> Option<String> {
+    [Table::Session, Table::Window, Table::Server]
+        .into_iter()
+        .flat_map(tmux_table)
+        .find(|(n, _)| *n == name)
+        .map(|(_, text)| unquote(text))
+}
+
+/// A value as `show` quoted it, unquoted: `''` is empty; `"..."` keeps
+/// what a backslash escapes; `'...'` is literal; a lone `\c` is `c`.
+pub fn unquote(text: &str) -> String {
+    if text == "''" {
+        return String::new();
+    }
+    if let Some(inner) = text.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            match (c, chars.clone().next()) {
+                ('\\', Some(n)) => {
+                    out.push(n);
+                    chars.next();
+                }
+                _ => out.push(c),
+            }
+        }
+        return out;
+    }
+    if let Some(inner) = text.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
+        return inner.to_string();
+    }
+    match text.strip_prefix('\\') {
+        Some(rest) if rest.chars().count() == 1 => rest.to_string(),
+        _ => text.to_string(),
+    }
 }
 
 // ---- Rows --------------------------------------------------------------------
@@ -515,8 +669,40 @@ const fn refuse(tmux_form: &'static str, reason: &'static str) -> Row {
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
     use GrofeTarget::{Native, Translate, Unsupported};
-    use MappingKind::{Behaviour, PassThrough};
+    use MappingKind::{Behaviour, FlagRename, PassThrough};
     vec![
+        row(
+            "set-option",
+            FlagRename,
+            Translate(set_option),
+            &[],
+            "M3.6",
+            "fe_3/show",
+        ),
+        row(
+            "set-window-option",
+            FlagRename,
+            Translate(set_window_option),
+            &[],
+            "M3.6",
+            "fe_3/show",
+        ),
+        row(
+            "show-options",
+            FlagRename,
+            Translate(show_options),
+            &[],
+            "M3.6",
+            "fe_3/show",
+        ),
+        row(
+            "show-window-options",
+            FlagRename,
+            Translate(show_window_options),
+            &[],
+            "M3.6",
+            "fe_3/show",
+        ),
         row(
             "set-hook -g",
             Behaviour,
@@ -544,7 +730,7 @@ pub(crate) fn rows() -> Vec<Row> {
         row(
             "show-hooks -g",
             Behaviour,
-            Translate(show_hooks),
+            Native("show-hooks"),
             SEMANTIC,
             "M3.6",
             "fe_3/hooks",
@@ -679,6 +865,28 @@ mod tests {
         assert_eq!(foreign_modifier("=21:pane_title"), Some('='));
         assert_eq!(foreign_modifier("session_name"), None);
         assert_eq!(foreign_modifier("?a,b:c,d"), None);
+    }
+
+    #[test]
+    fn tmux_s_tables_are_the_recorded_ones() {
+        let session = tmux_table(Table::Session);
+        assert_eq!(session.len(), 68);
+        assert_eq!(session.first(), Some(&("activity-action", "other")));
+        assert_eq!(
+            tmux_default("window-status-format").as_deref(),
+            Some("#I:#W#{?window_flags,#{window_flags}, }")
+        );
+        assert_eq!(tmux_default("default-command").as_deref(), Some(""));
+        assert_eq!(
+            unquote(r##""!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~""##),
+            r##"!"#$%&'()*+,-./:;<=>?@[\]^`{|}~"##
+        );
+        assert_eq!(tmux_table(Table::Window).len(), 74);
+        assert!(
+            tmux_table(Table::Server)
+                .iter()
+                .any(|(n, _)| *n == "command-alias[5]")
+        );
     }
 
     #[test]

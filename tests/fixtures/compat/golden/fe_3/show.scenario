@@ -41,3 +41,6 @@ $ set -gu status-right
 $ show -g status-right
 $ show -g window-status-current-format
 $ show -g
+$ show -gw
+$ show -gwv
+$ show -gv
