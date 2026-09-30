@@ -31,19 +31,6 @@ fn steps(transcript: &str) -> Vec<String> {
     out
 }
 
-/// Steps of `fe_2/layout` that need FE.4's `new-pane` row, which is not
-/// on this branch's base: once it is, they must match and this list goes.
-/// The floating-pane string is pinned by `server::layout`'s unit tests,
-/// from this recording.
-const NEEDS_NEW_PANE: &[&str] = &[
-    "$ new-pane -d -t main:2 -x 20 -y 5 -X 3 -Y 4 'sleep 1000'",
-    "$ display -p -t main:2 'floating #{window_layout}'",
-    "$ new-pane -d -t main:1 -x 10 -y 3 -X 30 -Y 10 'sleep 1000'",
-    "$ new-pane -d -t main:1 -x 12 -y 4 -X 40 -Y 2 'sleep 1000'",
-    "$ display -p -t main:1 'floating #{window_layout} #{window_zoomed_flag}'",
-    "$ list-panes -t main:1 -F '#{pane_id} #{pane_floating_flag} #{pane_x},#{pane_y},#{pane_z} #{pane_width}x#{pane_height}'",
-];
-
 /// The grofe side of `fe_2/<name>` against its golden, step by step.
 fn check(name: &str) {
     let scenario = fixtures_dir().join(format!("golden/fe_2/{name}.scenario"));
@@ -53,29 +40,16 @@ fn check(name: &str) {
     let run = crate::fe_3::exact_pids(replay(&grofe_cli(dir.path()), &parsed));
     let got = run.normalized(&Normalizer::load());
     let (want, got) = (steps(&golden), steps(&got));
-    let listed = |w: &str| {
-        name == "layout" && NEEDS_NEW_PANE.contains(&w.lines().next().unwrap_or_default())
-    };
     let wrong: Vec<String> = want
         .iter()
         .zip(&got)
-        .filter(|(w, g)| w != g && !listed(w))
+        .filter(|(w, g)| w != g)
         .map(|(w, g)| format!("--- golden\n{w}+++ grofe\n{g}"))
         .collect();
     assert!(
         wrong.is_empty(),
         "fe_2/{name} differs:\n{}",
         wrong.join("\n")
-    );
-    let stale: Vec<&String> = want
-        .iter()
-        .zip(&got)
-        .filter(|(w, g)| w == g && listed(w))
-        .map(|(w, _)| w)
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "fe_2/{name}: listed steps now match: {stale:#?}"
     );
     assert_eq!(want.len(), got.len(), "fe_2/{name}: step count");
 }

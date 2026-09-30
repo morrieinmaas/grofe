@@ -170,9 +170,26 @@ pub fn miss_log(_state: &State, what: &str) {
 /// [`miss_log`] for code that has no `State`: the tmux front end notes a
 /// cosmetic flag it ignores while it translates (spec §4.5).
 pub fn note_miss(what: &str) {
+    if QUIET.get() {
+        return;
+    }
     if let Some(path) = MISS_LOG.get() {
         append_miss(path, what);
     }
+}
+
+thread_local! {
+    /// Set while [`quietly`] runs.
+    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with [`note_miss`] silent: for a second look at a request
+/// that was already parsed (and its misses noted) once.
+pub fn quietly<T>(f: impl FnOnce() -> T) -> T {
+    let before = QUIET.replace(true);
+    let out = f();
+    QUIET.set(before);
+    out
 }
 
 /// The longest `what` a miss line keeps, in bytes.

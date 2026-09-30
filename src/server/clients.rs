@@ -626,8 +626,10 @@ pub(crate) fn plan_command_log(
         return plan;
     }
     for cmd in cmd::parse::split_argv(argv) {
-        let Ok(count) = crate::server::dispatch::parse_split(state, ctx, &cmd).map(|c| c.len())
-        else {
+        // Parsed again only to count, so the front end notes nothing.
+        let parsed_again =
+            crate::compat::quietly(|| crate::server::dispatch::parse_split(state, ctx, &cmd));
+        let Ok(count) = parsed_again.map(|c| c.len()) else {
             return VecDeque::new();
         };
         let printed = match ctx.dialect {
