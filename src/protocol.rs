@@ -161,6 +161,11 @@ pub enum Hello {
         /// `attach --nest`: allow self-nesting (spec §4.6).
         #[serde(default)]
         nest: bool,
+        /// The client's terminal (`ttyname` of its stdin): tmux's
+        /// `client_tty`, and the client's name when it attaches in the tmux
+        /// dialect (FE.2). An older client sends none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tty: Option<String>,
     },
 }
 
@@ -585,6 +590,7 @@ mod tests {
             target: Some("main:2".to_string()),
             detach_others: true,
             nest: true,
+            tty: None,
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
@@ -617,6 +623,7 @@ mod tests {
             target: None,
             detach_others: false,
             nest: false,
+            tty: None,
         };
         let line = encode_hello(&attach).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), attach);
@@ -645,6 +652,7 @@ mod tests {
             target: None,
             detach_others: false,
             nest: false,
+            tty: None,
         };
         let line = encode_hello(&hello).unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -752,6 +760,7 @@ mod tests {
             target: Some("s:1".to_string()),
             detach_others: true,
             nest: true,
+            tty: None,
         };
         let decoded = decode_hello(&encode_hello(&hello).unwrap()).unwrap();
         match decoded {

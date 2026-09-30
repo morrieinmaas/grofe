@@ -384,3 +384,38 @@ fn grofe_pane_from_another_server_is_ignored() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout.trim(), b_pane, "a foreign GROFE_PANE was used");
 }
+
+/// FE.2: natively too, `list-windows -a` and `list-panes -a`/`-s` list
+/// every session's windows and panes, each line saying where it is, and
+/// `-f` keeps only the lines its format is true for.
+#[test]
+fn lists_take_all_session_and_filter_flags() {
+    let srv = TestServer::start();
+    new_session(&srv, "b");
+    new_session(&srv, "a");
+    let windows = srv.cmd(&["list-windows", "-a", "-F", "#{session_name}"]);
+    assert_eq!(windows.expect("list-windows -a"), "a\nb\n");
+    let all = srv.cmd(&["list-windows", "-a"]).expect("list-windows -a");
+    let heads: Vec<&str> = all.lines().filter_map(|l| l.split(' ').next()).collect();
+    assert_eq!(heads, ["a:1:", "b:1:"]);
+    srv.cmd(&["split-window", "-t", "a", "sleep", "30"])
+        .expect("split");
+    let panes = srv.cmd(&["list-panes", "-a"]).expect("list-panes -a");
+    let heads: Vec<&str> = panes.lines().filter_map(|l| l.split(' ').next()).collect();
+    assert_eq!(heads, ["a:1.1:", "a:1.2:", "b:1.1:"]);
+    let session = srv
+        .cmd(&["list-panes", "-s", "-t", "a"])
+        .expect("list-panes -s");
+    assert!(session.starts_with("1.1: "), "{session}");
+    let active = [
+        "list-panes",
+        "-a",
+        "-f",
+        "#{pane_active}",
+        "-F",
+        "#{session_name}",
+    ];
+    assert_eq!(srv.cmd(&active).expect("list-panes -f"), "a\nb\n");
+    let named = ["list-sessions", "-f", "#{==:#{session_name},b}"];
+    assert_eq!(lines(&srv.cmd(&named).expect("ls -f")), ["b: 1 windows"]);
+}

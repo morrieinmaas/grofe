@@ -146,12 +146,11 @@ pub fn has_session(state: &mut State, ctx: &ClientCtx, c: HasSession) -> Result<
 
 /// `list-sessions` in the default format; `-F` is routed to `options`.
 /// tmux sorts sessions by name, not by id.
-pub fn list_sessions(state: &State, _c: ListSessions) -> Result<String, String> {
+pub fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let model = &state.model;
-    let mut sessions: Vec<&Session> = model.sessions.values().collect();
-    sessions.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(sessions
+    Ok(crate::server::dispatch::options::listed_sessions(state, &c)
         .into_iter()
+        .filter_map(|id| model.sessions.get(&id))
         .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
         .collect())
 }

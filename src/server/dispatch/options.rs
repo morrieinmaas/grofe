@@ -1758,11 +1758,7 @@ fn display_message(
     // nothing, as tmux's `CMD_CLIENT_CANFAIL`. Formats see that client if
     // it shows the pane's session, else the current one.
     let current = match &c.client {
-        Some(name) => state
-            .clients
-            .iter()
-            .find(|(_, e)| &e.name == name)
-            .map(|(id, _)| *id),
+        Some(name) => clients::client_named(state, name),
         None => clients::current_client(state, ctx),
     };
     let session = model
@@ -1803,36 +1799,165 @@ fn active_pane(model: &Model, window: WindowId) -> Option<PaneId> {
     model.windows.get(&window).map(|w| w.active)
 }
 
+// tmux 3.7b's default `list-*` templates (`cmd-list-*.c`), in tmux's
+// format language (`compat::tmux::formats::to_native` rewrites them as a
+// tmux `-F`): the output a tmux-dialect `list-*` with no `-F` gives (FE.2).
+
+pub(crate) const TMUX_LIST_SESSIONS: &str = "#{session_name}: #{session_windows} windows \
+     (created #{t:session_created})#{?session_grouped, (group ,}\
+     #{session_group}#{?session_grouped,),}#{?session_attached, (attached),}";
+
+const TMUX_LIST_WINDOWS: &str = "#{window_index}: #{window_name}#{window_raw_flags} \
+     (#{window_panes} panes) [#{window_width}x#{window_height}] \
+     [layout #{window_layout}] #{window_id}#{?window_active, (active),}";
+
+const TMUX_LIST_WINDOWS_ALL: &str = "#{session_name}:#{window_index}: \
+     #{window_name}#{window_raw_flags} (#{window_panes} panes) \
+     [#{window_width}x#{window_height}] ";
+
+/// `list-panes`' template after its line's own prefix.
+const TMUX_LIST_PANES: &str = "[#{pane_width}x#{pane_height}\
+     #{?pane_floating_flag, #{pane_x}#,#{pane_y}#,#{pane_z}}] [history \
+     #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}\
+     #{?pane_active, (active),}#{?pane_dead, (dead),}";
+
+pub(crate) const TMUX_LIST_CLIENTS: &str = "#{client_name}: #{session_name} \
+     [#{client_width}x#{client_height} #{client_termname}] \
+     #{?#{!=:#{client_uid},#{uid}},[user #{?client_user,#{client_user},#{client_uid},}] ,}\
+     #{?client_flags,(,}#{client_flags}#{?client_flags,),}";
+
+/// A tmux template in grofe's format language.
+pub(crate) fn tmux_template(template: &str) -> String {
+    crate::compat::tmux::formats::to_native(template, crate::compat::tmux::formats::Jobs::Empty)
+        .value
+}
+
+/// A `list-*` command's format: its `-F`, else tmux's default template
+/// (only a tmux-dialect request with no `-F` gets here, [`super::route`]).
+fn list_format(format: Option<String>, template: impl FnOnce() -> String) -> String {
+    format.unwrap_or_else(|| tmux_template(&template()))
+}
+
 fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
-    let model = &state.model;
-    let fmt = c.format.unwrap_or_default();
-    let panes = model
-        .sessions
-        .values()
-        .filter_map(|s| active_pane(model, s.active));
+    let fmt = list_format(c.format.clone(), || TMUX_LIST_SESSIONS.to_string());
+    let sessions = listed_sessions(state, &c);
+    let panes = sessions
+        .into_iter()
+        .filter_map(|s| session_pane(&state.model, s));
     Ok(lines(state, &fmt, panes))
 }
 
 fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
-    let model = &state.model;
-    let session = model.resolve_session(&c.target, ctx)?;
-    let fmt = c.format.unwrap_or_default();
-    let panes = model.sessions[&session]
-        .windows
-        .iter()
-        .filter_map(|w| active_pane(model, *w));
+    let fmt = list_format(c.format.clone(), || match c.all {
+        true => TMUX_LIST_WINDOWS_ALL.to_string(),
+        false => TMUX_LIST_WINDOWS.to_string(),
+    });
+    let windows = listed_windows(state, ctx, &c)?;
+    let panes = windows
+        .into_iter()
+        .filter_map(|w| active_pane(&state.model, w));
     Ok(lines(state, &fmt, panes))
 }
 
 fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
+    // `-a` lines start with the session and window, `-s` lines with the
+    // window, others with the pane index alone.
+    let fmt = list_format(c.format.clone(), || {
+        let prefix = if c.all {
+            "#{session_name}:#{window_index}.#{pane_index}: "
+        } else if c.session {
+            "#{window_index}.#{pane_index}: "
+        } else {
+            "#{pane_index}: "
+        };
+        format!("{prefix}{TMUX_LIST_PANES}")
+    });
+    let panes = listed_panes(state, ctx, &c)?;
+    Ok(lines(state, &fmt, panes.into_iter()))
+}
+
+/// Whether a list's `-f` filter keeps the line of `pane` (tmux's
+/// `format_true`: not empty and not `0`); no filter keeps every line.
+fn kept(state: &State, filter: Option<&str>, pane: PaneId) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    let vars = FormatCtx::new(&state.model, pane);
+    let got = expand(filter, &ServerVars::new(state, pane, &vars));
+    !got.is_empty() && got != "0"
+}
+
+/// The pane a session's formats expand against: its current window's
+/// active pane.
+fn session_pane(model: &Model, session: SessionId) -> Option<PaneId> {
+    model
+        .sessions
+        .get(&session)
+        .and_then(|s| active_pane(model, s.active))
+}
+
+/// Every session, by name as tmux keeps them.
+fn sessions_by_name(model: &Model) -> Vec<SessionId> {
+    let mut sessions: Vec<_> = model.sessions.values().map(|s| (&s.name, s.id)).collect();
+    sessions.sort();
+    sessions.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The sessions `list-sessions` lists: all of them, by name, that `-f`
+/// keeps.
+pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Vec<SessionId> {
+    sessions_by_name(&state.model)
+        .into_iter()
+        .filter(|s| {
+            session_pane(&state.model, *s).is_some_and(|p| kept(state, c.filter.as_deref(), p))
+        })
+        .collect()
+}
+
+/// The windows `list-windows` lists: the target session's, or with `-a`
+/// every session's (by name), in index order, that `-f` keeps.
+pub(crate) fn listed_windows(
+    state: &State,
+    ctx: &ClientCtx,
+    c: &ListWindows,
+) -> Result<Vec<WindowId>, String> {
     let model = &state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
-    let fmt = c.format.unwrap_or_default();
-    Ok(lines(
-        state,
-        &fmt,
-        model.windows[&window].pane_ids().into_iter(),
-    ))
+    let sessions = match c.all {
+        true => sessions_by_name(model),
+        false => vec![model.resolve_session(&c.target, ctx)?],
+    };
+    Ok(sessions
+        .iter()
+        .flat_map(|s| model.sessions[s].windows.iter().copied())
+        .filter(|w| active_pane(model, *w).is_some_and(|p| kept(state, c.filter.as_deref(), p)))
+        .collect())
+}
+
+/// The panes `list-panes` lists: the target window's, with `-s` its
+/// session's, with `-a` every session's, that `-f` keeps.
+pub(crate) fn listed_panes(
+    state: &State,
+    ctx: &ClientCtx,
+    c: &ListPanes,
+) -> Result<Vec<PaneId>, String> {
+    let model = &state.model;
+    let windows = if c.all {
+        sessions_by_name(model)
+            .iter()
+            .flat_map(|s| model.sessions[s].windows.clone())
+            .collect()
+    } else if c.session {
+        let s = model.resolve_session(&c.target, ctx)?;
+        model.sessions[&s].windows.clone()
+    } else {
+        vec![model.resolve_window(&c.target, ctx)?]
+    };
+    Ok(windows
+        .iter()
+        .filter_map(|w| model.windows.get(w))
+        .flat_map(|w| w.pane_ids())
+        .filter(|p| kept(state, c.filter.as_deref(), *p))
+        .collect())
 }
 
 /// Format variables (spec §4.5) for one pane, its window and its session.
@@ -1927,14 +2052,11 @@ impl FormatVars for FormatCtx<'_> {
             "pid" => return Some(std::process::id().to_string()),
             // Session groups are out of scope (spec §4.5).
             "session_grouped" => return Some("0".to_string()),
-            // ponytail: tmux's layout string (with its checksum) is FE.2's
-            // codec; there is no native one.
-            "window_layout" => return Some(String::new()),
             // ponytail: stubs until the features exist: copy mode (M5),
             // and the status range under
             // the mouse, which only a mouse-bound command sees (TC.10).
-            // `session_group` is empty with no groups. `client_tty` needs
-            // the tty in the attach hello (FE.2).
+            // `session_group` is empty with no groups. `client_tty` is a
+            // client's (`ClientVars`), empty with none.
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
             | "client_tty" => return Some(String::new()),
             "pane_in_mode" => return Some("0".to_string()),
@@ -1963,6 +2085,9 @@ impl FormatVars for FormatCtx<'_> {
                 .map_or(0, |d| d.as_secs())
                 .to_string(),
             "session_attached" => s.attached.to_string(),
+            "session_path" => s.cwd.display().to_string(),
+            "window_layout" => window_layout(w),
+            "window_raw_flags" => window_flags(s, w),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
@@ -1987,6 +2112,22 @@ impl FormatVars for FormatCtx<'_> {
                 Some(f) => f.y.to_string(),
                 None => pane_origin(w, p.id)?.1.to_string(),
             },
+            // tmux's names for the same corner, and the far one.
+            "pane_x" => self.get("pane_left")?,
+            "pane_y" => self.get("pane_top")?,
+            "pane_right" => {
+                let left: u32 = self.get("pane_left")?.parse().ok()?;
+                (left + u32::from(p.cols)).saturating_sub(1).to_string()
+            }
+            "pane_bottom" => {
+                let top: u32 = self.get("pane_top")?.parse().ok()?;
+                (top + u32::from(p.rows)).saturating_sub(1).to_string()
+            }
+            // Only a floating pane has a place in the stack: 0 on top.
+            "pane_z" => {
+                let f = w.floating(p.id)?;
+                w.floating.iter().filter(|o| o.z > f.z).count().to_string()
+            }
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
@@ -2005,12 +2146,36 @@ impl FormatVars for FormatCtx<'_> {
             "alternate_on" => flag(p.handle.modes().alt_screen),
             "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
             "history_size" => p.handle.history_size().to_string(),
+            "history_limit" => m.history_limit(s.id).to_string(),
+            // tmux's grid: 40 bytes a line, history and screen.
+            // ponytail: tmux adds 5 bytes for each cell a line has
+            // allocated, which depends on how its grid grew; left out.
+            "history_bytes" => ((p.handle.history_size() + usize::from(p.rows)) * 40).to_string(),
             "window_flags" => window_flags(s, w),
             // ponytail: `client_width`/`client_height` need clients (M2);
             // `host` and `host_short` are `ServerVars`' (TC.11).
             _ => return None,
         })
     }
+}
+
+/// tmux's `window_layout`: the layout string of the window's tiled panes,
+/// then its floating ones, topmost first.
+fn window_layout(w: &crate::server::model::Window) -> String {
+    use crate::server::layout::{FloatingCell, tmux_layout};
+    let mut floating: Vec<FloatingCell> = w
+        .floating
+        .iter()
+        .map(|f| FloatingCell {
+            pane: f.pane,
+            x: f.x,
+            y: f.y,
+            cols: f.cols,
+            rows: f.rows,
+        })
+        .collect();
+    floating.sort_by_key(|f| std::cmp::Reverse(w.floating(f.pane).map_or(0, |f| f.z)));
+    tmux_layout(&w.layout.export(w.area()), &floating)
 }
 
 /// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in
@@ -2033,7 +2198,7 @@ fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Win
 /// with any of ` #';${}%`, else single quotes around one with a space or
 /// `"`; a lone special character, or a leading `~`, gets a backslash;
 /// control characters and backslashes are escaped C-style.
-fn escape_arg(s: &str) -> String {
+pub(crate) fn escape_arg(s: &str) -> String {
     const DQUOTED: &str = " #';${}%";
     const SQUOTED: &str = " \"";
     if s.is_empty() {

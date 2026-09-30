@@ -366,6 +366,11 @@ pub struct DetachClient {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListClients {
     pub format: Option<String>,
+    /// `-t` (M3.6, FE.2): only the clients showing this session.
+    pub target: Option<Target>,
+    /// `-f` (M3.6, FE.2): a format; only clients it expands true for are
+    /// listed.
+    pub filter: Option<String>,
 }
 
 /// `next-window`, `previous-window`, `last-window` (`-t` session).

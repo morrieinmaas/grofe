@@ -75,9 +75,8 @@ pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String
 
 /// Runs a parsed request. argv may have held several commands, split at
 /// `;` arguments as tmux's CLI splits them ([`cmd::parse_sequence`]): they
-/// run in order and the first error stops the rest.
-// ponytail: the reply is the output of every command, or the first error
-// alone; output of commands before a failing one is dropped.
+/// run in order and the first error stops the rest; what the commands
+/// before it printed goes out with the error (`State::failed_out`).
 pub fn run_parsed(
     state: &mut State,
     ctx: &ClientCtx,
@@ -141,6 +140,11 @@ pub(crate) fn run_commands(
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
+                // What ran before the failing command still prints, before
+                // the error (and before what a nested request that failed
+                // printed), as in tmux 3.7b.
+                let nested = std::mem::take(&mut state.failed_out);
+                state.failed_out = std::mem::take(&mut out) + &nested;
                 result = Err(e);
                 break;
             }
@@ -230,13 +234,21 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::NewSession(c) => session::new_session(state, ctx, c),
         Command::KillSession(c) => session::kill_session(state, ctx, c),
         Command::HasSession(c) => session::has_session(state, ctx, c),
-        Command::ListSessions(c) if c.format.is_none() => session::list_sessions(state, c),
+        // With no `-F`, grofe's own columns natively, tmux's default
+        // templates (`options`) in the tmux dialect (FE.2).
+        Command::ListSessions(c) if c.format.is_none() && !tmux(ctx) => {
+            session::list_sessions(state, c)
+        }
 
         Command::NewWindow(c) => window::new_window(state, ctx, c),
         Command::KillWindow(c) => window::kill_window(state, ctx, c),
         Command::SelectWindow(c) => window::select_window(state, ctx, c),
-        Command::ListWindows(c) if c.format.is_none() => window::list_windows(state, ctx, c),
-        Command::ListPanes(c) if c.format.is_none() => window::list_panes(state, ctx, c),
+        Command::ListWindows(c) if c.format.is_none() && !tmux(ctx) => {
+            window::list_windows(state, ctx, c)
+        }
+        Command::ListPanes(c) if c.format.is_none() && !tmux(ctx) => {
+            window::list_panes(state, ctx, c)
+        }
 
         Command::SplitWindow(_)
         | Command::KillPane(_)
@@ -272,7 +284,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest).
         Command::AttachSession(c) => clients::attach_session(state, ctx, c),
         Command::DetachClient(c) => clients::detach_client(state, ctx, c),
-        Command::ListClients(c) => clients::list_clients(state, c),
+        Command::ListClients(c) => clients::list_clients(state, ctx, c),
         Command::NextWindow(c) => window::step_window(state, ctx, c, window::Step::Next),
         Command::PreviousWindow(c) => window::step_window(state, ctx, c, window::Step::Previous),
         Command::LastWindow(c) => window::last_window(state, ctx, c),
@@ -335,6 +347,10 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             Ok(String::new())
         }
     }
+}
+
+fn tmux(ctx: &ClientCtx) -> bool {
+    ctx.dialect == crate::protocol::Dialect::Tmux
 }
 
 /// The error a command's stub answers with until its task lands.

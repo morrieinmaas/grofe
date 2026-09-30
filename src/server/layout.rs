@@ -763,6 +763,48 @@ impl LayoutTree {
         self.exact_for = Some((geometry.cols, geometry.rows));
         Ok(())
     }
+
+    /// Arranges `panes` (the window's, in index order) as the tmux layout
+    /// string `layout` says, as tmux 3.7b's `layout_parse`: the cells get
+    /// the panes in order whatever pane numbers the string names; with
+    /// fewer panes than cells the bottom-right cell goes, again and again,
+    /// its room given to its neighbour. The error is tmux's cause, which
+    /// `select-layout` follows with `: <layout>`.
+    // ponytail: tmux resizes the window to the layout's size; grofe keeps
+    // the window's and scales the layout onto it.
+    pub fn apply_tmux_layout(&mut self, layout: &str, panes: &[PaneId]) -> Result<(), String> {
+        let invalid = || "invalid layout".to_string();
+        let mut geometry = parse_tmux_layout(layout).ok_or_else(invalid)?;
+        let mut count = 0;
+        count_cells(&geometry, &mut count);
+        if panes.len() > count {
+            return Err(format!("have {} panes but need {count}", panes.len()));
+        }
+        fix_root_size(&mut geometry);
+        let mismatch = || "size mismatch after applying layout".to_string();
+        if (geometry.x, geometry.y) != (0, 0) {
+            return Err(mismatch());
+        }
+        let root = import_node(&geometry).ok_or_else(mismatch)?;
+        let mut cells = LayoutTree {
+            root,
+            exact_for: Some((geometry.cols, geometry.rows)),
+            order: (0..count as u32).map(PaneId).collect(),
+            last_preset: None,
+        };
+        // Cells are numbered in order, so the bottom-right one (tmux's
+        // `layout_find_bottomright`) is the highest left.
+        for cell in (panes.len()..count).rev() {
+            cells.remove(PaneId(cell as u32));
+        }
+        relabel_node(&mut cells.root, &|p: PaneId| {
+            panes.get(p.0 as usize).copied().unwrap_or(p)
+        });
+        self.root = cells.root;
+        self.exact_for = cells.exact_for;
+        self.order = panes.to_vec();
+        Ok(())
+    }
 }
 
 /// `target_size, new_size` for [`LayoutTree::insert`] on `avail` cells:
@@ -1526,6 +1568,185 @@ fn collect_borders(node: &Node, area: Rect, out: &mut Vec<BorderSegment>) {
             collect_borders(&child.node, rect, out);
         }
     }
+}
+
+// ---- tmux layout strings (spec §4.3) ------------------------------------
+
+/// A floating pane as a tmux layout string lists it: the pane, its
+/// top-left content cell (which may be off the window) and its size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloatingCell {
+    pub pane: PaneId,
+    pub x: i32,
+    pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// The tmux layout string (`#{window_layout}`) for `tiled` and the
+/// window's floating panes (topmost first), as tmux 3.7b's `layout_dump`:
+/// a four-digit hex checksum, then `WxH,X,Y,<pane>` for a pane,
+/// `WxH,X,Y{...}` for cells side by side, `WxH,X,Y[...]` for stacked ones,
+/// and the floating panes in `<...>`.
+pub fn tmux_layout(tiled: &LayoutGeometry, floating: &[FloatingCell]) -> String {
+    let mut body = String::new();
+    append_cell(tiled, &mut body);
+    for (i, f) in floating.iter().enumerate() {
+        body.push(if i == 0 { '<' } else { ',' });
+        body.push_str(&format!(
+            "{}x{},{},{},{}",
+            f.cols, f.rows, f.x, f.y, f.pane.0
+        ));
+    }
+    if !floating.is_empty() {
+        body.push('>');
+    }
+    format!("{:04x},{body}", tmux_checksum(&body))
+}
+
+fn append_cell(g: &LayoutGeometry, out: &mut String) {
+    out.push_str(&format!("{}x{},{},{}", g.cols, g.rows, g.x, g.y));
+    match &g.cell {
+        GeometryCell::Pane(p) => out.push_str(&format!(",{}", p.0)),
+        GeometryCell::Split { dir, children } => {
+            let (open, close) = match dir {
+                Dir::Horizontal => ('{', '}'),
+                Dir::Vertical => ('[', ']'),
+            };
+            out.push(open);
+            for (i, c) in children.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                append_cell(c, out);
+            }
+            out.push(close);
+        }
+    }
+}
+
+/// tmux's `layout_checksum`: a 16-bit rotate-and-add over the bytes.
+fn tmux_checksum(s: &str) -> u16 {
+    s.bytes().fold(0u16, |sum, b| {
+        let sum = (sum >> 1).wrapping_add((sum & 1) << 15);
+        sum.wrapping_add(u16::from(b))
+    })
+}
+
+/// The cells of a tmux layout string, as tmux 3.7b's `layout_parse` and
+/// `layout_construct` read them: the checksum must match the rest, and the
+/// cells must nest and close. The panes are numbered in cell order from
+/// `%0`; the string's own pane numbers are not kept. `None` for tmux's
+/// `invalid layout`, and for cells nested past [`IMPORT_MAX_DEPTH`].
+pub fn parse_tmux_layout(s: &str) -> Option<LayoutGeometry> {
+    let (sum, body) = (s.get(..4)?, s.get(4..)?.strip_prefix(',')?);
+    if !sum.bytes().all(|b| b.is_ascii_hexdigit())
+        || u16::from_str_radix(sum, 16).ok()? != tmux_checksum(body)
+    {
+        return None;
+    }
+    let mut rest = body.as_bytes();
+    let mut panes = 0;
+    let g = construct(&mut rest, 0, &mut panes)?;
+    rest.is_empty().then_some(g)
+}
+
+/// A run of digits at the start of `rest` as a number, consumed.
+fn digits(rest: &mut &[u8]) -> Option<u32> {
+    let n = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+    let (num, tail) = rest.split_at(n);
+    *rest = tail;
+    std::str::from_utf8(num).ok()?.parse().ok()
+}
+
+fn expect(rest: &mut &[u8], byte: u8) -> Option<()> {
+    let (&first, tail) = rest.split_first()?;
+    (first == byte).then(|| *rest = tail)
+}
+
+/// One cell and its children (`layout_construct`).
+fn construct(rest: &mut &[u8], depth: usize, panes: &mut u32) -> Option<LayoutGeometry> {
+    if depth > IMPORT_MAX_DEPTH {
+        return None;
+    }
+    let cols = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b'x')?;
+    let rows = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b',')?;
+    let x = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b',')?;
+    let y = u16::try_from(digits(rest)?).ok()?;
+    // A pane number, unless the digits after the comma start the next
+    // cell (`WxH`).
+    if let [b',', tail @ ..] = *rest {
+        let mut after = tail;
+        let _ = digits(&mut after);
+        if after.first() != Some(&b'x') {
+            *rest = after;
+        }
+    }
+    let dir = match rest.first() {
+        None | Some(b',' | b'}' | b']' | b'>') => {
+            *panes += 1;
+            let cell = GeometryCell::Pane(PaneId(*panes - 1));
+            return Some(LayoutGeometry {
+                x,
+                y,
+                cols,
+                rows,
+                cell,
+            });
+        }
+        Some(b'{') => Dir::Horizontal,
+        Some(b'[') => Dir::Vertical,
+        Some(_) => return None,
+    };
+    let mut children = Vec::new();
+    loop {
+        *rest = &rest[1..];
+        children.push(construct(rest, depth + 1, panes)?);
+        if rest.first() != Some(&b',') {
+            break;
+        }
+    }
+    expect(rest, if dir == Dir::Horizontal { b'}' } else { b']' })?;
+    Some(LayoutGeometry {
+        x,
+        y,
+        cols,
+        rows,
+        cell: GeometryCell::Split { dir, children },
+    })
+}
+
+fn count_cells(g: &LayoutGeometry, n: &mut usize) {
+    match &g.cell {
+        GeometryCell::Pane(_) => *n += 1,
+        GeometryCell::Split { children, .. } => children.iter().for_each(|c| count_cells(c, n)),
+    }
+}
+
+/// tmux's fix for layouts older versions wrote with a wrong top cell size:
+/// a split root takes its size from its children.
+fn fix_root_size(g: &mut LayoutGeometry) {
+    let GeometryCell::Split { dir, children } = &g.cell else {
+        return;
+    };
+    let (mut cols, mut rows) = (0u32, 0u32);
+    for c in children {
+        match dir {
+            Dir::Horizontal => {
+                rows = u32::from(c.rows) + 1;
+                cols += u32::from(c.cols) + 1;
+            }
+            Dir::Vertical => {
+                cols = u32::from(c.cols) + 1;
+                rows += u32::from(c.rows) + 1;
+            }
+        }
+    }
+    g.cols = u16::try_from(cols.saturating_sub(1)).unwrap_or(u16::MAX);
+    g.rows = u16::try_from(rows.saturating_sub(1)).unwrap_or(u16::MAX);
 }
 
 #[cfg(test)]
@@ -3740,5 +3961,101 @@ mod tests {
                 prop_assert!(no_child_zeroed_where_it_fits(&tree.root, area));
             }
         }
+    }
+
+    /// The tmux 3.7b layout string after `split -h`, `split -v` on the new
+    /// pane, then `split -h` on the first, at 200x50 (recorded).
+    const RECORDED: &str =
+        "423d,200x50,0,0{50x50,0,0,0,49x50,51,0,3,99x50,101,0[99x25,101,0,1,99x24,101,26,2]}";
+
+    fn recorded_tree() -> LayoutTree {
+        let area = rect(200, 50);
+        let p = PaneId;
+        let mut tree = LayoutTree::new(p(0));
+        tree.split(area, p(0), Dir::Horizontal, p(1), SplitSize::Half)
+            .unwrap();
+        tree.split(area, p(1), Dir::Vertical, p(2), SplitSize::Half)
+            .unwrap();
+        tree.split(area, p(0), Dir::Horizontal, p(3), SplitSize::Half)
+            .unwrap();
+        tree
+    }
+
+    #[test]
+    fn a_layout_writes_tmux_s_string() {
+        let tree = recorded_tree();
+        assert_eq!(tmux_layout(&tree.export(rect(200, 50)), &[]), RECORDED);
+        let one = LayoutTree::new(PaneId(7));
+        let g = one.export(rect(80, 24));
+        let sum = tmux_checksum("80x24,0,0,7");
+        assert_eq!(tmux_layout(&g, &[]), format!("{sum:04x},80x24,0,0,7"));
+        let float = FloatingCell {
+            pane: PaneId(9),
+            x: -2,
+            y: 3,
+            cols: 10,
+            rows: 5,
+        };
+        let s = tmux_layout(&g, &[float]);
+        assert!(s.ends_with(",80x24,0,0,7<10x5,-2,3,9>"), "{s}");
+    }
+
+    #[test]
+    fn a_tmux_string_round_trips_with_the_window_s_panes() {
+        let mut tree = LayoutTree::new(PaneId(5));
+        let panes: Vec<PaneId> = [5, 6, 7, 8].map(PaneId).to_vec();
+        for p in &panes[1..] {
+            let area = rect(200, 50);
+            tree.split(area, PaneId(5), Dir::Vertical, *p, SplitSize::Half)
+                .unwrap();
+        }
+        tree.apply_tmux_layout(RECORDED, &panes).unwrap();
+        // The cells take the panes in order, whatever the string numbers.
+        let want = RECORDED
+            .replace(",0,0,0,", ",0,0,5,")
+            .replace(",51,0,3,", ",51,0,6,")
+            .replace(",101,0,1,", ",101,0,7,")
+            .replace(",101,26,2]", ",101,26,8]");
+        let got = tmux_layout(&tree.export(rect(200, 50)), &[]);
+        assert_eq!(got[5..], want[5..]);
+        assert_eq!(tree.order, panes);
+    }
+
+    #[test]
+    fn tmux_s_layout_errors() {
+        let mut tree = recorded_tree();
+        let panes: Vec<PaneId> = (0..4).map(PaneId).collect();
+        let with_sum = |body: &str| format!("{:04x},{body}", tmux_checksum(body));
+        let mut err = |s: &str, panes: &[PaneId]| tree.apply_tmux_layout(s, panes).unwrap_err();
+        assert_eq!(err("nope", &panes), "invalid layout");
+        assert_eq!(
+            err(&format!("ffff{}", &RECORDED[4..]), &panes),
+            "invalid layout"
+        );
+        let two = with_sum("80x24,0,0{40x24,0,0,1,39x24,41,0,2}");
+        assert_eq!(err(&two, &panes), "have 4 panes but need 2");
+        let gap = with_sum("80x24,0,0{40x24,0,0,1,39x23,41,0,2}");
+        assert_eq!(
+            err(&gap, &panes[..2]),
+            "size mismatch after applying layout"
+        );
+        let deep = "1x1,0,0[".repeat(300);
+        assert!(parse_tmux_layout(&with_sum(&deep)).is_none());
+        // Nothing changed.
+        assert_eq!(tmux_layout(&tree.export(rect(200, 50)), &[]), RECORDED);
+    }
+
+    /// Fewer panes than cells: the bottom-right cell goes, its room to its
+    /// neighbour, until they match, as tmux's `layout_parse`.
+    #[test]
+    fn spare_cells_go_from_the_bottom_right() {
+        let mut tree = LayoutTree::new(PaneId(0));
+        let area = rect(200, 50);
+        tree.split(area, PaneId(0), Dir::Horizontal, PaneId(1), SplitSize::Half)
+            .unwrap();
+        tree.apply_tmux_layout(RECORDED, &[PaneId(0), PaneId(1)])
+            .unwrap();
+        let got = tmux_layout(&tree.export(area), &[]);
+        assert_eq!(&got[5..], "200x50,0,0{50x50,0,0,0,149x50,51,0,1}");
     }
 }

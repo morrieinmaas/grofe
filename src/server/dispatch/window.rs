@@ -273,15 +273,20 @@ pub fn select_window(
 /// `list-windows` in the default format; `-F` is routed to `options`.
 pub fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
     let model = &state.model;
-    let session = model.resolve_session(&c.target, ctx)?;
-    let s = &model.sessions[&session];
-    Ok(s.windows
+    Ok(options::listed_windows(state, ctx, &c)?
         .iter()
         .filter_map(|id| model.windows.get(id))
-        .map(|w| {
+        .filter_map(|w| Some((model.sessions.get(&w.session)?, w)))
+        .map(|(s, w)| {
             let active = w.id == s.active;
+            // With `-a`, each line says its session, as tmux's does.
+            let session = if c.all {
+                format!("{}:", s.name)
+            } else {
+                String::new()
+            };
             format!(
-                "{}: {}{} ({} panes) [{}x{}] {}{}\n",
+                "{session}{}: {}{} ({} panes) [{}x{}] {}{}\n",
                 w.index,
                 w.name,
                 if active { "*" } else { "" },
@@ -298,13 +303,24 @@ pub fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<St
 /// `list-panes` in the default format; `-F` is routed to `options`.
 pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
     let model = &state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
-    let w = &model.windows[&window];
-    Ok(w.pane_ids()
+    let listed = options::listed_panes(state, ctx, &c)?;
+    Ok(listed
         .iter()
-        .zip(model.pane_base_index(window)..)
-        .filter_map(|(id, index)| Some((index, model.panes.get(id)?)))
-        .map(|(index, p)| {
+        .filter_map(|id| model.panes.get(id))
+        .filter_map(|p| {
+            let w = model.windows.get(&p.window)?;
+            let s = model.sessions.get(&w.session)?;
+            let at = w.pane_ids().iter().position(|id| *id == p.id)? as u32;
+            Some((s, w, at + model.pane_base_index(w.id), p))
+        })
+        .map(|(s, w, index, p)| {
+            // With `-s` each line says its window, with `-a` its session
+            // too, as tmux's do.
+            let index = match (c.all, c.session) {
+                (true, _) => format!("{}:{}.{index}", s.name, w.index),
+                (false, true) => format!("{}.{index}", w.index),
+                _ => index.to_string(),
+            };
             format!(
                 "{index}: [{}x{}] {}{}{}\n",
                 p.cols,
@@ -347,8 +363,21 @@ pub fn select_layout(
     };
     w.zoomed = false;
     let Some(preset) = Preset::from_name(&c.name, width, height) else {
+        // Not a preset: a tmux layout string (spec §4.3), which puts every
+        // pane, floating ones too, into its cells, as tmux 3.7b does.
+        let applied = model.windows.get_mut(&window).map(|w| {
+            let panes = w.pane_ids();
+            let applied = w.layout.apply_tmux_layout(&c.name, &panes);
+            if applied.is_ok() {
+                w.floating.clear();
+            }
+            applied
+        });
         model.relayout(window);
-        return Err(format!("invalid layout: {}", c.name));
+        return match applied {
+            Some(Err(cause)) => Err(format!("{cause}: {}", c.name)),
+            _ => Ok(String::new()),
+        };
     };
     apply_preset(model, window, preset);
     Ok(String::new())

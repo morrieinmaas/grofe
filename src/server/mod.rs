@@ -70,6 +70,8 @@ pub enum ServerMsg {
         ctx: ClientCtx,
         req: Request,
         reply: oneshot::Sender<Reply>,
+        /// The requesting process, for the message log's `client-<pid>`.
+        pid: Option<i32>,
     },
     /// A `subscribe` request, with the connection's event queue, which the
     /// actor keeps as the subscriber.
@@ -183,6 +185,9 @@ pub struct State {
     /// The rest of the request now running, held behind a wait
     /// ([`dispatch::client::Held`]).
     pub(crate) held: Option<dispatch::client::Held>,
+    /// What a request printed before the command that failed it: the
+    /// reply carries it next to the error, as tmux prints both (FE.2).
+    pub(crate) failed_out: String,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -458,6 +463,7 @@ async fn serve(
         jobs: jobs_tx,
         deferred_reply: None,
         held: None,
+        failed_out: String::new(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -652,14 +658,27 @@ fn exit_if_empty(state: &mut State, listener: &UnixListener) {
 
 fn handle(state: &mut State, msg: ServerMsg) {
     match msg {
-        ServerMsg::Control { ctx, req, reply } => {
+        ServerMsg::Control {
+            ctx,
+            req,
+            reply,
+            pid,
+        } => {
             if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
             // Parsed once: classified, then run.
+            state.failed_out.clear();
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
+            // Logged as tmux 3.7b logs a client's commands and errors
+            // (`show-messages`).
+            let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
+            clients::log_commands(state, &who, &ctx, &req.argv);
             let result = dispatch::run_parsed(state, &ctx, parsed);
+            if let Err(e) = &result {
+                clients::log_error(state, &who, e);
+            }
             finish(state, req.id, result, reply);
             if !read_only {
                 clients::changed(state);
@@ -710,11 +729,21 @@ fn finish(
             let _ = reply.send(Reply::Ok { id, out });
         }
         (_, Err(err), None) => {
-            let _ = reply.send(Reply::err(id, err));
+            let failure = protocol::Failure {
+                err,
+                out: std::mem::take(&mut state.failed_out),
+                status: None,
+            };
+            let _ = reply.send(Reply::failed(id, failure));
         }
         (_, result, Some(hold)) => {
             let (tx, later) = oneshot::channel();
-            let _ = tx.send(result.map_err(protocol::Failure::from));
+            let out = std::mem::take(&mut state.failed_out);
+            let _ = tx.send(result.map_err(|err| protocol::Failure {
+                err,
+                out,
+                status: None,
+            }));
             reply_later(id, later, reply, Some(hold));
         }
     }
@@ -790,6 +819,7 @@ async fn connection(
             target,
             detach_others,
             nest,
+            tty,
         }) => {
             let req = clients::AttachRequest {
                 ctx,
@@ -799,6 +829,7 @@ async fn connection(
                 target,
                 detach_others,
                 nest,
+                tty,
             };
             attach(lines, req, msgs).await;
             return;
@@ -862,6 +893,7 @@ async fn connection(
                 ctx: ctx.clone(),
                 req,
                 reply: reply_tx,
+                pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
             }
         };
         if msgs.send(msg).await.is_err() {
@@ -1048,6 +1080,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         jobs,
         deferred_reply: None,
         held: None,
+        failed_out: String::new(),
         exit: false,
         exit_when_empty: false,
         connections: 0,

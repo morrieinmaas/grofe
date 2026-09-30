@@ -343,6 +343,7 @@ fn raw_attach(
         target: Some("main".to_string()),
         detach_others: false,
         nest: false,
+        tty: None,
     };
     let mut bytes = (encode_hello(&hello).expect("hello") + "\n").into_bytes();
     bytes.extend_from_slice(typeahead);

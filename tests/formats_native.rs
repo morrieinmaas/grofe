@@ -206,8 +206,8 @@ fn server_and_session_variables() {
     assert_eq!(display(&srv, t, "#{session_grouped}"), "0");
     assert_eq!(display(&srv, t, "#{session_windows}"), "2");
     assert_eq!(display(&srv, t, "#{window_panes}"), "1");
-    // FE.2 owns tmux's layout string; natively it is a stub.
-    assert_eq!(display(&srv, t, "[#{window_layout}]"), "[]");
+    // tmux's layout string (FE.2): checksum, size, offset, pane number.
+    assert_eq!(display(&srv, t, "[#{window_layout}]"), "[b25d,80x24,0,0,0]");
 }
 
 #[test]

@@ -295,8 +295,6 @@ fn parse_kill_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const FORMAT_ONLY_SHORT: &[(char, FlagKind)] = &[('F', FlagKind::Value)];
-
 const LIST_SESSIONS_SHORT: &[(char, FlagKind)] = &[('F', FlagKind::Value), ('f', FlagKind::Value)];
 
 fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
@@ -905,18 +903,30 @@ fn parse_detach_client(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+const LIST_CLIENTS_SHORT: &[(char, FlagKind)] = &[
+    ('F', FlagKind::Value),
+    ('f', FlagKind::Value),
+    ('t', FlagKind::Value),
+];
+
 fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: FORMAT_ONLY_SHORT,
+            short: LIST_CLIENTS_SHORT,
             long: &[],
         },
         "list-clients",
     )?;
     no_extra_positionals(&flags, "list-clients", 0)?;
+    let target = match flags.values.get(&'t') {
+        Some(raw) => Some(parse_target(raw)?),
+        None => None,
+    };
     Ok(Command::ListClients(ListClients {
         format: flags.values.get(&'F').cloned(),
+        target,
+        filter: flags.values.get(&'f').cloned(),
     }))
 }
 
@@ -3207,6 +3217,15 @@ mod tests {
             parse(&argv(&["list-clients", "-F", "#{client_width}"])),
             Ok(Command::ListClients(ListClients {
                 format: Some("#{client_width}".to_string()),
+                ..ListClients::default()
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["list-clients", "-t", "main", "-f", "1"])),
+            Ok(Command::ListClients(ListClients {
+                format: None,
+                target: Some(Target::Session(SessionRef::Name("main".to_string()))),
+                filter: Some("1".to_string()),
             }))
         );
     }

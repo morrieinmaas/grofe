@@ -651,6 +651,9 @@ fn run(
         target: opts.target,
         detach_others: opts.detach_others,
         nest: opts.nest,
+        tty: nix::unistd::ttyname(io::stdin())
+            .ok()
+            .map(|p| p.display().to_string()),
     })
     .map_err(|e| e.to_string())?;
     io::Write::write_all(&mut &stream, format!("{hello}\n").as_bytes())

@@ -458,7 +458,7 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
 /// between being created and being attached to.
 fn session_gone(err: &str) -> bool {
     err == "no sessions"
-        || err.starts_with("no server running")
+        || no_server(err)
         || err.starts_with("can't find session")
         || err.contains("Broken pipe")
         || err.contains("Connection reset")
@@ -532,7 +532,7 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
     // tmux's attach starts a server, which finds no sessions; grofe's does
     // not start one and says what tmux would.
     let connect_attach = || match connect(socket) {
-        Err(e) if e.starts_with("no server running") => Err("no sessions".to_string()),
+        Err(e) if no_server(&e) => Err("no sessions".to_string()),
         other => other,
     };
     // The target first (protocol::ATTACH_CHECK): a refusal never probes
@@ -610,11 +610,24 @@ fn connect(socket: &Path) -> Result<UnixStream, String> {
         UnixStream::connect(socket)
     });
     result.map_err(|e| match e.kind() {
+        // tmux 3.7b says `no server running` only for a stale socket, and
+        // names the errno for a missing one (recorded, FE.2).
+        io::ErrorKind::NotFound if dialect() == Dialect::Tmux => format!(
+            "error connecting to {} (No such file or directory)",
+            socket.display()
+        ),
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
             format!("no server running on {}", socket.display())
         }
         _ => format!("error connecting to {}: {e}", socket.display()),
     })
+}
+
+/// Whether a connect error means no server runs there, in either
+/// dialect's words ([`connect`]).
+fn no_server(err: &str) -> bool {
+    err.starts_with("no server running")
+        || (err.starts_with("error connecting to ") && err.ends_with("(No such file or directory)"))
 }
 
 /// Connects, starting a server first if none runs (spec §4.1): under a

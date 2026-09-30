@@ -82,6 +82,8 @@ pub struct AttachRequest {
     pub target: Option<String>,
     pub detach_others: bool,
     pub nest: bool,
+    /// The client's terminal device, if it said (`client_tty`).
+    pub tty: Option<String>,
 }
 
 /// An accepted attach: the connection writes `output` (one frame at a
@@ -183,8 +185,12 @@ impl Outbox {
 
 /// One attached client, keyed by `ClientId` in `State::clients`.
 pub struct ClientEntry {
-    /// `client_name`, what `detach-client -t` takes.
+    /// `client_name`, what `detach-client -t` takes: its tty when it
+    /// attached in the tmux dialect, as tmux names clients, else
+    /// `client-N`.
     pub name: String,
+    /// `client_tty`: the client's terminal device, if it said.
+    pub tty: Option<String>,
     pub session: SessionId,
     /// The attaching CLI's context, with `client` set to this client.
     pub ctx: ClientCtx,
@@ -365,10 +371,15 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         client: Some(id),
         ..req.ctx
     };
+    let name = match &req.tty {
+        Some(tty) if ctx.dialect == crate::protocol::Dialect::Tmux => tty.clone(),
+        _ => client_name(id),
+    };
     state.clients.insert(
         id,
         ClientEntry {
-            name: client_name(id),
+            name,
+            tty: req.tty,
             session,
             ctx,
             size: clamp_size(req.size),
@@ -565,17 +576,114 @@ const MESSAGE_LIMIT: usize = 1000;
 
 /// Adds a status-line message for client `id` to the server's message
 /// log, worded as tmux's `status_message_set` logs it.
-// ponytail: tmux also logs every command run after the config is loaded
-// (`<client> command: <cmd>`); grofe logs only the messages.
 fn log_message(state: &mut State, id: ClientId, text: &str) {
     let Some(name) = state.clients.get(&id).map(|c| c.name.clone()) else {
         return;
     };
+    push_message(state, format!("{name} message: {text}"));
+}
+
+fn push_message(state: &mut State, line: String) {
     let log = &mut state.registry.messages;
-    log.push_back((SystemTime::now(), format!("{name} message: {text}")));
+    log.push_back((SystemTime::now(), line));
     while log.len() > MESSAGE_LIMIT {
         log.pop_front();
     }
+}
+
+/// Logs each command of a CLI request, as tmux 3.7b's
+/// `cmdq_add_message` does (`<client> command: <cmd>`, the command
+/// re-printed with its full name, recorded): `who` is the requesting
+/// client.
+// ponytail: only CLI requests are logged. tmux also logs the commands of
+// bindings (`<client> key <key>: <cmd>`), hooks and sourced files, and
+// names a CLI run from a terminal by its tty.
+pub(crate) fn log_commands(state: &mut State, who: &str, ctx: &ClientCtx, argv: &[String]) {
+    if argv.first().is_some_and(|verb| verb.starts_with("__")) {
+        return;
+    }
+    for cmd in cmd::parse::split_argv(argv) {
+        let printed = match ctx.dialect {
+            crate::protocol::Dialect::Tmux => tmux_print(&cmd),
+            crate::protocol::Dialect::Grofe => None,
+        };
+        let printed = printed.unwrap_or_else(|| {
+            let words: Vec<String> = cmd
+                .iter()
+                .map(|w| crate::server::dispatch::options::escape_arg(w))
+                .collect();
+            words.join(" ")
+        });
+        push_message(state, format!("{who} command: {printed}"));
+    }
+}
+
+/// A request's error, as tmux's `cmdq_error` logs it for a client.
+pub(crate) fn log_error(state: &mut State, who: &str, err: &str) {
+    push_message(state, format!("{who} message: {err}"));
+}
+
+/// A tmux command as tmux's `cmd_print` prints it: the full name, the
+/// flags with no value together and sorted, then each flag with a value,
+/// sorted, then the arguments, each quoted as `args_escape` quotes it.
+/// `None` for a verb tmux does not have.
+fn tmux_print(argv: &[String]) -> Option<String> {
+    use crate::server::dispatch::options::escape_arg;
+    let (name, args) = argv.split_first()?;
+    let spec = crate::compat::tmux::resolve(name).ok()?;
+    // `[-c working-directory]` takes a value, `[-dErx]` does not.
+    let takes = |flag: char| {
+        spec.usage.split("[-").skip(1).any(|part| {
+            let mut chars = part.chars();
+            chars.next() == Some(flag) && chars.next() == Some(' ')
+        }) || (spec.name == "select-pane" && flag == 'P')
+    };
+    let mut bare: std::collections::BTreeMap<char, usize> = Default::default();
+    let mut valued: std::collections::BTreeMap<char, Vec<&str>> = Default::default();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
+            break;
+        };
+        i += 1;
+        for (at, flag) in letters.char_indices() {
+            if !takes(flag) {
+                *bare.entry(flag).or_default() += 1;
+                continue;
+            }
+            let rest = &letters[at + flag.len_utf8()..];
+            let value = if rest.is_empty() {
+                let next = args.get(i).map(String::as_str);
+                i += 1;
+                next.unwrap_or_default()
+            } else {
+                rest
+            };
+            valued.entry(flag).or_default().push(value);
+            break;
+        }
+    }
+    let mut out = spec.name.to_string();
+    if !bare.is_empty() {
+        out.push_str(" -");
+        for (flag, n) in bare {
+            out.extend(std::iter::repeat_n(flag, n));
+        }
+    }
+    for (flag, values) in valued {
+        for v in values {
+            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+        }
+    }
+    for word in args.get(i..).unwrap_or_default() {
+        out.push(' ');
+        out.push_str(&escape_arg(word));
+    }
+    Some(out)
 }
 
 /// The message log (TC.9's `show-messages`), oldest first.
@@ -1755,6 +1863,7 @@ impl FormatVars for ClientVars<'_> {
             "client_width" => Some(c.size.0.to_string()),
             "client_height" => Some(c.size.1.to_string()),
             "client_name" => Some(c.name.clone()),
+            "client_tty" => Some(c.tty.clone().unwrap_or_default()),
             "client_termname" => Some(c.term.clone()),
             "client_key_table" => Some(c.keys.table().to_string()),
             // ponytail: grofe always speaks UTF-8 to the client.
@@ -2085,12 +2194,23 @@ pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId>
 }
 
 fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
+    client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
+}
+
+/// The client `name` names, as tmux's `cmd_find_client` finds it: by its
+/// name or its tty, with or without `/dev/`, one trailing `:` ignored.
+pub(crate) fn client_named(state: &State, name: &str) -> Option<ClientId> {
+    let name = name.strip_suffix(':').unwrap_or(name);
     state
         .clients
         .iter()
-        .find(|(_, c)| c.name == name)
+        .find(|(_, c)| {
+            c.name == name
+                || c.tty
+                    .as_deref()
+                    .is_some_and(|t| t == name || t.strip_prefix("/dev/") == Some(name))
+        })
         .map(|(id, _)| *id)
-        .ok_or_else(|| format!("can't find client: {name}"))
 }
 
 /// `attach-session` run as a command: only an attached client can (its
@@ -2149,22 +2269,38 @@ pub fn detach_client(
 /// `client_*` variables over the client's current pane's. The default line
 /// is tmux 3.7b's (its `[user ...]` part only shows for another user's
 /// client, which grofe never has).
-pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
+/// `list-clients`: every client, or with `-t` those showing that
+/// session, that `-f` keeps.
+pub fn list_clients(state: &State, ctx: &ClientCtx, c: ListClients) -> Result<String, String> {
     let model = &state.model;
-    let format = c.format.unwrap_or_else(|| {
-        "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}] \
-         (#{client_flags})"
-            .to_string()
+    let session = match &c.target {
+        Some(target) => Some(model.resolve_session(target, ctx)?),
+        None => None,
+    };
+    let format = c.format.unwrap_or_else(|| match ctx.dialect {
+        crate::protocol::Dialect::Tmux => options::tmux_template(options::TMUX_LIST_CLIENTS),
+        crate::protocol::Dialect::Grofe => {
+            "#{client_name}: #{session_name} [#{client_width}x#{client_height} \
+             #{client_termname}] (#{client_flags})"
+                .to_string()
+        }
     });
-    Ok(state
-        .clients
-        .values()
-        .map(|client| {
-            let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
-            let vars = ClientVars::new(model, client, pane);
-            format!("{}\n", cmd::expand(&format, &vars))
-        })
-        .collect())
+    let mut out = String::new();
+    for client in state.clients.values() {
+        if session.is_some_and(|s| s != client.session) {
+            continue;
+        }
+        let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
+        let vars = ClientVars::new(model, client, pane);
+        if let Some(filter) = &c.filter {
+            let got = cmd::expand(filter, &vars);
+            if got.is_empty() || got == "0" {
+                continue;
+            }
+        }
+        out.push_str(&format!("{}\n", cmd::expand(&format, &vars)));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -2173,6 +2309,58 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    /// As tmux 3.7b's `show-messages` printed them (recorded on `-L
+    /// grofe-fe2 -f /dev/null`).
+    #[test]
+    fn commands_print_as_tmux_logs_them() {
+        let print = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            tmux_print(&argv).unwrap()
+        };
+        assert_eq!(
+            print(&["set", "-sg", "escape-time", "25"]),
+            "set-option -gs escape-time 25"
+        );
+        assert_eq!(
+            print(&["set", "-as", "terminal-features", "*:RGB"]),
+            "set-option -as terminal-features *:RGB"
+        );
+        assert_eq!(
+            print(&["ls", "-f", "#{==:#{session_name},b}"]),
+            "list-sessions -f \"#{==:#{session_name},b}\""
+        );
+        assert_eq!(print(&["has", "-t", "=ma"]), "has-session -t =ma");
+        assert_eq!(
+            print(&["new", "-d", "-s", "b", "-x", "80", "-y", "24"]),
+            "new-session -d -s b -x 80 -y 24"
+        );
+        assert_eq!(print(&["show-messages"]), "show-messages");
+        assert_eq!(print(&["show-messages", "-JT"]), "show-messages -JT");
+    }
+
+    #[test]
+    fn a_cli_request_is_logged_command_by_command_with_its_error() {
+        let mut state = crate::server::test_state();
+        let ctx = ClientCtx {
+            dialect: crate::protocol::Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let argv: Vec<String> = ["splitw", "-h", ";", "has", "-t", "=ma"]
+            .map(String::from)
+            .to_vec();
+        log_commands(&mut state, "client-7", &ctx, &argv);
+        log_error(&mut state, "client-7", "can't find session: ma");
+        let lines: Vec<&str> = messages(&state).map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "client-7 command: split-window -h",
+                "client-7 command: has-session -t =ma",
+                "client-7 message: can't find session: ma",
+            ]
+        );
+    }
 
     /// A server state with no sessions and one client, as the actor
     /// would hold it.
@@ -2184,6 +2372,7 @@ mod tests {
             id,
             ClientEntry {
                 name: client_name(id),
+                tty: None,
                 session: SessionId(0),
                 ctx: ClientCtx {
                     cwd: PathBuf::from("/"),

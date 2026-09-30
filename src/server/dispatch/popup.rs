@@ -192,14 +192,9 @@ fn client_pane(state: &State, id: ClientId) -> Option<PaneId> {
     Some(state.model.windows.get(&s.active)?.active)
 }
 
-/// The client `-c` names, by its `client_name`, as tmux words a miss.
+/// The client `-c` names, by its name or tty, as tmux words a miss.
 fn client_named(state: &State, name: &str) -> Result<ClientId, String> {
-    state
-        .clients
-        .iter()
-        .find(|(_, c)| c.name == name)
-        .map(|(id, _)| *id)
-        .ok_or_else(|| format!("can't find client: {name}"))
+    clients::client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
 }
 
 /// A size in cells of `len`: cells as given, or a percent rounded down.

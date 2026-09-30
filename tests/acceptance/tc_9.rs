@@ -227,7 +227,12 @@ fn display_message_shows_on_the_status_line_and_in_show_messages() {
         last_row(text).trim_end() == "hi main"
     });
     let log = srv.cmd(&["show-messages"]).expect("show-messages");
-    let line = log.lines().next().unwrap_or_default();
+    // Newest first: `show-messages` itself, logged as a command (FE.2),
+    // then the message.
+    let mut lines = log.lines();
+    let first = lines.next().unwrap_or_default();
+    assert!(first.ends_with(" command: show-messages"), "{log:?}");
+    let line = lines.next().unwrap_or_default();
     let (time, rest) = line.split_at(5.min(line.len()));
     assert!(
         time.len() == 5 && time.as_bytes()[2] == b':',
