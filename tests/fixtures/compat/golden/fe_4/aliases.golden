@@ -30,3 +30,16 @@ $ list-panes -t main -F '#{pane_index}'
 1
 2
 ? 0
+$ set -gu command-alias
+? 0
+$ show -gv command-alias
+split-pane=split-window
+splitp=split-window
+server-info=show-messages -JT
+info=show-messages -JT
+choose-window=choose-tree -w
+choose-session=choose-tree -s
+? 0
+$ mya
+! unknown command: mya
+? 1

@@ -11,3 +11,7 @@ $ two
 $ bind -n F9 mya
 $ splitp -d -t main
 $ list-panes -t main -F '#{pane_index}'
+# set -gu puts the list back to tmux's six defaults, dropping mya and two.
+$ set -gu command-alias
+$ show -gv command-alias
+$ mya

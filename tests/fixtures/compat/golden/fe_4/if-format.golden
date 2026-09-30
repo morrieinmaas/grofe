@@ -79,3 +79,6 @@ $ list-windows -t main -F '#{window_index} #{window_name}'
 $ show -wv -t main:made automatic-rename
 off
 ? 0
+$ if-shell -F 1 "if-shell -F 1 { display -p 'a\"b\c' }"
+a"b\c
+? 0

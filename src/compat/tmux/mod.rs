@@ -1153,8 +1153,9 @@ fn start_server(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 
 /// `resize-pane -M` and `copy-mode -M` outside a mouse event: nothing, as
 /// tmux 3.7b does (a stock mouse binding's drag is grofe's built-in mouse
-/// model's).
-fn mouse_no_op(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+/// model's), noted in `compat-miss.log` as ignored so it is never silent.
+fn mouse_no_op(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    inv.ignored('M');
     Ok(Vec::new())
 }
 
@@ -1611,6 +1612,16 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         }
     }
     out.argv = args[i..].to_vec();
+    // tmux 3.7b's client packs the command into one message (recorded:
+    // up to 16364 bytes, a NUL after each argument, goes; to 16380 is
+    // `failed to send command`; past that `command too long`).
+    let size: usize = out.argv.iter().map(|a| a.len() + 1).sum();
+    if size > 16380 {
+        return Err("command too long".to_string());
+    }
+    if size > 16364 {
+        return Err("failed to send command".to_string());
+    }
     // Bare `tmux` is `new-session`, as in tmux 3.7b.
     if out.argv.is_empty() {
         out.argv.push("new-session".to_string());

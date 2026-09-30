@@ -1829,159 +1829,205 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
 ///   except a trailing one, which is dropped;
 /// - an unterminated quote is closed at the end of the string.
 ///
-/// - a `{` that starts a word opens a command list, up to its `}`, which is
-///   one argument: the list's commands, printed as tmux prints a list
-///   (`cmd_list_print`: each word escaped as [`escape_arg`] escapes it,
-///   commands joined by ` ; `), which is the string tmux hands a command
-///   that runs it (a prompt template, an `if-shell` branch, a menu item);
-///   an unclosed `{`, or an unquoted `}` with no list open, is a syntax
-///   error; a `}` closing a `#{` is part of its word.
+/// - a `{` that starts an argument opens a command list, up to its `}`,
+///   which is one argument: the parsed commands, quoted so that running it
+///   splits back to exactly those words ([`list_text`]), as tmux
+///   runs a parsed list (a prompt template, an `if-shell` branch, a menu
+///   item). tmux's syntax errors: a `{` that starts a command, an unclosed
+///   `{`, an unquoted `}` with no list open; lists nested 2000 deep are
+///   `yacc stack overflow`. A `}` closing a `#{` is part of its word.
 ///
 /// Empty commands are dropped.
-// ponytail: no octal or `\u` escapes, `#` comments or `%if`; a list
-// prints its verbs and flags as written, not in tmux's canonical order.
+// ponytail: no octal or `\u` escapes, `#` comments or `%if`.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
-    split_commands(&mut s.chars().peekable(), false)
+    split_commands(&mut s.chars().peekable())
 }
 
-/// [`split_command_string`] from `chars`, up to the end or, `in_list`, up
-/// to the `}` that closes the list.
+/// How deep `{ }` lists nest before tmux 3.7b's parser gives up (recorded:
+/// 1999 nested lists parse, 2000 are `yacc stack overflow`).
+const MAX_LIST_DEPTH: usize = 2000;
+
+/// One command list being read by [`split_commands`]: the top level, or a
+/// `{ }` list inside it.
+#[derive(Default)]
+struct Level {
+    cmds: Vec<Vec<String>>,
+    /// Each command's words as source text that splits back to them
+    /// ([`quote_word`], or `{ ... }` for a word that was a list).
+    srcs: Vec<Vec<String>>,
+    words: Vec<String>,
+    word_srcs: Vec<String>,
+    word: String,
+    /// The current word's source text when it is a list.
+    word_src: Option<String>,
+    // A word has begun, even if it is still empty (`''`).
+    started: bool,
+    // The word so far is exactly one `\;`.
+    escaped_semicolon: bool,
+    // Open `#{` in the word so far, whose `}` is part of the word.
+    formats: usize,
+}
+
+impl Level {
+    fn end_word(&mut self) {
+        if self.started {
+            let src = self
+                .word_src
+                .take()
+                .unwrap_or_else(|| quote_word(&self.word));
+            self.word_srcs.push(src);
+            self.words.push(std::mem::take(&mut self.word));
+            self.started = false;
+        }
+    }
+
+    fn end_command(&mut self) {
+        if !self.words.is_empty() {
+            self.cmds.push(std::mem::take(&mut self.words));
+            self.srcs.push(std::mem::take(&mut self.word_srcs));
+        }
+    }
+
+    /// The commands read and their source texts, the last word and command
+    /// ended.
+    fn finish(mut self) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+        self.end_word();
+        // A trailing `\;` word is dropped, as tmux drops it.
+        if self.escaped_semicolon {
+            self.words.pop();
+            self.word_srcs.pop();
+        }
+        self.end_command();
+        (self.cmds, self.srcs)
+    }
+}
+
+/// [`split_command_string`] from `chars`. Nested `{ }` lists are levels on
+/// an explicit stack, not recursion, so no input can exhaust the thread's
+/// stack.
 fn split_commands(
     chars: &mut std::iter::Peekable<std::str::Chars>,
-    in_list: bool,
 ) -> Result<Vec<Vec<String>>, ParseError> {
-    let mut cmds = Vec::new();
-    let mut words: Vec<String> = Vec::new();
-    let mut word = String::new();
-    // A word has begun, even if it is still empty (`''`).
-    let mut started = false;
-    // The word so far is exactly one `\;`.
-    let mut escaped_semicolon = false;
-    // Open `#{` in the word so far, whose `}` is part of the word.
-    let mut formats = 0usize;
-    let mut closed = false;
-
-    let end_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
-        if *started {
-            words.push(std::mem::take(word));
-            *started = false;
-        }
-    };
-    let end_command = |words: &mut Vec<String>, cmds: &mut Vec<Vec<String>>| {
-        if !words.is_empty() {
-            cmds.push(std::mem::take(words));
-        }
-    };
-
+    let mut stack: Vec<Level> = vec![Level::default()];
     while let Some(c) = chars.next() {
-        let fresh = !started;
+        let in_list = stack.len() > 1;
+        let Some(l) = stack.last_mut() else {
+            break;
+        };
+        let fresh = !l.started;
         if !c.is_whitespace() && !(c == '\\' && fresh) {
-            escaped_semicolon = false;
+            l.escaped_semicolon = false;
         }
         if fresh {
-            formats = 0;
+            l.formats = 0;
         }
         match c {
-            c if c.is_whitespace() => end_word(&mut word, &mut started, &mut words),
+            c if c.is_whitespace() => l.end_word(),
+            // A command cannot start with a list (tmux's grammar: `{{`
+            // is a syntax error, recorded).
+            '{' if fresh && l.words.is_empty() => return Err(syntax_error()),
             '{' if fresh => {
-                let list = split_commands(chars, true)?;
-                word = print_command_list(&list);
-                started = true;
+                if stack.len() >= MAX_LIST_DEPTH {
+                    return Err(ParseError::Other("yacc stack overflow".to_string()));
+                }
+                stack.push(Level::default());
             }
-            '}' if in_list && formats == 0 => {
-                closed = true;
-                break;
+            '}' if in_list && l.formats == 0 => {
+                let (_, srcs) = stack.pop().map(Level::finish).unwrap_or_default();
+                if let Some(parent) = stack.last_mut() {
+                    let text = list_text(&srcs);
+                    parent.word_src = Some(format!("{{ {text} }}"));
+                    parent.word = text;
+                    parent.started = true;
+                }
             }
-            '}' if formats > 0 => {
-                formats -= 1;
-                word.push('}');
+            '}' if l.formats > 0 => {
+                l.formats -= 1;
+                l.word.push('}');
             }
             // tmux 3.7b (recorded): an unquoted `}` with no list open is a
             // syntax error (`display }`, `display a}`).
             '}' => return Err(syntax_error()),
-            '{' if word.ends_with('#') => {
-                formats += 1;
-                word.push('{');
+            '{' if l.word.ends_with('#') => {
+                l.formats += 1;
+                l.word.push('{');
             }
             ';' => {
-                end_word(&mut word, &mut started, &mut words);
-                end_command(&mut words, &mut cmds);
+                l.end_word();
+                l.end_command();
             }
             '\\' => {
-                started = true;
+                l.started = true;
                 let next = chars.next().unwrap_or('\\');
-                escaped_semicolon = fresh && next == ';';
-                word.push(escape(next));
+                l.escaped_semicolon = fresh && next == ';';
+                l.word.push(escape(next));
             }
             '\'' => {
-                started = true;
+                l.started = true;
                 for x in chars.by_ref() {
                     if x == '\'' {
                         break;
                     }
-                    word.push(x);
+                    l.word.push(x);
                 }
             }
             '"' => {
-                started = true;
+                l.started = true;
                 if fresh && chars.peek() == Some(&'~') {
                     chars.next();
-                    expand_tilde(chars, &mut word);
+                    expand_tilde(chars, &mut l.word);
                 }
                 while let Some(x) = chars.next() {
                     match x {
                         '"' => break,
-                        '\\' => word.push(escape(chars.next().unwrap_or('\\'))),
-                        '$' => expand_var(chars, &mut word)?,
-                        x => word.push(x),
+                        '\\' => l.word.push(escape(chars.next().unwrap_or('\\'))),
+                        '$' => expand_var(chars, &mut l.word)?,
+                        x => l.word.push(x),
                     }
                 }
             }
             '$' => {
-                started = true;
+                l.started = true;
                 // tmux 3.7b's lexer quirk, recorded: `display $;` is a
                 // syntax error, `display $; ` is `display $`.
                 let mut ahead = chars.clone();
                 if ahead.next() == Some(';') && ahead.next().is_none() {
                     return Err(syntax_error());
                 }
-                expand_var(chars, &mut word)?;
+                expand_var(chars, &mut l.word)?;
             }
             '~' if fresh => {
-                started = true;
-                expand_tilde(chars, &mut word);
+                l.started = true;
+                expand_tilde(chars, &mut l.word);
             }
             c => {
-                word.push(c);
-                started = true;
+                l.word.push(c);
+                l.started = true;
             }
         }
     }
-    if in_list && !closed {
+    // An unclosed `{`.
+    if stack.len() > 1 {
         return Err(syntax_error());
     }
-    end_word(&mut word, &mut started, &mut words);
-    // A trailing `\;` word is dropped, as tmux drops it.
-    if escaped_semicolon {
-        words.pop();
-    }
-    end_command(&mut words, &mut cmds);
-    Ok(cmds)
+    Ok(stack.pop().map(|l| l.finish().0).unwrap_or_default())
 }
 
-/// A command list as tmux 3.7b prints one inside `{ }` (`cmd_list_print`
-/// with no flags): each command's words escaped ([`escape_arg`]), the
-/// commands joined by ` ; `.
-pub fn print_command_list(cmds: &[Vec<String>]) -> String {
-    cmds.iter()
-        .map(|argv| {
-            argv.iter()
-                .map(|w| escape_arg(w))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+/// A parsed `{ }` list as the one argument a command gets: the source text
+/// of its commands joined by ` ; `, which split back to exactly the parsed
+/// words, as tmux runs the parsed list itself. Nested lists stay `{ }`, so
+/// the text grows with the input, not with its depth.
+fn list_text(srcs: &[Vec<String>]) -> String {
+    srcs.iter()
+        .map(|w| w.join(" "))
         .collect::<Vec<_>>()
         .join(" ; ")
+}
+
+/// A word as source text that splits back to it: in single quotes, a `'`
+/// as `'\''`, so backslashes, `$` and `~` stay as they are.
+fn quote_word(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// One argument as tmux 3.7b's `args_escape` prints it: `''` when empty;
@@ -3506,15 +3552,15 @@ mod tests {
                 vec![argv(&["display", "no \\escape"])],
             ),
             ("a\\ b\tc", vec![argv(&["a b", "c"])]),
-            // A `{ }` list is one argument, printed as tmux prints a list
-            // (recorded with `bind X '<string>'` then `list-keys`).
+            // A `{ }` list is one argument, its parsed words quoted so they
+            // split back as they were.
             (
                 "command-prompt -I \"#S\" { rename-session -- \"%%\" }",
                 vec![argv(&[
                     "command-prompt",
                     "-I",
                     "#S",
-                    "rename-session -- \"%%\"",
+                    "'rename-session' '--' '%%'",
                 ])],
             ),
             (
@@ -3523,25 +3569,18 @@ mod tests {
                     "if",
                     "-F",
                     "1",
-                    "display -p \"a b\"",
-                    "display c ; neww -n \"x;y\"",
+                    "'display' '-p' 'a b'",
+                    "'display' 'c' ; 'neww' '-n' 'x;y'",
                 ])],
             ),
             (
                 "if -F 1 {display x}",
-                vec![argv(&["if", "-F", "1", "display x"])],
-            ),
-            (
-                "if -F 1 { if -F 0 { display x } } ; ls",
-                vec![
-                    argv(&["if", "-F", "1", "if -F 0 \"display x\""]),
-                    argv(&["ls"]),
-                ],
+                vec![argv(&["if", "-F", "1", "'display' 'x'"])],
             ),
             ("if -F 1 {}", vec![argv(&["if", "-F", "1", ""])]),
             (
                 "if -F 1 { display \"#{pane_id}\" }",
-                vec![argv(&["if", "-F", "1", "display \"#{pane_id}\""])],
+                vec![argv(&["if", "-F", "1", "'display' '#{pane_id}'"])],
             ),
             ("display a{b", vec![argv(&["display", "a{b"])]),
             ("display \"a\\\\b\"", vec![argv(&["display", "a\\b"])]),
@@ -3583,14 +3622,56 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(split_command_string(input), Ok(want), "{input:?}");
         }
-        // tmux 3.7b's syntax errors: an unclosed list, a stray `}`.
-        for input in ["if 1 { display", "display }", "display a}"] {
+        // tmux 3.7b's syntax errors: an unclosed list, a stray `}`, a
+        // command that starts with a list (20000 `{`, from a config).
+        let braces = "{".repeat(20000);
+        for input in [
+            "if 1 { display",
+            "display }",
+            "display a}",
+            "{ display }",
+            braces.as_str(),
+        ] {
             assert_eq!(
                 split_command_string(input),
                 Err(syntax_error()),
                 "{input:?}"
             );
         }
+    }
+
+    /// A list's words survive being run: splitting its argument again gives
+    /// the parsed words back, backslashes and quotes included (tmux 3.7b:
+    /// `if-shell -F 1 "if-shell -F 1 { display -p 'a\"b\c' }"` prints
+    /// `a"b\c`), through nested lists too.
+    #[test]
+    fn a_list_splits_back_to_its_parsed_words() {
+        let outer = split_command_string(r#"if-shell -F 1 { display -p 'a"b\c' }"#).unwrap();
+        let inner = split_command_string(&outer[0][3]).unwrap();
+        assert_eq!(inner, vec![argv(&["display", "-p", r#"a"b\c"#])]);
+        let nested =
+            split_command_string(r#"if -F 1 { if -F 1 { display -p "it's $ ~ \\t" } }"#).unwrap();
+        let once = split_command_string(&nested[0][3]).unwrap();
+        let twice = split_command_string(&once[0][3]).unwrap();
+        assert_eq!(twice, vec![argv(&["display", "-p", r"it's $ ~ \t"])]);
+    }
+
+    /// tmux 3.7b's parser gives up on lists nested 2000 deep (recorded:
+    /// 1999 parse); grofe stops at the same depth, with no recursion.
+    #[test]
+    fn lists_nested_2000_deep_are_tmux_s_stack_overflow() {
+        let nest = |n: usize| {
+            format!(
+                "if -F 0 {}{{ display x }}{}",
+                "{ if -F 0 ".repeat(n),
+                " }".repeat(n)
+            )
+        };
+        assert!(split_command_string(&nest(1998)).is_ok());
+        assert_eq!(
+            split_command_string(&nest(1999)),
+            Err(ParseError::Other("yacc stack overflow".to_string()))
+        );
     }
 
     /// `args_escape` as tmux 3.7b prints arguments (recorded in

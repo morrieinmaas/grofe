@@ -31,3 +31,5 @@ $ if -b true 'display -p then'
 $ if -F 1 'neww -d -n made ; setw -t :made automatic-rename off' 'display -p else'
 $ list-windows -t main -F '#{window_index} #{window_name}'
 $ show -wv -t main:made automatic-rename
+# A `{ }` list runs as parsed: the backslash and the quote reach display.
+$ if-shell -F 1 "if-shell -F 1 { display -p 'a\"b\c' }"

@@ -289,6 +289,57 @@ fn send_m_fails_with_tmux_s_text_and_a_log_line() {
     let _ = cli.run(&words(&["kill-server"]));
 }
 
+/// `resize-pane -M` and `copy-mode -M` exit 0 with no output, as in tmux
+/// 3.7b, and each leaves one `compat-miss.log` line: ignored, never
+/// silent (orchestrator ruling on the review).
+#[test]
+fn the_mouse_no_ops_exit_0_with_one_log_line_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = grofe_cli(dir.path());
+    let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
+    assert!(status.success(), "{err}");
+    for (verb, line) in [
+        ("resize-pane", "resize-pane -M: cosmetic, ignored"),
+        ("copy-mode", "copy-mode -M: cosmetic, ignored"),
+    ] {
+        let before = miss_log(dir.path()).len();
+        let (status, out, err) = cli.run(&words(&[verb, "-M"]));
+        assert_eq!(
+            (status.code(), out.as_str(), err.as_str()),
+            (Some(0), "", "")
+        );
+        assert_eq!(miss_log(dir.path())[before..], [line.to_string()]);
+    }
+    let _ = cli.run(&words(&["kill-server"]));
+}
+
+/// 20000 `{` (the review's input) is tmux 3.7b's `command too long`, exit
+/// 1, from the client before any server parses it (recorded); the parser
+/// itself never recurses, so a config holding the same text is a `syntax
+/// error` rather than a stack overflow (`cmd::parse`'s tests).
+#[test]
+fn twenty_thousand_braces_are_command_too_long() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = grofe_cli(dir.path());
+    let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
+    assert!(status.success(), "{err}");
+    let braces = "{".repeat(20000);
+    let (status, out, err) = cli.run(&words(&["bind", "X", &braces]));
+    assert_eq!(
+        (status.code(), out.as_str(), err.as_str()),
+        (Some(1), "", "command too long\n")
+    );
+    let (status, _, err) = cli.run(&words(&["display", "-p", &"x".repeat(16360)]));
+    assert_eq!(
+        (status.code(), err.as_str()),
+        (Some(1), "failed to send command\n")
+    );
+    let (status, out, _) = cli.run(&words(&["display", "-p", &"x".repeat(16352)]));
+    assert_eq!((status.code(), out.len()), (Some(0), 16353));
+    assert!(cli.run(&words(&["has-session", "-t", "main"])).0.success());
+    let _ = cli.run(&words(&["kill-server"]));
+}
+
 /// Case 4: a style flag grofe draws no differently is ignored, with
 /// exactly one log line naming it (the `popup-styles` golden has the
 /// screen, and tmux's error for an unknown `-b`).

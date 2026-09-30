@@ -3608,7 +3608,7 @@ mod tests {
                 "command-prompt".to_string(),
                 "-I".into(),
                 "#S".into(),
-                "rename-session \"%%\"".into(),
+                "'rename-session' '%%'".into(),
             ]]
         );
         assert!(
