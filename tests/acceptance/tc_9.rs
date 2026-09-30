@@ -470,6 +470,68 @@ fn wait_for_s_releases_a_waiting_wait_for() {
     assert!(status.success(), "{status:?}");
 }
 
+/// A blocked `wait-for` holds the rest of its request until the signal,
+/// and the request prints everything once done, as tmux 3.7b (recorded).
+#[test]
+fn wait_for_holds_the_rest_of_the_request() {
+    use std::io::Read;
+    let srv = start();
+    let mut cmd = srv.command();
+    cmd.args([
+        "display-message",
+        "-p",
+        "a",
+        ";",
+        "wait-for",
+        "c",
+        ";",
+        "new-session",
+        "-d",
+        "-s",
+        "after",
+        ";",
+        "display-message",
+        "-p",
+        "b",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    let mut waiter = cmd.spawn().expect("spawn wait-for");
+    let mut stdout = waiter.stdout.take().expect("stdout");
+    sleep(Duration::from_millis(300));
+    assert!(
+        srv.run(&["has-session", "-t", "after"]).status.code() == Some(1),
+        "the rest ran before the signal"
+    );
+    srv.cmd(&["wait-for", "-S", "c"]).expect("wait-for -S");
+    let status = wait_child(waiter, WAIT).expect("the waiter exits");
+    assert!(status.success(), "{status:?}");
+    let mut out = String::new();
+    stdout.read_to_string(&mut out).expect("read stdout");
+    assert_eq!(out, "a\nb\n");
+    assert!(srv.run(&["has-session", "-t", "after"]).status.success());
+
+    // A caller that hangs up drops its rest, as tmux frees a dead client's
+    // queue.
+    let mut cmd = srv.command();
+    cmd.args(["wait-for", "d", ";", "new-session", "-d", "-s", "gone"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut waiter = cmd.spawn().expect("spawn wait-for");
+    sleep(Duration::from_millis(300));
+    waiter.kill().expect("kill waiter");
+    waiter.wait().expect("reap waiter");
+    sleep(Duration::from_millis(200));
+    srv.cmd(&["wait-for", "-S", "d"]).expect("wait-for -S");
+    sleep(Duration::from_millis(300));
+    assert_eq!(
+        srv.run(&["has-session", "-t", "gone"]).status.code(),
+        Some(1)
+    );
+}
+
 /// How many file descriptors `pid` has open.
 fn open_fds(pid: i32) -> usize {
     if let Ok(dir) = std::fs::read_dir(format!("/proc/{pid}/fd")) {

@@ -2,12 +2,14 @@
 //! `show-messages`, the choosers (their UI in `server::tree`),
 //! `suspend-client`, `find-window` and `wait-for`.
 
+use tokio::sync::oneshot;
+
 use crate::cmd::{
-    ChooseClient, ChooseTree, FindWindow, ParseError, RefreshClient, ShowMessages, SuspendClient,
-    WaitFor,
+    ChooseClient, ChooseTree, Command, FindWindow, ParseError, RefreshClient, ShowMessages,
+    SuspendClient, WaitFor,
 };
-use crate::protocol::ClientCtx;
-use crate::server::{State, clients, dispatch, tree};
+use crate::protocol::{ClientCtx, Failure};
+use crate::server::{Job, State, clients, dispatch, tree};
 
 /// `refresh-client`: the client (`-t`, else the current one) redraws, only
 /// its status line with `-S`; `-c/-L/-R/-U/-D [n]` (tmux's stock pan keys)
@@ -123,6 +125,79 @@ pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<Strin
         clients::wait_channel(state, &channel, dispatch::defer_reply);
     }
     Ok(String::new())
+}
+
+/// The rest of a request behind a blocked `wait-for`: it runs on the actor
+/// once the channel is signalled, and the request's answer is everything
+/// it printed. A CLI caller that hangs up first drops it, as tmux frees a
+/// dead client's queue; a binding's rest runs whatever happens to its
+/// (dropped) answer.
+pub(crate) fn hold_rest(state: &mut State, ctx: &ClientCtx, rest: Vec<Command>, out: String) {
+    let Some(wait) = state.deferred_reply.take() else {
+        return;
+    };
+    let mut tx = dispatch::defer_reply(state);
+    let jobs = state.jobs.clone();
+    let ctx = ctx.clone();
+    let cli = ctx.client.is_none();
+    tokio::spawn(async move {
+        let woken = if cli {
+            tokio::select! {
+                woken = wait => woken,
+                () = tx.closed() => return,
+            }
+        } else {
+            wait.await
+        };
+        match woken {
+            Ok(Ok(_)) => {}
+            Ok(Err(failure)) => {
+                let _ = tx.send(Err(failure));
+                return;
+            }
+            // The server is going away; the dropped answer says so.
+            Err(_) => return,
+        }
+        let job: Job = Box::new(move |state: &mut State| resume(state, &ctx, rest, out, tx));
+        let _ = jobs.send(job).await;
+    });
+}
+
+/// Runs a held request's rest and answers it, or holds it again behind
+/// the next blocked `wait-for`.
+fn resume(
+    state: &mut State,
+    ctx: &ClientCtx,
+    rest: Vec<Command>,
+    out: String,
+    tx: oneshot::Sender<Result<String, Failure>>,
+) {
+    let result = dispatch::run_commands(state, ctx, rest);
+    let later = state.deferred_reply.take();
+    state.events.flush();
+    clients::changed(state);
+    match (result, later) {
+        (Ok(more), Some(later)) => {
+            let mut tx = tx;
+            tokio::spawn(async move {
+                let answer = tokio::select! {
+                    answer = later => answer,
+                    () = tx.closed() => return,
+                };
+                let _ = tx.send(match answer {
+                    Ok(Ok(last)) => Ok(out + &more + &last),
+                    Ok(Err(failure)) => Err(failure),
+                    Err(_) => return,
+                });
+            });
+        }
+        (Ok(more), None) => {
+            let _ = tx.send(Ok(out + &more));
+        }
+        (Err(e), _) => {
+            let _ = tx.send(Err(Failure::from(e)));
+        }
+    }
 }
 
 #[cfg(test)]
