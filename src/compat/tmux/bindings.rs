@@ -1,17 +1,222 @@
 //! Binding and overlay rows (FE.4): `if-shell`, `command-alias`, popup and
-//! menu flags, `list-keys` output, the mouse argv forms.
+//! menu flags, `new-pane` and `wait-for` (fzf's `--tmux`, M36-R1), the mouse
+//! argv forms.
 //!
 //! Rows and rewrites only: the schema, the dispatcher and the helpers a
 //! translation uses ([`super::Invocation`]) are `mod.rs`'s. The most
 //! specific matching row decides, and between rows as specific this
 //! file's come before the core rows, so a row here naming a core form
 //! takes it over. Rewrites ([`super::Rewrite`]) apply before any row.
+//!
+//! Every verb here has a native verb of the same name and flag letters
+//! (TC.6, TC.7, TC.9, TC.10), so most rows pass through. A translation
+//! only drops the style flags grofe draws no differently, each noted in
+//! `compat-miss.log` ([`super::Invocation::ignored`]). Stored commands (an
+//! `if-shell` branch, a menu item, a `confirm-before` command) keep the
+//! request's dialect, so a tmux branch such as `neww` runs as tmux's.
 
-use super::{Rewrite, Row};
+use super::{FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Row, TmuxError};
+use crate::cmd::Command;
+
+const MOUSE_POSITION: &str = "a mouse position (M, W or S); grofe's built-in mouse model \
+                              opens a mouse key's menu at the pointer when no position is given \
+                              (spec 4.5, M36-R5)";
+const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
+
+const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
+const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
+
+const fn row(
+    tmux_form: &'static str,
+    kind: MappingKind,
+    target: GrofeTarget,
+    flags: &'static [FlagMark],
+    golden_id: &'static str,
+) -> Row {
+    Row {
+        tmux_form,
+        kind,
+        target,
+        flags,
+        milestone: "M3.6",
+        golden_id,
+    }
+}
+
+const fn pass(verb: &'static str, golden_id: &'static str) -> Row {
+    row(
+        verb,
+        MappingKind::PassThrough,
+        GrofeTarget::Native(verb),
+        &[],
+        golden_id,
+    )
+}
+
+/// Refused for good: [`super::Row::refuses`] is true with no milestone.
+const fn refuse(tmux_form: &'static str, reason: &'static str) -> Row {
+    Row {
+        tmux_form,
+        kind: MappingKind::Behaviour,
+        target: GrofeTarget::Unsupported(reason),
+        flags: SEMANTIC,
+        milestone: "",
+        golden_id: "",
+    }
+}
+
+/// `inv`'s arguments without the flags in `cosmetic`, each one given noted
+/// as ignored; the positionals after them as sent.
+fn without_cosmetic(inv: &Invocation<'_>, cosmetic: &[char]) -> Vec<String> {
+    let got = inv.getopt();
+    let mut args = Vec::new();
+    let mut noted = Vec::new();
+    for (flag, value) in &got.flags {
+        if cosmetic.contains(flag) {
+            if !noted.contains(flag) {
+                inv.ignored(*flag);
+                noted.push(*flag);
+            }
+            continue;
+        }
+        args.push(format!("-{flag}"));
+        args.extend(value.map(str::to_string));
+    }
+    let rest = got.rest.min(inv.args.len());
+    if rest > 0 && inv.args[rest - 1] == "--" {
+        args.push("--".to_string());
+    }
+    args.extend_from_slice(&inv.args[rest..]);
+    args
+}
+
+/// `display-popup`: grofe draws every `-b` border-lines value tmux has
+/// (TC.6), so only the fill and border styles are cosmetic.
+// ponytail: `-s`/`-S` styles are dropped; the popup keeps the default
+// colours until TC.6's overlay reads a style.
+fn display_popup(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    inv.native("display-popup", &without_cosmetic(inv, &['s', 'S']))
+}
+
+/// `display-menu`: the border lines, the styles and `-O` (stay open after
+/// the mouse button that opened the menu is released) change only how the
+/// menu looks or how a mouse release closes it.
+// ponytail: grofe's menu is drawn in tmux's default menu style whatever
+// `-b -s -S -H` say.
+fn display_menu(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    inv.native(
+        "display-menu",
+        &without_cosmetic(inv, &['b', 's', 'S', 'H', 'O']),
+    )
+}
+
+/// `new-pane`: the pane's border styles are cosmetic.
+fn new_pane(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    inv.native("new-pane", &without_cosmetic(inv, &['s', 'S', 'R']))
+}
 
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
-    Vec::new()
+    use GrofeTarget::Translate;
+    use MappingKind::{Behaviour, FlagRename, PassThrough};
+    vec![
+        // The conditional (TC.10): the format form on the actor, the shell
+        // form off it; the branch runs in the request's dialect. A bare
+        // `=` target is the pointer's inside a mouse key (M36-R3).
+        row(
+            "if-shell",
+            Behaviour,
+            GrofeTarget::Native("if-shell"),
+            &[],
+            "fe_4/if-format",
+        ),
+        row(
+            "if-shell -F",
+            Behaviour,
+            GrofeTarget::Native("if-shell"),
+            SEMANTIC,
+            "fe_4/if-format",
+        ),
+        // `command-alias` entries are grofe aliases (TC.7): the native
+        // dispatcher expands them before any dialect parses the request.
+        row(
+            "set-option command-alias",
+            Behaviour,
+            Translate(|inv| super::option_command(inv, "set-option", false)),
+            &[],
+            "fe_4/aliases",
+        ),
+        // Popups and floating panes (TC.6).
+        row(
+            "display-popup",
+            PassThrough,
+            Translate(display_popup),
+            &[],
+            "fe_4/popup-env",
+        ),
+        row(
+            "display-popup -s",
+            FlagRename,
+            Translate(display_popup),
+            COSMETIC,
+            "fe_4/popup-styles",
+        ),
+        row(
+            "display-popup -S",
+            FlagRename,
+            Translate(display_popup),
+            COSMETIC,
+            "fe_4/popup-styles",
+        ),
+        row(
+            "new-pane",
+            PassThrough,
+            Translate(new_pane),
+            &[],
+            "tc_6/new-pane-fzf",
+        ),
+        pass("wait-for", "fe_4/fzf"),
+        refuse("wait-for -L", UNUSED),
+        refuse("wait-for -U", UNUSED),
+        // Menus, prompts and the pane labels (TC.7).
+        row(
+            "display-menu",
+            PassThrough,
+            Translate(display_menu),
+            &[],
+            "fe_4/menu-over-popup",
+        ),
+        row(
+            "display-menu -b",
+            FlagRename,
+            Translate(display_menu),
+            COSMETIC,
+            "",
+        ),
+        row(
+            "display-menu -O",
+            FlagRename,
+            Translate(display_menu),
+            COSMETIC,
+            "",
+        ),
+        pass("display-panes", ""),
+        pass("confirm-before", "tc_7/confirm-before"),
+        pass("choose-tree", ""),
+        // The mouse position letters stay semantic (M36-R5): tmux 3.7b
+        // opens such a menu at the client's top left when no mouse event
+        // is current (recorded), so there is no tmux text to reuse.
+        refuse("display-menu -x[M]", MOUSE_POSITION),
+        refuse("display-menu -y[M]", MOUSE_POSITION),
+        refuse("display-menu -x[W]", MOUSE_POSITION),
+        refuse("display-menu -y[W]", MOUSE_POSITION),
+        refuse("display-menu -y[S]", MOUSE_POSITION),
+        refuse("display-popup -x[M]", MOUSE_POSITION),
+        refuse("display-popup -y[M]", MOUSE_POSITION),
+        refuse("display-popup -x[W]", MOUSE_POSITION),
+        refuse("display-popup -y[W]", MOUSE_POSITION),
+        refuse("display-popup -y[S]", MOUSE_POSITION),
+    ]
 }
 
 /// This area's argument rewrites, applied before any row matches.

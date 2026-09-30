@@ -1,0 +1,96 @@
+$ new-session -d -s main -x 200 -y 50 cat
+? 0
+$ display-message -t %0 -p '#{window_id}'
+@0
+? 0
+$ list-panes -t @0 -F '#{pane_id}'
+%0
+? 0
+$ split-window -d -t %0 -h -l 70% -P -F '#{pane_id}' -- cat
+%1
+? 0
+$ set-option -p -t %1 window-style bg=default,fg=blue
+? 0
+$ set-option -p -t %1 pane-border-style fg=blue
+? 0
+$ set-option -p -t %1 pane-active-border-style fg=blue
+? 0
+$ select-pane -t %1 -T researcher
+? 0
+$ set-option -p -t %1 pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'
+? 0
+$ select-layout -t @0 main-vertical
+? 0
+$ resize-pane -t %0 -x 30%
+? 0
+$ set-option -p -t %1 remain-on-exit failed
+? 0
+$ list-panes -t @0 -F '#{pane_id} #{pane_width} #{pane_active} #{pane_title}'
+%0 60 1 <HOST>
+%1 139 0 researcher
+? 0
+$ respawn-pane -k -t %1 -- 'echo teammate-started; exec cat'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t %1
+teammate-started
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ list-panes -t @0 -F '#{pane_id} #{pane_active} #{pane_dead}'
+%0 1 0
+%1 0 0
+? 0
+$ kill-pane -t %1
+? 0
+$ list-panes -t @0 -F '#{pane_id}'
+%0
+? 0

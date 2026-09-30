@@ -1,0 +1,13 @@
+# FE.4: command-alias entries are aliases, as tmux 3.7b expands them
+# (cmd_get_alias): a bare verb, one standing for two commands, one bound
+# to a key, and tmux's own default entries.
+$ new-session -d -s main -x 80 -y 24
+$ show -gv command-alias
+$ set -ag command-alias 'mya=display -p hi'
+$ mya
+$ mya extra
+$ set -ag command-alias 'two=display -p one ; display -p two'
+$ two
+$ bind -n F9 mya
+$ splitp -d -t main
+$ list-panes -t main -F '#{pane_index}'

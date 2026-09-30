@@ -1,0 +1,32 @@
+$ new-session -d -s main -x 80 -y 24
+? 0
+$ show -gv command-alias
+split-pane=split-window
+splitp=split-window
+server-info=show-messages -JT
+info=show-messages -JT
+choose-window=choose-tree -w
+choose-session=choose-tree -s
+? 0
+$ set -ag command-alias 'mya=display -p hi'
+? 0
+$ mya
+hi
+? 0
+$ mya extra
+! command display-message: too many arguments (need at most 1)
+? 1
+$ set -ag command-alias 'two=display -p one ; display -p two'
+? 0
+$ two
+one
+two
+? 0
+$ bind -n F9 mya
+? 0
+$ splitp -d -t main
+? 0
+$ list-panes -t main -F '#{pane_index}'
+1
+2
+? 0
