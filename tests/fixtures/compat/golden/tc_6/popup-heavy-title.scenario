@@ -1,0 +1,7 @@
+# TC.6: -b heavy with a styled title cut to the box, placed by numbers
+# (-y is the row below the box).
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& display-popup -c {client} -x 3 -y 8 -w 20 -h 5 -b heavy -T "x#[fg=red]a-long-title-cut-here" "echo heavy; exec cat"
+screen heavy

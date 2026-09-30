@@ -360,6 +360,78 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
     }
 }
 
+/// A floating pane to draw over a window (tmux 3.7's `new-pane`, TC.6):
+/// its top-left content cell in window coordinates, its size and rows,
+/// and whether it is the window's active pane.
+pub struct FloatingPane {
+    pub at: (i32, i32),
+    pub size: (u16, u16),
+    pub snap: RowsSnapshot,
+    pub active: bool,
+}
+
+/// Draws `panes` (lowest first) over a window's composed `screen`, seen
+/// through `viewport`, as tmux 3.7b draws floating panes (recorded): each
+/// is a box of single lines around its content, in `active_style` for the
+/// active pane and `style` for the others, over the tiled panes and any
+/// lower floating pane. The cursor is the active floating pane's; the
+/// active tiled pane's is hidden when a floating pane covers it.
+pub fn draw_floating(
+    screen: &mut Screen,
+    panes: &[FloatingPane],
+    viewport: (u16, u16),
+    style: &Style,
+    active_style: &Style,
+) {
+    let (cols, rows) = (i32::from(screen.cols), i32::from(screen.rows));
+    let put = |screen: &mut Screen, x: i32, y: i32, cell: SnapCell| {
+        if (0..cols).contains(&x) && (0..rows).contains(&y) {
+            screen.cells[(y * cols + x) as usize] = cell;
+        }
+    };
+    for pane in panes {
+        let x = pane.at.0 - i32::from(viewport.0);
+        let y = pane.at.1 - i32::from(viewport.1);
+        let (w, h) = (i32::from(pane.size.0), i32::from(pane.size.1));
+        let border = if pane.active { active_style } else { style };
+        for i in -1..=w {
+            let (top, bottom) = match i {
+                -1 => ('┌', '└'),
+                i if i == w => ('┐', '┘'),
+                _ => ('─', '─'),
+            };
+            put(screen, x + i, y - 1, styled(top, border));
+            put(screen, x + i, y + h, styled(bottom, border));
+        }
+        for j in 0..h {
+            put(screen, x - 1, y + j, styled('│', border));
+            put(screen, x + w, y + j, styled('│', border));
+        }
+        for (r, row) in pane.snap.rows.iter().enumerate() {
+            for (c, cell) in row.iter().take(pane.size.0 as usize).enumerate() {
+                put(screen, x + c as i32, y + r as i32, cell.clone());
+            }
+        }
+        let covers =
+            |cx: i32, cy: i32| (x - 1..=x + w).contains(&cx) && (y - 1..=y + h).contains(&cy);
+        if pane.active {
+            let c = pane.snap.cursor;
+            let (cx, cy) = (x + i32::from(c.col), y + i32::from(c.row));
+            let shown = c.visible && (0..cols).contains(&cx) && (0..rows).contains(&cy);
+            screen.cursor = shown.then_some(CursorState {
+                col: cx as u16,
+                row: cy as u16,
+                ..c
+            });
+        } else if screen
+            .cursor
+            .is_some_and(|c| covers(i32::from(c.col), i32::from(c.row)))
+        {
+            screen.cursor = None;
+        }
+    }
+}
+
 /// A window's composed screen with the status rows stacked above it
 /// (`top`) or below it, as one client screen: the window's cells and
 /// cursor move down by the rows above them (TC.11, `status-position`).

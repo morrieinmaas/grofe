@@ -46,6 +46,8 @@ const NO_FLAGS: FlagTable = FlagTable {
 struct ParsedFlags {
     present: BTreeSet<char>,
     values: BTreeMap<char, String>,
+    /// Every value flag's value in order, repeats included (`-e A -e B`).
+    repeated: Vec<(char, String)>,
     long_present: BTreeSet<&'static str>,
     positionals: Vec<String>,
 }
@@ -124,7 +126,9 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
                                 .get(i)
                                 .ok_or_else(|| ParseError::MissingValue(cmd_name.to_string(), c))?;
                             flags.values.insert(c, value.clone());
+                            flags.repeated.push((c, value.clone()));
                         } else {
+                            flags.repeated.push((c, attached.clone()));
                             flags.values.insert(c, attached);
                         }
                         ci = chars.len();
@@ -1536,6 +1540,7 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
         ('b', FlagKind::Value),
         ('c', FlagKind::Value),
         ('d', FlagKind::Value),
+        ('e', FlagKind::Value),
         ('T', FlagKind::Value),
         ('w', FlagKind::Value),
         ('h', FlagKind::Value),
@@ -1549,6 +1554,13 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
         border: flags.values.get(&'b').cloned(),
         client: flags.values.get(&'c').cloned(),
         cwd: flags.values.get(&'d').cloned(),
+        env: flags
+            .repeated
+            .iter()
+            .filter(|(c, _)| *c == 'e')
+            .filter_map(|(_, v)| v.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         title: flags.values.get(&'T').cloned(),
         width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
         height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,

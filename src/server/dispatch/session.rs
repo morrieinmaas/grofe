@@ -88,6 +88,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         rows: size.1,
         bell_flag: false,
         last_panes: Vec::new(),
+        floating: Vec::new(),
     });
     // `-n` names the window for good, as `rename-window` does.
     if named {

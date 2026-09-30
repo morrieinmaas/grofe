@@ -1447,13 +1447,13 @@ impl FormatVars for FormatCtx<'_> {
             // codec; there is no native one.
             "window_layout" => return Some(String::new()),
             // ponytail: stubs until the features exist: copy mode (M5),
-            // floating panes (`new-pane`, TC.6), and the status range under
+            // and the status range under
             // the mouse, which only a mouse-bound command sees (TC.10).
             // `session_group` is empty with no groups. `client_tty` needs
             // the tty in the attach hello (FE.2).
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
             | "client_tty" => return Some(String::new()),
-            "pane_in_mode" | "pane_floating_flag" => return Some("0".to_string()),
+            "pane_in_mode" => return Some("0".to_string()),
             _ => {}
         }
         let p = m.panes.get(&self.pane)?;
@@ -1470,7 +1470,8 @@ impl FormatVars for FormatCtx<'_> {
             "window_width" => w.cols.to_string(),
             "window_bell_flag" => flag(w.bell_flag),
             "window_height" => w.rows.to_string(),
-            "window_panes" => w.layout.compute(w.area()).len().to_string(),
+            "window_panes" => w.pane_ids().len().to_string(),
+            "pane_floating_flag" => flag(w.floating(p.id).is_some()),
             "session_windows" => s.windows.len().to_string(),
             "session_created" => s
                 .created
@@ -1494,8 +1495,14 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
-            "pane_left" => pane_origin(w, p.id)?.0.to_string(),
-            "pane_top" => pane_origin(w, p.id)?.1.to_string(),
+            "pane_left" => match w.floating(p.id) {
+                Some(f) => f.x.to_string(),
+                None => pane_origin(w, p.id)?.0.to_string(),
+            },
+            "pane_top" => match w.floating(p.id) {
+                Some(f) => f.y.to_string(),
+                None => pane_origin(w, p.id)?.1.to_string(),
+            },
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),

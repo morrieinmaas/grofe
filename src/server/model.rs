@@ -83,12 +83,41 @@ pub struct Window {
     /// (tmux's `last_panes`, for `last-pane`), kept by
     /// [`Window::set_active`] and [`Window::lose_pane`].
     pub last_panes: Vec<PaneId>,
+    /// Floating panes (tmux 3.7's `new-pane`, TC.6), in creation order:
+    /// panes of the window outside its layout, drawn over it.
+    pub floating: Vec<Floating>,
 }
+
+/// Where a floating pane is: the window cell of its top-left content
+/// cell (its border is drawn around it, and either may be off the
+/// window), its size, and its place in the stack, highest on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Floating {
+    pub pane: PaneId,
+    pub x: i32,
+    pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
+    pub z: u32,
+}
+
+/// Stands in a window's layout once its last tiled pane has gone while
+/// floating panes remain (tmux 3.7b keeps such a window, recorded): no
+/// pane has this id, so nothing is drawn or listed for it.
+pub const HOLE: PaneId = PaneId(u32::MAX);
 
 impl Window {
     /// Makes `pane` the active pane; the one it replaces becomes the most
     /// recent last pane, as tmux's `window_set_active_pane` does.
     pub fn set_active(&mut self, pane: PaneId) {
+        // A floating pane that becomes active comes to the top, as in
+        // tmux 3.7b (recorded: select-pane raises it).
+        let top = self.floating.iter().map(|f| f.z).max().unwrap_or(0);
+        if let Some(f) = self.floating.iter_mut().find(|f| f.pane == pane)
+            && f.z != top
+        {
+            f.z = top + 1;
+        }
         if self.active == pane {
             return;
         }
@@ -133,14 +162,29 @@ impl Window {
         }
     }
 
-    /// Pane ids in layout order: position `i` is pane index
+    /// Pane ids in layout order, then the floating panes in creation
+    /// order, as tmux 3.7b indexes them: position `i` is pane index
     /// `i + pane-base-index`.
     pub fn pane_ids(&self) -> Vec<PaneId> {
+        let mut ids = self.tiled_ids();
+        ids.extend(self.floating.iter().map(|f| f.pane));
+        ids
+    }
+
+    /// The panes in the layout, in layout order: the only ones a layout
+    /// operation (presets, rotation, splits) may touch.
+    pub fn tiled_ids(&self) -> Vec<PaneId> {
         self.layout
             .compute(self.area())
             .into_iter()
             .map(|(id, _)| id)
+            .filter(|id| *id != HOLE)
             .collect()
+    }
+
+    /// `pane`'s place if it is a floating pane of this window.
+    pub fn floating(&self, pane: PaneId) -> Option<&Floating> {
+        self.floating.iter().find(|f| f.pane == pane)
     }
 }
 
@@ -358,6 +402,18 @@ impl Model {
         if order.len() <= 1 {
             return self.remove_window(window_id);
         }
+        if window.floating(pane).is_some() {
+            window.floating.retain(|f| f.pane != pane);
+            window.lose_pane(&order, pane);
+            return self.take_panes(&[pane]);
+        }
+        if window.tiled_ids().len() <= 1 {
+            // Floating panes remain: the window stays, as tmux 3.7b's does.
+            window.zoomed = false;
+            window.layout.replace(pane, HOLE);
+            window.lose_pane(&order, pane);
+            return self.take_panes(&[pane]);
+        }
         window.zoomed = false;
         window.layout.remove(pane);
         window.lose_pane(&order, pane);
@@ -456,7 +512,16 @@ impl Model {
         let Some(w) = self.windows.get(&window) else {
             return;
         };
-        for (id, rect) in w.layout.compute(w.area()) {
+        let floating = w.floating.iter().map(|f| {
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                cols: f.cols,
+                rows: f.rows,
+            };
+            (f.pane, rect)
+        });
+        for (id, rect) in w.layout.compute(w.area()).into_iter().chain(floating) {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
@@ -770,6 +835,7 @@ mod tests {
             rows: 24,
             bell_flag: false,
             last_panes: Vec::new(),
+            floating: Vec::new(),
         });
         model.insert_window(Window {
             id: w2,
@@ -783,6 +849,7 @@ mod tests {
             rows: 24,
             bell_flag: false,
             last_panes: Vec::new(),
+            floating: Vec::new(),
         });
 
         // A second session, owning nothing of "a"'s.
@@ -830,6 +897,7 @@ mod tests {
             rows: 24,
             bell_flag: false,
             last_panes: Vec::new(),
+            floating: Vec::new(),
         };
         assert_eq!(w.last_pane(), None);
         w.set_active(b);
@@ -873,6 +941,7 @@ mod tests {
                 rows: 24,
                 bell_flag: true,
                 last_panes: Vec::new(),
+                floating: Vec::new(),
             });
         }
         let flag = |m: &Model, w| m.windows[&w].bell_flag;
