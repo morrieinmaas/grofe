@@ -431,6 +431,12 @@ impl LayoutTree {
             return;
         }
         self.order.retain(|p| *p != pane);
+        self.remove_at(&path);
+    }
+
+    /// [`Self::remove`] of the leaf at `path` (not the root), without
+    /// touching `order`.
+    fn remove_at(&mut self, path: &[usize]) {
         let idx = path[path.len() - 1];
         let parent_path = &path[..path.len() - 1];
         let Node::Split { dir, children } = node_at_mut(&mut self.root, parent_path) else {
@@ -775,6 +781,12 @@ impl LayoutTree {
     pub fn apply_tmux_layout(&mut self, layout: &str, panes: &[PaneId]) -> Result<(), String> {
         let invalid = || "invalid layout".to_string();
         let mut geometry = parse_tmux_layout(layout).ok_or_else(invalid)?;
+        // A layout from a user's string is bounded as `import` bounds one,
+        // with room for spare cells up to a cap.
+        let mut budget = panes.len().max(MAX_LAYOUT_CELLS);
+        if !bounded(&geometry, 0, &mut budget) {
+            return Err(invalid());
+        }
         let mut count = 0;
         count_cells(&geometry, &mut count);
         if panes.len() > count {
@@ -789,13 +801,22 @@ impl LayoutTree {
         let mut cells = LayoutTree {
             root,
             exact_for: Some((geometry.cols, geometry.rows)),
-            order: (0..count as u32).map(PaneId).collect(),
+            order: Vec::new(),
             last_preset: None,
         };
-        // Cells are numbered in order, so the bottom-right one (tmux's
-        // `layout_find_bottomright`) is the highest left.
-        for cell in (panes.len()..count).rev() {
-            cells.remove(PaneId(cell as u32));
+        // The bottom-right cell is the last child's last child and so on
+        // down (tmux's `layout_find_bottomright`): found in O(depth).
+        for _ in panes.len()..count {
+            let mut path = Vec::new();
+            let mut node = &cells.root;
+            while let Node::Split { children, .. } = node {
+                path.push(children.len() - 1);
+                node = &children[children.len() - 1].node;
+            }
+            if path.is_empty() {
+                break;
+            }
+            cells.remove_at(&path);
         }
         relabel_node(&mut cells.root, &|p: PaneId| {
             panes.get(p.0 as usize).copied().unwrap_or(p)
@@ -950,6 +971,11 @@ fn export_node(node: &Node, rect: Rect) -> LayoutGeometry {
 /// How deep [`LayoutTree::import`] lets cells nest. A tree of `n` panes
 /// is at most `n - 1` splits deep, and no window holds this many panes.
 const IMPORT_MAX_DEPTH: usize = 256;
+
+/// How many cells a tmux layout string may hold past the window's panes
+/// ([`LayoutTree::apply_tmux_layout`]). More cells than this cannot tile
+/// any window a terminal shows.
+const MAX_LAYOUT_CELLS: usize = 4096;
 
 /// Whether `g` nests no deeper than [`IMPORT_MAX_DEPTH`] and holds no more
 /// than `budget` panes, found without going past either bound: every
@@ -1573,7 +1599,8 @@ fn collect_borders(node: &Node, area: Rect, out: &mut Vec<BorderSegment>) {
 // ---- tmux layout strings (spec §4.3) ------------------------------------
 
 /// A floating pane as a tmux layout string lists it: the pane, its
-/// top-left content cell (which may be off the window) and its size.
+/// top-left content cell (which may be off the window), its size and its
+/// place in the stack (highest on top).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FloatingCell {
     pub pane: PaneId,
@@ -1581,25 +1608,44 @@ pub struct FloatingCell {
     pub y: i32,
     pub cols: u16,
     pub rows: u16,
+    pub z: u32,
 }
 
 /// The tmux layout string (`#{window_layout}`) for `tiled` and the
-/// window's floating panes (topmost first), as tmux 3.7b's `layout_dump`:
-/// a four-digit hex checksum, then `WxH,X,Y,<pane>` for a pane,
-/// `WxH,X,Y{...}` for cells side by side, `WxH,X,Y[...]` for stacked ones,
-/// and the floating panes in `<...>`.
-pub fn tmux_layout(tiled: &LayoutGeometry, floating: &[FloatingCell]) -> String {
+/// window's floating panes (in the order they were made), as tmux 3.7b's
+/// `layout_dump`: a four-digit hex checksum, then `WxH,X,Y,<pane>` for a
+/// pane, `WxH,X,Y{...}` for cells side by side, `WxH,X,Y[...]` for
+/// stacked ones, and the floating panes in `<...>`, topmost first.
+///
+/// tmux 3.7b also keeps each floating pane's cell in the root, after the
+/// tiled cells, a lone tiled pane becoming a stack of it and them
+/// (recorded: `80x24,0,0[80x24,0,0,0,20x5,3,4,1]<20x5,3,4,1>`), except
+/// in a zoomed window, which shows the root saved when it zoomed
+/// (`in_root` false).
+// ponytail: tmux then splits a lone tiled pane inside that stack; grofe's
+// root is the split itself, so after a float the string differs there.
+pub fn tmux_layout(tiled: &LayoutGeometry, floating: &[FloatingCell], in_root: bool) -> String {
+    let cell = |f: &FloatingCell| format!("{}x{},{},{},{}", f.cols, f.rows, f.x, f.y, f.pane.0);
     let mut body = String::new();
     append_cell(tiled, &mut body);
-    for (i, f) in floating.iter().enumerate() {
-        body.push(if i == 0 { '<' } else { ',' });
-        body.push_str(&format!(
-            "{}x{},{},{},{}",
-            f.cols, f.rows, f.x, f.y, f.pane.0
-        ));
-    }
     if !floating.is_empty() {
-        body.push('>');
+        let made: Vec<String> = floating.iter().map(cell).collect();
+        let made = made.join(",");
+        body = match &tiled.cell {
+            _ if !in_root => body,
+            GeometryCell::Pane(_) => {
+                let (w, h, x, y) = (tiled.cols, tiled.rows, tiled.x, tiled.y);
+                format!("{w}x{h},{x},{y}[{body},{made}]")
+            }
+            GeometryCell::Split { .. } => {
+                let close = body.pop().unwrap_or(']');
+                format!("{body},{made}{close}")
+            }
+        };
+        let mut stack: Vec<&FloatingCell> = floating.iter().collect();
+        stack.sort_by_key(|f| std::cmp::Reverse(f.z));
+        let stack: Vec<String> = stack.into_iter().map(cell).collect();
+        body.push_str(&format!("<{}>", stack.join(",")));
     }
     format!("{:04x},{body}", tmux_checksum(&body))
 }
@@ -3984,20 +4030,52 @@ mod tests {
     #[test]
     fn a_layout_writes_tmux_s_string() {
         let tree = recorded_tree();
-        assert_eq!(tmux_layout(&tree.export(rect(200, 50)), &[]), RECORDED);
+        assert_eq!(
+            tmux_layout(&tree.export(rect(200, 50)), &[], true),
+            RECORDED
+        );
         let one = LayoutTree::new(PaneId(7));
         let g = one.export(rect(80, 24));
         let sum = tmux_checksum("80x24,0,0,7");
-        assert_eq!(tmux_layout(&g, &[]), format!("{sum:04x},80x24,0,0,7"));
-        let float = FloatingCell {
-            pane: PaneId(9),
+        assert_eq!(tmux_layout(&g, &[], true), format!("{sum:04x},80x24,0,0,7"));
+        let float = |pane, z| FloatingCell {
+            pane: PaneId(pane),
             x: -2,
             y: 3,
             cols: 10,
             rows: 5,
+            z,
         };
-        let s = tmux_layout(&g, &[float]);
-        assert!(s.ends_with(",80x24,0,0,7<10x5,-2,3,9>"), "{s}");
+        let s = tmux_layout(&g, &[float(9, 1)], true);
+        assert!(
+            s.ends_with(",80x24,0,0[80x24,0,0,7,10x5,-2,3,9]<10x5,-2,3,9>"),
+            "{s}"
+        );
+        // `fe_2/layout`'s recorded string, byte for byte.
+        let lone = LayoutTree::new(PaneId(5)).export(rect(200, 50));
+        let recorded = FloatingCell {
+            pane: PaneId(6),
+            x: 3,
+            y: 4,
+            cols: 20,
+            rows: 5,
+            z: 1,
+        };
+        assert_eq!(
+            tmux_layout(&lone, &[recorded], true),
+            "27a7,200x50,0,0[200x50,0,0,5,20x5,3,4,6]<20x5,3,4,6>"
+        );
+        // In the root in the order made, in `<>` topmost first (recorded).
+        let tree = recorded_tree();
+        let s = tmux_layout(
+            &tree.export(rect(200, 50)),
+            &[float(8, 1), float(9, 2)],
+            true,
+        );
+        assert!(
+            s.ends_with(",99x24,101,26,2],10x5,-2,3,8,10x5,-2,3,9}<10x5,-2,3,9,10x5,-2,3,8>"),
+            "{s}"
+        );
     }
 
     #[test]
@@ -4016,7 +4094,7 @@ mod tests {
             .replace(",51,0,3,", ",51,0,6,")
             .replace(",101,0,1,", ",101,0,7,")
             .replace(",101,26,2]", ",101,26,8]");
-        let got = tmux_layout(&tree.export(rect(200, 50)), &[]);
+        let got = tmux_layout(&tree.export(rect(200, 50)), &[], true);
         assert_eq!(got[5..], want[5..]);
         assert_eq!(tree.order, panes);
     }
@@ -4042,7 +4120,10 @@ mod tests {
         let deep = "1x1,0,0[".repeat(300);
         assert!(parse_tmux_layout(&with_sum(&deep)).is_none());
         // Nothing changed.
-        assert_eq!(tmux_layout(&tree.export(rect(200, 50)), &[]), RECORDED);
+        assert_eq!(
+            tmux_layout(&tree.export(rect(200, 50)), &[], true),
+            RECORDED
+        );
     }
 
     /// Fewer panes than cells: the bottom-right cell goes, its room to its
@@ -4055,7 +4136,36 @@ mod tests {
             .unwrap();
         tree.apply_tmux_layout(RECORDED, &[PaneId(0), PaneId(1)])
             .unwrap();
-        let got = tmux_layout(&tree.export(area), &[]);
+        let got = tmux_layout(&tree.export(area), &[], true);
         assert_eq!(&got[5..], "200x50,0,0{50x50,0,0,0,149x50,51,0,1}");
+    }
+
+    /// A string of `n` one-cell panes side by side, checksummed.
+    fn flat_layout(n: usize) -> String {
+        let cells: Vec<String> = (0..n).map(|i| format!("1x1,{},0,{i}", 2 * i)).collect();
+        let body = format!("{}x1,0,0{{{}}}", 2 * n - 1, cells.join(","));
+        format!("{:04x},{body}", tmux_checksum(&body))
+    }
+
+    /// Spare cells go in O(depth) each, and a string past the cell cap is
+    /// refused before any is walked, so a huge layout (from `source-file`)
+    /// cannot stall the actor.
+    #[test]
+    fn a_big_layout_is_quick_and_a_huge_one_refused() {
+        let panes = [PaneId(0), PaneId(1)];
+        let mut tree = LayoutTree::new(PaneId(0));
+        let area = rect(80, 24);
+        tree.split(area, PaneId(0), Dir::Horizontal, PaneId(1), SplitSize::Half)
+            .unwrap();
+        let start = std::time::Instant::now();
+        tree.apply_tmux_layout(&flat_layout(MAX_LAYOUT_CELLS), &panes)
+            .unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        let got = tmux_layout(&tree.export(rect(8191, 1)), &[], true);
+        assert_eq!(&got[5..], "8191x1,0,0{1x1,0,0,0,8189x1,2,0,1}");
+        let start = std::time::Instant::now();
+        let err = tree.apply_tmux_layout(&flat_layout(30000), &panes);
+        assert_eq!(err.unwrap_err(), "invalid layout");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 }

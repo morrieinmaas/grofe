@@ -188,6 +188,9 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
+    /// The log lines of the request now running, logged as its commands
+    /// fire (`clients::log_fired`).
+    pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -464,6 +467,7 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        command_log: Default::default(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -674,8 +678,14 @@ fn handle(state: &mut State, msg: ServerMsg) {
             // Logged as tmux 3.7b logs a client's commands and errors
             // (`show-messages`).
             let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
-            clients::log_commands(state, &who, &ctx, &req.argv);
+            state.command_log = match &parsed {
+                Ok(dispatch::Parsed::Commands(cmds)) => {
+                    clients::plan_command_log(state, &who, &ctx, &req.argv, cmds.len())
+                }
+                _ => Default::default(),
+            };
             let result = dispatch::run_parsed(state, &ctx, parsed);
+            state.command_log.clear();
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
             }
@@ -1081,6 +1091,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        command_log: Default::default(),
         exit: false,
         exit_when_empty: false,
         connections: 0,

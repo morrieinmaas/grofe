@@ -2123,11 +2123,13 @@ impl FormatVars for FormatCtx<'_> {
                 let top: u32 = self.get("pane_top")?.parse().ok()?;
                 (top + u32::from(p.rows)).saturating_sub(1).to_string()
             }
-            // Only a floating pane has a place in the stack: 0 on top.
-            "pane_z" => {
-                let f = w.floating(p.id)?;
-                w.floating.iter().filter(|o| o.z > f.z).count().to_string()
+            // The place in the stack, 0 on top: the floating panes, then
+            // every tiled pane one below them all (tmux's z_index).
+            "pane_z" => match w.floating(p.id) {
+                Some(f) => w.floating.iter().filter(|o| o.z > f.z).count(),
+                None => w.floating.len() + 1,
             }
+            .to_string(),
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
@@ -2159,11 +2161,11 @@ impl FormatVars for FormatCtx<'_> {
     }
 }
 
-/// tmux's `window_layout`: the layout string of the window's tiled panes,
-/// then its floating ones, topmost first.
+/// tmux's `window_layout`: the layout string of the window's tiled and
+/// floating panes (`layout::tmux_layout`).
 fn window_layout(w: &crate::server::model::Window) -> String {
     use crate::server::layout::{FloatingCell, tmux_layout};
-    let mut floating: Vec<FloatingCell> = w
+    let floating: Vec<FloatingCell> = w
         .floating
         .iter()
         .map(|f| FloatingCell {
@@ -2172,10 +2174,10 @@ fn window_layout(w: &crate::server::model::Window) -> String {
             y: f.y,
             cols: f.cols,
             rows: f.rows,
+            z: f.z,
         })
         .collect();
-    floating.sort_by_key(|f| std::cmp::Reverse(w.floating(f.pane).map_or(0, |f| f.z)));
-    tmux_layout(&w.layout.export(w.area()), &floating)
+    tmux_layout(&w.layout.export(w.area()), &floating, !w.zoomed)
 }
 
 /// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in

@@ -84,3 +84,26 @@ $ resize-pane -Z -t main:1.1
 $ display -p -t main:1 '#{window_layout} #{window_zoomed_flag}'
 84be,200x50,0,0{100x50,0,0[100x25,0,0,0,100x24,0,26,3],99x50,101,0[99x10,101,0,4,99x10,101,11,1,99x28,101,22,2]} 1
 ? 0
+$ new-pane -d -t main:2 -x 20 -y 5 -X 3 -Y 4 'sleep 1000'
+? 0
+$ display -p -t main:2 'floating #{window_layout}'
+floating 27a7,200x50,0,0[200x50,0,0,5,20x5,3,4,6]<20x5,3,4,6>
+? 0
+$ resize-pane -Z -t main:1.1
+? 0
+$ new-pane -d -t main:1 -x 10 -y 3 -X 30 -Y 10 'sleep 1000'
+? 0
+$ new-pane -d -t main:1 -x 12 -y 4 -X 40 -Y 2 'sleep 1000'
+? 0
+$ display -p -t main:1 'floating #{window_layout} #{window_zoomed_flag}'
+floating 379e,200x50,0,0{100x50,0,0[100x25,0,0,0,100x24,0,26,3],99x50,101,0[99x10,101,0,4,99x10,101,11,1,99x28,101,22,2],10x3,30,10,7,12x4,40,2,8}<12x4,40,2,8,10x3,30,10,7> 0
+? 0
+$ list-panes -t main:1 -F '#{pane_id} #{pane_floating_flag} #{pane_x},#{pane_y},#{pane_z} #{pane_width}x#{pane_height}'
+%0 0 0,0,3 100x25
+%3 0 0,26,3 100x24
+%4 0 101,0,3 99x10
+%1 0 101,11,3 99x10
+%2 0 101,22,3 99x28
+%7 1 30,10,1 10x3
+%8 1 40,2,0 12x4
+? 0

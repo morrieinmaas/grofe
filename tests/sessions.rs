@@ -419,3 +419,42 @@ fn lists_take_all_session_and_filter_flags() {
     let named = ["list-sessions", "-f", "#{==:#{session_name},b}"];
     assert_eq!(lines(&srv.cmd(&named).expect("ls -f")), ["b: 1 windows"]);
 }
+
+/// FE.2: `show-messages` lists a request's commands as they fire, as tmux
+/// 3.7b logs them: after a failing command the rest never ran, so it is
+/// not listed; the error is.
+#[test]
+fn show_messages_lists_only_the_commands_that_ran() {
+    let srv = TestServer::start();
+    new_session(&srv, "main");
+    let chain = [
+        "display-message",
+        "-p",
+        "a",
+        ";",
+        "has-session",
+        "-t",
+        "nope",
+        ";",
+        "display-message",
+        "-p",
+        "b",
+    ];
+    assert!(srv.cmd(&chain).is_err());
+    let log = srv.cmd(&["show-messages"]).expect("show-messages");
+    let texts: Vec<&str> = log
+        .lines()
+        .filter_map(|l| l.split_once(": ").map(|(_, t)| t))
+        .filter_map(|t| t.split_once(' ').map(|(_, t)| t))
+        .collect();
+    assert_eq!(
+        &texts[..4],
+        [
+            "command: show-messages",
+            "message: can't find session: nope",
+            "command: has-session -t nope",
+            "command: display-message -p a",
+        ],
+        "{log}"
+    );
+}

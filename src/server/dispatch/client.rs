@@ -212,6 +212,8 @@ fn resume(
         match dispatch::run_commands(state, &fctx, cmds) {
             Ok(text) => more.push_str(&text),
             Err(e) => {
+                // What the failing sequence printed first still prints.
+                more.push_str(&std::mem::take(&mut state.failed_out));
                 result = Err(e);
                 break;
             }
@@ -237,7 +239,11 @@ fn resume(
         return;
     }
     hooks::run_pending(state);
-    let result = result.map(|()| more);
+    // A failure keeps what was printed before it, as tmux prints it.
+    let result = match result {
+        Ok(()) => Ok(more),
+        Err(e) => Err((e, more)),
+    };
     let later = state.deferred_reply.take().filter(|_| result.is_ok());
     let hold = hooks::take_reply_hold(state);
     state.events.flush();
@@ -251,7 +257,11 @@ fn resume(
     if later.is_none() && hold.is_none() {
         let _ = tx.send(match result {
             Ok(more) => answer(out + &more),
-            Err(e) => Err(Failure::from(e)),
+            Err((err, more)) => Err(Failure {
+                err,
+                out: out + &more,
+                status: None,
+            }),
         });
         return;
     }
@@ -276,7 +286,11 @@ fn resume(
                     out: out + &more + &f.out + &hooked,
                     ..f
                 }),
-                (Err(e), _) => Err(Failure::from(e)),
+                (Err((err, more)), _) => Err(Failure {
+                    err,
+                    out: out + &more,
+                    status: None,
+                }),
             })
         };
         let answer = tokio::select! {

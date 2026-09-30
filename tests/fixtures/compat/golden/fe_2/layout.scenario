@@ -33,3 +33,11 @@ $ new-window -t main
 $ display -p -t main:2 '#{window_layout}'
 $ resize-pane -Z -t main:1.1
 $ display -p -t main:1 '#{window_layout} #{window_zoomed_flag}'
+# Floating panes: in <> topmost first, and in the root too, as tmux 3.7b.
+$ new-pane -d -t main:2 -x 20 -y 5 -X 3 -Y 4 'sleep 1000'
+$ display -p -t main:2 'floating #{window_layout}'
+$ resize-pane -Z -t main:1.1
+$ new-pane -d -t main:1 -x 10 -y 3 -X 30 -Y 10 'sleep 1000'
+$ new-pane -d -t main:1 -x 12 -y 4 -X 40 -Y 2 'sleep 1000'
+$ display -p -t main:1 'floating #{window_layout} #{window_zoomed_flag}'
+$ list-panes -t main:1 -F '#{pane_id} #{pane_floating_flag} #{pane_x},#{pane_y},#{pane_z} #{pane_width}x#{pane_height}'

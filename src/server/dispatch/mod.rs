@@ -137,6 +137,9 @@ pub(crate) fn run_commands(
     while let Some(cmd) = cmds.next() {
         let answered = state.deferred_reply.is_none();
         let shell = matches!(cmd, Command::RunShell(_));
+        if server::hooks::depth(state) == 1 && !server::hooks::in_hook(state) {
+            clients::log_fired(state);
+        }
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {

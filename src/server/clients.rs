@@ -371,7 +371,10 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         client: Some(id),
         ..req.ctx
     };
-    let name = match &req.tty {
+    // The tty comes from the client: one that is not a device path is
+    // taken as none.
+    let tty = req.tty.filter(|t| usable_tty(t));
+    let name = match &tty {
         Some(tty) if ctx.dialect == crate::protocol::Dialect::Tmux => tty.clone(),
         _ => client_name(id),
     };
@@ -379,7 +382,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         id,
         ClientEntry {
             name,
-            tty: req.tty,
+            tty,
             session,
             ctx,
             size: clamp_size(req.size),
@@ -424,6 +427,15 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         exit,
         suspend,
     })
+}
+
+/// Whether an attach hello's tty can name its client: a path under
+/// `/dev/`, no longer than `PATH_MAX`, with no control characters (it
+/// reaches `list-clients`, the message log and scripts that parse them).
+fn usable_tty(tty: &str) -> bool {
+    tty.starts_with("/dev/")
+        && tty.len() <= libc::PATH_MAX as usize
+        && !tty.chars().any(char::is_control)
 }
 
 /// Everything attach refuses before it changes anything, in tmux's order:
@@ -591,18 +603,33 @@ fn push_message(state: &mut State, line: String) {
     }
 }
 
-/// Logs each command of a CLI request, as tmux 3.7b's
-/// `cmdq_add_message` does (`<client> command: <cmd>`, the command
-/// re-printed with its full name, recorded): `who` is the requesting
-/// client.
-// ponytail: only CLI requests are logged. tmux also logs the commands of
-// bindings (`<client> key <key>: <cmd>`), hooks and sourced files, and
-// names a CLI run from a terminal by its tty.
-pub(crate) fn log_commands(state: &mut State, who: &str, ctx: &ClientCtx, argv: &[String]) {
+/// Plans the log lines of a CLI request's commands, as tmux 3.7b's
+/// `cmdq_add_message` logs each command as it fires (`<client> command:
+/// <cmd>`, re-printed with its full name, recorded): one line per command
+/// of `argv`, with how many native commands it parsed to, so
+/// [`log_fired`] logs it as the first of those runs. `who` is the
+/// requesting client. Empty when the request does not parse, as tmux
+/// fires nothing then, or when its commands cannot be told apart.
+// ponytail: only CLI requests are logged, and not the rest held behind a
+// wait. tmux also logs the commands of bindings (`<client> key <key>:
+// <cmd>`), hooks and sourced files, and names a CLI run from a terminal by
+// its tty.
+pub(crate) fn plan_command_log(
+    state: &State,
+    who: &str,
+    ctx: &ClientCtx,
+    argv: &[String],
+    parsed: usize,
+) -> VecDeque<(usize, Option<String>)> {
+    let mut plan = VecDeque::new();
     if argv.first().is_some_and(|verb| verb.starts_with("__")) {
-        return;
+        return plan;
     }
     for cmd in cmd::parse::split_argv(argv) {
+        let Ok(count) = crate::server::dispatch::parse_split(state, ctx, &cmd).map(|c| c.len())
+        else {
+            return VecDeque::new();
+        };
         let printed = match ctx.dialect {
             crate::protocol::Dialect::Tmux => tmux_print(&cmd),
             crate::protocol::Dialect::Grofe => None,
@@ -614,7 +641,33 @@ pub(crate) fn log_commands(state: &mut State, who: &str, ctx: &ClientCtx, argv: 
                 .collect();
             words.join(" ")
         });
-        push_message(state, format!("{who} command: {printed}"));
+        plan.push_back((count, Some(format!("{who} command: {printed}"))));
+    }
+    if plan.iter().map(|(n, _)| n).sum::<usize>() != parsed {
+        return VecDeque::new();
+    }
+    plan
+}
+
+/// Logs the planned line of the request command whose first native
+/// command is about to run ([`plan_command_log`]), and any before it that
+/// ran as no command at all.
+pub(crate) fn log_fired(state: &mut State) {
+    while let Some((left, line)) = state.command_log.front_mut() {
+        let (left, line) = (std::mem::take(left), line.take());
+        if let Some(line) = line {
+            push_message(state, line);
+        }
+        if left > 1 {
+            if let Some(front) = state.command_log.front_mut() {
+                front.0 = left - 1;
+            }
+            return;
+        }
+        state.command_log.pop_front();
+        if left == 1 {
+            return;
+        }
     }
 }
 
@@ -2310,6 +2363,61 @@ mod tests {
 
     use super::*;
 
+    /// A hello's tty names the client only if it is a device path: else
+    /// it is taken as none and the client is `client-N`.
+    #[tokio::test]
+    async fn only_a_device_path_names_a_client() {
+        assert!(usable_tty("/dev/ttys003"));
+        assert!(usable_tty("/dev/pts/4"));
+        for bad in [
+            "ttys003",
+            "/tmp/x",
+            "/dev/pts/1\n/dev/pts/2",
+            "/dev/\x1b[31mred",
+            &format!("/dev/{}", "a".repeat(libc::PATH_MAX as usize)),
+        ] {
+            assert!(!usable_tty(bad), "{bad:?}");
+        }
+        let mut state = crate::server::test_state();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &[
+                "new-session".to_string(),
+                "-d".to_string(),
+                "-s".to_string(),
+                "main".to_string(),
+            ],
+        )
+        .expect("new-session");
+        let ctx = ClientCtx {
+            dialect: crate::protocol::Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        for (tty, name, kept) in [
+            ("/dev/ttys009", "/dev/ttys009", Some("/dev/ttys009")),
+            ("/dev/tty\x07s", "client-", None),
+        ] {
+            let accepted = attach(
+                &mut state,
+                AttachRequest {
+                    ctx: ctx.clone(),
+                    size: (80, 24),
+                    term: "xterm".to_string(),
+                    caps: Caps::default(),
+                    target: Some("main".to_string()),
+                    detach_others: false,
+                    nest: true,
+                    tty: Some(tty.to_string()),
+                },
+            )
+            .expect("attach");
+            let c = &state.clients[&accepted.id];
+            assert!(c.name.starts_with(name), "{}", c.name);
+            assert_eq!(c.tty.as_deref(), kept);
+        }
+    }
+
     /// As tmux 3.7b's `show-messages` printed them (recorded on `-L
     /// grofe-fe2 -f /dev/null`).
     #[test]
@@ -2346,10 +2454,13 @@ mod tests {
             dialect: crate::protocol::Dialect::Tmux,
             ..crate::server::test_ctx()
         };
-        let argv: Vec<String> = ["splitw", "-h", ";", "has", "-t", "=ma"]
+        let argv: Vec<String> = ["splitw", "-h", ";", "has", "-t", "=ma", ";", "ls"]
             .map(String::from)
             .to_vec();
-        log_commands(&mut state, "client-7", &ctx, &argv);
+        state.command_log = plan_command_log(&state, "client-7", &ctx, &argv, 3);
+        // Two commands fire; the second fails, so the third never does.
+        log_fired(&mut state);
+        log_fired(&mut state);
         log_error(&mut state, "client-7", "can't find session: ma");
         let lines: Vec<&str> = messages(&state).map(|(_, l)| l.as_str()).collect();
         assert_eq!(
@@ -2360,6 +2471,8 @@ mod tests {
                 "client-7 message: can't find session: ma",
             ]
         );
+        // A plan whose parts do not add up to the request logs nothing.
+        assert!(plan_command_log(&state, "c", &ctx, &argv, 4).is_empty());
     }
 
     /// A server state with no sessions and one client, as the actor
