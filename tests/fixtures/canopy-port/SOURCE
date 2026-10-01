@@ -12,7 +12,10 @@ their sources, by:
 
 The two templates are rendered without chezmoi: the lookPath block becomes
 /bin/zsh and {{ .chezmoi.homeDir }} becomes ~. user.conf is athome's text as
-written, quoted source material.
+written, quoted source material. On a machine with no /bin/zsh (a Linux CI
+container) the script's load check and tp_1.rs swap that /bin/zsh for the
+first of zsh and sh that resolves there, since grofe refuses a default-shell
+it cannot run; the copy itself keeps /bin/zsh.
 
 canopy is Apache License 2.0, copyright 2026 morrieinmaas (see
 tests/fixtures/import-tmux/canopy/SOURCE for its NOTICE attribution).

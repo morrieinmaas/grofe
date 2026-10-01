@@ -193,9 +193,30 @@ fn checkouts() -> Option<Checkouts> {
     Some(Checkouts { canopy, athome })
 }
 
+/// The shell athome's `lookPath "zsh"` block stands for in a test:
+/// `/bin/zsh` where it can run, as the fixture copy says, else the first of
+/// zsh and sh on this machine's `PATH` (a Linux CI container has no zsh).
+/// grofe refuses a `default-shell` it cannot run, as tmux does, so the
+/// test must not name one this machine lacks.
+pub fn port_shell() -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let runs = |p: &Path| {
+        fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if runs(Path::new("/bin/zsh")) {
+        return "/bin/zsh".to_string();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    ["zsh", "sh"]
+        .iter()
+        .flat_map(|name| std::env::split_paths(&path).map(move |dir| dir.join(name)))
+        .find(|p| p.is_absolute() && runs(p))
+        .map_or_else(|| "/bin/sh".to_string(), |p| p.display().to_string())
+}
+
 /// athome's `user.toml.tmpl` rendered as `check-canopy-port.sh` renders it
-/// without chezmoi: the lookPath block becomes `/bin/zsh`, the home dir
-/// `~`.
+/// without chezmoi: the lookPath block becomes [`port_shell`], the home
+/// dir `~`.
 fn render_user_toml(template: &str) -> String {
     let block = "{{ with lookPath \"zsh\" -}}\ndefault-shell = \"{{ . }}\"\n{{ end -}}\n";
     assert!(
@@ -203,7 +224,7 @@ fn render_user_toml(template: &str) -> String {
         "user.toml.tmpl's lookPath block moved"
     );
     let text = template
-        .replace(block, "default-shell = \"/bin/zsh\"\n")
+        .replace(block, &format!("default-shell = \"{}\"\n", port_shell()))
         .replace("{{ .chezmoi.homeDir }}", "~");
     assert!(
         !text.contains("{{"),
@@ -530,7 +551,7 @@ fn user_toml_renders_like_check_canopy_port() {
     let template = "a\n{{ with lookPath \"zsh\" -}}\ndefault-shell = \"{{ . }}\"\n{{ end -}}\nb = \"{{ .chezmoi.homeDir }}/x\"\n";
     assert_eq!(
         render_user_toml(template),
-        "a\ndefault-shell = \"/bin/zsh\"\nb = \"~/x\"\n"
+        format!("a\ndefault-shell = \"{}\"\nb = \"~/x\"\n", port_shell())
     );
 }
 

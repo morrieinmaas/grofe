@@ -63,6 +63,14 @@ render "$dots/dot_config/canopy/user.conf.tmpl" >"$tmp/user.conf"
 if grep -n '{{' "$tmp/user.toml" "$tmp/user.conf"; then
   fail "a chezmoi template directive is left unrendered"
 fi
+# The copy says /bin/zsh. grofe refuses a default-shell it cannot run, as
+# tmux does, so where /bin/zsh is missing (a Linux CI container) the load
+# check below names the first of zsh and sh that resolves here instead.
+shell=/bin/zsh
+if [ ! -x "$shell" ]; then
+  shell="$(command -v zsh || command -v sh)"
+fi
+sed "s|^default-shell = \"/bin/zsh\"\$|default-shell = \"$shell\"|" "$tmp/user.toml" >"$tmp/user-here.toml"
 
 # The regenerate: canopy's generator, from the checkout, into a scratch dir.
 clean CANOPY_STORE="$canopy" CANOPY_GROFE="$grofe" sh "$canopy/bin/canopy-grofe" generate --out "$tmp/regen" ||
@@ -75,7 +83,7 @@ fi
 load() {
   local dir="$1" args=(--file "$dots/dot_config/grofe/config.toml") f err
   for f in "$dir"/*.toml; do args+=(--file "$f"); done
-  args+=(--file "$tmp/user.toml")
+  args+=(--file "$tmp/user-here.toml")
   if ! err="$(clean "$grofe" show-config "${args[@]}" 2>&1 >/dev/null)" || [ -n "$err" ]; then
     printf '%s\n' "$err" >&2
     fail "show-config on $dir with athome's config.toml and user.toml"

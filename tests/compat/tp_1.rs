@@ -25,6 +25,7 @@ use grofe::server::input::parse_key;
 use crate::fe_1::grofe_cli;
 use crate::normalize::{Normalizer, fixtures_dir};
 use crate::replay::{parse_scenario, replay};
+use crate::scenarios::port_shell;
 
 fn port_dir() -> PathBuf {
     fixtures_dir()
@@ -53,8 +54,36 @@ fn fragments() -> Vec<PathBuf> {
 fn whole_tree() -> Vec<PathBuf> {
     let mut files = vec![port_dir().join("config.toml")];
     files.extend(fragments());
-    files.push(port_dir().join("user.toml"));
+    files.push(user_toml());
     files
+}
+
+/// The fixture's `user.toml`, its `/bin/zsh` swapped for
+/// [`port_shell`] where this machine has no `/bin/zsh`; written once.
+fn user_toml() -> PathBuf {
+    static RENDERED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    RENDERED
+        .get_or_init(|| {
+            let copy = port_dir().join("user.toml");
+            let shell = port_shell();
+            if shell == "/bin/zsh" {
+                return copy;
+            }
+            let text = fs::read_to_string(&copy).unwrap();
+            let line = "default-shell = \"/bin/zsh\"";
+            assert!(text.contains(line), "user.toml's default-shell moved");
+            let dir =
+                Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("tp_1-{}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            let out = dir.join("user.toml");
+            fs::write(
+                &out,
+                text.replace(line, &format!("default-shell = \"{shell}\"")),
+            )
+            .unwrap();
+            out
+        })
+        .clone()
 }
 
 /// Only the named files: no `~/.config/grofe` of this machine.
