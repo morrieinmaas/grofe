@@ -145,7 +145,7 @@ pub fn place(
         Position::Pane => i64::from(pane.x),
         Position::PaneRight => i64::from(pane.x) + i64::from(pane.cols) - w,
     };
-    if px + w >= cols {
+    if px.saturating_add(w) >= cols {
         px = cols - w;
     } else if px < 0 {
         px = 0;
@@ -156,7 +156,7 @@ pub fn place(
         Position::Pane | Position::PaneRight => i64::from(pane.y) + i64::from(pane.rows),
     };
     py = if py < h { 0 } else { py - h };
-    if py + h >= rows {
+    if py.saturating_add(h) >= rows {
         py = rows - h;
     }
     let clamp = |n: i64| u16::try_from(n.max(0)).unwrap_or(0);
@@ -785,6 +785,9 @@ mod tests {
         assert_eq!(place(big, (20, 5), CLIENT, full()), (40, 10));
         let small = (Position::Cells(3), Position::Cells(8));
         assert_eq!(place(small, (20, 5), CLIENT, full()), (3, 3));
+        // The largest number still lands inside, with no overflow.
+        let huge = (Position::Cells(i64::MAX), Position::Cells(i64::MAX));
+        assert_eq!(place(huge, (20, 5), CLIENT, full()), (40, 10));
     }
 
     #[test]

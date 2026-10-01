@@ -395,7 +395,7 @@ fn place(
         Position::PaneRight => i64::from(pane.x) + i64::from(pane.cols) - w,
         Position::Pointer(x) => i64::from(x) - w / 2,
     };
-    if n + w >= cols {
+    if n.saturating_add(w) >= cols {
         n = cols - w;
     } else if n < 0 {
         n = 0;
@@ -408,7 +408,7 @@ fn place(
         Position::Pointer(y) => i64::from(y) + h,
     };
     n = if n < h { 0 } else { n - h };
-    if n + h >= rows {
+    if n.saturating_add(h) >= rows {
         n = rows - h;
     }
     Some((u16::try_from(px).ok()?, u16::try_from(n.max(0)).ok()?))
@@ -1266,6 +1266,8 @@ mod tests {
         assert_eq!(p(Cells(49), Cells(23), pane0), Some((49, 20)));
         assert_eq!(p(Cells(5), Cells(3), pane0), Some((5, 0)));
         assert_eq!(p(Cells(30), Cells(10), pane0), Some((30, 7)));
+        // The largest number still lands inside, with no overflow.
+        assert_eq!(p(Cells(i64::MAX), Cells(i64::MAX), pane0), Some((71, 21)));
         // 25 rows, 81 columns: the centre rounds as tmux's does.
         assert_eq!(
             place((Centre, Centre), (9, 3), (81, 25), pane0),
