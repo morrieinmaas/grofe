@@ -13,8 +13,7 @@
 //!
 //! As in tmux, a resize clears the selection (`window_copy_size_changed`).
 // ponytail: the `prefix` argument of the copy commands is accepted and
-// ignored (buffers are always named `buffer<N>`), and `set-clipboard`
-// (OSC 52) is TM.5's.
+// ignored (buffers are always named `buffer<N>`).
 
 use super::{Action, Ctx, LineSel, Mode, WHITESPACE};
 use crate::server::State;
@@ -51,6 +50,9 @@ pub struct Copied {
     pub set_paste: bool,
     /// Also goes to the clipboard (no `-C`); TM.5's.
     pub set_clip: bool,
+    /// The command a `copy-pipe` form runs with `data` on stdin (TM.5);
+    /// empty for `copy-command`.
+    pub pipe: Option<String>,
 }
 
 /// The selection state beyond [`Mode`]'s own fields (tmux's
@@ -394,7 +396,11 @@ pub fn highlighted(mode: &Mode, x: usize, y: usize) -> bool {
 
 /// A copy-mode command's flags (any of `allowed`) and positionals, as
 /// tmux's `args_parse`; `None` when they do not fit.
-fn parse<'a>(args: &'a [String], allowed: &str, max: usize) -> Option<(String, &'a [String])> {
+pub(super) fn parse<'a>(
+    args: &'a [String],
+    allowed: &str,
+    max: usize,
+) -> Option<(String, &'a [String])> {
     let mut flags = String::new();
     let mut rest = args;
     while let Some(a) = rest.first() {
@@ -430,6 +436,7 @@ fn queue(mode: &mut Mode, append: bool, set_paste: bool, set_clip: bool) {
             append,
             set_paste,
             set_clip,
+            pipe: None,
         }),
         Ok(None) => {}
         Err(e) => mode.sel.error = Some(e),

@@ -4,7 +4,11 @@
 //!
 //! - OSC 52 clipboard stores (the emulator decodes them into
 //!   `PaneEventKind::Clipboard`), to the session's clients while
-//!   `set-clipboard` is `on` (R14); reads are never forwarded;
+//!   `set-clipboard` is `on` (R14), which also makes each a buffer
+//!   (TM.5); reads are never forwarded or answered, so a pane cannot read
+//!   the clipboard or a buffer;
+//! - every copy-mode copy, as OSC 52 to the clients showing its pane
+//!   while `set-clipboard` is `on` or `external` (TM.5, [`on_copy`]);
 //! - the outer terminal's title (OSC 0), the client's current pane's
 //!   `set-titles-string` expanded, while `set-titles` is on (R15; off,
 //!   tmux's default, sends nothing);
@@ -516,9 +520,14 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             crate::server::alerts::bell(state, window);
             send(state, clients_on(state, session), b"\x07");
         }
+        // As tmux 3.7b's `input_osc_52` (recorded): only under `on`, a
+        // store also makes a buffer; `external` and `off` drop it whole.
         PaneEventKind::Clipboard(text)
-            if state.model.options.lookup("set-clipboard", &[]) == Some("on") =>
+            if state.model.options.lookup("set-clipboard", &[]) == Some("on")
+                && text.len() <= MAX_PANE_STORE =>
         {
+            let limit = crate::server::buffers::limit(state);
+            let _ = state.buffers.add(text.as_bytes().to_vec(), limit);
             send(state, clients_on(state, session), &osc52(&text));
         }
         PaneEventKind::Title(title) => {
@@ -728,6 +737,56 @@ pub(crate) fn osc52(text: &str) -> Vec<u8> {
     format!("\x1b]52;c;{data}\x07").into_bytes()
 }
 
+/// The largest pane OSC 52 store acted on: what tmux's default
+/// `input-buffer-size` (1 MiB of sequence) decodes to. tmux drops a
+/// longer sequence whole.
+const MAX_PANE_STORE: usize = (1 << 20) / 4 * 3;
+
+/// The largest copy sent to the clients as OSC 52.
+// ponytail: tmux sends a copy of any size; grofe sends at most 8 MiB,
+// which encodes to under half a client's raw-output cap (16 MiB).
+const MAX_COPY_CLIP: usize = 8 << 20;
+
+/// OSC 52 for a copy, as tmux 3.7b's `window_copy_copy_buffer` sends it
+/// (recorded): an empty selection parameter, so the terminal picks.
+fn copy_osc52(data: &[u8]) -> Vec<u8> {
+    let data = base64::engine::general_purpose::STANDARD.encode(data);
+    format!("\x1b]52;;{data}\x07").into_bytes()
+}
+
+/// A copy-mode command in `pane` made `copied` (TM.5): under
+/// `set-clipboard` `on` or `external`, each that goes to the clipboard (no
+/// `-C`, not empty, at most [`MAX_COPY_CLIP`]) is sent as OSC 52 to the
+/// clients showing the pane's window, as tmux's `tty_write` picks them.
+// ponytail: encoded on the actor, so copies reach the terminal in order;
+// an 8 MiB copy costs milliseconds there, as extracting it already did.
+pub fn on_copy(state: &mut State, pane: PaneId, copied: &[crate::server::copy::select::Copied]) {
+    if state.model.options.lookup("set-clipboard", &[]) == Some("off") {
+        return;
+    }
+    let Some(window) = state.model.panes.get(&pane).map(|p| p.window) else {
+        return;
+    };
+    let to: Vec<ClientId> = state
+        .clients
+        .iter()
+        .filter(|(_, c)| {
+            state
+                .model
+                .sessions
+                .get(&c.session)
+                .is_some_and(|s| s.active == window)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for c in copied {
+        if !c.set_clip || c.data.is_empty() || c.data.len() > MAX_COPY_CLIP || to.is_empty() {
+            continue;
+        }
+        send(state, to.clone(), &copy_osc52(&c.data));
+    }
+}
+
 /// OSC 0 setting the outer terminal's title (R15, tmux's own choice:
 /// `tsl`/`fsl`), control characters dropped.
 fn osc0(title: &str) -> Vec<u8> {
@@ -920,6 +979,9 @@ mod tests {
     #[test]
     fn relayed_sequences() {
         assert_eq!(osc52("hello\n"), b"\x1b]52;c;aGVsbG8K\x07");
+        assert_eq!(copy_osc52(b"hello\n"), b"\x1b]52;;aGVsbG8K\x07");
+        // The largest pane store is 1 MiB of sequence once encoded.
+        assert_eq!(MAX_PANE_STORE.div_ceil(3) * 4, 1 << 20);
         assert_eq!(osc0("a\x1bb\x07c"), b"\x1b]0;abc\x07");
         assert_eq!(osc(b"9;a\x01b"), b"\x1b]9;ab\x07");
     }

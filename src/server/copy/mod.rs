@@ -1856,6 +1856,7 @@ fn command_now(state: &mut State, pane: PaneId, args: &[String]) -> Result<(), S
     let vi = vi_keys(state, pane);
     let seps = separators(state, pane);
     resize_to_pane(state, pane);
+    let args = &pipe::expand(state, pane, args);
     if args.first().map(String::as_str) == Some("refresh-from-pane") {
         if positionals(&args[1..], 0, 0).is_some() {
             refresh(state, pane);
@@ -1876,6 +1877,8 @@ fn command_now(state: &mut State, pane: PaneId, args: &[String]) -> Result<(), S
     if action == Action::Cancel {
         state.copy.remove(pane);
     }
+    pipe::run_pipes(state, pane, &copied);
+    crate::server::passthrough::on_copy(state, pane, &copied);
     select::store(state, copied)?;
     error.map_or(Ok(()), Err)
 }
