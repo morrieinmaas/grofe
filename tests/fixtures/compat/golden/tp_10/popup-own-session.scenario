@@ -1,0 +1,22 @@
+# TP.10, the coordinator's ruling: a popup whose command attaches to the
+# session of the client it is on. tmux 3.7b attaches (its nesting check
+# refuses only a client on one of its panes' terminals), so the popup
+# shows main inside itself: main's window shrinks to the popup's size and
+# the outer client shows it in the letterbox. It does not hang or
+# recurse; prefix d inside detaches the nested client, the popup closes
+# and the window takes the client's size again. The status line is off.
+$ new-session -d -s main -n first -x 60 -y 20 cat
+$ set -g status off
+client 60x20 attach -t main
+keys zz00
+screen zz00
+$& display-popup -c {client} -E 'tmux attach-session -t main'
+screen ┘
+$ list-clients -F '#{session_name} #{client_width}x#{client_height}'
+$ display -p -t main '#{window_width}x#{window_height}'
+keys C-b d
+# Waits until only the outer client is left (at most 10 s).
+$ run-shell 'i=0; until [ "$(tmux list-clients | wc -l)" -eq 1 ]; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
+screen
+$ list-clients -F '#{session_name} #{client_width}x#{client_height}'
+$ display -p -t main '#{window_width}x#{window_height}'

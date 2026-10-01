@@ -202,23 +202,18 @@ fn show_options_match_their_golden() {
 
 const SHOW_GAPS: &[(&str, &str)] = &[];
 
-/// Case 4: each of the twelve hooks fires once, its output where tmux
+/// Case 4: each of the twelve hooks fires once (and `alert-bell`, since
+/// TP.10, is set as tmux sets it), its output where tmux
 /// puts it against its command's reply.
 #[test]
 fn hooks_match_their_golden() {
     check("hooks", HOOK_GAPS, same);
 }
 
-const HOOK_GAPS: &[(&str, &str)] = &[
-    (
-        "$ set-hook -g alert-bell 'display x'",
-        "refused on purpose: grofe has no event for this tmux hook (spec 4.5 names twelve)",
-    ),
-    (
-        "$ set-hook after-select-pane 'display x'",
-        "refused on purpose: grofe's hooks are global only (TC.5)",
-    ),
-];
+const HOOK_GAPS: &[(&str, &str)] = &[(
+    "$ set-hook after-select-pane 'display x'",
+    "refused on purpose: grofe's hooks are global only (TC.5)",
+)];
 
 /// Case 7: a hook whose command uses tmux-only forms runs them when it
 /// fires.

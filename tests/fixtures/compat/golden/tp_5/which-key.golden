@@ -1,0 +1,210 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -d -t main:2 -n second cat
+? 0
+$ select-window -t main:2
+? 0
+$ select-window -t main:1
+? 0
+$ set -g status-right ''
+? 0
+$ set -g @tmux-which-key-disable-autobuild 1
+? 0
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-which-key "$HOME/wk"'
+? 0
+$ run-shell '"$HOME/wk/plugin.sh.tmux" >/dev/null 2>&1'
+? 0
+$ list-keys -T prefix Space
+? 0
+$ show -gv @wk_menu_root
+Run "space" command-prompt "Last window" "tab" last-window "Last pane" "`" last-pane Copy "c" "show-wk-menu #{@wk_menu_copy}" "" "+Windows" "w" "show-wk-menu #{@wk_menu_windows}" "+Panes" "p" "show-wk-menu #{@wk_menu_panes}" "+Buffers" "b" "show-wk-menu #{@wk_menu_buffers}" "+Sessions" "s" "show-wk-menu #{@wk_menu_sessions}" "+Client" "C" "show-wk-menu #{@wk_menu_client}" "" Time "T" clock-mode "Show messages" "\~" show-messages "+Keys" "?" "list-keys -N"
+? 0
+client 80x24 attach -t main
+keys C-b Space
+screen +Windows
+|
+|
+|
+|
+|
+|
+|
+|                                                            ┌───────tmux────────┐
+|                                                            │ Run       (Space) │
+|                                                            │ Last window (Tab) │
+|                                                            │ Last pane     (`) │
+|                                                            │ Copy          (c) │
+|                                                            ├───────────────────┤
+|                                                            │ +Windows      (w) │
+|                                                            │ +Panes        (p) │
+|                                                            │ +Buffers      (b) │
+|                                                            │ +Sessions     (s) │
+|                                                            │ +Client       (C) │
+|                                                            ├───────────────────┤
+|                                                            │ Time          (T) │
+|                                                            │ Show messages (~) │
+|                                                            │ +Keys         (?) │
+|                                                            └───────────────────┘
+| [main] 1:first* 2:second-
+keys q
+keys zz00
+screen zz00
+| zz00
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second-
+keys C-b Space
+screen +Windows
+| zz00
+|
+|
+|
+|
+|
+|
+|                                                            ┌───────tmux────────┐
+|                                                            │ Run       (Space) │
+|                                                            │ Last window (Tab) │
+|                                                            │ Last pane     (`) │
+|                                                            │ Copy          (c) │
+|                                                            ├───────────────────┤
+|                                                            │ +Windows      (w) │
+|                                                            │ +Panes        (p) │
+|                                                            │ +Buffers      (b) │
+|                                                            │ +Sessions     (s) │
+|                                                            │ +Client       (C) │
+|                                                            ├───────────────────┤
+|                                                            │ Time          (T) │
+|                                                            │ Show messages (~) │
+|                                                            │ +Keys         (?) │
+|                                                            └───────────────────┘
+| [main] 1:first* 2:second-
+keys w
+screen +Layout
+| zz00
+|
+|
+|
+|
+|
+|
+|                                                         ┌─────────tmux─────────┐
+|                                                         │ Last           (Tab) │
+|                                                         │ Choose           (w) │
+|                                                         │ Previous         (p) │
+|                                                         │ Next             (n) │
+|                                                         │ New              (c) │
+|                                                         ├──────────────────────┤
+|                                                         │ +Layout          (l) │
+|                                                         │ Split horizontal (/) │
+|                                                         │ Split vertical   (-) │
+|                                                         │ Rotate           (o) │
+|                                                         │ Rotate reverse   (O) │
+|                                                         ├──────────────────────┤
+|                                                         │ Rename           (R) │
+|                                                         │ Kill             (X) │
+|                                                         └──────────────────────┘
+| [main] 1:first* 2:second-
+keys q
+keys zz11
+screen zz00zz11
+| zz00zz11
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second-
+keys C-b Space
+screen +Windows
+| zz00zz11
+|
+|
+|
+|
+|
+|
+|                                                            ┌───────tmux────────┐
+|                                                            │ Run       (Space) │
+|                                                            │ Last window (Tab) │
+|                                                            │ Last pane     (`) │
+|                                                            │ Copy          (c) │
+|                                                            ├───────────────────┤
+|                                                            │ +Windows      (w) │
+|                                                            │ +Panes        (p) │
+|                                                            │ +Buffers      (b) │
+|                                                            │ +Sessions     (s) │
+|                                                            │ +Client       (C) │
+|                                                            ├───────────────────┤
+|                                                            │ Time          (T) │
+|                                                            │ Show messages (~) │
+|                                                            │ +Keys         (?) │
+|                                                            └───────────────────┘
+| [main] 1:first* 2:second-
+keys Tab
+keys zz22
+screen zz22
+| zz22
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first- 2:second*
+$ display -p -t main '#{window_index} #{window_name}'
+2 second
+? 0

@@ -130,6 +130,42 @@ for f in "$fixtures"/conf.d/*.toml; do
   fi
 done
 
+# The vendored plugins the M3.7 compat checks run (tests/compat/tp_*.rs):
+# of each tree, the files its entry point runs, byte for byte and with
+# their modes, and its license. Files plugins/LOCAL names are written by
+# the plugin itself and are left out.
+plugins=(tmux-which-key tmux-claude-session-manager tmux-sensible tmux-sessionx)
+plugin_files() {
+  local local_files
+  local_files="$(awk -v n="$2" 'NF > 0 && substr($1, 1, 1) != "#" && $1 == n { print $2 }' \
+    "$canopy/plugins/LOCAL")"
+  (cd "$1" && find . -type f \( -name '*.tmux' -o -name 'LICENSE*' -o -name config.example.yaml \
+    -o -path './scripts/*' -o -path './plugin/*' \) | sed 's|^\./||' | LC_ALL=C sort) |
+    grep -vxF "${local_files:-/}" || true
+}
+for name in "${plugins[@]}"; do
+  src="$canopy/plugins/$name" dst="$fixtures/plugins/$name"
+  want="$(plugin_files "$src" "$name")"
+  if [ "$update" -eq 1 ]; then
+    rm -rf "$dst"
+    while IFS= read -r f; do
+      mkdir -p "$dst/$(dirname "$f")"
+      cp -p "$src/$f" "$dst/$f"
+    done <<<"$want"
+    continue
+  fi
+  if [ ! -d "$dst" ] || [ "$(plugin_files "$dst" "$name")" != "$want" ]; then
+    fail "tests/fixtures/canopy-port/plugins/$name holds other files than canopy's (rerun with --update)"
+    continue
+  fi
+  while IFS= read -r f; do
+    if ! cmp -s "$src/$f" "$dst/$f" || { [ -x "$src/$f" ] && [ ! -x "$dst/$f" ]; } ||
+      { [ ! -x "$src/$f" ] && [ -x "$dst/$f" ]; }; then
+      fail "tests/fixtures/canopy-port/plugins/$name/$f differs from $src/$f (rerun with --update)"
+    fi
+  done <<<"$want"
+done
+
 # The canopy store the plugin checks (tests/acceptance/plugin_rig.rs) run
 # plugins from: the loader, the save and restore strategies with the
 # libraries they source, and each plugin's runtime files (its entry point,

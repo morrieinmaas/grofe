@@ -263,7 +263,7 @@ fn read_only_commands_do_not_redraw_clients() {
         &["has-session", "-t", "main"],
         &["display-message", "-p", "-t", "main", "#{window_name}"],
         &["capture-pane", "-p", "-t", "main"],
-        &["__attach-check", "-t", "main"],
+        &["__attach-check", "", "-t", "main"],
     ];
     for argv in reads {
         control

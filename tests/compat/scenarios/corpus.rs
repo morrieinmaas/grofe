@@ -12,8 +12,8 @@
 //! it. A CLI line is sent as its argv, without the corpus's own `-L`, `-S`
 //! or `-f` (they name other servers); a config line (`static-conf`,
 //! `container-stored`) is split as the config language splits it and each
-//! command is sent as one request, `\;` kept literal, since grofe's
-//! `source-file` reads grofe's TOML and not a tmux config. A request still
+//! command is sent as one request, `\;` kept literal, so each line's reply
+//! is read on its own (a sourced file answers once for all). A request still
 //! running after [`BLOCK`] was accepted and is waiting (a popup, a menu,
 //! `wait-for`, an attach), and is killed.
 

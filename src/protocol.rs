@@ -13,8 +13,8 @@
 //! stream and must not be dropped.
 //!
 //! **Attach check.** Before it touches the terminal, `grofe attach` sends
-//! [`ATTACH_CHECK`] with its `attach-session` arguments as a control
-//! request: the server resolves the target and refuses self-nesting as the
+//! [`ATTACH_CHECK`] with its terminal and its `attach-session` arguments as
+//! a control request: the server resolves the target and refuses self-nesting as the
 //! attach hello would, without changing anything. Only on an `Ok` does the
 //! client probe the terminal and send the hello, so a bad target never
 //! costs a probe (tmux resolves the target before it opens the terminal).
@@ -178,8 +178,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// carries no request id of its own). See the module docs for the handshake.
 pub const HELLO_REPLY_ID: u64 = 0;
 
-/// The control verb of the attach check (module docs): `argv[1..]` are
-/// `attach-session`'s arguments.
+/// The control verb of the attach check (module docs): `argv[1]` is the
+/// client's terminal (`ttyname` of its stdin, empty without one), the
+/// rest `attach-session`'s arguments.
 pub const ATTACH_CHECK: &str = "__attach-check";
 
 /// Which side of a version mismatch needs to upgrade.

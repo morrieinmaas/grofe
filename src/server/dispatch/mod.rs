@@ -174,7 +174,11 @@ pub(crate) fn run_commands(
             let rest: Vec<Command> = cmds.collect();
             let held = state.held.get_or_insert_default();
             if !rest.is_empty() {
-                held.frames.push((ctx.clone(), rest));
+                held.frames.push(client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds: rest,
+                    keep_going: false,
+                });
             }
             break;
         }
@@ -263,9 +267,13 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // A status source a `#(cmd)` registered stops once no option
         // reads it any more (FE.3).
-        Command::SetOption(_) => {
-            let out = options::run(state, ctx, cmd);
+        Command::SetOption(c) => {
+            let silence = c.name == "monitor-silence";
+            let out = options::run(state, ctx, Command::SetOption(c));
             server::sources::prune_unreferenced(state);
+            if silence && out.is_ok() {
+                server::alerts::silence_option_set(state);
+            }
             out
         }
         Command::ShowOptions(_)
@@ -494,7 +502,7 @@ mod tests {
             &["has-session", "-t", "main"],
             &["display-message", "-p", "#{window_name}"],
             &["capture-pane", "-p"],
-            &[ATTACH_CHECK, "-t", "main"],
+            &[ATTACH_CHECK, "", "-t", "main"],
         ] {
             assert!(read_only(&argv(words)), "{words:?}");
         }

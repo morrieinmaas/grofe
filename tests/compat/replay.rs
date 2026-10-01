@@ -31,6 +31,12 @@
 //!   `idx:<n>` or `rgb:<rr>/<gg>/<bb>`, so no digit run is long enough for
 //!   the pid rule to read. A blank's foreground, bold, dim and italic are
 //!   left out, since they draw nothing.
+//! - `keys <key>...`: type keys on the client's pty, as a person would, by
+//!   tmux key name: `C-<c>`, `Space`, `Escape`, `Enter`, `Tab`, `BSpace`,
+//!   or a word typed as it is, then wait a moment, so an `Escape` is not
+//!   read as Meta with the next step's key. Recorded as the `keys` line
+//!   only; follow it with `screen <text>` to see what the keys did, and
+//!   before typing into a menu a key opened.
 //!
 //! In `$`, `$&` and `client` args, `{client}` expands to the client's tty
 //! (for `-c`) and `{fixtures}` to `tests/fixtures/compat` (for `source-file`).
@@ -63,6 +69,10 @@ const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A client's screen counts as settled after this long without output.
 const SCREEN_QUIET: Duration = Duration::from_millis(500);
+
+/// How long a `keys` step waits after typing: well past the recorder's
+/// escape-time (25 ms, `tmux-defaults.conf`).
+const KEYS_PAUSE: Duration = Duration::from_millis(200);
 
 /// How to run one command against the server under test.
 #[derive(Debug, Clone)]
@@ -251,6 +261,17 @@ pub fn replay(cli: &Cli, steps: &[Step]) -> Transcript {
                     out.push_str(&format!("~ {run}\n"));
                 }
             }
+            Step::Keys { line, bytes } => {
+                let client = live
+                    .client
+                    .as_mut()
+                    .expect("keys needs a client step first");
+                client.type_bytes(bytes);
+                // Past any escape-time, so a key in the next step is not
+                // read as Meta with an Escape here.
+                thread::sleep(KEYS_PAUSE);
+                out.push_str(&format!("{line}\n"));
+            }
             Step::Screen { until } => {
                 let client = live
                     .client
@@ -318,6 +339,30 @@ pub enum Step {
         last: u16,
         until: Option<String>,
     },
+    Keys {
+        line: String,
+        bytes: Vec<u8>,
+    },
+}
+
+/// The bytes a terminal sends for `keys`'s words (tmux key names).
+fn key_bytes(words: &[String]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    for word in words {
+        match word.as_str() {
+            "Space" => out.push(b' '),
+            "Escape" => out.push(0x1b),
+            "Enter" => out.push(b'\r'),
+            "Tab" => out.push(b'\t'),
+            "BSpace" => out.push(0x7f),
+            w => match w.strip_prefix("C-").map(str::as_bytes) {
+                Some([c]) if c.is_ascii_alphabetic() => out.push(c.to_ascii_lowercase() - b'a' + 1),
+                Some(_) => return Err(format!("no control key {w:?}")),
+                None => out.extend_from_slice(w.as_bytes()),
+            },
+        }
+    }
+    Ok(out)
 }
 
 pub fn parse_scenario(text: &str) -> Result<Vec<Step>, String> {
@@ -365,6 +410,12 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, String> {
                 .filter(|(a, b)| a <= b)
                 .ok_or_else(|| at(format!("bad rows {rows:?}, want <first>-<last>")))?;
             steps.push(Step::Styles { first, last, until });
+        } else if let Some(rest) = line.strip_prefix("keys ") {
+            let bytes = key_bytes(&split_words(rest).map_err(at)?).map_err(at)?;
+            steps.push(Step::Keys {
+                line: line.to_string(),
+                bytes,
+            });
         } else if line == "screen" {
             steps.push(Step::Screen { until: None });
         } else if let Some(text) = line.strip_prefix("screen ") {
@@ -471,6 +522,7 @@ fn username() -> String {
 struct PtyClient {
     child: Child,
     tty: PathBuf,
+    input: File,
     output: Arc<Mutex<(Vec<u8>, Instant)>>,
     cols: u16,
     rows: u16,
@@ -506,6 +558,7 @@ impl PtyClient {
         let output = Arc::new(Mutex::new((Vec::new(), Instant::now())));
         let sink = Arc::clone(&output);
         let mut master = File::from(pty.master);
+        let input = master.try_clone().expect("dup pty master");
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             while let Ok(n) = master.read(&mut buf) {
@@ -520,10 +573,17 @@ impl PtyClient {
         PtyClient {
             child,
             tty,
+            input,
             output,
             cols,
             rows,
         }
+    }
+
+    /// Type `bytes` on the client's terminal.
+    fn type_bytes(&mut self, bytes: &[u8]) {
+        use std::io::Write;
+        self.input.write_all(bytes).expect("write to the pty");
     }
 
     /// Wait until the screen shows `until` (if given) and [`SCREEN_QUIET`]

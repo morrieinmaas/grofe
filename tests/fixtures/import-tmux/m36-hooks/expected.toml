@@ -8,3 +8,5 @@ window-created = "select-layout even-horizontal"
 pane-focused = 'display-message "#{session_name}:#{window_index}"'
 # ~/.tmux.conf:4
 pane-died = "respawn-pane -k"
+# ~/.tmux.conf:8
+alert-bell = "display-message bell"

@@ -501,8 +501,10 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
             if !err.is_empty() {
                 eprintln!("{}", err.trim_end_matches('\n'));
             }
-            let status = status.and_then(|s| u8::try_from(s).ok()).unwrap_or(1);
-            ExitCode::from(status.max(1))
+            // An error with status 0 is one a later `run-shell` cleared
+            // (tmux 3.7b prints it and exits 0); with none, 1.
+            let status = status.map_or(1, |s| u8::try_from(s).unwrap_or(1));
+            ExitCode::from(status)
         }
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
@@ -570,7 +572,11 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
     };
     // The target first (protocol::ATTACH_CHECK): a refusal never probes
     // the terminal.
-    let check: Vec<String> = std::iter::once(ATTACH_CHECK.to_string())
+    let tty = nix::unistd::ttyname(std::io::stdin())
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let check: Vec<String> = [ATTACH_CHECK.to_string(), tty]
+        .into_iter()
         .chain(argv[1..].iter().cloned())
         .collect();
     match connect_attach().and_then(|s| request(s, socket, &check)) {

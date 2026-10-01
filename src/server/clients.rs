@@ -356,7 +356,13 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
-    check_target(&state.model, &target, &req.ctx, req.nest)?;
+    check_target(
+        &state.model,
+        &target,
+        &req.ctx,
+        req.nest,
+        req.tty.as_deref(),
+    )?;
     let session = select_target(&mut state.model, &target, &req.ctx)?;
     if req.detach_others {
         detach_session(state, session, None);
@@ -441,11 +447,20 @@ fn usable_tty(tty: &str) -> bool {
 /// Everything attach refuses before it changes anything, in tmux's order:
 /// no sessions, then the target (session, window, pane), then self-nesting
 /// without `--nest`.
+///
+/// Self-nesting is two rules. In the tmux dialect it is tmux 3.7b's
+/// `server_client_check_nested` (recorded): a client with `$TMUX` set
+/// whose terminal `tty` is one of this server's panes' is refused, to any
+/// session; any other client attaches, so a popup's `tmux attach -t` to
+/// the popup's own session shows it nested in the popup (TP.10). grofe's
+/// own rule stays TC.1's: from a pane, its own session is refused and
+/// another is allowed.
 fn check_target(
     model: &Model,
     target: &Target,
     ctx: &ClientCtx,
     nest: bool,
+    tty: Option<&str>,
 ) -> Result<SessionId, String> {
     if model.sessions.is_empty() {
         return Err("no sessions".to_string());
@@ -457,14 +472,24 @@ fn check_target(
     if let Target::Pane(_) = target {
         model.resolve_pane(target, ctx)?;
     }
+    if !nest && ctx.dialect == crate::protocol::Dialect::Tmux {
+        let tmux_set = ctx.env.iter().any(|(k, v)| k == "TMUX" && !v.is_empty());
+        let on_a_pane = tty.filter(|t| !t.is_empty()).is_some_and(|t| {
+            model
+                .panes
+                .values()
+                .any(|p| p.handle.tty_path() == Some(std::path::Path::new(t)))
+        });
+        if tmux_set && on_a_pane {
+            return Err(crate::compat::TMUX_NESTED.to_string());
+        }
+        return Ok(session);
+    }
     if !nest
         && let Some(pane) = ctx.pane
         && let Some(p) = model.panes.get(&pane)
         && model.windows.get(&p.window).map(|w| w.session) == Some(session)
     {
-        if ctx.dialect == crate::protocol::Dialect::Tmux {
-            return Err(crate::compat::TMUX_NESTED.to_string());
-        }
         return Err(format!(
             "refusing to attach session {} from inside itself (use --nest to force)",
             model.sessions[&session].name
@@ -473,10 +498,13 @@ fn check_target(
     Ok(session)
 }
 
-/// The attach check (`protocol::ATTACH_CHECK`): `args` are
-/// `attach-session`'s, checked as the attach hello will be, changing
-/// nothing.
+/// The attach check (`protocol::ATTACH_CHECK`): `args` are the client's
+/// terminal, then `attach-session`'s arguments, checked as the attach
+/// hello will be, changing nothing.
 pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<String, String> {
+    let (tty, args) = args
+        .split_first()
+        .map_or(("", args), |(t, a)| (t.as_str(), a));
     let argv: Vec<String> = std::iter::once("attach-session".to_string())
         .chain(args.iter().cloned())
         .collect();
@@ -484,7 +512,7 @@ pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<S
     let parsed = crate::compat::parse_split(ctx, &argv)?;
     match parsed.into_iter().next() {
         Some(cmd::Command::AttachSession(c)) => {
-            check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
+            check_target(&state.model, &c.target, ctx, c.nest, Some(tty)).map(|_| String::new())
         }
         _ => Err("attach-session: unexpected command".to_string()),
     }
@@ -1147,6 +1175,7 @@ pub fn wake(state: &mut State) {
         .filter(|p| p.handle.take_dirty())
         .map(|p| p.id)
         .collect();
+    crate::server::alerts::output(state, &dirty);
     if dirty.is_empty() || state.clients.is_empty() {
         return;
     }
@@ -2278,7 +2307,7 @@ pub fn attach_session(
 ) -> Result<String, String> {
     let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) else {
         // tmux resolves the target before it finds there is no terminal.
-        check_target(&state.model, &c.target, ctx, c.nest)?;
+        check_target(&state.model, &c.target, ctx, c.nest, None)?;
         return Err("open terminal failed: not a terminal".to_string());
     };
     let session = select_target(&mut state.model, &c.target, ctx)?;

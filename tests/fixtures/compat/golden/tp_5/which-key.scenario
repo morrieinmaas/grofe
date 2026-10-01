@@ -1,0 +1,40 @@
+# TP.5: tmux-which-key's own script, unchanged (canopy's vendored copy),
+# loaded as canopy's loader loads it: the option canopy's plugin layer sets
+# first, then a run-shell of the entry point with its output discarded.
+# The plugin copies itself into its own tree on load, so it runs from a
+# copy in $HOME. prefix Space opens its menu, q closes it, a group item
+# opens that group's menu in its place, and a leaf item runs its command.
+# Typing zz00 after a menu closes shows the keys reach the pane again (no
+# menu item answers to z or 0). q, not Escape: in this container tmux
+# 3.7b holds a lone Escape typed on the pty and reads it as Meta with the
+# next key, so tp_5.rs presses Escape on grofe itself, against what tmux
+# 3.7b does on a private socket outside the container.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -d -t main:2 -n second cat
+$ select-window -t main:2
+$ select-window -t main:1
+$ set -g status-right ''
+$ set -g @tmux-which-key-disable-autobuild 1
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-which-key "$HOME/wk"'
+$ run-shell '"$HOME/wk/plugin.sh.tmux" >/dev/null 2>&1'
+$ list-keys -T prefix Space
+$ show -gv @wk_menu_root
+client 80x24 attach -t main
+keys C-b Space
+screen +Windows
+keys q
+keys zz00
+screen zz00
+keys C-b Space
+screen +Windows
+keys w
+screen +Layout
+keys q
+keys zz11
+screen zz00zz11
+keys C-b Space
+screen +Windows
+keys Tab
+keys zz22
+screen zz22
+$ display -p -t main '#{window_index} #{window_name}'

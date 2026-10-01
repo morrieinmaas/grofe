@@ -1,0 +1,13 @@
+# TP.10: the edge tmux 3.7b draws round a window smaller than its client
+# (what the outer client shows while a popup attaches to its own session):
+# `│` down the right, `─` along the foot, `┘` at the corner and `┴` where
+# a pane border meets it, the letterbox beyond. The status line is off.
+$ new-session -d -s main -n first -x 40 -y 12 cat
+$ set -g status off
+client 40x12 attach -t main
+$ resize-window -t main -x 30 -y 8
+screen ┘
+$ split-window -h -t main cat
+screen ┴
+$ split-window -v -t main cat
+screen ┤

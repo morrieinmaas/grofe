@@ -83,6 +83,7 @@ const SHORT_FORMS: &[(char, &str)] = &[
 /// The modifier prefixes grofe's expander knows (TC.3), longest first.
 const NATIVE_MODIFIERS: &[&str] = &[
     "?", "==:", "!=:", ">=:", ">:", "<=:", "<:", "&&:", "||:", "!!:", "!:", "m:", "m/", "b:", "t:",
+    "q:",
 ];
 
 /// `fmt`, a tmux format, in grofe's format language, with the status
@@ -1044,7 +1045,7 @@ mod tests {
     }
 
     #[test]
-    fn the_twelve_hooks_map_onto_grofe_events() {
+    fn the_fifteen_hooks_map_onto_grofe_events() {
         for tmux in [
             "after-select-pane",
             "after-select-window",
@@ -1058,13 +1059,16 @@ mod tests {
             "session-closed",
             "pane-exited",
             "pane-died",
+            "alert-bell",
+            "alert-activity",
+            "alert-silence",
         ] {
             let event = hook_event(tmux).unwrap();
             assert!(crate::server::hooks::event(event).is_some(), "{tmux}");
         }
         assert_eq!(hook_event("nope").unwrap_err().0, "invalid option: nope");
         assert!(
-            hook_event("alert-bell")
+            hook_event("client-focus-in")
                 .unwrap_err()
                 .0
                 .contains("not supported")

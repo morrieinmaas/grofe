@@ -8,7 +8,8 @@
 //! - the outer terminal's title (OSC 0), the client's current pane's
 //!   `set-titles-string` expanded, while `set-titles` is on (R15; off,
 //!   tmux's default, sends nothing);
-//! - BEL, to the session's clients, also setting `window_bell_flag` (R13);
+//! - BEL, to the session's clients, and to `server::alerts` (the bell flag
+//!   and the `alert-bell` hook);
 //! - OSC 8 hyperlinks, re-emitted by `render::diff` from the cells (R20);
 //! - OSC 7, read by the [`Scanner`] into `PaneEventKind::Cwd`;
 //! - OSC 9 and 777 notifications, verbatim to the session's clients;
@@ -512,13 +513,7 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
     match kind {
         PaneEventKind::Cwd(path) => p.handle.set_reported_cwd(path),
         PaneEventKind::Bell => {
-            if let (Some(s), Some(w)) = (
-                state.model.sessions.get(&session),
-                state.model.windows.get_mut(&window),
-            ) && (s.active != window || s.attached == 0)
-            {
-                w.bell_flag = true;
-            }
+            crate::server::alerts::bell(state, window);
             send(state, clients_on(state, session), b"\x07");
         }
         PaneEventKind::Clipboard(text)

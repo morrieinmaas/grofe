@@ -1,0 +1,186 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -d -t main:2 -n second cat
+? 0
+$ set -g status off
+? 0
+$ run-shell 'mkdir -p "$HOME/tmp" && tmux set-environment -g TMPDIR "$HOME/tmp"'
+? 0
+$ set -g @claude_launch_key a
+? 0
+$ set -g @claude_list_key A
+? 0
+$ set -g @claude_command "sh -c 'echo agent-ready; exec cat'"
+? 0
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-claude-session-manager "$HOME/csm"'
+? 0
+$ run-shell '"$HOME/csm/claude_hatch.tmux" >/dev/null 2>&1'
+? 0
+$ list-keys -T prefix a
+? 0
+$ show-hooks -g alert-bell
+alert-bell[0] run-shell -b "<TMPDIR>/home/csm/scripts/bell.sh '#{q:hook_session_name}'"
+? 0
+client 80x24 attach -t main
+keys C-b a
+screen agent-ready
+|    ╭─ Agent ────────────────────────────────────────────────────────────╮
+|    │agent-ready                                                           │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    │                                                                      │
+|    ╰──────────────────────────────────────────────────────────────────────╯
+|
+|
+|
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+1 1
+1 0
+? 0
+keys C-b d
+keys zz00
+screen zz00
+| zz00
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+0 1
+1 0
+? 0
+$ set -g @claude_session_prefix mai
+? 0
+keys C-b a
+keys zz11
+screen zz00zz11
+| zz00zz11
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+0 1
+1 0
+? 0
+$ set -gu @claude_session_prefix
+? 0
+keys C-b A
+screen fzf is required
+| zz00zz11
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| tmux-claude-hatch: fzf is required for the picker
+$ select-window -t main:2
+? 0
+$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"'
+? 0
+$ run-shell 'i=0; until tmux list-windows -t main -F "##{window_index}##{window_flags}" | grep -q "^1!"; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
+? 0
+$ list-windows -t main -F '#{window_index} #{window_flags}'
+1 !-
+2 *
+? 0
+$& display-popup -c {client} -E 'tmux attach-session -t main'
+screen
+|                                       │·········································
+|                                       │·········································
+|                                       │·········································
+|                                       │·········································
+|                                       │·········································
+|                    ┌──────────────────────────────────────┐·····················
+|                    │                                      │·····················
+|                    │                                      │·····················
+|                    │                                      │·····················
+|                    │                                      │·····················
+| ───────────────────│                                      │·····················
+| ···················│                                      │·····················
+| ···················│                                      │·····················
+| ···················│                                      │·····················
+| ···················│                                      │·····················
+| ···················│                                      │·····················
+| ···················└──────────────────────────────────────┘·····················
+| ················································································
+| ················································································
+| ················································································
+| ················································································
+| ················································································
+| ················································································
+| ················································································
+$ list-clients -F '#{session_name}'
+main
+main
+? 0
