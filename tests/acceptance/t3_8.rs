@@ -273,11 +273,17 @@ fn placeholder_images_reach_kitty_clients() {
 fn a_stalled_client_gets_each_image_once() {
     let srv = TestServer::start();
     let go = srv.home.join("go");
+    // 300 lines in 30 bursts, one frame each. Line i is i written 23 times,
+    // so no two lines share their cells and each frame rewrites the screen:
+    // the stopped client's socket fills within a few bursts. A pause per
+    // burst, not per line: each `sleep` is a fork, about 20 ms on macOS, and
+    // 300 of them outlast `WAIT` on a loaded host.
     let script = format!(
-        "cat {}; {}; i=0; while [ $i -lt 300 ]; do printf '%070d\\n' $i; i=$((i+1)); \
-         sleep 0.01; done; echo END; exec sleep 600",
+        "cat {}; {}; i=0; while [ $i -lt 300 ]; do printf '%s\\n' {}; i=$((i+1)); \
+         [ $((i % 10)) -eq 0 ] && sleep 0.03; done; echo END; exec sleep 600",
         shell_quote(&fixture("icat-placeholder-2x2.bin").to_string_lossy()),
         wait_flag(&go),
+        "$i".repeat(23),
     );
     new_session(&srv, &script);
     let mut a = attach(&srv, KITTY);
