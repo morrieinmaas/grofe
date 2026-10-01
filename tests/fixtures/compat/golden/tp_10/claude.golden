@@ -146,7 +146,9 @@ screen fzf is required
 | tmux-claude-hatch: fzf is required for the picker
 $ select-window -t main:2
 ? 0
-$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"; sleep 1'
+$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"'
+? 0
+$ run-shell 'i=0; until tmux list-windows -t main -F "##{window_index}##{window_flags}" | grep -q "^1!"; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
 ? 0
 $ list-windows -t main -F '#{window_index} #{window_flags}'
 1 !-

@@ -55,7 +55,7 @@ $ display -p -t main '#{window_width}x#{window_height}'
 28x8
 ? 0
 keys C-b d
-$ run-shell 'sleep 1'
+$ run-shell 'i=0; until [ "$(tmux list-clients | wc -l)" -eq 1 ]; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
 ? 0
 screen
 | zz00

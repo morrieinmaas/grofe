@@ -44,7 +44,10 @@ $ set -gu @claude_session_prefix
 keys C-b A
 screen fzf is required
 $ select-window -t main:2
-$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"; sleep 1'
+$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"'
+# Waits until window 1 shows the forwarded bell (at most 10 s), rather
+# than for a fixed time.
+$ run-shell 'i=0; until tmux list-windows -t main -F "##{window_index}##{window_flags}" | grep -q "^1!"; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
 $ list-windows -t main -F '#{window_index} #{window_flags}'
 $& display-popup -c {client} -E 'tmux attach-session -t main'
 screen
