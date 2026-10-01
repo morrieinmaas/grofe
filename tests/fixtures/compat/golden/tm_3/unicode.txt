@@ -1,0 +1,5 @@
+plain ascii line
+naïve café Ünïcödé Straße x_y
+greek αβγ ΑΒΓ and wide 日本語 here
+digits ١٢٣ and 123 sign ∑ and ¶
+combining é done

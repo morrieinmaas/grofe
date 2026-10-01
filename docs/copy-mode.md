@@ -247,32 +247,42 @@ tmux 3.7b's own quirks are kept, because the goldens show them
 - An empty match counts as none, so `x*` finds only lines starting with x.
 
 tmux compiles the pattern with POSIX `regcomp` (extended syntax); the golden
-recorder runs on Debian, so the goldens show glibc's dialect. grofe reads the
-pattern as glibc does and runs it with the `regex` crate. These behave as in
-tmux, checked by the `tm_3/dialect` golden:
+recorder runs on Debian, so the goldens show glibc's dialect in `C.UTF-8`.
+grofe reads the pattern as glibc does and runs it with the `regex` crate,
+taking the longest match at the leftmost position as POSIX does (`d(e|ee)`
+matches all of `dee`). These behave as in tmux, checked by the `tm_3/dialect`,
+`tm_3/differs` and `tm_3/unicode` goldens:
 
 - `\w`, `\W`, `\s`, `\S`, `\b`, `\B`, `\<` and `\>` are GNU's classes and
   boundaries. Any other letter or digit after `\` (`\d`, `\n`, `\t`,
   `\pL`, `\x41`) makes the pattern invalid, so it finds nothing. Before
   any other character, `\` makes it literal.
-- In a bracket expression, `\` is itself and `[:digit:]` is a class, so
-  `[\d]` matches a backslash or a d. `]` first is itself.
+- In a bracket expression, `\` is itself, so `[\d]` matches a backslash or
+  a d, and `]` first is itself. A range with an end outside ASCII
+  (`[α-γ]`) is invalid, as in glibc.
+- The classes follow glibc's tables. Letters of every script and digits of
+  other scripts (`١`) are `alpha`, only `0-9` are `digit`, and symbols
+  (`∑`) are `punct`. Ignoring case, `upper` and `lower` match every letter.
 - Intervals work, and `{,2}` is `{0,2}`. A `(?` and a repetition with
   nothing to repeat are invalid.
 
-These still differ, checked by the `tm_3/differs` golden:
+These still differ:
 
-1. **Alternation**: POSIX takes the longest match at the leftmost
-   position, while the crate takes the first alternative that matches.
-   `d(e|ee)` matches `dee` in tmux and `de` in grofe. The cursor lands in
-   the same place, but the highlighted match and `#{search_match}` can
-   differ. Matching tmux would need the `regex-automata` crate's
-   leftmost-longest search, which grofe does not depend on.
-2. **Back-references** (`(ab)\1`): glibc accepts them, but the crate
-   cannot match them, so grofe finds nothing.
-3. **Unicode**: `\w`, `\s`, `\b` and `.` follow Unicode in grofe.
-   glibc follows the locale (`C.UTF-8` in the recorder). They agree for
-   ASCII and can differ for other scripts.
+1. **Back-references** (`(ab)\1`): glibc accepts them, but neither crate
+   can match them, so grofe finds nothing, as an ERE would.
+2. **Unicode tables**: grofe maps glibc's classes and `\w` to Unicode
+   properties (`alpha` is `\p{Alphabetic}` plus other scripts' digits,
+   `punct` is `\p{P}\p{S}`, and so on). They agree on every case the golden
+   records, but glibc's own tables can differ for rarer characters.
+3. **Longest matches next to non-ASCII text**: a pattern with both an
+   alternation and a word boundary falls back to the first alternative's
+   match when the text there is not ASCII. The lazy DFA that finds the
+   longest match gives up on Unicode word boundaries.
+
+A search over the history is one pass of a prefilter over the whole copy.
+That copy is kept as one string of about a byte a cell for the mode's next
+search, so the rows with no match cost no search of their own. A
+100 000-line search takes a few milliseconds in a release build.
 
 The incremental searches (`search-forward-incremental`, emacs `C-s`) are
 out of scope, as is the timestamp `copy-mode-position-format` can show.

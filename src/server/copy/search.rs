@@ -10,8 +10,14 @@
 //! ignores case, a line is searched with its soft-wrapped rows joined (up
 //! to 2000 cells), padded to the pane's width with blanks, and an empty
 //! match counts as none. tmux's POSIX extended syntax is read as glibc
-//! reads it ([`translate`]) and run with the `regex` crate; what still
-//! differs is in `docs/copy-mode.md`.
+//! reads it ([`translate`]) and run with the `regex` crate, leftmost-longest
+//! as POSIX wants (a lazy DFA from `regex-automata` finds the longest end);
+//! what still differs is in `docs/copy-mode.md`.
+//!
+//! A search does not search each row in turn: one pass of a prefilter over
+//! the whole copy as a single string ([`Text`], kept for the next search)
+//! finds the rows that may match, and only those are searched as tmux
+//! searches them.
 //!
 //! A search runs off the actor (spec D5, D8): [`launch`] hands the scan a
 //! shared reference to the mode's copy of the pane on the blocking pool,
@@ -26,10 +32,14 @@
 //! them out for the rows on view, which bounds them by the pane's size.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use regex::{Regex, RegexBuilder};
+use regex_automata::hybrid::dfa::{Cache, DFA};
+use regex_automata::nfa::thompson;
+use regex_automata::util::syntax;
+use regex_automata::{Anchored, Input, MatchKind};
 use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthStr;
 
@@ -51,7 +61,11 @@ pub const CURRENT_MATCH_STYLE: &str = "bg=magenta,fg=black";
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// tmux's `WINDOW_COPY_SEARCH_ALL_TIMEOUT`: how long counting every match
 /// may take before only the rows on view are marked.
-const SEARCH_ALL_TIMEOUT: Duration = Duration::from_millis(200);
+// ponytail: tmux allows 200 ms, on its only thread. Off the actor the
+// budget bounds the worker, not a frame, so grofe allows 1 s: a debug build
+// on a loaded machine still counts, and a release one counts 100 000 lines
+// in a few milliseconds.
+const SEARCH_ALL_TIMEOUT: Duration = Duration::from_secs(1);
 /// tmux's `WINDOW_COPY_SEARCH_MAX_LINE`: the most cells of one line,
 /// soft-wrapped rows joined, a regex sees.
 const SEARCH_MAX_LINE: usize = 2000;
@@ -139,9 +153,78 @@ pub struct Pattern {
     /// width a plain match marks.
     width: usize,
     /// `^` matches at the start of what it is run on.
-    bol: Regex,
+    bol: Engine,
     /// tmux's `REG_NOTBOL`: `^` never matches at the start.
-    notbol: Regex,
+    notbol: Engine,
+    /// Matches wherever the pattern can and maybe more, run once over the
+    /// whole copy to skip rows; `None` when it matches the empty string,
+    /// so every row is searched.
+    pre: Option<Regex>,
+}
+
+/// One compiled form of a pattern: the crate's leftmost-first regex, which
+/// finds where the leftmost match starts, and a lazy DFA that reports the
+/// longest match from there, as POSIX's leftmost-longest rule wants.
+#[derive(Debug)]
+struct Engine {
+    re: Regex,
+    longest: Option<Longest>,
+}
+
+#[derive(Debug)]
+struct Longest {
+    dfa: DFA,
+    cache: Mutex<Cache>,
+}
+
+impl Engine {
+    fn new(re: Regex, longest: Option<Longest>) -> Engine {
+        Engine { re, longest }
+    }
+
+    /// The leftmost-longest match in `hay`, as tmux's `regexec`: its
+    /// start and end.
+    fn find(&self, hay: &str) -> Option<(usize, usize)> {
+        let m = self.re.find(hay)?;
+        let end = self
+            .longest
+            .as_ref()
+            .and_then(|l| l.end(hay, m.start()))
+            .map_or(m.end(), |e| e.max(m.end()));
+        Some((m.start(), end))
+    }
+}
+
+impl Longest {
+    fn build(pattern: &str, cis: bool) -> Option<Longest> {
+        let dfa = DFA::builder()
+            .configure(
+                DFA::config()
+                    .match_kind(MatchKind::All)
+                    .cache_capacity(DFA_SIZE_LIMIT)
+                    .unicode_word_boundary(true),
+            )
+            .syntax(
+                syntax::Config::new()
+                    .case_insensitive(cis)
+                    .nest_limit(NEST_LIMIT),
+            )
+            .thompson(thompson::Config::new().nfa_size_limit(Some(REGEX_SIZE_LIMIT)))
+            .build(pattern)
+            .ok()?;
+        let cache = Mutex::new(dfa.create_cache());
+        Some(Longest { dfa, cache })
+    }
+
+    /// The end of the longest match starting at `start`; `None` when the
+    /// lazy DFA gives up (a Unicode word boundary next to a non-ASCII
+    /// byte, or its cache thrashing), which leaves the leftmost-first end.
+    fn end(&self, hay: &str, start: usize) -> Option<usize> {
+        let mut cache = self.cache.lock().ok()?;
+        let input = Input::new(hay).range(start..).anchored(Anchored::Yes);
+        let hm = self.dfa.try_search_fwd(&mut cache, &input).ok()??;
+        Some(hm.offset())
+    }
 }
 
 /// tmux's `window_copy_is_lowercase`.
@@ -160,21 +243,30 @@ impl Pattern {
     /// which finds nothing.
     fn compile(text: &str, regex: bool) -> Option<Pattern> {
         let cis = is_lowercase(text);
-        let (bol, notbol) = if regex {
-            let t = translate(text)?;
-            (build(&t.bol, cis)?, build(&t.notbol, cis)?)
+        let (bol, notbol, pre) = if regex {
+            let t = translate(text, cis)?;
+            (
+                Engine::new(build(&t.bol, cis)?, Longest::build(&t.bol, cis)),
+                Engine::new(build(&t.notbol, cis)?, Longest::build(&t.notbol, cis)),
+                build(&t.pre, cis).filter(|re| !re.is_match("")),
+            )
         } else {
             // As tmux's `window_copy_search_compare`: a one-byte character
             // is compared lowered, any other exactly.
             let flags = if cis { "(?i-u:" } else { "(?-u:" };
             let re = build(&format!("{flags}{})", regex::escape(text)), false)?;
-            (re.clone(), re)
+            (
+                Engine::new(re.clone(), None),
+                Engine::new(re.clone(), None),
+                Some(re),
+            )
         };
         Some(Pattern {
             regex,
             width: UnicodeWidthStr::width(text),
             bol,
             notbol,
+            pre,
         })
     }
 }
@@ -189,19 +281,16 @@ fn build(pattern: &str, cis: bool) -> Option<Regex> {
         .ok()
 }
 
-/// A POSIX pattern in the crate's syntax: with `^` as an anchor, and with
-/// `^` never matching (for `REG_NOTBOL`).
+/// A POSIX pattern in the crate's syntax: with `^` as an anchor, with `^`
+/// never matching (for `REG_NOTBOL`), and with no assertions at all, which
+/// matches wherever the pattern does and more (the prefilter over the
+/// whole copy).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Translated {
     pub bol: String,
     pub notbol: String,
+    pub pre: String,
 }
-
-/// The POSIX character class names glibc knows.
-const CLASSES: &[&str] = &[
-    "alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space",
-    "upper", "xdigit",
-];
 
 /// Reads `pattern` as glibc's `regcomp` reads POSIX extended syntax
 /// (`REG_EXTENDED`) and writes it in the `regex` crate's; `None` for one
@@ -218,25 +307,28 @@ const CLASSES: &[&str] = &[
 /// - `*`, `+`, `?` and an interval with nothing to repeat are refused;
 ///   stacked ones repeat what is before them (`a**`, `a+?`), where the
 ///   crate would read a lazy repetition.
-pub fn translate(pattern: &str) -> Option<Translated> {
-    let mut bol = String::new();
-    let mut notbol = String::new();
-    // Where in both outputs the last atom starts, if the last thing
-    // written was an atom or a repetition of one.
-    let mut atom: Option<(usize, usize)> = None;
+pub fn translate(pattern: &str, cis: bool) -> Option<Translated> {
+    let mut out = Out::default();
+    // Where in the outputs the last atom starts, if the last thing written
+    // was an atom or a repetition of one.
+    let mut atom: Option<[usize; 3]> = None;
     // Whether the last thing written was a repetition.
     let mut repeated = false;
     // The open groups' starts.
-    let mut groups: Vec<(usize, usize)> = Vec::new();
+    let mut groups: Vec<[usize; 3]> = Vec::new();
     let chars: Vec<char> = pattern.chars().collect();
     let mut i = 0;
-    let push = |bol: &mut String, notbol: &mut String, s: &str| {
-        bol.push_str(s);
-        notbol.push_str(s);
-    };
     while i < chars.len() {
         let c = chars[i];
-        let start = (bol.len(), notbol.len());
+        let start = out.at();
+        // An assertion: written to `bol` and `notbol` as given, left out
+        // of `pre`.
+        let mut assert = |out: &mut Out, bol: &str, notbol: &str| {
+            out.bol.push_str(bol);
+            out.notbol.push_str(notbol);
+            atom = None;
+            repeated = false;
+        };
         match c {
             '\\' => {
                 let n = *chars.get(i + 1)?;
@@ -244,34 +336,29 @@ pub fn translate(pattern: &str) -> Option<Translated> {
                 let text = match n {
                     'w' | 'W' | 's' | 'S' => format!("\\{n}"),
                     'b' | 'B' | '<' | '>' => {
-                        push(&mut bol, &mut notbol, &format!("\\{n}"));
-                        atom = None;
-                        repeated = false;
+                        let a = format!("\\{n}");
+                        assert(&mut out, &a, &a);
                         continue;
                     }
                     '`' => {
-                        push(&mut bol, &mut notbol, "\\A");
-                        atom = None;
-                        repeated = false;
+                        assert(&mut out, "\\A", "\\A");
                         continue;
                     }
                     '\'' => {
-                        push(&mut bol, &mut notbol, "\\z");
-                        atom = None;
-                        repeated = false;
+                        assert(&mut out, "\\z", "\\z");
                         continue;
                     }
                     n if n.is_ascii_alphanumeric() => return None,
                     n => regex::escape(&n.to_string()),
                 };
-                push(&mut bol, &mut notbol, &text);
+                out.push(&text);
                 atom = Some(start);
                 repeated = false;
                 continue;
             }
             '[' => {
-                let (class, next) = bracket(&chars, i)?;
-                push(&mut bol, &mut notbol, &class);
+                let (class, next) = bracket(&chars, i, cis)?;
+                out.push(&class);
                 i = next;
                 atom = Some(start);
                 repeated = false;
@@ -282,24 +369,25 @@ pub fn translate(pattern: &str) -> Option<Translated> {
                     return None;
                 }
                 groups.push(start);
-                push(&mut bol, &mut notbol, "(");
+                out.push("(");
                 atom = None;
                 repeated = false;
             }
-            ')' => match groups.pop() {
-                Some(open) => {
-                    push(&mut bol, &mut notbol, ")");
-                    atom = Some(open);
-                    repeated = false;
+            ')' => {
+                match groups.pop() {
+                    Some(open) => {
+                        out.push(")");
+                        atom = Some(open);
+                    }
+                    None => {
+                        out.push("\\)");
+                        atom = Some(start);
+                    }
                 }
-                None => {
-                    push(&mut bol, &mut notbol, "\\)");
-                    atom = Some(start);
-                    repeated = false;
-                }
-            },
+                repeated = false;
+            }
             '|' => {
-                push(&mut bol, &mut notbol, "|");
+                out.push("|");
                 atom = None;
                 repeated = false;
             }
@@ -309,36 +397,26 @@ pub fn translate(pattern: &str) -> Option<Translated> {
                 } else {
                     (c.to_string(), i + 1)
                 };
-                let (ab, an) = atom?;
+                let at = atom?;
                 if repeated {
                     // `a**`: repeat the repetition, not lazily.
-                    bol.insert_str(ab, "(?:");
-                    notbol.insert_str(an, "(?:");
-                    push(&mut bol, &mut notbol, ")");
+                    out.insert(at, "(?:");
+                    out.push(")");
                 }
-                push(&mut bol, &mut notbol, &op);
+                out.push(&op);
                 repeated = true;
                 i = next;
                 continue;
             }
-            '^' => {
-                bol.push('^');
-                notbol.push_str("(?:\\b\\B)");
-                atom = None;
-                repeated = false;
-            }
-            '$' => {
-                push(&mut bol, &mut notbol, "$");
-                atom = None;
-                repeated = false;
-            }
+            '^' => assert(&mut out, "^", "(?:\\b\\B)"),
+            '$' => assert(&mut out, "$", "$"),
             '.' => {
-                push(&mut bol, &mut notbol, ".");
+                out.push(".");
                 atom = Some(start);
                 repeated = false;
             }
             c => {
-                push(&mut bol, &mut notbol, &regex::escape(&c.to_string()));
+                out.push(&regex::escape(&c.to_string()));
                 atom = Some(start);
                 repeated = false;
             }
@@ -348,7 +426,37 @@ pub fn translate(pattern: &str) -> Option<Translated> {
     if !groups.is_empty() {
         return None;
     }
-    Some(Translated { bol, notbol })
+    Some(Translated {
+        bol: out.bol,
+        notbol: out.notbol,
+        pre: out.pre,
+    })
+}
+
+/// The three spellings [`translate`] writes at once.
+#[derive(Default)]
+struct Out {
+    bol: String,
+    notbol: String,
+    pre: String,
+}
+
+impl Out {
+    fn push(&mut self, s: &str) {
+        self.bol.push_str(s);
+        self.notbol.push_str(s);
+        self.pre.push_str(s);
+    }
+
+    fn at(&self) -> [usize; 3] {
+        [self.bol.len(), self.notbol.len(), self.pre.len()]
+    }
+
+    fn insert(&mut self, at: [usize; 3], s: &str) {
+        self.bol.insert_str(at[0], s);
+        self.notbol.insert_str(at[1], s);
+        self.pre.insert_str(at[2], s);
+    }
 }
 
 /// An interval at `chars[i] == '{'`: the crate's spelling and the index
@@ -384,7 +492,7 @@ fn interval(chars: &[char], i: usize) -> Option<(String, usize)> {
 
 /// A bracket expression at `chars[i] == '['`: the crate's class and the
 /// index after it.
-fn bracket(chars: &[char], i: usize) -> Option<(String, usize)> {
+fn bracket(chars: &[char], i: usize, cis: bool) -> Option<(String, usize)> {
     let mut out = String::from("[");
     let mut j = i + 1;
     if chars.get(j) == Some(&'^') {
@@ -392,6 +500,8 @@ fn bracket(chars: &[char], i: usize) -> Option<(String, usize)> {
         j += 1;
     }
     let mut first = true;
+    // The last character written, which a `-` makes a range from.
+    let mut prev: Option<char> = None;
     loop {
         let c = *chars.get(j)?;
         if c == ']' && !first {
@@ -411,24 +521,58 @@ fn bracket(chars: &[char], i: usize) -> Option<(String, usize)> {
             }
             let body: String = chars[body_start..k].iter().collect();
             match kind {
-                ':' if CLASSES.contains(&body.as_str()) => {
-                    out.push_str(&format!("[:{body}:]"));
-                }
+                ':' => out.push_str(class(&body, cis)?),
                 // A collating symbol or equivalence class of one character
                 // is that character; anything else glibc's locale decides.
                 '=' | '.' if body.chars().count() == 1 => out.push_str(&class_char(body)),
                 _ => return None,
             }
+            prev = None;
             j = k + 2;
             continue;
         }
-        if c == '-' && chars.get(j + 1).is_some_and(|&n| n != ']') && out.len() > 1 {
+        let next = chars.get(j + 1).copied();
+        if c == '-' && prev.is_some() && next.is_some_and(|n| n != ']') {
+            // glibc refuses a range with an end outside ASCII (recorded:
+            // `[α-γ]` finds nothing).
+            let to = next?;
+            if !prev.is_some_and(|p| p.is_ascii()) || !to.is_ascii() || to == '[' {
+                return None;
+            }
             out.push('-');
-        } else {
-            out.push_str(&class_char(c.to_string()));
+            out.push_str(&class_char(to.to_string()));
+            prev = None;
+            j += 2;
+            continue;
         }
+        out.push_str(&class_char(c.to_string()));
+        prev = Some(c);
         j += 1;
     }
+}
+
+/// A POSIX class as Unicode properties, as glibc's `C.UTF-8` tables read
+/// them (recorded in the `tm_3/unicode` golden): letters, and digits of
+/// other scripts, are `alpha`; only `0-9` are `digit`; symbols are
+/// `punct`; ignoring case, `upper` and `lower` are every letter. `None`
+/// for a name glibc does not know.
+fn class(name: &str, cis: bool) -> Option<&'static str> {
+    Some(match name {
+        "upper" | "lower" if cis => r"[\p{Alphabetic}\p{Nd}--0-9]",
+        "alpha" => r"[\p{Alphabetic}\p{Nd}--0-9]",
+        "alnum" => r"\p{Alphabetic}\p{Nd}",
+        "digit" => "0-9",
+        "xdigit" => "0-9A-Fa-f",
+        "upper" => r"\p{Uppercase}",
+        "lower" => r"\p{Lowercase}",
+        "space" => r"\p{White_Space}",
+        "blank" => r"\t\p{Zs}",
+        "punct" => r"\p{P}\p{S}",
+        "graph" => r"\p{L}\p{M}\p{N}\p{P}\p{S}",
+        "print" => r"\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}",
+        "cntrl" => r"\p{Cc}",
+        _ => return None,
+    })
 }
 
 /// One character as it is written inside the crate's class.
@@ -450,8 +594,34 @@ struct Line {
     py: usize,
     rows: usize,
     text: String,
+    loaded: bool,
+    /// Every cell is one byte, so cell and byte offsets are the same and
+    /// `starts` is left empty.
+    simple: bool,
     starts: Vec<usize>,
 }
+
+/// The whole copy as one string for the prefilter: each row as the search
+/// writes it, a newline after each row that does not wrap, and where each
+/// row starts (one more entry for the end). About a byte a cell.
+#[derive(Debug)]
+pub struct Text {
+    text: String,
+    rows: Vec<usize>,
+}
+
+impl Text {
+    /// The row byte `off` is in.
+    fn row_of(&self, off: usize) -> usize {
+        self.rows
+            .partition_point(|&s| s <= off)
+            .saturating_sub(1)
+            .min(self.rows.len() - 2)
+    }
+}
+
+/// How many rows a search up asks the prefilter about at once.
+const BLOCK_ROWS: usize = 256;
 
 /// A position on the view (tmux's `cx`, `cy`, `oy`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,13 +640,23 @@ type Marks = Vec<u8>;
 struct Scanner<'a> {
     gd: &'a Grid,
     line: Line,
+    /// For each of the copy's looks, whether a one-byte character in it
+    /// is just that byte (no combining marks, not a wide character's half).
+    plain: Vec<bool>,
 }
 
 impl<'a> Scanner<'a> {
     fn new(gd: &'a Grid) -> Self {
+        let spacer = CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER;
+        let plain = gd
+            .looks
+            .iter()
+            .map(|l| l.zerowidth.is_empty() && !l.flags.intersects(spacer))
+            .collect();
         Scanner {
             gd,
             line: Line::default(),
+            plain,
         }
     }
 
@@ -507,21 +687,85 @@ impl<'a> Scanner<'a> {
         rows
     }
 
-    fn load(&mut self, py: usize, rows: usize) {
-        if self.line.py != py || self.line.rows != rows || self.line.starts.is_empty() {
-            let gd = self.gd;
-            let line = &mut self.line;
-            line.py = py;
-            line.rows = rows;
-            line.text.clear();
-            line.starts.clear();
-            for y in py..py + rows {
-                for x in 0..gd.sx {
-                    line.starts.push(line.text.len());
-                    push_cell(&mut line.text, gd, x, y);
+    /// The prefilter's string of the whole copy.
+    fn whole(&self) -> Text {
+        let gd = self.gd;
+        let sx = gd.sx;
+        let mut text = String::with_capacity(gd.total() * (sx + 1));
+        let mut rows = Vec::with_capacity(gd.total() + 1);
+        for y in 0..gd.total() {
+            rows.push(text.len());
+            let cells = gd.rows.get(y).map_or(&[][..], |r| r.cells.as_slice());
+            let n = cells.len().min(sx);
+            let simple = cells[..n].iter().all(|cell| {
+                let c = cell.c;
+                c.is_ascii() && c != '\t' && c != TAB_PAD && self.plain[cell.look as usize]
+            });
+            if simple {
+                text.extend(cells[..n].iter().map(|cell| cell.c));
+                text.extend(std::iter::repeat_n(' ', sx - n));
+            } else {
+                for x in 0..sx {
+                    push_cell(&mut text, gd, x, y);
                 }
             }
-            line.starts.push(line.text.len());
+            if !gd.wrapped(y) {
+                text.push('\n');
+            }
+        }
+        rows.push(text.len());
+        Text { text, rows }
+    }
+
+    /// Writes rows `py..py + rows` as the line, unless they already are.
+    /// Rows of plain one-byte cells, the common case, are copied as they
+    /// are and padded with blanks; only a line with any other cell keeps
+    /// where each cell starts.
+    fn load(&mut self, py: usize, rows: usize) {
+        let line = &mut self.line;
+        if line.loaded && line.py == py && line.rows == rows {
+            return;
+        }
+        let gd = self.gd;
+        let sx = gd.sx;
+        line.py = py;
+        line.rows = rows;
+        line.loaded = true;
+        line.text.clear();
+        line.starts.clear();
+        line.simple = true;
+        'rows: for y in py..py + rows {
+            let cells = gd.rows.get(y).map_or(&[][..], |r| r.cells.as_slice());
+            let n = cells.len().min(sx);
+            for cell in &cells[..n] {
+                let c = cell.c;
+                if !c.is_ascii() || c == '\t' || c == TAB_PAD || !self.plain[cell.look as usize] {
+                    line.simple = false;
+                    break 'rows;
+                }
+                line.text.push(c);
+            }
+            line.text.extend(std::iter::repeat_n(' ', sx - n));
+        }
+        if line.simple {
+            return;
+        }
+        line.text.clear();
+        for y in py..py + rows {
+            for x in 0..sx {
+                line.starts.push(line.text.len());
+                push_cell(&mut line.text, gd, x, y);
+            }
+        }
+        line.starts.push(line.text.len());
+    }
+
+    /// Where cell `cell` (counted along the joined rows) starts in the line.
+    fn byte_of(&self, cell: usize) -> usize {
+        if self.line.simple {
+            cell.min(self.line.text.len())
+        } else {
+            self.line.starts[cell.min(self.line.starts.len() - 1)]
         }
     }
 
@@ -529,8 +773,17 @@ impl<'a> Scanner<'a> {
     /// line starts, as tmux's `window_copy_cstrtocellpos`: the first cell
     /// there, or one past the end.
     fn cell_at(&self, off: usize) -> usize {
+        if self.line.simple {
+            return off.min(self.line.text.len());
+        }
+        // A match that starts or ends inside a cell (a combining mark on
+        // its own) maps one past the end, as tmux's does.
         let cells = self.line.starts.len() - 1;
-        self.line.starts[..cells].partition_point(|&s| s < off)
+        let c = self.line.starts[..cells].partition_point(|&s| s < off);
+        if c < cells && self.line.starts[c] != off {
+            return cells;
+        }
+        c
     }
 
     /// tmux's `window_copy_search_lr_regex`: the first match starting on
@@ -548,14 +801,14 @@ impl<'a> Scanner<'a> {
         let sx = self.gd.sx;
         let rows = self.regex_rows(py, first);
         self.load(py, rows);
-        let off = self.line.starts[first];
+        let off = self.byte_of(first);
         let re = if first != 0 { &pat.notbol } else { &pat.bol };
-        let m = re.find(&self.line.text[off..])?;
-        if m.is_empty() {
+        let (ms, me) = re.find(&self.line.text[off..])?;
+        if ms == me {
             return None;
         }
-        let (s, e) = (self.cell_at(off + m.start()), self.cell_at(off + m.end()));
-        (s < sx && s < last).then_some((s, e - s))
+        let (s, e) = (self.cell_at(off + ms), self.cell_at(off + me));
+        (s < sx && s < last && e >= s).then(|| (s, e - s))
     }
 
     /// tmux's `window_copy_search_rl_regex` and `window_copy_last_regex`:
@@ -572,24 +825,24 @@ impl<'a> Scanner<'a> {
         let sx = self.gd.sx;
         let rows = self.regex_rows(py, first);
         self.load(py, rows);
-        let base = self.line.starts[first.min(self.line.starts.len() - 1)];
+        let base = self.byte_of(first);
         let re = if first != 0 { &pat.notbol } else { &pat.bol };
         let mut pos = 0;
         let mut saved = None;
-        while let Some(m) = re.find(&self.line.text[base + pos..]) {
-            if m.is_empty() {
+        while let Some((ms, me)) = re.find(&self.line.text[base + pos..]) {
+            if ms == me {
                 break;
             }
-            let s = self.cell_at(base + pos + m.start());
+            let s = self.cell_at(base + pos + ms);
             if s >= sx || s >= last {
                 break;
             }
-            let e = self.cell_at(base + pos + m.end());
+            let e = self.cell_at(base + pos + me);
             if e >= sx || e >= last {
                 return Some((s, e - s));
             }
             saved = Some((s, e - s));
-            pos += m.end();
+            pos += me;
         }
         saved.filter(|&(_, w)| w > 0)
     }
@@ -603,7 +856,7 @@ impl<'a> Scanner<'a> {
         }
         let rows = self.plain_rows(py, pat.width);
         self.load(py, rows);
-        let m = pat.bol.find_at(&self.line.text, self.line.starts[first])?;
+        let m = pat.bol.re.find_at(&self.line.text, self.byte_of(first))?;
         let s = self.cell_at(m.start());
         (s < sx && s < last).then_some(s)
     }
@@ -617,9 +870,9 @@ impl<'a> Scanner<'a> {
         }
         let rows = self.plain_rows(py, pat.width);
         self.load(py, rows);
-        let mut at = self.line.starts[first];
+        let mut at = self.byte_of(first);
         let mut best = None;
-        while let Some(m) = pat.bol.find_at(&self.line.text, at) {
+        while let Some(m) = pat.bol.re.find_at(&self.line.text, at) {
             let s = self.cell_at(m.start());
             if s >= sx || s >= last {
                 break;
@@ -693,6 +946,8 @@ impl Default for Kept {
 /// A search on its way to the blocking pool.
 struct Request {
     grid: Arc<Grid>,
+    /// The prefilter's string of `grid`, if an earlier search wrote it.
+    whole: Option<Arc<Text>>,
     view: View,
     text: String,
     kept: Kept,
@@ -706,6 +961,7 @@ struct Request {
 /// What it found.
 pub struct Outcome {
     grid: Arc<Grid>,
+    whole: Arc<Text>,
     view: View,
     kept: Kept,
 }
@@ -714,6 +970,8 @@ pub struct Outcome {
 /// functions that take it).
 struct Run<'a> {
     scan: Scanner<'a>,
+    /// The whole copy as one string, for the prefilter.
+    text: Arc<Text>,
     view: View,
     kept: Kept,
     /// The marks of the rows on view, as the last marking left them.
@@ -851,7 +1109,7 @@ impl Run<'_> {
     fn jump(
         &mut self,
         pat: &Pattern,
-        mut fx: usize,
+        fx: usize,
         fy: usize,
         endline: usize,
         wrap: bool,
@@ -860,37 +1118,35 @@ impl Run<'_> {
         let sx = self.sx();
         let mut hit = None;
         if down {
-            for i in fy..=endline {
-                let found = if pat.regex {
-                    self.scan.lr_regex(pat, i, fx, sx).map(|(px, _)| px)
-                } else {
-                    self.scan.lr(pat, i, fx, sx)
-                };
-                if let Some(px) = found {
+            // The first row from `fx`, then each row the prefilter offers.
+            let mut row = Some(fy).filter(|&r| r <= endline);
+            let mut first = fx;
+            while let Some(i) = row {
+                if let Some(px) = self.down_at(pat, i, first) {
                     hit = Some((px, i));
                     break;
                 }
-                fx = 0;
+                first = 0;
+                row = self.candidate(pat, i + 1, endline);
             }
-        } else {
-            let mut i = fy + 1;
-            while endline < i {
-                let found = if pat.regex {
-                    self.scan
-                        .rl_regex(pat, i - 1, 0, fx + 1)
-                        .map(|(mut px, w)| {
-                            self.back_overlap(pat, &mut px, w, &mut i, endline);
-                            px
-                        })
-                } else {
-                    self.scan.rl(pat, i - 1, 0, fx + 1)
-                };
-                if let Some(px) = found {
-                    hit = Some((px, i - 1));
-                    break;
+        } else if fy >= endline {
+            // The first row up to `fx`, then blocks of rows upwards, each
+            // row the prefilter offers there from the bottom up.
+            hit = self.up_at(pat, fy, fx + 1, endline);
+            let mut hi = fy;
+            while hit.is_none() && hi > endline {
+                let lo = hi.saturating_sub(BLOCK_ROWS).max(endline);
+                let mut rows = Vec::new();
+                let mut next = self.candidate(pat, lo, hi - 1);
+                while let Some(r) = next {
+                    rows.push(r);
+                    next = self.candidate(pat, r + 1, hi - 1);
                 }
-                fx = sx - 1;
-                i -= 1;
+                hit = rows
+                    .into_iter()
+                    .rev()
+                    .find_map(|r| self.up_at(pat, r, sx, endline));
+                hi = lo;
             }
         }
         if let Some((px, py)) = hit {
@@ -906,6 +1162,56 @@ impl Run<'_> {
             return self.jump(pat, x, y, fy, false, down);
         }
         false
+    }
+
+    /// The first match on row `py` from cell `first`.
+    fn down_at(&mut self, pat: &Pattern, py: usize, first: usize) -> Option<usize> {
+        let sx = self.sx();
+        if pat.regex {
+            self.scan.lr_regex(pat, py, first, sx).map(|(px, _)| px)
+        } else {
+            self.scan.lr(pat, py, first, sx)
+        }
+    }
+
+    /// The last match on row `py` before cell `last`, and the row it ends
+    /// up on (an earlier one for a match that wraps onto this row, as
+    /// tmux's `back_overlap` finds).
+    fn up_at(
+        &mut self,
+        pat: &Pattern,
+        py: usize,
+        last: usize,
+        endline: usize,
+    ) -> Option<(usize, usize)> {
+        if pat.regex {
+            let (mut px, w) = self.scan.rl_regex(pat, py, 0, last)?;
+            let mut i = py + 1;
+            self.back_overlap(pat, &mut px, w, &mut i, endline);
+            Some((px, i - 1))
+        } else {
+            self.scan.rl(pat, py, 0, last).map(|px| (px, py))
+        }
+    }
+
+    /// The first row in `from..=to` that may hold a match: by the
+    /// prefilter, one regex pass over the whole copy, so the rows with no
+    /// match cost no search of their own.
+    fn candidate(&self, pat: &Pattern, from: usize, to: usize) -> Option<usize> {
+        if from > to {
+            return None;
+        }
+        let Some(pre) = &pat.pre else {
+            return Some(from);
+        };
+        // A match never runs past the end of its line, so the search stops
+        // there instead of reading on to the end of the copy.
+        let text = &self.text.text;
+        let at = self.text.rows[to];
+        let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+        let m = pre.find_at(&text[..end], self.text.rows[from])?;
+        let row = self.text.row_of(m.start());
+        (row <= to).then_some(row)
     }
 
     /// tmux's `window_copy_move_after_search_mark`.
@@ -1041,7 +1347,9 @@ impl Run<'_> {
         let marks = loop {
             let mut marks = vec![0u8; gd.sx * gd.sy];
             let mut generation = 1u8;
-            for py in start..end {
+            let mut next = self.candidate(pat, start, end.saturating_sub(1));
+            while let Some(py) = next {
+                next = self.candidate(pat, py + 1, end.saturating_sub(1));
                 nfound += mark_row(
                     &mut self.scan,
                     pat,
@@ -1171,8 +1479,11 @@ fn mark_row(
 /// Runs a search request: tmux's `window_copy_search_up` or `_down`, as
 /// many times as its count.
 fn scan(req: Request) -> Outcome {
+    let scanner = Scanner::new(&req.grid);
+    let whole = req.whole.unwrap_or_else(|| Arc::new(scanner.whole()));
     let mut run = Run {
-        scan: Scanner::new(&req.grid),
+        scan: scanner,
+        text: Arc::clone(&whole),
         view: req.view,
         marks: None,
         kept: req.kept,
@@ -1190,6 +1501,7 @@ fn scan(req: Request) -> Outcome {
     let (view, kept) = (run.view, run.kept);
     Outcome {
         grid: Arc::clone(&req.grid),
+        whole,
         view,
         kept,
     }
@@ -1247,6 +1559,9 @@ pub struct Search {
     /// The copy a search in flight reads; commands wait until it ends.
     busy: Option<Arc<Grid>>,
     held: VecDeque<Vec<String>>,
+    /// The prefilter's string of the copy, kept for the next search, and
+    /// the copy it is of.
+    whole: Option<(Weak<Grid>, Arc<Text>)>,
     /// The replies waiting for the search and the commands held behind it.
     waiters: Vec<oneshot::Sender<Result<String, Failure>>>,
 }
@@ -1421,17 +1736,21 @@ pub fn launch(state: &mut State, pane: PaneId, wait: bool) {
         Ok(rt) => {
             let jobs = state.jobs.clone();
             rt.spawn_blocking(move || {
-                let out = scan(req);
+                // A scan that panics still lets the mode go on (unbusy, its
+                // held commands run), rather than leaving it busy for good.
+                let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(req))).ok();
                 let _ =
                     jobs.blocking_send(Box::new(move |state: &mut State| finish(state, pane, out)));
             });
         }
         // No runtime (unit tests): there is no actor to keep free.
-        Err(_) => finish(state, pane, scan(req)),
+        Err(_) => finish(state, pane, Some(scan(req))),
     }
 }
 
 fn request(state: &mut State, pane: PaneId) -> Option<Request> {
+    // Most commands ask for no search; they cost no option lookup.
+    state.copy.get(pane)?.search.pending?;
     let model = &state.model;
     let wrap = model
         .options
@@ -1445,6 +1764,12 @@ fn request(state: &mut State, pane: PaneId) -> Option<Request> {
 fn new_request(mode: &Mode, p: Pending, wrap: bool) -> Request {
     Request {
         grid: Arc::clone(&mode.grid),
+        whole: mode
+            .search
+            .whole
+            .as_ref()
+            .filter(|(of, _)| std::ptr::eq(of.as_ptr(), Arc::as_ptr(&mode.grid)))
+            .map(|(_, t)| Arc::clone(t)),
         view: View {
             cx: mode.cx,
             cy: mode.cy,
@@ -1470,17 +1795,20 @@ fn apply(mode: &mut Mode, out: Outcome) {
     mode.cy = out.view.cy;
     mode.oy = out.view.oy;
     mode.search.kept = out.kept;
+    mode.search.whole = Some((Arc::downgrade(&out.grid), out.whole));
     select::update_selection(mode);
 }
 
 /// On the actor once the scan is done: the outcome lands, the held
 /// commands run in order (one may start the next search), and once
 /// nothing is in flight the waiting replies go.
-fn finish(state: &mut State, pane: PaneId, out: Outcome) {
+fn finish(state: &mut State, pane: PaneId, out: Option<Outcome>) {
     let Some(mode) = state.copy.get_mut(pane) else {
         return;
     };
-    apply(mode, out);
+    if let Some(out) = out {
+        apply(mode, out);
+    }
     mode.search.busy = None;
     while let Some(mode) = state.copy.get_mut(pane) {
         if mode.search.busy.is_some() {
@@ -1812,12 +2140,13 @@ mod tests {
         assert_eq!(first(&["xx{3}f", ""], "x{3}f"), Some("x{3}f".into()));
     }
 
-    /// The differences from glibc that remain, as `docs/copy-mode.md` lists
-    /// them: alternation is the first alternative that matches, not the
-    /// longest, and a back-reference finds nothing.
+    /// Alternation takes the longest match at the leftmost position, as
+    /// POSIX does; a back-reference finds nothing (`docs/copy-mode.md`).
     #[test]
-    fn documented_regex_differences() {
-        assert_eq!(first(&["xab", ""], "x(a|ab)"), Some("xa".into()));
+    fn alternation_is_leftmost_longest() {
+        assert_eq!(first(&["xab", ""], "x(a|ab)"), Some("xab".into()));
+        assert_eq!(first(&["abcd", ""], "(a|ab)(c|bcd)"), Some("abcd".into()));
+        assert_eq!(first(&["a dee", ""], "d(e|ee)"), Some("dee".into()));
         assert_eq!(first(&["abab", ""], "(ab)\\1"), None);
     }
 
@@ -1847,7 +2176,7 @@ mod tests {
 
     #[test]
     fn translation() {
-        let t = |p: &str| translate(p).map(|t| t.bol);
+        let t = |p: &str| translate(p, false).map(|t| t.bol);
         assert_eq!(t("a**").as_deref(), Some("(?:a*)*"));
         assert_eq!(t("(ab)+?").as_deref(), Some("(?:(ab)+)?"));
         assert_eq!(t("a{,2}").as_deref(), Some("a{0,2}"));
@@ -1857,7 +2186,7 @@ mod tests {
         assert_eq!(t("a{x"), None);
         assert_eq!(t("(a"), None);
         assert_eq!(t("\\1"), None);
-        assert_eq!(translate("^a").unwrap().notbol, "(?:\\b\\B)a");
+        assert_eq!(translate("^a", false).unwrap().notbol, "(?:\\b\\B)a");
     }
 
     /// A match the terminal split over a soft wrap is found whole.
@@ -1926,5 +2255,44 @@ mod tests {
     fn a_huge_pattern_is_refused() {
         let p = "(\\w{100}){100}";
         assert!(Pattern::compile(p, true).is_none());
+    }
+
+    /// A 100 000-line history, one row of text each and 80 wide.
+    fn big(lines: usize) -> Mode {
+        let rows: Vec<String> = (0..lines)
+            .map(|i| format!("line {i} of the history, some text to search"))
+            .collect();
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        Mode::new(Grid::from_text(80, lines - 24, &refs), (0, 23), true)
+    }
+
+    /// A search over a 100 000-line history (`history-limit 100000`) is one
+    /// pass of the prefilter over the copy, not a search per row: each of
+    /// these, end to end and wrapping, stays under 250 ms in a release build
+    /// (under 10 ms on the machine this was written on). Timing a debug
+    /// build says little and loads the suite, so this runs with
+    /// `cargo test --release -- 100k`.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "timing: run with --release")]
+    fn a_search_over_a_100k_line_history_is_one_pass() {
+        let mut m = big(100_000);
+        let limit = Duration::from_millis(250);
+        for (cmd, pat, count) in [
+            ("search-backward", "no(such|line)[x-z]+", None),
+            ("search-forward", "no(such|line)[x-z]+", None),
+            ("search-backward", "nosuchtext", None),
+            ("search-backward", "line 5 of", Some("1")),
+            ("search-backward", "line [0-9]+5 of", Some("9999")),
+        ] {
+            let t = Instant::now();
+            x(&mut m, &[cmd, pat]);
+            let took = t.elapsed();
+            eprintln!("{cmd} {pat}: {took:?}");
+            assert!(took < limit, "{cmd} {pat} took {took:?}");
+            if let Some(count) = count {
+                assert_eq!(format_var(&m, "search_count").as_deref(), Some(count));
+            }
+        }
+        assert_eq!(found(&m), "line 99995 of");
     }
 }

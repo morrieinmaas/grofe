@@ -1,8 +1,7 @@
-# TM.3: where grofe's regex differs from glibc's, recorded for the
-# record: POSIX takes the longest match at the leftmost position, the
-# regex crate the first alternative that matches; glibc takes a
+# TM.3: alternation and back-references. POSIX takes the longest match
+# at the leftmost position, and so does grofe; glibc takes a
 # back-reference, grofe finds nothing. tests/acceptance/tm_3.rs checks
-# grofe's own answers against these lines.
+# grofe's own answer on those lines.
 $ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
 $ run-shell 'sleep 1'
 $ copy-mode -t main

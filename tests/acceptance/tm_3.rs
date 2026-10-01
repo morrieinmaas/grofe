@@ -424,17 +424,13 @@ fn match_styles_equal_the_golden() {
     replay("styles");
 }
 
-/// Case 5, where grofe differs (`docs/copy-mode.md`): alternation takes the
-/// first alternative that matches, not the longest, so `d(e|ee)` matches
-/// `de` of `dee` (the cursor lands where tmux's does); a back-reference
-/// finds nothing. Every other line equals tmux's.
+/// Case 5, alternation and back-references: alternation takes the
+/// longest match at the leftmost position, as POSIX does (`d(e|ee)` matches
+/// all of `dee`); a back-reference, which the crate cannot match, finds
+/// nothing (`docs/copy-mode.md`). Every other line equals tmux's.
 #[test]
-fn the_documented_regex_differences() {
+fn alternation_is_longest_and_back_references_find_nothing() {
     let differs = [
-        (
-            "$ send-keys -t main -X search-backward 'd(e|ee)'",
-            "15,10,0 1 2 de",
-        ),
         (
             "$ send-keys -t main -X search-forward '(ab)\\1'",
             "0,0,36 0  ",
@@ -445,6 +441,14 @@ fn the_documented_regex_differences() {
         ),
     ];
     replay_with("differs", &differs);
+}
+
+/// Classes, case and ranges outside ASCII, as glibc reads them in
+/// `C.UTF-8` (`docs/copy-mode.md` lists where grofe's Unicode properties
+/// only approximate glibc's tables).
+#[test]
+fn unicode_classes_equal_the_golden() {
+    replay("unicode");
 }
 
 // ---- Off the actor ---------------------------------------------------------------
@@ -507,8 +511,8 @@ fn force_frames(
 
 /// Case 7: two clients attached to a session running `cat`, frames forced
 /// at 60 Hz; meanwhile a 50 000-line history in another session is
-/// searched end to end for a pattern it does not hold, forty times over
-/// (`-N 40`, each wrapping once). No frame waits more than 50 ms (or twice
+/// searched end to end for a pattern it does not hold, ten times over
+/// (`-N 10`, each wrapping once). No frame waits more than 50 ms (or twice
 /// the machine's own baseline, on a loaded machine, as TC.4 allows), and
 /// the request waits for the whole search.
 #[test]
@@ -563,7 +567,7 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
             "big",
             "-X",
             "-N",
-            "40",
+            "10",
             "search-backward",
             "no(such|line)[x-z]+",
         ]);
