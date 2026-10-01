@@ -332,6 +332,7 @@ fn destination(
         }
         return Ok((session, None));
     };
+    let dst = &model.window_index_type(dst, ctx)?;
     let (session, index) = match dst {
         Target::Window(s, WindowRef::Index(i)) => (
             model.resolve_session(&Target::Session(s.clone()), ctx)?,
@@ -576,7 +577,8 @@ fn rotate_slots(w: &mut Window, order: &[PaneId], down: bool) {
 /// (the first, `even-horizontal`, if none was), in tmux's order.
 pub fn next_layout(state: &mut State, ctx: &ClientCtx, c: NextLayout) -> Result<String, String> {
     let model = &mut state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
+    // tmux finds `-t` as a pane (cmd-select-layout.c).
+    let window = model.resolve_window(&model.pane_type(&c.target, ctx)?, ctx)?;
     unzoom(model, window);
     let (width, height) = main_sizes(model, window);
     let next = model.windows[&window]

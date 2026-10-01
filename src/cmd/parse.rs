@@ -2597,7 +2597,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::KillSession(KillSession {
-                target: Target::Session(SessionRef::Name("work".to_string())),
+                target: Target::Session(SessionRef::Bare("work".to_string())),
             })
         );
     }
@@ -2631,7 +2631,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::ListPanes(ListPanes {
-                target: Target::Session(SessionRef::Name("work".to_string())),
+                target: Target::Session(SessionRef::Bare("work".to_string())),
                 format: None,
                 all: false,
                 session: false,
@@ -2658,7 +2658,7 @@ mod tests {
             cmd,
             Command::NewWindow(NewWindow {
                 detached: true,
-                target: Target::Session(SessionRef::Name("work".to_string())),
+                target: Target::Session(SessionRef::Bare("work".to_string())),
                 name: Some("editor".to_string()),
                 cwd: Some("/tmp".to_string()),
                 command: Some(vec!["vim".to_string()]),
@@ -3301,7 +3301,7 @@ mod tests {
             cmd,
             Command::NewWindow(NewWindow {
                 detached: false,
-                target: Target::Session(SessionRef::Name("work".to_string())),
+                target: Target::Session(SessionRef::Bare("work".to_string())),
                 name: None,
                 cwd: None,
                 command: Some(vec!["-x".to_string()]),
@@ -3358,7 +3358,7 @@ mod tests {
     }
 
     fn session(name: &str) -> Target {
-        Target::Session(SessionRef::Name(name.to_string()))
+        Target::Session(SessionRef::Bare(name.to_string()))
     }
 
     #[test]
@@ -3423,7 +3423,7 @@ mod tests {
             parse(&argv(&["list-clients", "-t", "main", "-f", "1"])),
             Ok(Command::ListClients(ListClients {
                 format: None,
-                target: Some(Target::Session(SessionRef::Name("main".to_string()))),
+                target: Some(Target::Session(SessionRef::Bare("main".to_string()))),
                 filter: Some("1".to_string()),
             }))
         );

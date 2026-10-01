@@ -32,7 +32,8 @@ pub fn default_name(cwd: &Path) -> String {
 /// tmux's `winlink_shuffle_up` moves them. `-P` prints the new pane.
 pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<String, String> {
     let model = &state.model;
-    let (session, index) = match &c.target {
+    let target = model.window_index_type(&c.target, ctx)?;
+    let (session, index) = match &target {
         // -a: after the target window, moving later windows up; a free
         // index is taken as it is, as tmux 3.7b does.
         target if c.after => match model.resolve_window(target, ctx) {
@@ -50,7 +51,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         Target::Window(s, WindowRef::Index(index)) => {
             let session = model.resolve_session(&Target::Session(s.clone()), ctx)?;
             if model.window_at_index(session, *index).is_some() {
-                return Err(format!("index {index} in use"));
+                return Err(format!("create window failed: index {index} in use"));
             }
             (session, *index)
         }
@@ -356,7 +357,8 @@ pub fn select_layout(
         model.relayout(window);
         return Ok(String::new());
     }
-    let window = model.resolve_window(&c.target, ctx)?;
+    // tmux finds `-t` as a pane (cmd-select-layout.c).
+    let window = model.resolve_window(&model.pane_type(&c.target, ctx)?, ctx)?;
     let (width, height) = main_sizes(model, window);
     let Some(w) = model.windows.get_mut(&window) else {
         return Err(format!("can't find window: {window}"));

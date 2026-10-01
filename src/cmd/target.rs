@@ -1,6 +1,7 @@
-//! Target grammar (spec §4.5): `$N`/`@N`/`%N` runtime ids, `session`,
+//! Target grammar (spec §4.5): `$N`/`@N`/`%N` runtime ids, a bare word,
 //! `session:window`, `session:window.pane`, with window by index or name
-//! and pane by index. Not supported in v1: fnmatch patterns, `{last}`/
+//! and pane by index. A bare word is read as tmux's cmd-find.c reads it,
+//! by the kind of target the verb wants ([`SessionRef::Bare`]). Not supported in v1: fnmatch patterns, `{last}`/
 //! `{next}` tokens, `!`, `+`/`-` offsets.
 //!
 //! The tmux front end (FE.1, spec §4.5) reads targets the tmux way through
@@ -39,6 +40,14 @@ pub enum SessionRef {
     /// never resolves, and says so as tmux does ([`NO_MOUSE_TARGET`]).
     /// Built only by the tmux front end.
     Mouse,
+    /// A bare word with no `:` or `.`, read as tmux's `cmd-find.c` reads it:
+    /// what it names depends on the kind of target the verb wants. As a
+    /// pane, a number is a pane index in the current window, then a window
+    /// in the current session, then a session; as a window, a window in
+    /// the current session, then a session; as a session, a session only.
+    /// Natively too: the canopy port's `select-pane -t 1` means pane 1,
+    /// as in tmux. Only the front end reads `window.pane` with no `:`.
+    Bare(String),
 }
 
 /// The window part of a target; `Current` for the same reason as
@@ -165,7 +174,7 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 /// `target` with its named session made an exact match (tmux's `=name`).
 fn exact_session(target: Target) -> Target {
     let exact = |s: SessionRef| match s {
-        SessionRef::Name(name) => SessionRef::Exact(name),
+        SessionRef::Name(name) | SessionRef::Bare(name) => SessionRef::Exact(name),
         other => other,
     };
     match target {
@@ -235,8 +244,12 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
 
     let mut colon_positions = s.match_indices(':');
     let Some((colon_idx, _)) = colon_positions.next() else {
-        // No ':': a bare name is a session (spec: "session" alone).
-        return Ok(Target::Session(SessionRef::Name(s.to_string())));
+        if tmux_targets() {
+            return tmux_bare(s);
+        }
+        // No ':': a bare word, read by the kind of target the verb wants,
+        // as tmux reads it ([`SessionRef::Bare`]).
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
     };
     if colon_positions.next().is_some() {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
@@ -288,6 +301,26 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
         session,
         window,
         pane: parse_pane_part(pane_part)?,
+    }))
+}
+
+/// tmux's target with no `:`: `window.pane` in the current session, or a
+/// bare word left for the resolver ([`SessionRef::Bare`]).
+fn tmux_bare(s: &str) -> Result<Target, ParseError> {
+    let Some((window, pane)) = s.split_once('.') else {
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
+    };
+    if window.is_empty() || pane.is_empty() || pane.contains('.') {
+        return Err(ParseError::UnsupportedTarget(s.to_string()));
+    }
+    let window = match tmux_offset(window) {
+        Some(n) => WindowRef::Offset(n),
+        None => parse_window_ref(window)?,
+    };
+    Ok(Target::Pane(PaneRef {
+        session: SessionRef::Current,
+        window,
+        pane: parse_pane_part(pane)?,
     }))
 }
 
@@ -389,10 +422,10 @@ mod tests {
     }
 
     #[test]
-    fn bare_name_is_a_session() {
+    fn bare_name_is_a_bare_word() {
         assert_eq!(
             parse_target("work").unwrap(),
-            Target::Session(SessionRef::Name("work".to_string()))
+            Target::Session(SessionRef::Bare("work".to_string()))
         );
     }
 
@@ -600,11 +633,11 @@ mod tests {
     fn tmux_forms_are_native_literals_outside_the_front_end() {
         assert_eq!(
             parse_target("=x").unwrap(),
-            Target::Session(SessionRef::Name("=x".to_string()))
+            Target::Session(SessionRef::Bare("=x".to_string()))
         );
         assert_eq!(
             parse_target("=").unwrap(),
-            Target::Session(SessionRef::Name("=".to_string()))
+            Target::Session(SessionRef::Bare("=".to_string()))
         );
         assert!(parse_target(":.+").is_err());
     }
@@ -655,6 +688,24 @@ mod tests {
             })
         );
         assert_eq!(t("=").unwrap(), Target::Session(SessionRef::Mouse));
+        // A word with no `:` is left for the resolver, and `w.p` is a pane
+        // of the current session's window w (cmd-find.c).
+        assert_eq!(
+            t("1").unwrap(),
+            Target::Session(SessionRef::Bare("1".to_string()))
+        );
+        assert_eq!(
+            t("2.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Index(2),
+                pane: PanePart::Index(1),
+            })
+        );
+        assert_eq!(
+            parse_target("1").unwrap(),
+            Target::Session(SessionRef::Bare("1".to_string()))
+        );
         // Ids and a bare offset keep their native reading.
         assert_eq!(t("%3").unwrap(), parse_target("%3").unwrap());
         assert!(t("+1").is_err());

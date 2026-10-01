@@ -84,21 +84,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
         JOB_TMUX,
     ),
     (
-        "cockpit",
-        r##"$ new-window -c "#{pane_current_path}" \; split-window -h -c "#{pane_current_path}" \; split-window -v -c "#{pane_current_path}" \; select-layout main-vertical \; select-pane -t 1"##,
-        BARE_PANE_INDEX,
-    ),
-    (
-        "cockpit",
-        "$ display-message -p '#{session_name}:#{window_index}.#{pane_index} #{window_panes} panes'",
-        BARE_PANE_INDEX,
-    ),
-    (
-        "cockpit",
-        "$ list-panes -t main:2 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height} active=#{pane_active}'",
-        BARE_PANE_INDEX,
-    ),
-    (
         "nav",
         "$ display-message -p '#{pane_id} #{pane_at_left} #{pane_at_right}'",
         PANE_AT,
@@ -116,13 +101,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
 /// `--tmux` decides from `$TMUX`, so `bind K run-shell tsess` would open
 /// no floating pane. Owner: run-shell's job env (TC.5; TC.1 set it in panes).
 const JOB_TMUX: &str = "run-shell jobs have no $TMUX (TC.5, run-shell's environment)";
-
-/// canopy's `prefix c` ends with `select-pane -t 1`; tmux reads a bare
-/// number as a pane index in the current window, grofe as a session name,
-/// so the chain stops at `can't find session: 1` with the last pane
-/// focused. Owner: FE.1's target grammar.
-const BARE_PANE_INDEX: &str =
-    "`select-pane -t 1` resolves 1 as a session, not the pane index (FE.1 targets)";
 
 /// `#{pane_at_left}` and its siblings are empty: no inventory row names
 /// them (docs/compat-coverage.md, "Variable named: no"). The navigator's

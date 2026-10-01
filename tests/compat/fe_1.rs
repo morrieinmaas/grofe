@@ -103,6 +103,14 @@ fn targets_match_their_golden() {
     check_golden("targets");
 }
 
+/// TC.13 regression: a target with no `:` is read by the kind of target
+/// the verb wants (cmd-find.c), so `select-pane -t 1` is pane 1 of the
+/// current window, not a session named `1`.
+#[test]
+fn bare_targets_match_their_golden() {
+    check_golden("bare-targets");
+}
+
 /// Case 5: `set -gw`, `show -gqv`, the chained `set -p`, `setw`/`showw`,
 /// options grofe stores without acting on them.
 #[test]

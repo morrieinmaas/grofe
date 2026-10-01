@@ -250,7 +250,12 @@ and error texts) reaches grofe through the tmux front end below. Natively,
 **Targets (supported forms):** `$N`, `@N`, `%N`; `session`, `session:window`,
 `session:window.pane`, with window by index or name and pane by index; exact
 session name, then unique prefix; empty or omitted means the client's current
-(from the request context, §4.6); `name:` is the session's current window.
+(from the request context, §4.6); `name:` is the session's current window. A
+bare word with no `:` is read as tmux's `cmd-find.c` reads it, by the kind of
+target the verb wants: as a pane, a number is a pane index in the current
+window, then a window of the current session, then a session; as a window, a
+window, then a session; as a session, a session only (TC.13: canopy's
+`select-pane -t 1`).
 Through the tmux front end (M3.6, below): `=name` (exact session name, never
 a prefix match) and `=name:window`, which it maps onto an exact session
 reference in the native `Target` type; the native grammar is not required to

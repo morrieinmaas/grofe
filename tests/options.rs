@@ -282,7 +282,7 @@ fn display_message_errors_on_an_unresolvable_target() {
     let err = srv
         .cmd(&["display-message", "-p", "-t", "no-such-session", "hi"])
         .unwrap_err();
-    assert!(err.contains("can't find session: no-such-session"), "{err}");
+    assert!(err.contains("can't find pane: no-such-session"), "{err}");
     let err = srv
         .cmd(&["display-message", "-p", "-t", "%999", "hi"])
         .unwrap_err();

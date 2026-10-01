@@ -957,8 +957,9 @@ fn tmux_only_names_are_unknown_natively() {
     }
 }
 
-/// Natively `=x` is the literal session name `=x` (T1.2's approved
-/// reading); `=name` as an exact match is FE.1's front-end form.
+/// Natively `=x` is the literal word `=x`, looked up as any bare word is
+/// (a pane target: a window, then a session); `=name` as an exact match is
+/// FE.1's front-end form.
 #[test]
 fn equals_targets_are_literal_session_names() {
     for (given, name) in [("=", "="), ("=foo", "=foo")] {
@@ -966,7 +967,7 @@ fn equals_targets_are_literal_session_names() {
             p(&["select-pane", "-t", given]),
             Ok(Command::SelectPane(SelectPane {
                 edge: None,
-                target: Target::Session(SessionRef::Name(name.to_string())),
+                target: Target::Session(SessionRef::Bare(name.to_string())),
                 last: false,
                 keep_zoom: false,
                 title: None,
@@ -982,9 +983,9 @@ fn equals_targets_find_no_session_at_run_time() {
     srv.cmd(&["new-session", "-d", "-s", "x", "sleep", "30"])
         .expect("new-session");
     let e = srv.cmd(&["select-pane", "-t", "=x"]).unwrap_err();
-    assert_eq!(e.trim_end(), "can't find session: =x");
+    assert_eq!(e.trim_end(), "can't find pane: =x");
     let e = srv.cmd(&["select-pane", "-t", "="]).unwrap_err();
-    assert_eq!(e.trim_end(), "can't find session: =");
+    assert_eq!(e.trim_end(), "can't find pane: =");
 }
 
 /// D17: a bare `$` in a stored command string, as tmux 3.7b's lexer reads

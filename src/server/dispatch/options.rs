@@ -852,8 +852,13 @@ fn owner(
 ) -> Result<Owner, String> {
     Ok(match scope {
         OptionScope::Global => Owner::Global,
-        OptionScope::Session => Owner::Session(model.resolve_session(target, ctx)?),
-        OptionScope::Window => Owner::Window(model.resolve_window(target, ctx)?),
+        // tmux finds `-t` as a pane for every scope (cmd-set-option.c).
+        OptionScope::Session => {
+            Owner::Session(model.resolve_session(&model.pane_type(target, ctx)?, ctx)?)
+        }
+        OptionScope::Window => {
+            Owner::Window(model.resolve_window(&model.pane_type(target, ctx)?, ctx)?)
+        }
         OptionScope::Pane => Owner::Pane(model.resolve_pane(target, ctx)?),
         OptionScope::Server => Owner::Server,
         OptionScope::GlobalWindow => Owner::GlobalWindow,
@@ -2247,8 +2252,9 @@ pub(crate) fn listed_panes(
             .flat_map(|s| model.sessions[s].windows.clone())
             .collect()
     } else if c.session {
-        let s = model.resolve_session(&c.target, ctx)?;
-        model.sessions[&s].windows.clone()
+        // tmux finds `-t` as a window, then takes its session.
+        let w = model.resolve_window(&c.target, ctx)?;
+        model.sessions[&model.windows[&w].session].windows.clone()
     } else {
         vec![model.resolve_window(&c.target, ctx)?]
     };

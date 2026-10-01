@@ -61,7 +61,9 @@ pub fn set_environment(
     if c.global {
         hooks::set_global(state, &name, value, c.hidden);
     } else {
-        let session = state.model.resolve_session(&c.target, ctx)?;
+        // tmux finds `-t` as a pane (cmd-set-option.c).
+        let target = state.model.pane_type(&c.target, ctx)?;
+        let session = state.model.resolve_session(&target, ctx)?;
         hooks::set_session(state, session, &name, value, c.hidden);
     }
     Ok(String::new())

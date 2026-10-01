@@ -630,7 +630,7 @@ impl Model {
                 .contains_key(id)
                 .then_some(*id)
                 .ok_or_else(|| format!("can't find session: {id}")),
-            SessionRef::Name(name) => {
+            SessionRef::Name(name) | SessionRef::Bare(name) => {
                 if let Some(id) = self.session_by_name(name) {
                     return Ok(id);
                 }
@@ -750,6 +750,80 @@ impl Model {
     }
 }
 
+impl Model {
+    /// tmux's bare word as a window (cmd-find.c): a window of the current
+    /// session by index or name, then a session's current window.
+    fn bare_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        let window = match word.parse::<u32>() {
+            Ok(index) => WindowRef::Index(index),
+            Err(_) => WindowRef::Name(word.to_string()),
+        };
+        self.window_ref(&SessionRef::Current, &window, ctx)
+            .or_else(|_| {
+                let sid = self.session_ref(&SessionRef::Name(word.to_string()), ctx)?;
+                Ok(self.sessions[&sid].active)
+            })
+            .map_err(|_: String| format!("can't find window: {word}"))
+    }
+
+    /// tmux's bare word as a pane (cmd-find.c): a pane index in the current
+    /// window, then a window's active pane ([`Model::bare_window`]).
+    fn bare_pane(&self, word: &str, ctx: &ClientCtx) -> Result<PaneId, String> {
+        if let Ok(index) = word.parse::<u32>() {
+            let pane = PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Index(index),
+            };
+            if let Ok(p) = self.pane_ref(&pane, ctx) {
+                return Ok(p);
+            }
+        }
+        self.bare_window(word, ctx)
+            .map(|w| self.windows[&w].active)
+            .map_err(|_| format!("can't find pane: {word}"))
+    }
+
+    /// `target` read as tmux reads a pane target, for a verb whose `-t` is
+    /// a pane in tmux but whose grofe handler resolves it as a window or a
+    /// session (`set-option`, `set-hook`, `select-layout`): a bare word
+    /// becomes the pane it names. Every other target is returned as is.
+    pub fn pane_type(&self, target: &Target, ctx: &ClientCtx) -> Result<Target, String> {
+        match target {
+            Target::Session(SessionRef::Bare(word)) => Ok(Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Id(self.bare_pane(word, ctx)?),
+            })),
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// `target` read as tmux reads a window-index target (`new-window -t`,
+    /// `move-window -t`): a bare number is that index in the current
+    /// session, used or not; another bare word is a window of the current
+    /// session by name, then a session. Every other target is returned as
+    /// is.
+    pub fn window_index_type(&self, target: &Target, ctx: &ClientCtx) -> Result<Target, String> {
+        let Target::Session(SessionRef::Bare(word)) = target else {
+            return Ok(target.clone());
+        };
+        let session = SessionRef::Id(self.current_session(ctx)?);
+        if let Ok(index) = word.parse::<u32>() {
+            return Ok(Target::Window(session, WindowRef::Index(index)));
+        }
+        let name = WindowRef::Name(word.clone());
+        if let Ok(w) = self.window_ref(&SessionRef::Current, &name, ctx) {
+            let index = WindowRef::Index(self.windows[&w].index);
+            return Ok(Target::Window(session, index));
+        }
+        match self.session_ref(&SessionRef::Name(word.clone()), ctx) {
+            Ok(sid) => Ok(Target::Session(SessionRef::Id(sid))),
+            Err(_) => Err(format!("can't find window: {word}")),
+        }
+    }
+}
+
 /// The item `n` places after `from` in `items` (before it when `n` is
 /// negative), wrapping round; `from` itself when it is not there.
 fn step<T: Copy + PartialEq>(items: &[T], from: T, n: i32) -> T {
@@ -767,6 +841,7 @@ impl Resolve for Model {
         match target {
             Target::Current => self.current_pane(ctx),
             Target::Pane(r) => self.pane_ref(r, ctx),
+            Target::Session(SessionRef::Bare(word)) => self.bare_pane(word, ctx),
             Target::Session(_) | Target::Window(..) => {
                 let w = self.resolve_window(target, ctx)?;
                 Ok(self.windows[&w].active)
@@ -777,6 +852,7 @@ impl Resolve for Model {
     fn resolve_window(&self, target: &Target, ctx: &ClientCtx) -> Result<WindowId, String> {
         match target {
             Target::Current => self.current_window(ctx),
+            Target::Session(SessionRef::Bare(word)) => self.bare_window(word, ctx),
             Target::Session(s) => {
                 let sid = self.session_ref(s, ctx)?;
                 Ok(self.sessions[&sid].active)
