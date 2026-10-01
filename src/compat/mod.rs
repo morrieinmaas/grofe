@@ -85,6 +85,9 @@ pub fn server_started(state: &mut State) {
         .lookup("compat-identity", &[Owner::Global])
         .unwrap_or("auto");
     state.model.identity = decide_identity(started, option);
+    // tmux's `getshell`: the server's `$SHELL`, the passwd shell, `/bin/sh`.
+    let shell = crate::server::pane::pick_shell(std::env::var("SHELL").ok());
+    state.model.options.set_default("default-shell", shell);
     if state.model.identity == Identity::Tmux {
         let _ = MISS_LOG.set(miss_log_path(&Env::from_process()));
         // tmux's built-in defaults where grofe's differ (FE.1 ruling).

@@ -400,7 +400,9 @@ const BUILTINS: &[Builtin] = &[
     // `renumber-windows` itself is read (`Model::remove_window`).
     // ponytail: `default-command` and `synchronize-panes` do something in
     // tmux; grofe stores them only, until a ported script needs one.
-    // `default-shell` is read when a pane starts (`Model::default_shell`).
+    // `default-shell` is read when a pane starts (`Model::default_shell`);
+    // its default is the server's shell, as tmux's `getshell` picks it
+    // (`compat::server_started`).
     // `mode-keys` waits for M5's copy mode, and `pane-border-format` for
     // pane border titles.
     Builtin {
@@ -596,6 +598,26 @@ impl Options {
     /// A value the config set keeps winning, and falls back to tmux's on
     /// `reload` once the config stops setting it; a runtime value is left
     /// alone. Called once, at start.
+    /// Makes `value` this server's built-in default for `name`: a value
+    /// the config sets still wins, with this as its reload base, a runtime
+    /// value is left alone, and `set -gu` restores it.
+    pub fn set_default(&mut self, name: &'static str, value: String) {
+        if let Some(base) = self.config_base.get_mut(name) {
+            *base = value.clone();
+        } else if !self.runtime.contains(name)
+            && let Some(global) = self.values.get_mut(&Owner::Global)
+        {
+            global.insert(
+                name.to_string(),
+                Entry {
+                    value: value.clone(),
+                    persist: false,
+                },
+            );
+        }
+        self.identity_defaults.insert(name, value);
+    }
+
     pub fn use_tmux_defaults(&mut self, editor: Option<&str>) {
         let keys = match editor.and_then(|e| e.rsplit('/').next()) {
             Some(e) if e.contains("vi") => "vi",
@@ -609,20 +631,7 @@ impl Options {
                 ("status-keys", keys.to_string()),
             ]);
         for (name, value) in defaults {
-            if let Some(base) = self.config_base.get_mut(name) {
-                *base = value.clone();
-            } else if !self.runtime.contains(name)
-                && let Some(global) = self.values.get_mut(&Owner::Global)
-            {
-                global.insert(
-                    name.to_string(),
-                    Entry {
-                        value: value.clone(),
-                        persist: false,
-                    },
-                );
-            }
-            self.identity_defaults.insert(name, value);
+            self.set_default(name, value);
         }
         let aliases: BTreeMap<u32, String> = (0..)
             .zip(TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()))
@@ -805,6 +814,16 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             // tmux's wording for a flag option; choices say `unknown value`.
             _ => Err(format!("bad value: {value}")),
         },
+        // tmux's `checkshell`: an absolute path it may execute, not tmux.
+        Kind::String if name == "default-shell" => {
+            let tmux = value.rsplit('/').next() == Some("tmux");
+            let usable = value.starts_with('/')
+                && !tmux
+                && nix::unistd::access(value, nix::unistd::AccessFlags::X_OK).is_ok();
+            usable
+                .then(|| value.to_string())
+                .ok_or_else(|| format!("not a suitable shell: {value}"))
+        }
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),

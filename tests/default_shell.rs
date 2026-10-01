@@ -38,11 +38,17 @@ fn a_new_pane_starts_the_default_shell_when_it_is_set() {
     assert!(!srv.capture("before:1").contains("marker-shell"));
 }
 
+/// As tmux 3.7b's `checkshell` (recorded): a shell that is not an
+/// absolute path it may run is refused, and panes keep starting.
 #[test]
-fn an_unusable_default_shell_falls_back_as_shell_does() {
+fn an_unusable_default_shell_is_refused_as_tmux_does() {
     let srv = TestServer::start();
-    srv.cmd(&["set-option", "-g", "default-shell", "/nonexistent/shell"])
-        .unwrap();
+    for bad in ["/nonexistent/shell", "sh"] {
+        let err = srv
+            .cmd(&["set-option", "-g", "default-shell", bad])
+            .unwrap_err();
+        assert_eq!(err.trim_end(), format!("not a suitable shell: {bad}"));
+    }
     srv.cmd(&["new-session", "-d", "-s", "s"]).unwrap();
     srv.cmd(&["send-keys", "-t", "s", "echo alive-$((6*7))", "Enter"])
         .unwrap();

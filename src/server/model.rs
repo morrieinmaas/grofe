@@ -347,14 +347,13 @@ impl Model {
             .unwrap_or(default)
     }
 
-    /// `default-shell` for `session`, when it is set to something other
-    /// than its built-in `/bin/sh`: the shell a new pane starts, as tmux
-    /// starts it. Unset, a pane starts `$SHELL` (`pane::default_shell`).
-    // ponytail: an explicit `/bin/sh` reads as unset, so `$SHELL` wins it.
+    /// `default-shell` for `session`: the shell a new pane starts, as tmux
+    /// starts it. Its default is the server's own shell, picked at start
+    /// as tmux's `getshell` picks it (`compat::server_started`).
     pub fn default_shell(&self, session: SessionId) -> Option<String> {
         self.options
             .lookup("default-shell", &[options::Owner::Session(session)])
-            .filter(|v| !v.is_empty() && *v != "/bin/sh")
+            .filter(|v| !v.is_empty())
             .map(str::to_string)
     }
 

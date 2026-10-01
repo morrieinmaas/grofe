@@ -660,6 +660,30 @@ fn tmux_c_runs_the_command_with_the_default_shell() {
     let out = tmux(&srv, &["-c", "echo not this shell"]);
     assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(out.stdout, format!("marker {shell}\n"));
+
+    // An explicit /bin/sh is set like any other shell, whatever $SHELL is.
+    let out = tmux(&srv, &["set", "-g", "default-shell", "/bin/sh"]);
+    assert!(out.status.success(), "{}", out.stderr);
+    let mut cmd = Command::new(tmux_link(&srv));
+    isolate(&srv, &mut cmd);
+    cmd.env("SHELL", &shell).args([
+        "-S",
+        &srv.socket.display().to_string(),
+        "-c",
+        "echo \"$0 $SHELL\"",
+    ]);
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert_eq!(out.stdout, "sh /bin/sh\n", "{}", out.stderr);
+
+    // tmux's checkshell refuses what it could not run.
+    for bad in ["/nonexistent", "sh"] {
+        let out = tmux(&srv, &["set", "-g", "default-shell", bad]);
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            out.stderr.trim_end(),
+            format!("not a suitable shell: {bad}")
+        );
+    }
     let _ = tmux(&srv, &["kill-server"]);
 }
 
