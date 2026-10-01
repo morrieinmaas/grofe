@@ -13,7 +13,7 @@ use crate::server::input::{self, parse_prefix};
 use crate::server::layout::{Insert, LayoutError};
 use crate::server::model::Model;
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients, graphics};
+use crate::server::{State, clients, copy, graphics, prompt};
 use crate::types::{Dir, Edge, PaneId, Rect, SplitSize, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -463,12 +463,61 @@ pub(crate) fn respawn(
 /// `send-keys`: key names encoded for the pane's current input modes,
 /// literals as UTF-8, `-H` as raw bytes, all queued in one write.
 fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, String> {
+    let pane = state.model.resolve_pane(&c.target, ctx)?;
+    // M5 (TM.1): `-N`, `-X` and keys for a pane in copy mode, as tmux
+    // 3.7b's `cmd_send_keys_exec`.
+    let in_mode = state.copy.is_active(pane);
+    let mut repeat = 1;
+    if let Some(count) = &c.count {
+        let at = ClientCtx {
+            pane: Some(pane),
+            ..ctx.clone()
+        };
+        let text = prompt::expand_command(state, &at, count);
+        let n = copy::strtonum(&text, 1, i64::from(u32::MAX))
+            .map_err(|why| format!("repeat count {why}"))?;
+        repeat = n as u32;
+        if in_mode && (c.command || c.items.is_empty()) {
+            copy::set_prefix(state, pane, repeat)?;
+        }
+    }
+    if c.command {
+        let args: Vec<String> = c.items.into_iter().map(item_text).collect();
+        copy::command_in(state, pane, &args)?;
+        return Ok(String::new());
+    }
+    if c.items.is_empty() {
+        return Ok(String::new());
+    }
+    if in_mode {
+        // Each key runs its binding in the mode's table; others are dropped.
+        let at = ClientCtx {
+            pane: Some(pane),
+            ..ctx.clone()
+        };
+        for _ in 0..repeat {
+            for item in &c.items {
+                for key in mode_keys(item) {
+                    if let Some((cmds, dialect)) = copy::binding_for(state, pane, &key) {
+                        let at = ClientCtx {
+                            dialect,
+                            ..at.clone()
+                        };
+                        for argv in &cmds {
+                            crate::server::dispatch::run_bound(state, &at, argv)?;
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(String::new());
+    }
     let model = &state.model;
-    let pane = model.resolve_pane(&c.target, ctx)?;
     let handle = &model.panes[&pane].handle;
     let modes = handle.modes();
     let mut bytes = Vec::new();
-    for item in c.items {
+    let items: Vec<SendKeysItem> = (0..repeat).flat_map(|_| c.items.clone()).collect();
+    for item in items {
         match item {
             SendKeysItem::Key(name) => match cmd::key_bytes(&name, &modes) {
                 Some(b) => bytes.extend(b),
@@ -485,6 +534,38 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         .enqueue_input(bytes)
         .map_err(|e| format!("send-keys: {pane}: {e}"))?;
     Ok(String::new())
+}
+
+/// A `send-keys -X` word as given.
+fn item_text(item: SendKeysItem) -> String {
+    match item {
+        SendKeysItem::Key(s) | SendKeysItem::Literal(s) => s,
+        SendKeysItem::Hex(b) => format!("{b:02x}"),
+    }
+}
+
+/// The keys `item` is for a pane in a mode: a key name is one key, text
+/// one key per character, as tmux's `cmd_send_keys_inject_string`.
+fn mode_keys(item: &SendKeysItem) -> Vec<input::Key> {
+    let chars = |s: &str| {
+        s.chars()
+            .map(|c| input::Key::new(input::KeyCode::Char(c), input::Mods::default()))
+            .collect()
+    };
+    match item {
+        SendKeysItem::Key(name) => match input::parse_key(name) {
+            Ok(key) => vec![key],
+            Err(_) => chars(name),
+        },
+        SendKeysItem::Literal(text) => match input::parse_key(text) {
+            Ok(key) if text.chars().count() > 1 => vec![key],
+            _ => chars(text),
+        },
+        SendKeysItem::Hex(b) => vec![input::Key::new(
+            input::KeyCode::Char(char::from(*b)),
+            input::Mods::default(),
+        )],
+    }
 }
 
 /// `send-prefix`: the target pane's session `prefix` key, typed into the

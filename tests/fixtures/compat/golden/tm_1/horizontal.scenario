@@ -1,0 +1,455 @@
+# TM.1: horizontal and word motions (h l Left Right BSpace 0 Home $ End ^
+# w b e W B E), each followed by the cursor readout, over
+# tests/fixtures/copy/fixture.txt: indentation, separators, wide gaps,
+# wide characters, trailing blanks, a line wrapped twice, punctuation.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main H
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 4 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 5 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main $
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main ^
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main Right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main Left
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 6 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main End
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main BSpace
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main BSpace
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main Home
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 8 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main $
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 70 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main j
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main ^
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main k
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 75 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main j
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main $
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 16 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 17 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 18 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X top-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 10 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main ^
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 19 cursor-down
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main $
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main ^
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main G
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main ^
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main $
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main E
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main W
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-top
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main B
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'

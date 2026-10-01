@@ -1,0 +1,56 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 5 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,0
+? 0
+$ run-shell -t main 'seq 1 50 > #{pane_tty}'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode} #{history_size}'
+1 550
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,0
+? 0
+$ send-keys -t main -X -N 3 page-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,66
+? 0
+$ send-keys -t main r
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,116
+? 0
+$ send-keys -t main G
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,550
+? 0
+$ send-keys -t main r
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,550
+? 0
+$ send-keys -t main q
+? 0
+$ display -p -t main '#{pane_in_mode} #{history_size}'
+0 550
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0

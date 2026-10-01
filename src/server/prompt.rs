@@ -420,6 +420,26 @@ impl InputHook for PromptHook {
         if let Input::Focus(_) = input {
             return None;
         }
+        // `-N` (M5): as tmux 3.7b's `status_prompt_key`, any key but a
+        // digit answers the prompt and then goes on as a key (copy mode's
+        // counts: `5` then `j`).
+        if let (Read::Line, true, Input::Key(key)) = (prompt.read, prompt.numeric, input) {
+            let digit = key.mods == Default::default()
+                && matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit());
+            if !digit {
+                let prompt = state.prompts.close(client)?;
+                let command = replace_template(&prompt.template, &prompt.line());
+                match cmd::split_command_string(&command) {
+                    Ok(cmds) if !cmds.is_empty() => {
+                        clients::run_binding(state, client, &cmds, prompt.dialect)
+                    }
+                    Ok(_) => {}
+                    Err(e) => clients::show_message(state, client, &e.to_string()),
+                }
+                clients::mark_dirty(state, client);
+                return None;
+            }
+        }
         let edit = match (prompt.read, input) {
             (Read::Line, Input::Key(key)) => prompt.key(key, history),
             (Read::Line, Input::Paste { data, .. }) => {

@@ -1,0 +1,111 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{pane_in_mode}[#{pane_mode}]'
+80x24 500 0[]
+? 0
+$ send-keys -t main -X cursor-up
+! not in a mode
+? 1
+$ send-keys -t main -N 3 -X cursor-up
+! not in a mode
+? 1
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode}[#{pane_mode}] #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1[copy-mode] 0,23,0
+? 0
+$ send-keys -t main -X -N 4 cursor-up
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,0
+? 0
+$ copy-mode -u -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,22
+? 0
+$ send-keys -t main -X
+? 0
+$ send-keys -t main -X no-such-command
+? 0
+$ send-keys -t main -X goto-line
+? 0
+$ send-keys -t main -N abc -X cursor-up
+! repeat count invalid
+? 1
+$ send-keys -t main -N 0 -X cursor-up
+! repeat count too small
+? 1
+$ send-keys -t main -N 99999999999 -X cursor-up
+! repeat count too large
+? 1
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,22
+? 0
+$ send-keys -t main -N 2
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,17,22
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ display -p -t main '#{pane_in_mode}[#{pane_mode}] [#{copy_cursor_x}] [#{scroll_position}]'
+0[] [] []
+? 0
+$ copy-mode -u -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+58,23,22
+? 0
+$ send-keys -t main q
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -e -u -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 58,23,22
+? 0
+$ send-keys -t main -X -N 3 scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 41,23,19
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -e -t main
+? 0
+$ send-keys -t main -X scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -e -u -t main
+? 0
+$ send-keys -t main C-d
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 22,23,10
+? 0
+$ send-keys -t main C-d
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main C-c
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
