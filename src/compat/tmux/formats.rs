@@ -83,6 +83,7 @@ const SHORT_FORMS: &[(char, &str)] = &[
 /// The modifier prefixes grofe's expander knows (TC.3), longest first.
 const NATIVE_MODIFIERS: &[&str] = &[
     "?", "==:", "!=:", ">=:", ">:", "<=:", "<:", "&&:", "||:", "!!:", "!:", "m:", "m/", "b:", "t:",
+    "q:",
 ];
 
 /// `fmt`, a tmux format, in grofe's format language, with the status
