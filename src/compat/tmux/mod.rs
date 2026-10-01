@@ -889,12 +889,14 @@ fn check_flags(inv: &Invocation<'_>) -> Result<(), TmuxError> {
 /// natively (`invalid option: <name>`). Names grofe stores without acting
 /// on them are the option store's `NO_EFFECT` list.
 pub const OPTION_NAMES: &[(&str, &str)] = &[
+    ("activity-action", "activity-action"),
     ("aggressive-resize", "aggressive-resize"),
     ("allow-passthrough", "allow-passthrough"),
     ("allow-rename", "allow-rename"),
     ("automatic-rename", "automatic-rename"),
     ("automatic-rename-format", "automatic-rename-format"),
     ("base-index", "base-index"),
+    ("bell-action", "bell-action"),
     ("command-alias", "command-alias"),
     ("compat-identity", "compat-identity"),
     ("default-command", "default-command"),
@@ -910,6 +912,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("main-pane-width", "main-pane-width"),
     ("message-style", "message-style"),
     ("mode-keys", "mode-keys"),
+    ("monitor-activity", "monitor-activity"),
+    ("monitor-bell", "monitor-bell"),
+    ("monitor-silence", "monitor-silence"),
     ("mouse", "mouse"),
     ("pane-active-border-style", "pane-active-border-style"),
     ("pane-base-index", "pane-base-index"),
@@ -922,6 +927,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("set-clipboard", "set-clipboard"),
     ("set-titles", "set-titles"),
     ("set-titles-string", "set-titles-string"),
+    ("silence-action", "silence-action"),
     ("status", "status"),
     ("status-format", "status-format"),
     ("status-interval", "status-interval"),
@@ -938,6 +944,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("synchronize-panes", "synchronize-panes"),
     ("terminal-features", "terminal-features"),
     ("update-environment", "update-environment"),
+    ("visual-activity", "visual-activity"),
+    ("visual-bell", "visual-bell"),
+    ("visual-silence", "visual-silence"),
     ("window-size", "window-size"),
     ("window-status-bell-style", "window-status-bell-style"),
     (

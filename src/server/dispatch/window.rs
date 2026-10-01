@@ -95,6 +95,8 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         cols: size.0,
         rows: size.1,
         bell_flag: false,
+        activity_flag: false,
+        silence_flag: false,
         last_panes: Vec::new(),
         floating: Vec::new(),
     });
@@ -183,8 +185,8 @@ pub enum Step {
 
 /// `next-window` / `previous-window`: the target session's next or
 /// previous window by index, wrapping around as tmux does. With `-a`, the
-/// next or previous one with an alert, which in grofe is a bell
-/// (`window_bell_flag`, R13); none is an error, as in tmux 3.7b.
+/// next or previous one with an alert (a bell, activity or silence flag,
+/// `server::alerts`); none is an error, as in tmux 3.7b.
 pub fn step_window(
     state: &mut State,
     ctx: &ClientCtx,
@@ -210,7 +212,12 @@ pub fn step_window(
         Step::Next => (pos + k) % n,
         Step::Previous => (pos + n - k % n) % n,
     };
-    let alerted = |id: &WindowId| model.windows.get(id).is_some_and(|w| w.bell_flag);
+    let alerted = |id: &WindowId| {
+        model
+            .windows
+            .get(id)
+            .is_some_and(|w| w.bell_flag || w.activity_flag || w.silence_flag)
+    };
     let window = if c.alert {
         (1..n)
             .map(|k| s.windows[at(k)])

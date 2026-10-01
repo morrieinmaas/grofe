@@ -1147,6 +1147,7 @@ pub fn wake(state: &mut State) {
         .filter(|p| p.handle.take_dirty())
         .map(|p| p.id)
         .collect();
+    crate::server::alerts::output(state, &dirty);
     if dirty.is_empty() || state.clients.is_empty() {
         return;
     }

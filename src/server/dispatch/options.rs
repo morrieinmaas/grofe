@@ -100,6 +100,12 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ),
 ];
 
+/// `bell-action`, `activity-action` and `silence-action`'s choices.
+const ALERT_ACTIONS: &[&str] = &["none", "any", "current", "other"];
+
+/// The `visual-*` options' choices.
+const VISUAL: &[&str] = &["off", "on", "both"];
+
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -243,6 +249,63 @@ const BUILTINS: &[Builtin] = &[
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "reverse",
+    },
+    // Window alerts (`server::alerts`, TP.10), with tmux's defaults.
+    Builtin {
+        name: "monitor-bell",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "monitor-activity",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "monitor-silence",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Window,
+        default: "0",
+    },
+    Builtin {
+        name: "bell-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "any",
+    },
+    Builtin {
+        name: "activity-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+    },
+    Builtin {
+        name: "silence-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+    },
+    Builtin {
+        name: "visual-bell",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "visual-activity",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "visual-silence",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
     },
     Builtin {
         name: "message-style",
@@ -2511,6 +2574,8 @@ impl FormatVars for FormatCtx<'_> {
             "window_zoomed_flag" => flag(w.zoomed),
             "window_width" => w.cols.to_string(),
             "window_bell_flag" => flag(w.bell_flag),
+            "window_activity_flag" => flag(w.activity_flag),
+            "window_silence_flag" => flag(w.silence_flag),
             "window_height" => w.rows.to_string(),
             "window_panes" => w.pane_ids().len().to_string(),
             "pane_floating_flag" => flag(w.floating(p.id).is_some()),
@@ -2633,19 +2698,22 @@ fn window_layout(w: &crate::server::model::Window) -> String {
     tmux_layout(&w.layout.export(w.area()), &floating, !w.zoomed)
 }
 
-/// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in
-/// tmux's order. grofe tracks no activity, silence or marked pane, so
-/// `#`, `~` and `M` never show.
+/// tmux's `window_flags`: `#` activity (written `##`, as tmux escapes it
+/// there), `!` bell, `~` silence, `*` current, `-` last, `Z` zoomed, in
+/// tmux's order. grofe has no marked pane, so `M` never shows.
 fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Window) -> String {
-    [
+    let activity = if w.activity_flag { "##" } else { "" };
+    let rest: String = [
         (w.bell_flag, '!'),
+        (w.silence_flag, '~'),
         (s.active == w.id, '*'),
         (s.last_windows.last() == Some(&w.id), '-'),
         (w.zoomed, 'Z'),
     ]
     .into_iter()
     .filter_map(|(on, c)| on.then_some(c))
-    .collect()
+    .collect();
+    format!("{activity}{rest}")
 }
 
 /// One word of `pane_start_command`, quoted as tmux's `args_escape`

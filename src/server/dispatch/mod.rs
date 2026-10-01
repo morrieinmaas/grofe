@@ -263,9 +263,13 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // A status source a `#(cmd)` registered stops once no option
         // reads it any more (FE.3).
-        Command::SetOption(_) => {
-            let out = options::run(state, ctx, cmd);
+        Command::SetOption(c) => {
+            let silence = c.name == "monitor-silence";
+            let out = options::run(state, ctx, Command::SetOption(c));
             server::sources::prune_unreferenced(state);
+            if silence && out.is_ok() {
+                server::alerts::silence_option_set(state);
+            }
             out
         }
         Command::ShowOptions(_)
