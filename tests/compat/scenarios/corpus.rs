@@ -183,8 +183,19 @@ fn requests(line: &str, conf: bool) -> Result<Vec<Vec<String>>, String> {
     if cli.version {
         return Ok(vec![vec!["-V".into()]]);
     }
+    // `-c` runs its command with the default shell, no server request: it
+    // goes as written, with [`SHELL_RAN`] after it to prove a shell ran.
+    if let Some(command) = cli.shell_command {
+        return Ok(vec![vec![
+            "-c".into(),
+            format!("{command}\necho {SHELL_RAN}$?"),
+        ]]);
+    }
     Ok(vec![cli.argv])
 }
+
+/// What a `-c` request's shell prints last, with the command's status.
+const SHELL_RAN: &str = "tc13-shell-ran-";
 
 /// Runs `argv` through `cli`, killing it once [`BLOCK`] passes: its exit
 /// code (`None` when it was still waiting) and what it printed.
@@ -333,6 +344,14 @@ pub fn run(co: &Checkouts) -> Vec<String> {
                             Some(0) => {}
                             Some(_) => refused += 1,
                         }
+                        if req.first().is_some_and(|w| w == "-c")
+                            && (code != Some(0) || !reply.contains(SHELL_RAN))
+                        {
+                            problem = Some(format!(
+                                "sent {req:?}, no shell ran it ({code:?}): {}",
+                                reply.trim()
+                            ));
+                        }
                         if let Some(bad) = FORBIDDEN.iter().find(|f| reply.contains(*f)) {
                             problem = Some(format!(
                                 "sent {req:?}, reply says {bad:?}: {}",
@@ -358,6 +377,9 @@ pub fn run(co: &Checkouts) -> Vec<String> {
         }
     }
     let _ = cli.run(&words(&["kill-server"]));
+    if let Err(e) = super::tripwire(&cli) {
+        failures.push(e);
+    }
 
     for (line, why) in KNOWN_FAILING {
         match failing.get(line) {
@@ -393,6 +415,16 @@ fn placeholders_become_concrete() {
         "kill-pane -t %1 \\; select -t @1:1"
     );
     assert_eq!(concrete("a <b c> d"), "a <b c> d");
+}
+
+/// tmux-fzf's `-c {}` goes as `-c`, its command and the marker the
+/// replay looks for, so the line cannot pass without a shell running.
+#[test]
+fn a_shell_command_line_goes_with_its_marker() {
+    assert_eq!(
+        requests("-c {}", false).unwrap(),
+        vec![words(&["-c", &format!("{{}}\necho {SHELL_RAN}$?")])]
+    );
 }
 
 #[test]

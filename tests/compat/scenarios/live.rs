@@ -7,8 +7,8 @@
 //!   floating pane needs a client), opens through a real fzf's `--tmux`,
 //!   is typed into, and its selection switches the client's session.
 //!   Skipped, loudly, without an fzf that has `--tmux`. Where tsess's own
-//!   `PATH` would find a real tmux ([`TSESS_PATH_TMUX`]), tsess's picker
-//!   call runs from a shell line instead of the script, and says so.
+//!   `PATH` would find a real tmux ([`script_tmux`]), tsess's picker call
+//!   runs from a shell line instead of the script, and says so.
 //! - Case 4, vim-tmux-navigator: a headless Neovim in the right pane runs
 //!   TP.2's copy of the plugin's `s:TmuxAwareNavigate` edge call, `tmux -S
 //!   <socket from $TMUX> select-pane -t $TMUX_PANE -L`, plus the plugin's
@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use nix::pty::{Winsize, openpty};
 
-use super::{Checkouts, TSESS_PATH_TMUX, tc13_cli};
+use super::{Checkouts, script_tmux, tc13_cli, tripwire};
 use crate::replay::Cli;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -152,13 +152,15 @@ fn fzf_tsess(co: &Checkouts) -> Result<Option<String>, String> {
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let cli = tc13_cli(dir.path(), co);
     symlink(&fzf, dir.path().join("bin/fzf")).map_err(|e| e.to_string())?;
-    // tsess puts TSESS_PATH_TMUX's directory first on its PATH; a tmux
-    // there is a real one, not grofe. Then tsess's own fzf call, as the
-    // script writes it, runs from a shell line instead, and the run says so.
-    let picker = if Path::new(TSESS_PATH_TMUX).exists() {
+    // Where tsess's own PATH finds a tmux that is not grofe, tsess's fzf
+    // call, as the script writes it, runs from a shell line instead, and
+    // the run says so.
+    let tsess = co.athome.join("home/dot_local/bin/executable_tsess");
+    let found = script_tmux(&tsess, &cli);
+    let picker = if found.as_ref() != Some(&cli.program) {
         eprintln!(
-            "tc_13 fzf --tmux: {TSESS_PATH_TMUX} would shadow grofe on tsess's PATH, so \
-             tsess's picker call runs without the script"
+            "tc_13 fzf --tmux: tsess's PATH finds {found:?}, not grofe, so tsess's picker \
+             call runs without the script"
         );
         "sel=$(tmux list-sessions -F '#S' | fzf --ansi --tmux center,70%,68% --reverse \
          --prompt='sessions  '); tmux switch-client -t \"$sel\"; echo tsess-exit-$?; exec cat"
@@ -167,9 +169,7 @@ fn fzf_tsess(co: &Checkouts) -> Result<Option<String>, String> {
         format!(
             "'{}' '{}'; echo tsess-exit-$?; exec cat",
             bash.display(),
-            co.athome
-                .join("home/dot_local/bin/executable_tsess")
-                .display()
+            tsess.display()
         )
     };
     let result = (|| {
@@ -232,7 +232,7 @@ fn fzf_tsess(co: &Checkouts) -> Result<Option<String>, String> {
         wait_until("the floating pane to close", || floating().is_none())
     })();
     let _ = cli.run(&words(&["kill-server"]));
-    result.map(|()| None)
+    result.and_then(|()| tripwire(&cli)).map(|()| None)
 }
 
 /// TP.2's minimal Neovim init: the plugin's edge call and zoom probe, each
@@ -337,7 +337,7 @@ fn nav_from_nvim(co: &Checkouts) -> Result<Option<String>, String> {
         Ok(())
     })();
     let _ = cli.run(&words(&["kill-server"]));
-    result.map(|()| None)
+    result.and_then(|()| tripwire(&cli)).map(|()| None)
 }
 
 #[test]

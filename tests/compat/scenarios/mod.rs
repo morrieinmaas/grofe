@@ -67,12 +67,71 @@ const ATHOME_TREE: &str = "{fixtures}/../../compat/scenarios/trees/athome";
 const TMUX_ONLY: &str =
     "$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf";
 
-/// athome's tsess puts this directory first on its own `PATH`. A `tmux`
-/// there is a real tmux, which the script would call instead of grofe, so
-/// where one exists the tsess scenario is skipped, loudly, and the fzf
-/// check runs tsess's picker call without the script: real tmux runs only
-/// in the golden container.
-pub const TSESS_PATH_TMUX: &str = "/opt/nanobrew/prefix/bin/tmux";
+/// The `tmux` `script` would run: the first on the `PATH` its own `PATH=`
+/// lines set, read in order with `$HOME` and `$PATH` from `cli`'s
+/// environment, else on `cli`'s `PATH`. athome's scripts put
+/// `/opt/nanobrew/prefix/bin` first, where a machine may have a real tmux,
+/// which the script would call instead of grofe.
+pub fn script_tmux(script: &Path, cli: &Cli) -> Option<PathBuf> {
+    let var = |name: &str| {
+        cli.env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let home = var("HOME");
+    let mut path = var("PATH");
+    for line in fs::read_to_string(script).unwrap_or_default().lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some(value) = line.strip_prefix("PATH=") {
+            path = value
+                .trim_matches(['"', '\''])
+                .replace("${HOME}", &home)
+                .replace("$HOME", &home)
+                .replace("${PATH}", &path)
+                .replace("$PATH", &path);
+        }
+    }
+    path.split(':')
+        .map(|dir| Path::new(dir).join("tmux"))
+        .find(|t| fs::metadata(t).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0))
+}
+
+/// Why `scenario` must not run here, if it must not: a canopy or athome
+/// script it runs would find a `tmux` other than the grofe symlink.
+fn foreign_tmux(scenario: &str, cli: &Cli, co: &Checkouts) -> Option<String> {
+    let text = scenario
+        .replace(CANOPY_TREE, &co.canopy.display().to_string())
+        .replace(ATHOME_TREE, &co.athome.display().to_string());
+    let roots = [&co.canopy, &co.athome];
+    text.split(|c: char| c.is_whitespace() || c == '\'' || c == '"')
+        .map(Path::new)
+        .filter(|p| roots.iter().any(|r| p.starts_with(r)) && p.is_file())
+        .find_map(|script| match script_tmux(script, cli) {
+            Some(t) if t == cli.program => None,
+            found => Some(format!(
+                "{} would run {}, not the grofe symlink",
+                script.display(),
+                found.map_or("no tmux".into(), |t| t.display().to_string())
+            )),
+        })
+}
+
+/// The tripwire: only a real tmux makes `tmux-$UID` in the private
+/// `TMUX_TMPDIR` the suite gives it; grofe keeps its sockets elsewhere.
+pub fn tripwire(cli: &Cli) -> Result<(), String> {
+    let Some((_, tmpdir)) = cli.env.iter().find(|(k, _)| k == "TMUX_TMPDIR") else {
+        return Err("the suite's tmux has no private TMUX_TMPDIR".into());
+    };
+    let dir = Path::new(tmpdir).join(format!("tmux-{}", nix::unistd::getuid()));
+    match dir.exists() {
+        true => Err(format!("a real tmux ran: {} exists", dir.display())),
+        false => Ok(()),
+    }
+}
 
 /// Scenario steps (by scenario and first line) where grofe is known to
 /// differ from tmux 3.7b, each with the gap and its owner. A listed step
@@ -287,13 +346,19 @@ fn compare(name: &str, golden: &str, got: &str) -> Result<(), String> {
     }
 }
 
-/// Replays one tc_13 scenario on grofe; the normalized transcript.
-fn run_scenario(path: &Path, co: &Checkouts) -> Result<String, String> {
-    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let steps = parse_scenario(&text)?;
-    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+/// Replays one tc_13 scenario on grofe: the normalized transcript, or
+/// `Err(Ok(reason))` when it is skipped because a script would find a
+/// real tmux ([`foreign_tmux`]).
+fn run_scenario(path: &Path, co: &Checkouts) -> Result<String, Result<String, String>> {
+    let text = fs::read_to_string(path).map_err(|e| Err(e.to_string()))?;
+    let steps = parse_scenario(&text).map_err(Err)?;
+    let dir = tempfile::tempdir().map_err(|e| Err(e.to_string()))?;
     let cli = tc13_cli(dir.path(), co);
+    if let Some(why) = foreign_tmux(&text, &cli, co) {
+        return Err(Ok(why));
+    }
     let got = exact_pids(replay(&cli, &grofe_steps(steps, co)));
+    tripwire(&cli).map_err(Err)?;
     Ok(got.normalized(&Normalizer::load()))
 }
 
@@ -339,6 +404,7 @@ fn smoke(cli: &Cli) -> Result<(), String> {
     }
     let (_, job, _) = cli.run(&[arg("run-shell"), arg("command -v tmux")]);
     let _ = cli.run(&[arg("kill-server")]);
+    tripwire(cli)?;
     if job.trim() != symlink {
         return Err(format!(
             "a run-shell job's tmux is {:?}, not the grofe symlink",
@@ -402,10 +468,6 @@ fn tc_13_suite() {
     let mut first: Option<(String, String, String)> = None;
     for path in &found {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        if name == "tsess" && Path::new(TSESS_PATH_TMUX).exists() {
-            eprintln!("SKIPPED tc_13 scenario tsess: {TSESS_PATH_TMUX} would shadow grofe");
-            continue;
-        }
         let golden = fs::read_to_string(path.with_extension("golden"))
             .unwrap_or_else(|e| panic!("{name}: no golden ({e}); record it"));
         if let Some(swapped) = golden.split(&format!("{TMUX_ONLY}\n")).nth(1)
@@ -423,7 +485,11 @@ fn tc_13_suite() {
                     first = Some((name.clone(), golden, got));
                 }
             }
-            Err(e) => failures.push(format!("{name}: {e}")),
+            Err(Ok(skip)) => {
+                eprintln!("SKIPPED tc_13 scenario {name}: {skip}");
+                continue;
+            }
+            Err(Err(e)) => failures.push(format!("{name}: {e}")),
         }
         eprintln!("tc_13 scenario {name}: done");
     }
@@ -474,4 +540,30 @@ fn a_known_divergence_must_still_differ() {
     assert!(compare("none", golden, golden).is_ok());
     assert!(compare("none", golden, "$ a\n? 1\n").is_err());
     assert!(compare("none", golden, "$ a\n? 0\n$ b\n? 0\n").is_err());
+}
+
+/// A script's own `PATH=` line decides which `tmux` it reaches, and the
+/// tripwire fires once a real tmux's socket directory appears.
+#[test]
+fn a_script_s_path_and_the_tripwire_are_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = grofe_cli(dir.path());
+    let other = dir.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    let fake = other.join("tmux");
+    fs::write(&fake, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let plain = dir.path().join("plain");
+    fs::write(&plain, "#!/bin/sh\ntmux ls\n").unwrap();
+    assert_eq!(script_tmux(&plain, &cli), Some(cli.program.clone()));
+    let hardened = dir.path().join("hardened");
+    let line = format!("export PATH=\"{}:$HOME/x:$PATH\"\n", other.display());
+    fs::write(&hardened, format!("#!/bin/sh\n{line}tmux ls\n")).unwrap();
+    assert_eq!(script_tmux(&hardened, &cli), Some(fake));
+
+    assert_eq!(tripwire(&cli), Ok(()));
+    let real = dir.path().join(format!("tmux-{}", nix::unistd::getuid()));
+    fs::create_dir_all(&real).unwrap();
+    assert!(tripwire(&cli).unwrap_err().contains("a real tmux ran"));
 }
