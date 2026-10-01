@@ -40,6 +40,9 @@ const PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Buffer {
+    /// Unique for the server's life, kept through a rename (a chooser's
+    /// line finds its buffer again by it).
+    pub id: u64,
     pub name: String,
     pub data: Vec<u8>,
     /// Unix seconds (`buffer_created`).
@@ -58,6 +61,7 @@ impl Buffer {
 pub struct Buffers {
     list: Vec<Buffer>,
     next_index: u64,
+    next_id: u64,
     total: usize,
 }
 
@@ -83,6 +87,15 @@ impl Buffers {
             return None;
         }
         self.list.iter().find(|b| b.name == name)
+    }
+
+    /// The buffer with this [`Buffer::id`].
+    pub fn by_id(&self, id: u64) -> Option<&Buffer> {
+        self.list.iter().find(|b| b.id == id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
     }
 
     /// The newest automatic buffer.
@@ -111,6 +124,7 @@ impl Buffers {
             }
         };
         let buffer = Buffer {
+            id: 0,
             name,
             data,
             created: now(),
@@ -139,6 +153,7 @@ impl Buffers {
         }
         let old = self.get(name).map_or(0, Buffer::cost);
         let buffer = Buffer {
+            id: 0,
             name: name.to_string(),
             data,
             created: now(),
@@ -187,7 +202,9 @@ impl Buffers {
         true
     }
 
-    fn push(&mut self, buffer: Buffer) {
+    fn push(&mut self, mut buffer: Buffer) {
+        buffer.id = self.next_id;
+        self.next_id += 1;
         self.total += buffer.cost();
         self.list.insert(0, buffer);
     }
@@ -249,19 +266,7 @@ pub fn format_var(state: &State, name: &str) -> Option<String> {
 // where tmux cuts at byte 200 exactly; they differ only when a character
 // of more than one byte straddles it.
 pub fn sample(data: &[u8]) -> String {
-    let head = &data[..data.len().min(SAMPLE_WIDTH)];
-    let mut out = String::new();
-    for chunk in head.utf8_chunks() {
-        let valid = chunk.valid();
-        let mut chars = valid.chars().peekable();
-        while let Some(c) = chars.next() {
-            let next = chars.peek().copied();
-            cstyle(c, next, &mut out);
-        }
-        for b in chunk.invalid() {
-            out.push_str(&format!("\\{b:03o}"));
-        }
-    }
+    let mut out = escape(&data[..data.len().min(SAMPLE_WIDTH)]);
     if data.len() > SAMPLE_WIDTH || out.len() > SAMPLE_WIDTH {
         let mut cut = SAMPLE_WIDTH.min(out.len());
         while !out.is_char_boundary(cut) {
@@ -269,6 +274,24 @@ pub fn sample(data: &[u8]) -> String {
         }
         out.truncate(cut);
         out.push_str("...");
+    }
+    out
+}
+
+/// `data` escaped as `vis(3)` with `VIS_OCTAL | VIS_CSTYLE | VIS_TAB |
+/// VIS_NL`, valid UTF-8 kept whole (tmux's `utf8_strvis`): what a
+/// sample, and each line of `choose-buffer`'s preview, shows.
+pub fn escape(data: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in data.utf8_chunks() {
+        let mut chars = chunk.valid().chars().peekable();
+        while let Some(c) = chars.next() {
+            let next = chars.peek().copied();
+            cstyle(c, next, &mut out);
+        }
+        for b in chunk.invalid() {
+            out.push_str(&format!("\\{b:03o}"));
+        }
     }
     out
 }
@@ -293,12 +316,18 @@ fn cstyle(c: char, next: Option<char>, out: &mut String) {
 
 /// What `paste-buffer` writes to a pane for `data`: each line feed
 /// replaced by `separator`, every line sanitized as tmux 3.7b does
-/// ([`sanitize`]), wrapped in bracketed-paste markers when `bracket`
+/// ([`sanitize_line`]), wrapped in bracketed-paste markers when `bracket`
 /// (`-p` and a pane in mode 2004). Since sanitizing turns an escape in
 /// the data into the two characters `^[`, the data cannot end the
 /// bracketed paste early or send the pane any other control sequence.
-/// Errs past [`MAX_PASTE_BYTES`].
-pub fn paste_bytes(data: &[u8], separator: &[u8], bracket: bool) -> Result<Vec<u8>, String> {
+/// Without `sanitize` (`-S`, the caller's explicit choice, as in tmux) the
+/// lines go as they are. Errs past [`MAX_PASTE_BYTES`].
+pub fn paste_bytes(
+    data: &[u8],
+    separator: &[u8],
+    bracket: bool,
+    sanitize: bool,
+) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     if bracket {
         out.extend_from_slice(PASTE_START);
@@ -307,7 +336,11 @@ pub fn paste_bytes(data: &[u8], separator: &[u8], bracket: bool) -> Result<Vec<u
         if i > 0 {
             out.extend_from_slice(separator);
         }
-        sanitize(line, &mut out);
+        if sanitize {
+            sanitize_line(line, &mut out);
+        } else {
+            out.extend_from_slice(line);
+        }
         if out.len() > MAX_PASTE_BYTES {
             return Err(format!("paste too large (limit {MAX_PASTE_BYTES} bytes)"));
         }
@@ -326,7 +359,7 @@ pub fn paste_bytes(data: &[u8], separator: &[u8], bracket: bool) -> Result<Vec<u
 // ponytail: an invalid byte in 0xa1-0xff is `M-x` here; tmux on macOS
 // passes it through and glibc's answer depends on the locale. `set-buffer`
 // cannot make such a buffer (its data is a UTF-8 argument).
-fn sanitize(line: &[u8], out: &mut Vec<u8>) {
+fn sanitize_line(line: &[u8], out: &mut Vec<u8>) {
     let caret = |c: u8, out: &mut Vec<u8>| {
         out.push(b'^');
         out.push(if c == 0x7f { b'?' } else { c + b'@' });
@@ -479,20 +512,32 @@ mod tests {
     fn pastes_sanitize_and_separate_as_tmux() {
         let data = b"a\x1b[201~b\tc\x01d\x7fe\x08f\x07g\rh \xc3\xa9\nz";
         assert_eq!(
-            paste_bytes(data, b"\r", true).unwrap(),
+            paste_bytes(data, b"\r", true, true).unwrap(),
             b"\x1b[200~a^[[201~b\tc^Ad^?e\x08f\x07g\rh \xc3\xa9\rz\x1b[201~"
         );
         assert_eq!(
-            paste_bytes(data, b"\r", false).unwrap(),
+            paste_bytes(data, b"\r", false, true).unwrap(),
             b"a^[[201~b\tc^Ad^?e\x08f\x07g\rh \xc3\xa9\rz"
         );
-        assert_eq!(paste_bytes(b"l1\nl2\n", b"XX", false).unwrap(), b"l1XXl2XX");
-        assert_eq!(paste_bytes(b"l1\nl2", b"\n", false).unwrap(), b"l1\nl2");
         assert_eq!(
-            paste_bytes(b"\x80|\x9b|\xa0|\xe9", b"\r", false).unwrap(),
+            paste_bytes(b"l1\nl2\n", b"XX", false, true).unwrap(),
+            b"l1XXl2XX"
+        );
+        assert_eq!(
+            paste_bytes(b"l1\nl2", b"\n", false, true).unwrap(),
+            b"l1\nl2"
+        );
+        assert_eq!(
+            paste_bytes(b"\x80|\x9b|\xa0|\xe9", b"\r", false, true).unwrap(),
             b"M^@|M^[|\\240|M-i"
         );
+        // Recorded: `-S` sends the lines as they are, separators still
+        // replacing line feeds.
+        assert_eq!(
+            paste_bytes(data, b"\r", true, false).unwrap(),
+            b"\x1b[200~a\x1b[201~b\tc\x01d\x7fe\x08f\x07g\rh \xc3\xa9\rz\x1b[201~"
+        );
         let many = vec![b'\n'; 1000];
-        assert!(paste_bytes(&many, &vec![b'x'; MAX_PASTE_BYTES / 999 + 1], false).is_err());
+        assert!(paste_bytes(&many, &vec![b'x'; MAX_PASTE_BYTES / 999 + 1], false, true).is_err());
     }
 }

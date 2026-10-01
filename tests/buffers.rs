@@ -6,12 +6,16 @@
 //! asynchronously).
 
 mod common;
+#[allow(dead_code)]
+#[path = "acceptance/harness.rs"]
+mod harness;
 
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{CMD_TIMEOUT, TestServer, wait_until};
+use harness::Harness;
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/compat/golden/tm_4")
@@ -256,13 +260,133 @@ fn buffer_verbs_parse_with_their_flags() {
             delete: true,
             raw: true,
             separator: Some("XX".into()),
+            unsanitized: false,
             target: Target::Current,
         }))
     );
     assert!(cmd::parse(&argv(&["set-buffer", "a", "b"])).is_err());
-    assert!(cmd::parse(&argv(&["paste-buffer", "-S"])).is_err());
+    assert!(matches!(
+        cmd::parse(&argv(&["paste-buffer", "-S"])),
+        Ok(Command::PasteBuffer(c)) if c.unsanitized
+    ));
     assert!(matches!(
         cmd::parse(&argv(&["choose-buffer", "-Z"])),
         Ok(Command::ChooseBuffer(c)) if c.zoom
     ));
+}
+
+/// A server whose `main` pane shows what it reads (`cat -v`, raw), with
+/// buffers `a`, `b`, `c` (newest last) and a client attached at 80x24.
+fn chooser_server() -> (TestServer, Harness) {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "23",
+        "stty raw -echo; exec cat -v",
+    ])
+    .unwrap();
+    for (name, data) in [("a", "AAA"), ("b", "BBB"), ("c", "CCC")] {
+        srv.cmd(&["set-buffer", "-b", name, data]).unwrap();
+    }
+    let mut a = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
+    a.wait_for("[main]");
+    (srv, a)
+}
+
+fn pane_text(srv: &TestServer) -> String {
+    srv.cmd(&["capture-pane", "-p", "-t", "main"])
+        .unwrap_or_default()
+}
+
+/// Case 7, as recorded in a pty against tmux 3.7b: the list is newest
+/// first, each line `name: time: sample`, titled `(sort: creation)` with
+/// the buffer previewed; Enter pastes the chosen buffer (the second line,
+/// `b`) into the pane and closes the chooser.
+#[test]
+fn choose_buffer_then_enter_pastes_the_chosen_buffer() {
+    let (srv, mut a) = chooser_server();
+    srv.cmd(&["choose-buffer"]).unwrap();
+    a.wait_for("(2) a: ");
+    let text = a.text();
+    assert!(text.contains(": CCC"), "{text}");
+    assert!(text.contains("(1) b: "), "{text}");
+    assert!(text.contains("┌ c (sort: creation) "), "{text}");
+    a.send("\x1b[B");
+    a.wait_for("┌ b (sort: creation) ");
+    a.send("\r");
+    wait_until(|| pane_text(&srv).starts_with("BBB\n"), CMD_TIMEOUT)
+        .unwrap_or_else(|_| panic!("pane: {:?}", pane_text(&srv)));
+    a.wait_until("the chooser closed", CMD_TIMEOUT, |t| {
+        !t.contains("(sort: ")
+    });
+    assert_eq!(
+        srv.cmd(&["list-buffers", "-F", "#{buffer_name}"]),
+        Ok("c\nb\na\n".to_string())
+    );
+}
+
+/// `d` deletes the current buffer and the chooser stays on the next one;
+/// the stock `prefix =` opens it zoomed (`choose-buffer -Z`); no buffers,
+/// no chooser.
+#[test]
+fn choose_buffer_d_deletes_and_prefix_equals_opens_it_zoomed() {
+    let (srv, mut a) = chooser_server();
+    srv.cmd(&["split-window", "-d", "-t", "main", "cat"])
+        .unwrap();
+    a.send("\x02=");
+    a.wait_for("┌ c (sort: creation) ");
+    let zoomed = || {
+        srv.cmd(&[
+            "display-message",
+            "-p",
+            "-t",
+            "main",
+            "#{window_zoomed_flag}",
+        ])
+    };
+    assert_eq!(zoomed(), Ok("1\n".to_string()));
+    a.send("\x1b[B");
+    a.wait_for("┌ b (sort: creation) ");
+    a.send("d");
+    a.wait_for("┌ a (sort: creation) ");
+    assert_eq!(
+        srv.cmd(&["list-buffers", "-F", "#{buffer_name}"]),
+        Ok("c\na\n".to_string())
+    );
+    a.send("q");
+    a.wait_until("the chooser closed", CMD_TIMEOUT, |t| {
+        !t.contains("(sort: ")
+    });
+    assert_eq!(zoomed(), Ok("0\n".to_string()));
+    for name in ["a", "c"] {
+        srv.cmd(&["delete-buffer", "-b", name]).unwrap();
+    }
+    srv.cmd(&["choose-buffer"]).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!a.text().contains("(sort: "));
+}
+
+/// `-S` (tmux 3.7b, recorded): the data goes as it is, control characters
+/// and all; the separator still replaces line feeds.
+#[test]
+fn paste_buffer_s_sends_unsanitized_bytes() {
+    let srv = TestServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let script = format!("stty raw -echo; exec cat > '{}'", out.display());
+    srv.cmd(&["new-session", "-d", "-s", "main", &script])
+        .unwrap();
+    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    srv.cmd(&["set-buffer", "-b", "x", "a\x1b[31mb\nc\x01"])
+        .unwrap();
+    srv.cmd(&["paste-buffer", "-S", "-b", "x"]).unwrap();
+    let want: &[u8] = b"a\x1b[31mb\rc\x01";
+    wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
+        .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
 }

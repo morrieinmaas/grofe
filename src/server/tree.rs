@@ -1,4 +1,5 @@
-//! The choosers (TC.9): `choose-tree`, `find-window` and `choose-client`,
+//! The choosers (TC.9): `choose-tree`, `find-window`, `choose-client` and
+//! (TM.4) `choose-buffer`,
 //! drawn over a pane of one client ([`TreeOverlay`]) and taking its keys
 //! while open ([`TreeHook`]).
 //!
@@ -15,8 +16,10 @@
 //!   holds a preview: a session's windows or a window's panes side by side,
 //!   each with a small labelled box in its middle, or the pane itself.
 //! - Enter (or a line's key) switches the client to the chosen session,
-//!   window or pane (`choose-client` detaches the chosen client); `q`,
-//!   Escape and C-g close it. `-Z` zooms the pane while it is open.
+//!   window or pane (`choose-client` detaches the chosen client,
+//!   `choose-buffer` pastes the chosen buffer into the pane, `paste-buffer
+//!   -p`, and its `d` deletes the current buffer); `q`, Escape and C-g
+//!   close it. `-Z` zooms the pane while it is open.
 //!
 //! grofe keeps a chooser per client, over one pane, where tmux puts the
 //! pane itself in a mode that every client showing it sees.
@@ -83,11 +86,14 @@ enum Tag {
     Window(WindowId),
     Pane(PaneId),
     Client(ClientId),
+    /// A paste buffer, by its id (`buffers::Buffer::id`).
+    Buffer(u64),
 }
 
 enum Kind {
     Tree { find: Option<String> },
     Clients,
+    Buffers,
 }
 
 struct Tree {
@@ -200,6 +206,20 @@ pub fn open_tree(
 
 /// Opens the client chooser on the current client, over its pane.
 pub fn open_clients(state: &mut State, ctx: &ClientCtx, zoom: bool) -> Result<String, String> {
+    open_list(state, ctx, Kind::Clients, zoom)
+}
+
+/// Opens the buffer chooser on the current client, over its pane (TM.4).
+/// With no buffers nothing opens, as in tmux.
+pub fn open_buffers(state: &mut State, ctx: &ClientCtx, zoom: bool) -> Result<String, String> {
+    if state.buffers.is_empty() {
+        return Ok(String::new());
+    }
+    open_list(state, ctx, Kind::Buffers, zoom)
+}
+
+/// A flat chooser (clients or buffers) over the current pane.
+fn open_list(state: &mut State, ctx: &ClientCtx, kind: Kind, zoom: bool) -> Result<String, String> {
     let pane = state.model.resolve_pane(&Target::Current, ctx)?;
     let Some(client) = clients::current_client(state, ctx) else {
         return Ok(String::new());
@@ -209,7 +229,7 @@ pub fn open_clients(state: &mut State, ctx: &ClientCtx, zoom: bool) -> Result<St
     }
     let none = Tag::Pane(pane);
     let tree = Tree {
-        kind: Kind::Clients,
+        kind,
         pane,
         unzoom: None,
         expanded: BTreeMap::new(),
@@ -280,6 +300,7 @@ pub fn client_gone(state: &mut State, id: ClientId) {
 fn build(state: &State, tree: &Tree) -> (Vec<Item>, bool) {
     match &tree.kind {
         Kind::Clients => (client_items(state), false),
+        Kind::Buffers => (buffer_items(state), false),
         Kind::Tree { find } => {
             let items = tree_items(state, find.as_deref());
             if find.is_some() && items.is_empty() {
@@ -449,6 +470,29 @@ fn pane_text(state: &State, pane: PaneId) -> String {
     }
     text.push_str(&title_suffix(state, pane));
     text
+}
+
+/// tmux's `window-buffer.c` list: newest first (`sort: creation`), each
+/// line its name and `#{t/p:buffer_created}: #{buffer_sample}`.
+fn buffer_items(state: &State) -> Vec<Item> {
+    state
+        .buffers
+        .iter()
+        .map(|b| {
+            let created = std::time::UNIX_EPOCH + std::time::Duration::from_secs(b.created);
+            Item {
+                tag: Tag::Buffer(b.id),
+                name: b.name.clone(),
+                text: format!(
+                    "{}: {}",
+                    clients::pretty_time(created),
+                    crate::server::buffers::sample(&b.data)
+                ),
+                align: false,
+                children: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 fn client_items(state: &State) -> Vec<Item> {
@@ -732,6 +776,18 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
         return Routed::Consumed;
     } else if code == Some(KeyCode::Enter) || ctrl('m') {
         return choose(state, client, v.lines[current].tag);
+    } else if is('d') && matches!(tree.kind, Kind::Buffers) {
+        // `window_buffer_key`: the current buffer goes, and the chooser
+        // with the last one.
+        if let Tag::Buffer(id) = v.lines[current].tag
+            && let Some(name) = state.buffers.by_id(id).map(|b| b.name.clone())
+        {
+            state.buffers.delete(&name);
+        }
+        if state.buffers.is_empty() {
+            close(state, client);
+        }
+        return Routed::Consumed;
     } else if code == Some(KeyCode::Up) || is('k') || ctrl('p') {
         up(&mut current, &mut offset, true);
     } else if code == Some(KeyCode::Down) || is('j') || ctrl('n') {
@@ -858,6 +914,7 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
 /// targets), or for `choose-client` the chosen client detaches
 /// (`detach-client -t`, tmux's default template).
 fn choose(state: &mut State, client: ClientId, tag: Tag) -> Routed {
+    let pane = state.trees.open.get(&client).map(|t| t.pane);
     let argv: Vec<String> = match tag {
         Tag::Session(s) => vec!["switch-client".into(), "-t".into(), s.to_string()],
         Tag::Window(w) => vec!["switch-client".into(), "-t".into(), w.to_string()],
@@ -865,6 +922,13 @@ fn choose(state: &mut State, client: ClientId, tag: Tag) -> Routed {
         Tag::Client(c) => match state.clients.get(&c) {
             Some(entry) => vec!["detach-client".into(), "-t".into(), entry.name.clone()],
             None => Vec::new(),
+        },
+        // tmux's template, `paste-buffer -p -b '%%'`, into the pane.
+        Tag::Buffer(id) => match (state.buffers.by_id(id), pane) {
+            (Some(b), Some(p)) => ["paste-buffer", "-p", "-b", &b.name, "-t", &p.to_string()]
+                .map(String::from)
+                .to_vec(),
+            _ => Vec::new(),
         },
     };
     close(state, client);
@@ -915,7 +979,7 @@ fn strip_of(state: &State, tag: Tag) -> Option<(Vec<Preview>, usize)> {
             let current = entries.iter().position(|e| e.2).unwrap_or(0);
             Some((entries, current))
         }
-        Tag::Pane(_) | Tag::Client(_) => None,
+        Tag::Pane(_) | Tag::Client(_) | Tag::Buffer(_) => None,
     }
 }
 
@@ -1231,6 +1295,7 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
     let order = match tree.kind {
         Kind::Tree { .. } => "index",
         Kind::Clients => "name",
+        Kind::Buffers => "creation",
     };
     let title = format!(" {} (sort: {order})", line.name);
     if w - 2 >= title.len() {
@@ -1273,6 +1338,25 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
         }
         Tag::Pane(p) => preview(state, cv, p, (x, y, box_x, box_y)),
         Tag::Client(c) => draw_client(state, cv, c, (x, y, box_x, box_y)),
+        Tag::Buffer(id) => draw_buffer(state, cv, id, (x, y, box_x, box_y)),
+    }
+}
+
+/// `window_buffer_draw`: the buffer's first lines, each escaped as
+/// `vis(3)` writes it.
+fn draw_buffer(
+    state: &State,
+    cv: &mut Canvas,
+    id: u64,
+    (cx, cy, sx, sy): (usize, usize, usize, usize),
+) {
+    let Some(b) = state.buffers.by_id(id) else {
+        return;
+    };
+    let lines = b.data.split(|c| *c == b'\n');
+    for (i, line) in lines.take(sy).enumerate() {
+        let text = crate::server::buffers::escape(line);
+        cv.text(cx, cy + i, &text, &Style::default(), sx);
     }
 }
 

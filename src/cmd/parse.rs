@@ -1637,6 +1637,7 @@ fn parse_paste_buffer(argv: &[String]) -> Result<Command, ParseError> {
         ('d', FlagKind::Bool),
         ('p', FlagKind::Bool),
         ('r', FlagKind::Bool),
+        ('S', FlagKind::Bool),
         ('b', FlagKind::Value),
         ('s', FlagKind::Value),
         ('t', FlagKind::Value),
@@ -1649,6 +1650,7 @@ fn parse_paste_buffer(argv: &[String]) -> Result<Command, ParseError> {
         delete: flags.present.contains(&'d'),
         raw: flags.present.contains(&'r'),
         separator: flags.values.get(&'s').cloned(),
+        unsanitized: flags.present.contains(&'S'),
         target: target_or_current(&flags.values, 't')?,
     }))
 }

@@ -960,6 +960,8 @@ pub struct PasteBuffer {
     pub raw: bool,
     /// `-s`: what each line feed becomes (default CR).
     pub separator: Option<String>,
+    /// `-S`: send control characters as they are, unsanitized.
+    pub unsanitized: bool,
     pub target: Target,
 }
 

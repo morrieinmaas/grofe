@@ -8,7 +8,7 @@ use crate::cmd::{
 };
 use crate::protocol::ClientCtx;
 use crate::server::buffers::{self, BufferVars};
-use crate::server::{State, dispatch};
+use crate::server::{State, tree};
 
 /// `set-buffer`: a new automatic buffer, or with `-b` that named buffer;
 /// `-a` appends to the `-b` buffer; `-n` renames (`-b`'s buffer, else the
@@ -120,7 +120,7 @@ pub fn paste_buffer(state: &mut State, ctx: &ClientCtx, c: PasteBuffer) -> Resul
         None => b"\r",
     };
     let bracket = c.bracket && handle.modes().bracketed_paste;
-    let bytes = buffers::paste_bytes(&b.data, separator, bracket)?;
+    let bytes = buffers::paste_bytes(&b.data, separator, bracket, !c.unsanitized)?;
     handle
         .enqueue_input(bytes)
         .map_err(|e| format!("paste-buffer: {pane}: {e}"))?;
@@ -130,12 +130,12 @@ pub fn paste_buffer(state: &mut State, ctx: &ClientCtx, c: PasteBuffer) -> Resul
     Ok(String::new())
 }
 
-/// `choose-buffer`: needs TC.9's chooser (`tree.rs`) to list buffers,
-/// which its public API does not offer yet (a rule 9 contract change).
+/// `choose-buffer`: TC.9's chooser listing the buffers over the current
+/// pane; Enter pastes the chosen one, `d` deletes it.
 pub fn choose_buffer(
-    _state: &mut State,
-    _ctx: &ClientCtx,
-    _c: ChooseBuffer,
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: ChooseBuffer,
 ) -> Result<String, String> {
-    dispatch::not_implemented("choose-buffer")
+    tree::open_buffers(state, ctx, c.zoom)
 }

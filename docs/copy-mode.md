@@ -199,6 +199,19 @@ to differ is dropped from this list.
 `\<` and `\>`, bracket expressions and `[[:alpha:]]` classes behave the
 same. The `-text` forms take the pattern as plain text in both.
 
+## Buffers
+
+Buffers follow tmux 3.7b's goldens (`tests/fixtures/compat/golden/tm_4/`)
+where the plan's TM.4 row said otherwise. An automatic buffer is named
+`buffer<N>` from a counter that only grows, so `buffer0` is the oldest one
+kept, not the newest; lists run newest first. `set-buffer -a` appends only
+to a `-b` buffer, and without `-b` makes a new one. Writing to a buffer by
+name, or renaming it, makes it a named buffer, which `buffer-limit` never
+drops and which commands with no `-b` skip. `paste-buffer` sanitizes
+control characters as tmux does (`^X`), unless `-S` is given, so buffer
+data cannot end a `-p` bracketed paste early. A copy (TM.2, TM.5) adds an
+automatic buffer.
+
 ## Copy targets
 
 `copy-pipe`, `copy-pipe-and-cancel` and `copy-pipe-no-clear` store a buffer

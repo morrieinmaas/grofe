@@ -1253,8 +1253,7 @@ impl KeyTables {
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
 /// `o` (needs `+`/`-` target offsets, FE.1's), `m`/`M` (marking), `C` and
 /// `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus),
-/// `*` (`new-pane`), copy mode (`[ PPage`, M5) and `=` (`choose-buffer`,
-/// waiting on a buffer list in TC.9's chooser).
+/// `*` (`new-pane`) and copy mode (`[ PPage`, M5).
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
@@ -1507,6 +1506,12 @@ pub fn default_bindings() -> KeyTables {
         "Paste the most recent paste buffer",
     );
     bind("#", &["list-buffers"], false, "List all paste buffers");
+    bind(
+        "=",
+        &["choose-buffer", "-Z"],
+        false,
+        "Choose a paste buffer from a list",
+    );
     bind(
         "-",
         &["delete-buffer"],
@@ -3705,7 +3710,7 @@ mod tests {
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
         // Stock keys grofe leaves unbound (out of scope, or M5's).
-        for name in ["m", "M", "t", "C", "<", ">", "*", "[", "="] {
+        for name in ["m", "M", "t", "C", "<", ">", "*", "["] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }
