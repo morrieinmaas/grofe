@@ -237,7 +237,6 @@ fn accounting_note(rest: &str) -> bool {
         " is expanded ",
         " dropped: cosmetic",
         " toggles it, as tmux does",
-        "an exact =name target is spelled as the name",
         " replaced by the built-in mouse model",
         " is already set, so -o leaves it",
     ]
@@ -315,11 +314,9 @@ fn front_end_forms_are_written_natively() {
     let cmd = |k: &str| prefix[k].as_str().expect("a command string").to_string();
     assert_eq!(cmd("N"), "new-window -n scratch");
     assert_eq!(cmd("W"), "set-option -w -g automatic-rename off");
-    assert_eq!(cmd("X"), "select-pane -t work:1.2");
-    assert!(
-        !prefix.contains_key("Y"),
-        "kill-session -t =work: an exact target of a destructive verb is reported"
-    );
+    // `=` means exact natively too, so an exact target is written as it is.
+    assert_eq!(cmd("X"), "select-pane -t =work:1.2");
+    assert_eq!(cmd("Y"), "kill-session -t =work");
     assert_eq!(cmd("D"), "display-message \"on #{session_name}\"");
     assert!(
         !prefix.contains_key("O"),

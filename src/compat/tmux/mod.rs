@@ -15,9 +15,9 @@
 //! form it matches decides (area rows come before the core rows, so an
 //! area can take over a form); flags are read with tmux's own getopt rules
 //! for that verb. A pass-through row hands the argv to the native parser
-//! under the native verb name, with targets read the tmux way (`=name`
-//! exact, a bare `=` the mouse target, `+`/`-` offsets:
-//! [`cmd::target::with_tmux_targets`]).
+//! under the native verb name, with targets read the tmux way (a bare `=`
+//! the mouse target, `+`/`-` offsets: [`cmd::target::with_tmux_targets`];
+//! `=name` is exact in both grammars).
 //!
 //! Stored command strings keep their dialect (spec §4.5): a binding, hook,
 //! alias, menu item or prompt template stored from a tmux-dialect request

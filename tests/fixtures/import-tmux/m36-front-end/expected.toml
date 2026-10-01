@@ -7,6 +7,8 @@ N = "new-window -n scratch"
 # ~/.tmux.conf:3
 W = "set-option -w -g automatic-rename off"
 # ~/.tmux.conf:4
-X = "select-pane -t work:1.2"
+X = "select-pane -t =work:1.2"
+# ~/.tmux.conf:6
+Y = "kill-session -t =work"
 # ~/.tmux.conf:7
 D = 'display-message "on #{session_name}"'

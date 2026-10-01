@@ -4,14 +4,19 @@
 //! by the kind of target the verb wants ([`SessionRef::Bare`]). Not supported in v1: fnmatch patterns, `{last}`/
 //! `{next}` tokens, `!`, `+`/`-` offsets.
 //!
-//! The tmux front end (FE.1, spec §4.5) reads targets the tmux way through
-//! [`with_tmux_targets`]: `=name` and `=name:window` are exact session
-//! matches ([`SessionRef::Exact`]), `=N` in the window part is exactly
-//! that window, `+`/`-` offsets in the window and pane parts are relative
-//! to the active window or pane, and a bare `=` (tmux's mouse target, which
-//! mouse keys replace before parsing, M36-R3) fails when it is resolved,
-//! as in tmux, so a mouse binding that holds one still binds. The native
-//! grammar never builds these: natively `=x` is the literal name `=x`.
+//! A leading `=` means exact, natively and in the tmux front end alike, as
+//! in tmux: `=name:window` and `=name:window.pane` name exactly session
+//! `name` ([`SessionRef::Exact`]), never a prefix; a bare `=name` is exact
+//! as a session or a window and a literal word as a pane
+//! ([`SessionRef::Bare`]); and `=N` or `=name` in the window part is
+//! exactly that window.
+//!
+//! The tmux front end (FE.1, spec §4.5) also reads targets the tmux way
+//! through [`with_tmux_targets`]: `+`/`-` offsets in the window and pane
+//! parts are relative to the active window or pane, and a bare `=` (tmux's
+//! mouse target, which mouse keys replace before parsing, M36-R3) fails
+//! when it is resolved, as in tmux, so a mouse binding that holds one still
+//! binds. The native grammar never builds those two.
 //!
 //! Parsing here is purely syntactic: it decides the *shape* of a target
 //! string, not whether the session/window/pane it names exists. Existence
@@ -32,8 +37,7 @@ pub enum SessionRef {
     Current,
     Id(SessionId),
     Name(String),
-    /// Exactly this name, never a prefix: tmux's `=name`, built only by the
-    /// tmux front end.
+    /// Exactly this name, never a prefix: tmux's `=name`.
     Exact(String),
     /// tmux's bare `=`, the mouse target, outside a mouse key's commands
     /// (which get the pointer's target in its place first, M36-R3): it
@@ -161,18 +165,18 @@ fn tmux_offset(s: &str) -> Option<i32> {
 /// Parses one target string (spec §4.5). See the module docs for the
 /// supported grammar.
 pub fn parse_target(s: &str) -> Result<Target, ParseError> {
-    if tmux_targets() {
-        if s == "=" {
-            return Ok(Target::Session(SessionRef::Mouse));
-        }
-        // `=word` with no `:` or `.`: left for the resolver, which strips
-        // the `=` from a session or window but not from a pane (cmd-find.c).
-        if s.starts_with('=') && !s.contains([':', '.']) {
-            return Ok(Target::Session(SessionRef::Bare(s.to_string())));
-        }
-        if let Some(rest) = s.strip_prefix('=') {
-            return parse_position(rest).map(exact_session);
-        }
+    if s == "=" && tmux_targets() {
+        return Ok(Target::Session(SessionRef::Mouse));
+    }
+    // `=word` with no `:` or `.`: left for the resolver, which strips the
+    // `=` from a session or window but not from a pane (cmd-find.c).
+    if s.len() > 1 && s.starts_with('=') && !s.contains([':', '.']) {
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
+    }
+    if let Some(rest) = s.strip_prefix('=')
+        && !rest.is_empty()
+    {
+        return parse_position(rest).map(exact_session);
     }
     parse_position(s)
 }
@@ -341,10 +345,10 @@ fn parse_session_ref(s: &str) -> Result<SessionRef, ParseError> {
 }
 
 fn parse_window_ref(s: &str) -> Result<WindowRef, ParseError> {
-    // tmux's `=N` / `=name`: exactly that window. grofe's window lookups
-    // are exact already, so the `=` only has to go.
+    // `=N` / `=name`: exactly that window. grofe's window lookups are
+    // exact already, so the `=` only has to go.
     let s = match s.strip_prefix('=') {
-        Some(rest) if tmux_targets() && !rest.is_empty() => rest,
+        Some(rest) if !rest.is_empty() => rest,
         _ => s,
     };
     if s.starts_with('@') {
@@ -634,12 +638,33 @@ mod tests {
         ));
     }
 
-    /// Natively `=x` is the literal name `=x`, and offsets stay refused.
+    /// Natively, as in the front end, `=` means exact; a bare `=` is a
+    /// plain word and offsets stay refused.
     #[test]
-    fn tmux_forms_are_native_literals_outside_the_front_end() {
+    fn equals_is_exact_natively_too() {
+        let exact = |s: &str| SessionRef::Exact(s.to_string());
         assert_eq!(
             parse_target("=x").unwrap(),
             Target::Session(SessionRef::Bare("=x".to_string()))
+        );
+        assert_eq!(
+            parse_target("=x:1").unwrap(),
+            Target::Window(exact("x"), WindowRef::Index(1))
+        );
+        assert_eq!(
+            parse_target("=x:=2.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: exact("x"),
+                window: WindowRef::Index(2),
+                pane: PanePart::Index(1),
+            })
+        );
+        assert_eq!(
+            parse_target("x:=ed").unwrap(),
+            Target::Window(
+                SessionRef::Name("x".to_string()),
+                WindowRef::Name("ed".to_string())
+            )
         );
         assert_eq!(
             parse_target("=").unwrap(),

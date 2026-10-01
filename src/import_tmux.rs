@@ -19,9 +19,10 @@
 //! through the tmux front end's own table ([`tmux::spell`]), so the
 //! converter and the live front end share one mapping: `#(cmd)` becomes a
 //! `[status.sources]` entry, tmux's short formats grofe's, `neww`/`setw`/
-//! `-t =x` grofe's spelling, `set-hook` a `[hooks]` entry. What grofe's
-//! config has no key for (user options, the environment, commands tmux ran
-//! at load time) is written as native command comments at the end.
+//! `-t =x` grofe's spelling, `set-hook` a `[hooks]` entry, user options
+//! a `[user-options]` entry, `set-environment` an `[environment]` entry,
+//! and a load-time `run-shell` or `if-shell` a `load-commands` entry in
+//! native form.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -2000,33 +2001,12 @@ impl Importer {
                 self.add_source(file, line, r.clone());
                 continue;
             }
-            let Some((mut native, exact)) = spelled.iter().find_map(|a| spelled_as(a, c, mouse))
-            else {
+            let Some(mut native) = spelled.iter().find_map(|a| spelled_as(a, c, mouse)) else {
                 return Err(format!(
                     "no native spelling for {} (a tmux-only target or form)",
                     tmux::miss_form(&argv)
                 ));
             };
-            if exact {
-                let verb = native.first().map_or("", String::as_str);
-                let destructive = verb.starts_with("kill-")
-                    || verb.starts_with("respawn-")
-                    || verb == "detach-client";
-                if destructive {
-                    return Err(format!(
-                        "an exact =name target in {verb} has no native spelling: natively a \
-                         name no session has exactly matches a prefix, the wrong target for \
-                         {verb}"
-                    ));
-                }
-                self.note(
-                    file,
-                    line,
-                    "an exact =name target is spelled as the name: natively, a name no session \
-                     has exactly also matches a prefix"
-                        .to_string(),
-                );
-            }
             // A flag the front end dropped as cosmetic (FE.4: popup and
             // menu styles, menu border lines).
             if let (Some(sent), Some(written)) = (tmux::form_of(&argv), tmux::form_of(&native)) {
@@ -2358,13 +2338,13 @@ fn validate_command(s: &str, aliases: &[String]) -> Result<(), String> {
 /// text that means `command`, if it does. Two structural checks: read with
 /// the front end's targets, the argv is `command` (a row that changed the
 /// command after parsing, such as a user option's tmux scope, fails this);
-/// and with tmux's exact `=name` spelled as the name (the flag says so),
-/// the native parser reads it exactly as the front end would, so no
-/// tmux-only target (an offset, a bare `=`) is left. In a mouse key's
+/// and the native parser reads it exactly as the front end would, so no
+/// tmux-only target (an offset, a bare `=`) is left. An exact `=name` is
+/// the same in both grammars, so it is written as it is. In a mouse key's
 /// commands a bare `=` is the pointer's target in both grammars (M36-R3),
 /// checked with a pane id in its place. `SetOption::shown` only records
 /// what a tmux-dialect `show` prints, so it is not compared.
-fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<(Vec<String>, bool)> {
+fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<Vec<String>> {
     let mut front = command.clone();
     if let Command::SetOption(set) = &mut front {
         set.shown = None;
@@ -2379,30 +2359,15 @@ fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<(Vec
             && flag[1..].chars().all(|c| c.is_ascii_alphabetic())
             && flag.ends_with(['t', 's'])
     };
-    let mut argv = spelled.to_vec();
     let mut probe = spelled.to_vec();
-    let mut exact = false;
-    for i in 1..argv.len() {
-        if !is_target_flag(&spelled[i - 1]) {
-            continue;
-        }
-        if argv[i] == "=" {
-            if mouse {
-                probe[i] = "%0".to_string();
-            }
-            continue;
-        }
-        let word = argv[i].strip_prefix('=').unwrap_or(&argv[i]);
-        let word = word.replacen(":=", ":", 1);
-        if word != argv[i] {
-            argv[i] = word.clone();
-            probe[i] = word;
-            exact = true;
+    for i in 1..probe.len() {
+        if mouse && is_target_flag(&spelled[i - 1]) && probe[i] == "=" {
+            probe[i] = "%0".to_string();
         }
     }
     let native = cmd::parse(&probe).ok()?;
     let tmux = cmd::target::with_tmux_targets(|| cmd::parse(&probe)).ok()?;
-    (native == tmux).then_some((argv, exact))
+    (native == tmux).then(|| spelled.to_vec())
 }
 
 /// The command strings `command` stores (run later, so translated too),

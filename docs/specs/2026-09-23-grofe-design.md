@@ -226,9 +226,10 @@ grofe's own reasons: no **new** tmux-only form enters it. M1's short names
 (`new`, `neww`, `splitw`, `lsp`, `lsw`, `send`, `display`, `set`, `show` and
 the rest of T1.2's `canonical_name` table) and its `-g` scope merges (`set
 -gw`, `show -gw`) stay, as approved. Everything else tmux-only (tmux's full
-alias table and prefix matching, `=name` exact targets, tmux's option names
-and error texts) reaches grofe through the tmux front end below. Natively,
-`-t =x` is the literal session name `=x`, as M1 parses it.
+alias table and prefix matching, tmux's option names and error texts)
+reaches grofe through the tmux front end below. One tmux form is native
+too, because it means the same in both: a leading `=` is an exact match
+(targets below).
 
 | Command | Milestone |
 |---|---|
@@ -256,12 +257,13 @@ target the verb wants: as a pane, a number is a pane index in the current
 window, then a window of the current session, then a session; as a window, a
 window, then a session; as a session, a session only (TC.13: canopy's
 `select-pane -t 1`).
-Through the tmux front end (M3.6, below): `=name` (exact session name, never
-a prefix match) and `=name:window`, which it maps onto an exact session
-reference in the native `Target` type; the native grammar is not required to
-spell it `=`. A bare `=` (tmux's mouse target in its stock bindings) is
-refused with an error naming it, because mouse-bound commands act on the pane
-under the pointer without a target (§4.5 bindings row). Not supported in
+A leading `=` means exact, natively and through the tmux front end alike,
+as in tmux: `=name:window` and `=name:window.pane` name exactly session
+`name`, never a prefix match; a bare `=name` is exact as a session or a
+window and a literal word as a pane; `=N` or `=name` in the window part is
+exactly that window. A bare `=` (tmux's mouse target in its stock bindings)
+is refused with an error naming it, because mouse-bound commands act on the
+pane under the pointer without a target (§4.5 bindings row). Not supported in
 v1: fnmatch patterns, `{mouse}`/`{last}`/`{next}`/`{marked}` tokens, `!`,
 `+`/`-` offsets.
 

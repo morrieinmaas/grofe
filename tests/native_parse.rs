@@ -1,6 +1,6 @@
 //! TC.2: native parsing of the M3.6 verbs and of the new flags on existing
 //! verbs, in grofe's own grammar (spec §4.5). tmux-only forms stay unknown
-//! natively (FE.1's alias table and `=name` targets translate them), and
+//! natively (FE.1's alias table translates them), and
 //! the two tokenizer divergences D17 and D24 match tmux 3.7b, recorded on
 //! `tmux -L grofe-tc2 -f /dev/null`.
 
@@ -978,12 +978,30 @@ fn equals_targets_are_bare_words() {
 }
 
 /// As tmux 3.7b (recorded): `=x` names exactly session `x`, never a
-/// prefix, and is no pane.
+/// prefix, and is no pane; `=x:1` is window 1 of exactly session `x`, and
+/// `=1` in the window part is exactly window 1.
 #[test]
 fn equals_targets_are_exact_sessions_and_no_pane() {
     let srv = TestServer::start();
     srv.cmd(&["new-session", "-d", "-s", "x", "sleep", "30"])
         .expect("new-session");
+    srv.cmd(&["new-session", "-d", "-s", "yz", "sleep", "30"])
+        .expect("new-session");
+    let shown = |t: &str| {
+        srv.cmd(&[
+            "display-message",
+            "-p",
+            "-t",
+            t,
+            "#{session_name}:#{window_index}",
+        ])
+    };
+    assert_eq!(shown("=x:1"), Ok("x:1\n".to_string()));
+    assert_eq!(shown("=x:=1"), Ok("x:1\n".to_string()));
+    assert_eq!(shown("=x:=1.1"), Ok("x:1\n".to_string()));
+    assert_eq!(shown("y:1"), Ok("yz:1\n".to_string()), "a prefix without =");
+    let e = shown("=y:1").unwrap_err();
+    assert_eq!(e.trim_end(), "can't find session: y");
     srv.cmd(&["has-session", "-t", "=x"])
         .expect("=x is session x");
     let e = srv.cmd(&["has-session", "-t", "=y"]).unwrap_err();
