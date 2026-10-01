@@ -1893,6 +1893,82 @@ pub fn set_prefix(state: &mut State, pane: PaneId, count: u32) -> Result<(), Str
     Ok(())
 }
 
+/// The commands that only move the cursor, the view or the selection's
+/// moving end, as a function of where they start: one that leaves
+/// [`position`] as it found it would do the same if run again.
+const MOTIONS: &[&str] = &[
+    "back-to-indentation",
+    "bottom-line",
+    "cursor-down",
+    "cursor-left",
+    "cursor-right",
+    "cursor-up",
+    "end-of-line",
+    "halfpage-down",
+    "halfpage-up",
+    "history-bottom",
+    "history-top",
+    "middle-line",
+    "next-paragraph",
+    "next-space",
+    "next-space-end",
+    "next-word",
+    "next-word-end",
+    "page-down",
+    "page-up",
+    "previous-paragraph",
+    "previous-space",
+    "previous-word",
+    "scroll-bottom",
+    "scroll-down",
+    "scroll-middle",
+    "scroll-top",
+    "scroll-up",
+    "start-of-line",
+    "top-line",
+];
+
+/// Whether a bound command is `send-keys -X` with a motion and nothing else.
+pub fn is_motion(argv: &[String]) -> bool {
+    match argv {
+        [send, x, name] => {
+            matches!(send.as_str(), "send-keys" | "send")
+                && x == "-X"
+                && MOTIONS.contains(&name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Everything a motion reads or writes in `pane`'s mode, beyond the copy
+/// itself and the options; `None` outside the mode, or while its next
+/// command would wait for a search or take a fresh copy first.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Position {
+    /// Which copy (a fresh one is another).
+    grid: usize,
+    cursor: (usize, usize, usize),
+    last: (usize, usize),
+    mark: (usize, usize, bool),
+    selection: (bool, (usize, usize), (usize, usize)),
+    prefix: u32,
+}
+
+pub fn position(state: &State, pane: PaneId) -> Option<Position> {
+    if search::busy(state, pane) || resize_pending(state, pane) {
+        return None;
+    }
+    let m = state.copy.get(pane)?;
+    Some(Position {
+        grid: Arc::as_ptr(&m.grid) as usize,
+        cursor: (m.cx, m.cy, m.oy),
+        last: (m.lastcx, m.lastsx),
+        mark: (m.mx, m.my, m.showmark),
+        selection: (m.selecting, m.sel_start, m.sel_end),
+        prefix: m.prefix,
+    })
+}
+
 /// Whether `pane` has been resized since its mode's copy was taken.
 fn resize_pending(state: &State, pane: PaneId) -> bool {
     let (Some(p), Some(m)) = (state.model.panes.get(&pane), state.copy.get(pane)) else {

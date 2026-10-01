@@ -521,10 +521,16 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         // ponytail: tmux 3.7b runs every repeat and stops answering for a
         // huge count (recorded: `-N 4294967295` hangs it); grofe runs at
         // most `copy::MAX_REPEAT`.
+        // A repeat of only motions that moved nothing would move nothing
+        // again: the rest are skipped, to the end state tmux reaches by
+        // running them all, at a cost that follows the effect.
         for _ in 0..repeat.min(copy::MAX_REPEAT) {
+            let before = copy::position(state, pane);
+            let mut motions = true;
             for item in &c.items {
                 for key in mode_keys(item) {
                     if let Some((cmds, dialect)) = copy::binding_for(state, pane, &key) {
+                        motions &= cmds.iter().all(|argv| copy::is_motion(argv));
                         let at = ClientCtx {
                             dialect,
                             ..at.clone()
@@ -534,6 +540,9 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
                         }
                     }
                 }
+            }
+            if motions && before.is_some() && copy::position(state, pane) == before {
+                break;
             }
         }
         return Ok(String::new());
