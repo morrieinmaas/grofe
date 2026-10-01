@@ -1253,7 +1253,7 @@ impl KeyTables {
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
 /// `o` (needs `+`/`-` target offsets, FE.1's), `m`/`M` (marking), `C` and
 /// `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus),
-/// `*` (`new-pane`) and copy mode (`[ PPage`, M5).
+/// `*` (`new-pane`). Copy mode (M5) binds `[`, `PPage` and the `copy-mode-vi` table.
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
@@ -1548,6 +1548,23 @@ pub fn default_bindings() -> KeyTables {
             &format!("{verb} the {layout} layout"),
         );
     }
+    // M5 stub: copy mode's keys (TM.1 builds the mode).
+    bind("[", &["copy-mode"], false, "Enter copy mode");
+    bind(
+        "PPage",
+        &["copy-mode", "-u"],
+        false,
+        "Enter copy mode and scroll up",
+    );
+    for (key, text) in COPY_MODE_VI {
+        if let (Ok(key), Ok(cmds)) = (parse_key(key), crate::cmd::split_command_string(text)) {
+            t.insert(
+                COPY_MODE_VI_TABLE,
+                key,
+                Binding::new(cmds, false, BindingSource::Default),
+            );
+        }
+    }
     // FE.1: stock `o`. Its `:.+` offset has no native spelling, so the
     // binding is tmux dialect, run through the front end (recorded on tmux
     // 3.7b: `select-pane -t :.+`, "Select the next pane").
@@ -1560,6 +1577,176 @@ pub fn default_bindings() -> KeyTables {
     }
     t
 }
+
+/// The copy-mode key table with `mode-keys vi`.
+pub const COPY_MODE_VI_TABLE: &str = "copy-mode-vi";
+
+/// tmux 3.7b's 88 stock `copy-mode-vi` bindings (`key-bindings.c`), in
+/// native spelling: the key, then its commands as a command string. The
+/// rows yank and the navigator add come from those plugins (TM.0's
+/// decision 5).
+pub const COPY_MODE_VI: &[(&str, &str)] = &[
+    (
+        r#"#"#,
+        r#"send-keys -F -X search-backward -- '#{copy_cursor_word}'"#,
+    ),
+    (
+        r#"*"#,
+        r#"send-keys -F -X search-forward -- '#{copy_cursor_word}'"#,
+    ),
+    (r#"C-c"#, r#"send-keys -X cancel"#),
+    (r#"C-d"#, r#"send-keys -X halfpage-down"#),
+    (r#"C-e"#, r#"send-keys -X scroll-down"#),
+    (r#"C-b"#, r#"send-keys -X page-up"#),
+    (r#"C-f"#, r#"send-keys -X page-down"#),
+    (r#"C-h"#, r#"send-keys -X cursor-left"#),
+    (r#"C-j"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"Enter"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"C-u"#, r#"send-keys -X halfpage-up"#),
+    (r#"C-v"#, r#"send-keys -X rectangle-toggle"#),
+    (r#"C-y"#, r#"send-keys -X scroll-up"#),
+    (r#"Escape"#, r#"send-keys -X clear-selection"#),
+    (r#"C-["#, r#"send-keys -X clear-selection"#),
+    (r#"Space"#, r#"send-keys -X begin-selection"#),
+    (r#"$"#, r#"send-keys -X end-of-line"#),
+    (r#","#, r#"send-keys -X jump-reverse"#),
+    (
+        r#"/"#,
+        r#"command-prompt -T search -p '(search down)' { send-keys -X search-forward -- '%%' }"#,
+    ),
+    (r#"0"#, r#"send-keys -X start-of-line"#),
+    (
+        r#"1"#,
+        r#"command-prompt -N -p '(repeat)' -I 1 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"2"#,
+        r#"command-prompt -N -p '(repeat)' -I 2 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"3"#,
+        r#"command-prompt -N -p '(repeat)' -I 3 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"4"#,
+        r#"command-prompt -N -p '(repeat)' -I 4 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"5"#,
+        r#"command-prompt -N -p '(repeat)' -I 5 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"6"#,
+        r#"command-prompt -N -p '(repeat)' -I 6 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"7"#,
+        r#"command-prompt -N -p '(repeat)' -I 7 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"8"#,
+        r#"command-prompt -N -p '(repeat)' -I 8 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"9"#,
+        r#"command-prompt -N -p '(repeat)' -I 9 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#":"#,
+        r#"command-prompt -p '(goto line)' { send-keys -X goto-line -- '%%' }"#,
+    ),
+    (r#";"#, r#"send-keys -X jump-again"#),
+    (
+        r#"?"#,
+        r#"command-prompt -T search -p '(search up)' { send-keys -X search-backward -- '%%' }"#,
+    ),
+    (r#"A"#, r#"send-keys -X append-selection-and-cancel"#),
+    (r#"B"#, r#"send-keys -X previous-space"#),
+    (r#"D"#, r#"send-keys -X copy-pipe-end-of-line-and-cancel"#),
+    (r#"E"#, r#"send-keys -X next-space-end"#),
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p '(jump backward)' { send-keys -X jump-backward -- '%%' }"#,
+    ),
+    (r#"G"#, r#"send-keys -X history-bottom"#),
+    (r#"H"#, r#"send-keys -X top-line"#),
+    (r#"J"#, r#"send-keys -X scroll-down"#),
+    (r#"K"#, r#"send-keys -X scroll-up"#),
+    (r#"L"#, r#"send-keys -X bottom-line"#),
+    (r#"M"#, r#"send-keys -X middle-line"#),
+    (r#"N"#, r#"send-keys -X search-reverse"#),
+    (r#"P"#, r#"send-keys -X toggle-position"#),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p '(jump to backward)' { send-keys -X jump-to-backward -- '%%' }"#,
+    ),
+    (r#"V"#, r#"send-keys -X select-line"#),
+    (r#"W"#, r#"send-keys -X next-space"#),
+    (r#"X"#, r#"send-keys -X set-mark"#),
+    (r#"^"#, r#"send-keys -X back-to-indentation"#),
+    (r#"b"#, r#"send-keys -X previous-word"#),
+    (r#"e"#, r#"send-keys -X next-word-end"#),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p '(jump forward)' { send-keys -X jump-forward -- '%%' }"#,
+    ),
+    (r#"g"#, r#"send-keys -X history-top"#),
+    (r#"h"#, r#"send-keys -X cursor-left"#),
+    (r#"j"#, r#"send-keys -X cursor-down"#),
+    (r#"k"#, r#"send-keys -X cursor-up"#),
+    (r#"z"#, r#"send-keys -X scroll-middle"#),
+    (r#"l"#, r#"send-keys -X cursor-right"#),
+    (r#"n"#, r#"send-keys -X search-again"#),
+    (r#"o"#, r#"send-keys -X other-end"#),
+    (r#"q"#, r#"send-keys -X cancel"#),
+    (r#"r"#, r#"send-keys -X refresh-from-pane"#),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p '(jump to forward)' { send-keys -X jump-to-forward -- '%%' }"#,
+    ),
+    (r#"v"#, r#"send-keys -X rectangle-toggle"#),
+    (r#"w"#, r#"send-keys -X next-word"#),
+    (r#"{"#, r#"send-keys -X previous-paragraph"#),
+    (r#"}"#, r#"send-keys -X next-paragraph"#),
+    (r#"%"#, r#"send-keys -X next-matching-bracket"#),
+    (r#"Home"#, r#"send-keys -X start-of-line"#),
+    (r#"End"#, r#"send-keys -X end-of-line"#),
+    (r#"MouseDown1Pane"#, r#"select-pane"#),
+    (
+        r#"MouseDrag1Pane"#,
+        r#"select-pane; send-keys -X begin-selection"#,
+    ),
+    (
+        r#"MouseDragEnd1Pane"#,
+        r#"send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"WheelUpPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-up"#,
+    ),
+    (
+        r#"WheelDownPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-down"#,
+    ),
+    (
+        r#"DoubleClick1Pane"#,
+        r#"select-pane; send-keys -X select-word; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"TripleClick1Pane"#,
+        r#"select-pane; send-keys -X select-line; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (r#"BSpace"#, r#"send-keys -X cursor-left"#),
+    (r#"NPage"#, r#"send-keys -X page-down"#),
+    (r#"PPage"#, r#"send-keys -X page-up"#),
+    (r#"Up"#, r#"send-keys -X cursor-up"#),
+    (r#"Down"#, r#"send-keys -X cursor-down"#),
+    (r#"Left"#, r#"send-keys -X cursor-left"#),
+    (r#"Right"#, r#"send-keys -X cursor-right"#),
+    (r#"M-x"#, r#"send-keys -X jump-to-mark"#),
+    (r#"C-Up"#, r#"send-keys -X scroll-up"#),
+    (r#"C-Down"#, r#"send-keys -X scroll-down"#),
+];
 
 /// tmux 3.7b's stock prefix table (`list-keys -T prefix` on a `-f
 /// /dev/null` server, the `fe_4/list-keys` golden; notes from its
@@ -3709,8 +3896,8 @@ mod tests {
         }
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
-        // Stock keys grofe leaves unbound (out of scope, or M5's).
-        for name in ["m", "M", "t", "C", "<", ">", "*", "["] {
+        // Stock keys grofe leaves unbound (out of scope).
+        for name in ["m", "M", "t", "C", "<", ">", "*"] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }

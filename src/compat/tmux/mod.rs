@@ -33,6 +33,7 @@
 //! sends `argv` with the dialect [`cli`] chose.
 
 mod bindings;
+mod copy;
 pub(crate) mod formats;
 mod structure;
 
@@ -272,6 +273,7 @@ pub fn table() -> &'static [Row] {
         let mut rows = structure::rows();
         rows.extend(formats::rows());
         rows.extend(bindings::rows());
+        rows.extend(copy::rows());
         rows.extend(core_rows());
         rows
     })
@@ -900,6 +902,12 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("buffer-limit", "buffer-limit"),
     ("command-alias", "command-alias"),
     ("compat-identity", "compat-identity"),
+    ("copy-command", "copy-command"),
+    (
+        "copy-mode-current-match-style",
+        "copy-mode-current-match-style",
+    ),
+    ("copy-mode-match-style", "copy-mode-match-style"),
     ("default-command", "default-command"),
     ("default-shell", "default-shell"),
     ("default-terminal", "default-terminal"),
@@ -913,6 +921,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("main-pane-width", "main-pane-width"),
     ("message-style", "message-style"),
     ("mode-keys", "mode-keys"),
+    ("mode-style", "mode-style"),
     ("monitor-activity", "monitor-activity"),
     ("monitor-bell", "monitor-bell"),
     ("monitor-silence", "monitor-silence"),
@@ -961,6 +970,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("window-status-style", "window-status-style"),
     ("window-style", "window-style"),
     ("window-active-style", "window-active-style"),
+    ("word-separators", "word-separators"),
+    ("wrap-search", "wrap-search"),
 ];
 
 /// The option store's name for tmux option `tmux`.

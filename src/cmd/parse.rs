@@ -10,12 +10,12 @@ use super::keys;
 use super::target::parse_target;
 use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
-    Command, CommandPrompt, Condition, ConfirmBefore, DeleteBuffer, DetachClient, DisplayMenu,
-    DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane,
-    KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys, ListPanes,
-    ListSessions, ListWindows, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout,
-    Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient, RegisterSource, Reload,
-    Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
+    Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer, DetachClient,
+    DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane,
+    KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys,
+    ListPanes, ListSessions, ListWindows, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
+    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient, RegisterSource,
+    Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
     SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
     SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
     ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
@@ -614,6 +614,9 @@ const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
     ('l', FlagKind::Bool),
     ('H', FlagKind::Bool),
     ('t', FlagKind::Value),
+    ('X', FlagKind::Bool),
+    ('N', FlagKind::Value),
+    ('F', FlagKind::Bool),
 ];
 
 fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
@@ -627,6 +630,8 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     )?;
     let literal = flags.present.contains(&'l');
     let hex = flags.present.contains(&'H');
+    // `-X` (M5): the words are a copy-mode command and its arguments.
+    let command = flags.present.contains(&'X');
     if literal && hex {
         return Err(ParseError::Other(
             "send-keys: only one of -l or -H allowed".to_string(),
@@ -634,7 +639,9 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     }
     let mut items = Vec::with_capacity(flags.positionals.len());
     for arg in &flags.positionals {
-        items.push(if hex {
+        items.push(if command {
+            SendKeysItem::Literal(arg.clone())
+        } else if hex {
             let byte = u8::from_str_radix(arg, 16)
                 .map_err(|_| ParseError::Other(format!("invalid hex byte: {arg}")))?;
             SendKeysItem::Hex(byte)
@@ -647,6 +654,9 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::SendKeys(SendKeys {
         target: target_or_current(&flags.values, 't')?,
         items,
+        command,
+        count: flags.values.get(&'N').cloned(),
+        format: flags.present.contains(&'F'),
     }))
 }
 
@@ -2624,6 +2634,20 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             }))
         }
         "paste-buffer" => parse_paste_buffer(rest),
+        "copy-mode" => {
+            const SHORT: &[(char, FlagKind)] = &[
+                ('e', FlagKind::Bool),
+                ('u', FlagKind::Bool),
+                ('t', FlagKind::Value),
+            ];
+            let flags = flags_for(rest, SHORT, "copy-mode")?;
+            no_extra_positionals(&flags, "copy-mode", 0)?;
+            Ok(Command::CopyMode(CopyMode {
+                page_up: flags.present.contains(&'u'),
+                scroll_exit: flags.present.contains(&'e'),
+                target: target_or_current(&flags.values, 't')?,
+            }))
+        }
         "choose-buffer" => {
             let flags = flags_for(rest, &[('Z', FlagKind::Bool)], "choose-buffer")?;
             no_extra_positionals(&flags, "choose-buffer", 0)?;

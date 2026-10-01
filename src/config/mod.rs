@@ -102,6 +102,16 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("visual-silence", "visual-silence"),
     // Paste buffers (TM.4).
     ("buffer-limit", "buffer-limit"),
+    // Copy mode (M5 stub).
+    ("word-separators", "word-separators"),
+    ("wrap-search", "wrap-search"),
+    ("copy-command", "copy-command"),
+    ("mode-style", "mode-style"),
+    ("copy-mode.match-style", "copy-mode-match-style"),
+    (
+        "copy-mode.current-match-style",
+        "copy-mode-current-match-style",
+    ),
 ];
 
 /// TOML key to tmux option name for every list option (TC.2b). A TOML
@@ -134,7 +144,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
         | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes"
-        | "monitor-bell" | "monitor-activity" => Ty::Bool,
+        | "monitor-bell" | "monitor-activity" | "wrap-search" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

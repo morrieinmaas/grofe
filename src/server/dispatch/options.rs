@@ -133,6 +133,44 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "50",
     },
+    // M5 stub: copy mode's options, with tmux 3.7b's scopes and defaults
+    // (`copy-command` is a server option there, global here).
+    Builtin {
+        name: "word-separators",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
+    },
+    Builtin {
+        name: "wrap-search",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "copy-command",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "",
+    },
+    Builtin {
+        name: "mode-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "noattr,bg=yellow,fg=black",
+    },
+    Builtin {
+        name: "copy-mode-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=cyan,fg=black",
+    },
+    Builtin {
+        name: "copy-mode-current-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=magenta,fg=black",
+    },
     Builtin {
         name: "pane-base-index",
         kind: Kind::Number {
@@ -476,8 +514,8 @@ const BUILTINS: &[Builtin] = &[
     // `default-shell` is read when a pane starts (`Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
-    // `mode-keys` waits for M5's copy mode, and `pane-border-format` for
-    // pane border titles.
+    // `pane-border-format` waits for pane border titles; copy mode reads
+    // `mode-keys` (M5).
     Builtin {
         name: "aggressive-resize",
         kind: Kind::Bool,
@@ -1432,8 +1470,18 @@ pub(crate) fn quote(value: &str) -> String {
         return format!("\\{c}");
     }
     let mut escaped = String::new();
-    for c in value.chars() {
+    let mut it = value.chars().peekable();
+    while let Some(c) = it.next() {
         match c {
+            // As tmux's `utf8_stravis`: `$` only before a name (M5: the
+            // `word-separators` default holds `$%`).
+            '$' if quotes == Some('"')
+                && !it
+                    .peek()
+                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{') =>
+            {
+                escaped.push('$');
+            }
             '\\' => escaped.push_str("\\\\"),
             '\n' => escaped.push_str("\\n"),
             '\t' => escaped.push_str("\\t"),
@@ -2530,6 +2578,10 @@ impl<'a> ServerVars<'a> {
 
 impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        // Copy mode's variables while the pane is in it (TM.1).
+        if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
         // The mouse event a mouse key's commands run for, and the view (TC.10).
         if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
             return Some(v);
@@ -2950,7 +3002,6 @@ const NO_EFFECT: &[&str] = &[
     "default-terminal",
     "extended-keys",
     "extended-keys-format",
-    "mode-keys",
     "pane-border-format",
     "status-keys",
     "synchronize-panes",

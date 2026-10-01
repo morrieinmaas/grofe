@@ -653,6 +653,20 @@ impl PaneHandle {
             .collect()
     }
 
+    /// Every row of the grid, the oldest history row first and then the
+    /// screen, each passed to `row`, under one lock: copy mode's copy of
+    /// the pane (M5, TM.1). Returns the number of history rows and the
+    /// cursor.
+    pub fn copy_grid(&self, mut row: impl FnMut(Vec<SnapCell>)) -> (usize, CursorState) {
+        let emu = lock(&self.emu);
+        let grid = emu.term.grid();
+        let history = grid.history_size();
+        for r in -(history as i32)..grid.screen_lines() as i32 {
+            row(snap_row(&grid[Line(r)], grid.columns()));
+        }
+        (history, cursor_state(&emu.term))
+    }
+
     pub fn modes(&self) -> InputModes {
         let mode = *lock(&self.emu).term.mode();
         let mouse = if mode.contains(TermMode::MOUSE_MOTION) {

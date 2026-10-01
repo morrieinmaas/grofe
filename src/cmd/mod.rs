@@ -251,6 +251,13 @@ pub enum SendKeysItem {
 pub struct SendKeys {
     pub target: Target,
     pub items: Vec<SendKeysItem>,
+    /// `-X` (M5): the items are a copy-mode command and its arguments,
+    /// run by the target pane's mode.
+    pub command: bool,
+    /// `-N` (M5): the repeat count, a format expanded when it runs.
+    pub count: Option<String>,
+    /// `-F` (M5): the mode command expands its arguments as formats.
+    pub format: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -965,6 +972,16 @@ pub struct PasteBuffer {
     pub target: Target,
 }
 
+/// `copy-mode [-eu] [-t pane]` (M5, TM.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyMode {
+    /// `-u`: start a page up.
+    pub page_up: bool,
+    /// `-e`: scrolling back to the bottom leaves the mode.
+    pub scroll_exit: bool,
+    pub target: Target,
+}
+
 /// `choose-buffer [-Z]` (TM.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChooseBuffer {
@@ -1055,4 +1072,6 @@ pub enum Command {
     DeleteBuffer(DeleteBuffer),
     PasteBuffer(PasteBuffer),
     ChooseBuffer(ChooseBuffer),
+    // M5: copy mode (TM.1).
+    CopyMode(CopyMode),
 }

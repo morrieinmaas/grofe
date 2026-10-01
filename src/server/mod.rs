@@ -13,6 +13,7 @@
 pub mod alerts;
 pub mod buffers;
 pub mod clients;
+pub mod copy;
 pub mod dispatch;
 pub mod events;
 pub mod graphics;
@@ -179,6 +180,8 @@ pub struct State {
     pub trees: tree::Trees,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
+    /// The panes in copy mode (TM.1).
+    pub copy: copy::Copies,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
@@ -261,6 +264,7 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
+    copy::register(state);
 }
 
 /// Set to `1` to make the server panic on its first command: the test
@@ -470,6 +474,7 @@ async fn serve(
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         buffers: buffers::Buffers::default(),
+        copy: copy::Copies::default(),
         alerts: alerts::Alerts::default(),
         jobs: jobs_tx,
         deferred_reply: None,
@@ -1096,6 +1101,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         buffers: buffers::Buffers::default(),
+        copy: copy::Copies::default(),
         alerts: alerts::Alerts::default(),
         jobs,
         deferred_reply: None,

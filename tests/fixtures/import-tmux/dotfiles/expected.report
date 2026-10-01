@@ -1,6 +1,5 @@
 ~/.tmux.conf:2: note: default-terminal: grofe keeps and shows it, with no effect
 ~/.tmux.conf:3: option grofe does not have: set -ga terminal-overrides ",xterm-256color:Tc"
-~/.tmux.conf:13: note: mode-keys: grofe keeps and shows it, with no effect
 ~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
 ~/.tmux.conf:24: send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi v send -X begin-selection
 ~/.tmux.conf:25: send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi y send -X copy-pipe-and-cancel "pbcopy"

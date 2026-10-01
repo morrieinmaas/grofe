@@ -2800,15 +2800,15 @@ mod tests {
     }
 
     /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
-    /// popup, chooser, mouse) are registered in priority order, and with
+    /// popup, chooser, mouse) and M5's copy mode are registered in priority order, and with
     /// nothing open every hook passes every kind of input on and every
     /// overlay leaves the screen alone.
     #[test]
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 5);
-        assert_eq!(state.registry.overlays.len(), 5);
+        assert_eq!(state.registry.input_hooks.len(), 6);
+        assert_eq!(state.registry.overlays.len(), 6);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),

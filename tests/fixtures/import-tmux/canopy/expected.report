@@ -1,6 +1,5 @@
 ~/.config/tmux/tmux.conf:4: note: source-file -q found ~/.local/share/canopy/tmux/tmux.conf
 ~/.local/share/canopy/tmux/tmux.conf:39: note: source-file found ~/.local/share/canopy/tmux/conf.d/00-core.conf
-~/.local/share/canopy/tmux/conf.d/00-core.conf:33: note: mode-keys: grofe keeps and shows it, with no effect
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: %if: %if "#{==:#{@canopy_core_appended},}"
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:52: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -g default-terminal "tmux-256color"
 ~/.local/share/canopy/tmux/conf.d/00-core.conf:53: inside %if at ~/.local/share/canopy/tmux/conf.d/00-core.conf:48: set -as terminal-features ",xterm-256color:RGB"
