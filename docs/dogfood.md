@@ -66,3 +66,32 @@ Copy this block for each entry.
 ```
 
 ## Entries
+
+### 2026-10-01 Daily bindings, checked by script (TP.9a)
+
+The owner ruled that this check runs as a script, not by hand.
+`scripts/key-parity.sh` presses each daily binding once, through a client
+attached on a pty, with the whole config and every plugin loaded. It does
+this on real tmux 3.7b and on two grofe servers, one under the tmux name and
+one under grofe's own. A key passes when grofe ran what tmux ran: the same
+script or stub, with the same argv, in the same directory, in a popup of the
+same size. Your own tools are stubs that log a line; the plugin scripts run
+unchanged. Tick the last column once you have used the key yourself.
+
+| Key | What it does | Script (grofe under the tmux name, and under its own) | You |
+|---|---|---|---|
+| `prefix s` | sessionx's picker (fzf-tmux, the session list) | [x] same as tmux | [ ] |
+| `prefix K` | `~/.local/bin/tsess` | [x] same as tmux | [ ] |
+| `prefix ?` | `keys-popup.sh`, the searchable key list | [x] same as tmux | [ ] |
+| `prefix u` | fzf-url's picker over the pane's URLs | [x] same as tmux | [ ] |
+| `prefix g` | gh-dash in a 95% by 90% popup | [x] same as tmux | [ ] |
+| `prefix G` | `enhance-pr.sh` in a popup, in the pane's directory | [x] same as tmux | [ ] |
+| `prefix P` | `pet-pick.sh` in a borderless popup | [x] same as tmux | [ ] |
+| `prefix T` | `theme` with `THEME_POPUP=1` in a popup | [x] same as tmux | [ ] |
+| `prefix W` | `net-popup.sh` in the 66 by 26 network popup | [x] same as tmux | [ ] |
+| `prefix a` | claude-session-manager's agent for this directory, in a popup | [x] same as tmux | [ ] |
+| `prefix A` | claude-session-manager's agent picker | [x] same as tmux | [ ] |
+
+- grofe: built from TP.9a's branch
+- What the script cannot see: how a popup looks (its border and title) and
+  what you do inside it. Those are yours to judge when you tick a row.

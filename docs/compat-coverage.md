@@ -210,6 +210,90 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
 
+## Key parity
+
+`scripts/key-parity.sh` (plan M3.7, TP.9a) loads the owner's whole config
+with every plugin on real tmux 3.7b and on grofe, and compares `list-keys`
+per table, every table but `copy-mode` and `copy-mode-vi` (TP.9b, M5). It
+runs two grofe servers: `grofe-tmux`, grofe answering to the tmux name as
+it will from alias day, and `grofe`, the same native config with the
+server started under grofe's own name. A key that differs fails the script
+unless a row below names it. *Servers* says which grofe server the row is
+for. The classes:
+
+- **deferred**: M5's copy mode and buffers. Never compared, only reported.
+- **oos**: out of scope in the spec (§4.5). Never compared, only reported.
+- **mouse**: a stock tmux mouse binding. grofe leaves it unbound, and its
+  built-in mouse model (TC.10, `src/server/mouse.rs`) does the job, or
+  nothing does, as the reason says.
+- **native**: grofe binds the key in its own form on purpose.
+
+A **mouse** or **native** row whose key matches tmux anyway fails the
+script, so this table cannot go stale.
+
+| Table | Key | Class | Servers | Reason |
+|---|---|---|---|---|
+| `prefix` | `[` | deferred | both | `copy-mode`: TP.9b, M5 |
+| `prefix` | `]` | deferred | both | `paste-buffer -p`: TP.9b, M5 |
+| `prefix` | `=` | deferred | both | `choose-buffer -Z`: TP.9b, M5 |
+| `prefix` | `PPage` | deferred | both | `copy-mode -u`, tmux's spelling of PageUp: TP.9b, M5 |
+| `prefix` | `m` | oos | both | out of scope: marks unused by the owner's scripts (spec §4.5, marked panes) |
+| `root` | `WheelUpPane` | deferred | both | wheel into copy mode: TP.9b, M5. Until then the built-in model opens the read-only scrollback view |
+| `root` | `MouseDrag1Pane` | deferred | both | drag selection in copy mode: TP.9b, M5 |
+| `root` | `DoubleClick1Pane` | deferred | both | word selection in copy mode: TP.9b, M5 |
+| `root` | `TripleClick1Pane` | deferred | both | line selection in copy mode: TP.9b, M5 |
+| `root` | `MouseDrag1ScrollbarSlider` | deferred | both | a scrollbar drag in copy mode: TP.9b, M5; grofe draws no scrollbar |
+| `root` | `MouseDown1Pane` | mouse | both | built-in: a press focuses the pane under the pointer and reaches it if it asked for the mouse |
+| `root` | `MouseDrag1Border` | mouse | both | built-in: the border under the pointer follows the drag until the release |
+| `root` | `WheelUpStatus` | mouse | both | built-in: the previous window |
+| `root` | `WheelDownStatus` | mouse | both | built-in: the next window |
+| `root` | `MouseDown2Pane` | mouse | both | built-in: focus, then the press reaches a pane that asked for the mouse; pasting a buffer is M5's |
+| `root` | `MouseDown1Border` | mouse | both | `select-pane -M` clears the mark, which is out of scope (`m`); the built-in drag starts here |
+| `root` | `MouseDown3Pane` | mouse | both | no replacement: tmux's pane menu opens at `-x M -y M`, a mouse argv form (spec §4.5); the press reaches a pane that asked for the mouse |
+| `root` | `M-MouseDown3Pane` | mouse | both | no replacement: the same pane menu, at `-x M -y M` |
+| `root` | `MouseDown3Status` | mouse | both | no replacement: tmux's window menu opens at `-x W -y W`, a mouse argv form |
+| `root` | `M-MouseDown3Status` | mouse | both | no replacement: the same window menu, at `-x W -y W` |
+| `root` | `MouseDown3StatusLeft` | mouse | both | no replacement: tmux's session menu opens at `-x M -y W`, a mouse argv form |
+| `root` | `M-MouseDown3StatusLeft` | mouse | both | no replacement: the same session menu |
+| `root` | `C-MouseDown1Pane` | mouse | both | no replacement: `swap-pane -s @` takes the pane under the pointer as a mouse target |
+| `root` | `C-MouseDown1Status` | mouse | both | no replacement: `swap-window -t @`, the same for the window clicked |
+| `root` | `MouseDown1Control8` | mouse | both | never fires: tmux 3.7's pane border controls, which grofe does not draw |
+| `root` | `MouseDown1Control9` | mouse | both | never fires: the same, and its menu opens at `-x M -y M` |
+| `root` | `MouseDown1ScrollbarUp` | mouse | both | never fires: grofe draws no pane scrollbar |
+| `root` | `MouseDown1ScrollbarDown` | mouse | both | never fires: grofe draws no pane scrollbar |
+| `root` | `C-h` | native | both | vim-tmux-navigator, which athome loads through TPM on tmux, is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
+| `root` | `C-j` | native | both | the same |
+| `root` | `C-k` | native | both | the same |
+| `root` | `C-l` | native | both | the same |
+| `root` | `C-\\` | native | both | the same |
+| `prefix` | `C-l` | native | both | the same fragment gives clearing the screen to the prefix |
+| `prefix` | `r` | native | both | canopy-reload runs grofe's `reload`, which validates every layer first (canopy `grofe/keys.tsv`) |
+| `prefix` | `M-s` | native | both | the grofe fragment runs `"$CANOPY_STORE/..."`, which the shell expands from the server's environment; tmux expanded the same path when it read the config |
+| `prefix` | `\"` | native | grofe | grofe's own default table splits in the active pane's directory (spec §5.3); under the tmux name it is tmux's stock `split-window` |
+| `prefix` | `\%` | native | grofe | the same, `split-window -h` |
+| `prefix` | `&` | native | grofe | grofe's own default table spells tmux's `#W` as `#{window_name}`, the same text |
+| `prefix` | `x` | native | grofe | the same, `#P` as `#{pane_index}` |
+| `prefix` | `,` | native | grofe | grofe's own default table writes the prompt's template as a quoted string, not a `{ }` block: the same command |
+| `prefix` | `\$` | native | grofe | the same |
+| `prefix` | `\'` | native | grofe | the same |
+| `prefix` | `.` | native | grofe | the same |
+| `prefix` | `/` | native | grofe | the same |
+| `prefix` | `f` | native | grofe | the same |
+| `prefix` | `0` | native | grofe | grofe's own default table targets `:0`, which the native grammar reads as exactly window 0, as tmux reads `:=0` |
+| `prefix` | `1` | native | grofe | the same |
+| `prefix` | `2` | native | grofe | the same |
+| `prefix` | `3` | native | grofe | the same |
+| `prefix` | `4` | native | grofe | the same |
+| `prefix` | `5` | native | grofe | the same |
+| `prefix` | `6` | native | grofe | the same |
+| `prefix` | `7` | native | grofe | the same |
+| `prefix` | `8` | native | grofe | the same |
+| `prefix` | `9` | native | grofe | the same |
+| `prefix` | `*` | native | grofe | grofe's own default table leaves `new-pane` unbound; under the tmux name it is tmux's stock binding |
+| `prefix` | `<` | native | grofe | grofe's own default table leaves tmux's window menu unbound |
+| `prefix` | `>` | native | grofe | grofe's own default table leaves tmux's pane menu unbound |
+| `prefix` | `\#` | native | grofe | grofe's own default table leaves `list-buffers` unbound (M5) |
+
 ## Coverage
 
 The tables below are generated from the corpus by `scripts/corpus.py
