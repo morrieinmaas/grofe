@@ -917,6 +917,58 @@ pub struct RegisterSource {
     pub command: String,
 }
 
+/// `set-buffer [-a] [-b name] [-n new-name] [data]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SetBuffer {
+    /// `-a`: append to the `-b` buffer (no `-b` makes a new buffer, as
+    /// tmux 3.7b does).
+    pub append: bool,
+    /// `-b`: the buffer; none is a new automatic one.
+    pub name: Option<String>,
+    /// `-n`: rename the buffer (the data, if any, is ignored).
+    pub rename: Option<String>,
+    pub data: Option<String>,
+}
+
+/// `show-buffer [-b name]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShowBuffer {
+    pub name: Option<String>,
+}
+
+/// `list-buffers [-F format]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ListBuffers {
+    pub format: Option<String>,
+}
+
+/// `delete-buffer [-b name]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeleteBuffer {
+    pub name: Option<String>,
+}
+
+/// `paste-buffer [-dpr] [-b name] [-s separator] [-t pane]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteBuffer {
+    /// `-p`: bracketed-paste markers, for a pane that asked for them.
+    pub bracket: bool,
+    pub name: Option<String>,
+    /// `-d`: delete the buffer after pasting.
+    pub delete: bool,
+    /// `-r`: line feeds stay line feeds (a separator of LF).
+    pub raw: bool,
+    /// `-s`: what each line feed becomes (default CR).
+    pub separator: Option<String>,
+    pub target: Target,
+}
+
+/// `choose-buffer [-Z]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChooseBuffer {
+    pub zoom: bool,
+}
+
 /// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -994,4 +1046,11 @@ pub enum Command {
     SetEnvironment(SetEnvironment),
     ShowEnvironment(ShowEnvironment),
     RegisterSource(RegisterSource),
+    // M5: buffers (TM.4).
+    SetBuffer(SetBuffer),
+    ShowBuffer(ShowBuffer),
+    ListBuffers(ListBuffers),
+    DeleteBuffer(DeleteBuffer),
+    PasteBuffer(PasteBuffer),
+    ChooseBuffer(ChooseBuffer),
 }

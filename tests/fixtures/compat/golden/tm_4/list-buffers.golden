@@ -1,0 +1,30 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set-buffer one
+? 0
+$ set-buffer 'two words'
+? 0
+$ set-buffer 'with "quotes", a \ and a tab:	end'
+? 0
+$ list-buffers
+buffer2: 33 bytes: "with "quotes", a \\ and a tab:\tend"
+buffer1: 9 bytes: "two words"
+buffer0: 3 bytes: "one"
+? 0
+$ show-buffer
+with "quotes", a \ and a tab:	end
+? 0
+$ show-buffer -b buffer1
+two words
+? 0
+$ list-buffers -F '#{buffer_name}|#{buffer_size}|#{buffer_sample}'
+buffer2|33|with "quotes", a \\ and a tab:\tend
+buffer1|9|two words
+buffer0|3|one
+? 0
+$ delete-buffer
+? 0
+$ list-buffers
+buffer1: 9 bytes: "two words"
+buffer0: 3 bytes: "one"
+? 0

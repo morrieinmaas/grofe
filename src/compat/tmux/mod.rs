@@ -897,6 +897,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("automatic-rename-format", "automatic-rename-format"),
     ("base-index", "base-index"),
     ("bell-action", "bell-action"),
+    ("buffer-limit", "buffer-limit"),
     ("command-alias", "command-alias"),
     ("compat-identity", "compat-identity"),
     ("default-command", "default-command"),

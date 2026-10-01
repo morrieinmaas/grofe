@@ -10,7 +10,8 @@
 //! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
 //! verbs route to one file per owning task: [`structure`] (TC.8),
 //! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
-//! (TC.10) and [`hooks`] (TC.5). After every command it runs the pending
+//! (TC.10) and [`hooks`] (TC.5); M5's buffer verbs to [`buffers`] (TM.4).
+//! After every command it runs the pending
 //! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
 //! last session is gone the server exits.
 //!
@@ -22,6 +23,7 @@
 //! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
 
 pub mod bindings;
+pub mod buffers;
 pub mod client;
 pub mod hooks;
 pub mod menu;
@@ -219,6 +221,8 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ShowOptions(_)
                 | Command::HasSession(_)
                 | Command::CapturePane(_)
+                | Command::ShowBuffer(_)
+                | Command::ListBuffers(_)
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
     })
@@ -357,6 +361,13 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::register(state, c.name.as_deref(), &c.command, None, None);
             Ok(String::new())
         }
+        // M5: buffers (TM.4).
+        Command::SetBuffer(c) => buffers::set_buffer(state, ctx, c),
+        Command::ShowBuffer(c) => buffers::show_buffer(state, ctx, c),
+        Command::ListBuffers(c) => buffers::list_buffers(state, ctx, c),
+        Command::DeleteBuffer(c) => buffers::delete_buffer(state, ctx, c),
+        Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),
+        Command::ChooseBuffer(c) => buffers::choose_buffer(state, ctx, c),
     }
 }
 

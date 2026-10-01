@@ -11,6 +11,7 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod alerts;
+pub mod buffers;
 pub mod clients;
 pub mod dispatch;
 pub mod events;
@@ -176,6 +177,8 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
+    /// The paste buffers (TM.4).
+    pub buffers: buffers::Buffers,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
@@ -466,6 +469,7 @@ async fn serve(
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        buffers: buffers::Buffers::default(),
         alerts: alerts::Alerts::default(),
         jobs: jobs_tx,
         deferred_reply: None,
@@ -1091,6 +1095,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        buffers: buffers::Buffers::default(),
         alerts: alerts::Alerts::default(),
         jobs,
         deferred_reply: None,

@@ -1,0 +1,162 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ show-options -gv buffer-limit
+50
+? 0
+$ set-buffer -b keep k
+? 0
+$ set-buffer d0
+? 0
+$ set-buffer d1
+? 0
+$ set-buffer d2
+? 0
+$ set-buffer d3
+? 0
+$ set-buffer d4
+? 0
+$ set-buffer d5
+? 0
+$ set-buffer d6
+? 0
+$ set-buffer d7
+? 0
+$ set-buffer d8
+? 0
+$ set-buffer d9
+? 0
+$ set-buffer d10
+? 0
+$ set-buffer d11
+? 0
+$ set-buffer d12
+? 0
+$ set-buffer d13
+? 0
+$ set-buffer d14
+? 0
+$ set-buffer d15
+? 0
+$ set-buffer d16
+? 0
+$ set-buffer d17
+? 0
+$ set-buffer d18
+? 0
+$ set-buffer d19
+? 0
+$ set-buffer d20
+? 0
+$ set-buffer d21
+? 0
+$ set-buffer d22
+? 0
+$ set-buffer d23
+? 0
+$ set-buffer d24
+? 0
+$ set-buffer d25
+? 0
+$ set-buffer d26
+? 0
+$ set-buffer d27
+? 0
+$ set-buffer d28
+? 0
+$ set-buffer d29
+? 0
+$ set-buffer d30
+? 0
+$ set-buffer d31
+? 0
+$ set-buffer d32
+? 0
+$ set-buffer d33
+? 0
+$ set-buffer d34
+? 0
+$ set-buffer d35
+? 0
+$ set-buffer d36
+? 0
+$ set-buffer d37
+? 0
+$ set-buffer d38
+? 0
+$ set-buffer d39
+? 0
+$ set-buffer d40
+? 0
+$ set-buffer d41
+? 0
+$ set-buffer d42
+? 0
+$ set-buffer d43
+? 0
+$ set-buffer d44
+? 0
+$ set-buffer d45
+? 0
+$ set-buffer d46
+? 0
+$ set-buffer d47
+? 0
+$ set-buffer d48
+? 0
+$ set-buffer d49
+? 0
+$ set-buffer d50
+? 0
+$ list-buffers
+buffer50: 3 bytes: "d50"
+buffer49: 3 bytes: "d49"
+buffer48: 3 bytes: "d48"
+buffer47: 3 bytes: "d47"
+buffer46: 3 bytes: "d46"
+buffer45: 3 bytes: "d45"
+buffer44: 3 bytes: "d44"
+buffer43: 3 bytes: "d43"
+buffer42: 3 bytes: "d42"
+buffer41: 3 bytes: "d41"
+buffer40: 3 bytes: "d40"
+buffer39: 3 bytes: "d39"
+buffer38: 3 bytes: "d38"
+buffer37: 3 bytes: "d37"
+buffer36: 3 bytes: "d36"
+buffer35: 3 bytes: "d35"
+buffer34: 3 bytes: "d34"
+buffer33: 3 bytes: "d33"
+buffer32: 3 bytes: "d32"
+buffer31: 3 bytes: "d31"
+buffer30: 3 bytes: "d30"
+buffer29: 3 bytes: "d29"
+buffer28: 3 bytes: "d28"
+buffer27: 3 bytes: "d27"
+buffer26: 3 bytes: "d26"
+buffer25: 3 bytes: "d25"
+buffer24: 3 bytes: "d24"
+buffer23: 3 bytes: "d23"
+buffer22: 3 bytes: "d22"
+buffer21: 3 bytes: "d21"
+buffer20: 3 bytes: "d20"
+buffer19: 3 bytes: "d19"
+buffer18: 3 bytes: "d18"
+buffer17: 3 bytes: "d17"
+buffer16: 3 bytes: "d16"
+buffer15: 3 bytes: "d15"
+buffer14: 3 bytes: "d14"
+buffer13: 3 bytes: "d13"
+buffer12: 3 bytes: "d12"
+buffer11: 3 bytes: "d11"
+buffer10: 3 bytes: "d10"
+buffer9: 2 bytes: "d9"
+buffer8: 2 bytes: "d8"
+buffer7: 2 bytes: "d7"
+buffer6: 2 bytes: "d6"
+buffer5: 2 bytes: "d5"
+buffer4: 2 bytes: "d4"
+buffer3: 2 bytes: "d3"
+buffer2: 2 bytes: "d2"
+buffer1: 2 bytes: "d1"
+keep: 1 bytes: "k"
+? 0

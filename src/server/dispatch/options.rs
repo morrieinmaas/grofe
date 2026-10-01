@@ -123,6 +123,16 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "50000",
     },
+    // TM.4: tmux's server option, at grofe's global scope (as
+    // `escape-time`); at least 1.
+    Builtin {
+        name: "buffer-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "50",
+    },
     Builtin {
         name: "pane-base-index",
         kind: Kind::Number {
@@ -902,7 +912,7 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
                 IntErrorKind::NegOverflow => too_small(),
                 _ => format!("value is invalid: {value}"),
             })?;
-            if n < 0 {
+            if n < i64::from(name == "buffer-limit") {
                 Err(too_small())
             } else if n > max {
                 Err(too_large())
@@ -2522,6 +2532,10 @@ impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
         // The mouse event a mouse key's commands run for, and the view (TC.10).
         if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+            return Some(v);
+        }
+        // The newest automatic buffer's `#{buffer_*}` (TM.4).
+        if let Some(v) = crate::server::buffers::format_var(self.state, name) {
             return Some(v);
         }
         // Inside a hook, its `#{hook*}` variables (TC.5).

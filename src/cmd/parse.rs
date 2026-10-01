@@ -9,16 +9,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AttachSession, BindKey, BreakPane, CapturePane, ChooseClient, ChooseTree, Command,
-    CommandPrompt, Condition, ConfirmBefore, DetachClient, DisplayMenu, DisplayMessage,
-    DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
-    KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
-    ParseError, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
-    ResizeWindow, RespawnPane, RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow,
-    SendKeys, SendKeysItem, SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment,
-    ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient,
-    SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
+    Command, CommandPrompt, Condition, ConfirmBefore, DeleteBuffer, DetachClient, DisplayMenu,
+    DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane,
+    KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys, ListPanes,
+    ListSessions, ListWindows, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout,
+    Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient, RegisterSource, Reload,
+    Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
+    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
+    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
+    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
+    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1615,6 +1616,43 @@ fn parse_wait_for(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_set_buffer(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('a', FlagKind::Bool),
+        ('b', FlagKind::Value),
+        ('n', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "set-buffer")?;
+    no_extra_positionals(&flags, "set-buffer", 1)?;
+    Ok(Command::SetBuffer(SetBuffer {
+        append: flags.present.contains(&'a'),
+        name: flags.values.get(&'b').cloned(),
+        rename: flags.values.get(&'n').cloned(),
+        data: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_paste_buffer(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('d', FlagKind::Bool),
+        ('p', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+        ('b', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "paste-buffer")?;
+    no_extra_positionals(&flags, "paste-buffer", 0)?;
+    Ok(Command::PasteBuffer(PasteBuffer {
+        bracket: flags.present.contains(&'p'),
+        name: flags.values.get(&'b').cloned(),
+        delete: flags.present.contains(&'d'),
+        raw: flags.present.contains(&'r'),
+        separator: flags.values.get(&'s').cloned(),
+        target: target_or_current(&flags.values, 't')?,
+    }))
+}
+
 fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('E', FlagKind::Bool),
@@ -2561,6 +2599,36 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "set-environment" => parse_set_environment(rest),
         "show-environment" => parse_show_environment(rest),
         "__register-source" => parse_register_source(rest),
+        "set-buffer" => parse_set_buffer(rest),
+        "show-buffer" => {
+            let flags = flags_for(rest, &[('b', FlagKind::Value)], "show-buffer")?;
+            no_extra_positionals(&flags, "show-buffer", 0)?;
+            Ok(Command::ShowBuffer(ShowBuffer {
+                name: flags.values.get(&'b').cloned(),
+            }))
+        }
+        "list-buffers" => {
+            let flags = flags_for(rest, &[('F', FlagKind::Value)], "list-buffers")?;
+            no_extra_positionals(&flags, "list-buffers", 0)?;
+            Ok(Command::ListBuffers(ListBuffers {
+                format: flags.values.get(&'F').cloned(),
+            }))
+        }
+        "delete-buffer" => {
+            let flags = flags_for(rest, &[('b', FlagKind::Value)], "delete-buffer")?;
+            no_extra_positionals(&flags, "delete-buffer", 0)?;
+            Ok(Command::DeleteBuffer(DeleteBuffer {
+                name: flags.values.get(&'b').cloned(),
+            }))
+        }
+        "paste-buffer" => parse_paste_buffer(rest),
+        "choose-buffer" => {
+            let flags = flags_for(rest, &[('Z', FlagKind::Bool)], "choose-buffer")?;
+            no_extra_positionals(&flags, "choose-buffer", 0)?;
+            Ok(Command::ChooseBuffer(ChooseBuffer {
+                zoom: flags.present.contains(&'Z'),
+            }))
+        }
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }

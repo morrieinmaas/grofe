@@ -1,0 +1,65 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set-buffer -b named hello
+? 0
+$ set-buffer -a -b named ' world'
+? 0
+$ show-buffer -b named
+hello world
+? 0
+$ set-buffer first
+? 0
+$ set-buffer -a second
+? 0
+$ set-buffer -a -b buffer0 X
+? 0
+$ list-buffers
+buffer0: 6 bytes: "firstX"
+buffer1: 6 bytes: "second"
+named: 11 bytes: "hello world"
+? 0
+$ show-buffer
+second
+? 0
+$ set-buffer -a -b fresh new
+? 0
+$ set-buffer -b named -n renamed
+? 0
+$ set-buffer -b renamed -n other ignored
+? 0
+$ list-buffers
+fresh: 3 bytes: "new"
+buffer0: 6 bytes: "firstX"
+buffer1: 6 bytes: "second"
+other: 11 bytes: "hello world"
+? 0
+$ show-buffer -b nope
+! no buffer nope
+? 1
+$ delete-buffer -b nope
+! unknown buffer: nope
+? 1
+$ set-buffer
+! no data specified
+? 1
+$ set-buffer -b nob -n x
+! unknown buffer: nob
+? 1
+$ set-buffer ''
+? 0
+$ delete-buffer -b buffer1
+? 0
+$ show-buffer
+! no buffers
+? 1
+$ delete-buffer
+! no buffer
+? 1
+$ paste-buffer -b nope
+! no buffer nope
+? 1
+$ list-buffers
+fresh: 3 bytes: "new"
+buffer0: 6 bytes: "firstX"
+other: 11 bytes: "hello world"
+? 0

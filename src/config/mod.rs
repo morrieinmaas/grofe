@@ -100,6 +100,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("visual-bell", "visual-bell"),
     ("visual-activity", "visual-activity"),
     ("visual-silence", "visual-silence"),
+    // Paste buffers (TM.4).
+    ("buffer-limit", "buffer-limit"),
 ];
 
 /// TOML key to tmux option name for every list option (TC.2b). A TOML
@@ -143,7 +145,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "status.right-length"
         | "status.interval"
         | "message.display-time-ms"
-        | "monitor-silence" => Ty::Int,
+        | "monitor-silence"
+        | "buffer-limit" => Ty::Int,
         _ => Ty::Str,
     }
 }
