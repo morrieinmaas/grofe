@@ -2424,6 +2424,10 @@ impl FormatVars for FormatCtx<'_> {
             }
             "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
             "pid" => return Some(std::process::id().to_string()),
+            "start_time" => {
+                let since = m.started?.duration_since(std::time::UNIX_EPOCH).ok()?;
+                return Some(since.as_secs().to_string());
+            }
             // Session groups are out of scope (spec §4.5).
             "session_grouped" => return Some("0".to_string()),
             // ponytail: stubs until the features exist: copy mode (M5),
@@ -3403,6 +3407,21 @@ mod tests {
         assert_eq!(b.dialect, Dialect::Tmux);
         let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
         assert_eq!(err, "unknown command: ls");
+    }
+
+    /// TP.12: `#{start_time}` is when the server started, in Unix seconds,
+    /// without a pane: continuum reads it to tell a fresh server (restore
+    /// once) from one that has been running.
+    #[test]
+    fn start_time_is_the_server_start() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let model = Model::new(false);
+        let got = FormatCtx::new(&model, PaneId(99)).get("start_time");
+        let secs: u64 = got.expect("start_time set").parse().expect("a number");
+        assert!(secs >= before && secs <= before + 5, "{secs} vs {before}");
     }
 
     /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);

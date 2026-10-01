@@ -169,10 +169,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
         "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
     ),
     (
-        "$ display -p -t main:1.1 '#{start_time}'",
-        "native: no start_time variable (TC.3's FormatVars)",
-    ),
-    (
         "$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'",
         "native: grofe's format language has no p: padding (TC.3); left for \
          the expander, which gives nothing",

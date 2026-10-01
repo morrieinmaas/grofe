@@ -225,6 +225,9 @@ pub struct Model {
     /// Sessions removed since `hooks::run_pending` last took them, as
     /// `(id, name)`, for the `session-closed` hook (TC.5).
     pub closed_sessions: Vec<(SessionId, String)>,
+    /// When the server started (`start_time`); `None` only for a model
+    /// built with `Model::default()`.
+    pub started: Option<std::time::SystemTime>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -235,6 +238,7 @@ impl Model {
     pub fn new(remain_on_exit: bool) -> Model {
         Model {
             options: Options::new(remain_on_exit),
+            started: Some(std::time::SystemTime::now()),
             ..Model::default()
         }
     }
