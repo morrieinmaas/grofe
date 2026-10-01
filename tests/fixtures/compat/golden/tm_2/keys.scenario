@@ -2,8 +2,8 @@
 # V and A (append-selection-and-cancel), which with no buffer makes a new
 # one and then appends to it. Escape goes through send-keys: typed alone
 # on the pty, tmux holds it and reads it with the next key as M-Space.
-$ new-session -d -s main -x 80 -y 24 'printf "alpha beta\ngamma delta\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 80 -y 24 'printf "alpha beta\ngamma delta\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 client 80x25 attach -t main
 keys C-b [
 $ send-keys -t main -X history-top

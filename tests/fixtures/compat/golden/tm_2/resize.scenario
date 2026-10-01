@@ -2,8 +2,8 @@
 # 3.7b clears the selection when the pane resizes (window_copy_size_changed),
 # so a copy after the resize copies nothing; selecting the logical line
 # again at 50 columns copies the same text as at 80.
-$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\nafter\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\nafter\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 $ copy-mode -t main
 $ send-keys -t main -X history-top
 $ send-keys -t main -X begin-selection

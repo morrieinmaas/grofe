@@ -168,6 +168,10 @@ whole.
 
 Where grofe differs:
 
+- **Tab stops.** grofe finds a tab's width from stops every 8 columns,
+  not from the pane's own stops, so a program that moves them (`HTS`,
+  `TBC`) gets tabs whose width, motions and yank follow the 8-column
+  grid instead. tmux reads its own stops.
 - **Resize.** A pane resized while in copy mode gets a fresh copy at its
   new size, as `refresh-from-pane` would, on the next copy-mode command;
   the cursor keeps its place, clamped to its line. tmux instead reflows
@@ -286,6 +290,11 @@ control characters as tmux does (`^X`), unless `-S` is given, so buffer
 data cannot end a `-p` bracketed paste early. A copy (TM.2, TM.5) adds an
 automatic buffer.
 
+tmux bounds no buffer; grofe holds at most 32 MiB in one buffer and
+128 MiB in all, which a copy of a whole 100 000-line scrollback fits.
+A copy past 32 MiB stops extracting there and fails with `selection too
+large`, shown on the status line, rather than storing part of it.
+
 ## Copy targets
 
 `copy-pipe`, `copy-pipe-and-cancel` and `copy-pipe-no-clear` store a buffer
@@ -318,7 +327,8 @@ the read-only scrollback view from T3.2 and the shift-drag fallback.
   the scrollbar rows of the stock `root` table (grofe draws no pane
   scrollbar) and view mode.
 - **`-X` commands no row or plan task names**, such as the incremental
-  search commands, `scroll-to-mouse` and `copy-line`.
+  search commands and `scroll-to-mouse`. TM.2 also routes `copy-line`,
+  `rectangle-on`, `rectangle-off` and `stop-selection` as tmux does.
 
 ## Decisions for the owner
 

@@ -1,6 +1,6 @@
-$ new-session -d -s main -x 20 -y 10 'printf "see foo/bar-baz.rs  x\n"; printf "123456789012345 wrapping-word end\n"; printf "1234567890123456789\344\270\255x\n"; exec sleep 100000'
+$ new-session -d -s main -x 20 -y 10 'printf "see foo/bar-baz.rs  x\n"; printf "123456789012345 wrapping-word end\n"; printf "1234567890123456789\344\270\255x\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
 ? 0
-$ run-shell 'sleep 1'
+$ wait-for ready
 ? 0
 $ copy-mode -t main
 ? 0

@@ -186,27 +186,53 @@ fn paste_bytes_reach_the_pane_exactly() {
         .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
 }
 
+/// A 20 MiB buffer pastes whole: the pane reads every byte, through the
+/// writer's bounded writes.
+#[test]
+fn a_20_mib_paste_reaches_the_pane() {
+    let srv = TestServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let script = format!("stty raw -echo; exec cat > '{}'", out.display());
+    srv.cmd(&["new-session", "-d", "-s", "main", &script])
+        .unwrap();
+    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    // A request is capped below 20 MiB, so the buffer is built in halves.
+    let half = "x".repeat(10 << 20);
+    let request = |args: &[&str]| {
+        let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        srv.request(&argv, CMD_TIMEOUT)
+    };
+    request(&["set-buffer", "-b", "big", &half]).unwrap();
+    request(&["set-buffer", "-a", "-b", "big", &half]).unwrap();
+    srv.cmd(&["paste-buffer", "-b", "big"]).unwrap();
+    let len = || fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+    wait_until(|| len() == 20 << 20, Duration::from_secs(120))
+        .unwrap_or_else(|_| panic!("pane read {} bytes", len()));
+    assert!(fs::read(&out).unwrap().iter().all(|&b| b == b'x'));
+}
+
 /// Hostile sizes are refused, and nothing is stored.
 #[test]
 fn oversized_buffers_are_refused() {
     let srv = TestServer::start();
     srv.cmd(&["new-session", "-d", "-s", "main", "cat"])
         .unwrap();
-    let big = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES + 1);
-    // Over the socket: an argv this long is past the OS's exec limit.
+    // Over the socket: an argv this long is past the OS's exec limit. A
+    // buffer is larger than one request may be, so it is reached by
+    // appending thirds.
     let request = |args: &[&str]| {
         let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         srv.request(&argv, CMD_TIMEOUT)
     };
-    let err = request(&["set-buffer", &big]).unwrap_err();
-    assert!(err.contains("buffer too large"), "{err}");
-    let half = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES / 2 + 1);
-    request(&["set-buffer", "-b", "a", &half]).unwrap();
-    let err = request(&["set-buffer", "-a", "-b", "a", &half]).unwrap_err();
+    let third = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES / 3 + 1);
+    request(&["set-buffer", "-b", "a", &third]).unwrap();
+    request(&["set-buffer", "-a", "-b", "a", &third]).unwrap();
+    let err = request(&["set-buffer", "-a", "-b", "a", &third]).unwrap_err();
     assert!(err.contains("buffer too large"), "{err}");
     assert_eq!(
         srv.cmd(&["list-buffers", "-F", "#{buffer_name} #{buffer_size}"]),
-        Ok(format!("a {}\n", half.len()))
+        Ok(format!("a {}\n", 2 * third.len()))
     );
     assert!(srv.cmd(&["set", "-g", "buffer-limit", "0"]).is_err());
 }

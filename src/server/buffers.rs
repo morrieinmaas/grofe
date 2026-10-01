@@ -22,13 +22,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cmd::FormatVars;
 use crate::server::State;
 
-/// One buffer's largest size. A paste of it fits a pane's input queue
-/// (`pane::io`'s 4 MiB budget) when nothing else is queued.
-pub const MAX_BUFFER_BYTES: usize = 4 << 20;
+/// One buffer's largest size: room for a copy of a whole 100 000-line
+/// scrollback. A paste is bounded separately ([`MAX_PASTE_BYTES`]).
+pub const MAX_BUFFER_BYTES: usize = 32 << 20;
 /// The most every buffer's data and name may add up to.
-pub const MAX_TOTAL_BYTES: usize = 64 << 20;
-/// The most one paste may write, separators and escapes included.
-pub const MAX_PASTE_BYTES: usize = 16 << 20;
+pub const MAX_TOTAL_BYTES: usize = 128 << 20;
+/// The most one paste may write, separators and escapes included: a whole
+/// buffer's worth. It goes to the pane as one queued chunk, which the
+/// pane's writer task writes 4 KiB per `write` (`pane::io::WRITE_CHUNK`),
+/// yielding between them, so a large paste never blocks the server.
+pub const MAX_PASTE_BYTES: usize = 32 << 20;
 /// What each buffer costs beyond its name and data.
 pub const OVERHEAD: usize = 64;
 /// The longest buffer name (tmux has no limit).

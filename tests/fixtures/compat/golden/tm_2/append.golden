@@ -1,6 +1,6 @@
-$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; exec sleep 100000'
+$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
 ? 0
-$ run-shell 'sleep 1'
+$ wait-for ready
 ? 0
 $ copy-mode -t main
 ? 0
