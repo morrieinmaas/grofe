@@ -71,7 +71,10 @@ pub fn check_with(
             .unwrap_or_else(|e| panic!("{task}/{name}: no golden ({e}); record it")),
     );
     let dir = tempfile::tempdir().unwrap();
-    let got = replay(&grofe_cli(dir.path()), &parsed).normalized(&Normalizer::load());
+    // Exact pids, not the replayer's window, which can swallow a value such
+    // as history-limit's 50000 on a busy machine.
+    let got = crate::fe_3::exact_pids(replay(&grofe_cli(dir.path()), &parsed))
+        .normalized(&Normalizer::load());
     let (want, steps) = (steps(&golden), steps(&got));
     assert_eq!(want.len(), steps.len(), "{task}/{name}: step count\n{got}");
     let listed: BTreeMap<&str, &str> = diverges.iter().copied().collect();
