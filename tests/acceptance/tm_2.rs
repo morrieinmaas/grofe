@@ -272,7 +272,12 @@ fn a_whole_100k_line_scrollback_copies() {
         &["send-keys", "-t", "main", "-X", "history-bottom"],
         &["send-keys", "-t", "main", "-X", "copy-selection"],
     ] {
-        srv.cmd(cmd).unwrap();
+        // This checks what is copied, not how fast: a debug build on a
+        // loaded host can take longer than CMD_TIMEOUT over 100k lines.
+        let mut c = srv.command();
+        c.args(cmd);
+        let out = common::run_bounded(c, std::time::Duration::from_secs(120));
+        assert!(out.status.success(), "{cmd:?}: {}", out.stderr);
     }
     assert_eq!(
         srv.cmd(&["list-buffers", "-F", "#{buffer_name} #{buffer_size}"]),
