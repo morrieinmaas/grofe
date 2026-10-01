@@ -27,8 +27,11 @@ use crate::server::State;
 pub const MAX_BUFFER_BYTES: usize = 32 << 20;
 /// The most every buffer's data and name may add up to.
 pub const MAX_TOTAL_BYTES: usize = 128 << 20;
-/// The most one paste may write, separators and escapes included.
-pub const MAX_PASTE_BYTES: usize = 16 << 20;
+/// The most one paste may write, separators and escapes included: a whole
+/// buffer's worth. It goes to the pane as one queued chunk, which the
+/// pane's writer task writes 4 KiB per `write` (`pane::io::WRITE_CHUNK`),
+/// yielding between them, so a large paste never blocks the server.
+pub const MAX_PASTE_BYTES: usize = 32 << 20;
 /// What each buffer costs beyond its name and data.
 pub const OVERHEAD: usize = 64;
 /// The longest buffer name (tmux has no limit).

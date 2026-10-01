@@ -186,6 +186,32 @@ fn paste_bytes_reach_the_pane_exactly() {
         .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
 }
 
+/// A 20 MiB buffer pastes whole: the pane reads every byte, through the
+/// writer's bounded writes.
+#[test]
+fn a_20_mib_paste_reaches_the_pane() {
+    let srv = TestServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let script = format!("stty raw -echo; exec cat > '{}'", out.display());
+    srv.cmd(&["new-session", "-d", "-s", "main", &script])
+        .unwrap();
+    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    // A request is capped below 20 MiB, so the buffer is built in halves.
+    let half = "x".repeat(10 << 20);
+    let request = |args: &[&str]| {
+        let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        srv.request(&argv, CMD_TIMEOUT)
+    };
+    request(&["set-buffer", "-b", "big", &half]).unwrap();
+    request(&["set-buffer", "-a", "-b", "big", &half]).unwrap();
+    srv.cmd(&["paste-buffer", "-b", "big"]).unwrap();
+    let len = || fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+    wait_until(|| len() == 20 << 20, Duration::from_secs(120))
+        .unwrap_or_else(|_| panic!("pane read {} bytes", len()));
+    assert!(fs::read(&out).unwrap().iter().all(|&b| b == b'x'));
+}
+
 /// Hostile sizes are refused, and nothing is stored.
 #[test]
 fn oversized_buffers_are_refused() {
