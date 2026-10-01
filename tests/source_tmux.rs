@@ -210,9 +210,10 @@ fn nested_files_stop_at_tmux_s_limit() {
 
 /// An error on a line before a `run-shell` hold, and one after it, are
 /// kept: the lines after each still run, and the request fails with both
-/// at the end. (tmux 3.7b prints the errors too, but exits with the last
-/// `run-shell`'s status, 0, when only a line before it failed; grofe
-/// fails the request, by the coordinator's ruling.)
+/// at the end. When only a line before the hold failed, tmux 3.7b prints
+/// the error and exits with the `run-shell`'s status, 0 (recorded: `set
+/// -g @e`, `run-shell "sleep 0.2"`, `set -g @after 1` gives `empty value`
+/// and exit 0); a tmux-dialect request does the same.
 #[test]
 fn errors_around_a_hold_are_kept() {
     let srv = server();
@@ -227,16 +228,39 @@ fn errors_around_a_hold_are_kept() {
     assert_eq!(out.stderr.trim_end(), "empty value\nempty value");
     assert_eq!(opt(&srv, "@after"), "1");
     assert_eq!(opt(&srv, "@skipped"), "");
-    // Only a line before the hold failed: still a failure.
+    // Only a line before the hold failed: printed, and exit 0.
     let file = write(
         &srv,
         "hold.conf",
         "set -g @e\nrun-shell 'sleep 0.2'\nset -g @after2 1\n",
     );
     let out = tmux_run(&srv, &["source-file", &file]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(out.stderr.trim_end(), "empty value");
+    assert_eq!(opt(&srv, "@after2"), "1");
+}
+
+/// A native request keeps the failure: on a tmux-identity server (where a
+/// native `source-file` reads a tmux file too), the same file exits 1.
+#[test]
+fn a_native_request_keeps_an_error_before_the_hold() {
+    let srv = TestServer::unstarted();
+    let dir = srv.config_home.join("grofe");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.toml"), "compat-identity = \"tmux\"\n").unwrap();
+    srv.cmd(&["start-server"]).expect("start-server");
+    srv.cmd(&["new-session", "-d", "-s", "main"])
+        .expect("new-session");
+    let file = write(
+        &srv,
+        "hold.conf",
+        "set -g @e\nrun-shell 'sleep 0.2'\nset -g @after2 1\n",
+    );
+    let out = srv.run(&["source-file", &file]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert_eq!(out.stderr.trim_end(), "empty value");
     assert_eq!(opt(&srv, "@after2"), "1");
+    let _ = srv.cmd(&["kill-server"]);
 }
 
 /// which-key on a grofe server reading its native config: its entry point

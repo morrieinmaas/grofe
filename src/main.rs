@@ -501,8 +501,10 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
             if !err.is_empty() {
                 eprintln!("{}", err.trim_end_matches('\n'));
             }
-            let status = status.and_then(|s| u8::try_from(s).ok()).unwrap_or(1);
-            ExitCode::from(status.max(1))
+            // An error with status 0 is one a later `run-shell` cleared
+            // (tmux 3.7b prints it and exits 0); with none, 1.
+            let status = status.map_or(1, |s| u8::try_from(s).unwrap_or(1));
+            ExitCode::from(status)
         }
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
