@@ -60,11 +60,11 @@ If performance becomes the headline, the project has lost the plot.
 | D5 | **Single-owner state.** One tokio task (the server actor) owns the model. Pane I/O tasks, client connections and timers send it messages. The only shared state is each pane's terminal behind a mutex, with bounded lock holds (§4.8). | Removes a class of concurrency bugs; easy for parallel implementers to reason about. |
 | D6 | **Window size follows the latest active client**, where "latest" means last input, debounced ~500 ms so two attached clients do not make the window flap. Larger clients are letterboxed (window drawn at its size, the rest filled with a dim pattern). Smaller clients are cropped, with a viewport that follows the active pane's cursor. The emulator reflows the primary screen on resize; alt-screen apps just get SIGWINCH. | Every multiplexer picks a side. tmux users already know this behavior. |
 | D7 | **Advertise an honest `TERM`: `tmux-256color`.** Default `tmux-256color` plus `COLORTERM=truecolor`, falling back per host to `screen-256color` when the `tmux-256color` terminfo entry is missing, and to `xterm-256color` when both are (that last resort advertises more than `screen-256color` and exists only for such hosts). T0.4 checked whether every extra capability `tmux-256color`'s entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survived the M0 spike's render path; it did not, so M0 to M3 shipped `screen-256color`. T3.6 re-ran the check through grofe's real render path (pane, server, attach client, reconstructed outer terminal) on macOS and Linux after T2.2 and T3.3 landed, and every capability passed (`tests/acceptance/t3_6.rs`, docs/spike-notes.md "T3.6 re-run"), so the default is now `tmux-256color` under both names: under the `tmux` name `TERM` is what the owner sees in tmux today. The honesty rule stands: a capability that fails later is fixed, not advertised anyway, and the re-run passing is a gate for alias day (plan M3.6). | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. The owner runs `tmux-256color` with italics and undercurl in Neovim; a smaller `TERM` would be a visible difference under the alias. |
-| D8 | **No subprocess on the redraw path, ever.** The status line renders formats over options; rendering never forks or waits. Dynamic content arrives in options, set either by something external or by a **status source** [planned, M3.6]: a command the server runs at most once per `status-interval` (or the source's own `interval`), off the redraw path, with one run in flight and a timeout after which it is killed; the last non-empty line of its output (CR or LF ends a line), as tmux 3.7b keeps it, is stored in an option. `#(cmd)` in a format is shorthand for an inline source keyed by the command: the format reads the cached value, empty until the first run returns, as in tmux. `run-shell` exists for key bindings and hooks. | Forks in the status line are the one real performance problem in tmux setups. canopy measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (canopy 6ef854a). Banning commands outright would lose the owner's pet, network, battery and canopy-status segments, which the alias must keep. A cached source bounds the cost by the number of sources and their intervals, never by redraws, clients or windows, and a slow or hung command can only make its own segment stale. |
+| D8 | **No subprocess on the redraw path, ever.** The status line renders formats over options; rendering never forks or waits. Dynamic content arrives in options, set either by something external or by a **status source**: a command the server runs at most once per `status-interval` (or the source's own `interval`), off the redraw path, with one run in flight and a timeout after which it is killed; the last non-empty line of its output (CR or LF ends a line), as tmux 3.7b keeps it, is stored in an option. `#(cmd)` in a format is shorthand for an inline source keyed by the command: the format reads the cached value, empty until the first run returns, as in tmux. `run-shell` exists for key bindings and hooks. | Forks in the status line are the one real performance problem in tmux setups. canopy measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (canopy 6ef854a). Banning commands outright would lose the owner's pet, network, battery and canopy-status segments, which the alias must keep. A cached source bounds the cost by the number of sources and their intervals, never by redraws, clients or windows, and a slow or hung command can only make its own segment stale. |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
 | D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). | Keeps core general, and gives the plugin API a real, demanding first user. |
 | D11 | **Ghostty and WezTerm are the first-class outer terminals.** grofe is tested and tuned against both: kitty keyboard, synchronized output, OSC 52 and kitty graphics placeholders (§4.9). Other terminals work with legacy key encoding and whatever features the capability probe (§4.4) finds; missing features degrade, never break. WezTerm speaks kitty keys only with `enable_kitty_keyboard = true` in the user's WezTerm config, and grofe's docs must say so. | Two modern terminals cover the owner's machines and most of the target audience. Naming them keeps the manual checks and the probe fixtures concrete. |
-| D12 | **grofe answers to `tmux`.** When `argv[0]`'s basename is `tmux` (a symlink or wrapper on PATH; a shell alias does not reach scripts), that CLI call behaves as tmux's CLI: `-V` prints `tmux <compat level>` (the tmux release the compat suite is recorded against, 3.7b today), and the aliases and prefix matching of §4.5's invocation row apply. **Identity is a server property:** fixed when the server starts, from the `argv[0]` of the CLI that started it, and overridable with the `compat-identity` server option (`auto`, the default, then `tmux` or `grofe`). A server with tmux identity gives panes `TERM_PROGRAM=tmux` and `TERM_PROGRAM_VERSION` set to the compat level, answers `#{version}` with the compat level (`#{grofe_version}` always gives grofe's own), and appends every verb, flag or format variable it does not know to `compat-miss.log` in its state directory, which the dogfood log reviews. Under both identities panes get `TMUX` in tmux's format (`<socket path>,<server pid>,<session id number>`) and `TMUX_PANE` (`%N`) alongside `GROFE` and `GROFE_PANE`. Error texts and exit statuses are tmux 3.7b's for tmux-dialect requests only; grofe-dialect requests keep grofe's own texts (T1.2's). Option defaults do not change with the identity (§5.3). Sockets stay in grofe's directory (§4.1), so a real tmux on the same machine never shares one. **The front end** (`src/compat/tmux/`, §4.5) handles exactly two sources of tmux dialect: a request whose hello carries `dialect: "tmux"` (set by a CLI invoked as `tmux`, §4.6), and text typed at the `:` command prompt of a server with tmux identity. Every other request is grofe dialect, including every `grofe` CLI call and control client; config files are always grofe-native; stored command strings keep the dialect they were stored with (§4.5). tmux's own `-C`/`-CC` control mode is not shipped in v1. A pure grofe user never meets the front end. [planned, M3.6] | Scripts and tools (canopy-agent, vim-tmux-navigator, `fzf --tmux`, gh-dash, snacks.image) find the multiplexer through `tmux` on PATH and `$TMUX`/`$TMUX_PANE`, and use the socket in `$TMUX` with `-S`. Identity belongs to the server, not to each call, so a pane's environment never depends on which name a script happened to use; login autostart starts the server under the `tmux` name (§7.1). Setting `TMUX` under both identities means a tool behaves the same either way. The cost: a real tmux run inside a grofe pane reads `$TMUX` and would talk to grofe's socket, so the fallback is run as `env -u TMUX <absolute path to tmux>` (§8, README). Defaults that silently differed by `argv[0]` would be a provenance trap; the ported config sets the owner's values either way. canopy's `%if` gate on tmux's version is moot, since its config is ported (D1). Under grofe identity `TERM_PROGRAM` stays the outer terminal's (§4.2). |
+| D12 | **grofe answers to `tmux`.** When `argv[0]`'s basename is `tmux` (a symlink or wrapper on PATH; a shell alias does not reach scripts), that CLI call behaves as tmux's CLI: `-V` prints `tmux <compat level>` (the tmux release the compat suite is recorded against, 3.7b today), and the aliases and prefix matching of §4.5's invocation row apply. **Identity is a server property:** fixed when the server starts, from the `argv[0]` of the CLI that started it, and overridable with the `compat-identity` server option (`auto`, the default, then `tmux` or `grofe`). A server with tmux identity gives panes `TERM_PROGRAM=tmux` and `TERM_PROGRAM_VERSION` set to the compat level, answers `#{version}` with the compat level (`#{grofe_version}` always gives grofe's own), and appends every verb, flag or format variable it does not know to `compat-miss.log` in its state directory, which the dogfood log reviews. Under both identities panes get `TMUX` in tmux's format (`<socket path>,<server pid>,<session id number>`) and `TMUX_PANE` (`%N`) alongside `GROFE` and `GROFE_PANE`. Error texts and exit statuses are tmux 3.7b's for tmux-dialect requests only; grofe-dialect requests keep grofe's own texts (T1.2's). Under tmux identity the built-in option defaults where grofe's differ (§5.3) become tmux 3.7b's (`base-index` and `pane-base-index` 0, `mouse` off, `escape-time` 10, `history-limit` 2000, `renumber-windows` off, and the rest of that list), and the default prefix table is tmux's stock one in place of grofe's defaults, so a script or a pair of hands sees what tmux would; a value the config sets still wins. Sockets stay in grofe's directory (§4.1), so a real tmux on the same machine never shares one. **The front end** (`src/compat/tmux/`, §4.5) handles exactly two sources of tmux dialect: a request whose hello carries `dialect: "tmux"` (set by a CLI invoked as `tmux`, §4.6), and text typed at the `:` command prompt of a server with tmux identity. Every other request is grofe dialect, including every `grofe` CLI call and control client; config files are always grofe-native; stored command strings keep the dialect they were stored with (§4.5). tmux's own `-C`/`-CC` control mode is not shipped in v1. A pure grofe user never meets the front end. | Scripts and tools (canopy-agent, vim-tmux-navigator, `fzf --tmux`, gh-dash, snacks.image) find the multiplexer through `tmux` on PATH and `$TMUX`/`$TMUX_PANE`, and use the socket in `$TMUX` with `-S`. Identity belongs to the server, not to each call, so a pane's environment never depends on which name a script happened to use; login autostart starts the server under the `tmux` name (§7.1). Setting `TMUX` under both identities means a tool behaves the same either way. The cost: a real tmux run inside a grofe pane reads `$TMUX` and would talk to grofe's socket, so the fallback is run as `env -u TMUX <absolute path to tmux>` (§8, README). Defaults follow the identity, never a single call's `argv[0]`, so a server keeps one set for its whole life; tmux's defaults and stock keys under the `tmux` name mean switching changes nothing a tmux user relies on, and the ported config sets the owner's values either way. canopy's `%if` gate on tmux's version is moot, since its config is ported (D1). Under grofe identity `TERM_PROGRAM` stays the outer terminal's (§4.2). |
 
 **Publishability rule (inherited from athome and canopy):** no identities,
 hostnames, or machine specifics in shipped files.
@@ -172,7 +172,7 @@ Server
   tmux identity (D12) `TERM_PROGRAM=tmux` replaces the outer terminal's value
   inside panes, as in tmux; the session environment keeps the outer value. A server
   environment (`set-environment -g`) sits under every session's and reaches
-  new panes, `run-shell`, hooks, popups and status sources [planned, M3.6].
+  new panes, `run-shell`, hooks, popups and status sources.
 
 ### 4.3 Layout
 
@@ -182,11 +182,11 @@ leaves are panes. Splitting a pane in the direction its parent already splits
 adds a sibling (three `split -h` give three columns). Supports zoom and resize by
 cells or percent. Borders are one cell wide, shared between neighbours, active
 pane border highlighted. Layout presets `select-layout main-vertical`,
-`even-horizontal` and `even-vertical` [planned, M3]: dogfooding already asks for
+`even-horizontal` and `even-vertical`: dogfooding already asks for
 them (canopy's cockpit binding uses `main-vertical`). Other presets wait for a
 reason. tmux layout strings (the checksummed form `#{window_layout}` prints)
 are read by `select-layout` and written by `#{window_layout}` byte for byte as
-tmux does [planned, M3.6]: the owner's scripts pass them.
+tmux does: the owner's scripts pass them.
 
 ### 4.4 Rendering
 
@@ -270,7 +270,11 @@ v1: fnmatch patterns, `{mouse}`/`{last}`/`{next}`/`{marked}` tokens, `!`,
 status line needs them. Formats in
 flag values (`-c '#{pane_current_path}'`) are expanded at **execution** time
 against the target's context, not at parse time. `#(cmd)` never forks during
-expansion: it reads a cached status source (D8) [planned, M3.6].
+expansion: it reads a cached status source (D8).
+Expansion stops at tmux 3.7b's loop limit: text nested 100 `#{` deep
+expands to nothing, as in tmux. An else branch that is one whole `#{?...}`
+costs no depth, so the tmux front end's chain for `#{?c1,v1,c2,v2,...}` is
+not cut, and the work stays linear in the format's length whatever it holds.
 Variables: `session_name`, `session_id`, `window_index`, `window_name`,
 `window_id`, `window_active`, `window_zoomed_flag`, `pane_id`, `pane_uid`,
 `pane_index`, `pane_active`, `pane_pid`, `pane_current_command`,
@@ -280,7 +284,7 @@ Variables: `session_name`, `session_id`, `window_index`, `window_name`,
 `pane_restored` (§6); M5 adds `copy_cursor_x`, `copy_cursor_y`,
 `scroll_position` and the `buffer_*` variables (§4.11).
 
-**The tmux front end [planned, M3.6].** `src/compat/tmux/` (with
+**The tmux front end.** `src/compat/tmux/` (with
 `src/compat/mod.rs` for identity, D12) holds one table: `mod.rs` defines its
 schema and dispatcher, and per-area files (formats, bindings, structure)
 register their rows into it. Each row is one tmux
@@ -338,7 +342,7 @@ lands in the milestone shown.
 | Command sequences | `\;` chains on the CLI and in bindings (canopy-agent's `set ... \; set ...` on every hook, the cockpit binding's five-command sequence) | pass-through | M3 (T3.5); goldens M3.6 |
 | Bindings | `if-shell`, both the `-F` format form and the shell form (run off the actor; `-b` does not wait); `confirm-before -p`; `command-prompt -I -p` for renames; the `command-alias` option; `bind -N` notes as descriptions; custom key tables (`-T <name>`, entered with `switch-client -T`); `-r` repeat; bindable mouse keys (`MouseDown1Pane`, `MouseDown1Status`, `MouseDown3Pane`, `MouseDrag1Border`, `MouseDragEnd1Pane`, `WheelUpPane`, `WheelDownPane`, `DoubleClick1Pane`, `TripleClick1Pane`) acting on the pane or status range under the pointer, and a `display-menu` run from a mouse key opens at the pointer. **grofe's built-in mouse model** (T3.2, TC.10: focus, wheel, border drag, selection) replaces tmux's stock mouse bindings, so their argv forms (`-t =`, `send -M`, `resize-pane -M`, `copy-mode -M -e`, `display-menu -x M -y M`, `-x W -y S`) are not supported; TP.9 lists each stock mouse binding against its built-in replacement | `if-shell` to grofe's conditional; `command-alias` to grofe aliases; mouse argv forms fail as semantic | M3.6 |
 | tmux default bindings | The stock prefix bindings the owner's server has live: `;` `last-pane`, `C-o`/`M-o` `rotate-window`, `q` `display-panes`, `.` `move-window` prompt, `f` `find-window` prompt, `C-z` `suspend-client`, `D` `choose-client -Z`, `~` `show-messages`, `E` `select-layout -E`, `M-n`/`M-p` `next-window -a`/`previous-window -a`, `/` `command-prompt -k` then `list-keys -1N`, `'` `command-prompt -T window-target`, plus `d w z [ ] x & , $ ! { } : = i n p` from earlier milestones and this table. `m` (`select-pane -m`, marking) is out of scope, below | none: grofe's native default key table | M3.6 (`[`, `]`, `=`: M5) |
-| Overlays | `display-popup` with `-E -w -h -x -y -d -b <border> -T <title> -c <client> [cmd]`, whatever else the installed fzf's `--tmux` sends, and a nested `tmux attach-session -t <other>` inside it (§4.6); `display-menu -T -x -y` whose items may open further menus; `display-panes` (pick a pane by its number); `command-prompt -k` (read one key) and `-T <type>` (accepted, no completion); `list-keys -1N`; `choose-tree -Z -w` | pass-through; border style and title cosmetic | M3.6 |
+| Overlays | `display-popup` with `-E -w -h -x -y -d -b <border> -T <title> -c <client> [cmd]`, what the installed fzf's `--tmux` sends (`list-commands new-pane` as its probe, `new-pane -P -F -t -c -x -y -X -Y` for a floating pane, `wait-for` and `wait-for -S`), and a nested `tmux attach-session -t <other>` inside it (§4.6); `display-menu -T -x -y` whose items may open further menus; `display-panes` (pick a pane by its number); `command-prompt -k` (read one key) and `-T <type>` (accepted, no completion); `list-keys -1N`; `choose-tree -Z -w` | pass-through; border style and title cosmetic | M3.6 |
 | Hooks and environment | `set-hook -g`, `set-hook -gu`, `show-hooks`, for `after-select-pane`, `after-select-window`, `after-new-window`, `after-kill-pane`, `after-resize-pane`, `after-resize-window`, `client-resized`, `client-session-changed`, `session-created`, `session-closed`, `pane-exited`, `pane-died`; `run-shell -b`; `set-environment` with `-g`, `-u`, `-h` (and `-gu`); `show-environment -g -h` (§4.2) | hook names to grofe event subscriptions; environment flags pass through | M3.6 |
 | Buffers and copy | `set-buffer`, `paste-buffer -p`, `choose-buffer`, `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` in the `copy-mode-vi` table, `command-prompt -T search` | pass-through | M5, with copy mode |
 | Formats | short forms `#S #I #W #h #P`; the inventory's variables (`client_name`, `client_tty`, `client_prefix`, `client_session`, `client_last_session`, `pane_tty`, `pane_title`, `pane_start_command`, `pane_in_mode`, `pane_mode`, `pane_left`, `pane_top`, `alternate_on`, `mouse_any_flag`, `window_layout`, `window_flags`, `window_panes`, `session_windows`, `session_grouped`, `pid`, `socket_path`, `mouse_status_range`, `history_size`, `version`, and grofe's own `grofe_version`); modifiers `#{!=:}`, `#{>:}`, `#{>=:}`, `#{&&:}`, `#{\|\|:}`, `#{m:}` (fnmatch), `#{m/r:}` (regex), `#{t:}`; conditions on bare names (`#{?#W,..}`, `#{?@opt,..}`); `##` and `##{` escaping; `#(cmd)` as a cached source (D8) | short forms and `##` rewritten; `#(cmd)` to a cached source; modifiers native | M3.6 (`copy_cursor_word`: M5) |
@@ -355,12 +359,12 @@ lands in the milestone shown.
 | tmux's `-C` and `-CC` control mode | Not shipped in v1; nothing the owner runs uses it; possible M8. grofe's own control mode (§4.6) is always grofe dialect |
 | Marked panes: `select-pane -m`/`-M`, the stock `m` binding | The mark only feeds `{marked}` targets and `-s` defaults, which the owner's scripts never use; `m` stays unbound and TP.9 lists it |
 | Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `copy-mode -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
-| `pipe-pane`, `wait-for`, `lock-server`, `clock-mode`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
+| `pipe-pane`, `lock-server`, `clock-mode`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
 | Format modifiers `#{s/../../:}`, `#{=N:}`, `#{l:}`, `#{E:}`, `#{T:}`, `#{q:}` and the loops `#{S:}`, `#{W:}`, `#{P:}` | Not in the owner's formats; each is added when a ported script needs it |
 | Sockets under tmux's own directory, or scripts that build `/tmp/tmux-$UID/...` by hand | grofe keeps its socket directory (§4.1, D12); the owner's scripts use `$TMUX` or `#{socket_path}` |
 
 **Window names:** `automatic-rename` is on by default and names a window
-`#{b:pane_current_path}` [planned, M2]. An OSC title from a pane is relayed
+`#{b:pane_current_path}`. An OSC title from a pane is relayed
 (§4.9) but never freezes the window name (tmux treats it as a manual
 rename, and the name then stops following the cwd). Only `rename-window` stops
 automatic renaming.
@@ -384,7 +388,7 @@ resolve correctly for a CLI call made from inside a pane:
 
 `pane` is `$GROFE_PANE` when set. `dialect` is `tmux` when the CLI was invoked
 as `tmux` (D12), as in the attach example from `tmux attach`, and defaults to
-`grofe` [planned, M3.6]. **Nested attach:** attaching from inside a
+`grofe`. **Nested attach:** attaching from inside a
 grofe pane or popup is allowed when the target session is a different one;
 the owner's claude-session-manager binding runs `tmux attach-session -t <agent
 session>` inside a popup, and detaching returns to the popup's caller. Only
@@ -503,7 +507,7 @@ wrapped sequence never reaches a client unless the same bytes sent bare
 would. `allow-passthrough` is accepted with tmux's values and changes
 nothing.
 
-**Inline images [planned, M3]: kitty graphics via Unicode placeholders.** grofe
+**Inline images: kitty graphics via Unicode placeholders.** grofe
 supports the kitty graphics protocol's Unicode-placeholder mode, the mode kitty
 documents for multiplexers. The application transmits image data and creates a
 virtual placement (APC `_G` with `U=1`), then prints U+10EEEE placeholder
@@ -532,7 +536,7 @@ colour (and the placement id in the underline colour).
   sixel. Both draw at screen positions and need
   per-pane image tracking and clipping.
 
-### 4.10 Status line [planned, M2]
+### 4.10 Status line
 
 Formats over options only (D8); the tmux-compatible breadth is listed in
 §4.5. Beyond `status.left` and `status.right`:
@@ -542,8 +546,7 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
 - `#{}` expands inside `#[...]` style directives, so themes are data:
   `#[fg=#{@theme_blue}]` (canopy 1aa91b4).
 - strftime sequences (`%H:%M`) expand, so a clock needs no subprocess.
-- Battery, network, pet and canopy-status come from status sources (D8)
-  [planned, M3.6]; the M3 dogfood setup lacks them until then. A source is
+- Battery, network, pet and canopy-status come from status sources (D8). A source is
   declared in config (`[status.sources.<name>]` with `cmd`, `interval` and
   `timeout`, its value in `@<name>`) or inline as `#(cmd)` in a format (its
   value in `@src-<hash of cmd>`). A declared source shows in `show-config
@@ -554,7 +557,7 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
   environment (§4.2), each spawn under the pane spawn lock (§4.8), and a
   changed value triggers a repaint.
 - Multi-row status (`status 2` with `status-format[N]`; canopy uses two rows at
-  the top) and `status-position top` [planned, M3.6].
+  the top) and `status-position top`.
 
 ### 4.11 Copy mode and buffers [planned, M5]
 
@@ -706,7 +709,7 @@ plugin binds, and `list-keys` marks bindings that did not come from the config
 table, so a doctor can flag them. tmux-resurrect silently took over canopy's
 `prefix C-s` this way (canopy 94435f6).
 
-### 5.5 Importing a tmux.conf [planned, M3.5]
+### 5.5 Importing a tmux.conf
 
 `grofe import-tmux [<tmux.conf>] [-o <path>]` reads a `tmux.conf` (default
 `~/.tmux.conf`, then `~/.config/tmux/tmux.conf`), follows `source-file`, and
@@ -724,7 +727,7 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
 - The output loads in grofe with no errors, and is meant as a starting
   `config.toml` or `user.toml` that the user then edits. There is no
   round trip and no runtime reading of tmux.conf (D1).
-- **With M3.6** [planned, M3.6, plan TP.0] the converter learns what M3.6
+- **With M3.6** (plan TP.0) the converter learns what M3.6
   adds, since the owner's port is drafted with it before alias day: `#()` becomes a status source,
   `if-shell`, `set-hook`, `set-environment`, `command-alias`, custom key
   tables, mouse bindings, `display-popup`/`display-menu` bindings and

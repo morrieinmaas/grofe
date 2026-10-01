@@ -170,34 +170,34 @@ command text in that form.
 
 ## What the corpus says about spec 4.5
 
-Every form maps to a row, but some mappings are stretches that the rows'
-owners should settle. As recorded on 2026-09-28 (tmux 3.7b, fzf 0.74.4):
+Every form maps to a row. The corpus recorded on 2026-09-28 (tmux 3.7b, fzf
+0.74.4) raised the questions below; each one now has an owner, and M3.6
+settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
 
 - **fzf `--tmux` no longer uses `display-popup`.** fzf 0.74.4 probes with
   `list-commands new-pane`, opens its window as a tmux 3.7 floating pane
   (`new-pane -P -F #{pane_id} -t %N -c <dir> -x -y -X -Y sh -c ...`, inside
   an `if -F #{window_zoomed_flag}`), and waits on it with `wait-for` and
-  `wait-for -S`. The out-of-scope table says nothing the owner runs sends
-  `wait-for`; the corpus contradicts it. The Overlays row ("whatever else the
-  installed fzf's `--tmux` sends") is where these are mapped, and no row
-  names `new-pane` or its floating-pane format variables
-  (`pane_floating_flag`). A front end that fails `list-commands new-pane`
-  may push fzf back to `display-popup`; that needs a golden, not a guess.
+  `wait-for -S`. These shipped: `new-pane` as a real floating pane (TC.6),
+  `wait-for` and `wait-for -S` (TC.9), the `list-commands` answer (FE.1),
+  and `pane_floating_flag` (TC.3). A real `fzf --tmux` run works end to end
+  (FE.4).
 - **The owner's own binding sends a bare `=` target.** `user.conf`'s
   `MouseDown1Status` else branch is `switch-client -t =`, on purpose (it
-  reproduces tmux's default). The spec refuses a bare `=` and replaces the
-  stock mouse bindings with grofe's mouse model; that branch then needs the
-  built-in model's status click, not a translation.
+  reproduces tmux's default). Inside a mouse key's commands a bare `=` now
+  means the target under the pointer (M36-R3, TC.10); elsewhere it is still
+  refused.
 - **Popup and menu positions beyond `M`, `W`, `S`.** which-key opens its
   menus with `-x R -y P`, tmux-fzf its popup with `-x C -y C`, and tmux's
-  stock menus use `-x W -y W`. The out-of-scope row names only the mouse
-  letters; `R`, `P` and `C` are not named anywhere.
-- **Verbs no row names:** `new-pane`, `wait-for`, `list-commands` (fzf);
-  `move-pane` (tmux-fzf); `next-layout`, `respawn-window -k` (tmux's stock
-  bindings and menus); `setw`/`showw` spelled out as `set-window-option` and
-  `show-window-options`; and the copy-mode and buffer verbs beyond the three
-  the M5 row names (`copy-mode` and its flags, `send-keys -X`,
-  `delete-buffer`, `list-buffers`, `load-buffer`, `show-buffer`).
+  stock menus use `-x W -y W`. TC.6 and TC.7 parse each letter the corpus
+  sends, pinned by goldens recorded from tmux 3.7b (M36-R5).
+- **Verbs no row named at first:** `move-pane` (tmux-fzf), `next-layout` and
+  `respawn-window -k` (tmux's stock bindings and menus) shipped with TC.8
+  (M36-R6). `set-window-option` and `show-window-options` resolve to `setw`
+  and `showw` through the front end's alias table (FE.1, M36-R10). The
+  copy-mode and buffer verbs beyond the three the M5 row names (`copy-mode`
+  and its flags, `send-keys -X`, `delete-buffer`, `list-buffers`,
+  `load-buffer`, `show-buffer`) belong to M5 (M36-R8).
 - **A hidden flag, not a rejected one:** opensessions' pane flash sends
   `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
   3.7b still takes it (recorded by FE.1): it selects the pane and sets the
@@ -206,6 +206,7 @@ owners should settle. As recorded on 2026-09-28 (tmux 3.7b, fzf 0.74.4):
   the two options have no effect.
 - **Session groups and linked windows** are out of scope (spec), and sessionx
   sends both: `new-session -d -s <name> -t <session>` and `link-window`.
+  M3.7's native sessionx port (TP.4) replaces them (M36-R9).
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
 
@@ -327,7 +328,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `list-clients` | 3 | 0 | cj1 cp1 sc1 | cmd:M2 | yes |  | canopy:bin/canopy-reboot-check, canopy:plugins/tmux-continuum/scripts/helpers.sh, container:job (+1) |
 | `list-clients -F` | 4 | 0 | cj1 sc3 | area:Sessions and clients | yes |  | container:job, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:tmux-claude-session-manager/scripts/list.sh |
 | `list-clients -F -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs |
-| `list-commands` | 2 | 0 | cp1 sc1 | area:Overlays | **no** |  | container:pane, plugin:tmux-fzf/scripts/command.sh |
+| `list-commands` | 2 | 0 | cp1 sc1 | area:Overlays | yes |  | container:pane, plugin:tmux-fzf/scripts/command.sh |
 | `list-keys` | 2 | 0 | cj1 sc1 | cmd:M3 | yes |  | athome:home/dot_config/tmux/executable_keys-popup.sh, container:job, plugin:tmux-fzf/scripts/keybinding.sh (+1) |
 | `list-keys -1 -N` | 1 | 1 | cs1 | area:Overlays | yes | `-N` | container:list-keys |
 | `list-panes -F` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
@@ -349,8 +350,8 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `move-window -r -s -t` | 1 | 0 | cc1 | area:Windows and panes | yes | `-r` | container:cli |
 | `move-window -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `move-window -t` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
-| `new-pane` | 1 | 1 | cs1 | area:Overlays | **no** |  | container:list-keys |
-| `new-pane -c -F -P -t -x -X -y -Y` | 1 | 0 | cp1 | area:Overlays | **no** | `-F`, `-P`, `-X`, `-Y` | container:pane |
+| `new-pane` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
+| `new-pane -c -F -P -t -x -X -y -Y` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
 | `new-session` | 3 | 2 | cs2 sc1 | cmd:M1 | yes |  | athome:home/dot_zsh/aliases.zsh, container:list-keys |
 | `new-session -A -d -s` | 1 | 0 | cc1 | area:Sessions and clients | yes |  | container:cli |
 | `new-session -A -s` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | athome:home/dot_zsh/aliases.zsh |
@@ -521,8 +522,8 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `unbind-key -T` | 5 | 0 | sc5 | cmd:M3 | yes | `-T` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
 | `unbind-key -n` | 2 | 0 | sc2 | cmd:M3 | yes | `-n` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
 | `unlink-window -k -t` | 1 | 0 | sc1 | oos:`link-window` |  |  | plugin:tmux-fzf/scripts/window.sh |
-| `wait-for` | 1 | 0 | cp1 | area:Overlays | **no** |  | container:pane |
-| `wait-for -S` | 1 | 0 | cp1 | area:Overlays | **no** | `-S` | container:pane |
+| `wait-for` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
+| `wait-for -S` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
 
 File codes: `sc` static-cli, `sf` static-conf, `cc` container-cli, `cp` container-pane, `cj` container-job, `cs` container-stored.
 
