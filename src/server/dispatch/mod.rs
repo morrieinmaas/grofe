@@ -174,7 +174,11 @@ pub(crate) fn run_commands(
             let rest: Vec<Command> = cmds.collect();
             let held = state.held.get_or_insert_default();
             if !rest.is_empty() {
-                held.frames.push((ctx.clone(), rest));
+                held.frames.push(client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds: rest,
+                    keep_going: false,
+                });
             }
             break;
         }

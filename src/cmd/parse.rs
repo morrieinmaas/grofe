@@ -2125,7 +2125,13 @@ pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseErr
             formats = 0;
         }
     }
-    flush(&mut start, &mut cur)?;
+    // An unclosed `{` is an error at the end of the file, as tmux reports
+    // it (recorded: a file of four lines ending in a newline says line 5).
+    let eof = src
+        .last()
+        .map_or(1, |(c, line)| line + usize::from(*c == '\n'));
+    let unclosed = depth > 0;
+    flush(&mut start, &mut cur).map_err(|(line, e)| (if unclosed { eof } else { line }, e))?;
     Ok(lines)
 }
 
@@ -4147,6 +4153,9 @@ mod tests {
     fn a_config_file_error_names_its_line() {
         let err = split_config_file("set -g @a 1\n\ndisplay }\n").unwrap_err();
         assert_eq!(err.0, 3);
+        // An unclosed `{` is reported at the end of the file (tmux 3.7b).
+        let err = split_config_file("set -g @u 1\nbind x {\n  display a\n\n").unwrap_err();
+        assert_eq!(err.0, 5);
         let err = split_config_file("%if 1\nset -g @a 1\n%endif\n").unwrap_err();
         assert_eq!(
             err,

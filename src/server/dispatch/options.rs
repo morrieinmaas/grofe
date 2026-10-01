@@ -2040,9 +2040,15 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 ///   against it. Its values and bindings count as runtime (R10): `reload`
 ///   keeps them. All errors or nothing, as `reload`.
 /// - `*.lua` is M6's.
-/// - Any other file is a tmux config, in either dialect and under either
-///   identity: tmux's plugins source their own `*.tmux` and `*.conf`
-///   files ([`source_tmux_file`]).
+/// - Any other file is a tmux config when the request is tmux's (its
+///   dialect, or a tmux-identity server): tmux's plugins source their own
+///   `*.tmux` and `*.conf` files through `tmux` ([`source_tmux_file`]). A
+///   native request on a grofe server reads it as TOML, as before.
+///
+/// Files sourced from files nest at most [`MAX_SOURCE_DEPTH`] deep, as in
+/// tmux 3.7b; a deeper one is `too many nested files`. A TOML file cannot
+/// run `source-file` (its includes are `config::load_one`'s, which refuse
+/// a cycle), so only a tmux file nests this way.
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
     let path = ctx.cwd.join(&c.path);
     if !path.exists() {
@@ -2055,8 +2061,16 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     if path.extension().is_some_and(|e| e == "lua") {
         return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
     }
-    if path.extension().is_none_or(|e| e != "toml") {
-        return source_tmux_file(state, ctx, &path);
+    let tmux =
+        ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
+    if tmux && path.extension().is_none_or(|e| e != "toml") {
+        if SOURCE_DEPTH.get() >= MAX_SOURCE_DEPTH {
+            return Err("too many nested files".to_string());
+        }
+        SOURCE_DEPTH.set(SOURCE_DEPTH.get() + 1);
+        let out = source_tmux_file(state, ctx, &path);
+        SOURCE_DEPTH.set(SOURCE_DEPTH.get() - 1);
+        return out;
     }
     let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
@@ -2084,6 +2098,17 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     Ok(String::new())
 }
 
+/// How deep `source-file` of a tmux file nests, as tmux 3.7b's (recorded:
+/// a file that sources itself loads 50 times, then the 51st is `too many
+/// nested files`, exit 1, the server up).
+const MAX_SOURCE_DEPTH: u32 = 50;
+
+thread_local! {
+    /// The tmux files being sourced now, one inside another (the actor's
+    /// stack: a held file's later lines run outside it).
+    static SOURCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// A tmux config file, read as tmux 3.7b's `source-file` reads one
 /// (recorded): split into lines ([`cmd::split_config_file`]) and every
 /// command parsed through the tmux front end before any runs, so an error
@@ -2093,10 +2118,8 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
 /// and the request fails at the end with every error, after what the
 /// commands printed. A command that holds the request (`run-shell`
 /// without `-b`, `wait-for`) holds the lines after it too, as tmux's queue
-/// waits.
-// ponytail: once a line holds, a later line's error stops the lines after
-// it (held lines run as one request's rest), and an error before the hold
-// is dropped with the request's answer.
+/// waits; those lines still run on after an error, and the errors from
+/// before the hold and after it fail the request at the end.
 fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
@@ -2125,8 +2148,13 @@ fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<S
         }
         if state.held.is_some() {
             let held = state.held.get_or_insert_default();
+            held.errors.append(&mut errors);
             held.frames
-                .extend(groups.by_ref().map(|g| (ctx.clone(), g)));
+                .extend(groups.by_ref().map(|cmds| super::client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds,
+                    keep_going: true,
+                }));
             return Ok(out);
         }
     }
