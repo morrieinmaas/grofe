@@ -360,6 +360,7 @@ impl Rig {
                 let wrapper = self.store().join("plugins/strategies/canopy_save.sh");
                 let wrapper = wrapper.display().to_string();
                 self.t(&["set-option", "-g", "@resurrect-save-script-path", &wrapper]);
+                self.t(&["bind-key", "M-s", "run-shell", &wrapper]);
             }
         }
         let loaded = wait_until(|| self.plugins.iter().all(|p| self.loaded(p)), WAIT);

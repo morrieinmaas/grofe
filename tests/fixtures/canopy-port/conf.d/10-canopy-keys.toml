@@ -29,5 +29,5 @@ t = { cmd = "switch-client -l", desc = "The session you were in before this one"
 ")" = { cmd = "switch-client -n", desc = "Next session, repeatable", group = "session", name = "session-next", repeat = true }
 # canopy-reload: grofe re-reads every layer with its own reload, which validates them all first and applies all or nothing.
 r = { cmd = 'reload ; display-message "canopy: reloaded"', desc = "Re-read canopy's configuration, your user.conf included", group = "canopy", name = "canopy-reload" }
-M-s = { cmd = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/save.sh"', desc = "Save every session now, without waiting for the next autosave", group = "session", name = "save-now" }
+M-s = { cmd = 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_save.sh"', desc = "Save every session now, without waiting for the next autosave", group = "session", name = "save-now" }
 M-r = { cmd = 'run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/restore.sh"', desc = "Restore the last save over this server, replacing what is open", group = "session", name = "restore-now" }

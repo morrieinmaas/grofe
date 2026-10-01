@@ -19,18 +19,18 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, geometry, read_golden, recording_tmux, wait_until, write_golden,
+    PREFIX, Rig, WAIT, geometry, private_tmp, read_golden, recording_tmux, wait_until, write_golden,
 };
 
 const TASK: &str = "tp12";
 const GOLDEN: &str = "tp_12";
 const PLUGINS: &[&str] = &["tmux-resurrect", "tmux-continuum"];
 
-/// Wraps resurrect's save script for case 2, logging each save's start and
+/// Wraps canopy's save wrapper for case 2, logging each save's start and
 /// end with its pid. continuum runs the script path as one word.
 const SAVE_PROBE: &str = r#"#!/bin/sh
 echo "start $$" >>'<root>/probe.log'
-'<root>/store/plugins/tmux-resurrect/scripts/save.sh' "$@"
+'<root>/store/plugins/strategies/canopy_save.sh' "$@"
 echo "end $$" >>'<root>/probe.log'
 "#;
 
@@ -123,6 +123,38 @@ fn build(rig: &Rig) {
     assert!(shown.is_ok(), "the editor pane never printed its line");
 }
 
+/// The wrapper canopy's config points continuum's saves and M-s at.
+fn wrapper(rig: &Rig) -> String {
+    rig.store()
+        .join("plugins/strategies/canopy_save.sh")
+        .display()
+        .to_string()
+}
+
+/// Waits until the load is over: the config's last step after the loader
+/// points continuum's saves and M-s at canopy's wrapper, expanded (a
+/// literal `$CANOPY_STORE` would not run).
+fn wait_loaded(rig: &Rig) {
+    let want = wrapper(rig);
+    let done = wait_until(
+        || {
+            rig.t(&["show-options", "-gv", "@resurrect-save-script-path"])
+                .trim_end()
+                == want
+                && rig
+                    .t(&["list-keys", "-T", "prefix"])
+                    .lines()
+                    .any(|l| l.contains(" M-s ") && l.contains("canopy_save.sh"))
+        },
+        WAIT,
+    );
+    assert!(
+        done.is_ok(),
+        "continuum's saves and M-s do not run {want}: {}",
+        rig.t(&["show-options", "-gv", "@resurrect-save-script-path"])
+    );
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -157,7 +189,7 @@ fn save_and_restore(rig: &Rig) -> (String, String) {
 }
 
 /// Case 3's run: a save, then a fresh server with continuum's restore
-/// armed. Returns the structure once the restore ran, a few seconds later.
+/// armed. Returns the structure once the restore ran.
 fn auto_restore(rig: &Rig) -> String {
     rig.start("main");
     build(rig);
@@ -173,8 +205,9 @@ fn auto_restore(rig: &Rig) -> String {
     fs::remove_file(rig.path("home/tmux_no_auto_restore")).unwrap();
     rig.start("scratch");
     rig.wait_lines("restores.log", 1, "continuum's restore");
-    // continuum restores from one background job, started once per load.
-    std::thread::sleep(Duration::from_secs(4));
+    // continuum restores from one background job, started once per load:
+    // with the load over, nothing can start another.
+    wait_loaded(rig);
     assert_eq!(rig.lines("restores.log"), 1, "restored more than once");
     let after = rig.structure();
     rig.kill_server();
@@ -247,26 +280,17 @@ fn save_and_restore_contents(rig: &Rig) {
 
 #[test]
 fn case_2_continuum_autosaves_one_save_at_a_time() {
+    // continuum's launcher locks with directories under the shared /tmp.
+    if !private_tmp("/tmp/tmux-continuum-<server pid>-lock-*") {
+        return;
+    }
     let rig = rig(None);
     rig.start("main");
     rig.t(&["set-option", "-g", "@continuum-save-interval", "1"]);
     rig.t(&["set-option", "-g", "status-interval", "1"]);
-    // As shipped, continuum's saves go through canopy's one-at-a-time
-    // wrapper; the probe stands in for it here.
-    // (Set by the load command after the loader, which may still be
-    // running when continuum, the last plugin, has loaded.)
-    let shipped = wait_until(
-        || {
-            rig.t(&["show-options", "-gv", "@resurrect-save-script-path"])
-                .trim_end()
-                .ends_with("/plugins/strategies/canopy_save.sh")
-        },
-        WAIT,
-    );
-    assert!(
-        shipped.is_ok(),
-        "continuum's saves do not go through canopy's wrapper"
-    );
+    wait_loaded(&rig);
+    // The probe logs each save around canopy's wrapper, which continuum
+    // runs as shipped.
     let probe = rig.path("bin/save-probe").display().to_string();
     rig.t(&["set-option", "-g", "@resurrect-save-script-path", &probe]);
     let mut a = rig.attach("main");
@@ -287,7 +311,6 @@ fn case_2_continuum_autosaves_one_save_at_a_time() {
             fs::read_to_string(rig.path("probe.log")).unwrap_or_default()
         );
     }
-    std::thread::sleep(Duration::from_secs(3));
     let log = fs::read_to_string(rig.path("probe.log")).unwrap();
     let kinds: Vec<&str> = log.lines().map(|l| l.split(' ').next().unwrap()).collect();
     assert_eq!(
@@ -296,6 +319,48 @@ fn case_2_continuum_autosaves_one_save_at_a_time() {
         "saves overlapped:\n{log}"
     );
     assert_eq!(rig.lines("saves.log"), 2);
+    rig.kill_server();
+    a.wait_exit();
+}
+
+/// Case 4: canopy's lock. An autosave made slow (a `sleep` in
+/// resurrect's post-save-layout hook, mid-save) is running when M-s and a
+/// second autosave arrive: both are skipped, each with one log line, and
+/// only the first save writes.
+#[test]
+fn case_4_a_save_during_a_save_is_skipped() {
+    let rig = rig(None);
+    rig.start("main");
+    wait_loaded(&rig);
+    rig.t(&[
+        "set-option",
+        "-g",
+        "@resurrect-hook-post-save-layout",
+        "sleep 3",
+    ]);
+    let mut a = rig.attach("main");
+    let wrapper = wrapper(&rig);
+    rig.t(&["run-shell", "-b", &format!("'{wrapper}' quiet")]);
+    let lock = rig.path("cstate").join(format!(
+        "resurrect-save.{}.lock",
+        rig.t(&["display-message", "-p", "#{pid}"]).trim()
+    ));
+    let held = wait_until(|| lock.join("pid").exists(), WAIT);
+    assert!(held.is_ok(), "the first save never took {}", lock.display());
+    a.send(format!("{PREFIX}\x1bs"));
+    rig.wait_lines("cstate/resurrect-save.log", 1, "M-s during a save");
+    rig.t(&["run-shell", "-b", &format!("'{wrapper}' quiet")]);
+    rig.wait_lines("cstate/resurrect-save.log", 2, "an autosave during a save");
+    rig.wait_lines("saves.log", 1, "the first save");
+    let gone = wait_until(|| !lock.exists(), WAIT);
+    assert!(gone.is_ok(), "the first save kept its lock");
+    assert_eq!(rig.lines("saves.log"), 1, "a skipped save wrote");
+    let log = fs::read_to_string(rig.path("cstate/resurrect-save.log")).unwrap();
+    assert!(
+        log.lines()
+            .all(|l| l.contains("skipped: a save is already running")),
+        "{log}"
+    );
     rig.kill_server();
     a.wait_exit();
 }

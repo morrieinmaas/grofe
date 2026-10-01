@@ -46,5 +46,5 @@ session-last	t	-	switch-client -l	session	The session you were in before this on
 session-prev	(	-r	switch-client -p	session	Previous session, repeatable
 session-next	)	-r	switch-client -n	session	Next session, repeatable
 canopy-reload	r	-	source-file "$CANOPY_STORE/tmux/tmux.conf" ; display-message "canopy: reloaded"	canopy	Re-read canopy's configuration, your user.conf included
-save-now	M-s	-	run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/save.sh"	session	Save every session now, without waiting for the next autosave
+save-now	M-s	-	run-shell "$CANOPY_STORE/plugins/strategies/canopy_save.sh"	session	Save every session now, without waiting for the next autosave
 restore-now	M-r	-	run-shell "$CANOPY_STORE/plugins/tmux-resurrect/scripts/restore.sh"	session	Restore the last save over this server, replacing what is open
