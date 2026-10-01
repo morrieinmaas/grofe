@@ -1,0 +1,21 @@
+$ new-session -d -s main -x 80 -y 24 'sleep 1000'
+? 0
+$ display -p a \; has-session -t nope \; display -p b
+a
+! can't find session: nope
+? 1
+$ list-sessions -F '#{session_name}' \; select-layout -t main bogus \; display -p c
+main
+! invalid layout: bogus
+? 1
+$ display -p one \; display -p two \; kill-window -t main:9
+one
+two
+! can't find window: 9
+? 1
+$ display -p a \; run-shell 'echo r' \; display -p b \; has-session -t nope
+a
+r
+b
+! can't find session: nope
+? 1

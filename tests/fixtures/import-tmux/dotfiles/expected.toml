@@ -11,14 +11,26 @@ pane-base-index = 1
 escape-time-ms = 10
 # ~/.tmux.conf:11
 history-limit = 10000
-# ~/.tmux.conf:7
-mouse = true
+# ~/.tmux.conf:32
+mouse = false
+# ~/.tmux.conf:2
+default-terminal = "tmux-256color"
+# ~/.tmux.conf:13
+mode-keys = "vi"
+# ~/.tmux.conf:12
+renumber-windows = true
+load-commands = [
+# ~/.tmux.conf:36
+'''if-shell 'uname | grep -q Darwin' "set-option -g default-command \"reattach-to-user-namespace -l zsh\""''',
+]
 
 [status]
 # ~/.tmux.conf:26
 style = "bg=colour234 fg=colour137"
 # ~/.tmux.conf:27
-left = "#[fg=green]#S "
+left = "#[fg=green]#{session_name} "
+# ~/.tmux.conf:28
+right = "#{@src-f337a73a0a12a078} %H:%M"
 # ~/.tmux.conf:14
 left-length = 20
 # ~/.tmux/local.conf:1
@@ -26,7 +38,7 @@ interval = 5
 
 [status.window]
 # ~/.tmux.conf:29
-current-format = " #I:#W#F "
+current-format = " #{window_index}:#{window_name}#{window_flags} "
 
 [pane-border]
 # ~/.tmux.conf:30
@@ -34,13 +46,21 @@ style = "fg=colour238"
 # ~/.tmux.conf:31
 active-style = "fg=colour51"
 
+[status.sources.src-f337a73a0a12a078]
+# ~/.tmux.conf:28
+cmd = "uptime | cut -d, -f1"
+
+[hooks]
+# ~/.tmux.conf:35
+window-created = "select-layout even-horizontal"
+
 [keys.prefix]
 # ~/.tmux.conf:4
 C-b = ""
 # ~/.tmux/local.conf:3
 C-a = "last-window"
 # ~/.tmux.conf:15
-r = 'reload ; display "Reloaded!"'
+r = 'reload ; display-message "Reloaded!"'
 # ~/.tmux.conf:16
 "|" = 'split-window -h -c "#{pane_current_path}"'
 # ~/.tmux.conf:17

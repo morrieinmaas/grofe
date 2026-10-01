@@ -1,0 +1,26 @@
+$ list-sessions
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ kill-window -t nope
+! can't find window: nope
+? 1
+$ select-window -t main:9
+! can't find window: 9
+? 1
+$ frobnicate
+! unknown command: frobnicate
+? 1
+$ has-session -t nope
+! can't find session: nope
+? 1
+$ has-session -t =mai
+! can't find session: mai
+? 1
+$ switch-client -t main
+! no current client
+? 1
+$ new-session -d -s main
+! duplicate session: main
+? 1

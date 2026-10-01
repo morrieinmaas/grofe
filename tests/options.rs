@@ -150,6 +150,8 @@ fn unknown_option_with_no_value_names_the_option() {
 fn remain_on_exit_is_looked_up_per_pane() {
     let srv = TestServer::start();
     new_session(&srv, "r");
+    // The windows keep their indexes while the panes end.
+    srv.cmd(&["set", "-g", "renumber-windows", "off"]).unwrap();
     for _ in 0..3 {
         srv.cmd(&["new-window", "-d", "-t", "r", "sleep", "30"])
             .unwrap();
@@ -280,7 +282,7 @@ fn display_message_errors_on_an_unresolvable_target() {
     let err = srv
         .cmd(&["display-message", "-p", "-t", "no-such-session", "hi"])
         .unwrap_err();
-    assert!(err.contains("can't find session: no-such-session"), "{err}");
+    assert!(err.contains("can't find pane: no-such-session"), "{err}");
     let err = srv
         .cmd(&["display-message", "-p", "-t", "%999", "hi"])
         .unwrap_err();
@@ -418,20 +420,25 @@ fn m2_options_set_and_show_by_tmux_name() {
     let rows: &[(&str, &str, &str, &str)] = &[
         ("status", "on", "-s", "off"),
         ("status-left", "\"[#{session_name}] \"", "-s", "L"),
-        ("status-right", "\"%H:%M %d-%b-%y\"", "-s", "R"),
+        (
+            "status-right",
+            "\"\\\"#{pane_title}\\\" %H:%M %d-%b-%y\"",
+            "-s",
+            "R",
+        ),
         ("status-left-length", "10", "-s", "32767"),
         ("status-right-length", "40", "-s", "0"),
         ("status-style", "bg=green,fg=black", "-s", "fg=red"),
         ("status-interval", "15", "-s", "2147483647"),
         (
             "window-status-format",
-            "\"#{window_index}:#{window_name} \"",
+            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
             "-w",
             "#{window_index}",
         ),
         (
             "window-status-current-format",
-            "\"#{window_index}:#{window_name}*\"",
+            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
             "-w",
             "[#{window_index}]",
         ),

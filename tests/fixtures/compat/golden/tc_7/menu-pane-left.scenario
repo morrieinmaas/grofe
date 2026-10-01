@@ -1,0 +1,8 @@
+# TC.7 (M36-R5): -x P -y P on the right-hand pane: the menu's left edge on
+# the pane's, its bottom on the pane's bottom.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ split-window -h -l 25 -t main cat
+client 60x15 attach -t main
+$& display-menu -c {client} -x P -y P Split s "split-window" Kill x "kill-pane"
+screen Split

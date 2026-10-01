@@ -1,0 +1,18 @@
+# FE.1 fix round: native flags the corpus sends that tmux 3.7b has:
+# new-session -n -P -F, split-window -l N%, display -c, run-shell -d, and
+# flags tmux itself lacks, refused with its own text.
+$ new-session -d -s main -x 200 -y 50
+$ new-session -d -s n1 -n named -P -F '#{session_name}:#{window_name}' cat
+$ new-session -d -s n2 -P cat
+$ split-window -d -t main -l 30% -P -F '#{pane_height}' cat
+$ split-window -d -t main -l 101%
+$ split-window -d -t main -l x%
+$ display -p -c nope x
+$ run-shell -d 0.2 'echo hi'
+$ run-shell -d x 'echo hi'
+$ run-shell -d 0.1
+$ showw -p
+$ showw -gp remain-on-exit
+$ start-server -x
+$ list-commands info
+$ \;

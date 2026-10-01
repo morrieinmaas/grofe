@@ -1,0 +1,8 @@
+# TC.7: display-panes labels each pane, big digits and its size.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ split-window -h -l 25 -t main cat
+$ select-pane -t main:1.1
+client 60x15 attach -t main
+$& display-panes -t {client} -d 0
+screen 34x14

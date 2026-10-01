@@ -1,0 +1,85 @@
+$ new-session -d -s main -n main -x 200 -y 50 cat
+? 0
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+pins: canopy c0e331e8a018 athome 8bd91688ca54
+? 0
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+? 0
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+? 0
+$ setw -g main-pane-width 50%
+? 0
+$ run-shell 'echo "TMUX ${TMUX:+set} TMUX_PANE ${TMUX_PANE:-unset}"'
+TMUX set TMUX_PANE unset
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh idle'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+idle|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh working'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+working|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh working'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+working|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh blocked'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+blocked|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh completed'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+completed|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-1\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh completed'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+completed|claude-code|s-1|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-2\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh idle'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+idle|claude-code|s-2|1000000000
+? 0
+$ run-shell 'echo "{\"session_id\":\"s-2\"}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh exited'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+exited|claude-code|s-2|1000000000
+? 0
+$ run-shell 'echo "{}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh working'
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+working|claude-code|s-2|1000000000
+? 0
+$ run-shell 'echo "{}" | TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH {fixtures}/../../compat/scenarios/trees/canopy/adapters/claude-code/report.sh bogus; echo "report.sh exit $?"'
+report.sh exit 0
+? 0
+$ run-shell 'TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-agent report bogus 2>&1; echo "exit $?"'
+canopy: canopy-agent: bogus is not an agent state (one of: idle working blocked completed exited)
+exit 1
+? 0
+$ run-shell 'TMUX_PANE=%0 PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-agent report idle --session-id "a;b" 2>&1; echo "exit $?"'
+canopy: canopy-agent: a session id may hold only letters, digits, dot, underscore, colon and dash
+exit 1
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+working|claude-code|s-2|1000000000
+? 0
+$ run-shell 'env -u TMUX_PANE PATH={fixtures}/../../compat/scenarios/bin:$PATH sh {fixtures}/../../compat/scenarios/trees/canopy/bin/canopy-agent report working; echo "exit $?"'
+exit 0
+? 0
+$ display-message -p -t %0 '#{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}|#{@canopy_agent_ts}'
+working|claude-code|s-2|1000000000
+? 0
+$ show-options -p -t %0
+@canopy_agent_session s-2
+@canopy_agent_source claude-code
+@canopy_agent_state working
+@canopy_agent_ts 1000000000
+? 0

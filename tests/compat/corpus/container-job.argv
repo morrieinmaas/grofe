@@ -1,0 +1,332 @@
+-S <socket-path> kill-pane -t %N
+-S <socket-path> list-panes -a -F '#{session_name}\t#{window_id}\t#{pane_title}\t#{pane_dead}\t#{session_windows}'
+-S <socket-path> list-panes -a -f #{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_id}\t#{session_windows}'
+-S <socket-path> list-panes -a -f #{&&:#{>:#{window_panes},1},#{&&:#{==:#{pane_title},opensessions-sidebar},#{!=:#{pane_width},#{@opensessions_width}}}} -F #{pane_id}
+-S <socket-path> list-panes -a -f #{==:#{pane_dead},1} -F #{pane_id}
+-S <socket-path> show-option -g -q -v @opensessions_width
+-V
+bind C-l send-keys C-l
+bind-key -N 'Open URLs with fzf' u run -b '~/.config/tmux/plugins/tmux-fzf-url/fzf-url.sh 2000 '"'"''"'"' '"'"''"'"' '"'"''"'"' '"'"''"'"' '
+bind-key -T copy-mode M-y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode Y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode-vi 'C-\' select-pane -l
+bind-key -T copy-mode-vi C-h select-pane -L
+bind-key -T copy-mode-vi C-j select-pane -D
+bind-key -T copy-mode-vi C-k select-pane -U
+bind-key -T copy-mode-vi C-l select-pane -R
+bind-key -T copy-mode-vi M-y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode-vi Y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T opensessions 1 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 1'
+bind-key -T opensessions 2 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 2'
+bind-key -T opensessions 3 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 3'
+bind-key -T opensessions 4 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 4'
+bind-key -T opensessions 5 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 5'
+bind-key -T opensessions 6 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 6'
+bind-key -T opensessions 7 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 7'
+bind-key -T opensessions 8 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 8'
+bind-key -T opensessions 9 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 9'
+bind-key -T opensessions Any switch-client -T root
+bind-key -T opensessions e run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/even-horizontal.sh'"'"' '"'"'#{window_id}'"'"' '"'"'#{pane_id}'"'"''
+bind-key -T opensessions s run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/focus.sh'"'"''
+bind-key -T opensessions t run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/toggle.sh'"'"''
+bind-key -n 'C-\' if-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"'       | grep -iqE '"'"'^[^TXZ ]+ +(\S+/)?g?\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-\'"'"'' 'select-pane -l'
+bind-key -n C-h if-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"'       | grep -iqE '"'"'^[^TXZ ]+ +(\S+/)?g?\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-h'"'"'' 'select-pane -L'
+bind-key -n C-j if-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"'       | grep -iqE '"'"'^[^TXZ ]+ +(\S+/)?g?\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-j'"'"'' 'select-pane -D'
+bind-key -n C-k if-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"'       | grep -iqE '"'"'^[^TXZ ]+ +(\S+/)?g?\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-k'"'"'' 'select-pane -U'
+bind-key -n C-l if-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"'       | grep -iqE '"'"'^[^TXZ ]+ +(\S+/)?g?\.?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-l'"'"'' 'select-pane -R'
+bind-key A run-shell '~/.config/tmux/plugins/tmux-claude-session-manager/scripts/list.sh '"'"'#{client_name}'"'"''
+bind-key C-n next-window
+bind-key C-p previous-window
+bind-key C-s run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/focus.sh'"'"''
+bind-key C-t run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/toggle.sh'"'"''
+bind-key F run-shell -b ~/.config/tmux/plugins/tmux-fzf/main.sh
+bind-key I run-shell ~/.config/tmux/plugins/tpm/bindings/install_plugins
+bind-key M-1 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 1'
+bind-key M-2 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 2'
+bind-key M-3 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 3'
+bind-key M-4 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 4'
+bind-key M-5 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 5'
+bind-key M-6 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 6'
+bind-key M-7 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 7'
+bind-key M-8 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 8'
+bind-key M-9 run-shell 'sh '"'"'~/.config/tmux/plugins/opensessions/integrations/tmux-plugin/scripts/switch-index.sh'"'"' 9'
+bind-key M-r run-shell ~/.local/share/canopy/plugins/tmux-resurrect/scripts/restore.sh
+bind-key M-s run-shell ~/.local/share/canopy/plugins/tmux-resurrect/scripts/save.sh
+bind-key M-u run-shell ~/.config/tmux/plugins/tpm/bindings/clean_plugins
+bind-key R run-shell ' \t\t\ttmux source-file ~/.config/tmux/tmux.conf > /dev/null; \t\t\ttmux display-message '"'"'Sourced ~/.config/tmux/tmux.conf!'"'"''
+bind-key U run-shell ~/.config/tmux/plugins/tpm/bindings/update_plugins
+bind-key a run-shell '~/.config/tmux/plugins/tmux-claude-session-manager/scripts/launch.sh '"'"'#{pane_current_path}'"'"' '"'"'#{window_id}'"'"''
+bind-key o switch-client -T opensessions
+bind-key s run-shell ~/.config/tmux/plugins/tmux-sessionx/scripts/sessionx.sh
+display 'tmux-fzf-url: installing xre v0.1.1...'
+display 'tmux-fzf-url: xre is required but could not be installed. See https://github.com/wfxr/xre'
+display-message ' - Restoring...'
+display-message ' - Saving...'
+display-message ' / Restoring...'
+display-message ' / Saving...'
+display-message ' \ Restoring...'
+display-message ' \ Saving...'
+display-message ' | Restoring...'
+display-message ' | Saving...'
+display-message 'Sourced ~/.config/tmux/tmux.conf!'
+display-message 'Tmux environment saved!'
+display-message 'Tmux restore complete!'
+display-message -p #S
+display-message -p #{@theme_bg}|#{@theme_fg}|#{@theme_blue}|#{@theme_green}|#{@theme_grey}|#{@theme_red}|#{@pill_l}|#{@pill_r}|#{@canopy_status_battery}|#{@canopy_status_net}
+display-message -p #{client_last_session}
+display-message -p #{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}
+display-message -p #{pane_in_mode}
+display-message -p #{session_name}
+display-message -p #{window_id}
+display-message -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'
+display-message -p 'state\t#{client_session}\t#{client_last_session}'
+display-message -p -F #{start_time}
+display-message -p -t %N #{pane_pid}
+display-message -p -t %N #{pane_start_command}
+display-message -p -t %N #{pane_width}
+display-popup -E -d <dir> -B -x C -y C -w 70% -h 68% sh /tmp/fzf-temp-<n>
+display-popup -E -d <dir> -B -x C -y C -w 80% -h 80% sh /tmp/fzf-temp-<n>
+display-popup -c <client> -w 90% -h 90% -E ~/.config/tmux/plugins/tmux-claude-session-manager/scripts/picker.sh
+display-popup -w 90% -h 90% -E 'tmux attach-session -t claude-0360ea16'
+has-session -t <session>
+join-pane -d -s %N -t @N
+join-pane -h -b -d -f -l 26 -s %N -t %N
+list-clients
+list-clients -F '#{client_name} #{session_name}'
+list-keys
+list-panes -a
+list-panes -a -F #{pane_pid}|#{pane_id}|#{@canopy_agent_source}|#{@canopy_agent_session}
+list-panes -a -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
+list-panes -a -F 'pane\t#{session_name}\t#{window_index}\t#{window_active}\t:#{window_flags}\t#{pane_index}\t#{pane_title}\t:#{pane_current_path}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{history_size}'
+list-panes -a -f #{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}} -F '#{session_name}\t#{pane_current_path}'
+list-panes -s -t <name> -F '#{pane_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_width}\t#{pane_height}\t#{pane_left}\t#{pane_right}'
+list-panes -t <session>:1 -F #{pane_index}
+list-panes -t <session>:2 -F #{pane_index}
+list-panes -t <session>:3 -F #{pane_index}
+list-panes -t <session>:4 -F #{pane_index}
+list-panes -t @N -F #{pane_id}|#{pane_left}|#{pane_right}
+list-panes -t @N -F #{pane_id}|#{pane_title}|#{pane_width}|#{pane_left}|#{pane_right}|#{pane_active}
+list-panes -t @N -F '#{pane_id} #{pane_title}'
+list-sessions
+list-sessions -F #S
+list-sessions -F '#{session_grouped}\t#{session_group}\t#{session_id}\t#{session_name}'
+list-sessions -F '#{session_id}\t#{session_name}\t#{session_created}\t#{session_attached}\t#{session_windows}\t#{session_path}'
+list-windows -a -F '#{session_name}:#{window_index} #{window_name}'
+list-windows -a -F 'window\t#{session_name}\t#{window_index}\t:#{window_name}\t#{window_active}\t:#{window_flags}\t#{window_layout}'
+list-windows -t <session> -F #{window_id}
+new-session -d -s <name> -c <dir> claude
+new-session -d -s <name> -x 80 -y 24
+popup -d <dir> -B -E -w 62% -h 38% 'bash /tmp/fzf-tmux-XXXXXX/args'
+popup -d <dir> -B -E -w 75% -h 75% 'bash /tmp/fzf-tmux-XXXXXX/args'
+rename-window -t <session>:1 <name>
+rename-window -t <session>:2 <name>
+rename-window -t <session>:3 <name>
+rename-window -t <session>:4 <name>
+resize-pane -t %N -x 26
+resize-window -t @N -x 200 -y 200
+select-layout -t <session>:1 41f3,200x200,0,0,14
+select-layout -t <session>:1 c145,200x48,0,0[200x24,0,0,0,200x23,0,25{100x23,0,25,1,99x23,101,25,2}]
+select-layout -t <session>:1 d960,80x24,0,0,21
+select-layout -t <session>:2 caa0,200x48,0,0,3
+select-layout -t <session>:3 7fa5,200x48,0,0{70x48,0,0,7,42x48,71,0,10,42x48,114,0,8,43x48,157,0,9}
+select-layout -t <session>:4 6584,200x48,0,0,15
+select-layout -t @N even-horizontal
+select-pane -t %N
+select-pane -t 1
+select-pane -t <session>:1.1 -T 3737b9dbe049
+select-pane -t <session>:1.2 -T 3737b9dbe049
+select-pane -t <session>:1.3 -T 3737b9dbe049
+select-pane -t <session>:2.1 -T 3737b9dbe049
+select-pane -t <session>:3.1 -T 3737b9dbe049
+select-pane -t <session>:3.2 -T 3737b9dbe049
+select-pane -t <session>:3.3 -T 3737b9dbe049
+select-pane -t <session>:3.4 -T 3737b9dbe049
+select-pane -t <session>:4.1 -T 3737b9dbe049
+set -g @resurrect-processes <value>
+set-environment -g -u OPENSESSIONS_WIDTH
+set-environment -g OPENSESSIONS_DIR <value>
+set-hook -g after-kill-pane 'run-shell "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{==:##{window_panes},1},##{==:##{pane_title},opensessions-sidebar}}'"'"' -F '"'"'##{session_name}\t##{pane_id}\t##{session_windows}'"'"' | while IFS=\$(printf '"'"'\\t'"'"') read -r session pane windows; do if [ \"\$windows\" -le 1 ]; then fallback=\$(tmux -S #{socket_path} list-sessions -F '"'"'##{session_name}'"'"' | awk -v s=\"\$session\" '"'"'\$0==s { if (prev != \"\") { print prev; exit }; seen=1; next } seen { print; exit } { prev=\$0 }'"'"'); tmux -S #{socket_path} list-clients -t \"=\$session:\" -F '"'"'##{client_tty}'"'"' | while IFS= read -r client; do [ -n \"\$client\" ] && [ -n \"\$fallback\" ] && tmux -S #{socket_path} switch-client -c \"\$client\" -t \"=\$fallback:\" >/dev/null 2>&1 || true; done; fi; tmux -S #{socket_path} kill-pane -t \"\$pane\" >/dev/null 2>&1 || true; done" ; run-shell "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/pane-exited >/dev/null 2>&1 || true" ; run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x \$(tmux -S #{socket_path} show-option -gqv @opensessions_width)"'
+set-hook -g after-new-window 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/ensure-sidebar -d '"'"'#{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}'"'"' >/dev/null 2>&1 || true"'
+set-hook -g after-resize-pane 'run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x $(tmux -S #{socket_path} show-option -gqv @opensessions_width)"'
+set-hook -g after-resize-window 'run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x $(tmux -S #{socket_path} show-option -gqv @opensessions_width)" ; run-shell -b "sleep 0.05; curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/pane-layout-changed >/dev/null 2>&1 || true"'
+set-hook -g after-select-pane 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/focus -d '"'"'#{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}'"'"' >/dev/null 2>&1 || true"'
+set-hook -g after-select-window 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/ensure-sidebar -d '"'"'#{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}'"'"' >/dev/null 2>&1 || true"'
+set-hook -g client-resized 'run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x $(tmux -S #{socket_path} show-option -gqv @opensessions_width)" ; run-shell -b "sleep 0.05; curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/client-resized >/dev/null 2>&1 || true"'
+set-hook -g client-session-changed 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/focus -d '"'"'#{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}'"'"' >/dev/null 2>&1 || true" ; run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/ensure-sidebar -d '"'"'#{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}'"'"' >/dev/null 2>&1 || true"'
+set-hook -g pane-died 'run-shell "tmux -S #{socket_path} list-panes -a -F '"'"'##{session_name}\t##{window_id}\t##{pane_title}\t##{pane_dead}\t##{session_windows}'"'"' | awk -F '"'"'\t'"'"' '"'"'{ key=\$1 \"\\t\" \$2; session[key]=\$1; window[key]=\$2; windows[key]=\$5; if (\$3==\"opensessions-sidebar\") { sidebars[key]++ } else if (\$4!=\"1\") { live[key]++ } } END { for (key in session) if (sidebars[key] > 0 && live[key]+0 == 0) print session[key] \"\\t\" window[key] \"\\t\" windows[key] }'"'"' | while IFS=\$(printf '"'"'\\t'"'"') read -r session window windows; do if [ \"\$windows\" -le 1 ]; then fallback=\$(tmux -S #{socket_path} list-sessions -F '"'"'##{session_name}'"'"' | awk -v s=\"\$session\" '"'"'\$0==s { if (prev != \"\") { print prev; exit }; seen=1; next } seen { print; exit } { prev=\$0 }'"'"'); tmux -S #{socket_path} list-clients -t \"=\$session:\" -F '"'"'##{client_tty}'"'"' | while IFS= read -r client; do [ -n \"\$client\" ] && [ -n \"\$fallback\" ] && tmux -S #{socket_path} switch-client -c \"\$client\" -t \"=\$fallback:\" >/dev/null 2>&1 || true; done; fi; tmux -S #{socket_path} kill-window -t \"\$window\" >/dev/null 2>&1 || true; done; tmux -S #{socket_path} list-panes -a -f '"'"'##{==:##{pane_dead},1}'"'"' -F '"'"'##{pane_id}'"'"' | while IFS= read -r pane; do [ -n \"\$pane\" ] && tmux -S #{socket_path} kill-pane -t \"\$pane\" >/dev/null 2>&1 || true; done" ; run-shell "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/pane-exited >/dev/null 2>&1 || true" ; run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x \$(tmux -S #{socket_path} show-option -gqv @opensessions_width)"'
+set-hook -g pane-exited 'run-shell "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{==:##{window_panes},1},##{==:##{pane_title},opensessions-sidebar}}'"'"' -F '"'"'##{session_name}\t##{pane_id}\t##{session_windows}'"'"' | while IFS=\$(printf '"'"'\\t'"'"') read -r session pane windows; do if [ \"\$windows\" -le 1 ]; then fallback=\$(tmux -S #{socket_path} list-sessions -F '"'"'##{session_name}'"'"' | awk -v s=\"\$session\" '"'"'\$0==s { if (prev != \"\") { print prev; exit }; seen=1; next } seen { print; exit } { prev=\$0 }'"'"'); tmux -S #{socket_path} list-clients -t \"=\$session:\" -F '"'"'##{client_tty}'"'"' | while IFS= read -r client; do [ -n \"\$client\" ] && [ -n \"\$fallback\" ] && tmux -S #{socket_path} switch-client -c \"\$client\" -t \"=\$fallback:\" >/dev/null 2>&1 || true; done; fi; tmux -S #{socket_path} kill-pane -t \"\$pane\" >/dev/null 2>&1 || true; done" ; run-shell "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/pane-exited >/dev/null 2>&1 || true" ; run-shell -b "tmux -S #{socket_path} list-panes -a -f '"'"'##{&&:##{>:##{window_panes},1},##{&&:##{==:##{pane_title},opensessions-sidebar},##{!=:##{pane_width},##{@opensessions_width}}}}'"'"' -F '"'"'##{pane_id}'"'"' | xargs -n1 -I{} tmux -S #{socket_path} resize-pane -t {} -x \$(tmux -S #{socket_path} show-option -gqv @opensessions_width)"'
+set-hook -g session-closed 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/refresh >/dev/null 2>&1 || true"'
+set-hook -g session-created 'run-shell -b "curl -s -o /dev/null -m 0.2 --connect-timeout 0.1 -X POST http://127.0.0.1:24770/refresh >/dev/null 2>&1 || true"'
+set-option -g -q @continuum-save-last-timestamp <value>
+set-option -g -q @opensessions_width <value>
+set-option -g -q @resurrect-restore-script-path <value>
+set-option -g -q @resurrect-save-script-path <value>
+set-option -g -q @resurrect-strategy-irb <value>
+set-option -g -q @resurrect-strategy-mosh-client <value>
+set-option -g -q display-time 4000
+set-option -g -q display-time 5000
+set-option -g -q status-left '#[fg=#{@theme_blue},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_blue},bold] #S #[fg=#{@theme_blue},bg=default,nobold]#{@pill_r} '
+set-option -g -q status-right #(~/.local/share/canopy/plugins/tmux-continuum/scripts/continuum_save.sh)#(~/.local/share/canopy/bin/canopy-status)
+set-option -g @claude_parent <value>
+set-option -g @sessionx-_bind-back <value>
+set-option -g @sessionx-_built-args <value>
+set-option -g @sessionx-_built-fzf-opts <value>
+set-option -g @sessionx-_custom-paths <value>
+set-option -g @sessionx-_custom-paths-subdirectories <value>
+set-option -g @sessionx-_filter-current <value>
+set-option -g @sessionx-_filtered-sessions <value>
+set-option -g @sessionx-_fzf-builtin-tmux <value>
+set-option -g @sessionx-_git-branch <value>
+set-option -g @sessionx-_window-mode <value>
+set-option -g display-time 4000
+set-option -g focus-events on
+set-option -g status-keys emacs
+set-option -t <name> @claude_origin <value>
+set-option -t <session>:4 automatic-rename off
+set-option -u -t <session>:1 automatic-rename
+set-option -u -t <session>:2 automatic-rename
+set-option -u -t <session>:3 automatic-rename
+set-window-option -g aggressive-resize on
+show -g -q -v @canopy_resume_stagger_ms
+show -g -q -v @fzf-url-bind
+show -g -q -v @fzf-url-copy-cmd
+show -g -q -v @fzf-url-custom-pat
+show -g -q -v @fzf-url-custom-sub
+show -g -q -v @fzf-url-history-limit
+show -g -q -v @fzf-url-open
+show -g -v @pill_l
+show -g -v @pill_r
+show -g -v @theme_bg
+show -g -v @theme_blue
+show -g -v command-alias
+show-environment -g OPENSESSIONS_DIR
+show-environment -g OPENSESSIONS_HOST
+show-environment -g OPENSESSIONS_PID_FILE
+show-environment -g OPENSESSIONS_PORT
+show-environment -g TMUX_PLUGIN_MANAGER_PATH
+show-option -g -q -v @claude_args
+show-option -g -q -v @claude_command
+show-option -g -q -v @claude_launch_key
+show-option -g -q -v @claude_list_key
+show-option -g -q -v @claude_popup_height
+show-option -g -q -v @claude_popup_width
+show-option -g -q -v @claude_session_prefix
+show-option -g -q -v @continuum-boot
+show-option -g -q -v @continuum-restore
+show-option -g -q -v @continuum-restore-max-delay
+show-option -g -q -v @continuum-save-interval
+show-option -g -q -v @continuum-save-last-timestamp
+show-option -g -q -v @copy_mode_put
+show-option -g -q -v @copy_mode_yank
+show-option -g -q -v @copy_mode_yank_put
+show-option -g -q -v @custom_copy_command
+show-option -g -q -v @opensessions-focus-global-key
+show-option -g -q -v @opensessions-index-keys
+show-option -g -q -v @opensessions-prefix-key
+show-option -g -q -v @override_copy_command
+show-option -g -q -v @resurrect-capture-pane-contents
+show-option -g -q -v @resurrect-delete-backup-after
+show-option -g -q -v @resurrect-dir
+show-option -g -q -v @resurrect-hook-post-restore-all
+show-option -g -q -v @resurrect-hook-post-save-all
+show-option -g -q -v @resurrect-hook-post-save-layout
+show-option -g -q -v @resurrect-hook-pre-restore-all
+show-option -g -q -v @resurrect-hook-pre-restore-pane-processes
+show-option -g -q -v @resurrect-never-overwrite
+show-option -g -q -v @resurrect-processes
+show-option -g -q -v @resurrect-restore
+show-option -g -q -v @resurrect-save
+show-option -g -q -v @resurrect-save-command-strategy
+show-option -g -q -v @resurrect-save-script-path
+show-option -g -q -v @sessionx-_bind-back
+show-option -g -q -v @sessionx-_built-args
+show-option -g -q -v @sessionx-_built-fzf-opts
+show-option -g -q -v @sessionx-_custom-paths
+show-option -g -q -v @sessionx-_custom-paths-subdirectories
+show-option -g -q -v @sessionx-_filtered-sessions
+show-option -g -q -v @sessionx-_fzf-builtin-tmux
+show-option -g -q -v @sessionx-_git-branch
+show-option -g -q -v @sessionx-_window-mode
+show-option -g -q -v @sessionx-additional-options
+show-option -g -q -v @sessionx-auto-accept
+show-option -g -q -v @sessionx-bind
+show-option -g -q -v @sessionx-bind-abort
+show-option -g -q -v @sessionx-bind-accept
+show-option -g -q -v @sessionx-bind-back
+show-option -g -q -v @sessionx-bind-configuration-path
+show-option -g -q -v @sessionx-bind-delete-char
+show-option -g -q -v @sessionx-bind-kill-session
+show-option -g -q -v @sessionx-bind-new-window
+show-option -g -q -v @sessionx-bind-rename-session
+show-option -g -q -v @sessionx-bind-scroll-down
+show-option -g -q -v @sessionx-bind-scroll-up
+show-option -g -q -v @sessionx-bind-select-down
+show-option -g -q -v @sessionx-bind-select-up
+show-option -g -q -v @sessionx-bind-tree-mode
+show-option -g -q -v @sessionx-bind-window-mode
+show-option -g -q -v @sessionx-bind-zo-new-window
+show-option -g -q -v @sessionx-custom-paths
+show-option -g -q -v @sessionx-custom-paths-subdirectories
+show-option -g -q -v @sessionx-filter-current
+show-option -g -q -v @sessionx-filtered-sessions
+show-option -g -q -v @sessionx-fzf-builtin-tmux
+show-option -g -q -v @sessionx-fzf-marks-file
+show-option -g -q -v @sessionx-git-branch
+show-option -g -q -v @sessionx-layout
+show-option -g -q -v @sessionx-legacy-fzf-support
+show-option -g -q -v @sessionx-ls-command
+show-option -g -q -v @sessionx-pointer
+show-option -g -q -v @sessionx-prefix
+show-option -g -q -v @sessionx-preview-enabled
+show-option -g -q -v @sessionx-preview-location
+show-option -g -q -v @sessionx-preview-ratio
+show-option -g -q -v @sessionx-prompt
+show-option -g -q -v @sessionx-tmuxinator-mode
+show-option -g -q -v @sessionx-tree-mode
+show-option -g -q -v @sessionx-window-height
+show-option -g -q -v @sessionx-window-mode
+show-option -g -q -v @sessionx-window-width
+show-option -g -q -v @sessionx-x-path
+show-option -g -q -v @sessionx-zoxide-mode
+show-option -g -q -v @tpm-clean
+show-option -g -q -v @tpm-install
+show-option -g -q -v @tpm-update
+show-option -g -q -v display-time
+show-option -g -q -v status-left
+show-option -g -q -v status-right
+show-option -g -v -q @tmux-which-key-disable-autobuild
+show-option -g -v -q @tmux-which-key-xdg-enable
+show-option -g -v default-terminal
+show-option -g -v display-time
+show-option -g -v history-limit
+show-option -g -v prefix
+show-option -g -v status-interval
+show-option -s -v default-terminal
+show-option -s -v escape-time
+show-options -g -q @tmux_navigator_disable_when_zoomed
+show-options -g -q @vim_navigator_check
+show-options -g -q @vim_navigator_mapping_down
+show-options -g -q @vim_navigator_mapping_left
+show-options -g -q @vim_navigator_mapping_prev
+show-options -g -q @vim_navigator_mapping_right
+show-options -g -q @vim_navigator_mapping_up
+show-options -g -q @vim_navigator_pattern
+show-options -g -q @vim_navigator_prefix_mapping_clear_screen
+show-options -p remain-on-exit \; show-options -p synchronize-panes
+show-window-options -v -t <session>:1 automatic-rename
+show-window-options -v -t <session>:2 automatic-rename
+show-window-options -v -t <session>:3 automatic-rename
+show-window-options -v -t <session>:4 automatic-rename
+source-file <file>
+start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+start-server \; show-option -g -q -v @tpm_plugins
+switch-client -T root
+switch-client -c <client> -t <session>
+switch-client -t ''
+switch-client -t <session>
+switch-client -t <session>:1
+switch-client -t <session>:2
+switch-client -t <session>:3
+switch-client -t <session>:4

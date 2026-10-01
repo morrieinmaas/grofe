@@ -1,0 +1,10 @@
+#!/bin/sh
+# A fixed clock for TC.13's scenarios: canopy-status prints the date and
+# time, and canopy-agent stamps each report with `date +%s`. Put first on
+# PATH for those scripts only; anything else goes to the real date.
+case "$*" in
+  '+%a %d %b') echo 'Thu 01 Jan' ;;
+  '+%H:%M') echo '00:00' ;;
+  '+%s') echo 1000000000 ;;
+  *) PATH=/usr/bin:/bin exec date "$@" ;;
+esac

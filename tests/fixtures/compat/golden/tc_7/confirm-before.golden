@@ -1,0 +1,22 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+client 60x15 attach -t main
+$& confirm-before -t {client} "kill-pane -t main"
+screen Confirm
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Confirm 'kill-pane'? (y/n)

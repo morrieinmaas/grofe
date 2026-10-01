@@ -1,0 +1,19 @@
+# TP.1: canopy's status line as tmux 3.7b draws it, from canopy's own
+# tmux/conf.d/20-status.conf (the copy in tests/fixtures/canopy-port, real
+# theme values), with its #() aggregator replaced by FE.3's fixed script.
+# tests/compat/tp_1.rs draws the same windows from canopy's grofe fragments
+# and compares every step but the two that load the tmux config: the text,
+# and the colours and attributes of both status rows, cell for cell. The
+# script path is a glob, since the normalizer reads the word "golden" as the
+# recorder's user.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -d -t main -n second cat
+$ split-window -d -t main:1 cat
+$ source-file {fixtures}/../canopy-port/20-status.conf
+$ set -g status-right "#(sh {fixtures}/gold?n/fe_3/canopy-status.sh)"
+client 80x24 attach -t main
+screen net up
+styles 0-1 net up
+$ resize-pane -Z -t main:1
+screen +
+styles 0-1 +

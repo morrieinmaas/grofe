@@ -1,0 +1,494 @@
+
+-L <$sock> -f /dev/null new-session -d 'sleep 600' \; set -g @continuum-restore-max-delay <value> \; source-file <$conf>
+-L <$sock> kill-server
+-L <$sock> show -g -q -v <$option>
+-S #{socket_path} kill-pane -t <$pane>
+-S #{socket_path} kill-window -t <$window>
+-S #{socket_path} list-clients -t =<$session>: -F <fmt-arg>
+-S #{socket_path} list-panes -a -F '<fmt-arg>\t<fmt-arg>\t<fmt-arg>\t<fmt-arg>\t<fmt-arg>'
+-S #{socket_path} list-panes -a -f <fmt-arg> -F <fmt-arg>
+-S #{socket_path} list-sessions -F <fmt-arg>
+-S #{socket_path} resize-pane -t <name> -x <$(...)>
+-S #{socket_path} show-option -g -q -v @opensessions_width
+-S #{socket_path} switch-client -c <$client> -t =<$fallback>:
+-S <$(...)> new-session -d -s <$grouped_session> -t <$original_session>
+-S <$(...)> new-session -d -s <$session_name> -c <$dir>
+-S <$(...)> new-session -d -s <$session_name> -c <$dir> <$pane_creation_command>
+-S <socket-path> display-message -p #{window_zoomed_flag}
+-S <socket-path> if -F #{pane_at_left} '' 'select-pane -t <$TMUX_PANE> -L'
+-S <socket-path> run-shell 'ps -o state= -o comm= -t '"'"'#{pane_tty}'"'"''
+-S <socket-path> select-pane -t <$TMUX_PANE> -D
+-S <socket-path> select-pane -t <$TMUX_PANE> -L
+-S <socket-path> select-pane -t <$TMUX_PANE> -L -Z
+-S <socket-path> select-pane -t <$TMUX_PANE> -R
+-S <socket-path> select-pane -t <$TMUX_PANE> -U
+-S <socket-path> select-pane -t <$TMUX_PANE> -l
+-V
+-c {}
+attach
+attach -t <session>
+attach-session -t <$session>
+attach-session -t <session>
+bind <$k> send-keys C-l
+bind-key -T <$COMMAND_TABLE> <$i> run-shell 'sh '"'"'<$SCRIPTS_DIR>/switch-index.sh'"'"' <$i>'
+bind-key -T <$COMMAND_TABLE> Any switch-client -T root
+bind-key -T <$COMMAND_TABLE> e run-shell 'sh '"'"'<$SCRIPTS_DIR>/even-horizontal.sh'"'"' '"'"'#{window_id}'"'"' '"'"'#{pane_id}'"'"''
+bind-key -T <$COMMAND_TABLE> s run-shell 'sh '"'"'<$SCRIPTS_DIR>/focus.sh'"'"''
+bind-key -T <$COMMAND_TABLE> t run-shell 'sh '"'"'<$SCRIPTS_DIR>/toggle.sh'"'"''
+bind-key -T copy-mode <$(...)> send-keys -X <$(...)> <$copy_command>
+bind-key -T copy-mode <$(...)> send-keys -X <$(...)> <$copy_wo_newline_command>
+bind-key -T copy-mode <$(...)> send-keys -X copy-pipe-and-cancel '<$copy_command>; tmux paste-buffer -p'
+bind-key -T copy-mode <$(...)> send-keys -X copy-pipe-and-cancel 'tmux paste-buffer -p'
+bind-key -T copy-mode <$key> send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X <$(...)> <$copy_command_mouse>
+bind-key -T copy-mode-vi <$(...)> send-keys -X <$(...)> <$copy_command>
+bind-key -T copy-mode-vi <$(...)> send-keys -X <$(...)> <$copy_wo_newline_command>
+bind-key -T copy-mode-vi <$(...)> send-keys -X copy-pipe-and-cancel '<$copy_command>; tmux paste-buffer -p'
+bind-key -T copy-mode-vi <$(...)> send-keys -X copy-pipe-and-cancel 'tmux paste-buffer -p'
+bind-key -T copy-mode-vi <$key> <$tmux_cmd>
+bind-key -T copy-mode-vi <$key> send-keys -X copy-pipe-and-cancel 'tmux display-message '"'"'Error! tmux-yank dependencies not installed!'"'"''
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X <$(...)> <$copy_command_mouse>
+bind-key -T prefix #{@wk_cfg_key_prefix_table} show-wk-menu-root
+bind-key -T prefix Space show-wk-menu-root
+bind-key -T {table} #{{@wk_cfg_key_{table}_table}} show-wk-menu-root
+bind-key -n <$(...)> run-shell <$CURRENT_DIR>/scripts/sessionx.sh
+bind-key -n <$key> if-shell <$is_vim> 'send-keys '"'"'<$key>'"'"'' <$tmux_cmd>
+bind-key -n <$key> run-shell 'sh '"'"'<$SCRIPTS_DIR>/switch-index.sh'"'"' <$index>'
+bind-key -n <$key> run-shell <$command>
+bind-key <$(...)> run-shell -b <$SCRIPTS_DIR>/copy_line.sh
+bind-key <$(...)> run-shell -b <$SCRIPTS_DIR>/copy_pane_pwd.sh
+bind-key <$(...)> run-shell <$CURRENT_DIR>/scripts/sessionx.sh
+bind-key <$PREFIX_KEY> switch-client -T <$COMMAND_TABLE>
+bind-key <$TMUX_FZF_LAUNCH_KEY> run-shell -b <$CURRENT_DIR>/main.sh
+bind-key <$clean_key> run-shell <$BINDINGS_DIR>/clean_plugins
+bind-key <$install_key> run-shell <$BINDINGS_DIR>/install_plugins
+bind-key <$key> run-shell <$CURRENT_DIR>/scripts/restore.sh
+bind-key <$key> run-shell <$CURRENT_DIR>/scripts/save.sh
+bind-key <$launch_key> run-shell '<$CURRENT_DIR>/scripts/launch.sh '"'"'#{pane_current_path}'"'"' '"'"'#{window_id}'"'"''
+bind-key <$list_key> run-shell '<$CURRENT_DIR>/scripts/list.sh '"'"'#{client_name}'"'"''
+bind-key <$note_flag> <$key> run -b <$cmd>
+bind-key <$prefix> send-prefix
+bind-key <$prefix_without_ctrl> last-window
+bind-key <$update_key> run-shell <$BINDINGS_DIR>/update_plugins
+bind-key C-n next-window
+bind-key C-p previous-window
+bind-key C-s run-shell 'sh '"'"'<$SCRIPTS_DIR>/focus.sh'"'"''
+bind-key C-t run-shell 'sh '"'"'<$SCRIPTS_DIR>/toggle.sh'"'"''
+bind-key M-<$i> run-shell 'sh '"'"'<$SCRIPTS_DIR>/switch-index.sh'"'"' <$i>'
+bind-key R run-shell ' \t\t\ttmux source-file <$tmux_config> > /dev/null; \t\t\ttmux display-message '"'"'Sourced <$tmux_config>!'"'"''
+break-pane -s <$target> -t <$cur_ses>:<$last_win_num_after>
+capture-pane -J -p -e
+capture-pane -J -p -e -S -<$limit>
+capture-pane -e -p -J -S <$start_line> -t <$pane_id>
+capture-pane -e -p -t <$BASH_REMATCH>:<$BASH_REMATCH>
+capture-pane -e -p -t <$args>
+capture-pane -e -p -t <$session_id>
+capture-pane -e -p -t <$t>
+capture-pane -e -p -t <name>
+capture-pane -e -p -t <session>:
+capture-pane -p -J -t <$pane_id>
+command-prompt -I <$target>
+command-prompt -p 'plugin update:' ' \t\tsend-keys C-c; \t\trun-shell '"'"'<$SCRIPTS_DIR>/update_plugin_prompt_handler.sh %1'"'"''
+copy-mode
+delete-buffer -b <name>
+detach -s <session>
+detach-client -s <$my_session>
+display 'tmux-fzf-url: <$msg>...'
+display 'tmux-fzf-url: no URLs found'
+display 'tmux-fzf-url: xre is required but could not be installed. See https://github.com/wfxr/xre'
+display -p #{client_session}
+display -p -F #{pane_current_path}
+display -p -t <$pane_id> -F #{cursor_y}
+display -p -t <$pane_id> -F #{history_size}
+display-message ' <$SPIN> <$MESSAGE>'
+display-message 'Error! tmux-yank dependencies not installed!'
+display-message 'Sourced <$tmux_config>!'
+display-message 'tmux-claude-session-manager: <$tool> is required for the picker'
+display-message '🫪 Popup window already open'
+display-message -c <client> -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'
+display-message -p
+display-message -p #S
+display-message -p #S:#I:
+display-message -p #S:#{window_index}.#{pane_index}
+display-message -p #{@theme_bg}|#{@theme_fg}|#{@theme_blue}|#{@theme_green}|#{@theme_grey}|#{@theme_red}|#{@pill_l}|#{@pill_r}|#{@canopy_status_battery}|#{@canopy_status_net}
+display-message -p #{client_last_session}
+display-message -p #{client_termname}
+display-message -p #{client_tty}
+display-message -p #{client_tty}|#{session_name}|#{window_id}|#{pane_id}|#{pane_active}
+display-message -p #{pane_current_command}
+display-message -p #{pane_height}
+display-message -p #{pane_id}
+display-message -p #{pane_in_mode}
+display-message -p #{pane_width}
+display-message -p #{pid}
+display-message -p #{session_name}
+display-message -p #{window_id}
+display-message -p '#S:#I: #{window_name}'
+display-message -p '#S:#{window_index}.#{pane_index}: #{window_name}'
+display-message -p '#{client_tty}\t#{session_name}\t#{window_id}\t#{pane_id}'
+display-message -p -F #{pane_id} -t <$session_name>:<$window_number>
+display-message -p -F #{start_time}
+display-message -p -t <$1> #{pane_pid}
+display-message -p -t <$1> #{pane_start_command}
+display-message -p -t <$canopy_ad_pane> #{session_name}:#{window_index}.#{pane_index}<$canopy_ad_tab>#{@canopy_agent_session}<$canopy_ad_tab>#{@canopy_agent_state}
+display-message -p -t <$canopy_rc_pane> #{session_name}<$canopy_rc_tab>#{window_index}<$canopy_rc_tab>#{pane_index}<$canopy_rc_tab>#{@canopy_agent_session}
+display-message -p -t <$pane> #{@canopy_agent_state}|#{@canopy_agent_source}|#{@canopy_agent_session}
+display-message -p -t <$pane> #{session_name}
+display-message -p -t <$pane_id> #{pane_width}
+display-message -p -t <expr> <expr>
+display-message -p -t <target> #{session_name}
+display-message -p -t <target> #{window_id}
+display-message -p <$(...)>
+display-message -p <$canopy_cf_format>
+display-message -t <expr> -p #{window_id}
+display-message -t <pane> -p #{window_id}
+display-message -t <target> -p #{pane_current_path}
+display-message -t <target> -p #{window_id}
+display-message <$END_MESSAGE>
+display-message <$message>
+display-popup -c <$host> -w <$w> -h <$h> -E <$DIR>/picker.sh
+display-popup -d <dir> -h 90% -w 90% -E <command>
+display-popup -w <$w> -h <$h> -E 'tmux attach-session -t <$session>'
+display-popup -w <$w> -h <$h> -E <$DIR>/picker.sh
+has-session -t <$STASH_SESSION>
+has-session -t <$s>
+has-session -t <$session>
+has-session -t <$session_name>
+has-session -t =<$name>
+has-session -t =<$s>
+has-session -t =<$sel>
+has-session -t =<$session_name>
+has-session -t =<$t>
+has-session -t =<$target>
+info
+join-pane -d -s <$pane_id> -t <$target>
+join-pane <$join_flag> -d -f -l <$width> -s <$pane_id> -t <$target_pane_id>
+kill-pane -t <$pane>
+kill-pane -t <$pane_id>
+kill-pane -t <expr>
+kill-pane -t <name>
+kill-pane -t <pane>
+kill-server
+kill-session -t 0
+kill-session -t <expr>
+kill-session -t <session>
+link-window -a -s <$src_win> -t <$cur_ses>
+list-buffers
+list-clients
+list-clients -F #{session_name}
+list-clients -F '#{client_name} #{session_name}'
+list-clients -F <expr>
+list-commands
+list-keys
+list-panes -F #F
+list-panes -a
+list-panes -a -F #{pane_id}
+list-panes -a -F #{pane_pid}|#{pane_id}|#{@canopy_agent_source}|#{@canopy_agent_session}
+list-panes -a -F '#S:#{window_index}.#{pane_index}: <$TMUX_FZF_PANE_FORMAT>'
+list-panes -a -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{?pane_active,[active],[inactive]}'
+list-panes -a -F '#{pane_id} #{pane_title}'
+list-panes -a -F 'T\t#{pane_tty}\t#{pane_id}\t#{session_name}\t#{session_name}:#{window_index}.#{pane_index}'
+list-panes -a -F <$(...)>
+list-panes -a -F <pane-format>
+list-panes -s -t <target> -F <pane-format>
+list-panes -t <$1> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_active}
+list-panes -t <$1> -F '#{pane_id} #{pane_title}'
+list-panes -t <$session> -F #{pane_current_path}
+list-panes -t <$session_name>:<$window_number> -F #{pane_index}
+list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_left}<$PANE_FIELD_SEP>#{pane_right}
+list-panes -t <$window_id> -F #{pane_id}<$PANE_FIELD_SEP>#{pane_title}<$PANE_FIELD_SEP>#{pane_width}<$PANE_FIELD_SEP>#{pane_left}<$PANE_FIELD_SEP>#{pane_right}<$PANE_FIELD_SEP>#{pane_active}
+list-panes -t <target> -F '#{pane_id} #{pane_title}'
+list-panes -t <target> -F <pane-format>
+list-panes -t <window> -F #{pane_id}
+list-sessions
+list-sessions -F #S
+list-sessions -F '#S: <$TMUX_FZF_SESSION_FORMAT>'
+list-sessions -F <$(...)>
+list-sessions -F <expr>
+list-windows
+list-windows -a -F '#{session_name}:#{window_index}  #{window_name} (#{window_panes}p)'
+list-windows -a -F '#{session_name}:#{window_index} #{window_name}'
+list-windows -a -F <$(...)>
+list-windows -a -F <expr>
+list-windows -t <$STASH_SESSION> -F #{window_id}
+list-windows -t <$s> -F #{window_id}
+list-windows -t <$s> -F '<$s>:#{window_index}  #{window_name} (#{window_panes}p)'
+list-windows -t <$session_name> -F #{window_index}
+list-windows -t <$session_name> -F '#{window_flags} #{window_index}'
+list-windows -t <$t> -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'
+list-windows <$window_filter>
+list-windows <$window_filter> -F '#S:#{window_index}: <$TMUX_FZF_WINDOW_FORMAT>'
+load-buffer <file>
+ls
+ls -F #{session_id}
+ls -F #{session_id} -f #{==:#{session_name},<$session_name>}
+ls -F '#{session_id}#{session_name}: #{T:tree_mode_format}'
+lsw -t <$s> -F #{window_id}
+lsw -t <$s> -F #{window_id}#{T:tree_mode_format}
+menu -x R -y P -T '#[align=centre,bold fg=green]<$menu_name>' <$@>
+move-pane -s <name>
+move-window -a -s <$src_win> -t <$cur_ses>
+move-window -s <$session_name>:<$created_window_num> -t <$session_name>:<$window_number>
+new-session
+new-session -A -s
+new-session -d
+new-session -d -P -F #{session_name}
+new-session -d -c <dir> -P -F #{session_name}
+new-session -d -s <$STASH_SESSION> -x 80 -y 24
+new-session -d -s <$d_target> -c <$target>
+new-session -d -s <$mark> -c <$target>
+new-session -d -s <$name> -c <$sel>
+new-session -d -s <$session> -c <$path> <$cmd>
+new-session -d -s <$session_name>
+new-session -d -s <$session_name> -c <$selected>
+new-session -d -s <$target>
+new-session -d -s <$target> -c <$z_target> -n <$z_target>
+new-session -d -s <name>
+new-session -d -s <name> -P -F #{session_name}
+new-session -d -s <name> -c <dir> -P -F #{session_name}
+new-window 'gh-enhance -R <template> <template>'
+new-window -d -P -F #{window_id} 'bash -c '"'"'while :; do for c in \| / - '"'"'\;'"'"' do sleep 0.2; printf "\r$c fzf-tmux is running\r"; done; done'"'"''
+new-window -d -t <$STASH_SESSION>:
+new-window -d -t <$session_name>:<$window_number> -c <$dir>
+new-window -d -t <$session_name>:<$window_number> -c <$dir> <$pane_creation_command>
+paste-buffer -b <name>
+paste-buffer -p
+popup -d <$PWD> <$opt> 'bash <$argsf>'
+popup -x C -y C -w <$TMUX_FZF_MENU_POPUP_WIDTH> -h <$TMUX_FZF_MENU_POPUP_HEIGHT> {}
+refresh-client -S
+rename-session -t <$target> <$session_name>
+rename-session -t <session> <$name>
+rename-window -t <$session_name>:<$window_number> <$window_name>
+rename-window -t <$target> <$window_name>
+resize-pane -D <$size>
+resize-pane -L <$size>
+resize-pane -R <$size>
+resize-pane -U <$size>
+resize-pane -Z -t <$target>
+resize-pane -t <$pane_id> -x <$width>
+resize-pane -t <$session_name>:<$window_number> -U 999
+resize-pane -t <$session_name>:<$window_number> -Z
+resize-pane -t <expr> -x <expr>
+resize-pane -t <pane> -x 30%
+resize-window -t <$target> -x 200 -y 200
+respawn-pane -k -t <$canopy_ad_pane> <$canopy_ad_resume>
+respawn-pane -k -t <pane> <command>
+run-shell 'echo '"'"'<$message>'"'"''
+run-shell -b 'sleep 0.18; tmux select-pane -t <target> -P default'
+run-shell -b <$CURRENT_DIR>/scripts/<$item>.sh
+select-layout -t <$WINDOW_ID> even-horizontal
+select-layout -t <$session_name>:<$window_number> <$window_layout>
+select-layout -t <window> main-vertical
+select-layout <$target_origin>
+select-pane -t <$PANE_ID>
+select-pane -t <$active_pane>
+select-pane -t <$pane>
+select-pane -t <$pane_index>
+select-pane -t <$preferred_pane_id>
+select-pane -t <$session_name>:<$window_number>.<$pane_index> -T <$pane_title>
+select-pane -t <$sidebar_pane_id>
+select-pane -t <expr>
+select-pane -t <expr> -P bg=colour238
+select-pane -t <expr> -T <expr>
+select-pane -t <fmt-arg> -P default
+select-pane -t <name>
+select-pane -t <pane> -T <name>
+select-pane -t <target>
+select-window -t <$BASH_REMATCH>:<$BASH_REMATCH>
+select-window -t <$pane>
+select-window -t <expr>
+select-window -t <name>
+send -X -N 150 cursor-down
+send -X begin-selection
+send -X copy-pipe-and-cancel <$(...)>
+send -X end-of-line
+send -X next-word-end
+send -X previous-word
+send-key $
+send-key 150
+send-key <$(...)>
+send-key C-Space
+send-key C-a
+send-key C-e
+send-key C-n
+send-key Escape 0
+send-key M-b
+send-key M-f
+send-key Space
+send-key b
+send-key e
+send-key j
+send-keys $ a
+send-keys -X <$target>
+send-keys -t <$session_name>:<$window_number>.<$pane_index> <$command> C-m
+send-keys C-e
+set -g @resurrect-processes <value>
+set -g @theme_bg <value>
+set -g @theme_blue <value>
+set -g @theme_fg <value>
+set -g @theme_green <value>
+set -g @theme_grey <value>
+set -g @theme_muted <value>
+set -g @theme_yellow <value>
+set -g command-alias[<$idx>] <$new>
+set -p -t <$pane> @canopy_agent_state <value> \; set -p -t <$pane> @canopy_agent_source <value> \; set -p -t <$pane> @canopy_agent_session <value> \; set -p -t <$pane> @canopy_agent_ts <value>
+set -p allow-passthrough all
+set-buffer -b <name> <$(...)>
+set-buffer <$payload>
+set-environment -g -u OPENSESSIONS_DIR
+set-environment -g -u OPENSESSIONS_HOST
+set-environment -g -u OPENSESSIONS_PID_FILE
+set-environment -g -u OPENSESSIONS_PORT
+set-environment -g -u OPENSESSIONS_WIDTH
+set-environment -g <$DEFAULT_TPM_ENV_VAR_NAME> <value>
+set-environment -g OPENSESSIONS_DIR <value>
+set-hook -g -u <$hook>
+set-hook -g -u <expr>
+set-hook -g -u <hook>
+set-hook -g <expr> <expr>
+set-hook -g <hook> <command>
+set-option -g -q <$option> <$value>
+set-option -g -q <$restore_path_option> <$CURRENT_DIR>/scripts/restore.sh
+set-option -g -q <$restore_process_strategy_option>irb default_strategy
+set-option -g -q <$restore_process_strategy_option>mosh-client default_strategy
+set-option -g -q <$save_path_option> <$CURRENT_DIR>/scripts/save.sh
+set-option -g -q <expr> <expr>
+set-option -g -q <option> <value>
+set-option -g -q display-time <$display_duration>
+set-option -g -q display-time <$saved_display_time>
+set-option -g -u <expr>
+set-option -g -u <option>
+set-option -g @claude_parent <value>
+set-option -g @sessionx-_bind-back <value>
+set-option -g @sessionx-_built-args <value>
+set-option -g @sessionx-_built-fzf-opts <value>
+set-option -g @sessionx-_custom-paths <value>
+set-option -g @sessionx-_custom-paths-subdirectories <value>
+set-option -g @sessionx-_filter-current <value>
+set-option -g @sessionx-_filtered-sessions <value>
+set-option -g @sessionx-_fzf-builtin-tmux <value>
+set-option -g @sessionx-_git-branch <value>
+set-option -g @sessionx-_window-mode <value>
+set-option -g default-command 'reattach-to-user-namespace -l <$SHELL>'
+set-option -g default-terminal screen-256color
+set-option -g display-time 4000
+set-option -g focus-events on
+set-option -g history-limit 50000
+set-option -g status-interval 5
+set-option -g status-keys emacs
+set-option -p -t <pane> pane-active-border-style <style>
+set-option -p -t <pane> pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'
+set-option -p -t <pane> pane-border-style <style>
+set-option -p -t <pane> remain-on-exit failed
+set-option -p -t <pane> window-style <style>
+set-option -s default-terminal screen-256color
+set-option -s escape-time 0
+set-option -t <$session> @claude_origin <value>
+set-option -t <$session_name>:<$window_number> automatic-rename <$automatic_rename>
+set-option -u -t <$session_name>:<$window_number> automatic-rename
+set-window-option -g aggressive-resize on
+set-window-option -t <target> remain-on-exit off
+set-window-option -t <target> remain-on-exit on
+setw -t <$w> automatic-rename on
+show -g
+show -g -q -v <$1>
+show -g -q -v @canopy_resume_stagger_ms
+show -g -q -v @fzf-url-fzf-options
+show -g -v <$1>
+show -g -v base-index
+show -g -v command-alias
+show -g -v status-right
+show -g -w mode-keys
+show -g command-alias
+show -g extended-keys
+show-buffer -b
+show-environment -g <$DEFAULT_TPM_ENV_VAR_NAME>
+show-environment -g OPENSESSIONS_DIR
+show-environment -g OPENSESSIONS_HOST
+show-environment -g OPENSESSIONS_PID_FILE
+show-environment -g OPENSESSIONS_PORT
+show-environment -g SESSIONIZER_DIR
+show-environment -g SESSIONIZER_MAXDEPTH
+show-option -g -q -v <$1>
+show-option -g -q -v <$option>
+show-option -g -q -v @opensessions-focus-global-key
+show-option -g -q -v @opensessions-index-keys
+show-option -g -q -v @opensessions-prefix-key
+show-option -g -q -v @sessionx-_bind-back
+show-option -g -q -v @sessionx-_built-args
+show-option -g -q -v @sessionx-_built-fzf-opts
+show-option -g -q -v @sessionx-_custom-paths
+show-option -g -q -v @sessionx-_custom-paths-subdirectories
+show-option -g -q -v @sessionx-_filter-current
+show-option -g -q -v @sessionx-_filtered-sessions
+show-option -g -q -v @sessionx-_fzf-builtin-tmux
+show-option -g -q -v @sessionx-_git-branch
+show-option -g -q -v @sessionx-_window-mode
+show-option -g -q -v @sessionx-git-branch
+show-option -g -v -q @tmux-which-key-disable-autobuild
+show-option -g -v -q @tmux-which-key-xdg-enable
+show-option -g -v -q @tmux-which-key-xdg-plugin-path
+show-option -g -v <$option>
+show-option -g -v prefix
+show-option -g -w -v mode-keys
+show-option -s -v <$option>
+show-options -g -q -v @claude_parent
+show-options -g -q <$option>
+show-options -p remain-on-exit \; show-options -p synchronize-panes
+show-options -q -v -t <$session> @claude_origin
+show-window-options -v -t <$session_name>:<$window_index> automatic-rename
+show-window-options remain-on-exit \; show-window-options synchronize-panes
+source-file <$(...)>
+source-file <$init_file>
+source-file <file>
+split-window -c <$PWD> <$opt> 'bash -c '"'"'exec -a fzf bash <$argsf>'"'"'' <$swap> <$tmux_off_opts>
+split-window -d -t <pane> -h -l 70% -P -F #{pane_id} <command>
+split-window -h -b -f -l <width> -t <target> -P -F <pane-format> <command>
+split-window -h -f -l <width> -t <target> -P -F <pane-format> <command>
+split-window -t <$session_name>:<$window_number> -c <$dir>
+split-window -t <$session_name>:<$window_number> -c <$dir> <$pane_creation_command>
+split-window -v -l 30% -b 'bash -c '"'"'printf "Session Name: " && read session_name && echo "$session_name" > /tmp/tmux_fzf_session_name'"'"''
+split-window -v -l 30% -b 'bash -c '"'"'printf "Window Name: " && read window_name && echo "$window_name" > /tmp/tmux_fzf_window_name'"'"''
+split-window -v -l 30% -b -c #{pane_current_path} 'bash -c '"'"'doas kill -s <$1> <$2>'"'"''
+split-window -v -l 30% -b -c #{pane_current_path} 'bash -c '"'"'sudo kill -s <$1> <$2>'"'"''
+split-window -v -l 50% -b -c #{pane_current_path} 'top -p <$pid>'
+split-window -v -l 50% -b -c #{pane_current_path} 'top -pid <$pid>'
+start-server
+start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+start-server \; show-option -g -q -v <$tpm_plugins_variable_name>
+swap-pane -D
+swap-pane -s <$target> -t <$target_swap>
+swap-pane -t <$original_window> \; select-window -t <$original_window> \; kill-window -t <$tmp_window> \; resize-pane -Z
+swap-pane -t <$tmp_window> \; select-window -t <$tmp_window>
+swap-window -s <$target> -t <$target_swap>
+switch-client -T root
+switch-client -c <$parent> -t <$origin>
+switch-client -c <$parent> -t <$session>
+switch-client -c <client> -t <target>
+switch-client -n
+switch-client -t <$BASH_REMATCH>
+switch-client -t <$client_last_session>
+switch-client -t <$client_session>
+switch-client -t <$grouped_session>:<$active_window_index>
+switch-client -t <$grouped_session>:<$alternate_window_index>
+switch-client -t <$name>
+switch-client -t <$sel>
+switch-client -t <$session>
+switch-client -t <$session_name>
+switch-client -t <$session_name>:<$window_number>
+switch-client -t <$target>
+switch-client -t <session>
+switch-client -t <target>
+unbind-key -T opensessions <$i>
+unbind-key -T opensessions Any
+unbind-key -T opensessions e
+unbind-key -T opensessions s
+unbind-key -T opensessions t
+unbind-key -n <$FOCUS_GLOBAL_KEY>
+unbind-key -n <$key>
+unbind-key <$PREFIX_KEY>
+unbind-key C-b
+unbind-key C-s
+unbind-key C-t
+unbind-key M-<$i>
+unlink-window -k -t <name>

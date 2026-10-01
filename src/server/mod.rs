@@ -14,15 +14,20 @@ pub mod clients;
 pub mod dispatch;
 pub mod events;
 pub mod graphics;
+pub mod hooks;
 pub mod input;
 pub mod layout;
+pub mod menu;
 pub mod model;
 pub mod mouse;
 pub mod pane;
 pub mod passthrough;
+pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod sources;
 pub mod status;
+pub mod tree;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -65,6 +70,8 @@ pub enum ServerMsg {
         ctx: ClientCtx,
         req: Request,
         reply: oneshot::Sender<Reply>,
+        /// The requesting process, for the message log's `client-<pid>`.
+        pid: Option<i32>,
     },
     /// A `subscribe` request, with the connection's event queue, which the
     /// actor keeps as the subscriber.
@@ -116,6 +123,20 @@ impl StartOptions {
     }
 }
 
+/// Work for the actor, sent from a task off it (a status source's result,
+/// TC.4; a popup's pty, TC.6; a shell condition's answer, TC.10; a notify
+/// hook deferred past its command's reply, TC.5). It runs between messages
+/// with the whole state, then the events it caused are flushed; what it
+/// changed on screen it marks itself (`clients::mark_dirty`,
+/// `clients::changed`).
+pub type Job = Box<dyn FnOnce(&mut State) + Send>;
+
+/// How many [`Job`]s may wait for the actor. A task off the actor that
+/// finds the queue full waits (`send().await`, or `blocking_send` on a
+/// plain thread); code on the actor uses `try_send` and handles `Full`
+/// itself, since the actor waiting on its own queue would never wake.
+pub const JOB_QUEUE: usize = 256;
+
 /// Everything the actor owns.
 pub struct State {
     /// This server's socket; panes get it as `GROFE`.
@@ -144,9 +165,32 @@ pub struct State {
     pub passthrough: passthrough::Passthrough,
     /// Kitty graphics: id remap and image cache (T3.8).
     pub graphics: graphics::Graphics,
+    /// Status sources (TC.4).
+    pub sources: sources::Sources,
+    /// Event hooks and the server environment (TC.5).
+    pub hooks: hooks::Hooks,
+    /// Open popups (TC.6).
+    pub popups: popup::Popups,
+    /// Open menus and the aliases (TC.7).
+    pub menus: menu::Menus,
+    /// Open choosers (TC.9).
+    pub trees: tree::Trees,
+    /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
+    /// for who may wait); any task may hold a clone. The actor keeps this
+    /// one, so the channel never closes while it runs.
+    pub jobs: mpsc::Sender<Job>,
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
-    pub deferred_reply: Option<oneshot::Receiver<Result<String, String>>>,
+    pub deferred_reply: Option<oneshot::Receiver<Result<String, protocol::Failure>>>,
+    /// The rest of the request now running, held behind a wait
+    /// ([`dispatch::client::Held`]).
+    pub(crate) held: Option<dispatch::client::Held>,
+    /// What a request printed before the command that failed it: the
+    /// reply carries it next to the error, as tmux prints both (FE.2).
+    pub(crate) failed_out: String,
+    /// The log lines of the request now running, logged as its commands
+    /// fire (`clients::log_fired`).
+    pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -192,15 +236,23 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
     state.registry.input_hooks.push(hook);
 }
 
-/// The server's own overlays and input hooks, every M3 one (T3.0), in
-/// priority order, highest first. The rule: input hooks run in
-/// registration order and the first to answer `Some` wins; overlays draw in
-/// reverse order, so the highest-priority one ends on top. A prompt that is
-/// open therefore sees keys before the mouse and draws over the scrollback
-/// view. New ones (popups, menus) are placed by that rule.
+/// The server's own overlays and input hooks, every M3 (T3.0) and M3.6
+/// (stub edit) one, in priority order, highest first. The rule: input
+/// hooks run in registration order and the first to answer `Some` wins;
+/// overlays draw in reverse order, so the highest-priority one ends on top.
+/// So an open prompt sees keys first and draws over everything; a menu
+/// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
+/// command opens takes the keys and draws on top of it; then a chooser
+/// (TC.9) over its pane; then the mouse and the scrollback view.
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
+    register_input_hook(state, Arc::new(menu::MenuHook));
+    register_overlay(state, Arc::new(menu::MenuOverlay));
+    register_input_hook(state, Arc::new(popup::PopupHook));
+    register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_input_hook(state, Arc::new(tree::TreeHook));
+    register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
 }
@@ -228,9 +280,10 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
     }
     match kind {
         PaneEventKind::Exited(status) => {
-            let uid = p.uid.clone();
+            let (uid, window) = (p.uid.clone(), p.window);
             state.events.emit(Event::PaneExited { pane, uid, status });
             state.model.pane_exited(pane, status);
+            hooks::pane_exited(state, pane, window);
             if state.model.closed() {
                 state.exit = true;
             }
@@ -244,6 +297,15 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
+    hooks::run_pending(state);
+    state.events.flush();
+}
+
+/// Runs one [`Job`] on the actor, then sends the events it caused.
+fn run_job(state: &mut State, job: Job) {
+    job(state);
+    // A job is no CLI request: nothing waits for its hooks.
+    drop(hooks::take_reply_hold(state));
     state.events.flush();
 }
 
@@ -381,6 +443,7 @@ async fn serve(
     eprintln!("grofe server listening on {}", socket.display());
 
     let (pane_tx, pane_rx) = mpsc::channel(256);
+    let (jobs_tx, jobs_rx) = mpsc::channel(JOB_QUEUE);
     let mut state = State {
         socket,
         model: model::Model::new(options.remain_on_exit),
@@ -395,7 +458,16 @@ async fn serve(
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
+        sources: sources::Sources::default(),
+        hooks: hooks::Hooks::for_server(),
+        popups: popup::Popups::default(),
+        menus: menu::Menus::default(),
+        trees: tree::Trees::default(),
+        jobs: jobs_tx,
         deferred_reply: None,
+        held: None,
+        failed_out: String::new(),
+        command_log: Default::default(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -412,11 +484,12 @@ async fn serve(
     };
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
+    crate::compat::server_started(&mut state);
     signal_ready(&mut ready, "ok");
 
     // The actor owns the listener (dropped when it returns: no more
     // accepts) and `conns`, the last `alive` sender outside connections.
-    let mut state = actor(state, listener, conns, msg_rx, pane_rx, signals).await;
+    let mut state = actor(state, listener, conns, msg_rx, pane_rx, jobs_rx, signals).await;
     state.remove_socket();
     clients::shutdown(&mut state, "server exited");
     // Hang up the panes and let go of the subscribers' queues before the
@@ -466,6 +539,7 @@ async fn actor(
     conns: Connections,
     mut msgs: mpsc::Receiver<ServerMsg>,
     mut pane_events: mpsc::Receiver<PaneEvent>,
+    mut jobs: mpsc::Receiver<Job>,
     (mut sigterm, mut sigint, mut sighup): (
         tokio::signal::unix::Signal,
         tokio::signal::unix::Signal,
@@ -486,6 +560,7 @@ async fn actor(
                 None => break,
             },
             Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            Some(job) = jobs.recv() => run_job(&mut state, job),
             accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
                 Ok((stream, _)) => {
                     state.connections += 1;
@@ -587,12 +662,33 @@ fn exit_if_empty(state: &mut State, listener: &UnixListener) {
 
 fn handle(state: &mut State, msg: ServerMsg) {
     match msg {
-        ServerMsg::Control { ctx, req, reply } => {
+        ServerMsg::Control {
+            ctx,
+            req,
+            reply,
+            pid,
+        } => {
             if std::env::var_os(TEST_PANIC_ENV).is_some_and(|v| v == "1") {
                 panic!("{TEST_PANIC_ENV}=1: test panic on a command");
             }
-            let read_only = dispatch::read_only(&req.argv);
-            let result = dispatch(state, &ctx, &req.argv);
+            // Parsed once: classified, then run.
+            state.failed_out.clear();
+            let parsed = dispatch::parse(state, &ctx, &req.argv);
+            let read_only = dispatch::read_only(&parsed);
+            // Logged as tmux 3.7b logs a client's commands and errors
+            // (`show-messages`).
+            let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
+            state.command_log = match &parsed {
+                Ok(dispatch::Parsed::Commands(cmds)) => {
+                    clients::plan_command_log(state, &who, &ctx, &req.argv, cmds.len())
+                }
+                _ => Default::default(),
+            };
+            let result = dispatch::run_parsed(state, &ctx, parsed);
+            state.command_log.clear();
+            if let Err(e) = &result {
+                clients::log_error(state, &who, e);
+            }
             finish(state, req.id, result, reply);
             if !read_only {
                 clients::changed(state);
@@ -635,13 +731,30 @@ fn finish(
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }
-    match (state.deferred_reply.take(), result) {
-        (Some(later), Ok(_)) => reply_later(id, later, reply),
-        (_, Ok(out)) => {
+    // Waits for the request's `after-*` hooks, as tmux 3.7b's CLI does.
+    let hold = hooks::take_reply_hold(state);
+    match (state.deferred_reply.take(), result, hold) {
+        (Some(later), Ok(_), hold) => reply_later(id, later, reply, hold),
+        (_, Ok(out), None) => {
             let _ = reply.send(Reply::Ok { id, out });
         }
-        (_, Err(err)) => {
-            let _ = reply.send(Reply::Err { id, err });
+        (_, Err(err), None) => {
+            let failure = protocol::Failure {
+                err,
+                out: std::mem::take(&mut state.failed_out),
+                status: None,
+            };
+            let _ = reply.send(Reply::failed(id, failure));
+        }
+        (_, result, Some(hold)) => {
+            let (tx, later) = oneshot::channel();
+            let out = std::mem::take(&mut state.failed_out);
+            let _ = tx.send(result.map_err(|err| protocol::Failure {
+                err,
+                out,
+                status: None,
+            }));
+            reply_later(id, later, reply, Some(hold));
         }
     }
     state.events.flush();
@@ -651,14 +764,33 @@ fn finish(
 /// waiting; a handler that drops its sender answers with an error.
 fn reply_later(
     id: u64,
-    later: oneshot::Receiver<Result<String, String>>,
+    later: oneshot::Receiver<Result<String, protocol::Failure>>,
     reply: oneshot::Sender<Reply>,
+    hold: Option<oneshot::Receiver<String>>,
 ) {
     tokio::spawn(async move {
-        let reply_msg = match later.await {
-            Ok(Ok(out)) => Reply::Ok { id, out },
-            Ok(Err(err)) => Reply::Err { id, err },
-            Err(_) => error_reply(id, "command ended without an answer"),
+        let mut reply = reply;
+        let answer = async {
+            let answer = later.await;
+            // The rest of what the request's hooks printed follows its output.
+            let more = match hold {
+                Some(hold) => hold.await.unwrap_or_default(),
+                None => String::new(),
+            };
+            match answer {
+                Ok(Ok(out)) => Reply::Ok {
+                    id,
+                    out: out + &more,
+                },
+                Ok(Err(failure)) => Reply::failed(id, failure),
+                Err(_) => error_reply(id, "command ended without an answer"),
+            }
+        };
+        // A caller that hung up (a killed `wait-for`) drops the pending
+        // answer, so its handler sees the sender closed.
+        let reply_msg = tokio::select! {
+            msg = answer => msg,
+            () = reply.closed() => return,
         };
         let _ = reply.send(reply_msg);
     });
@@ -697,6 +829,7 @@ async fn connection(
             target,
             detach_others,
             nest,
+            tty,
         }) => {
             let req = clients::AttachRequest {
                 ctx,
@@ -706,6 +839,7 @@ async fn connection(
                 target,
                 detach_others,
                 nest,
+                tty,
             };
             attach(lines, req, msgs).await;
             return;
@@ -719,8 +853,13 @@ async fn connection(
     // This connection's event queue; the actor holds a sender once it
     // subscribes.
     let (events_tx, mut events_rx) = mpsc::channel(events::QUEUE);
+    // A request that arrived while an earlier one waited for its answer.
+    let mut next: Option<String> = None;
     loop {
-        let line = tokio::select! {
+        let line = if let Some(line) = next.take() {
+            Some(Ok(line))
+        } else {
+            tokio::select! {
             biased;
             _ = shutdown.changed() => {
                 // Events the actor queued before it stopped (a
@@ -739,6 +878,7 @@ async fn connection(
                 continue;
             }
             line = lines.next() => line,
+            }
         };
         let Some(Ok(line)) = line else { break };
         let req: Request = match serde_json::from_str(&line) {
@@ -763,12 +903,25 @@ async fn connection(
                 ctx: ctx.clone(),
                 req,
                 reply: reply_tx,
+                pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
             }
         };
         if msgs.send(msg).await.is_err() {
             break;
         }
-        let Ok(reply) = reply_rx.await else { break };
+        // The socket is read while the answer is pending, so a caller that
+        // hangs up during a long wait (`wait-for`) ends the connection.
+        let mut reply_rx = reply_rx;
+        let reply = loop {
+            tokio::select! {
+                reply = &mut reply_rx => break reply,
+                line = lines.next(), if next.is_none() => match line {
+                    Some(Ok(line)) => next = Some(line),
+                    _ => return,
+                },
+            }
+        };
+        let Ok(reply) = reply else { break };
         if send(&mut lines, &reply).await.is_err() {
             break;
         }
@@ -842,7 +995,21 @@ async fn write_frames(
     mut out: FramedWrite<tokio::net::unix::OwnedWriteHalf, FrameCodec>,
     mut accepted: clients::Accepted,
 ) {
-    while let Some(bytes) = accepted.output.recv().await {
+    loop {
+        // Output first, so a suspend goes out after what was drawn before it.
+        let bytes = tokio::select! {
+            biased;
+            bytes = accepted.output.recv() => match bytes {
+                Some(bytes) => bytes,
+                None => break,
+            },
+            Some(()) = accepted.suspend.recv() => {
+                if out.send(Frame::Suspend).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
         // A redraw of a huge client can pass the frame cap: it goes out as
         // consecutive frames, which the client just writes in order.
         for chunk in bytes.chunks(protocol::MAX_MESSAGE_LEN) {
@@ -863,10 +1030,7 @@ async fn refuse(mut lines: Framed<UnixStream, LinesCodec>, err: &str) {
 }
 
 fn error_reply(id: u64, err: &str) -> Reply {
-    Reply::Err {
-        id,
-        err: err.to_string(),
-    }
+    Reply::err(id, err)
 }
 
 async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyhow::Result<()> {
@@ -874,39 +1038,127 @@ async fn send(lines: &mut Framed<UnixStream, LinesCodec>, reply: &Reply) -> anyh
     Ok(())
 }
 
+/// A server state with nothing in it, as the actor starts, on a socket
+/// path nothing listens on, for unit tests.
+#[cfg(test)]
+pub(crate) fn test_state() -> State {
+    test_state_at(PathBuf::from("/nonexistent/grofe-test.sock")).0
+}
+
+/// A request context from the CLI, run in `/`, for unit tests.
+#[cfg(test)]
+pub(crate) fn test_ctx() -> ClientCtx {
+    ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: protocol::Dialect::Grofe,
+    }
+}
+
+/// [`test_state`] on `socket`, with the receiving end of its job channel.
+#[cfg(test)]
+fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
+    let (pane_events, _) = mpsc::channel(1);
+    let (jobs, jobs_rx) = mpsc::channel(JOB_QUEUE);
+    let socket_id = fs::symlink_metadata(&socket)
+        .ok()
+        .map(|m| (m.dev(), m.ino()));
+    let state = State {
+        socket,
+        options: StartOptions {
+            restore_on_start: false,
+            remain_on_exit: false,
+        },
+        model: model::Model::new(false),
+        inner_term: pane::inner_term(),
+        pane_events,
+        wake: Arc::new(Notify::new()),
+        events: events::Events::default(),
+        clients: BTreeMap::new(),
+        registry: clients::Registry::default(),
+        prompts: prompt::Prompts::default(),
+        mouse: mouse::MouseState::default(),
+        passthrough: passthrough::Passthrough::default(),
+        graphics: graphics::Graphics::default(),
+        sources: sources::Sources::default(),
+        hooks: hooks::Hooks::default(),
+        popups: popup::Popups::default(),
+        menus: menu::Menus::default(),
+        trees: tree::Trees::default(),
+        jobs,
+        deferred_reply: None,
+        held: None,
+        failed_out: String::new(),
+        command_log: Default::default(),
+        exit: false,
+        exit_when_empty: false,
+        connections: 0,
+        socket_id,
+    };
+    (state, jobs_rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A server state with nothing in it, as the actor starts, on `socket`.
     fn state_at(socket: PathBuf) -> State {
-        let (pane_events, _) = mpsc::channel(1);
-        let socket_id = fs::symlink_metadata(&socket)
-            .ok()
-            .map(|m| (m.dev(), m.ino()));
-        State {
-            socket,
-            options: StartOptions {
-                restore_on_start: false,
-                remain_on_exit: false,
-            },
-            model: model::Model::new(false),
-            inner_term: pane::inner_term(),
-            pane_events,
-            wake: Arc::new(Notify::new()),
-            events: events::Events::default(),
-            clients: BTreeMap::new(),
-            registry: clients::Registry::default(),
-            prompts: prompt::Prompts::default(),
-            mouse: mouse::MouseState::default(),
-            passthrough: passthrough::Passthrough::default(),
-            graphics: graphics::Graphics::default(),
-            deferred_reply: None,
-            exit: false,
-            exit_when_empty: false,
-            connections: 0,
-            socket_id,
+        test_state_at(socket).0
+    }
+
+    /// The stub edit's job channel: a job sent from another thread runs
+    /// on the actor with the whole state.
+    #[test]
+    fn a_job_from_another_thread_runs_with_the_state() {
+        let (mut state, mut jobs) = test_state_at(PathBuf::from("/nonexistent/grofe-job.sock"));
+        let tx = state.jobs.clone();
+        std::thread::spawn(move || {
+            let job: Job = Box::new(|state: &mut State| state.exit = true);
+            tx.blocking_send(job).map_err(|_| "closed").expect("send");
+        })
+        .join()
+        .expect("sender thread");
+        let job = jobs.try_recv().expect("a job");
+        assert!(!state.exit);
+        run_job(&mut state, job);
+        assert!(state.exit);
+    }
+
+    /// Fix round 1: the queue is bounded. On the actor, `try_send` on a
+    /// full queue answers `Full` at once instead of waiting; off it, a
+    /// sender waits until the actor has run a job, then goes through.
+    #[tokio::test]
+    async fn a_full_job_queue_refuses_on_the_actor_and_waits_off_it() {
+        use tokio::sync::mpsc::error::TrySendError;
+        let (mut state, mut jobs) = test_state_at(PathBuf::from("/nonexistent/grofe-full.sock"));
+        let noop = || -> Job { Box::new(|_: &mut State| {}) };
+        for _ in 0..JOB_QUEUE {
+            assert!(state.jobs.try_send(noop()).is_ok());
         }
+        assert!(matches!(
+            state.jobs.try_send(noop()),
+            Err(TrySendError::Full(_))
+        ));
+        let tx = state.jobs.clone();
+        let waiting = tokio::spawn(async move {
+            let job: Job = Box::new(|state: &mut State| state.exit = true);
+            tx.send(job).await.map_err(|_| "closed")
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished(), "sent into a full queue");
+        let job = jobs.recv().await.expect("a job");
+        run_job(&mut state, job);
+        waiting
+            .await
+            .expect("task")
+            .expect("sent once there was room");
+        for _ in 0..JOB_QUEUE {
+            let job = jobs.recv().await.expect("a job");
+            run_job(&mut state, job);
+        }
+        assert!(state.exit, "the waiting job ran last");
     }
 
     /// Fix round 1: a handler that deferred its answer and then failed is
@@ -919,7 +1171,7 @@ mod tests {
         finish(&mut state, 3, Err("spawn failed: boom".to_string()), reply);
         let got = reply_rx.try_recv().expect("answered now");
         assert!(
-            matches!(got, Reply::Err { id: 3, ref err } if err == "spawn failed: boom"),
+            matches!(got, Reply::Err { id: 3, ref err, .. } if err == "spawn failed: boom"),
             "{got:?}"
         );
         assert!(state.deferred_reply.is_none());
@@ -956,7 +1208,7 @@ mod tests {
     async fn a_deferred_reply_is_sent_when_the_handler_answers() {
         let (answer, later) = oneshot::channel();
         let (reply, mut reply_rx) = oneshot::channel();
-        reply_later(7, later, reply);
+        reply_later(7, later, reply, None);
         tokio::task::yield_now().await;
         assert!(reply_rx.try_recv().is_err(), "nothing before the answer");
         let _ = answer.send(Ok("hi\n".to_string()));
@@ -970,9 +1222,9 @@ mod tests {
         );
 
         // A handler that gives up still answers the request.
-        let (answer, later) = oneshot::channel::<Result<String, String>>();
+        let (answer, later) = oneshot::channel::<Result<String, protocol::Failure>>();
         let (reply, reply_rx) = oneshot::channel();
-        reply_later(8, later, reply);
+        reply_later(8, later, reply, None);
         drop(answer);
         let got = reply_rx.await.expect("a reply");
         assert!(matches!(got, Reply::Err { id: 8, .. }), "{got:?}");

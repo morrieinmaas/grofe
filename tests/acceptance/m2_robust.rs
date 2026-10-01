@@ -10,7 +10,9 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use common::{TestServer, wait_until};
-use grofe::protocol::{Caps, ClientCtx, Frame, FrameCodec, Hello, Reply, Request, encode_hello};
+use grofe::protocol::{
+    Caps, ClientCtx, Dialect, Frame, FrameCodec, Hello, Reply, Request, encode_hello,
+};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -87,6 +89,7 @@ fn raw_attach(srv: &TestServer, (cols, rows): (u16, u16)) -> UnixStream {
             pane: None,
             env: Vec::new(),
             client: None,
+            dialect: Dialect::Grofe,
         },
         cols,
         rows,
@@ -95,6 +98,7 @@ fn raw_attach(srv: &TestServer, (cols, rows): (u16, u16)) -> UnixStream {
         target: Some("main".to_string()),
         detach_others: false,
         nest: false,
+        tty: None,
     };
     let line = encode_hello(&hello).expect("hello") + "\n";
     stream.write_all(line.as_bytes()).expect("send hello");

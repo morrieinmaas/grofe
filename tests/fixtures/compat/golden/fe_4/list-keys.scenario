@@ -1,0 +1,8 @@
+# FE.4 case 5: list-keys -T prefix, tmux's full stock table in its own
+# columns, then a tmux bind whose command uses neww, setw and ls, as
+# tmux prints it back.
+$ new-session -d -s main -x 80 -y 24
+$ list-keys -T prefix
+$ bind y 'neww; setw automatic-rename on; ls'
+$ list-keys -T prefix y
+$ list-keys -1N x

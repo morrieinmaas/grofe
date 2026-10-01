@@ -1,0 +1,23 @@
+# FE.4: Claude Code's agent-teams pane calls (TmuxBackend, as the tuios
+# shim test TestClaudeCodeTeammateSequence pins them): a detached split
+# with a placeholder command and -P -F, pane styles and a title, the
+# layout, then respawn-pane -k with the teammate's command, and kill-pane.
+$ new-session -d -s main -x 200 -y 50 cat
+$ display-message -t %0 -p '#{window_id}'
+$ list-panes -t @0 -F '#{pane_id}'
+$ split-window -d -t %0 -h -l 70% -P -F '#{pane_id}' -- cat
+$ set-option -p -t %1 window-style bg=default,fg=blue
+$ set-option -p -t %1 pane-border-style fg=blue
+$ set-option -p -t %1 pane-active-border-style fg=blue
+$ select-pane -t %1 -T researcher
+$ set-option -p -t %1 pane-border-format '#[fg=blue,bold] #{pane_title} #[default]'
+$ select-layout -t @0 main-vertical
+$ resize-pane -t %0 -x 30%
+$ set-option -p -t %1 remain-on-exit failed
+$ list-panes -t @0 -F '#{pane_id} #{pane_width} #{pane_active} #{pane_title}'
+$ respawn-pane -k -t %1 -- 'echo teammate-started; exec cat'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t %1
+$ list-panes -t @0 -F '#{pane_id} #{pane_active} #{pane_dead}'
+$ kill-pane -t %1
+$ list-panes -t @0 -F '#{pane_id}'

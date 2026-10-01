@@ -7,16 +7,29 @@
 //! commands) to [`options`]. M3's commands route the same way: key
 //! bindings and config (`bind-key`, `unbind-key`, `list-keys`,
 //! `source-file`, `reload`) to [`options`], `command-prompt` and
-//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. After
-//! every command it checks the lifecycle cascade: once the last session is
-//! gone the server exits.
+//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
+//! verbs route to one file per owning task: [`structure`] (TC.8),
+//! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
+//! (TC.10) and [`hooks`] (TC.5). After every command it runs the pending
+//! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
+//! last session is gone the server exits.
+//!
+//! Parsing goes through `compat` (the request's dialect decides between
+//! the native parser and the tmux front end), after grofe aliases are
+//! expanded ([`menu::expand_aliases`]). No M3.6 task edits this file.
 //!
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
 
+pub mod bindings;
+pub mod client;
+pub mod hooks;
+pub mod menu;
 pub mod options;
 pub mod pane;
+pub mod popup;
 pub mod session;
+pub mod structure;
 pub mod window;
 
 use std::path::{Path, PathBuf};
@@ -30,31 +43,88 @@ use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, clients, graphics, prompt};
 use crate::types::{PaneId, SessionId, WindowId};
+use crate::{compat, server};
 
-/// Runs a request's argv (`argv[0]` is the verb) against the server
-/// state, returning its stdout or its error message.
-///
-/// argv may hold several commands, split at `;` arguments as tmux's CLI
-/// splits them ([`cmd::parse_sequence`]): they run in order and the first
-/// error stops the rest.
-// ponytail: the reply is the output of every command, or the first error
-// alone; output of commands before a failing one is dropped.
-pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+/// A request, parsed once ([`parse`]) and then both classified
+/// ([`read_only`]) and run ([`run_parsed`]), so a front-end miss is logged
+/// once per request.
+#[derive(Debug)]
+pub enum Parsed {
+    /// [`ATTACH_CHECK`] with `attach-session`'s arguments.
+    AttachCheck(Vec<String>),
+    Commands(Vec<Command>),
+}
+
+/// Parses a request's argv (`argv[0]` is the verb): grofe aliases
+/// expanded ([`menu::expand_aliases`]), then split and parsed in the
+/// request's dialect (`compat::parse_request`).
+pub fn parse(state: &State, ctx: &ClientCtx, argv: &[String]) -> Result<Parsed, String> {
     if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
-        return clients::attach_check(state, ctx, &argv[1..]);
+        return Ok(Parsed::AttachCheck(argv[1..].to_vec()));
     }
-    let cmds = cmd::parse_sequence(argv).map_err(|e| e.to_string())?;
-    run_commands(state, ctx, cmds)
+    let expanded = menu::expand_aliases(state, argv);
+    compat::parse_request(ctx, expanded.as_deref().unwrap_or(argv)).map(Parsed::Commands)
+}
+
+/// Runs a request's argv against the server state, returning its stdout
+/// or its error message: [`parse`], then [`run_parsed`].
+pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let parsed = parse(state, ctx, argv);
+    run_parsed(state, ctx, parsed)
+}
+
+/// Runs a parsed request. argv may have held several commands, split at
+/// `;` arguments as tmux's CLI splits them ([`cmd::parse_sequence`]): they
+/// run in order and the first error stops the rest; what the commands
+/// before it printed goes out with the error (`State::failed_out`).
+pub fn run_parsed(
+    state: &mut State,
+    ctx: &ClientCtx,
+    parsed: Result<Parsed, String>,
+) -> Result<String, String> {
+    match parsed? {
+        Parsed::AttachCheck(args) => clients::attach_check(state, ctx, &args),
+        Parsed::Commands(cmds) => run_commands(state, ctx, cmds),
+    }
 }
 
 /// Runs one command whose argv is already split (a binding, the prompt,
-/// the mouse): a `;` argument in it is literal, never a separator.
+/// the mouse): a `;` argument in it is literal, never a separator. An
+/// alias verb may stand for several commands ([`menu::expand_alias_command`]).
 pub fn run_split(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    let cmd = cmd::parse(argv).map_err(|e| e.to_string())?;
-    run_commands(state, ctx, vec![cmd])
+    let cmds = parse_split(state, ctx, argv)?;
+    run_commands(state, ctx, cmds)
 }
 
-fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Result<String, String> {
+/// [`run_split`]'s parse: one split command, an alias verb expanded.
+pub(crate) fn parse_split(
+    state: &State,
+    ctx: &ClientCtx,
+    argv: &[String],
+) -> Result<Vec<Command>, String> {
+    let Some(expanded) = menu::expand_alias_command(state, argv) else {
+        return compat::parse_split(ctx, argv);
+    };
+    let mut cmds = Vec::new();
+    for argv in &expanded {
+        cmds.extend(compat::parse_split(ctx, argv)?);
+    }
+    Ok(cmds)
+}
+
+/// Runs one command of a key binding: as [`run_split`], without
+/// expanding an alias, since `bind-key` expanded it when the key was
+/// bound, as tmux 3.7b does (a chain `a=b`, `b=...` expands once).
+pub fn run_bound(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
+    let cmds = compat::parse_split(ctx, argv)?;
+    run_commands(state, ctx, cmds)
+}
+
+pub(crate) fn run_commands(
+    state: &mut State,
+    ctx: &ClientCtx,
+    cmds: Vec<Command>,
+) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them. A new name is drawn even if the command only reads.
     if window::automatic_rename(&mut state.model) {
@@ -62,15 +132,60 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
     }
     let mut out = String::new();
     let mut result = Ok(());
-    for cmd in cmds {
-        match route(state, ctx, cmd) {
+    let mut cmds = cmds.into_iter();
+    server::hooks::enter(state);
+    while let Some(cmd) = cmds.next() {
+        let answered = state.deferred_reply.is_none();
+        let shell = matches!(cmd, Command::RunShell(_));
+        if server::hooks::depth(state) == 1 && !server::hooks::in_hook(state) {
+            clients::log_fired(state);
+        }
+        match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
+                // What ran before the failing command still prints, before
+                // the error (and before what a nested request that failed
+                // printed), as in tmux 3.7b.
+                let nested = std::mem::take(&mut state.failed_out);
+                state.failed_out = std::mem::take(&mut out) + &nested;
                 result = Err(e);
                 break;
             }
         }
+        // A command that answers later (a blocked `wait-for`, `run-shell`)
+        // holds the rest of the request until it answers, as tmux 3.7b's
+        // command queue waits (TC.9), and so does a hook waiting on its
+        // shell. Inside another command (`if -F`) the rest of that one is
+        // held too, after this rest.
+        // A hook's own commands wait on its queue instead (`hooks::drain`).
+        if server::hooks::in_hook(state) {
+            continue;
+        }
+        let nested = server::hooks::depth(state) > 1;
+        if answered && state.deferred_reply.is_some() && (cmds.len() > 0 || nested) {
+            let held = state.held.get_or_insert_default();
+            held.wait = state.deferred_reply.take();
+            held.shell = shell;
+        }
+        let hook_waits = cmds.len() > 0
+            && state.deferred_reply.is_none()
+            && server::hooks::request_waiting(state);
+        if state.held.is_some() || hook_waits {
+            let rest: Vec<Command> = cmds.collect();
+            let held = state.held.get_or_insert_default();
+            if !rest.is_empty() {
+                held.frames.push((ctx.clone(), rest));
+            }
+            break;
+        }
     }
+    server::hooks::leave(state);
+    if server::hooks::depth(state) == 0
+        && let Some(held) = state.held.take()
+    {
+        client::hold_rest(state, ctx, held, std::mem::take(&mut out), None, None);
+    }
+    server::hooks::run_pending(state);
     if state.model.closed() {
         state.exit = true;
     }
@@ -83,12 +198,11 @@ fn run_commands(state: &mut State, ctx: &ClientCtx, cmds: Vec<Command>) -> Resul
 /// requests count as changing something.
 // ponytail: an explicit list. The upgrade path is a per-command "changed"
 // result from dispatch, so each handler says what it touched.
-pub fn read_only(argv: &[String]) -> bool {
-    if argv.first().is_some_and(|verb| verb == ATTACH_CHECK) {
-        return true;
-    }
-    let Ok(cmds) = cmd::parse_sequence(argv) else {
-        return false;
+pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
+    let cmds = match parsed {
+        Ok(Parsed::AttachCheck(_)) => return true,
+        Ok(Parsed::Commands(cmds)) => cmds,
+        Err(_) => return false,
     };
     cmds.iter().all(|c| {
         matches!(
@@ -112,7 +226,7 @@ pub fn read_only(argv: &[String]) -> bool {
 /// the handler returns is ignored. From a binding the answer is dropped.
 // ponytail: one deferred answer per request; a second call replaces the
 // first, whose sender then fails.
-pub fn defer_reply(state: &mut State) -> oneshot::Sender<Result<String, String>> {
+pub fn defer_reply(state: &mut State) -> oneshot::Sender<Result<String, crate::protocol::Failure>> {
     let (tx, rx) = oneshot::channel();
     state.deferred_reply = Some(rx);
     tx
@@ -123,13 +237,21 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::NewSession(c) => session::new_session(state, ctx, c),
         Command::KillSession(c) => session::kill_session(state, ctx, c),
         Command::HasSession(c) => session::has_session(state, ctx, c),
-        Command::ListSessions(c) if c.format.is_none() => session::list_sessions(state, c),
+        // With no `-F`, grofe's own columns natively, tmux's default
+        // templates (`options`) in the tmux dialect (FE.2).
+        Command::ListSessions(c) if c.format.is_none() && !tmux(ctx) => {
+            session::list_sessions(state, c)
+        }
 
         Command::NewWindow(c) => window::new_window(state, ctx, c),
         Command::KillWindow(c) => window::kill_window(state, ctx, c),
         Command::SelectWindow(c) => window::select_window(state, ctx, c),
-        Command::ListWindows(c) if c.format.is_none() => window::list_windows(state, ctx, c),
-        Command::ListPanes(c) if c.format.is_none() => window::list_panes(state, ctx, c),
+        Command::ListWindows(c) if c.format.is_none() && !tmux(ctx) => {
+            window::list_windows(state, ctx, c)
+        }
+        Command::ListPanes(c) if c.format.is_none() && !tmux(ctx) => {
+            window::list_panes(state, ctx, c)
+        }
 
         Command::SplitWindow(_)
         | Command::KillPane(_)
@@ -139,8 +261,14 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::SendKeys(_)
         | Command::CapturePane(_) => pane::run(state, ctx, cmd),
 
-        Command::SetOption(_)
-        | Command::ShowOptions(_)
+        // A status source a `#(cmd)` registered stops once no option
+        // reads it any more (FE.3).
+        Command::SetOption(_) => {
+            let out = options::run(state, ctx, cmd);
+            server::sources::prune_unreferenced(state);
+            out
+        }
+        Command::ShowOptions(_)
         | Command::DisplayMessage(_)
         | Command::ListSessions(_)
         | Command::ListWindows(_)
@@ -159,7 +287,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest).
         Command::AttachSession(c) => clients::attach_session(state, ctx, c),
         Command::DetachClient(c) => clients::detach_client(state, ctx, c),
-        Command::ListClients(c) => clients::list_clients(state, c),
+        Command::ListClients(c) => clients::list_clients(state, ctx, c),
         Command::NextWindow(c) => window::step_window(state, ctx, c, window::Step::Next),
         Command::PreviousWindow(c) => window::step_window(state, ctx, c, window::Step::Previous),
         Command::LastWindow(c) => window::last_window(state, ctx, c),
@@ -170,15 +298,62 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // M3: bindings and config (T3.5), the prompt and run-shell (T3.4),
         // layout presets (T3.7).
-        Command::BindKey(c) => options::bind_key(state, c),
+        Command::BindKey(c) => options::bind_key(state, ctx, c),
         Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
         Command::ListKeys(c) => options::list_keys(state, ctx, c),
-        Command::SourceFile(c) => options::source_file(state, ctx, c),
-        Command::Reload(c) => options::reload(state, ctx, c),
+        Command::SourceFile(c) => {
+            let out = options::source_file(state, ctx, c);
+            server::sources::prune_unreferenced(state);
+            out
+        }
+        Command::Reload(c) => {
+            let out = options::reload(state, ctx, c);
+            server::sources::prune_unreferenced(state);
+            out
+        }
         Command::CommandPrompt(c) => prompt::command_prompt(state, ctx, c),
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),
+
+        // M3.6: stubs until each owning task lands (the stub edit).
+        Command::JoinPane(c) => structure::join_pane(state, ctx, c),
+        Command::SwapPane(c) => structure::swap_pane(state, ctx, c),
+        Command::SwapWindow(c) => structure::swap_window(state, ctx, c),
+        Command::BreakPane(c) => structure::break_pane(state, ctx, c),
+        Command::ResizeWindow(c) => structure::resize_window(state, ctx, c),
+        Command::LastPane(c) => structure::last_pane(state, ctx, c),
+        Command::RotateWindow(c) => structure::rotate_window(state, ctx, c),
+        Command::MoveWindow(c) => structure::move_window(state, ctx, c),
+        Command::MovePane(c) => structure::move_pane(state, ctx, c),
+        Command::NextLayout(c) => structure::next_layout(state, ctx, c),
+        Command::RespawnWindow(c) => structure::respawn_window(state, ctx, c),
+        Command::RefreshClient(c) => client::refresh_client(state, ctx, c),
+        Command::ShowMessages(c) => client::show_messages(state, ctx, c),
+        Command::ChooseClient(c) => client::choose_client(state, ctx, c),
+        Command::SuspendClient(c) => client::suspend_client(state, ctx, c),
+        Command::FindWindow(c) => client::find_window(state, ctx, c),
+        Command::ChooseTree(c) => client::choose_tree(state, ctx, c),
+        Command::WaitFor(c) => client::wait_for(state, ctx, c),
+        Command::DisplayPopup(c) => popup::display_popup(state, ctx, c),
+        Command::NewPane(c) => popup::new_pane(state, ctx, c),
+        Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
+        Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
+        Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),
+        Command::If(c) => bindings::if_shell(state, ctx, c),
+        Command::SetHook(c) => hooks::set_hook(state, ctx, c),
+        Command::ShowHooks(c) => hooks::show_hooks(state, ctx, c),
+        Command::SetEnvironment(c) => hooks::set_environment(state, ctx, c),
+        Command::ShowEnvironment(c) => hooks::show_environment(state, ctx, c),
+        // FE.1: a status source a tmux `#(cmd)` rewrite registers first.
+        Command::RegisterSource(c) => {
+            server::sources::register(state, c.name.as_deref(), &c.command, None, None);
+            Ok(String::new())
+        }
     }
+}
+
+fn tmux(ctx: &ClientCtx) -> bool {
+    ctx.dialect == crate::protocol::Dialect::Tmux
 }
 
 /// The error a command's stub answers with until its task lands.
@@ -220,6 +395,21 @@ pub(crate) fn resolve_cwd(
     ctx.cwd.join(dir)
 }
 
+/// A new or respawned pane's environment: the server environment
+/// (`hooks::pane_env`, TC.5) under the session's `env`, then what the
+/// server's identity adds (`compat::pane_env`, TC.1). Later entries win.
+pub(crate) fn pane_env(
+    state: &State,
+    session: SessionId,
+    pane: PaneId,
+    env: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut all = server::hooks::pane_env(state, session);
+    all.extend(env);
+    all.extend(compat::pane_env(state, session, pane));
+    all
+}
+
 struct NoVars;
 
 impl cmd::FormatVars for NoVars {
@@ -231,7 +421,8 @@ impl cmd::FormatVars for NoVars {
 /// Spawns a pane for `window` (which may not be in the model yet) with
 /// `env` (its session's), inserts it into `state.model.panes`, and returns
 /// its id. The caller puts it in the window's layout. `cell_px` is
-/// [`clients::cell_px`] for the window's session.
+/// [`clients::cell_px`] for the window's session. The pane's environment
+/// is [`pane_env`]'s.
 pub(crate) fn spawn_pane(
     state: &mut State,
     // The window's session, passed in: a new window is not in the model yet.
@@ -244,8 +435,15 @@ pub(crate) fn spawn_pane(
 ) -> Result<PaneId, String> {
     let id = state.model.alloc_pane_id();
     let cwd = usable_cwd(cwd);
+    let mut env = pane_env(state, session, id, env);
+    // tmux starts a pane's shell from `default-shell` and exports it as
+    // `SHELL`; the last `SHELL` is the one the pane starts.
+    if let Some(shell) = state.model.default_shell(session) {
+        env.push(("SHELL".to_string(), shell));
+    }
     let spec = PaneSpawn {
         id,
+        session,
         argv: argv.clone(),
         cwd: cwd.clone(),
         env,
@@ -287,6 +485,8 @@ mod tests {
 
     #[test]
     fn only_listed_commands_are_read_only() {
+        let (state, ctx) = (crate::server::test_state(), crate::server::test_ctx());
+        let read_only = |argv: &[String]| read_only(&parse(&state, &ctx, argv));
         for words in [
             &["list-sessions"][..],
             &["lsw"],

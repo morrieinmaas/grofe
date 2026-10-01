@@ -1,0 +1,113 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -d -t main -n second cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ source-file {fixtures}/../canopy-port/20-status.conf
+? 0
+$ set -g status-right "#(sh {fixtures}/gold?n/fe_3/canopy-status.sh)"
+? 0
+client 80x24 attach -t main
+screen net up
+|  main   1 first   2 second                                  bat 42 net up
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ────────────────────────────────────────────────────────────────────────────────
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+styles 0-1 net up
+~ 0 0-0 fg=rgb:45/85/88 bg=default
+~ 0 1-1 fg=default bg=rgb:45/85/88
+~ 0 2-5 fg=rgb:fb/f1/c7 bg=rgb:45/85/88 bold
+~ 0 6-6 fg=default bg=rgb:45/85/88
+~ 0 7-7 fg=rgb:45/85/88 bg=default
+~ 0 9-9 fg=rgb:b5/76/14 bg=default
+~ 0 10-10 fg=default bg=rgb:b5/76/14
+~ 0 11-11 fg=rgb:fb/f1/c7 bg=rgb:b5/76/14 bold
+~ 0 12-12 fg=default bg=rgb:b5/76/14
+~ 0 13-17 fg=rgb:fb/f1/c7 bg=rgb:b5/76/14 bold
+~ 0 18-18 fg=default bg=rgb:b5/76/14
+~ 0 19-19 fg=rgb:b5/76/14 bg=default
+~ 0 21-21 fg=rgb:a8/99/84 bg=default
+~ 0 22-22 fg=default bg=rgb:a8/99/84
+~ 0 23-23 fg=rgb:fb/f1/c7 bg=rgb:a8/99/84
+~ 0 24-24 fg=default bg=rgb:a8/99/84
+~ 0 25-30 fg=rgb:fb/f1/c7 bg=rgb:a8/99/84
+~ 0 31-31 fg=default bg=rgb:a8/99/84
+~ 0 32-32 fg=rgb:a8/99/84 bg=default
+~ 0 66-68 fg=green bg=default
+~ 0 70-71 fg=green bg=default
+~ 0 73-75 fg=rgb:3c/38/36 bg=default
+~ 0 77-78 fg=rgb:3c/38/36 bg=default
+$ resize-pane -Z -t main:1
+? 0
+screen +
+|  main   1 first +   2 second                                bat 42 net up
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+styles 0-1 +
+~ 0 0-0 fg=rgb:45/85/88 bg=default
+~ 0 1-1 fg=default bg=rgb:45/85/88
+~ 0 2-5 fg=rgb:fb/f1/c7 bg=rgb:45/85/88 bold
+~ 0 6-6 fg=default bg=rgb:45/85/88
+~ 0 7-7 fg=rgb:45/85/88 bg=default
+~ 0 9-9 fg=rgb:b5/76/14 bg=default
+~ 0 10-10 fg=default bg=rgb:b5/76/14
+~ 0 11-11 fg=rgb:fb/f1/c7 bg=rgb:b5/76/14 bold
+~ 0 12-12 fg=default bg=rgb:b5/76/14
+~ 0 13-17 fg=rgb:fb/f1/c7 bg=rgb:b5/76/14 bold
+~ 0 18-18 fg=default bg=rgb:b5/76/14
+~ 0 19-19 fg=rgb:fb/f1/c7 bg=rgb:b5/76/14 bold
+~ 0 20-20 fg=default bg=rgb:b5/76/14
+~ 0 21-21 fg=rgb:b5/76/14 bg=default
+~ 0 23-23 fg=rgb:a8/99/84 bg=default
+~ 0 24-24 fg=default bg=rgb:a8/99/84
+~ 0 25-25 fg=rgb:fb/f1/c7 bg=rgb:a8/99/84
+~ 0 26-26 fg=default bg=rgb:a8/99/84
+~ 0 27-32 fg=rgb:fb/f1/c7 bg=rgb:a8/99/84
+~ 0 33-33 fg=default bg=rgb:a8/99/84
+~ 0 34-34 fg=rgb:a8/99/84 bg=default
+~ 0 66-68 fg=green bg=default
+~ 0 70-71 fg=green bg=default
+~ 0 73-75 fg=rgb:3c/38/36 bg=default
+~ 0 77-78 fg=rgb:3c/38/36 bg=default

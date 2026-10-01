@@ -1,0 +1,28 @@
+# TC.13 case 2b: the cockpit, canopy's `prefix c` (keys.tsv's
+# window-cockpit): five commands in one `\;` chain, a new window, split
+# right, split the right column down, select-layout main-vertical, then
+# focus the first pane. Then `prefix V` (layout-cockpit) reshapes a
+# four-pane window. Pane shells are not shown: the port starts the
+# owner's default-shell, tmux here its own.
+# Each tc_13 scenario starts the same way. The pins line is the golden's
+# header: the canopy and athome commits it was recorded against (PINS).
+# On tmux, canopy's own tmux entry point is sourced, with CANOPY_STORE set
+# as canopy's installed stub sets it; on grofe that step does nothing,
+# because the port (canopy's grofe/conf.d plus athome's config.toml and
+# user.toml) is already loaded from XDG_CONFIG_HOME. main-pane-width is the
+# one line of athome's user.conf the scenarios' layouts read.
+$ new-session -d -s main -n main -x 200 -y 50 cat
+$ display-message -p "pins: canopy c0e331e8a018 athome 8bd91688ca54"
+$ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
+$ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
+$ setw -g main-pane-width 50%
+$ new-window -c "#{pane_current_path}" \; split-window -h -c "#{pane_current_path}" \; split-window -v -c "#{pane_current_path}" \; select-layout main-vertical \; select-pane -t 1
+$ display-message -p '#{session_name}:#{window_index}.#{pane_index} #{window_panes} panes'
+$ list-panes -t main:2 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height} active=#{pane_active}'
+$ display-message -p -t main:2 '#{window_layout}'
+$ split-window -t main:1 -h cat
+$ split-window -t main:1 -v cat
+$ split-window -t main:1 -h cat
+$ select-layout -t main:1 main-vertical
+$ list-panes -t main:1 -F '#{pane_index} #{pane_id} #{pane_left},#{pane_top} #{pane_width}x#{pane_height}'
+$ display-message -p -t main:1 '#{window_layout}'

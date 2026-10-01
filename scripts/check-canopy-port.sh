@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# check-canopy-port.sh: canopy's grofe fragments and athome's grofe config
+# load in grofe, and grofe's copies of them are current (plan M3.6, TP.1).
+#
+#   scripts/check-canopy-port.sh [--update] <canopy-checkout> <athome-checkout>
+#
+# Exits nonzero when:
+#
+#   - canopy's checked-in grofe/conf.d is not what its generator writes now
+#     (`canopy grofe generate`, run into a temporary directory);
+#   - `grofe show-config --file` on each fragment, athome's config.toml and
+#     its user.toml, in grofe's layer order, reports an error or skips a
+#     file, for the checked-in fragments or the regenerated ones;
+#   - a copy under tests/fixtures/canopy-port/ differs from its source, which
+#     tests/compat/tp_1.rs reads (status, key coverage). --update refreshes
+#     the copies instead.
+#
+# athome's two chezmoi templates are rendered here without chezmoi: the one
+# lookPath block becomes `/bin/zsh`, and {{ .chezmoi.homeDir }} becomes `~`.
+# Nothing runs against a live config: XDG_CONFIG_HOME is an empty temporary
+# directory for every grofe call, and no server is started.
+#
+# $GROFE_BIN names the grofe binary (default: target/debug/grofe).
+set -euo pipefail
+
+update=0
+if [ "${1:-}" = "--update" ]; then
+  update=1
+  shift
+fi
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 [--update] <canopy-checkout> <athome-checkout>" >&2
+  exit 2
+fi
+canopy="$(cd "$1" && pwd)"
+athome="$(cd "$2" && pwd)"
+dots="$athome/home"
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+grofe="${GROFE_BIN:-$repo/target/debug/grofe}"
+fixtures="$repo/tests/fixtures/canopy-port"
+[ -x "$grofe" ] || { echo "no grofe binary at $grofe (cargo build first)" >&2; exit 2; }
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/xdg" "$tmp/regen"
+status=0
+fail() { echo "FAIL: $*" >&2; status=1; }
+
+# Only what the checks name: none of the owner's live tmux, canopy or
+# grofe environment reaches a child.
+clean() {
+  env -u TMUX -u TMUX_PANE -u GROFE -u GROFE_PANE \
+    -u CANOPY_STORE -u CANOPY_STATE -u CANOPY_CONFIG -u CANOPY_RUNTIME \
+    HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/xdg" "$@"
+}
+
+render() {
+  perl -0pe 's/\{\{ with lookPath "zsh" -\}\}\n(.*?)"\{\{ \. \}\}"\n\{\{ end -\}\}\n/$1"\/bin\/zsh"\n/s;
+             s/\{\{ \.chezmoi\.homeDir \}\}/~/g' "$1"
+}
+render "$dots/dot_config/grofe/user.toml.tmpl" >"$tmp/user.toml"
+render "$dots/dot_config/canopy/user.conf.tmpl" >"$tmp/user.conf"
+if grep -n '{{' "$tmp/user.toml" "$tmp/user.conf"; then
+  fail "a chezmoi template directive is left unrendered"
+fi
+# The copy says /bin/zsh. grofe refuses a default-shell it cannot run, as
+# tmux does, so where /bin/zsh is missing (a Linux CI container) the load
+# check below names the first of zsh and sh that resolves here instead.
+shell=/bin/zsh
+if [ ! -x "$shell" ]; then
+  shell="$(command -v zsh || command -v sh)"
+fi
+sed "s|^default-shell = \"/bin/zsh\"\$|default-shell = \"$shell\"|" "$tmp/user.toml" >"$tmp/user-here.toml"
+
+# The regenerate: canopy's generator, from the checkout, into a scratch dir.
+clean CANOPY_STORE="$canopy" CANOPY_GROFE="$grofe" sh "$canopy/bin/canopy-grofe" generate --out "$tmp/regen" ||
+  fail "canopy grofe generate failed"
+if ! diff -ru "$canopy/grofe/conf.d" "$tmp/regen"; then
+  fail "canopy's grofe/conf.d is stale: run canopy grofe generate --out grofe/conf.d there"
+fi
+
+# grofe's layer order: config.toml, conf.d in lexical order, user.toml.
+load() {
+  local dir="$1" args=(--file "$dots/dot_config/grofe/config.toml") f err
+  for f in "$dir"/*.toml; do args+=(--file "$f"); done
+  args+=(--file "$tmp/user-here.toml")
+  if ! err="$(clean "$grofe" show-config "${args[@]}" 2>&1 >/dev/null)" || [ -n "$err" ]; then
+    printf '%s\n' "$err" >&2
+    fail "show-config on $dir with athome's config.toml and user.toml"
+  fi
+  for f in "$dir"/*.toml; do
+    if ! err="$(clean "$grofe" show-config --file "$f" 2>&1 >/dev/null)" || [ -n "$err" ]; then
+      printf '%s\n' "$err" >&2
+      fail "show-config --file $f"
+    fi
+  done
+}
+load "$canopy/grofe/conf.d"
+load "$tmp/regen"
+
+# The copies tests/compat/tp_1.rs reads.
+copies=(
+  "$canopy/tmux/keys.tsv:keys.tsv"
+  "$canopy/tmux/conf.d/20-status.conf:20-status.conf"
+  "$canopy/tmux/conf.d/30-plugins.conf:30-plugins.conf"
+  "$canopy/grofe/keys.tsv:keys-grofe.tsv"
+  "$dots/dot_config/grofe/config.toml:config.toml"
+  "$tmp/user.toml:user.toml"
+  "$tmp/user.conf:user.conf"
+)
+for f in "$canopy"/grofe/conf.d/*.toml; do
+  copies+=("$f:conf.d/${f##*/}")
+done
+for pair in "${copies[@]}"; do
+  src="${pair%%:*}" dst="$fixtures/${pair#*:}"
+  if [ "$update" -eq 1 ]; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+  elif ! cmp -s "$src" "$dst"; then
+    fail "tests/fixtures/canopy-port/${pair#*:} differs from $src (rerun with --update)"
+  fi
+done
+for f in "$fixtures"/conf.d/*.toml; do
+  [ -f "$f" ] || continue
+  [ -f "$canopy/grofe/conf.d/${f##*/}" ] && continue
+  if [ "$update" -eq 1 ]; then
+    rm -f "$f"
+  else
+    fail "tests/fixtures/canopy-port/conf.d/${f##*/} is no longer generated by canopy"
+  fi
+done
+
+[ "$status" -eq 0 ] && echo "ok: canopy's grofe fragments and athome's grofe config load, copies current"
+exit "$status"

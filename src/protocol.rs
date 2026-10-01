@@ -65,6 +65,27 @@ pub struct ClientCtx {
     /// for one-shot CLI and control requests. Never on the wire.
     #[serde(skip)]
     pub client: Option<ClientId>,
+    /// Which command language the request's argv is in (spec D12, §4.6).
+    /// Absent on the wire means grofe, so old hellos still parse; TC.1
+    /// decides it, and `compat` routes a tmux one to the front end.
+    #[serde(default, skip_serializing_if = "Dialect::is_grofe")]
+    pub dialect: Dialect,
+}
+
+/// A request's command language (spec D12): grofe's own, or tmux's as the
+/// tmux front end (`compat::tmux`) translates it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Dialect {
+    #[default]
+    Grofe,
+    Tmux,
+}
+
+impl Dialect {
+    fn is_grofe(&self) -> bool {
+        *self == Dialect::Grofe
+    }
 }
 
 /// (De)serializes [`ClientCtx::env`] as a JSON object, per spec §4.6.
@@ -140,6 +161,11 @@ pub enum Hello {
         /// `attach --nest`: allow self-nesting (spec §4.6).
         #[serde(default)]
         nest: bool,
+        /// The client's terminal (`ttyname` of its stdin): tmux's
+        /// `client_tty`, and the client's name when it attaches in the tmux
+        /// dialect (FE.2). An older client sends none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tty: Option<String>,
     },
 }
 
@@ -243,9 +269,56 @@ pub struct Request {
 /// no `id`/`ok` at all, hence the manual impls below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    Ok { id: u64, out: String },
-    Err { id: u64, err: String },
+    Ok {
+        id: u64,
+        out: String,
+    },
+    /// A failure. `out` and `status` (TC.5, D20) are left off the wire
+    /// when empty, so older replies still parse: `out` is what the command
+    /// printed before it failed (the CLI prints it on stdout), `status` the
+    /// exit status the CLI exits with (1 when absent).
+    Err {
+        id: u64,
+        err: String,
+        out: String,
+        status: Option<i32>,
+    },
     Event(Event),
+}
+
+/// A failed command's answer, as a deferred handler sends it: the error,
+/// and for `run-shell` the output and the command's own exit status.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Failure {
+    pub err: String,
+    pub out: String,
+    pub status: Option<i32>,
+}
+
+impl From<String> for Failure {
+    fn from(err: String) -> Failure {
+        Failure {
+            err,
+            ..Failure::default()
+        }
+    }
+}
+
+impl Reply {
+    /// The error reply for request `id`, with no output and status 1.
+    pub fn err(id: u64, err: impl Into<String>) -> Reply {
+        Reply::failed(id, Failure::from(err.into()))
+    }
+
+    /// The reply for request `id` that failed with `f`.
+    pub fn failed(id: u64, f: Failure) -> Reply {
+        Reply::Err {
+            id,
+            err: f.err,
+            out: f.out,
+            status: f.status,
+        }
+    }
 }
 
 impl Serialize for Reply {
@@ -261,11 +334,22 @@ impl Serialize for Reply {
                 map.serialize_entry("out", out)?;
                 map.end()
             }
-            Reply::Err { id, err } => {
-                let mut map = serializer.serialize_map(Some(3))?;
+            Reply::Err {
+                id,
+                err,
+                out,
+                status,
+            } => {
+                let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("id", id)?;
                 map.serialize_entry("ok", &false)?;
                 map.serialize_entry("err", err)?;
+                if !out.is_empty() {
+                    map.serialize_entry("out", out)?;
+                }
+                if let Some(status) = status {
+                    map.serialize_entry("status", status)?;
+                }
                 map.end()
             }
             Reply::Event(event) => event.serialize(serializer),
@@ -293,6 +377,10 @@ impl<'de> Deserialize<'de> for Reply {
         struct ErrPayload {
             id: u64,
             err: String,
+            #[serde(default)]
+            out: String,
+            #[serde(default)]
+            status: Option<i32>,
         }
         match value.get("ok").and_then(serde_json::Value::as_bool) {
             Some(true) => serde_json::from_value::<OkPayload>(value)
@@ -305,6 +393,8 @@ impl<'de> Deserialize<'de> for Reply {
                 .map(|p| Reply::Err {
                     id: p.id,
                     err: p.err,
+                    out: p.out,
+                    status: p.status,
                 })
                 .map_err(DeError::custom),
             None => Err(DeError::custom("reply has neither \"ok\" nor \"event\"")),
@@ -325,6 +415,10 @@ pub enum Frame {
     Output(Vec<u8>),
     /// server -> client: `detached`, `server exited`, `session killed`, ...
     Exit(String),
+    /// server -> client (`suspend-client`, TC.9): give the terminal back and
+    /// stop with SIGTSTP; once continued, take it again and send a
+    /// `Resize`, which the server answers with a full redraw.
+    Suspend,
 }
 
 const KIND_INPUT: u8 = 0;
@@ -332,6 +426,7 @@ const KIND_RESIZE: u8 = 1;
 const KIND_DETACH: u8 = 2;
 const KIND_OUTPUT: u8 = 3;
 const KIND_EXIT: u8 = 4;
+const KIND_SUSPEND: u8 = 5;
 
 /// One kind byte plus a big-endian `u32` payload length.
 const FRAME_HEADER_LEN: usize = 5;
@@ -393,6 +488,7 @@ impl Decoder for FrameCodec {
             KIND_DETACH => Frame::Detach,
             KIND_OUTPUT => Frame::Output(payload),
             KIND_EXIT => Frame::Exit(String::from_utf8(payload)?),
+            KIND_SUSPEND => Frame::Suspend,
             other => return Err(FrameError::UnknownKind(other)),
         }))
     }
@@ -413,6 +509,7 @@ impl Encoder<Frame> for FrameCodec {
             Frame::Detach => (KIND_DETACH, Vec::new()),
             Frame::Output(bytes) => (KIND_OUTPUT, bytes),
             Frame::Exit(reason) => (KIND_EXIT, reason.into_bytes()),
+            Frame::Suspend => (KIND_SUSPEND, Vec::new()),
         };
         if payload.len() > MAX_MESSAGE_LEN {
             return Err(FrameError::TooLarge {
@@ -443,6 +540,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             client: None,
+            dialect: Dialect::Grofe,
         }
     }
 
@@ -457,6 +555,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
             client: None,
+            dialect: Dialect::Grofe,
         });
         let err = encode_hello(&hello).unwrap_err().to_string();
         assert!(
@@ -491,9 +590,43 @@ mod tests {
             target: Some("main:2".to_string()),
             detach_others: true,
             nest: true,
+            tty: None,
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
+    }
+
+    /// The stub edit's `dialect` field: a grofe hello's wire form is
+    /// unchanged, a hello without it parses as grofe, and a tmux one
+    /// round-trips, in both hello modes.
+    #[test]
+    fn dialect_is_grofe_unless_the_hello_says_tmux() {
+        let grofe = Hello::Control(ctx("/", None, &[]));
+        let line = encode_hello(&grofe).unwrap();
+        assert!(!line.contains("dialect"), "{line}");
+        let old = r#"{"grofe":1,"mode":"control","cwd":"/","pane":null,"env":{}}"#;
+        assert_eq!(decode_hello(old).unwrap(), grofe);
+
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..ctx("/", None, &[])
+        };
+        let line = encode_hello(&Hello::Control(tmux.clone())).unwrap();
+        assert!(line.contains(r#""dialect":"tmux""#), "{line}");
+        assert_eq!(decode_hello(&line).unwrap(), Hello::Control(tmux.clone()));
+        let attach = Hello::Attach {
+            ctx: tmux,
+            cols: 80,
+            rows: 24,
+            term: "xterm".to_string(),
+            caps: Caps::default(),
+            target: None,
+            detach_others: false,
+            nest: false,
+            tty: None,
+        };
+        let line = encode_hello(&attach).unwrap();
+        assert_eq!(decode_hello(&line).unwrap(), attach);
     }
 
     #[test]
@@ -519,6 +652,7 @@ mod tests {
             target: None,
             detach_others: false,
             nest: false,
+            tty: None,
         };
         let line = encode_hello(&hello).unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -626,6 +760,7 @@ mod tests {
             target: Some("s:1".to_string()),
             detach_others: true,
             nest: true,
+            tty: None,
         };
         let decoded = decode_hello(&encode_hello(&hello).unwrap()).unwrap();
         match decoded {
@@ -675,16 +810,33 @@ mod tests {
 
     #[test]
     fn reply_err_matches_spec_wire_shape() {
-        let reply = Reply::Err {
-            id: 8,
-            err: "can't find pane: %99".to_string(),
-        };
+        let reply = Reply::err(8, "can't find pane: %99");
         assert_eq!(
             serde_json::to_string(&reply).unwrap(),
             r#"{"id":8,"ok":false,"err":"can't find pane: %99"}"#
         );
         let line = r#"{"id":8,"ok":false,"err":"can't find pane: %99"}"#;
         assert_eq!(serde_json::from_str::<Reply>(line).unwrap(), reply);
+    }
+
+    /// D20: a failure may carry output and an exit status; both stay off
+    /// the wire when empty, and an older reader ignores them.
+    #[test]
+    fn reply_err_carries_output_and_status() {
+        let reply = Reply::failed(
+            9,
+            Failure {
+                err: String::new(),
+                out: "a\n'x' returned 3\n".to_string(),
+                status: Some(3),
+            },
+        );
+        let json = serde_json::to_string(&reply).unwrap();
+        assert_eq!(
+            json,
+            r#"{"id":9,"ok":false,"err":"","out":"a\n'x' returned 3\n","status":3}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
     }
 
     #[test]
@@ -740,6 +892,7 @@ mod tests {
     #[test]
     fn exit_frame_round_trips() {
         frame_round_trip(Frame::Exit("detached".to_string()));
+        frame_round_trip(Frame::Suspend);
     }
 
     #[test]

@@ -1,0 +1,9 @@
+# FE.2: a chain prints what ran before the command that failed it, then
+# the error.
+$ new-session -d -s main -x 80 -y 24 'sleep 1000'
+$ display -p a \; has-session -t nope \; display -p b
+$ list-sessions -F '#{session_name}' \; select-layout -t main bogus \; display -p c
+$ display -p one \; display -p two \; kill-window -t main:9
+# A run-shell holds the rest of the chain until it answers; the rest's
+# error still comes after everything printed.
+$ display -p a \; run-shell 'echo r' \; display -p b \; has-session -t nope

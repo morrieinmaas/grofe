@@ -11,9 +11,10 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
@@ -22,10 +23,11 @@ use crate::cmd::{
 };
 use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
-use crate::protocol::ClientCtx;
+use crate::protocol::{ClientCtx, Dialect};
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
+use crate::server::pane::procinfo::{self, ProcSample};
 use crate::server::{State, clients};
 use crate::types::{PaneId, SessionId, WindowId};
 
@@ -62,17 +64,42 @@ struct Builtin {
 // M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
 // tmux's except where grofe differs on purpose or M2 formats cannot yet say
 // the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
-// `#{b:pane_current_path}` (spec §4.5), `status-right` without the pane
-// title, and the window formats without `#{window_flags}` (M3.6). tmux's
-// escape-time is a server option; grofe's server scope is global.
+// `#{b:pane_current_path}` (spec §4.5), and `status-right`'s pane title
+// untrimmed (tmux's is `#{=21:pane_title}`; the native language has no `=`
+// trim, so a title over 21 columns shows whole). The window formats are
+// tmux's, `#I:#W` spelled out (TC.11, D8). tmux's escape-time is a server
+// option; grofe's server scope is global.
 //
 // M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
 // where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
 // external), `focus-events` on (tmux off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
-// synchronized panes). `status-position` takes only `bottom` until TC.11.
+// synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
 // the string translated into grofe's `#{...}`-only expander (R15).
+/// tmux 3.7b's built-in defaults where grofe's differ (recorded: `show
+/// -g`/`-s`/`-gw` on `-f /dev/null` with a clean environment), used under
+/// tmux identity ([`Options::use_tmux_defaults`]); `status-keys` and
+/// `mode-keys` follow `$EDITOR` there. Formats are tmux's where the native
+/// language can say the same thing.
+// ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
+// for `pane-active-border-style` have no native spelling, so grofe's stay.
+const TMUX_DEFAULTS: &[(&str, &str)] = &[
+    ("base-index", "0"),
+    ("pane-base-index", "0"),
+    ("history-limit", "2000"),
+    ("escape-time", "10"),
+    ("mouse", "off"),
+    ("set-clipboard", "external"),
+    ("focus-events", "off"),
+    ("extended-keys", "off"),
+    ("renumber-windows", "off"),
+    (
+        "automatic-rename-format",
+        "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
+    ),
+];
+
 const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "base-index",
@@ -100,10 +127,10 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
-        // A choice in tmux 3.7b (`off`, `on`, `failed`), so `yes` is refused
-        // and a bad value is `unknown value`. ponytail: `failed` is not
-        // supported until something needs it.
-        kind: Kind::Choice(&["off", "on"]),
+        // A choice in tmux 3.7b, so `yes` is refused and a bad value is
+        // `unknown value`; `failed` keeps a pane only when its command
+        // failed (Claude Code's agent teams set it).
+        kind: Kind::Choice(&["off", "on", "failed"]),
         scope: OptionScope::Window,
         default: "off",
     },
@@ -123,7 +150,7 @@ const BUILTINS: &[Builtin] = &[
         name: "status-right",
         kind: Kind::String,
         scope: OptionScope::Session,
-        default: "%H:%M %d-%b-%y",
+        default: "\"#{pane_title}\" %H:%M %d-%b-%y",
     },
     Builtin {
         name: "status-left-length",
@@ -159,13 +186,77 @@ const BUILTINS: &[Builtin] = &[
         name: "window-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name} ",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
     },
     Builtin {
         name: "window-status-current-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}*",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+    },
+    // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
+    // of the status line (spec §4.5's status-line row).
+    Builtin {
+        name: "status-justify",
+        kind: Kind::Choice(&["left", "centre", "right", "absolute-centre"]),
+        scope: OptionScope::Session,
+        default: "left",
+    },
+    Builtin {
+        name: "status-left-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "status-right-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-separator",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: " ",
+    },
+    Builtin {
+        name: "window-status-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-current-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-last-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-bell-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "reverse",
+    },
+    Builtin {
+        name: "message-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=yellow,fg=black,fill=yellow",
+    },
+    Builtin {
+        name: "display-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "750",
     },
     Builtin {
         name: "prefix",
@@ -253,11 +344,157 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-position",
-        kind: Kind::Choice(&["bottom"]),
+        kind: Kind::Choice(&["top", "bottom"]),
         scope: OptionScope::Session,
         default: "bottom",
     },
+    // TC.12: tmux 3.7b's name, values, window scope and default, so the
+    // `set -p allow-passthrough on` that icat, snacks.nvim and canopy send
+    // works and `show` answers.
+    // ponytail: a no-op. grofe always unwraps `DCS tmux;` and lets out only
+    // what the same bytes sent bare would (passthrough.rs), so there is
+    // nothing for `off` to guard; canopy turns it on anyway.
+    Builtin {
+        name: "allow-passthrough",
+        kind: Kind::Choice(&["off", "on", "all"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    // M3.6 (the stub edit): the server's identity override (spec D12).
+    // TC.1 reads it once at start; until then nothing does.
+    Builtin {
+        name: "compat-identity",
+        kind: Kind::Choice(&["auto", "tmux", "grofe"]),
+        scope: OptionScope::Global,
+        default: "auto",
+    },
+    // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
+    // any string; `select-layout` reads cells or `N%`, TC.8).
+    Builtin {
+        name: "main-pane-width",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "80",
+    },
+    // TC.8: as `main-pane-width`, for the `main-horizontal` presets.
+    Builtin {
+        name: "main-pane-height",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "24",
+    },
+    // TC.8: tmux's `window-size`. `resize-window` sets `manual`, which
+    // stops clients resizing the window; grofe sizes every other value as
+    // `latest` (spec D6).
+    Builtin {
+        name: "window-size",
+        kind: Kind::Choice(&["largest", "smallest", "manual", "latest"]),
+        scope: OptionScope::Window,
+        default: "latest",
+    },
+    // FE.1: the corpus's tmux options grofe stores and never reads
+    // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
+    // §5.3's defaults where grofe's differ (`extended-keys`, `mode-keys`,
+    // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
+    // ones; D6 sizes windows; grofe's prompt keys are emacs's.
+    // `renumber-windows` itself is read (`Model::remove_window`).
+    // ponytail: `default-command` and `synchronize-panes` do something in
+    // tmux; grofe stores them only, until a ported script needs one.
+    // `default-shell` is read when a pane starts (`Model::default_shell`);
+    // its default is the server's shell, as tmux's `getshell` picks it
+    // (`compat::server_started`).
+    // `mode-keys` waits for M5's copy mode, and `pane-border-format` for
+    // pane border titles.
+    Builtin {
+        name: "aggressive-resize",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "default-command",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "",
+    },
+    Builtin {
+        name: "default-shell",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "/bin/sh",
+    },
+    Builtin {
+        name: "default-terminal",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "tmux-256color",
+    },
+    Builtin {
+        name: "extended-keys",
+        kind: Kind::Choice(&["off", "on", "always"]),
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "extended-keys-format",
+        kind: Kind::Choice(&["csi-u", "xterm"]),
+        scope: OptionScope::Global,
+        default: "xterm",
+    },
+    Builtin {
+        name: "mode-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Window,
+        default: "vi",
+    },
+    Builtin {
+        name: "pane-border-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"\
+                  #{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]\
+                  #[norange]#[range=control|9][x]#[norange],}",
+    },
+    Builtin {
+        name: "renumber-windows",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "status-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Session,
+        default: "emacs",
+    },
+    Builtin {
+        name: "synchronize-panes",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    // FE.1: what `select-pane -P` sets on a pane, as tmux 3.7b does
+    // (recorded; free text, unchecked). grofe draws no pane background.
+    Builtin {
+        name: "window-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "window-active-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
 ];
+
+/// A built-in option's scope (a list's too), `None` for anything else.
+pub fn builtin_scope(name: &str) -> Option<OptionScope> {
+    builtin(name)
+        .map(|b| b.scope)
+        .or_else(|| list_builtin(name).map(|l| l.scope))
+}
 
 /// Every built-in option's name, in table order (T3.1 walks it to check
 /// its TOML name table is complete).
@@ -276,6 +513,10 @@ pub enum Owner {
     Session(SessionId),
     Window(WindowId),
     Pane(PaneId),
+    /// tmux's server and global window scopes, for user options set
+    /// through the tmux front end (FE.1): looked up after global.
+    Server,
+    GlobalWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,7 +536,35 @@ pub struct Options {
     /// Global options set at runtime (`set -g`, `source-file`): the config
     /// no longer touches them (spec §5.1 layer 6, R10).
     runtime: BTreeSet<String>,
+    /// List options (TC.2b), beside the scalar store so [`Entry`] keeps
+    /// its shape.
+    lists: BTreeMap<Owner, BTreeMap<String, ListEntry>>,
+    /// Global lists the config set, each with the elements it had before,
+    /// as `config_base` for scalars.
+    config_list_base: BTreeMap<String, BTreeMap<u32, String>>,
+    /// Built-in defaults that differ under the server's identity
+    /// ([`Options::use_tmux_defaults`]): what `set -gu` restores.
+    identity_defaults: BTreeMap<&'static str, String>,
+    /// The same for list options.
+    identity_list_defaults: BTreeMap<&'static str, Vec<String>>,
+    /// What the tmux front end was sent for a value it rewrote into
+    /// grofe's format spelling (FE.3), by owner and name (`status-format[1]`
+    /// for an element): the stored value it stands for, and the text as
+    /// sent. A tmux-dialect `show` prints the text while the value is
+    /// still that one (continuum and canopy read values back).
+    shown: BTreeMap<(Owner, String), (String, String)>,
 }
+
+/// tmux 3.7b's default `command-alias` entries (recorded: `show -gv
+/// command-alias` on a `-f /dev/null` server), grofe's under tmux identity.
+const TMUX_COMMAND_ALIASES: &[&str] = &[
+    "split-pane=split-window",
+    "splitp=split-window",
+    "server-info=show-messages -JT",
+    "info=show-messages -JT",
+    "choose-window=choose-tree -w",
+    "choose-session=choose-tree -s",
+];
 
 impl Options {
     /// The built-in defaults, with the global `remain-on-exit` seeded from
@@ -316,14 +585,122 @@ impl Options {
         }
         Options {
             values: BTreeMap::from([(Owner::Global, global)]),
+            lists: BTreeMap::from([(Owner::Global, default_lists())]),
             ..Options::default()
         }
+    }
+
+    /// Under tmux identity (spec D12 ruling, FE.1): the built-in defaults
+    /// where grofe's differ from tmux 3.7b's become tmux's
+    /// ([`TMUX_DEFAULTS`]), so a script sees what tmux would. `editor` is
+    /// the server's `$VISUAL`, else `$EDITOR`: tmux makes `status-keys`
+    /// and `mode-keys` `vi` when its basename holds `vi` (recorded).
+    /// A value the config set keeps winning, and falls back to tmux's on
+    /// `reload` once the config stops setting it; a runtime value is left
+    /// alone. Called once, at start.
+    /// Makes `value` this server's built-in default for `name`: a value
+    /// the config sets still wins, with this as its reload base, a runtime
+    /// value is left alone, and `set -gu` restores it.
+    pub fn set_default(&mut self, name: &'static str, value: String) {
+        if let Some(base) = self.config_base.get_mut(name) {
+            *base = value.clone();
+        } else if !self.runtime.contains(name)
+            && let Some(global) = self.values.get_mut(&Owner::Global)
+        {
+            global.insert(
+                name.to_string(),
+                Entry {
+                    value: value.clone(),
+                    persist: false,
+                },
+            );
+        }
+        self.identity_defaults.insert(name, value);
+    }
+
+    pub fn use_tmux_defaults(&mut self, editor: Option<&str>) {
+        let keys = match editor.and_then(|e| e.rsplit('/').next()) {
+            Some(e) if e.contains("vi") => "vi",
+            _ => "emacs",
+        };
+        let defaults = TMUX_DEFAULTS
+            .iter()
+            .map(|(n, v)| (*n, v.to_string()))
+            .chain([
+                ("mode-keys", keys.to_string()),
+                ("status-keys", keys.to_string()),
+            ]);
+        for (name, value) in defaults {
+            self.set_default(name, value);
+        }
+        let aliases: BTreeMap<u32, String> = (0..)
+            .zip(TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()))
+            .collect();
+        if let Some(base) = self.config_list_base.get_mut("command-alias") {
+            *base = aliases.clone();
+        } else if !self.runtime.contains("command-alias") {
+            self.lists.entry(Owner::Global).or_default().insert(
+                "command-alias".to_string(),
+                ListEntry {
+                    items: aliases,
+                    persist: false,
+                },
+            );
+        }
+        self.identity_list_defaults.insert(
+            "command-alias",
+            TMUX_COMMAND_ALIASES.iter().map(|a| a.to_string()).collect(),
+        );
+    }
+
+    /// Whether any value, at any owner, scalar or list element, holds
+    /// `needle`.
+    pub fn mentions(&self, needle: &str) -> bool {
+        let scalars = self
+            .values
+            .values()
+            .flat_map(|m| m.values().map(|e| &e.value));
+        let lists = self
+            .lists
+            .values()
+            .flat_map(|m| m.values().flat_map(|l| l.items.values()));
+        scalars.chain(lists).any(|v| v.contains(needle))
+    }
+
+    /// Records the text a tmux-dialect request sent for `name`'s value
+    /// at `owner` (see `shown`); `None`, or the value itself, forgets it.
+    pub fn set_shown(&mut self, owner: Owner, name: &str, value: &str, sent: Option<String>) {
+        let key = (owner, name.to_string());
+        match sent {
+            Some(sent) if sent != value => {
+                self.shown.insert(key, (value.to_string(), sent));
+            }
+            _ => {
+                self.shown.remove(&key);
+            }
+        }
+    }
+
+    /// The text sent for `name` at `owner`, while its value is `value`.
+    pub fn shown(&self, owner: Owner, name: &str, value: &str) -> Option<&str> {
+        self.shown
+            .get(&(owner, name.to_string()))
+            .filter(|(v, _)| v == value)
+            .map(|(_, sent)| sent.as_str())
+    }
+
+    /// `name`'s built-in default under this server's identity.
+    fn default_of(&self, b: &'static Builtin) -> &str {
+        self.identity_defaults
+            .get(b.name)
+            .map_or(b.default, String::as_str)
     }
 
     /// Marks a global option as set at runtime, which the config then
     /// leaves alone.
     fn mark_runtime(&mut self, name: &str) {
         self.config_base.remove(name);
+        self.config_list_base.remove(name);
         self.runtime.insert(name.to_string());
     }
 
@@ -359,7 +736,8 @@ impl Options {
         if owner == Owner::Global
             && let Some(b) = builtin(name)
         {
-            return self.set(owner, name, b.default, false);
+            let default = self.default_of(b).to_string();
+            return self.set(owner, name, &default, false);
         }
         let Some(at) = self.values.get_mut(&owner) else {
             return Ok(false);
@@ -385,7 +763,7 @@ impl Options {
     pub fn lookup(&self, name: &str, chain: &[Owner]) -> Option<&str> {
         chain
             .iter()
-            .chain([&Owner::Global])
+            .chain([&Owner::GlobalWindow, &Owner::Global, &Owner::Server])
             .find_map(|o| self.get(*o, name))
             .map(|e| e.value.as_str())
     }
@@ -395,7 +773,13 @@ impl Options {
     /// apply to anything; this only frees them.
     pub fn retain_live(&mut self, model: &Model) {
         self.values.retain(|owner, _| match owner {
-            Owner::Global => true,
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
+            Owner::Session(id) => model.sessions.contains_key(id),
+            Owner::Window(id) => model.windows.contains_key(id),
+            Owner::Pane(id) => model.panes.contains_key(id),
+        });
+        self.lists.retain(|owner, _| match owner {
+            Owner::Global | Owner::Server | Owner::GlobalWindow => true,
             Owner::Session(id) => model.sessions.contains_key(id),
             Owner::Window(id) => model.windows.contains_key(id),
             Owner::Pane(id) => model.panes.contains_key(id),
@@ -430,6 +814,16 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             // tmux's wording for a flag option; choices say `unknown value`.
             _ => Err(format!("bad value: {value}")),
         },
+        // tmux's `checkshell`: an absolute path it may execute, not tmux.
+        Kind::String if name == "default-shell" => {
+            let tmux = value.rsplit('/').next() == Some("tmux");
+            let usable = value.starts_with('/')
+                && !tmux
+                && nix::unistd::access(value, nix::unistd::AccessFlags::X_OK).is_ok();
+            usable
+                .then(|| value.to_string())
+                .ok_or_else(|| format!("not a suitable shell: {value}"))
+        }
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
@@ -460,9 +854,12 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
 /// (user options default to session scope, as in tmux).
 fn default_scope(scope: Option<OptionScope>, name: Option<&str>) -> OptionScope {
     scope.unwrap_or_else(|| {
-        name.and_then(builtin)
-            .map(|b| b.scope)
-            .unwrap_or(OptionScope::Session)
+        name.and_then(|n| {
+            builtin(n)
+                .map(|b| b.scope)
+                .or_else(|| list_builtin(n).map(|l| l.scope))
+        })
+        .unwrap_or(OptionScope::Session)
     })
 }
 
@@ -474,9 +871,16 @@ fn owner(
 ) -> Result<Owner, String> {
     Ok(match scope {
         OptionScope::Global => Owner::Global,
-        OptionScope::Session => Owner::Session(model.resolve_session(target, ctx)?),
-        OptionScope::Window => Owner::Window(model.resolve_window(target, ctx)?),
+        // tmux finds `-t` as a pane for every scope (cmd-set-option.c).
+        OptionScope::Session => {
+            Owner::Session(model.resolve_session(&model.pane_type(target, ctx)?, ctx)?)
+        }
+        OptionScope::Window => {
+            Owner::Window(model.resolve_window(&model.pane_type(target, ctx)?, ctx)?)
+        }
         OptionScope::Pane => Owner::Pane(model.resolve_pane(target, ctx)?),
+        OptionScope::Server => Owner::Server,
+        OptionScope::GlobalWindow => Owner::GlobalWindow,
     })
 }
 
@@ -502,13 +906,38 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
     options.retain_live(model);
     model.options = options;
     match cmd {
-        Command::SetOption(c) => set_option(model, &mut state.events, ctx, c),
+        Command::SetOption(mut c) => {
+            if c.expand
+                && let Some(value) = &c.value
+            {
+                c.value = Some(expand_value(state, ctx, &c.target, value));
+            }
+            set_option(&mut state.model, &mut state.events, ctx, c)
+        }
         Command::ShowOptions(c) => show_options(model, ctx, c),
         Command::DisplayMessage(c) => display_message(state, ctx, c),
-        Command::ListSessions(c) => list_sessions(model, c),
-        Command::ListWindows(c) => list_windows(model, ctx, c),
-        Command::ListPanes(c) => list_panes(model, ctx, c),
+        Command::ListSessions(c) => list_sessions(state, c),
+        Command::ListWindows(c) => list_windows(state, ctx, c),
+        Command::ListPanes(c) => list_panes(state, ctx, c),
         _ => Err("not an option command".to_string()),
+    }
+}
+
+/// `set -F`'s value, expanded as `display-message` expands a format:
+/// against the target pane, with the current client's and the server's
+/// variables (the mouse event's and a running hook's among them) over it.
+fn expand_value(state: &State, ctx: &ClientCtx, target: &Target, value: &str) -> String {
+    let model = &state.model;
+    let Ok(pane) = model.resolve_pane(target, ctx) else {
+        return expand(value, &NoVars);
+    };
+    let vars = FormatCtx::new(model, pane);
+    match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
+        Some(client) => {
+            let client = clients::ClientVars::new(model, client, Some(vars));
+            expand(value, &ServerVars::fresh(state, pane, &client))
+        }
+        None => expand(value, &ServerVars::fresh(state, pane, &vars)),
     }
 }
 
@@ -518,8 +947,28 @@ fn set_option(
     ctx: &ClientCtx,
     c: SetOption,
 ) -> Result<String, String> {
+    // TC.11, as tmux 3.7b (recorded): `-q` hides an unknown or ambiguous
+    // name and a target that does not resolve, never a bad value.
+    let quiet = |r: Result<String, String>| if c.quiet { Ok(String::new()) } else { r };
+    let (base, index) = match split_index(&c.name) {
+        Ok(split) => split,
+        Err(e) => return quiet(Err(e)),
+    };
+    if index.is_none() && list_builtin(base).is_none() && check_name(base).is_err() {
+        return quiet(check_name(base).map(|_| String::new()));
+    }
+    if index.is_some() || list_builtin(base).is_some() {
+        let base = base.to_string();
+        return set_list(model, events, ctx, &c, &base, index);
+    }
     let scope = default_scope(c.scope, Some(&c.name));
-    let owner = owner(model, scope, &c.target, ctx)?;
+    let owner = match owner(model, scope, &c.target, ctx) {
+        Ok(owner) => owner,
+        Err(e) => return quiet(Err(e)),
+    };
+    if c.only_if_unset && !c.unset && model.options.get(owner, &c.name).is_some() {
+        return quiet(Err(format!("already set: {}", c.name)));
+    }
     // A runtime value at global scope takes the option out of the
     // config's hands (R10).
     let changed = |model: &mut Model, events: &mut Events, changed: bool| {
@@ -532,6 +981,7 @@ fn set_option(
     };
     if c.unset {
         let did = model.options.unset(owner, &c.name)?;
+        model.options.set_shown(owner, &c.name, "", None);
         changed(model, events, did);
         return Ok(String::new());
     }
@@ -560,16 +1010,57 @@ fn set_option(
             return Err("empty value".to_string());
         }
     };
+    // `-a` appends to a string's value at this scope (tmux: style options
+    // join with a comma); any other kind takes the value as given.
+    let separator = if c.name.ends_with("-style") { "," } else { "" };
+    // In the tmux dialect, the text as sent, for `show` (FE.3), kept only
+    // when the front end rewrote the value, or when an append extends
+    // text `show` already prints in place of the value. Any other value
+    // shows as stored, normalized as tmux normalizes it (`mouse yes` is
+    // `on`).
+    let tmux = ctx.dialect == Dialect::Tmux;
+    let (value, sent) = match model.options.get(owner, &c.name) {
+        Some(old) if c.append && is_text(&c.name) => {
+            let before = tmux_text(&model.options, owner, &c.name, &old.value);
+            let recorded = before != old.value;
+            let piece = c.shown.clone().unwrap_or_else(|| value.clone());
+            let sent = (tmux && (recorded || c.shown.is_some()))
+                .then(|| format!("{before}{separator}{piece}"));
+            (format!("{}{separator}{value}", old.value), sent)
+        }
+        _ => (value, c.shown.clone().filter(|_| tmux)),
+    };
     let did = model.options.set(owner, &c.name, &value, c.persist)?;
+    let stored = model
+        .options
+        .get(owner, &c.name)
+        .map(|e| e.value.clone())
+        .unwrap_or_default();
+    model.options.set_shown(owner, &c.name, &stored, sent);
     changed(model, events, did);
     Ok(String::new())
+}
+
+/// Whether `name` holds free text (a user option or a string built-in),
+/// which `-a` appends to.
+fn is_text(name: &str) -> bool {
+    name.starts_with('@') || builtin(name).is_some_and(|b| b.kind == Kind::String)
+}
+
+/// No format variables: `-F` with no pane to expand against.
+struct NoVars;
+
+impl FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
 }
 
 /// `option-changed`, emitted only for a real change (spec §4.2).
 fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
     events.emit(Event::OptionChanged {
         scope: match owner {
-            Owner::Global => "global".to_string(),
+            Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
             Owner::Session(id) => id.to_string(),
             Owner::Window(id) => id.to_string(),
             Owner::Pane(id) => id.to_string(),
@@ -583,7 +1074,7 @@ fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) 
 /// objects above it.
 fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
     match owner {
-        Owner::Global => Vec::new(),
+        Owner::Global | Owner::Server | Owner::GlobalWindow => Vec::new(),
         Owner::Session(_) => vec![owner],
         Owner::Window(w) => {
             let mut chain = vec![owner];
@@ -597,21 +1088,250 @@ fn owner_chain(model: &Model, owner: Owner) -> Vec<Owner> {
 }
 
 fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String, String> {
+    if let Some(name) = &c.name {
+        let (base, index) = split_index(name)?;
+        if index.is_some() || list_builtin(base).is_some() {
+            return show_list(model, ctx, &c, name, base, index);
+        }
+    }
     let scope = default_scope(c.scope, c.name.as_deref());
     let owner = owner(model, scope, &c.target, ctx)?;
     if let Some(name) = &c.name {
-        check_name(name)?;
-        // As tmux: a user option not set at this scope is an error.
-        if name.starts_with('@') && model.options.get(owner, name).is_none() {
-            return Err(format!("invalid option: {name}"));
+        // As tmux: a user option not set at this scope is an error. `-q`
+        // (recorded on tmux 3.7b) makes that, and an unknown option, an
+        // empty answer.
+        let known = check_name(name).and_then(|()| {
+            if name.starts_with('@') && model.options.get(owner, name).is_none() {
+                Err(format!("invalid option: {name}"))
+            } else {
+                Ok(())
+            }
+        });
+        match known {
+            Err(_) if c.quiet => return Ok(String::new()),
+            known => known?,
         }
     }
-    Ok(model
+    let tmux = ctx.dialect == Dialect::Tmux;
+    if tmux
+        && c.name.is_none()
+        && matches!(owner, Owner::Global | Owner::Server | Owner::GlobalWindow)
+    {
+        return Ok(tmux_listing(model, owner, c.value_only));
+    }
+    // `-v` (tmux 3.7b): each value alone and unquoted; in the tmux
+    // dialect, a value as it was sent.
+    let line = |name: &str, value: &str| {
+        let value = if tmux {
+            tmux_text(&model.options, owner, name, value)
+        } else {
+            value.to_string()
+        };
+        let value = value.as_str();
+        if c.value_only {
+            format!("{value}\n")
+        } else {
+            format!("{name} {}\n", quote(value))
+        }
+    };
+    // The server table listed whole (tmux's bare `show -s`) is the
+    // server's own options, which grofe keeps at global scope, and the
+    // user options set with `-s`; what `-s` stored for any other option
+    // shows only by name, as in tmux 3.7b.
+    let (listed, only_server) = match (owner, &c.name) {
+        (Owner::Server, None) => (Owner::Global, true),
+        _ => (owner, false),
+    };
+    let wanted = |name: &str| !only_server || builtin_scope(name) == Some(OptionScope::Global);
+    let mut lines: Vec<(&str, String)> = model
         .options
-        .at(owner)
-        .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name))
-        .map(|(name, e)| format!("{name} {}\n", quote(&e.value)))
-        .collect())
+        .at(listed)
+        .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name) && wanted(name))
+        .map(|(name, e)| (name.as_str(), line(name, &e.value)))
+        .collect();
+    if only_server {
+        lines.extend(
+            model
+                .options
+                .at(Owner::Server)
+                .filter(|(name, _)| name.starts_with('@'))
+                .map(|(name, e)| (name.as_str(), line(name, &e.value))),
+        );
+    }
+    if c.name.is_none() {
+        lines.extend(
+            model
+                .options
+                .lists_at(listed)
+                .filter(|(name, _)| wanted(name))
+                .map(|(name, l)| (name.as_str(), list_lines(name, l, c.value_only))),
+        );
+        lines.sort_by(|a, b| a.0.cmp(b.0));
+    }
+    Ok(lines.into_iter().map(|(_, l)| l).collect())
+}
+
+// ---- The tmux dialect's show (FE.3) -------------------------------------
+
+/// Options whose default the tmux dialect shows as tmux's own text: grofe
+/// spells the same default another way (`#{window_index}` for `#I`), or
+/// has none of that shape (`status-format`'s rows).
+const SPELLED_DEFAULTS: &[&str] = &[
+    "pane-active-border-style",
+    "set-titles-string",
+    "status-format",
+    "status-right",
+    "window-status-current-format",
+    "window-status-format",
+];
+
+/// tmux's default text for `name` (`base[N]` for an element) when the
+/// global `value` (`None`: no such element) is grofe's default for it.
+fn spelled_default(options: &Options, name: &str, value: Option<&str>) -> Option<String> {
+    let (base, index) = split_index(name).ok()?;
+    if !SPELLED_DEFAULTS.contains(&base) {
+        return None;
+    }
+    let default = match index {
+        None => builtin(base).map(|b| options.default_of(b)),
+        Some(i) => list_builtin(base)?
+            .default
+            .get(usize::try_from(i).ok()?)
+            .copied(),
+    };
+    if index.is_none() && default.is_none() {
+        return None;
+    }
+    (default == value)
+        .then(|| crate::compat::tmux::formats::tmux_default(name))
+        .flatten()
+}
+
+/// `value`, `name`'s at `owner`, as the tmux dialect shows it: the text a
+/// tmux request sent for it, tmux's own default text for a default grofe
+/// spells another way, else the value.
+fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
+    if let Some(sent) = options.shown(owner, name, value) {
+        return sent.to_string();
+    }
+    if owner == Owner::Global
+        && let Some(text) = spelled_default(options, name, Some(value))
+    {
+        return text;
+    }
+    value.to_string()
+}
+
+/// One `show` line for a value already in the tmux dialect's text.
+fn line_raw(name: &str, value: &str, value_only: bool) -> String {
+    if value_only {
+        format!("{value}\n")
+    } else {
+        format!("{name} {}\n", quote(value))
+    }
+}
+
+/// A global list's lines in the tmux dialect: grofe's elements as sent,
+/// plus tmux's default rows grofe's list lacks, by index. `tmux_rows` are
+/// tmux's own indices for the list, when a table lists them.
+fn tmux_list_lines(
+    model: &Model,
+    base: &str,
+    tmux_rows: Option<&[u32]>,
+    value_only: bool,
+) -> String {
+    let o = &model.options;
+    let items = o
+        .list(Owner::Global, base)
+        .map(|l| l.items.clone())
+        .unwrap_or_default();
+    let mut indices: BTreeSet<u32> = items.keys().copied().collect();
+    if SPELLED_DEFAULTS.contains(&base) {
+        indices.extend(tmux_rows.unwrap_or_default());
+        if tmux_rows.is_none() {
+            let table = crate::compat::tmux::formats::Table::Session;
+            indices.extend(list_rows(table, base));
+        }
+    }
+    if indices.is_empty() {
+        return if value_only {
+            String::new()
+        } else {
+            format!("{base}\n")
+        };
+    }
+    indices
+        .into_iter()
+        .filter_map(|i| {
+            let full = format!("{base}[{i}]");
+            let text = match items.get(&i) {
+                Some(v) => tmux_text(o, Owner::Global, &full, v),
+                None => spelled_default(o, &full, None)?,
+            };
+            Some(line_raw(&full, &text, value_only))
+        })
+        .collect()
+}
+
+/// The indices tmux's `table` lists for the list `base`.
+fn list_rows(table: crate::compat::tmux::formats::Table, base: &str) -> Vec<u32> {
+    crate::compat::tmux::formats::tmux_table(table)
+        .into_iter()
+        .filter_map(|(name, _)| {
+            let (b, i) = split_index(name).ok()?;
+            (b == base).then_some(i).flatten()
+        })
+        .collect()
+}
+
+/// tmux 3.7b's `show -g`, `show -gw` or `show -s` (`owner` Global,
+/// GlobalWindow or Server) with no name: the user options set there
+/// first, by name (the status sources' `@src-` options left out); then
+/// tmux's table in its order, each option grofe keeps with grofe's value
+/// as the tmux dialect shows it, each one grofe lacks with tmux's default.
+fn tmux_listing(model: &Model, owner: Owner, value_only: bool) -> String {
+    use crate::compat::tmux::formats::{Table, tmux_table, unquote};
+    let table = match owner {
+        Owner::Server => Table::Server,
+        Owner::GlobalWindow => Table::Window,
+        _ => Table::Session,
+    };
+    let o = &model.options;
+    let mut out = String::new();
+    for (name, e) in o.at(owner) {
+        if name.starts_with('@') && !name.starts_with("@src-") {
+            out.push_str(&line_raw(
+                name,
+                &tmux_text(o, owner, name, &e.value),
+                value_only,
+            ));
+        }
+    }
+    let mut lists_done: BTreeSet<&str> = BTreeSet::new();
+    for (name, text) in tmux_table(table) {
+        let Ok((base, index)) = split_index(name) else {
+            continue;
+        };
+        if list_builtin(base).is_some() {
+            if lists_done.insert(base) {
+                let rows = list_rows(table, base);
+                out.push_str(&tmux_list_lines(model, base, Some(&rows), value_only));
+            }
+            continue;
+        }
+        match o.get(Owner::Global, base) {
+            Some(e) if index.is_none() && builtin(base).is_some() => {
+                let text = tmux_text(o, Owner::Global, base, &e.value);
+                out.push_str(&line_raw(base, &text, value_only));
+            }
+            // An empty list shows by name alone, and `-v` prints nothing.
+            _ if text.is_empty() && value_only => {}
+            _ if text.is_empty() => out.push_str(&format!("{name}\n")),
+            _ if value_only => out.push_str(&format!("{}\n", unquote(text))),
+            _ => out.push_str(&format!("{name} {text}\n")),
+        }
+    }
+    out
 }
 
 /// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
@@ -619,7 +1339,7 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
 /// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
 /// a lone special character or `~` backslash-escaped; a leading `~`
 /// escaped; control characters C-style or octal.
-fn quote(value: &str) -> String {
+pub(crate) fn quote(value: &str) -> String {
     const DOUBLE: &str = " #';${}%";
     if value.is_empty() {
         return "''".to_string();
@@ -673,10 +1393,31 @@ fn config_env() -> config::Env {
     config::Env::from_process()
 }
 
+/// The config chain (spec §5.1), or with `tmux -f <file>...` those files
+/// alone, in order (`compat::start_config`): a missing file or
+/// `/dev/null` is no file, so none at all leaves the built-in defaults.
+fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
+    let env = config_env();
+    match crate::compat::start_config() {
+        None => config::load(&env),
+        Some(files) => {
+            let only = config::Env {
+                config_dir: None,
+                ..env
+            };
+            let files: Vec<PathBuf> = files
+                .into_iter()
+                .filter(|f| f != Path::new("/dev/null") && f.exists())
+                .collect();
+            config::load_with_file(&only, &files)
+        }
+    }
+}
+
 /// Applies the config chain once at server start. On any error the
 /// server keeps the built-in defaults and logs every error (R9).
 pub fn apply_config_at_start(state: &mut State) {
-    match config::load(&config_env()) {
+    match load_config() {
         Ok(resolved) => {
             log_warnings(&resolved);
             apply_config(state, &resolved);
@@ -700,7 +1441,7 @@ fn log_warnings(resolved: &Resolved) {
 /// of it or, on any error, none of it and answers every error, one per
 /// line.
 pub fn reload(state: &mut State, _ctx: &ClientCtx, _c: Reload) -> Result<String, String> {
-    let resolved = config::load(&config_env()).map_err(|errors| join_errors(&errors))?;
+    let resolved = load_config().map_err(|errors| join_errors(&errors))?;
     log_warnings(&resolved);
     apply_config(state, &resolved);
     Ok(String::new())
@@ -718,11 +1459,23 @@ fn join_errors(errors: &[config::ConfigError]) -> String {
 /// the config set before (R10): runtime values and bindings stay. Options
 /// change through the store as `set` changes them, emitting
 /// `option-changed`; the caller's `clients::changed` then re-syncs mouse
-/// modes and repaints.
+/// modes and repaints. The config's sources (TC.4), hooks (TC.5) and
+/// aliases (TC.7) are applied last, by their own modules.
 fn apply_config(state: &mut State, resolved: &Resolved) {
     let model = &mut state.model;
     let events = &mut state.events;
-    let configured: Vec<(&str, &str)> = resolved.configured().map(|(n, v, _)| (n, v)).collect();
+    // `[user-options]` (TP.0) are global options the config sets like any
+    // other: a runtime `set` of one takes it out of the config's hands.
+    let configured: Vec<(&str, &str)> = resolved
+        .configured()
+        .map(|(n, v, _)| (n, v))
+        .chain(
+            resolved
+                .user_options
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.as_str())),
+        )
+        .collect();
     let dropped: Vec<(String, String)> = model
         .options
         .config_base
@@ -732,6 +1485,13 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
         .collect();
     for (name, base) in dropped {
         model.options.config_base.remove(&name);
+        // A user option the config no longer sets was unset before it.
+        if name.starts_with('@') && base.is_empty() {
+            if let Ok(true) = model.options.unset(Owner::Global, &name) {
+                option_changed(model, events, Owner::Global, &name);
+            }
+            continue;
+        }
         set_global(model, events, &name, &base);
     }
     for (name, value) in configured {
@@ -753,6 +1513,36 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     if !resolved.keys.is_empty() || tables.is_configured() {
         *tables = tables.with_config_from(KeyTables::from_config(&resolved.keys));
     }
+    apply_config_lists(model, events, resolved);
+    crate::server::sources::configure(state, resolved);
+    crate::server::hooks::configure(state, resolved);
+    crate::server::menu::configure(state, resolved);
+    // `[environment]`, then `load-commands` (TP.0), as tmux runs a config
+    // file's `set-environment` and other commands each time it reads it.
+    for (name, value) in &resolved.environment {
+        let value = expand_env(state, value);
+        crate::server::hooks::set_global(state, name, Some(value), false);
+    }
+    let cmds: Vec<Vec<String>> = resolved
+        .load_commands
+        .iter()
+        .flat_map(|c| c.cmds.iter().cloned())
+        .collect();
+    crate::server::hooks::run_at_load(state, cmds);
+}
+
+/// `value` with `$NAME`, `${NAME}` and a leading `~` expanded from the
+/// global environment, as tmux expands a config line's words; an unset
+/// name is empty.
+fn expand_env(state: &State, value: &str) -> String {
+    let vars = crate::server::hooks::variables(state, None);
+    let get = |name: &str| {
+        vars.iter()
+            .find(|v| v.name == name)
+            .and_then(|v| v.value.clone())
+            .unwrap_or_default()
+    };
+    config::expand_value(value, &get)
 }
 
 /// Sets a global option, emitting `option-changed` on a change. The
@@ -772,8 +1562,9 @@ fn set_global(model: &mut Model, events: &mut Events, name: &str, value: &str) {
 /// several are split at `;` arguments as the CLI splits argv (tmux 3.7b:
 /// `bind y split-window '\;' select-pane -L` binds both). Each command
 /// must parse, as tmux checks at bind time; no command at all changes
-/// nothing, as in tmux.
-pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
+/// nothing, as in tmux. The binding keeps the request's dialect (spec
+/// §4.5), so a key bound through the tmux front end runs through it.
+pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String, String> {
     let key = parse_key(&c.key).map_err(|_| format!("unknown key: {}", c.key))?;
     let cmds = match c.command.as_slice() {
         [one] => split_command_string(one).map_err(|e| e.to_string())?,
@@ -783,11 +1574,21 @@ pub fn bind_key(state: &mut State, c: BindKey) -> Result<String, String> {
     if cmds.is_empty() {
         return Ok(String::new());
     }
+    // An alias (TC.7) is expanded now, as tmux expands it when the binding
+    // is made: the binding keeps what it ran then.
+    let cmds: Vec<Vec<String>> = cmds
+        .into_iter()
+        .flat_map(|argv| {
+            crate::server::dispatch::menu::expand_alias_command(state, &argv)
+                .unwrap_or_else(|| vec![argv])
+        })
+        .collect();
     for argv in &cmds {
-        crate::cmd::parse(argv).map_err(|e| e.to_string())?;
+        crate::compat::parse_split(ctx, argv)?;
     }
     let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
     b.desc = c.note;
+    b.dialect = ctx.dialect;
     state.registry.key_tables.insert(&c.table, key, b);
     Ok(String::new())
 }
@@ -813,16 +1614,32 @@ pub fn unbind_key(state: &mut State, _ctx: &ClientCtx, c: UnbindKey) -> Result<S
     Ok(String::new())
 }
 
-/// `list-keys [-T table]` in grofe's native form, one line per binding:
-/// `bind-key [-r] -T <table> <key> <command>` as tmux spells it, then
-/// `  # <source>`, with `: <desc>` and `[<name>]` when set. The source is
-/// `default`, `<file>:<line>` (`~` for `$HOME`), `runtime` or
-/// `plugin <name>`, so a binding from outside the config table shows.
+/// `list-keys [-1N] [-T table] [key]` in grofe's native form, one line per
+/// binding: `bind-key [-r] -T <table> <key> <command>` as tmux spells it,
+/// then `  # <source>`, with `: <desc>` and `[<name>]` when set. The source
+/// is `default`, `<file>:<line>` (`~` for `$HOME`), `runtime` or
+/// `plugin <name>`, so a binding from outside the config table shows. A
+/// key lists only its binding; `-1` only the first line; `-N` the notes
+/// ([`list_notes`]).
 // ponytail: tmux's padded `list-keys` layout is FE.4's.
-pub fn list_keys(state: &mut State, _ctx: &ClientCtx, c: ListKeys) -> Result<String, String> {
+pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<String, String> {
+    let only = match &c.key {
+        Some(name) => Some(parse_key(name).map_err(|_| format!("invalid key: {name}"))?),
+        None => None,
+    };
     let tables = &state.registry.key_tables;
+    if let Some(t) = &c.table
+        && !tables.exists(t)
+    {
+        return Err(format!("table {t} doesn't exist"));
+    }
+    if ctx.dialect == crate::protocol::Dialect::Tmux {
+        return list_keys_tmux(state, ctx, &c, only);
+    }
+    if c.notes {
+        return list_notes(state, ctx, &c, only);
+    }
     let names: Vec<&str> = match &c.table {
-        Some(t) if !tables.exists(t) => return Err(format!("table {t} doesn't exist")),
         Some(t) => vec![t.as_str()],
         None => tables.table_names().collect(),
     };
@@ -830,14 +1647,299 @@ pub fn list_keys(state: &mut State, _ctx: &ClientCtx, c: ListKeys) -> Result<Str
     let mut out = String::new();
     for table in names {
         for key in tables.keys(table) {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
             let Some(b) = tables.exact(table, &key) else {
                 continue;
             };
             out.push_str(&binding_line(table, &key, b, home.as_deref()));
             out.push('\n');
+            if c.first {
+                return Ok(out);
+            }
         }
     }
     Ok(out)
+}
+
+/// `list-keys -N`: each binding with a note as `<prefix><key> <note>`, keys
+/// padded to the widest, as tmux 3.7b prints them (recorded: without `-T`,
+/// the prefix table then the root table, every line after the prefix
+/// key, `C-b `; with `-T`, that table alone and no prefix). With `-1` only
+/// the first, and when a client is current it goes to that client's status
+/// line instead, unpadded, as tmux's stock `prefix /` shows it.
+// ponytail: tmux 3.7b's CLI prints nothing when a key is given, with or
+// without `-N` or `-1` (recorded: `list-keys -T prefix c`, `list-keys -1
+// -T prefix c` and `list-keys -N c` all print nothing), and `-1N` of a key
+// without a note shows the first noted binding; grofe lists what the key
+// names. Matching tmux's output is FE.4's.
+fn list_notes(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: &ListKeys,
+    only: Option<Key>,
+) -> Result<String, String> {
+    let tables = &state.registry.key_tables;
+    let prefix = match state.model.options.lookup("prefix", &[]) {
+        Some(p) if !p.eq_ignore_ascii_case("None") => format!("{p} "),
+        _ => String::new(),
+    };
+    let names: Vec<(&str, &str)> = match &c.table {
+        Some(t) => vec![(t.as_str(), "")],
+        None => vec![("prefix", prefix.as_str()), ("root", prefix.as_str())],
+    };
+    let mut notes: Vec<(String, String)> = Vec::new();
+    for (table, start) in names {
+        for key in tables.keys(table) {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
+            let Some(note) = tables.exact(table, &key).and_then(|b| b.desc.as_deref()) else {
+                continue;
+            };
+            if note.is_empty() {
+                continue;
+            }
+            notes.push((format!("{start}{key}"), note.to_string()));
+        }
+    }
+    if c.first {
+        notes.truncate(1);
+        if let (Some((key, note)), Some(id)) = (notes.first(), clients::current_client(state, ctx))
+        {
+            clients::show_message(state, id, &format!("{key} {note}"));
+            return Ok(String::new());
+        }
+    }
+    let width = notes
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
+    Ok(notes
+        .iter()
+        .map(|(key, note)| format!("{key:<width$} {note}\n"))
+        .collect())
+}
+
+/// `list-keys` for a tmux-dialect request, as tmux 3.7b prints it
+/// (`cmd-list-keys.c`, recorded on `-L grofe-fe4 -f /dev/null`):
+///
+/// - which bindings: `-T`'s table, or with `-N` the prefix then the root
+///   table, or every table by name; each table in tmux's key order
+///   ([`tmux_key_order`]); a key given keeps only its binding, `-N` only
+///   bindings with a note, `-1` only the first;
+/// - a line: `bind-key [-r] -T <table> <key> <commands>`, the table and
+///   the key (escaped as tmux escapes an argument) padded to the widest,
+///   `-r` or two blanks only when some binding repeats; with `-N`,
+///   `<prefix> <key> <note>`;
+/// - one binding (a key given, or `-1`) goes to the current client's
+///   status line, not to the output.
+///
+/// The commands are tmux's stock text for a stock binding, else each one
+/// printed as tmux prints a parsed command ([`tmux_command_line`]).
+// ponytail: no `-a`, `-F`, `-O`, `-P` or `-r` (none parse natively).
+fn list_keys_tmux(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: &ListKeys,
+    only: Option<Key>,
+) -> Result<String, String> {
+    let tables = &state.registry.key_tables;
+    let names: Vec<String> = match &c.table {
+        Some(t) => vec![t.clone()],
+        None if c.notes => vec!["prefix".to_string(), "root".to_string()],
+        None => tables.table_names().map(str::to_string).collect(),
+    };
+    let mut rows: Vec<(String, Key, Binding)> = Vec::new();
+    for table in &names {
+        let mut keys = tables.keys(table);
+        keys.sort_by_key(tmux_key_order);
+        for key in keys {
+            if only.is_some_and(|k| !k.matches(&key)) {
+                continue;
+            }
+            let Some(b) = tables.exact(table, &key) else {
+                continue;
+            };
+            if c.notes && b.desc.as_deref().is_none_or(str::is_empty) {
+                continue;
+            }
+            rows.push((table.clone(), key, b.clone()));
+        }
+    }
+    if c.first {
+        rows.truncate(1);
+    }
+    let prefix = match state.model.options.lookup("prefix", &[]) {
+        Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
+        _ => String::new(),
+    };
+    let key_width = rows
+        .iter()
+        .map(|(_, k, _)| k.to_string().chars().count())
+        .max()
+        .unwrap_or(0);
+    let table_width = rows
+        .iter()
+        .map(|(t, _, _)| t.chars().count())
+        .max()
+        .unwrap_or(0);
+    let has_repeat = rows.iter().any(|(_, _, b)| b.repeat);
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(table, key, b)| {
+            let command = b
+                .shown
+                .clone()
+                .unwrap_or_else(|| tmux_command_line(&b.cmds));
+            if c.notes {
+                let key = key.to_string();
+                let note = b.desc.clone().unwrap_or(command);
+                return format!("{prefix} {key:<key_width$} {note}");
+            }
+            let repeat = match (has_repeat, b.repeat) {
+                (false, _) => "",
+                (true, true) => "-r",
+                (true, false) => "  ",
+            };
+            let key = crate::cmd::parse::escape_arg(&key.to_string());
+            format!("bind-key {repeat} -T {table:<table_width$} {key:<key_width$} {command}")
+        })
+        .collect();
+    if lines.len() == 1 || c.first {
+        if let (Some(line), Some(id)) = (lines.first(), clients::current_client(state, ctx)) {
+            clients::show_message(state, id, line);
+        }
+        return Ok(String::new());
+    }
+    Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+}
+
+/// Where tmux 3.7b's key codes put `key` (its key tables are ordered by
+/// code): no modifier, then Meta, Ctrl and Shift as the high bits (`M-`
+/// 1, `C-` 2, `S-` 4); within one, characters by code point (Enter, Tab
+/// and Escape are C0 characters), then tmux's special keys in its own
+/// order, then the mouse keys.
+fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
+    use crate::server::input::KeyCode;
+    let m = &key.mods;
+    let mods = u8::from(m.alt) | u8::from(m.ctrl) << 1 | u8::from(m.shift) << 2;
+    const SPECIAL: &[KeyCode] = &[
+        KeyCode::Backspace,
+        KeyCode::Insert,
+        KeyCode::Delete,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::PageDown,
+        KeyCode::PageUp,
+        KeyCode::BackTab,
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Right,
+    ];
+    match key.code {
+        KeyCode::Char(c) => (mods, 0, c as u32, String::new()),
+        KeyCode::Enter => (mods, 0, 13, String::new()),
+        KeyCode::Tab => (mods, 0, 9, String::new()),
+        KeyCode::Escape => (mods, 0, 27, String::new()),
+        // F1 to F12 sit between BSpace and IC.
+        KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
+        KeyCode::Mouse(_) => (mods, 2, 0, key.to_string()),
+        code => {
+            let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
+            let at = if at == 0 { 0 } else { at + 12 };
+            (mods, 1, at, String::new())
+        }
+    }
+}
+
+/// A binding's commands as tmux 3.7b prints a parsed command list in
+/// `list-keys` (`cmd_list_print` escaped): each command by its full tmux
+/// name, its flags without values first in one word, then each flag with
+/// a value, both in tmux's flag order (ASCII: digits, upper, lower case),
+/// then the arguments, every value escaped as tmux escapes one; commands
+/// joined by ` \; `.
+pub(crate) fn tmux_command_line(cmds: &[Vec<String>]) -> String {
+    cmds.iter()
+        .map(|argv| tmux_command(argv))
+        .collect::<Vec<_>>()
+        .join(" \\; ")
+}
+
+fn tmux_command(argv: &[String]) -> String {
+    use crate::cmd::parse::escape_arg;
+    let Some((name, args)) = argv.split_first() else {
+        return String::new();
+    };
+    let Ok(spec) = crate::compat::tmux::resolve(name) else {
+        // A native-only verb: as it is.
+        let mut out = vec![name.clone()];
+        out.extend(args.iter().map(|a| escape_arg(a)));
+        return out.join(" ");
+    };
+    // Flags taking a value: `[-c word]` in the usage (and `select-pane
+    // -P`, which tmux hides).
+    let mut takes_value: Vec<char> = spec
+        .usage
+        .split("[-")
+        .skip(1)
+        .filter_map(|part| {
+            let mut chars = part.chars();
+            let flag = chars.next()?;
+            (chars.next() == Some(' ')).then_some(flag)
+        })
+        .collect();
+    if spec.name == "select-pane" {
+        takes_value.push('P');
+    }
+    let mut bools: BTreeMap<char, usize> = BTreeMap::new();
+    let mut values: BTreeMap<char, Vec<String>> = BTreeMap::new();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
+            break;
+        };
+        i += 1;
+        for (at, flag) in letters.char_indices() {
+            if !takes_value.contains(&flag) {
+                *bools.entry(flag).or_default() += 1;
+                continue;
+            }
+            let attached = &letters[at + flag.len_utf8()..];
+            let value = if attached.is_empty() {
+                i += 1;
+                args.get(i - 1).cloned().unwrap_or_default()
+            } else {
+                attached.to_string()
+            };
+            values.entry(flag).or_default().push(value);
+            break;
+        }
+    }
+    let mut out = spec.name.to_string();
+    if !bools.is_empty() {
+        out.push_str(" -");
+        for (flag, n) in &bools {
+            out.extend(std::iter::repeat_n(*flag, *n));
+        }
+    }
+    for (flag, vals) in &values {
+        for v in vals {
+            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+        }
+    }
+    for a in &args[i.min(args.len())..] {
+        out.push(' ');
+        out.push_str(&escape_arg(a));
+    }
+    out
 }
 
 fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> String {
@@ -890,6 +1992,10 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let model = &mut state.model;
     for (name, value, _) in resolved.configured() {
         set_global(model, &mut state.events, name, value);
+        model.options.mark_runtime(name);
+    }
+    for (name, items, _) in resolved.configured_lists() {
+        set_global_list(model, &mut state.events, name, list_items(items));
         model.options.mark_runtime(name);
     }
     let tables = &mut state.registry.key_tables;
@@ -949,24 +2055,66 @@ const DEFAULT_MESSAGE: &str =
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
 /// active one, as tmux's `cmd_find_best_client`), so `#{client_width}`
-/// and the other `client_*` variables work.
-// ponytail: printed with or without `-p`; showing it on the client's
-// status line without `-p` is M3.6's (spec §4.5 listing row).
-fn display_message(state: &State, ctx: &ClientCtx, c: DisplayMessage) -> Result<String, String> {
+/// and the other `client_*` variables work. With `-p` it is printed;
+/// without, it goes on that client's status line (`clients::
+/// display_message`, which logs it for `show-messages`), and with no
+/// client attached nothing happens, as in tmux 3.7b.
+fn display_message(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: DisplayMessage,
+) -> Result<String, String> {
+    // `-d` is checked first, as tmux 3.7b's `args_strtonum` (recorded).
+    let delay = match c.delay.as_deref().map(str::parse::<i128>) {
+        None => None,
+        Some(Ok(n)) if n < 0 => return Err("delay too small".to_string()),
+        Some(Ok(n)) if n > i128::from(u32::MAX) => return Err("delay too large".to_string()),
+        Some(Ok(n)) => Some(std::time::Duration::from_millis(
+            u64::try_from(n).unwrap_or(0),
+        )),
+        Some(Err(_)) => return Err("delay invalid".to_string()),
+    };
     let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
     let vars = FormatCtx::new(model, pane);
-    let out = match clients::current_client(state, ctx).and_then(|id| state.clients.get(&id)) {
-        Some(client) => expand(text, &clients::ClientVars::new(model, client, Some(vars))),
-        None => expand(text, &vars),
+    // `-c` names the client for the message; one that is not there shows
+    // nothing, as tmux's `CMD_CLIENT_CANFAIL`. Formats see that client if
+    // it shows the pane's session, else the current one.
+    let current = match &c.client {
+        Some(name) => clients::client_named(state, name),
+        None => clients::current_client(state, ctx),
     };
-    Ok(format!("{out}\n"))
+    let session = model
+        .panes
+        .get(&pane)
+        .and_then(|p| model.windows.get(&p.window))
+        .map(|w| w.session);
+    let for_formats = current
+        .filter(|id| state.clients.get(id).map(|e| e.session) == session)
+        .or_else(|| clients::current_client(state, ctx));
+    let out = match for_formats.and_then(|id| state.clients.get(&id)) {
+        Some(client) => {
+            let client = clients::ClientVars::new(model, client, Some(vars));
+            expand(text, &ServerVars::fresh(state, pane, &client))
+        }
+        None => expand(text, &ServerVars::fresh(state, pane, &vars)),
+    };
+    if c.print {
+        return Ok(format!("{out}\n"));
+    }
+    if let Some(id) = current {
+        clients::display_message(state, id, &out, delay);
+    }
+    Ok(String::new())
 }
 
-fn lines(model: &Model, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
+fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
     panes
-        .map(|p| format!("{}\n", expand(fmt, &FormatCtx::new(model, p))))
+        .map(|p| {
+            let vars = FormatCtx::new(&state.model, p);
+            format!("{}\n", expand(fmt, &ServerVars::fresh(state, p, &vars)))
+        })
         .collect()
 }
 
@@ -975,33 +2123,166 @@ fn active_pane(model: &Model, window: WindowId) -> Option<PaneId> {
     model.windows.get(&window).map(|w| w.active)
 }
 
-fn list_sessions(model: &Model, c: ListSessions) -> Result<String, String> {
-    let fmt = c.format.unwrap_or_default();
-    let panes = model
+// tmux 3.7b's default `list-*` templates (`cmd-list-*.c`), in tmux's
+// format language (`compat::tmux::formats::to_native` rewrites them as a
+// tmux `-F`): the output a tmux-dialect `list-*` with no `-F` gives (FE.2).
+
+pub(crate) const TMUX_LIST_SESSIONS: &str = "#{session_name}: #{session_windows} windows \
+     (created #{t:session_created})#{?session_grouped, (group ,}\
+     #{session_group}#{?session_grouped,),}#{?session_attached, (attached),}";
+
+const TMUX_LIST_WINDOWS: &str = "#{window_index}: #{window_name}#{window_raw_flags} \
+     (#{window_panes} panes) [#{window_width}x#{window_height}] \
+     [layout #{window_layout}] #{window_id}#{?window_active, (active),}";
+
+const TMUX_LIST_WINDOWS_ALL: &str = "#{session_name}:#{window_index}: \
+     #{window_name}#{window_raw_flags} (#{window_panes} panes) \
+     [#{window_width}x#{window_height}] ";
+
+/// `list-panes`' template after its line's own prefix.
+const TMUX_LIST_PANES: &str = "[#{pane_width}x#{pane_height}\
+     #{?pane_floating_flag, #{pane_x}#,#{pane_y}#,#{pane_z}}] [history \
+     #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}\
+     #{?pane_active, (active),}#{?pane_dead, (dead),}";
+
+pub(crate) const TMUX_LIST_CLIENTS: &str = "#{client_name}: #{session_name} \
+     [#{client_width}x#{client_height} #{client_termname}] \
+     #{?#{!=:#{client_uid},#{uid}},[user #{?client_user,#{client_user},#{client_uid},}] ,}\
+     #{?client_flags,(,}#{client_flags}#{?client_flags,),}";
+
+/// A tmux template in grofe's format language.
+pub(crate) fn tmux_template(template: &str) -> String {
+    crate::compat::tmux::formats::to_native(template, crate::compat::tmux::formats::Jobs::Empty)
+        .value
+}
+
+/// A `list-*` command's format: its `-F`, else tmux's default template
+/// (only a tmux-dialect request with no `-F` gets here, [`super::route`]).
+fn list_format(format: Option<String>, template: impl FnOnce() -> String) -> String {
+    format.unwrap_or_else(|| tmux_template(&template()))
+}
+
+fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
+    let fmt = list_format(c.format.clone(), || TMUX_LIST_SESSIONS.to_string());
+    let sessions = listed_sessions(state, &c);
+    let panes = sessions
+        .into_iter()
+        .filter_map(|s| session_pane(&state.model, s));
+    Ok(lines(state, &fmt, panes))
+}
+
+fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
+    let fmt = list_format(c.format.clone(), || match c.all {
+        true => TMUX_LIST_WINDOWS_ALL.to_string(),
+        false => TMUX_LIST_WINDOWS.to_string(),
+    });
+    let windows = listed_windows(state, ctx, &c)?;
+    let panes = windows
+        .into_iter()
+        .filter_map(|w| active_pane(&state.model, w));
+    Ok(lines(state, &fmt, panes))
+}
+
+fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
+    // `-a` lines start with the session and window, `-s` lines with the
+    // window, others with the pane index alone.
+    let fmt = list_format(c.format.clone(), || {
+        let prefix = if c.all {
+            "#{session_name}:#{window_index}.#{pane_index}: "
+        } else if c.session {
+            "#{window_index}.#{pane_index}: "
+        } else {
+            "#{pane_index}: "
+        };
+        format!("{prefix}{TMUX_LIST_PANES}")
+    });
+    let panes = listed_panes(state, ctx, &c)?;
+    Ok(lines(state, &fmt, panes.into_iter()))
+}
+
+/// Whether a list's `-f` filter keeps the line of `pane` (tmux's
+/// `format_true`: not empty and not `0`); no filter keeps every line.
+fn kept(state: &State, filter: Option<&str>, pane: PaneId) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    let vars = FormatCtx::new(&state.model, pane);
+    let got = expand(filter, &ServerVars::new(state, pane, &vars));
+    !got.is_empty() && got != "0"
+}
+
+/// The pane a session's formats expand against: its current window's
+/// active pane.
+fn session_pane(model: &Model, session: SessionId) -> Option<PaneId> {
+    model
         .sessions
-        .values()
-        .filter_map(|s| active_pane(model, s.active));
-    Ok(lines(model, &fmt, panes))
+        .get(&session)
+        .and_then(|s| active_pane(model, s.active))
 }
 
-fn list_windows(model: &Model, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
-    let session = model.resolve_session(&c.target, ctx)?;
-    let fmt = c.format.unwrap_or_default();
-    let panes = model.sessions[&session]
-        .windows
+/// Every session, by name as tmux keeps them.
+fn sessions_by_name(model: &Model) -> Vec<SessionId> {
+    let mut sessions: Vec<_> = model.sessions.values().map(|s| (&s.name, s.id)).collect();
+    sessions.sort();
+    sessions.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The sessions `list-sessions` lists: all of them, by name, that `-f`
+/// keeps.
+pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Vec<SessionId> {
+    sessions_by_name(&state.model)
+        .into_iter()
+        .filter(|s| {
+            session_pane(&state.model, *s).is_some_and(|p| kept(state, c.filter.as_deref(), p))
+        })
+        .collect()
+}
+
+/// The windows `list-windows` lists: the target session's, or with `-a`
+/// every session's (by name), in index order, that `-f` keeps.
+pub(crate) fn listed_windows(
+    state: &State,
+    ctx: &ClientCtx,
+    c: &ListWindows,
+) -> Result<Vec<WindowId>, String> {
+    let model = &state.model;
+    let sessions = match c.all {
+        true => sessions_by_name(model),
+        false => vec![model.resolve_session(&c.target, ctx)?],
+    };
+    Ok(sessions
         .iter()
-        .filter_map(|w| active_pane(model, *w));
-    Ok(lines(model, &fmt, panes))
+        .flat_map(|s| model.sessions[s].windows.iter().copied())
+        .filter(|w| active_pane(model, *w).is_some_and(|p| kept(state, c.filter.as_deref(), p)))
+        .collect())
 }
 
-fn list_panes(model: &Model, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
-    let window = model.resolve_window(&c.target, ctx)?;
-    let fmt = c.format.unwrap_or_default();
-    Ok(lines(
-        model,
-        &fmt,
-        model.windows[&window].pane_ids().into_iter(),
-    ))
+/// The panes `list-panes` lists: the target window's, with `-s` its
+/// session's, with `-a` every session's, that `-f` keeps.
+pub(crate) fn listed_panes(
+    state: &State,
+    ctx: &ClientCtx,
+    c: &ListPanes,
+) -> Result<Vec<PaneId>, String> {
+    let model = &state.model;
+    let windows = if c.all {
+        sessions_by_name(model)
+            .iter()
+            .flat_map(|s| model.sessions[s].windows.clone())
+            .collect()
+    } else if c.session {
+        // tmux finds `-t` as a window, then takes its session.
+        let w = model.resolve_window(&c.target, ctx)?;
+        model.sessions[&model.windows[&w].session].windows.clone()
+    } else {
+        vec![model.resolve_window(&c.target, ctx)?]
+    };
+    Ok(windows
+        .iter()
+        .filter_map(|w| model.windows.get(w))
+        .flat_map(|w| w.pane_ids())
+        .filter(|p| kept(state, c.filter.as_deref(), *p))
+        .collect())
 }
 
 /// Format variables (spec §4.5) for one pane, its window and its session.
@@ -1020,14 +2301,140 @@ fn flag(b: bool) -> String {
     if b { "1" } else { "0" }.to_string()
 }
 
+/// Format variables that need the server state, not only the model
+/// (`socket_path`, `pane_title`, `pane_tty`, TC.11's `host` and
+/// `host_short`, the mouse's, and a running hook's `#{hook*}`), over
+/// `inner` for the rest.
+/// Built where dispatch holds `&State`, the way `ClientVars` layers the
+/// client's variables.
+pub struct ServerVars<'a> {
+    state: &'a State,
+    pane: PaneId,
+    inner: &'a dyn FormatVars,
+    /// Read the foreground process now, not from the last sample.
+    fresh: bool,
+    /// What a fresh expansion has read so far: each is read at most once
+    /// per expansion, and the members only when a format asks for them.
+    group: OnceCell<Option<i32>>,
+    leader: OnceCell<ProcSample>,
+    members: OnceCell<Vec<Vec<String>>>,
+}
+
+impl<'a> ServerVars<'a> {
+    /// The status line's and hooks' form: the foreground process comes
+    /// from the pane's 1 s sample, so a redraw costs no syscalls for it.
+    pub fn new(state: &'a State, pane: PaneId, inner: &'a dyn FormatVars) -> ServerVars<'a> {
+        ServerVars {
+            state,
+            pane,
+            inner,
+            fresh: false,
+            group: OnceCell::new(),
+            leader: OnceCell::new(),
+            members: OnceCell::new(),
+        }
+    }
+
+    /// A command's form (a binding's conditional, `display-message`, `set
+    /// -F`, `list-* -F`): `pane_current_command`, `pane_current_argv` and
+    /// `pane_foreground_argv` read the pane's foreground process group at
+    /// this moment, with syscalls and no fork, so a key pressed just after
+    /// a program starts or exits sees the one in front.
+    pub fn fresh(state: &'a State, pane: PaneId, inner: &'a dyn FormatVars) -> ServerVars<'a> {
+        ServerVars {
+            fresh: true,
+            ..ServerVars::new(state, pane, inner)
+        }
+    }
+
+    fn foreground(&self, name: &str) -> Option<String> {
+        let group = *self.group.get_or_init(|| {
+            let p = self.state.model.panes.get(&self.pane)?;
+            p.handle.foreground_group()
+        });
+        let group = group?;
+        let leader = || self.leader.get_or_init(|| procinfo::leader(group));
+        match name {
+            "pane_current_command" => leader().command.clone(),
+            "pane_current_argv" => leader().argv.as_ref().map(|a| a.join(" ")),
+            _ => {
+                let members = self.members.get_or_init(|| procinfo::members(group));
+                (!members.is_empty()).then(|| procinfo::argv_lines(members))
+            }
+        }
+    }
+}
+
+impl FormatVars for ServerVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        // The mouse event a mouse key's commands run for, and the view (TC.10).
+        if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+            return Some(v);
+        }
+        // Inside a hook, its `#{hook*}` variables (TC.5).
+        let hook = crate::server::hooks::current_formats(self.state);
+        if let Some(v) = hook.and_then(|f| f.get(name)) {
+            return Some(v);
+        }
+        match name {
+            "socket_path" => Some(self.state.socket.display().to_string()),
+            "pane_title" => Some(self.state.passthrough.title(self.pane)),
+            "host" => Some(crate::server::passthrough::hostname().to_string()),
+            // tmux: the host name up to its first dot.
+            "host_short" => {
+                let host = crate::server::passthrough::hostname();
+                Some(host.split('.').next().unwrap_or(host).to_string())
+            }
+            "pane_tty" => {
+                let p = self.state.model.panes.get(&self.pane)?;
+                Some(p.handle.tty_path()?.display().to_string())
+            }
+            "pane_current_command" | "pane_current_argv" | "pane_foreground_argv" if self.fresh => {
+                self.foreground(name).or_else(|| self.inner.get(name))
+            }
+            _ => self.inner.get(name),
+        }
+    }
+}
+
+/// The tmux version a server with tmux identity reports (`#{version}`,
+/// `tmux -V`'s number): the release the compat suite is recorded against.
+const TMUX_COMPAT_VERSION: &str = "3.7b";
+
 impl FormatVars for FormatCtx<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        use crate::compat::Identity;
+        use crate::types::MouseMode;
         let m = self.model;
         if name.starts_with('@') || builtin(name).is_some() {
             return m
                 .options
                 .lookup(name, &chain(m, self.pane))
                 .map(str::to_string);
+        }
+        match name {
+            "version" => {
+                return Some(
+                    match m.identity {
+                        Identity::Grofe => env!("CARGO_PKG_VERSION"),
+                        Identity::Tmux => TMUX_COMPAT_VERSION,
+                    }
+                    .to_string(),
+                );
+            }
+            "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
+            "pid" => return Some(std::process::id().to_string()),
+            // Session groups are out of scope (spec §4.5).
+            "session_grouped" => return Some("0".to_string()),
+            // ponytail: stubs until the features exist: copy mode (M5),
+            // and the status range under
+            // the mouse, which only a mouse-bound command sees (TC.10).
+            // `session_group` is empty with no groups. `client_tty` is a
+            // client's (`ClientVars`), empty with none.
+            "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
+            | "client_tty" => return Some(String::new()),
+            "pane_in_mode" => return Some("0".to_string()),
+            _ => {}
         }
         let p = m.panes.get(&self.pane)?;
         let w = m.windows.get(&p.window)?;
@@ -1043,9 +2450,18 @@ impl FormatVars for FormatCtx<'_> {
             "window_width" => w.cols.to_string(),
             "window_bell_flag" => flag(w.bell_flag),
             "window_height" => w.rows.to_string(),
-            "window_panes" => w.layout.compute(w.area()).len().to_string(),
+            "window_panes" => w.pane_ids().len().to_string(),
+            "pane_floating_flag" => flag(w.floating(p.id).is_some()),
             "session_windows" => s.windows.len().to_string(),
+            "session_created" => s
+                .created
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+                .to_string(),
             "session_attached" => s.attached.to_string(),
+            "session_path" => s.cwd.display().to_string(),
+            "window_layout" => window_layout(w),
+            "window_raw_flags" => window_flags(s, w),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
@@ -1056,21 +2472,175 @@ impl FormatVars for FormatCtx<'_> {
             "pane_pid" => p.handle.pid()?.to_string(),
             "pane_current_command" => p.handle.current_command()?,
             "pane_current_argv" => p.handle.current_argv()?.join(" "),
+            // Every member of the foreground group, one argv per line; the
+            // sample holds only the leader's (a command reads them all,
+            // `ServerVars::fresh`).
+            "pane_foreground_argv" => procinfo::argv_lines(&[p.handle.current_argv()?]),
             "pane_current_path" => p
                 .handle
                 .current_path()
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
-            "pane_left" => pane_origin(w, p.id)?.0.to_string(),
-            "pane_top" => pane_origin(w, p.id)?.1.to_string(),
+            "pane_left" => match w.floating(p.id) {
+                Some(f) => f.x.to_string(),
+                None => pane_origin(w, p.id)?.0.to_string(),
+            },
+            "pane_top" => match w.floating(p.id) {
+                Some(f) => f.y.to_string(),
+                None => pane_origin(w, p.id)?.1.to_string(),
+            },
+            // tmux's names for the same corner, and the far one.
+            "pane_x" => self.get("pane_left")?,
+            "pane_y" => self.get("pane_top")?,
+            "pane_right" => {
+                let left: u32 = self.get("pane_left")?.parse().ok()?;
+                (left + u32::from(p.cols)).saturating_sub(1).to_string()
+            }
+            "pane_bottom" => {
+                let top: u32 = self.get("pane_top")?.parse().ok()?;
+                (top + u32::from(p.rows)).saturating_sub(1).to_string()
+            }
+            // Whether the pane touches that edge of the window, as tmux's
+            // format.c decides (grofe has no pane-border-status to move the
+            // top and bottom edges).
+            "pane_at_left" => flag(self.get("pane_left")? == "0"),
+            "pane_at_top" => flag(self.get("pane_top")? == "0"),
+            "pane_at_right" => {
+                let left: u32 = self.get("pane_left")?.parse().ok()?;
+                flag(left + u32::from(p.cols) >= u32::from(w.cols))
+            }
+            "pane_at_bottom" => {
+                let top: u32 = self.get("pane_top")?.parse().ok()?;
+                flag(top + u32::from(p.rows) >= u32::from(w.rows))
+            }
+            // The place in the stack, 0 on top: the floating panes, then
+            // every tiled pane one below them all (tmux's z_index).
+            "pane_z" => match w.floating(p.id) {
+                Some(f) => w.floating.iter().filter(|o| o.z > f.z).count(),
+                None => w.floating.len() + 1,
+            }
+            .to_string(),
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
+            // Empty for a live pane and for one a signal killed, as tmux.
+            "pane_dead_status" => p.dead.flatten()?.to_string(),
+            "pane_start_command" => p
+                .argv
+                .as_deref()
+                .map(|argv| {
+                    argv.iter()
+                        .map(|a| escape_arg(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default(),
+            "alternate_on" => flag(p.handle.modes().alt_screen),
+            "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
+            "history_size" => p.handle.history_size().to_string(),
+            "history_limit" => m.history_limit(s.id).to_string(),
+            // tmux's grid: 40 bytes a line, history and screen.
+            // ponytail: tmux adds 5 bytes for each cell a line has
+            // allocated, which depends on how its grid grew; left out.
+            "history_bytes" => ((p.handle.history_size() + usize::from(p.rows)) * 40).to_string(),
+            "window_flags" => window_flags(s, w),
             // ponytail: `client_width`/`client_height` need clients (M2);
-            // `host_short` needs nix's `hostname` feature (not enabled).
+            // `host` and `host_short` are `ServerVars`' (TC.11).
             _ => return None,
         })
+    }
+}
+
+/// tmux's `window_layout`: the layout string of the window's tiled and
+/// floating panes (`layout::tmux_layout`).
+fn window_layout(w: &crate::server::model::Window) -> String {
+    use crate::server::layout::{FloatingCell, tmux_layout};
+    let floating: Vec<FloatingCell> = w
+        .floating
+        .iter()
+        .map(|f| FloatingCell {
+            pane: f.pane,
+            x: f.x,
+            y: f.y,
+            cols: f.cols,
+            rows: f.rows,
+            z: f.z,
+        })
+        .collect();
+    tmux_layout(&w.layout.export(w.area()), &floating, !w.zoomed)
+}
+
+/// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in
+/// tmux's order. grofe tracks no activity, silence or marked pane, so
+/// `#`, `~` and `M` never show.
+fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Window) -> String {
+    [
+        (w.bell_flag, '!'),
+        (s.active == w.id, '*'),
+        (s.last_windows.last() == Some(&w.id), '-'),
+        (w.zoomed, 'Z'),
+    ]
+    .into_iter()
+    .filter_map(|(on, c)| on.then_some(c))
+    .collect()
+}
+
+/// One word of `pane_start_command`, quoted as tmux's `args_escape`
+/// quotes it (checked against tmux 3.7b): double quotes around a word
+/// with any of ` #';${}%`, else single quotes around one with a space or
+/// `"`; a lone special character, or a leading `~`, gets a backslash;
+/// control characters and backslashes are escaped C-style.
+pub(crate) fn escape_arg(s: &str) -> String {
+    const DQUOTED: &str = " #';${}%";
+    const SQUOTED: &str = " \"";
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let quote = if s.contains(|c| DQUOTED.contains(c)) {
+        Some('"')
+    } else if s.contains(|c| SQUOTED.contains(c)) {
+        Some('\'')
+    } else {
+        None
+    };
+    let mut chars = s.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && c != ' '
+        && (quote.is_some() || c == '~')
+    {
+        return format!("\\{c}");
+    }
+    let bytes = s.as_bytes();
+    let mut body = String::with_capacity(s.len());
+    for (i, c) in s.char_indices() {
+        match c {
+            '\\' => body.push_str("\\\\"),
+            '\n' => body.push_str("\\n"),
+            '\t' => body.push_str("\\t"),
+            '\r' => body.push_str("\\r"),
+            '\x07' => body.push_str("\\a"),
+            '\x08' => body.push_str("\\b"),
+            '\x0b' => body.push_str("\\v"),
+            '\x0c' => body.push_str("\\f"),
+            c if c.is_ascii_control() => body.push_str(&format!("\\{:03o}", c as u32)),
+            '"' if quote == Some('"') => body.push_str("\\\""),
+            // `$` only where a shell would start a variable after it.
+            '$' if quote == Some('"')
+                && bytes.get(i + 1).is_some_and(|&n| {
+                    n == b'_' || n == b'{' || n.is_ascii_alphabetic() || n >= 0x80
+                }) =>
+            {
+                body.push_str("\\$")
+            }
+            c => body.push(c),
+        }
+    }
+    let tilde = if body.starts_with('~') { "\\" } else { "" };
+    match quote {
+        Some('\'') => format!("'{body}'"),
+        Some(q) => format!("{q}{tilde}{body}{q}"),
+        None => format!("{tilde}{body}"),
     }
 }
 
@@ -1087,12 +2657,766 @@ fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u
         .map(|(_, r)| (r.x, r.y))
 }
 
+// TC.2b: list-valued options.
+//
+// A list option is tmux's array option: a sparse map from index to text,
+// read and written with the same grammar tmux 3.7b uses, so the native
+// form and FE.3's tmux form are one form:
+//
+// - `set name[N] value` sets element N; the list may have holes.
+// - `set name value` replaces the whole list with element 0.
+// - `set -a name value` fills the lowest free index (a hole first);
+//   `set -a name[N] value` appends the text to element N.
+// - `set -u name[N]` removes element N and leaves a hole: later indices
+//   do not shift (tmux's answer, recorded). `set -u name` puts a global
+//   list back to its default and removes a list set anywhere else.
+// - `show name` prints `name[N] value` per element (none for an empty
+//   list: the bare name); `show name[N]` prints `''` for a hole; `-v`
+//   drops the names.
+// - The index is read as C's `%u` (blanks, a sign, digits, wrapping
+//   modulo 2^32); anything malformed, or above `i32::MAX`, is
+//   `ambiguous option: <name>`. An index on a scalar is `not an array`
+//   for `set` and shows the scalar's value for `show`.
+//
+// A lookup takes the whole list from the first owner that has one (a
+// session's list hides the global one entirely), as tmux's does.
+
+/// A built-in list option: the scope used when no flag is given, and its
+/// global default, element by element from index 0.
+struct ListBuiltin {
+    name: &'static str,
+    scope: OptionScope,
+    default: &'static [&'static str],
+}
+
+// ponytail: `status-format`'s default row 0 is empty, which TC.11 renders
+// as the built-in row (status-left, window list, status-right), since the
+// native format language has no window-list loop to spell it with.
+// grofe's own aliases have no default (tmux's six name verbs grofe lacks).
+const LISTS: &[ListBuiltin] = &[
+    ListBuiltin {
+        name: "command-alias",
+        scope: OptionScope::Global,
+        default: &[],
+    },
+    ListBuiltin {
+        name: "status-format",
+        scope: OptionScope::Session,
+        default: &[""],
+    },
+    // TC.5: the client variables a session takes at new-session, attach
+    // and switch-client, tmux 3.7b's default (recorded).
+    ListBuiltin {
+        name: "update-environment",
+        scope: OptionScope::Session,
+        default: &[
+            "DISPLAY",
+            "KRB5CCNAME",
+            "MSYSTEM",
+            "SSH_ASKPASS",
+            "SSH_AUTH_SOCK",
+            "SSH_AGENT_PID",
+            "SSH_CONNECTION",
+            "WAYLAND_DISPLAY",
+            "WINDOWID",
+            "XAUTHORITY",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+        ],
+    },
+    // FE.1: tmux 3.7b's list and default (recorded); no effect, since the
+    // probe decides what the outer terminal can do (spec D7, §4.5).
+    ListBuiltin {
+        name: "terminal-features",
+        scope: OptionScope::Global,
+        default: &[
+            "xterm*:clipboard:ccolour:cstyle:focus:title",
+            "screen*:title",
+            "rxvt*:ignorefkeys",
+        ],
+    },
+];
+
+/// The separator tmux 3.7b splits a list option's value on when it is set
+/// or appended without an index (recorded); `status-format` has none.
+fn list_separator(name: &str) -> Option<char> {
+    match name {
+        "terminal-features" | "command-alias" => Some(','),
+        "update-environment" => Some(' '),
+        _ => None,
+    }
+}
+
+fn pieces(value: &str, sep: char) -> impl Iterator<Item = String> + '_ {
+    value
+        .split(sep)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
+
+fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
+    LISTS.iter().find(|l| l.name == name)
+}
+
+/// Every built-in list option's name, in table order.
+pub fn list_names() -> impl Iterator<Item = &'static str> {
+    LISTS.iter().map(|l| l.name)
+}
+
+/// Options grofe accepts and stores but never reads (spec §4.5, "Options
+/// by tmux name"), by tmux name. `show-config --explain` marks them
+/// `(no effect)`. FE.1's rows: every such option in the corpus, each with
+/// its `BUILTINS` or `LISTS` entry.
+const NO_EFFECT: &[&str] = &[
+    "aggressive-resize",
+    "default-command",
+    "default-terminal",
+    "extended-keys",
+    "extended-keys-format",
+    "mode-keys",
+    "pane-border-format",
+    "status-keys",
+    "synchronize-panes",
+    "terminal-features",
+    "window-active-style",
+    "window-style",
+];
+
+/// Whether grofe stores `name` without ever acting on it.
+pub fn has_no_effect(name: &str) -> bool {
+    NO_EFFECT.contains(&name)
+}
+
+/// One list option's elements at one owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListEntry {
+    pub items: BTreeMap<u32, String>,
+    /// Set with `--persist`, as [`Entry::persist`].
+    pub persist: bool,
+}
+
+fn default_list(l: &ListBuiltin) -> ListEntry {
+    ListEntry {
+        items: (0..).zip(l.default.iter().map(|s| s.to_string())).collect(),
+        persist: false,
+    }
+}
+
+fn default_lists() -> BTreeMap<String, ListEntry> {
+    LISTS
+        .iter()
+        .map(|l| (l.name.to_string(), default_list(l)))
+        .collect()
+}
+
+/// One change to a list option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListOp {
+    /// Element `index` becomes the text, or gains it at its end.
+    Set {
+        index: u32,
+        value: String,
+        append: bool,
+    },
+    /// The text fills the lowest free index.
+    Push(String),
+    /// The list becomes just the text at index 0.
+    Replace(String),
+    /// The list becomes exactly these elements.
+    Items(BTreeMap<u32, String>),
+    /// Element `index` goes; later ones keep their indices.
+    Remove(u32),
+    /// Back to the default (global) or gone (elsewhere).
+    Reset,
+}
+
+impl Options {
+    /// The list `name` set at exactly `owner`.
+    pub fn list(&self, owner: Owner, name: &str) -> Option<&ListEntry> {
+        self.lists.get(&owner)?.get(name)
+    }
+
+    /// Every list set at exactly `owner`, by name.
+    pub fn lists_at(&self, owner: Owner) -> impl Iterator<Item = (&String, &ListEntry)> {
+        self.lists.get(&owner).into_iter().flatten()
+    }
+
+    /// The whole list from the first owner in `chain`, then global, that
+    /// has one.
+    pub fn lookup_list(&self, name: &str, chain: &[Owner]) -> Option<&BTreeMap<u32, String>> {
+        chain
+            .iter()
+            .chain([&Owner::Global])
+            .find_map(|o| self.list(*o, name))
+            .map(|l| &l.items)
+    }
+
+    /// Applies `op` to the list `name` at `owner`. Returns whether the
+    /// list changed; an unknown list name is an error.
+    pub fn edit_list(
+        &mut self,
+        owner: Owner,
+        name: &str,
+        op: ListOp,
+        persist: bool,
+    ) -> Result<bool, String> {
+        let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        // As tmux: removing from a list this owner doesn't have changes
+        // nothing, and must not create an empty one that hides the parent's.
+        if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
+            return Ok(false);
+        }
+        let mut default = default_list(l);
+        if let Some(items) = self.identity_list_defaults.get(l.name) {
+            default.items = (0..).zip(items.iter().cloned()).collect();
+        }
+        let at = self.lists.entry(owner).or_default();
+        if op == ListOp::Reset {
+            let changed = if owner == Owner::Global {
+                at.insert(name.to_string(), default.clone())
+                    .map(|o| o.items)
+                    != Some(default.items)
+            } else {
+                at.remove(name).is_some()
+            };
+            if at.is_empty() {
+                self.lists.remove(&owner);
+            }
+            return Ok(changed);
+        }
+        let entry = at.entry(name.to_string()).or_default();
+        // An unset keeps the list's `--persist`; a set stores it.
+        if !matches!(op, ListOp::Remove(_)) {
+            entry.persist = persist;
+        }
+        let before = entry.items.clone();
+        let items = &mut entry.items;
+        match op {
+            ListOp::Set {
+                index,
+                value,
+                append,
+            } => {
+                let item = items.entry(index).or_default();
+                if append {
+                    item.push_str(&value);
+                } else {
+                    *item = value;
+                }
+            }
+            ListOp::Push(value) => {
+                let free = (0..).find(|i| !items.contains_key(i)).unwrap_or(u32::MAX);
+                items.insert(free, value);
+            }
+            ListOp::Replace(value) => *items = BTreeMap::from([(0, value)]),
+            ListOp::Items(new) => *items = new,
+            ListOp::Remove(index) => {
+                items.remove(&index);
+            }
+            ListOp::Reset => {}
+        }
+        Ok(*items != before)
+    }
+}
+
+/// `name` split into its base and `[N]` index, as tmux 3.7b's
+/// `options_parse` reads it.
+pub fn split_index(name: &str) -> Result<(&str, Option<u32>), String> {
+    let Some(open) = name.find('[') else {
+        return Ok((name, None));
+    };
+    let bad = || format!("ambiguous option: {name}");
+    let inner = name[open + 1..]
+        .strip_suffix(']')
+        .filter(|s| !s.contains(']') && s.ends_with(|c: char| c.is_ascii_digit()))
+        .ok_or_else(bad)?;
+    let index = c_unsigned(inner).filter(|i| *i <= i32::MAX as u32);
+    match index {
+        Some(i) if open > 0 => Ok((&name[..open], Some(i))),
+        _ => Err(bad()),
+    }
+}
+
+/// C's `sscanf("%u")`: leading blanks, an optional sign, then digits up
+/// to the first non-digit, wrapping modulo 2^32 (so `-1` is `u32::MAX`).
+fn c_unsigned(s: &str) -> Option<u32> {
+    let s = s.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
+    let (negative, s) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    let n = s[..end].bytes().fold(0u32, |n, d| {
+        n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'))
+    });
+    Some(if negative { n.wrapping_neg() } else { n })
+}
+
+/// The error for an index on a name that is not a list: `set` says
+/// `not an array` for a known scalar, else the name is unknown.
+fn not_a_list(base: &str, full: &str) -> String {
+    if base.starts_with('@') || builtin(base).is_some() {
+        format!("not an array: {full}")
+    } else {
+        format!("invalid option: {full}")
+    }
+}
+
+/// `set-option` on a list option, or on any name given an index.
+fn set_list(
+    model: &mut Model,
+    events: &mut Events,
+    ctx: &ClientCtx,
+    c: &SetOption,
+    base: &str,
+    index: Option<u32>,
+) -> Result<String, String> {
+    if list_builtin(base).is_none() {
+        return Err(not_a_list(base, &c.name));
+    }
+    let scope = default_scope(c.scope, Some(base));
+    let owner = match owner(model, scope, &c.target, ctx) {
+        Ok(owner) => owner,
+        Err(_) if c.quiet => return Ok(String::new()),
+        Err(e) => return Err(e),
+    };
+    if c.only_if_unset && !c.unset {
+        let list = model.options.list(owner, base);
+        let already = match index {
+            Some(i) => list.is_some_and(|l| l.items.contains_key(&i)),
+            None => list.is_some(),
+        };
+        if already {
+            if c.quiet {
+                return Ok(String::new());
+            }
+            return Err(format!("already set: {}", c.name));
+        }
+    }
+    let op = match (c.unset, index, c.value.clone()) {
+        (true, Some(i), _) => ListOp::Remove(i),
+        (true, None, _) => ListOp::Reset,
+        (false, _, None) => return Err("empty value".to_string()),
+        (false, Some(index), Some(value)) => ListOp::Set {
+            index,
+            value,
+            append: c.append,
+        },
+        (false, None, Some(value)) if c.append => ListOp::Push(value),
+        (false, None, Some(value)) => ListOp::Replace(value),
+    };
+    // As tmux 3.7b (recorded, FE.1): a list with a separator takes a value
+    // set or appended without an index as one element per piece, empty
+    // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
+    let ops = match (op, list_separator(base)) {
+        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
+        (ListOp::Replace(value), Some(sep)) => {
+            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
+        }
+        (op, _) => vec![op],
+    };
+    let element = index.map(|i| format!("{base}[{i}]"));
+    let before = element.as_ref().and_then(|full| {
+        let old = model.options.list(owner, base)?.items.get(&index?)?;
+        Some((old.clone(), tmux_text(&model.options, owner, full, old)))
+    });
+    let mut changed = false;
+    for op in ops {
+        changed |= model.options.edit_list(owner, base, op, c.persist)?;
+    }
+    // In the tmux dialect, an element's text as sent, for `show` (FE.3).
+    if let (Some(full), Some(i)) = (&element, index) {
+        let stored = model
+            .options
+            .list(owner, base)
+            .and_then(|l| l.items.get(&i).cloned())
+            .unwrap_or_default();
+        // Kept only for a rewritten value, or an append to text `show`
+        // already prints in place of the value, as for a scalar.
+        let piece = c.shown.clone().or(c.value.clone()).unwrap_or_default();
+        let sent = match (&before, c.append) {
+            (Some((raw, text)), true) if raw != text || c.shown.is_some() => {
+                Some(format!("{text}{piece}"))
+            }
+            _ => c.shown.clone(),
+        }
+        .filter(|_| ctx.dialect == Dialect::Tmux && !c.unset);
+        model.options.set_shown(owner, full, &stored, sent);
+    }
+    if owner == Owner::Global {
+        model.options.mark_runtime(base);
+    }
+    if changed {
+        let (name, value) = match index {
+            Some(i) => (
+                format!("{base}[{i}]"),
+                model
+                    .options
+                    .list(owner, base)
+                    .and_then(|l| l.items.get(&i).cloned()),
+            ),
+            None => (base.to_string(), None),
+        };
+        events.emit(Event::OptionChanged {
+            scope: scope_name(owner),
+            name,
+            value,
+        });
+    }
+    Ok(String::new())
+}
+
+/// A config list's elements, element N at index N.
+fn list_items(items: &[String]) -> BTreeMap<u32, String> {
+    (0..).zip(items.iter().cloned()).collect()
+}
+
+/// Sets a whole global list, emitting `option-changed` (value-less, as
+/// for any whole-list change) on a change.
+fn set_global_list(
+    model: &mut Model,
+    events: &mut Events,
+    name: &str,
+    items: BTreeMap<u32, String>,
+) {
+    match model
+        .options
+        .edit_list(Owner::Global, name, ListOp::Items(items), false)
+    {
+        Ok(true) => events.emit(Event::OptionChanged {
+            scope: scope_name(Owner::Global),
+            name: name.to_string(),
+            value: None,
+        }),
+        Ok(false) => {}
+        Err(e) => eprintln!("grofe config: {name}: {e}"),
+    }
+}
+
+/// `apply_config` for lists (R10): a list the config no longer sets goes
+/// back to what it was before the config set it; one set at runtime is
+/// left alone.
+fn apply_config_lists(model: &mut Model, events: &mut Events, resolved: &Resolved) {
+    let configured: Vec<(&str, &[String])> = resolved
+        .configured_lists()
+        .map(|(n, v, _)| (n, v))
+        .collect();
+    let dropped: Vec<(String, BTreeMap<u32, String>)> = model
+        .options
+        .config_list_base
+        .iter()
+        .filter(|(name, _)| !configured.iter().any(|(n, _)| n == name))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
+    for (name, base) in dropped {
+        model.options.config_list_base.remove(&name);
+        set_global_list(model, events, &name, base);
+    }
+    for (name, items) in configured {
+        if model.options.runtime.contains(name) {
+            continue;
+        }
+        if !model.options.config_list_base.contains_key(name) {
+            let base = model
+                .options
+                .list(Owner::Global, name)
+                .map(|l| l.items.clone())
+                .unwrap_or_default();
+            model
+                .options
+                .config_list_base
+                .insert(name.to_string(), base);
+        }
+        set_global_list(model, events, name, list_items(items));
+    }
+}
+
+fn scope_name(owner: Owner) -> String {
+    match owner {
+        Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),
+        Owner::Session(id) => id.to_string(),
+        Owner::Window(id) => id.to_string(),
+        Owner::Pane(id) => id.to_string(),
+    }
+}
+
+/// A list as `show-options` prints it: one line per element, or the bare
+/// name for an empty list; with `value_only`, values only and nothing for
+/// an empty list.
+fn list_lines(name: &str, l: &ListEntry, value_only: bool) -> String {
+    if l.items.is_empty() {
+        return if value_only {
+            String::new()
+        } else {
+            format!("{name}\n")
+        };
+    }
+    l.items
+        .iter()
+        .map(|(i, v)| {
+            if value_only {
+                format!("{v}\n")
+            } else {
+                format!("{name}[{i}] {}\n", quote(v))
+            }
+        })
+        .collect()
+}
+
+/// `show-options` of a list option, or of any name given an index.
+// ponytail: `-v` here covers lists and indexed names only; a plain
+// scalar's `-v` and every `-q` are TC.4's.
+fn show_list(
+    model: &Model,
+    ctx: &ClientCtx,
+    c: &ShowOptions,
+    full: &str,
+    base: &str,
+    index: Option<u32>,
+) -> Result<String, String> {
+    let scope = default_scope(c.scope, Some(base));
+    let owner = owner(model, scope, &c.target, ctx)?;
+    let tmux = ctx.dialect == Dialect::Tmux;
+    let line = |value: &str| {
+        let value = if tmux {
+            tmux_text(&model.options, owner, full, value)
+        } else {
+            value.to_string()
+        };
+        let value = value.as_str();
+        if c.value_only {
+            format!("{value}\n")
+        } else {
+            format!("{full} {}\n", quote(value))
+        }
+    };
+    if list_builtin(base).is_none() {
+        // As tmux: a scalar at an index shows its value under that name.
+        // `-q` makes an unknown or unset one an empty answer.
+        let invalid = || {
+            if c.quiet {
+                Ok(String::new())
+            } else {
+                Err(format!("invalid option: {full}"))
+            }
+        };
+        if check_name(base).is_err() {
+            return invalid();
+        }
+        return match model.options.get(owner, base) {
+            Some(e) => Ok(line(&e.value)),
+            None if base.starts_with('@') => invalid(),
+            None => Ok(String::new()),
+        };
+    }
+    let Some(l) = model.options.list(owner, base) else {
+        return Ok(String::new());
+    };
+    Ok(match index {
+        // tmux's default for an element grofe's list lacks (FE.3).
+        Some(i) if tmux && owner == Owner::Global && !l.items.contains_key(&i) => {
+            match spelled_default(&model.options, full, None) {
+                Some(text) => line_raw(full, &text, c.value_only),
+                None => line(""),
+            }
+        }
+        Some(i) => line(l.items.get(&i).map_or("", String::as_str)),
+        None if tmux && owner == Owner::Global => tmux_list_lines(model, base, None, c.value_only),
+        None => list_lines(base, l, c.value_only),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
+
+    /// TC.7: `list-keys` for one key, `-1` for the first line, `-N` for
+    /// notes in tmux 3.7b's form (recorded: `C-b c       Create a new
+    /// window`, keys padded to the widest; without `-T` the prefix table,
+    /// then the root table, every line after the prefix key).
+    #[test]
+    fn list_keys_one_key_first_and_notes() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let mut run = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv)
+        };
+        // The stock keys carry tmux's notes too (TC.10); start without them.
+        run(&["unbind-key", "-a", "-T", "prefix"]).expect("unbind");
+        run(&["bind-key", "-N", "Kill the active pane", "x", "kill-pane"]).expect("bind");
+        run(&["bind-key", "-N", "Next layout", "Space", "next-layout"]).expect("bind");
+        run(&["bind-key", "y", "list-sessions"]).expect("bind");
+        run(&["bind-key", "-n", "-N", "Root note", "F6", "list-sessions"]).expect("bind");
+
+        let got = run(&["list-keys", "-T", "prefix", "x"]).expect("list-keys x");
+        assert_eq!(got.lines().count(), 1, "{got}");
+        assert!(got.starts_with("bind-key -T prefix x kill-pane"), "{got}");
+        assert_eq!(
+            run(&["list-keys", "-T", "prefix", "F12"]),
+            Ok(String::new())
+        );
+        let first = run(&["list-keys", "-1", "-T", "prefix"]).expect("-1");
+        assert_eq!(first.lines().count(), 1, "{first}");
+
+        assert_eq!(
+            run(&["list-keys", "-N"]),
+            Ok(
+                "C-b Space Next layout\nC-b x     Kill the active pane\nC-b F6    Root note\n"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            run(&["list-keys", "-N", "-T", "root"]),
+            Ok("F6 Root note\n".to_string())
+        );
+        assert_eq!(
+            run(&["list-keys", "-N", "x"]),
+            Ok("C-b x Kill the active pane\n".to_string())
+        );
+        // No attached client: `-1N` prints its line.
+        assert_eq!(
+            run(&["list-keys", "-1N", "x"]),
+            Ok("C-b x Kill the active pane\n".to_string())
+        );
+        assert_eq!(run(&["list-keys", "-1N", "y"]), Ok(String::new()));
+        assert_eq!(
+            run(&["list-keys", "-1N", "NotAKey"]),
+            Err("invalid key: NotAKey".to_string())
+        );
+    }
+
+    /// `set -F` expands with the server's variables, as `display-message`
+    /// does: a mouse key's command sees the mouse event (TC.10).
+    #[tokio::test]
+    async fn set_f_sees_the_mouse_variables() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv)
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]).expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("a pane");
+        let target = crate::server::mouse::MouseTarget {
+            client: crate::types::ClientId(1),
+            cell: (3, 4),
+            pane,
+            target: pane.to_string(),
+            range: None,
+            pane_cell: Some((3, 4)),
+        };
+        crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
+            run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])
+        })
+        .expect("set -F");
+        assert_eq!(
+            run(&mut state, &["show-options", "-gv", "@m"]),
+            Ok(format!("{pane} 3\n"))
+        );
+    }
+
+    /// FE.1 ruling: under tmux identity each built-in default that differs
+    /// is tmux 3.7b's (recorded); under grofe identity grofe's stays.
+    #[test]
+    fn tmux_identity_takes_tmux_s_defaults() {
+        let recorded = [
+            ("base-index", "0", "1"),
+            ("pane-base-index", "0", "1"),
+            ("mouse", "off", "on"),
+            ("set-clipboard", "external", "on"),
+            ("focus-events", "off", "on"),
+            ("escape-time", "10", "25"),
+            ("history-limit", "2000", "50000"),
+            ("extended-keys", "off", "on"),
+            ("renumber-windows", "off", "on"),
+            ("mode-keys", "emacs", "vi"),
+            ("status-keys", "emacs", "emacs"),
+        ];
+        let grofe = Options::new(false);
+        let mut tmux = Options::new(false);
+        tmux.use_tmux_defaults(None);
+        for (name, tmux_default, grofe_default) in recorded {
+            let get = |o: &Options| o.lookup(name, &[]).map(str::to_string);
+            assert_eq!(get(&grofe).as_deref(), Some(grofe_default), "grofe {name}");
+            assert_eq!(get(&tmux).as_deref(), Some(tmux_default), "tmux {name}");
+        }
+        // `set -gu` restores the identity's default.
+        tmux.set(Owner::Global, "base-index", "5", false).unwrap();
+        tmux.unset(Owner::Global, "base-index").unwrap();
+        assert_eq!(tmux.lookup("base-index", &[]), Some("0"));
+        // tmux's `$EDITOR` rule for the key tables.
+        let mut vi = Options::new(false);
+        vi.use_tmux_defaults(Some("/usr/local/bin/nvim"));
+        assert_eq!(vi.lookup("status-keys", &[]), Some("vi"));
+        assert_eq!(vi.lookup("mode-keys", &[]), Some("vi"));
+        // A value the config set keeps winning, with tmux's as its base.
+        let mut configured = Options::new(false);
+        configured
+            .config_base
+            .insert("mouse".to_string(), "on".to_string());
+        configured.set(Owner::Global, "mouse", "on", false).unwrap();
+        configured.use_tmux_defaults(None);
+        assert_eq!(configured.lookup("mouse", &[]), Some("on"));
+        assert_eq!(configured.config_base["mouse"], "off");
+    }
+
+    /// The stub edit: `bind-key` checks the command in the request's
+    /// dialect and keeps that dialect on the binding.
+    #[test]
+    fn bind_key_keeps_the_requests_dialect() {
+        let mut state = crate::server::test_state();
+        let bind = |key: &str| BindKey {
+            table: "root".to_string(),
+            repeat: false,
+            note: None,
+            key: key.to_string(),
+            command: vec!["list-sessions".to_string()],
+        };
+        let grofe_ctx = crate::server::test_ctx;
+        let grofe = grofe_ctx();
+        bind_key(&mut state, &grofe, bind("F5")).expect("native bind");
+        let f5 = parse_key("F5").expect("key");
+        let b = state.registry.key_tables.exact("root", &f5).expect("bound");
+        assert_eq!(b.dialect, Dialect::Grofe);
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..grofe
+        };
+        // FE.1: a tmux-only form binds in the tmux dialect and keeps it.
+        let ls = |key: &str| BindKey {
+            command: vec!["ls".to_string()],
+            ..bind(key)
+        };
+        bind_key(&mut state, &tmux, ls("F6")).expect("tmux bind");
+        let f6 = parse_key("F6").expect("key");
+        let b = state.registry.key_tables.exact("root", &f6).expect("bound");
+        assert_eq!(b.dialect, Dialect::Tmux);
+        let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
+        assert_eq!(err, "unknown command: ls");
+    }
+
+    /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);
+    /// `#{grofe_version}` does not. Neither needs a pane.
+    #[test]
+    fn version_follows_the_identity() {
+        let mut model = Model::new(false);
+        let grofe = env!("CARGO_PKG_VERSION");
+        let get = |m: &Model, name: &str| FormatCtx::new(m, PaneId(99)).get(name);
+        assert_eq!(get(&model, "version").as_deref(), Some(grofe));
+        model.identity = crate::compat::Identity::Tmux;
+        assert_eq!(get(&model, "version").as_deref(), Some("3.7b"));
+        assert_eq!(get(&model, "grofe_version").as_deref(), Some(grofe));
+    }
 
     #[test]
     fn same_value_set_is_a_no_op() {
@@ -1199,6 +3523,7 @@ mod tests {
             ("pane-border-style", "default", OptionScope::Window),
             ("pane-active-border-style", "fg=green", OptionScope::Window),
             ("status-position", "bottom", OptionScope::Session),
+            ("allow-passthrough", "off", OptionScope::Window),
         ] {
             assert_eq!(o.lookup(name, &[]), Some(default), "{name}");
             assert_eq!(builtin(name).map(|b| b.scope), Some(scope), "{name}");
@@ -1210,9 +3535,10 @@ mod tests {
             Err("unknown value: maybe".to_string())
         );
         assert_eq!(validate("mouse", "yes"), Ok("on".into()));
+        assert_eq!(validate("status-position", "top"), Ok("top".into()));
         assert_eq!(
-            validate("status-position", "top"),
-            Err("unknown value: top".to_string())
+            validate("status-position", "left"),
+            Err("unknown value: left".to_string())
         );
         assert_eq!(builtin_names().count(), BUILTINS.len());
     }
@@ -1243,6 +3569,87 @@ mod tests {
             validate("set-titles", "maybe"),
             Err("bad value: maybe".to_string())
         );
+    }
+
+    /// TC.2b: tmux 3.7b's index grammar (recorded on a private socket).
+    #[test]
+    fn list_indices_read_as_tmux_reads_them() {
+        for (name, want) in [
+            ("status-format", Some(("status-format", None))),
+            ("status-format[1]", Some(("status-format", Some(1)))),
+            ("status-format[+3]", Some(("status-format", Some(3)))),
+            ("status-format[ 5]", Some(("status-format", Some(5)))),
+            ("status-format[0x6]", Some(("status-format", Some(0)))),
+            (
+                "status-format[4294967296]",
+                Some(("status-format", Some(0))),
+            ),
+            (
+                "status-format[99999999999]",
+                Some(("status-format", Some(1_215_752_191))),
+            ),
+            (
+                "status-format[2147483647]",
+                Some(("status-format", Some(i32::MAX as u32))),
+            ),
+            ("status-format[2147483648]", None),
+            ("status-format[-1]", None),
+            ("status-format[1a]", None),
+            ("status-format[a1]", None),
+            ("status-format[1]]", None),
+            ("status-format[[1]", None),
+            ("status-format[1][2]", None),
+            ("[1]", None),
+        ] {
+            let got = split_index(name);
+            match want {
+                Some(w) => assert_eq!(got, Ok(w), "{name}"),
+                None => assert_eq!(got, Err(format!("ambiguous option: {name}")), "{name}"),
+            }
+        }
+    }
+
+    /// A session's list hides the global one as a whole, as in tmux.
+    #[test]
+    fn a_list_lookup_takes_the_first_owner_with_a_list() {
+        let mut o = Options::new(false);
+        let s = Owner::Session(SessionId(0));
+        let set = |index, value: &str| ListOp::Set {
+            index,
+            value: value.to_string(),
+            append: false,
+        };
+        o.edit_list(Owner::Global, "status-format", set(1, "g"), false)
+            .unwrap();
+        let global = o.lookup_list("status-format", &[s]).cloned();
+        assert_eq!(
+            global,
+            Some(BTreeMap::from([(0, String::new()), (1, "g".to_string())]))
+        );
+        assert_eq!(o.edit_list(s, "status-format", set(1, "s"), true), Ok(true));
+        assert_eq!(
+            o.edit_list(s, "status-format", set(1, "s"), true),
+            Ok(false)
+        );
+        assert_eq!(
+            o.lookup_list("status-format", &[s]),
+            Some(&BTreeMap::from([(1, "s".to_string())]))
+        );
+        assert!(o.list(s, "status-format").unwrap().persist);
+        assert_eq!(
+            o.edit_list(s, "status-format", ListOp::Reset, false),
+            Ok(true)
+        );
+        assert_eq!(o.lookup_list("status-format", &[s]).cloned(), global);
+        assert_eq!(
+            o.edit_list(Owner::Global, "status-format", ListOp::Reset, false),
+            Ok(true)
+        );
+        assert_eq!(
+            o.edit_list(Owner::Global, "nosuch", ListOp::Reset, false),
+            Err("invalid option: nosuch".to_string())
+        );
+        assert!(list_names().all(|n| builtin(n).is_none()));
     }
 
     #[test]

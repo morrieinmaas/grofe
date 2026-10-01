@@ -1,0 +1,58 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set -g status off
+? 0
+client 80x24 attach -t main
+$& display-popup -w 30 -h 6 "echo in-popup; exec cat"
+screen in-popup
+|
+|
+|
+|
+|
+|
+|
+|
+|                         ┌────────────────────────────┐
+|                         │in-popup                    │
+|                         │                            │
+|                         │                            │
+|                         │                            │
+|                         └────────────────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display-menu -x C -y C A a 'display hi'
+? 0
+screen in-popup
+|
+|
+|
+|
+|
+|
+|
+|
+|                         ┌────────────────────────────┐
+|                         │in-popup                    │
+|                         │                            │
+|                         │                            │
+|                         │                            │
+|                         └────────────────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

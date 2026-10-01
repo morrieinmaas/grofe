@@ -1,12 +1,29 @@
-//! Target grammar (spec §4.5): `$N`/`@N`/`%N` runtime ids, `session`,
+//! Target grammar (spec §4.5): `$N`/`@N`/`%N` runtime ids, a bare word,
 //! `session:window`, `session:window.pane`, with window by index or name
-//! and pane by index. Not supported in v1: fnmatch patterns, `{last}`/
+//! and pane by index. A bare word is read as tmux's cmd-find.c reads it,
+//! by the kind of target the verb wants ([`SessionRef::Bare`]). Not supported in v1: fnmatch patterns, `{last}`/
 //! `{next}` tokens, `!`, `+`/`-` offsets.
+//!
+//! A leading `=` means exact, natively and in the tmux front end alike, as
+//! in tmux: `=name:window` and `=name:window.pane` name exactly session
+//! `name` ([`SessionRef::Exact`]), never a prefix; a bare `=name` is exact
+//! as a session or a window and a literal word as a pane
+//! ([`SessionRef::Bare`]); and `=N` or `=name` in the window part is
+//! exactly that window.
+//!
+//! The tmux front end (FE.1, spec §4.5) also reads targets the tmux way
+//! through [`with_tmux_targets`]: `+`/`-` offsets in the window and pane
+//! parts are relative to the active window or pane, and a bare `=` (tmux's
+//! mouse target, which mouse keys replace before parsing, M36-R3) fails
+//! when it is resolved, as in tmux, so a mouse binding that holds one still
+//! binds. The native grammar never builds those two.
 //!
 //! Parsing here is purely syntactic: it decides the *shape* of a target
 //! string, not whether the session/window/pane it names exists. Existence
 //! is [`Resolve`]'s job, against the live model and the request's
 //! [`ClientCtx`].
+
+use std::cell::Cell;
 
 use crate::cmd::ParseError;
 use crate::protocol::ClientCtx;
@@ -20,6 +37,22 @@ pub enum SessionRef {
     Current,
     Id(SessionId),
     Name(String),
+    /// Exactly this name, never a prefix: tmux's `=name`.
+    Exact(String),
+    /// tmux's bare `=`, the mouse target, outside a mouse key's commands
+    /// (which get the pointer's target in its place first, M36-R3): it
+    /// never resolves, and says so as tmux does ([`NO_MOUSE_TARGET`]).
+    /// Built only by the tmux front end.
+    Mouse,
+    /// A bare word with no `:` or `.`, read as tmux's `cmd-find.c` reads it:
+    /// what it names depends on the kind of target the verb wants. As a
+    /// pane, a number is a pane index in the current window, then a window
+    /// in the current session (by index, then exact name), then a session;
+    /// as a window, a window in the current session, then a session; as a
+    /// session, a session only. A leading `=` makes a session or window
+    /// match exact and stays part of the word for a pane. Natively too: the canopy port's `select-pane -t 1` means pane 1,
+    /// as in tmux. Only the front end reads `window.pane` with no `:`.
+    Bare(String),
 }
 
 /// The window part of a target; `Current` for the same reason as
@@ -30,6 +63,9 @@ pub enum WindowRef {
     Id(WindowId),
     Index(u32),
     Name(String),
+    /// tmux's `+N`/`-N`: that many windows after or before the session's
+    /// current one, wrapping. Built only by the tmux front end.
+    Offset(i32),
 }
 
 /// The pane part of a `session:window.pane` target: always by id or
@@ -38,6 +74,9 @@ pub enum WindowRef {
 pub enum PanePart {
     Id(PaneId),
     Index(u32),
+    /// tmux's `+N`/`-N`: that many panes after or before the window's
+    /// active one, wrapping. Built only by the tmux front end.
+    Offset(i32),
 }
 
 /// A fully parsed `session:window.pane` target, bundled into one type so
@@ -76,9 +115,90 @@ fn is_unsupported_token(s: &str) -> bool {
     }
 }
 
+thread_local! {
+    /// Set while the tmux front end parses: targets read the tmux way.
+    static TMUX_TARGETS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// tmux 3.7b's error for a bare `=` target with no mouse event (recorded:
+/// `has-session -t =`).
+pub const NO_MOUSE_TARGET: &str = "no mouse target";
+
+/// Runs `f` (a native parse) with targets read as the tmux front end reads
+/// them (see the module docs). Only `compat::tmux` calls this, so the
+/// native grammar is unchanged everywhere else.
+pub fn with_tmux_targets<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TMUX_TARGETS.with(|t| t.set(self.0));
+        }
+    }
+    let _restore = Restore(TMUX_TARGETS.with(|t| t.replace(true)));
+    f()
+}
+
+fn tmux_targets() -> bool {
+    TMUX_TARGETS.with(Cell::get)
+}
+
+/// tmux's `+`, `-`, `+N`, `-N` in a window or pane part, read only for the
+/// tmux front end.
+fn tmux_offset(s: &str) -> Option<i32> {
+    if !tmux_targets() {
+        return None;
+    }
+    let (sign, digits) = match s.as_bytes().first()? {
+        b'+' => (1, &s[1..]),
+        b'-' => (-1, &s[1..]),
+        _ => return None,
+    };
+    if digits.is_empty() {
+        return Some(sign);
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<i32>().ok().map(|n| sign * n)
+}
+
 /// Parses one target string (spec §4.5). See the module docs for the
 /// supported grammar.
 pub fn parse_target(s: &str) -> Result<Target, ParseError> {
+    if s == "=" && tmux_targets() {
+        return Ok(Target::Session(SessionRef::Mouse));
+    }
+    // `=word` with no `:` or `.`: left for the resolver, which strips the
+    // `=` from a session or window but not from a pane (cmd-find.c).
+    if s.len() > 1 && s.starts_with('=') && !s.contains([':', '.']) {
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
+    }
+    if let Some(rest) = s.strip_prefix('=')
+        && !rest.is_empty()
+    {
+        return parse_position(rest).map(exact_session);
+    }
+    parse_position(s)
+}
+
+/// `target` with its named session made an exact match (tmux's `=name`).
+fn exact_session(target: Target) -> Target {
+    let exact = |s: SessionRef| match s {
+        SessionRef::Name(name) | SessionRef::Bare(name) => SessionRef::Exact(name),
+        other => other,
+    };
+    match target {
+        Target::Session(s) => Target::Session(exact(s)),
+        Target::Window(s, w) => Target::Window(exact(s), w),
+        Target::Pane(p) => Target::Pane(PaneRef {
+            session: exact(p.session),
+            ..p
+        }),
+        Target::Current => Target::Current,
+    }
+}
+
+fn parse_position(s: &str) -> Result<Target, ParseError> {
     if s.is_empty() {
         return Ok(Target::Current);
     }
@@ -115,7 +235,10 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
     if let Some(pane_part) = s.strip_prefix('.')
         && !s.contains(':')
     {
-        if pane_part.is_empty() || pane_part.contains('.') || is_unsupported_token(pane_part) {
+        if pane_part.is_empty()
+            || pane_part.contains('.')
+            || (is_unsupported_token(pane_part) && tmux_offset(pane_part).is_none())
+        {
             return Err(ParseError::UnsupportedTarget(s.to_string()));
         }
         return Ok(Target::Pane(PaneRef {
@@ -131,8 +254,12 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 
     let mut colon_positions = s.match_indices(':');
     let Some((colon_idx, _)) = colon_positions.next() else {
-        // No ':': a bare name is a session (spec: "session" alone).
-        return Ok(Target::Session(SessionRef::Name(s.to_string())));
+        if tmux_targets() {
+            return tmux_bare(s);
+        }
+        // No ':': a bare word, read by the kind of target the verb wants,
+        // as tmux reads it ([`SessionRef::Bare`]).
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
     };
     if colon_positions.next().is_some() {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
@@ -150,6 +277,9 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 
     let mut dot_positions = rest.match_indices('.');
     let Some((dot_idx, _)) = dot_positions.next() else {
+        if let Some(n) = tmux_offset(rest) {
+            return Ok(Target::Window(session, WindowRef::Offset(n)));
+        }
         if is_unsupported_token(rest) {
             return Err(ParseError::UnsupportedTarget(s.to_string()));
         }
@@ -165,12 +295,15 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
 
     let window_part = &rest[..dot_idx];
     let pane_part = &rest[dot_idx + 1..];
-    if pane_part.is_empty() || is_unsupported_token(window_part) {
+    let window_offset = tmux_offset(window_part);
+    if pane_part.is_empty() || (is_unsupported_token(window_part) && window_offset.is_none()) {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
     }
     // Empty window part ("`sess:.1`", "`:.1`"): the current window.
     let window = if window_part.is_empty() {
         WindowRef::Current
+    } else if let Some(n) = window_offset {
+        WindowRef::Offset(n)
     } else {
         parse_window_ref(window_part)?
     };
@@ -178,6 +311,26 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
         session,
         window,
         pane: parse_pane_part(pane_part)?,
+    }))
+}
+
+/// tmux's target with no `:`: `window.pane` in the current session, or a
+/// bare word left for the resolver ([`SessionRef::Bare`]).
+fn tmux_bare(s: &str) -> Result<Target, ParseError> {
+    let Some((window, pane)) = s.split_once('.') else {
+        return Ok(Target::Session(SessionRef::Bare(s.to_string())));
+    };
+    if window.is_empty() || pane.is_empty() || pane.contains('.') {
+        return Err(ParseError::UnsupportedTarget(s.to_string()));
+    }
+    let window = match tmux_offset(window) {
+        Some(n) => WindowRef::Offset(n),
+        None => parse_window_ref(window)?,
+    };
+    Ok(Target::Pane(PaneRef {
+        session: SessionRef::Current,
+        window,
+        pane: parse_pane_part(pane)?,
     }))
 }
 
@@ -192,6 +345,12 @@ fn parse_session_ref(s: &str) -> Result<SessionRef, ParseError> {
 }
 
 fn parse_window_ref(s: &str) -> Result<WindowRef, ParseError> {
+    // `=N` / `=name`: exactly that window. grofe's window lookups are
+    // exact already, so the `=` only has to go.
+    let s = match s.strip_prefix('=') {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => s,
+    };
     if s.starts_with('@') {
         return s
             .parse::<WindowId>()
@@ -205,6 +364,9 @@ fn parse_window_ref(s: &str) -> Result<WindowRef, ParseError> {
 }
 
 fn parse_pane_part(s: &str) -> Result<PanePart, ParseError> {
+    if let Some(n) = tmux_offset(s) {
+        return Ok(PanePart::Offset(n));
+    }
     if s.starts_with('%') {
         return s
             .parse::<PaneId>()
@@ -270,10 +432,10 @@ mod tests {
     }
 
     #[test]
-    fn bare_name_is_a_session() {
+    fn bare_name_is_a_bare_word() {
         assert_eq!(
             parse_target("work").unwrap(),
-            Target::Session(SessionRef::Name("work".to_string()))
+            Target::Session(SessionRef::Bare("work".to_string()))
         );
     }
 
@@ -476,6 +638,117 @@ mod tests {
         ));
     }
 
+    /// Natively, as in the front end, `=` means exact; a bare `=` is a
+    /// plain word and offsets stay refused.
+    #[test]
+    fn equals_is_exact_natively_too() {
+        let exact = |s: &str| SessionRef::Exact(s.to_string());
+        assert_eq!(
+            parse_target("=x").unwrap(),
+            Target::Session(SessionRef::Bare("=x".to_string()))
+        );
+        assert_eq!(
+            parse_target("=x:1").unwrap(),
+            Target::Window(exact("x"), WindowRef::Index(1))
+        );
+        assert_eq!(
+            parse_target("=x:=2.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: exact("x"),
+                window: WindowRef::Index(2),
+                pane: PanePart::Index(1),
+            })
+        );
+        assert_eq!(
+            parse_target("x:=ed").unwrap(),
+            Target::Window(
+                SessionRef::Name("x".to_string()),
+                WindowRef::Name("ed".to_string())
+            )
+        );
+        assert_eq!(
+            parse_target("=").unwrap(),
+            Target::Session(SessionRef::Bare("=".to_string()))
+        );
+        assert!(parse_target(":.+").is_err());
+    }
+
+    #[test]
+    fn the_front_end_reads_exact_sessions_windows_and_offsets() {
+        let exact = |s: &str| SessionRef::Exact(s.to_string());
+        let t = |s: &str| with_tmux_targets(|| parse_target(s));
+        // A bare `=x` is left for the resolver: exact as a session or a
+        // window, a literal word as a pane.
+        assert_eq!(
+            t("=x").unwrap(),
+            Target::Session(SessionRef::Bare("=x".to_string()))
+        );
+        assert_eq!(
+            t("=x:2").unwrap(),
+            Target::Window(exact("x"), WindowRef::Index(2))
+        );
+        assert_eq!(
+            t("=x:").unwrap(),
+            Target::Window(exact("x"), WindowRef::Current)
+        );
+        assert_eq!(
+            t(":=3").unwrap(),
+            Target::Window(SessionRef::Current, WindowRef::Index(3))
+        );
+        assert_eq!(
+            t("=x:.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: exact("x"),
+                window: WindowRef::Current,
+                pane: PanePart::Index(1),
+            })
+        );
+        assert_eq!(
+            t(":.+").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Offset(1),
+            })
+        );
+        assert_eq!(
+            t(":-1").unwrap(),
+            Target::Window(SessionRef::Current, WindowRef::Offset(-1))
+        );
+        assert_eq!(
+            t("w:+2.-").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Name("w".to_string()),
+                window: WindowRef::Offset(2),
+                pane: PanePart::Offset(-1),
+            })
+        );
+        assert_eq!(t("=").unwrap(), Target::Session(SessionRef::Mouse));
+        // A word with no `:` is left for the resolver, and `w.p` is a pane
+        // of the current session's window w (cmd-find.c).
+        assert_eq!(
+            t("1").unwrap(),
+            Target::Session(SessionRef::Bare("1".to_string()))
+        );
+        assert_eq!(
+            t("2.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Index(2),
+                pane: PanePart::Index(1),
+            })
+        );
+        assert_eq!(
+            parse_target("1").unwrap(),
+            Target::Session(SessionRef::Bare("1".to_string()))
+        );
+        // Ids and a bare offset keep their native reading.
+        assert_eq!(t("%3").unwrap(), parse_target("%3").unwrap());
+        assert!(t("+1").is_err());
+        // The reading ends with the call.
+        assert!(parse_target(":.+").is_err());
+    }
+
     /// A minimal in-memory fake so [`Resolve`]'s contract is exercised
     /// without depending on `server/model.rs` (a different task's file).
     struct FakeModel;
@@ -507,6 +780,7 @@ mod tests {
             pane,
             env: Vec::new(),
             client: None,
+            dialect: crate::protocol::Dialect::Grofe,
         }
     }
 

@@ -2,17 +2,18 @@
 //!
 //! File layers only: it never starts or contacts a server, even when one
 //! is running (R8).
-// ponytail: runtime provenance (a value changed by `set-option`, and the
-// no-effect marker) is TC.2b's; this shows what the files resolve to.
+// ponytail: runtime provenance (a value changed by `set-option`) is not
+// shown; this shows what the files resolve to.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    Env, KeyBinding, OPTION_NAMES, Resolved, Ty, closest, load, load_with_file, tmux_name,
-    toml_type,
+    ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest,
+    list_tmux_name, load, load_with_file, tmux_name, toml_type,
 };
+use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
 
 const USAGE: &str = "usage: show-config [--explain] [--file <path>]... [<key>]";
@@ -74,7 +75,16 @@ fn run(args: &[String]) -> Result<String, String> {
     let mut out = String::new();
     let option = |out: &mut String, k: &str| {
         let value = r.get(k).unwrap_or_default();
-        out.push_str(&format!("{k} = {}\n", literal(k, value)));
+        let no_effect = explain && tmux_name(k).is_some_and(has_no_effect);
+        out.push_str(&value_line(k, &literal(k, value), no_effect));
+        if explain && let Some(src) = r.provenance.get(k) {
+            out.push_str(&format!("  set by {}\n", src.describe(home)));
+        }
+    };
+    let list = |out: &mut String, k: &str| {
+        let items = r.lists.get(k).cloned().unwrap_or_default();
+        let items = toml::Value::Array(items.into_iter().map(toml::Value::String).collect());
+        out.push_str(&format!("{k} = {items}\n"));
         if explain && let Some(src) = r.provenance.get(k) {
             out.push_str(&format!("  set by {}\n", src.describe(home)));
         }
@@ -90,30 +100,155 @@ fn run(args: &[String]) -> Result<String, String> {
             out.push_str(&format!("  set by {}\n", b.source.describe(home)));
         }
     };
+    let hook = |out: &mut String, event: &str, h: &ConfigHook| {
+        let command = toml::Value::String(h.command.clone());
+        out.push_str(&format!("hooks.{event} = {command}\n"));
+        if explain {
+            out.push_str(&format!("  set by {}\n", h.source.describe(home)));
+        }
+    };
+    let status_source = |out: &mut String, name: &str, s: &ConfigSource| {
+        out.push_str(&format!(
+            "status.sources.{} = {}\n",
+            bare_or_quoted(name),
+            source_value(s)
+        ));
+        if explain {
+            out.push_str(&format!("  set by {}\n", s.source.describe(home)));
+        }
+    };
+    let user_option = |out: &mut String, name: &str, value: &str| {
+        let name = name.strip_prefix('@').unwrap_or(name);
+        out.push_str(&format!(
+            "user-options.{} = {}\n",
+            bare_or_quoted(name),
+            quote(value)
+        ));
+    };
+    let variable = |out: &mut String, name: &str, value: &str| {
+        out.push_str(&format!(
+            "environment.{} = {}\n",
+            bare_or_quoted(name),
+            quote(value)
+        ));
+    };
+    let load_commands = |out: &mut String| {
+        if r.load_commands.is_empty() {
+            return;
+        }
+        let items = r
+            .load_commands
+            .iter()
+            .map(|c| toml::Value::String(c.command.clone()));
+        out.push_str(&format!(
+            "load-commands = {}\n",
+            toml::Value::Array(items.collect())
+        ));
+        if explain {
+            for c in &r.load_commands {
+                out.push_str(&format!("  set by {}\n", c.source.describe(home)));
+            }
+        }
+    };
+    // ponytail: `--explain` names no file for a user option or variable;
+    // the loader keeps no provenance for them.
     match key {
         None => {
             for (k, _) in OPTION_NAMES {
                 option(&mut out, k);
             }
+            for (k, _) in LIST_NAMES {
+                list(&mut out, k);
+            }
             for b in sorted_keys(&r) {
                 binding(&mut out, b);
             }
+            for (event, h) in &r.hooks {
+                hook(&mut out, event, h);
+            }
+            for (name, s) in &r.sources {
+                status_source(&mut out, name, s);
+            }
+            for (name, value) in &r.user_options {
+                user_option(&mut out, name, value);
+            }
+            for (name, value) in &r.environment {
+                variable(&mut out, name, value);
+            }
+            load_commands(&mut out);
+        }
+        Some("user-options") => {
+            for (name, value) in &r.user_options {
+                user_option(&mut out, name, value);
+            }
+        }
+        Some(k) if k.starts_with("user-options.") => {
+            let name = format!("@{}", &k["user-options.".len()..]);
+            let value = r
+                .user_options
+                .get(&name)
+                .ok_or_else(|| format!("show-config: no user option {k}"))?;
+            user_option(&mut out, &name, value);
+        }
+        Some("environment") => {
+            for (name, value) in &r.environment {
+                variable(&mut out, name, value);
+            }
+        }
+        Some(k) if k.starts_with("environment.") => {
+            let name = &k["environment.".len()..];
+            let (_, value) = r
+                .environment
+                .iter()
+                .find(|(n, _)| n == name)
+                .ok_or_else(|| format!("show-config: no variable {k}"))?;
+            variable(&mut out, name, value);
+        }
+        Some("load-commands") => load_commands(&mut out),
+        Some("status.sources") => {
+            for (name, s) in &r.sources {
+                status_source(&mut out, name, s);
+            }
+        }
+        Some(k) if k.starts_with("status.sources.") => {
+            let name = &k["status.sources.".len()..];
+            let s = r
+                .sources
+                .get(name)
+                .ok_or_else(|| format!("show-config: no source {k}"))?;
+            status_source(&mut out, name, s);
         }
         Some(k) if tmux_name(k).is_some() => option(&mut out, k),
+        Some(k) if list_tmux_name(k).is_some() => list(&mut out, k),
         Some(k) if k.starts_with("keys.") => {
             let b = find_binding(&r, &k["keys.".len()..])
                 .ok_or_else(|| format!("show-config: no binding {k}"))?;
             binding(&mut out, b);
         }
+        Some(k) if k.starts_with("hooks.") => {
+            let event = &k["hooks.".len()..];
+            let h = r
+                .hooks
+                .get(event)
+                .ok_or_else(|| format!("show-config: no hook {k}"))?;
+            hook(&mut out, event, h);
+        }
         Some(k) => {
             let mut msg = format!("show-config: unknown key {k}");
-            if let Some(s) = closest(k, OPTION_NAMES.iter().map(|(t, _)| *t)) {
+            if let Some(s) = closest(k, OPTION_NAMES.iter().chain(LIST_NAMES).map(|(t, _)| *t)) {
                 msg.push_str(&format!(", did you mean {s}?"));
             }
             return Err(msg);
         }
     }
     Ok(out)
+}
+
+/// One option's line; `--explain` marks an option grofe stores but never
+/// reads (spec §4.5).
+fn value_line(key: &str, literal: &str, no_effect: bool) -> String {
+    let marker = if no_effect { "  (no effect)" } else { "" };
+    format!("{key} = {literal}{marker}\n")
 }
 
 fn sorted_keys(r: &Resolved) -> Vec<&KeyBinding> {
@@ -155,6 +290,16 @@ fn bare_or_quoted(s: &str) -> String {
     if bare { s.to_string() } else { quote(s) }
 }
 
+fn source_value(s: &ConfigSource) -> String {
+    let mut fields = vec![format!("cmd = {}", quote(&s.cmd))];
+    for (k, v) in [("interval", s.interval), ("timeout", s.timeout)] {
+        if let Some(v) = v {
+            fields.push(format!("{k} = {v}"));
+        }
+    }
+    format!("{{ {} }}", fields.join(", "))
+}
+
 fn binding_value(b: &KeyBinding) -> String {
     if b.desc.is_none() && b.group.is_none() && b.name.is_none() && !b.repeat {
         return quote(&b.command);
@@ -169,4 +314,18 @@ fn binding_value(b: &KeyBinding) -> String {
         fields.push("repeat = true".to_string());
     }
     format!("{{ {} }}", fields.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explain_marks_a_no_effect_option() {
+        assert_eq!(
+            value_line("default-terminal", "\"tmux-256color\"", true),
+            "default-terminal = \"tmux-256color\"  (no effect)\n"
+        );
+        assert_eq!(value_line("mouse", "true", false), "mouse = true\n");
+    }
 }

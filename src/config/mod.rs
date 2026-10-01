@@ -44,6 +44,23 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("set-titles-string", "set-titles-string"),
     ("set-clipboard", "set-clipboard"),
     ("focus-events", "focus-events"),
+    // Top-level keys stay above the sectioned ones: `import-tmux` writes
+    // them in this order.
+    // FE.1: tmux options grofe stores without acting on them (spec §4.5).
+    ("aggressive-resize", "aggressive-resize"),
+    ("default-command", "default-command"),
+    ("default-shell", "default-shell"),
+    ("default-terminal", "default-terminal"),
+    ("extended-keys", "extended-keys"),
+    ("extended-keys-format", "extended-keys-format"),
+    ("mode-keys", "mode-keys"),
+    ("renumber-windows", "renumber-windows"),
+    ("synchronize-panes", "synchronize-panes"),
+    ("window-style", "window-style"),
+    ("window-active-style", "window-active-style"),
+    ("main-pane-width", "main-pane-width"),
+    ("main-pane-height", "main-pane-height"),
+    ("window-size", "window-size"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -57,9 +74,40 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
         "status.window.current-format",
         "window-status-current-format",
     ),
+    ("status.justify", "status-justify"),
+    ("status.left-style", "status-left-style"),
+    ("status.right-style", "status-right-style"),
+    ("status.window.separator", "window-status-separator"),
+    ("status.window.style", "window-status-style"),
+    ("status.window.current-style", "window-status-current-style"),
+    ("status.window.last-style", "window-status-last-style"),
+    ("status.window.bell-style", "window-status-bell-style"),
+    ("message.style", "message-style"),
+    ("message.display-time-ms", "display-time"),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
+    ("pane-border.format", "pane-border-format"),
+    ("status.keys", "status-keys"),
+    ("compat-identity", "compat-identity"),
+    ("allow-passthrough", "allow-passthrough"),
 ];
+
+/// TOML key to tmux option name for every list option (TC.2b). A TOML
+/// array of strings sets the whole list, element N from index N.
+pub const LIST_NAMES: &[(&str, &str)] = &[
+    ("status.rows", "status-format"),
+    ("command-alias", "command-alias"),
+    ("update-environment", "update-environment"),
+    ("terminal-features", "terminal-features"),
+];
+
+/// The tmux name of a list option's TOML key.
+pub fn list_tmux_name(toml_key: &str) -> Option<&'static str> {
+    LIST_NAMES
+        .iter()
+        .find(|(t, _)| *t == toml_key)
+        .map(|(_, n)| *n)
+}
 
 /// The TOML type an option takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +121,7 @@ pub(crate) enum Ty {
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
-        | "set-titles" => Ty::Bool,
+        | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
@@ -82,7 +130,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "status.lines"
         | "status.left-length"
         | "status.right-length"
-        | "status.interval" => Ty::Int,
+        | "status.interval"
+        | "message.display-time-ms" => Ty::Int,
         _ => Ty::Str,
     }
 }
@@ -172,6 +221,87 @@ pub struct KeyBinding {
     pub source: Source,
 }
 
+/// One `[hooks]` entry (TC.5): a grofe event and the command string it
+/// runs, from the last layer that set it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigHook {
+    /// The command string as written.
+    pub command: String,
+    /// `command` split by `cmd::split_command_string`, each command
+    /// checked. Empty means the hook is removed in this layer.
+    pub cmds: Vec<Vec<String>>,
+    pub source: Source,
+}
+
+/// One `[status.sources.<name>]` entry (TC.4): a status source whose last
+/// non-empty output line lands in `@<name>`, from the last layer that declared it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSource {
+    /// The shell command.
+    pub cmd: String,
+    /// Seconds between runs; `None` follows `status-interval`.
+    pub interval: Option<u64>,
+    /// Seconds a run may take before its process group is killed; `None`
+    /// is `server::sources::DEFAULT_TIMEOUT`.
+    pub timeout: Option<u64>,
+    pub source: Source,
+}
+
+/// An `[environment]` value (TP.0) with `$NAME`, `${NAME}` and a leading
+/// `~` expanded through `get`, as tmux expands a config line's words; an
+/// unset name is empty.
+pub fn expand_value(value: &str, get: &dyn Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    if let Some(after) = rest.strip_prefix('~')
+        && (after.is_empty() || after.starts_with('/'))
+    {
+        out.push_str(&get("HOME"));
+        rest = after;
+    }
+    let mut chars = rest.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        let mut name = String::new();
+        if chars.peek() == Some(&'{') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c == '}' {
+                    break;
+                }
+                name.push(c);
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
+                    break;
+                }
+                name.push(c);
+                chars.next();
+            }
+        }
+        if name.is_empty() {
+            out.push('$');
+        } else {
+            out.push_str(&get(&name));
+        }
+    }
+    out
+}
+
+/// One `load-commands` entry (TP.0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigCommand {
+    /// The command string as written.
+    pub command: String,
+    /// `command` split by `cmd::split_command_string`, each command checked.
+    pub cmds: Vec<Vec<String>>,
+    pub source: Source,
+}
+
 /// A fully loaded and validated config.
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -180,7 +310,22 @@ pub struct Resolved {
     pub options: BTreeMap<&'static str, String>,
     /// Bindings in load order.
     pub keys: Vec<KeyBinding>,
-    /// Who set each option.
+    /// `[hooks]` by event name (TC.5).
+    pub hooks: BTreeMap<String, ConfigHook>,
+    /// `[status.sources]` by name (TC.4).
+    pub sources: BTreeMap<String, ConfigSource>,
+    /// Every list option by TOML key (TC.2b), element N at index N.
+    pub lists: BTreeMap<&'static str, Vec<String>>,
+    /// `[user-options]` (TP.0): global user options by name, `@` included,
+    /// from the last layer that set each.
+    pub user_options: BTreeMap<String, String>,
+    /// `[environment]` (TP.0): global environment variables, in the order
+    /// first set, each with the last layer's value.
+    pub environment: Vec<(String, String)>,
+    /// `load-commands` (TP.0): command strings run in order each time the
+    /// config is applied, every layer's after the one before.
+    pub load_commands: Vec<ConfigCommand>,
+    /// Who set each option and list.
     pub provenance: Provenance,
     /// Files skipped by an unmet `requires` (R7), one line each.
     pub warnings: Vec<String>,
@@ -200,6 +345,16 @@ impl Resolved {
             let src = self.provenance.get(k)?;
             let name = tmux_name(k)?;
             (src.layer != Layer::Defaults).then_some((name, v.as_str(), src))
+        })
+    }
+
+    /// `(tmux name, elements, source)` for every list a file set, as
+    /// [`Resolved::configured`] for scalars.
+    pub fn configured_lists(&self) -> impl Iterator<Item = (&'static str, &[String], &Source)> {
+        self.lists.iter().filter_map(|(k, v)| {
+            let src = self.provenance.get(k)?;
+            let name = list_tmux_name(k)?;
+            (src.layer != Layer::Defaults).then_some((name, v.as_slice(), src))
         })
     }
 
@@ -264,10 +419,25 @@ mod tests {
 
     #[test]
     fn toml_names_are_unique() {
-        for (i, (a, _)) in OPTION_NAMES.iter().enumerate() {
+        let all: Vec<&str> = OPTION_NAMES
+            .iter()
+            .chain(LIST_NAMES)
+            .map(|(t, _)| *t)
+            .collect();
+        for (i, a) in all.iter().enumerate() {
+            assert!(all[i + 1..].iter().all(|b| a != b), "{a} listed twice");
+        }
+    }
+
+    #[test]
+    fn every_list_option_has_a_toml_name() {
+        let lists: Vec<&str> = crate::server::dispatch::options::list_names().collect();
+        let named: Vec<&str> = LIST_NAMES.iter().map(|(_, n)| *n).collect();
+        assert_eq!(lists.len(), named.len());
+        for name in lists {
             assert!(
-                OPTION_NAMES[i + 1..].iter().all(|(b, _)| a != b),
-                "{a} listed twice"
+                named.contains(&name),
+                "list option {name} has no LIST_NAMES row"
             );
         }
     }

@@ -69,10 +69,25 @@ directory.
 **Scriptable.** Everything you can do with a key you can do from the command
 line, and `grofe control` speaks a simple JSON protocol with an event stream,
 so scripts and plugins react to what happens instead of polling. Plugins are
-ordinary programs in whatever language you like, with Lua available for the
-quick things.
+ordinary programs in whatever language you like.
 
 ## Switching from tmux
+
+> **Know the gaps first.** The tmux compatibility layer answers what the
+> tools and scripts it was tested against send, but some things are not there
+> yet or never will be:
+>
+> - **Plugins.** TPM and its plugins do not run yet. A loader for them is
+>   milestone M3.7.
+> - **Copy mode and paste buffers** (`copy-mode`, `send-keys -X`, the
+>   `*-buffer` commands) come with milestone M5. Until then those keys do
+>   nothing useful.
+> - **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
+>   config with `grofe import-tmux` first.
+> - **Out of scope:** tmux's control mode (`-C` and `-CC`) and session groups
+>   (`new-session -t`, `link-window`).
+>
+> Keep real tmux reachable by its full path while you try grofe.
 
 grofe does not read `tmux.conf`, but it will convert one for you:
 
@@ -91,10 +106,12 @@ aliases and formats that scripts and tools send, so things like `fzf --tmux`
 and vim-tmux-navigator keep working. Once your config has moved, you can put
 grofe on your `PATH` under the name `tmux` (a symlink, since a shell alias does
 not reach scripts); a server started under that name also reports itself as
-tmux (`TERM_PROGRAM`, `tmux -V`). tmux compatibility is a translation layer;
-grofe works differently underneath. Real tmux stays available by its full path.
-Inside a grofe pane, run it as `env -u TMUX /path/to/tmux`, because `$TMUX`
-there points at grofe.
+tmux (`TERM_PROGRAM`, `tmux -V`) and starts with tmux 3.7b's option defaults
+and stock key bindings rather than grofe's own (base index 0, mouse off and so
+on), so nothing you rely on in tmux moves; your config's values still win.
+tmux compatibility is a translation layer; grofe works differently underneath.
+Real tmux stays available by its full path. Inside a grofe pane, run it as
+`env -u TMUX /path/to/tmux`, because `$TMUX` there points at grofe.
 
 ## Terminals
 
@@ -128,6 +145,29 @@ cargo install --locked --path .
 <!-- readme-test: end -->
 
 That puts `grofe` in `~/.cargo/bin`, which needs to be on your `PATH`.
+
+grofe also answers to the name `tmux` (see [Switching from tmux](#switching-from-tmux)
+for what that covers and what it does not). A command it does not support
+fails with `<command>: not supported (<reason>)`. To try the
+name without replacing tmux, link it somewhere off your `PATH` and call it by
+its full path:
+
+```sh
+mkdir -p ~/grofe-tmux
+ln -s ~/.cargo/bin/grofe ~/grofe-tmux/tmux
+~/grofe-tmux/tmux -V
+```
+
+A server started through that link has tmux identity: its panes get
+`TERM_PROGRAM=tmux`, and `tmux -V` prints the tmux release grofe is compatible
+with. `compat-identity = "tmux"` in `config.toml` does the same for a server
+started as `grofe`. Under either name, `-L` sockets live in grofe's own
+directory, never in tmux's. Run as `tmux`, grofe refuses a `-S` path inside
+tmux's socket directory (`$TMUX_TMPDIR` or `/tmp`, then `tmux-<uid>`) and
+never replaces a socket it did not create. A `-S` path elsewhere that a real
+tmux server listens on is still connected to, and grofe then reports that it
+is not a grofe server. Inside a grofe pane, `$TMUX` points at grofe, so run
+real tmux there as `env -u TMUX /path/to/tmux`.
 
 ## First steps
 
@@ -208,10 +248,12 @@ so if it crashes your panes don't notice.
 
 ## Status
 
-Sessions, windows and panes, the status line, the mouse, the command prompt,
-clipboard and title passthrough, and the config described above work today.
-Restoring sessions after a reboot, copy mode, the tmux compatibility layer,
-`import-tmux` and plugins are still to come. The
+Sessions, windows and panes, the status line with cached `#()` sources, the
+mouse, the command prompt, popups and menus, hooks, clipboard and title
+passthrough, the config described above, `import-tmux` and the tmux
+compatibility layer work today. Running TPM plugins (M3.7), copy mode (M5),
+restoring sessions after a reboot (M4) and grofe's own plugin API (M6) are
+still to come. The
 [roadmap](docs/plans/2026-09-23-milestones.md) has the details and the
 [design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.

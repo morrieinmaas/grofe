@@ -52,41 +52,135 @@ pub enum LayoutError {
     NotFound(PaneId),
     #[error("not enough room to split pane {0}")]
     TooSmall(PaneId),
+    /// [`LayoutTree::import`]: the cells do not tile their area, or name
+    /// other panes than the tree holds.
+    #[error("invalid layout")]
+    Invalid,
 }
 
-/// The main pane's width in `main-vertical`, as tmux's `main-pane-width`:
-/// cells, or a percent of the columns left after the border.
+/// The main pane's size in the `main-*` presets, as tmux's
+/// `main-pane-width` and `main-pane-height`: cells, or a percent of the
+/// cells left after the border.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainSize {
     Cells(u16),
     Percent(u8),
 }
 
-/// A `select-layout` preset (spec §4.3), sized as tmux 3.7b sizes it.
+impl MainSize {
+    /// tmux's `main-pane-width` default.
+    pub const WIDTH: MainSize = MainSize::Cells(80);
+    /// tmux's `main-pane-height` default.
+    pub const HEIGHT: MainSize = MainSize::Cells(24);
+
+    /// An option value as tmux reads it: `N` cells or `N%`. Anything else
+    /// is `None`, which tmux replaces with the option's default.
+    pub fn parse(s: &str) -> Option<MainSize> {
+        match s.strip_suffix('%') {
+            Some(p) => p
+                .parse::<u8>()
+                .ok()
+                .filter(|p| *p <= 100)
+                .map(MainSize::Percent),
+            None => s.parse().ok().map(MainSize::Cells),
+        }
+    }
+}
+
+/// A `select-layout` preset (spec §4.3), sized as tmux 3.7b sizes it. The
+/// first pane in index order is the main pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
-    /// The first pane full height on the left, the rest stacked on the
-    /// right.
-    MainVertical { main: MainSize },
     /// Every pane side by side.
     EvenHorizontal,
     /// Every pane stacked.
     EvenVertical,
+    /// The main pane full width on top, the rest side by side below.
+    MainHorizontal { main: MainSize },
+    /// As `MainHorizontal`, with the main pane at the bottom.
+    MainHorizontalMirrored { main: MainSize },
+    /// The main pane full height on the left, the rest stacked on the
+    /// right.
+    MainVertical { main: MainSize },
+    /// As `MainVertical`, with the main pane on the right.
+    MainVerticalMirrored { main: MainSize },
+    /// A grid, filled row by row.
+    Tiled,
 }
 
 impl Preset {
-    /// The preset tmux names `name`, if M3 has it.
-    pub fn from_name(name: &str) -> Option<Preset> {
-        match name {
-            // ponytail: tmux's `main-pane-width` default; TC.2b reads the option.
-            "main-vertical" => Some(Preset::MainVertical {
-                main: MainSize::Cells(80),
-            }),
-            "even-horizontal" => Some(Preset::EvenHorizontal),
-            "even-vertical" => Some(Preset::EvenVertical),
-            _ => None,
+    /// tmux's preset names in its `next-layout` order.
+    pub const NAMES: [&str; 7] = [
+        "even-horizontal",
+        "even-vertical",
+        "main-horizontal",
+        "main-horizontal-mirrored",
+        "main-vertical",
+        "main-vertical-mirrored",
+        "tiled",
+    ];
+
+    /// The preset tmux names `name`, its main pane sized by `width` (the
+    /// vertical ones) or `height` (the horizontal ones).
+    pub fn from_name(name: &str, width: MainSize, height: MainSize) -> Option<Preset> {
+        Some(match name {
+            "even-horizontal" => Preset::EvenHorizontal,
+            "even-vertical" => Preset::EvenVertical,
+            "main-horizontal" => Preset::MainHorizontal { main: height },
+            "main-horizontal-mirrored" => Preset::MainHorizontalMirrored { main: height },
+            "main-vertical" => Preset::MainVertical { main: width },
+            "main-vertical-mirrored" => Preset::MainVerticalMirrored { main: width },
+            "tiled" => Preset::Tiled,
+            _ => return None,
+        })
+    }
+
+    /// This preset's place in [`Preset::NAMES`].
+    pub fn index(self) -> usize {
+        match self {
+            Preset::EvenHorizontal => 0,
+            Preset::EvenVertical => 1,
+            Preset::MainHorizontal { .. } => 2,
+            Preset::MainHorizontalMirrored { .. } => 3,
+            Preset::MainVertical { .. } => 4,
+            Preset::MainVerticalMirrored { .. } => 5,
+            Preset::Tiled => 6,
         }
     }
+}
+
+/// How [`LayoutTree::insert`] places a pane: the split direction and size,
+/// as `split-window` takes them, and tmux's `-b` (before the target) and
+/// `-f` (split the whole window rather than the target).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Insert {
+    pub dir: Dir,
+    pub size: SplitSize,
+    pub before: bool,
+    pub full: bool,
+}
+
+/// A layout as cells with their sizes and offsets (tmux's layout cells),
+/// for the tmux layout-string codec: [`LayoutTree::export`] writes it and
+/// [`LayoutTree::import`] reads it. Geometry only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutGeometry {
+    pub x: u16,
+    pub y: u16,
+    pub cols: u16,
+    pub rows: u16,
+    pub cell: GeometryCell,
+}
+
+/// What a [`LayoutGeometry`] cell holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GeometryCell {
+    Pane(PaneId),
+    /// Children in order along `dir`, one border cell apart.
+    Split {
+        dir: Dir,
+        children: Vec<LayoutGeometry>,
+    },
 }
 
 /// One contiguous, one-cell-wide run of border cells, as the M2 renderer will
@@ -122,6 +216,13 @@ pub struct LayoutTree {
     /// `None` until the first `split` or `resize`, while the tree is still a
     /// single leaf with no weights.
     exact_for: Option<(u16, u16)>,
+    /// Every pane, in index order (tmux's pane list): the order `compute`
+    /// returns them in. It is the leaves' order, except where tmux's is
+    /// not: a pane joined before its target, or a mirrored preset.
+    order: Vec<PaneId>,
+    /// The last preset applied, as a [`Preset::index`]: where
+    /// `next-layout` goes on from (tmux's `lastlayout`).
+    last_preset: Option<usize>,
 }
 
 /// Which axis a point-in-rect lookup runs along.
@@ -131,20 +232,14 @@ enum Axis {
     Col,
 }
 
-/// Which side of a node the space freed by a removed sibling entered from,
-/// along the growth axis `grow` is called with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Front,
-    Back,
-}
-
 impl LayoutTree {
     /// A window with a single pane filling the whole area.
     pub fn new(pane: PaneId) -> Self {
         LayoutTree {
             root: Node::Leaf(pane),
             exact_for: None,
+            order: vec![pane],
+            last_preset: None,
         }
     }
 
@@ -183,6 +278,28 @@ impl LayoutTree {
         new: PaneId,
         size: SplitSize,
     ) -> Result<(), LayoutError> {
+        let how = Insert {
+            dir,
+            size,
+            before: false,
+            full: false,
+        };
+        self.insert(area, target, new, how)
+    }
+
+    /// Puts `new` next to `target` as [`Self::split`] does, or with
+    /// `how.before` in front of it (left of or above), or with `how.full`
+    /// beside the whole layout, which then shrinks to make room (tmux's
+    /// `-b` and `-f`). With half the room, the first of the two cells gets
+    /// the odd cell, as in tmux. `new` comes right after `target` in index
+    /// order either way, as `join-pane` places it in tmux 3.7b.
+    pub fn insert(
+        &mut self,
+        area: Rect,
+        target: PaneId,
+        new: PaneId,
+        how: Insert,
+    ) -> Result<(), LayoutError> {
         let mut path = Vec::new();
         if !find_path(&self.root, target, &mut path) {
             return Err(LayoutError::NotFound(target));
@@ -190,30 +307,41 @@ impl LayoutTree {
         if !self.rebase(area) {
             return Err(LayoutError::TooSmall(target));
         }
+        if how.full && !path.is_empty() {
+            self.insert_full(area, new, how)
+                .ok_or(LayoutError::TooSmall(target))?;
+        } else {
+            self.insert_at(area, &path, new, how)
+                .ok_or(LayoutError::TooSmall(target))?;
+        }
+        let pos = self
+            .order
+            .iter()
+            .position(|p| *p == target)
+            .map_or(self.order.len(), |i| i + 1);
+        self.order.insert(pos, new);
+        Ok(())
+    }
 
-        if path.is_empty() {
-            let raw = axis_len(dir, area);
-            let avail = raw.saturating_sub(1);
-            let (target_size, new_size) =
-                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
+    /// [`Self::insert`] next to the leaf at `path`. `None` when it has no
+    /// room for both panes.
+    fn insert_at(&mut self, area: Rect, path: &[usize], new: PaneId, how: Insert) -> Option<()> {
+        let dir = how.dir;
+        let leaf = |weight: u16, node: Node| Child {
+            weight: u32::from(weight),
+            node,
+        };
+        let Some((&idx, parent_path)) = path.split_last() else {
+            // The root is the target's leaf.
+            let avail = axis_len(dir, area).saturating_sub(1);
+            let (old, fresh) = insert_sizes(avail, how)?;
+            let target = std::mem::replace(&mut self.root, Node::Leaf(new));
             self.root = Node::Split {
                 dir,
-                children: vec![
-                    Child {
-                        weight: u32::from(target_size),
-                        node: Node::Leaf(target),
-                    },
-                    Child {
-                        weight: u32::from(new_size),
-                        node: Node::Leaf(new),
-                    },
-                ],
+                children: pair(leaf(old, target), leaf(fresh, Node::Leaf(new)), how.before),
             };
-            return Ok(());
-        }
-
-        let idx = path[path.len() - 1];
-        let parent_path = &path[..path.len() - 1];
+            return Some(());
+        };
         let parent_dir = match node_at(&self.root, parent_path) {
             Node::Split { dir, .. } => *dir,
             Node::Leaf(_) => unreachable!("parent path always resolves to a split"),
@@ -221,47 +349,72 @@ impl LayoutTree {
 
         if parent_dir == dir {
             // Splitting in the direction the parent already splits: add new
-            // as a sibling right after target, carved out of target's slice.
+            // as a sibling next to target, carved out of target's slice.
             // The tree is exact on `area` now, so target's weight is its
             // real size.
             let Node::Split { children, .. } = node_at_mut(&mut self.root, parent_path) else {
                 unreachable!("parent path always resolves to a split")
             };
             let current = u16::try_from(children[idx].weight).unwrap_or(u16::MAX);
-            let avail = current.saturating_sub(1);
-            let (target_size, new_size) =
-                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
-            children[idx].weight = u32::from(target_size);
-            children.insert(
-                idx + 1,
-                Child {
-                    weight: u32::from(new_size),
-                    node: Node::Leaf(new),
-                },
-            );
+            let (old, fresh) = insert_sizes(current.saturating_sub(1), how)?;
+            children[idx].weight = u32::from(old);
+            let at = if how.before { idx } else { idx + 1 };
+            children.insert(at, leaf(fresh, Node::Leaf(new)));
         } else {
             // Splitting the other way: wrap target's leaf in a new split.
-            let target_rect = rect_at_path(&self.root, area, &path);
-            let raw = axis_len(dir, target_rect);
-            let avail = raw.saturating_sub(1);
-            let (target_size, new_size) =
-                split_sizes(avail, size).ok_or(LayoutError::TooSmall(target))?;
-            let slot = node_at_mut(&mut self.root, &path);
+            let target_rect = rect_at_path(&self.root, area, path);
+            let avail = axis_len(dir, target_rect).saturating_sub(1);
+            let (old, fresh) = insert_sizes(avail, how)?;
+            let slot = node_at_mut(&mut self.root, path);
+            let target = std::mem::replace(slot, Node::Leaf(new));
             *slot = Node::Split {
                 dir,
-                children: vec![
-                    Child {
-                        weight: u32::from(target_size),
-                        node: Node::Leaf(target),
-                    },
-                    Child {
-                        weight: u32::from(new_size),
-                        node: Node::Leaf(new),
-                    },
-                ],
+                children: pair(leaf(old, target), leaf(fresh, Node::Leaf(new)), how.before),
             };
         }
-        Ok(())
+        Some(())
+    }
+
+    /// [`Self::insert`] with `full`, for a tree that is a split: the whole
+    /// layout shrinks along `how.dir` to make room, as tmux's
+    /// `layout_resize_child_cells` shrinks it. A root already split along
+    /// `how.dir` takes `new` as one more child, as in tmux; any other root
+    /// is wrapped. `None` when the layout cannot shrink that far.
+    fn insert_full(&mut self, area: Rect, new: PaneId, how: Insert) -> Option<()> {
+        let avail = axis_len(how.dir, area).checked_sub(1)?;
+        let (old, fresh) = insert_sizes(avail, how)?;
+        let mut shrunk = area;
+        match how.dir {
+            Dir::Horizontal => shrunk.cols = old,
+            Dir::Vertical => shrunk.rows = old,
+        }
+        let mut root = self.root.clone();
+        resize_children(&mut root, shrunk)?;
+        let new_child = Child {
+            weight: u32::from(fresh),
+            node: Node::Leaf(new),
+        };
+        self.root = match root {
+            Node::Split { dir, mut children } if dir == how.dir => {
+                if how.before {
+                    children.insert(0, new_child);
+                } else {
+                    children.push(new_child);
+                }
+                Node::Split { dir, children }
+            }
+            other => {
+                let old_child = Child {
+                    weight: u32::from(old),
+                    node: other,
+                };
+                Node::Split {
+                    dir: how.dir,
+                    children: pair(old_child, new_child, how.before),
+                }
+            }
+        };
+        Some(())
     }
 
     /// Removes `pane`. If its parent split is left with exactly one child,
@@ -277,6 +430,13 @@ impl LayoutTree {
         if path.is_empty() {
             return;
         }
+        self.order.retain(|p| *p != pane);
+        self.remove_at(&path);
+    }
+
+    /// [`Self::remove`] of the leaf at `path` (not the root), without
+    /// touching `order`.
+    fn remove_at(&mut self, path: &[usize]) {
         let idx = path[path.len() - 1];
         let parent_path = &path[..path.len() - 1];
         let Node::Split { dir, children } = node_at_mut(&mut self.root, parent_path) else {
@@ -286,10 +446,10 @@ impl LayoutTree {
         let removed = children.remove(idx);
         // The removed child's own weight, plus the one border cell that's
         // now gone too, is the extent whoever inherits its space gains
-        // along `dir`. It goes to the side the removed child sat on: the
-        // previous child if there was one, otherwise the new first child.
+        // along `dir`. It goes to the previous child if there was one,
+        // otherwise the new first child, which hands it on round-robin as
+        // tmux's `layout_resize_adjust` does.
         let gain = removed.weight + 1;
-        let side = if idx == 0 { Side::Front } else { Side::Back };
         if children.len() == 1 {
             // The survivor takes over the whole slot this split occupied,
             // growing by `gain` along `dir`. Unlike the non-collapse case,
@@ -297,19 +457,16 @@ impl LayoutTree {
             // (it's this split's axis, the one being discarded), so the
             // growth has to be pushed down through it explicitly.
             let mut remaining = children.pop().unwrap();
-            grow(&mut remaining.node, dir, gain, side);
+            grow(&mut remaining.node, dir, gain);
             let slot = node_at_mut(&mut self.root, parent_path);
             *slot = remaining.node;
         } else {
             // Like tmux's layout_destroy_cell: give the removed child's
             // cells to its neighbour directly (its own weight, in this
-            // group's list). If the neighbour is itself a nested split,
-            // push the same growth down into it too (grow's doc comment),
-            // since a same-axis descendant further down would otherwise
-            // keep weights summing to the neighbour's OLD extent.
+            // group's list), and push the growth down into it ([`adjust`]).
             let neighbour = idx.saturating_sub(1);
             children[neighbour].weight += gain;
-            grow(&mut children[neighbour].node, dir, gain, side);
+            grow(&mut children[neighbour].node, dir, gain);
         }
     }
 
@@ -336,21 +493,12 @@ impl LayoutTree {
                 continue;
             };
             let dir = *dir;
-            // Whichever of near/far comes first in the children list faces
-            // the moved border from its own back edge, the other from its
-            // own front; `grow`/`shrink` need that to know which child of a
-            // nested same-axis group to touch first.
-            let (near_side, far_side) = if far_idx > idx {
-                (Side::Back, Side::Front)
-            } else {
-                (Side::Front, Side::Back)
-            };
             // The tree is exact on `area` now, so each weight is that
             // child's real size and `max_shrink` reads real sizes too.
-            let (grower, grow_side, shrinker, shrink_side) = if delta > 0 {
-                (idx, near_side, far_idx, far_side)
+            let (grower, shrinker) = if delta > 0 {
+                (idx, far_idx)
             } else {
-                (far_idx, far_side, idx, near_side)
+                (far_idx, idx)
             };
             let cap = max_shrink(&children[shrinker].node, children[shrinker].weight, dir);
             let amt = delta.unsigned_abs().min(cap);
@@ -360,8 +508,8 @@ impl LayoutTree {
             debug_assert!(amt < children[shrinker].weight);
             children[shrinker].weight = children[shrinker].weight.saturating_sub(amt);
             children[grower].weight += amt;
-            grow(&mut children[grower].node, dir, amt, grow_side);
-            shrink(&mut children[shrinker].node, dir, amt, shrink_side);
+            grow(&mut children[grower].node, dir, amt);
+            shrink(&mut children[shrinker].node, dir, amt);
             return;
         }
     }
@@ -369,26 +517,40 @@ impl LayoutTree {
     /// Replaces the tree with `preset` over `panes` (in pane-index order,
     /// which the new tree keeps), exact on `area`. Returns false, changing
     /// nothing, for fewer than two panes (tmux does nothing either) or when
-    /// `area` cannot give every pane a cell.
+    /// `area` cannot give every pane a cell. Either way `preset` is where
+    /// `next-layout` goes on from ([`Self::last_preset`]), as in tmux.
     ///
-    /// ponytail: tmux 3.7b grows the layout past a window too small for the
-    /// preset and clips it; a tree exact on its area cannot, so the old
-    /// layout stays.
+    /// D18 (deliberate, kept for M3.6): tmux 3.7b grows the layout past a
+    /// window too small for the preset and clips it; a tree exact on its
+    /// area cannot, so the old layout stays.
     pub fn preset(&mut self, area: Rect, preset: Preset, panes: &[PaneId]) -> bool {
+        self.last_preset = Some(preset.index());
         if panes.len() < 2 {
             return false;
         }
+        let (h, v) = (Dir::Horizontal, Dir::Vertical);
         let root = match preset {
-            Preset::EvenHorizontal => even(Dir::Horizontal, area.cols, panes),
-            Preset::EvenVertical => even(Dir::Vertical, area.rows, panes),
-            Preset::MainVertical { main } => main_vertical(area, main, panes),
+            Preset::EvenHorizontal => even(h, area.cols, panes),
+            Preset::EvenVertical => even(v, area.rows, panes),
+            Preset::MainHorizontal { main } => main_split(area, v, main, panes, false),
+            Preset::MainHorizontalMirrored { main } => main_split(area, v, main, panes, true),
+            Preset::MainVertical { main } => main_split(area, h, main, panes, false),
+            Preset::MainVerticalMirrored { main } => main_split(area, h, main, panes, true),
+            Preset::Tiled => tiled(area, panes),
         };
         let Some(root) = root else {
             return false;
         };
         self.root = root;
         self.exact_for = Some((area.cols, area.rows));
+        self.order = panes.to_vec();
         true
+    }
+
+    /// The last preset [`Self::preset`] was asked for, as a
+    /// [`Preset::index`].
+    pub fn last_preset(&self) -> Option<usize> {
+        self.last_preset
     }
 
     /// The pane adjacent to `pane` across `edge`, among panes sharing the
@@ -427,9 +589,11 @@ impl LayoutTree {
     /// A pane's rect can be 0 cells wide or tall only when `area` is too
     /// small to hold every pane plus its borders; callers must not size a
     /// PTY to 0 from such a rect (M2's job, when it resizes panes).
+    /// In index order (tmux's pane list, `order`).
     pub fn compute(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::new();
         collect_rects(&self.root, area, &mut out);
+        out.sort_by_key(|(id, _)| self.order.iter().position(|p| p == id));
         out
     }
 
@@ -439,6 +603,445 @@ impl LayoutTree {
         collect_borders(&self.root, area, &mut out);
         out
     }
+
+    /// Whether `pane` is one of this tree's panes.
+    pub fn contains(&self, pane: PaneId) -> bool {
+        self.order.contains(&pane)
+    }
+
+    /// Moves `pane` to position `index` in index order (clamped to the
+    /// end), leaving every cell where it is: `split-window` places a new
+    /// pane in tmux's list apart from its cell.
+    pub fn reorder(&mut self, pane: PaneId, index: usize) {
+        if let Some(pos) = self.order.iter().position(|p| *p == pane) {
+            self.order.remove(pos);
+            self.order.insert(index.min(self.order.len()), pane);
+        }
+    }
+
+    /// Swaps two panes' cells and index positions (`swap-pane` within a
+    /// window). False, changing nothing, unless both are in the tree.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        self.relabel(&|p| match p {
+            p if p == a => b,
+            p if p == b => a,
+            p => p,
+        });
+        true
+    }
+
+    /// Puts `new` in `old`'s cell and index position (`swap-pane` between
+    /// windows). False, changing nothing, unless `old` is in the tree and
+    /// `new` is not.
+    pub fn replace(&mut self, old: PaneId, new: PaneId) -> bool {
+        if !self.contains(old) || self.contains(new) {
+            return false;
+        }
+        self.relabel(&|p| if p == old { new } else { p });
+        true
+    }
+
+    /// `rotate-window`: every pane moves one index position up (the first
+    /// goes last) or, with `down`, down, taking over that position's cell,
+    /// as tmux 3.7b does.
+    pub fn rotate(&mut self, down: bool) {
+        let mut next = self.order.clone();
+        if down {
+            next.rotate_right(1);
+        } else {
+            next.rotate_left(1);
+        }
+        let map: Vec<(PaneId, PaneId)> = self.order.iter().copied().zip(next).collect();
+        self.relabel(&|p| map.iter().find(|(from, _)| *from == p).map_or(p, |m| m.1));
+    }
+
+    fn relabel(&mut self, map: &dyn Fn(PaneId) -> PaneId) {
+        relabel_node(&mut self.root, map);
+        for p in &mut self.order {
+            *p = map(*p);
+        }
+    }
+
+    /// `resize-pane -x`/`-y`: makes the cell holding `pane` under its
+    /// nearest ancestor split along `dir` `cells` wide (or tall), as
+    /// tmux's `layout_resize_pane_to` does, taking room from or giving it
+    /// to the cells after it (or before it, for the last), clamped so every
+    /// pane keeps a cell. A no-op without such an ancestor, or when `area`
+    /// is below the floor (module docs).
+    pub fn resize_to(&mut self, area: Rect, pane: PaneId, dir: Dir, cells: u16) {
+        let mut path = Vec::new();
+        if !find_path(&self.root, pane, &mut path) || !self.rebase(area) {
+            return;
+        }
+        let Some(depth) = (0..path.len())
+            .rev()
+            .find(|d| matches!(node_at(&self.root, &path[..*d]), Node::Split { dir: d2, .. } if *d2 == dir))
+        else {
+            return;
+        };
+        let Node::Split { children, .. } = node_at_mut(&mut self.root, &path[..depth]) else {
+            unreachable!("depth was found at a split")
+        };
+        let idx = path[depth];
+        let size = i64::from(children[idx].weight);
+        let last = idx + 1 == children.len();
+        // tmux moves the border after the cell, or before the last one.
+        let (cell, change) = if last {
+            (idx - 1, size - i64::from(cells))
+        } else {
+            (idx, i64::from(cells) - size)
+        };
+        resize_cells(children, dir, cell, change);
+    }
+
+    /// `select-layout -E`: spreads the cells of `pane`'s parent split out
+    /// evenly, or if they already are, its grandparent's, and so on up, as
+    /// tmux's `layout_spread_out` does. Returns whether anything changed.
+    pub fn spread(&mut self, area: Rect, pane: PaneId) -> bool {
+        let mut path = Vec::new();
+        if !find_path(&self.root, pane, &mut path) || !self.rebase(area) {
+            return false;
+        }
+        for depth in (0..path.len()).rev() {
+            let parent = &path[..depth];
+            let rect = rect_at_path(&self.root, area, parent);
+            let node = node_at_mut(&mut self.root, parent);
+            let Node::Split { dir, children } = &mut *node else {
+                unreachable!("parent path always resolves to a split")
+            };
+            let Some(sizes) = spread(axis_len(*dir, rect), children.len()) else {
+                continue;
+            };
+            if children.iter().map(|c| c.weight).eq(sizes.iter().copied()) {
+                continue;
+            }
+            let before = node.clone();
+            if let Node::Split { children, .. } = &mut *node {
+                for (child, size) in children.iter_mut().zip(sizes) {
+                    child.weight = size;
+                }
+            }
+            if !renders_nonzero(node, rect) {
+                *node = before;
+                return false;
+            }
+            store_rendered(node, rect);
+            return true;
+        }
+        false
+    }
+
+    /// The layout's cells with their sizes and offsets on `area`, for the
+    /// layout-string codec.
+    pub fn export(&self, area: Rect) -> LayoutGeometry {
+        export_node(&self.root, area)
+    }
+
+    /// Replaces the layout with `geometry`, which must tile its area
+    /// exactly (every split's children one border cell apart, spanning it)
+    /// and hold exactly this tree's panes. Index order and the
+    /// `next-layout` position stay, as a layout string
+    /// leaves tmux's pane list alone (the codec puts the panes in the
+    /// cells, in the order tmux would).
+    pub fn import(&mut self, geometry: &LayoutGeometry) -> Result<(), LayoutError> {
+        if (geometry.x, geometry.y) != (0, 0) {
+            return Err(LayoutError::Invalid);
+        }
+        // Geometry can come from a user's layout string (FE.2): bound its
+        // depth and size before walking it.
+        let mut budget = self.order.len();
+        if !bounded(geometry, 0, &mut budget) {
+            return Err(LayoutError::Invalid);
+        }
+        let root = import_node(geometry).ok_or(LayoutError::Invalid)?;
+        let mut got = Vec::new();
+        leaves(&root, &mut got);
+        let mut want = self.order.clone();
+        got.sort();
+        want.sort();
+        if got != want {
+            return Err(LayoutError::Invalid);
+        }
+        self.root = root;
+        self.exact_for = Some((geometry.cols, geometry.rows));
+        Ok(())
+    }
+
+    /// Arranges `panes` (the window's, in index order) as the tmux layout
+    /// string `layout` says, as tmux 3.7b's `layout_parse`: the cells get
+    /// the panes in order whatever pane numbers the string names; with
+    /// fewer panes than cells the bottom-right cell goes, again and again,
+    /// its room given to its neighbour. The error is tmux's cause, which
+    /// `select-layout` follows with `: <layout>`.
+    // ponytail: tmux resizes the window to the layout's size; grofe keeps
+    // the window's and scales the layout onto it.
+    pub fn apply_tmux_layout(&mut self, layout: &str, panes: &[PaneId]) -> Result<(), String> {
+        let invalid = || "invalid layout".to_string();
+        let mut geometry = parse_tmux_layout(layout).ok_or_else(invalid)?;
+        // A layout from a user's string is bounded as `import` bounds one,
+        // with room for spare cells up to a cap.
+        let mut budget = panes.len().max(MAX_LAYOUT_CELLS);
+        if !bounded(&geometry, 0, &mut budget) {
+            return Err(invalid());
+        }
+        let mut count = 0;
+        count_cells(&geometry, &mut count);
+        if panes.len() > count {
+            return Err(format!("have {} panes but need {count}", panes.len()));
+        }
+        fix_root_size(&mut geometry);
+        let mismatch = || "size mismatch after applying layout".to_string();
+        if (geometry.x, geometry.y) != (0, 0) {
+            return Err(mismatch());
+        }
+        let root = import_node(&geometry).ok_or_else(mismatch)?;
+        let mut cells = LayoutTree {
+            root,
+            exact_for: Some((geometry.cols, geometry.rows)),
+            order: Vec::new(),
+            last_preset: None,
+        };
+        // The bottom-right cell is the last child's last child and so on
+        // down (tmux's `layout_find_bottomright`): found in O(depth).
+        for _ in panes.len()..count {
+            let mut path = Vec::new();
+            let mut node = &cells.root;
+            while let Node::Split { children, .. } = node {
+                path.push(children.len() - 1);
+                node = &children[children.len() - 1].node;
+            }
+            if path.is_empty() {
+                break;
+            }
+            cells.remove_at(&path);
+        }
+        relabel_node(&mut cells.root, &|p: PaneId| {
+            panes.get(p.0 as usize).copied().unwrap_or(p)
+        });
+        self.root = cells.root;
+        self.exact_for = cells.exact_for;
+        self.order = panes.to_vec();
+        Ok(())
+    }
+}
+
+/// `target_size, new_size` for [`LayoutTree::insert`] on `avail` cells:
+/// [`split_sizes`], except that a half split in front of the target gives
+/// the new (first) cell the odd cell, as tmux does.
+fn insert_sizes(avail: u16, how: Insert) -> Option<(u16, u16)> {
+    let (old, new) = split_sizes(avail, how.size)?;
+    Some(if how.before && how.size == SplitSize::Half {
+        (new, old)
+    } else {
+        (old, new)
+    })
+}
+
+/// `[old, new]`, or `[new, old]` when `new` goes before.
+fn pair(old: Child, new: Child, before: bool) -> Vec<Child> {
+    if before {
+        vec![new, old]
+    } else {
+        vec![old, new]
+    }
+}
+
+fn relabel_node(node: &mut Node, map: &dyn Fn(PaneId) -> PaneId) {
+    match node {
+        Node::Leaf(p) => *p = map(*p),
+        Node::Split { children, .. } => {
+            for child in children {
+                relabel_node(&mut child.node, map);
+            }
+        }
+    }
+}
+
+fn leaves(node: &Node, out: &mut Vec<PaneId>) {
+    match node {
+        Node::Leaf(p) => out.push(*p),
+        Node::Split { children, .. } => {
+            for child in children {
+                leaves(&child.node, out);
+            }
+        }
+    }
+}
+
+/// tmux's `layout_resize_pane` on one split's `children` along `dir`:
+/// moves the border after child `cell` by `change` cells, growing it by
+/// taking from the first later child that can spare room (else the
+/// nearest earlier one), or shrinking it (else the nearest earlier child
+/// that can shrink) in favour of the child after it, until `change` is
+/// used up or nothing can give.
+fn resize_cells(children: &mut [Child], dir: Dir, cell: usize, change: i64) {
+    let cap = |c: &Child| max_shrink(&c.node, c.weight, dir);
+    let mut needed = change.unsigned_abs();
+    while needed > 0 {
+        let (grower, shrinker) = if change > 0 {
+            let later = (cell + 1..children.len()).find(|&i| cap(&children[i]) > 0);
+            let earlier = (0..cell).rev().find(|&i| cap(&children[i]) > 0);
+            match later.or(earlier) {
+                Some(s) => (cell, s),
+                None => return,
+            }
+        } else {
+            match (0..=cell).rev().find(|&i| cap(&children[i]) > 0) {
+                Some(s) if cell + 1 < children.len() => (cell + 1, s),
+                _ => return,
+            }
+        };
+        let take = u32::try_from(needed)
+            .unwrap_or(u32::MAX)
+            .min(cap(&children[shrinker]));
+        children[grower].weight += take;
+        grow(&mut children[grower].node, dir, take);
+        children[shrinker].weight -= take;
+        shrink(&mut children[shrinker].node, dir, take);
+        needed -= u64::from(take);
+    }
+}
+
+/// tmux's `layout_resize_child_cells`, for weights exact on the node's
+/// old size: gives each child of `node` its share of `rect` in proportion
+/// to its size now (rounded down, never below what it can shrink to), the
+/// last child taking what is left, and so on down the tree. `None` when
+/// some child would get no cell.
+fn resize_children(node: &mut Node, rect: Rect) -> Option<()> {
+    let Node::Split { dir, children } = node else {
+        return Some(());
+    };
+    let dir = *dir;
+    let n = children.len() as u32;
+    let previous: u32 = children.iter().map(|c| c.weight).sum::<u32>() + n - 1;
+    let size = u32::from(axis_len(dir, rect));
+    let mut left = size;
+    for (i, c) in children.iter_mut().enumerate() {
+        let count_left = n - i as u32;
+        let new = if count_left == 1 {
+            left
+        } else {
+            let floor = c.weight - max_shrink(&c.node, c.weight, dir);
+            let min = (2 * (count_left - 1)).max(floor);
+            (c.weight * size / previous)
+                .min(left.saturating_sub(min))
+                .max(1)
+        };
+        if new == 0 {
+            return None;
+        }
+        c.weight = new;
+        left = left.saturating_sub(new + 1);
+    }
+    let sum: u32 = children.iter().map(|c| c.weight).sum();
+    if sum + n - 1 != size {
+        return None;
+    }
+    let rects = child_rects(dir, rect, children);
+    for (child, r) in children.iter_mut().zip(rects) {
+        resize_children(&mut child.node, r)?;
+    }
+    Some(())
+}
+
+fn export_node(node: &Node, rect: Rect) -> LayoutGeometry {
+    let cell = match node {
+        Node::Leaf(p) => GeometryCell::Pane(*p),
+        Node::Split { dir, children } => GeometryCell::Split {
+            dir: *dir,
+            children: children
+                .iter()
+                .zip(child_rects(*dir, rect, children))
+                .map(|(c, r)| export_node(&c.node, r))
+                .collect(),
+        },
+    };
+    LayoutGeometry {
+        x: rect.x,
+        y: rect.y,
+        cols: rect.cols,
+        rows: rect.rows,
+        cell,
+    }
+}
+
+/// How deep [`LayoutTree::import`] lets cells nest. A tree of `n` panes
+/// is at most `n - 1` splits deep, and no window holds this many panes.
+const IMPORT_MAX_DEPTH: usize = 256;
+
+/// How many cells a tmux layout string may hold past the window's panes
+/// ([`LayoutTree::apply_tmux_layout`]). More cells than this cannot tile
+/// any window a terminal shows.
+const MAX_LAYOUT_CELLS: usize = 4096;
+
+/// Whether `g` nests no deeper than [`IMPORT_MAX_DEPTH`] and holds no more
+/// than `budget` panes, found without going past either bound: every
+/// split's children each hold a pane at least, so a split with more
+/// children than the budget left fails before they are walked.
+fn bounded(g: &LayoutGeometry, depth: usize, budget: &mut usize) -> bool {
+    if depth > IMPORT_MAX_DEPTH {
+        return false;
+    }
+    match &g.cell {
+        GeometryCell::Pane(_) => match budget.checked_sub(1) {
+            Some(left) => {
+                *budget = left;
+                true
+            }
+            None => false,
+        },
+        GeometryCell::Split { children, .. } => {
+            children.len() <= *budget && children.iter().all(|c| bounded(c, depth + 1, budget))
+        }
+    }
+}
+
+/// The node `geometry` describes, weighted by its cells' sizes; `None`
+/// unless every cell has room and every split has two or more children
+/// that span it along its axis, one border apart, and fill it across.
+fn import_node(g: &LayoutGeometry) -> Option<Node> {
+    if g.cols == 0 || g.rows == 0 {
+        return None;
+    }
+    let GeometryCell::Split { dir, children } = &g.cell else {
+        let GeometryCell::Pane(p) = g.cell else {
+            unreachable!("a cell is a pane or a split")
+        };
+        return Some(Node::Leaf(p));
+    };
+    if children.len() < 2 {
+        return None;
+    }
+    // (start, len) along the split's axis, and across it.
+    let along = |c: &LayoutGeometry| match dir {
+        Dir::Horizontal => (c.x, c.cols),
+        Dir::Vertical => (c.y, c.rows),
+    };
+    let across = |c: &LayoutGeometry| match dir {
+        Dir::Horizontal => (c.y, c.rows),
+        Dir::Vertical => (c.x, c.cols),
+    };
+    let (start, len) = along(g);
+    let mut next = u32::from(start);
+    let mut out = Vec::with_capacity(children.len());
+    for c in children {
+        let (s, l) = along(c);
+        if u32::from(s) != next || across(c) != across(g) {
+            return None;
+        }
+        next = u32::from(s) + u32::from(l) + 1;
+        out.push(Child {
+            weight: u32::from(l),
+            node: import_node(c)?,
+        });
+    }
+    (next == u32::from(start) + u32::from(len) + 1).then_some(Node::Split {
+        dir: *dir,
+        children: out,
+    })
 }
 
 /// Sizes for `n` cells side by side along `len`, as tmux's
@@ -473,36 +1076,113 @@ fn even(dir: Dir, len: u16, panes: &[PaneId]) -> Option<Node> {
     Some(Node::Split { dir, children })
 }
 
-/// tmux's `layout_set_main_v`: the first pane on the left, `main` wide but
-/// leaving the right column at least one cell, and the rest spread down
-/// the right column.
-fn main_vertical(area: Rect, main: MainSize, panes: &[PaneId]) -> Option<Node> {
+/// tmux's `layout_set_main_v` (`dir` horizontal: main pane on the left,
+/// the rest stacked on the right) and `layout_set_main_h` (`dir`
+/// vertical: main pane on top, the rest side by side below), or their
+/// `-mirrored` twins with the main pane last. The main pane is `main`
+/// cells or percent of the cells left after the border; a cell count
+/// past them is tmux's default instead (80 wide, 24 tall), and either way
+/// the other side keeps at least one cell.
+fn main_split(
+    area: Rect,
+    dir: Dir,
+    main: MainSize,
+    panes: &[PaneId],
+    mirrored: bool,
+) -> Option<Node> {
     let (first, rest) = panes.split_first()?;
-    // The columns left after the border between the two columns.
-    let avail = area.cols.checked_sub(1).filter(|&a| a >= 2)?;
-    let want = match main {
+    let (other_dir, fallback) = match dir {
+        Dir::Horizontal => (Dir::Vertical, MainSize::WIDTH),
+        Dir::Vertical => (Dir::Horizontal, MainSize::HEIGHT),
+    };
+    // The cells left after the border between the main pane and the rest.
+    let avail = axis_len(dir, area).checked_sub(1).filter(|&a| a >= 2)?;
+    let cells = |m: MainSize| match m {
         MainSize::Cells(c) => c,
         MainSize::Percent(p) => (u32::from(avail) * u32::from(p.min(100)) / 100) as u16,
     };
-    // ponytail: `main-pane-width 0` or `0%` gives 1 cell here; tmux 3.7b gives a
+    let want = match main {
+        MainSize::Cells(c) if c > avail => cells(fallback),
+        m => cells(m),
+    };
+    // ponytail: a main size of 0 gives 1 cell here; tmux 3.7b gives a
     // degenerate 0-cell main pane, which a tree of >= 1-cell weights cannot hold.
-    let main_cols = want.clamp(1, avail - 1);
-    let right = match rest {
+    let main_cells = want.clamp(1, avail - 1);
+    let others = match rest {
         [only] => Node::Leaf(*only),
-        _ => even(Dir::Vertical, area.rows, rest)?,
+        _ => even(other_dir, axis_len(other_dir, area), rest)?,
+    };
+    let main_child = Child {
+        weight: u32::from(main_cells),
+        node: Node::Leaf(*first),
+    };
+    let others = Child {
+        weight: u32::from(avail - main_cells),
+        node: others,
     };
     Some(Node::Split {
-        dir: Dir::Horizontal,
-        children: vec![
-            Child {
-                weight: u32::from(main_cols),
-                node: Node::Leaf(*first),
-            },
-            Child {
-                weight: u32::from(avail - main_cols),
-                node: right,
-            },
-        ],
+        dir,
+        children: pair(main_child, others, mirrored),
+    })
+}
+
+/// tmux's `layout_set_tiled`: the fewest rows, then columns, that hold
+/// every pane, filled row by row, each cell the same size and the last
+/// row and each row's last cell taking what is left over; a pane alone
+/// on the last row spans it. `None` when the grid needs more room than
+/// `area` has (D18).
+fn tiled(area: Rect, panes: &[PaneId]) -> Option<Node> {
+    let n = panes.len();
+    let (mut rows, mut cols) = (1usize, 1usize);
+    while rows * cols < n {
+        rows += 1;
+        if rows * cols < n {
+            cols += 1;
+        }
+    }
+    let cells = |len: u16, k: usize| -> Option<u16> {
+        let k = u16::try_from(k).ok()?;
+        let each = len.checked_sub(k - 1)? / k;
+        (each > 0).then_some(each)
+    };
+    let (width, height) = (cells(area.cols, cols)?, cells(area.rows, rows)?);
+    let mut rest = panes;
+    let mut row_nodes = Vec::with_capacity(rows);
+    while !rest.is_empty() {
+        let (row, more) = rest.split_at(cols.min(rest.len()));
+        rest = more;
+        let node = match row {
+            [only] => Node::Leaf(*only),
+            _ => {
+                let mut children: Vec<Child> = row
+                    .iter()
+                    .map(|p| Child {
+                        weight: u32::from(width),
+                        node: Node::Leaf(*p),
+                    })
+                    .collect();
+                let used = row.len() as u32 * (u32::from(width) + 1) - 1;
+                if let Some(last) = children.last_mut() {
+                    last.weight += u32::from(area.cols).saturating_sub(used);
+                }
+                Node::Split {
+                    dir: Dir::Horizontal,
+                    children,
+                }
+            }
+        };
+        row_nodes.push(Child {
+            weight: u32::from(height),
+            node,
+        });
+    }
+    let used = row_nodes.len() as u32 * (u32::from(height) + 1) - 1;
+    if let Some(last) = row_nodes.last_mut() {
+        last.weight += u32::from(area.rows).saturating_sub(used);
+    }
+    Some(Node::Split {
+        dir: Dir::Vertical,
+        children: row_nodes,
     })
 }
 
@@ -722,46 +1402,57 @@ fn node_at_mut<'a>(node: &'a mut Node, path: &[usize]) -> &'a mut Node {
     }
 }
 
-/// Grows `node`'s own extent along `dir` by `delta` cells, freed by a
-/// removed sibling elsewhere in the tree and entering from `side`. Matches
-/// tmux's `layout_resize_adjust`, except that tmux spreads a resize's
-/// growth evenly across a same-axis group's children; here the delta goes
-/// entirely to the one child adjacent to `side`, the simpler rule `remove`
-/// already needed (a removed sibling's cells have nowhere else to go).
-///
-/// A leaf has no weight of its own to grow: its size lives entirely in its
-/// parent's `Child::weight`, which the caller already adjusted. A split
-/// along `dir` (the growth axis) only has one child actually touching the
-/// freed space: the last child if it came from the back, the first if it
-/// came from the front. That child's own weight grows by `delta`, and
-/// `grow` recurses into just that child, since none of the split's other
-/// children changed extent. A split along the other axis doesn't subdivide
-/// `dir` at all, so growing it doesn't change any of its children's own
-/// weights (those are shares of the *other* axis); it changes what every
-/// one of them inherits along `dir`, so all of them recurse with the same
-/// delta and side.
-fn grow(node: &mut Node, dir: Dir, delta: u32, side: Side) {
-    if delta == 0 {
+/// Grows `node`'s own extent along `dir` by `delta` cells ([`adjust`]).
+fn grow(node: &mut Node, dir: Dir, delta: u32) {
+    adjust(node, dir, i64::from(delta));
+}
+
+/// Shrinks `node`'s own extent along `dir` by `delta` cells ([`adjust`]).
+/// The caller first clamps `delta` to `max_shrink(node, own_extent, dir)`.
+fn shrink(node: &mut Node, dir: Dir, delta: u32) {
+    adjust(node, dir, -i64::from(delta));
+}
+
+/// tmux's `layout_resize_adjust`: `node`'s own extent along `dir` changed
+/// by `change` cells (its weight, which lives in its parent's `Child`,
+/// the caller already changed); this passes the change down. A leaf needs
+/// nothing more. A split along the other axis does not divide `dir`, so
+/// every child takes the whole change. A split along `dir` hands it out
+/// one cell at a time, round-robin from its first child, a shrink skipping
+/// children that cannot give a cell, until it is used up (or, for a shrink
+/// the caller did not clamp, no child can give).
+fn adjust(node: &mut Node, dir: Dir, mut change: i64) {
+    let Node::Split {
+        dir: node_dir,
+        children,
+    } = node
+    else {
+        return;
+    };
+    if *node_dir != dir {
+        for child in children.iter_mut() {
+            adjust(&mut child.node, dir, change);
+        }
         return;
     }
-    match node {
-        Node::Leaf(_) => {}
-        Node::Split {
-            dir: node_dir,
-            children,
-        } => {
-            if *node_dir == dir {
-                let idx = match side {
-                    Side::Front => 0,
-                    Side::Back => children.len() - 1,
-                };
-                children[idx].weight += delta;
-                grow(&mut children[idx].node, dir, delta, side);
-            } else {
-                for child in children.iter_mut() {
-                    grow(&mut child.node, dir, delta, side);
-                }
+    while change != 0 {
+        let before = change;
+        for child in children.iter_mut() {
+            if change == 0 {
+                break;
             }
+            if change > 0 {
+                child.weight += 1;
+                adjust(&mut child.node, dir, 1);
+                change -= 1;
+            } else if max_shrink(&child.node, child.weight, dir) > 0 {
+                child.weight -= 1;
+                adjust(&mut child.node, dir, -1);
+                change += 1;
+            }
+        }
+        if change == before {
+            return;
         }
     }
 }
@@ -800,59 +1491,6 @@ fn max_shrink(node: &Node, own_extent: u32, dir: Dir) -> u32 {
                     .map(|c| max_shrink(&c.node, own_extent, dir))
                     .min()
                     .unwrap_or(0)
-            }
-        }
-    }
-}
-
-/// Shrinks `node`'s own extent along `dir` by `delta` cells, taken from the
-/// side facing the moved border (`side`) first, then its neighbours in
-/// order if that side alone can't spare it all. The caller must first
-/// clamp `delta` to `max_shrink(node, own_extent, dir)`, so every child
-/// touched here has room to give up its share without dropping below one
-/// cell; `shrink` itself doesn't re-check.
-///
-/// A leaf does nothing (mirrors `grow`'s leaf arm: its size lives in its
-/// parent's weight, already reduced by the caller). A split along `dir`
-/// takes as much as each child in turn (starting from `side`) can spare,
-/// via `max_shrink`, until `delta` is used up; unlike `grow`, more than one
-/// child can be touched, since one child's own ceiling might not cover the
-/// whole request. A split along the other axis doesn't subdivide `dir`, so
-/// every child inherits the same smaller extent: the full `delta` (not
-/// divided) recurses into each of them.
-fn shrink(node: &mut Node, dir: Dir, mut delta: u32, side: Side) {
-    if delta == 0 {
-        return;
-    }
-    match node {
-        Node::Leaf(_) => {}
-        Node::Split {
-            dir: node_dir,
-            children,
-        } => {
-            if *node_dir == dir {
-                let order: Box<dyn Iterator<Item = usize>> = match side {
-                    Side::Front => Box::new(0..children.len()),
-                    Side::Back => Box::new((0..children.len()).rev()),
-                };
-                for idx in order {
-                    if delta == 0 {
-                        break;
-                    }
-                    let cap = max_shrink(&children[idx].node, children[idx].weight, dir);
-                    let take = delta.min(cap);
-                    if take == 0 {
-                        continue;
-                    }
-                    debug_assert!(take < children[idx].weight);
-                    children[idx].weight = children[idx].weight.saturating_sub(take);
-                    shrink(&mut children[idx].node, dir, take, side);
-                    delta -= take;
-                }
-            } else {
-                for child in children.iter_mut() {
-                    shrink(&mut child.node, dir, delta, side);
-                }
             }
         }
     }
@@ -956,6 +1594,205 @@ fn collect_borders(node: &Node, area: Rect, out: &mut Vec<BorderSegment>) {
             collect_borders(&child.node, rect, out);
         }
     }
+}
+
+// ---- tmux layout strings (spec §4.3) ------------------------------------
+
+/// A floating pane as a tmux layout string lists it: the pane, its
+/// top-left content cell (which may be off the window), its size and its
+/// place in the stack (highest on top).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloatingCell {
+    pub pane: PaneId,
+    pub x: i32,
+    pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
+    pub z: u32,
+}
+
+/// The tmux layout string (`#{window_layout}`) for `tiled` and the
+/// window's floating panes (in the order they were made), as tmux 3.7b's
+/// `layout_dump`: a four-digit hex checksum, then `WxH,X,Y,<pane>` for a
+/// pane, `WxH,X,Y{...}` for cells side by side, `WxH,X,Y[...]` for
+/// stacked ones, and the floating panes in `<...>`, topmost first.
+///
+/// tmux 3.7b also keeps each floating pane's cell in the root, after the
+/// tiled cells, a lone tiled pane becoming a stack of it and them
+/// (recorded: `80x24,0,0[80x24,0,0,0,20x5,3,4,1]<20x5,3,4,1>`), except
+/// in a zoomed window, which shows the root saved when it zoomed
+/// (`in_root` false).
+// ponytail: tmux then splits a lone tiled pane inside that stack; grofe's
+// root is the split itself, so after a float the string differs there.
+pub fn tmux_layout(tiled: &LayoutGeometry, floating: &[FloatingCell], in_root: bool) -> String {
+    let cell = |f: &FloatingCell| format!("{}x{},{},{},{}", f.cols, f.rows, f.x, f.y, f.pane.0);
+    let mut body = String::new();
+    append_cell(tiled, &mut body);
+    if !floating.is_empty() {
+        let made: Vec<String> = floating.iter().map(cell).collect();
+        let made = made.join(",");
+        body = match &tiled.cell {
+            _ if !in_root => body,
+            GeometryCell::Pane(_) => {
+                let (w, h, x, y) = (tiled.cols, tiled.rows, tiled.x, tiled.y);
+                format!("{w}x{h},{x},{y}[{body},{made}]")
+            }
+            GeometryCell::Split { .. } => {
+                let close = body.pop().unwrap_or(']');
+                format!("{body},{made}{close}")
+            }
+        };
+        let mut stack: Vec<&FloatingCell> = floating.iter().collect();
+        stack.sort_by_key(|f| std::cmp::Reverse(f.z));
+        let stack: Vec<String> = stack.into_iter().map(cell).collect();
+        body.push_str(&format!("<{}>", stack.join(",")));
+    }
+    format!("{:04x},{body}", tmux_checksum(&body))
+}
+
+fn append_cell(g: &LayoutGeometry, out: &mut String) {
+    out.push_str(&format!("{}x{},{},{}", g.cols, g.rows, g.x, g.y));
+    match &g.cell {
+        GeometryCell::Pane(p) => out.push_str(&format!(",{}", p.0)),
+        GeometryCell::Split { dir, children } => {
+            let (open, close) = match dir {
+                Dir::Horizontal => ('{', '}'),
+                Dir::Vertical => ('[', ']'),
+            };
+            out.push(open);
+            for (i, c) in children.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                append_cell(c, out);
+            }
+            out.push(close);
+        }
+    }
+}
+
+/// tmux's `layout_checksum`: a 16-bit rotate-and-add over the bytes.
+fn tmux_checksum(s: &str) -> u16 {
+    s.bytes().fold(0u16, |sum, b| {
+        let sum = (sum >> 1).wrapping_add((sum & 1) << 15);
+        sum.wrapping_add(u16::from(b))
+    })
+}
+
+/// The cells of a tmux layout string, as tmux 3.7b's `layout_parse` and
+/// `layout_construct` read them: the checksum must match the rest, and the
+/// cells must nest and close. The panes are numbered in cell order from
+/// `%0`; the string's own pane numbers are not kept. `None` for tmux's
+/// `invalid layout`, and for cells nested past [`IMPORT_MAX_DEPTH`].
+pub fn parse_tmux_layout(s: &str) -> Option<LayoutGeometry> {
+    let (sum, body) = (s.get(..4)?, s.get(4..)?.strip_prefix(',')?);
+    if !sum.bytes().all(|b| b.is_ascii_hexdigit())
+        || u16::from_str_radix(sum, 16).ok()? != tmux_checksum(body)
+    {
+        return None;
+    }
+    let mut rest = body.as_bytes();
+    let mut panes = 0;
+    let g = construct(&mut rest, 0, &mut panes)?;
+    rest.is_empty().then_some(g)
+}
+
+/// A run of digits at the start of `rest` as a number, consumed.
+fn digits(rest: &mut &[u8]) -> Option<u32> {
+    let n = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+    let (num, tail) = rest.split_at(n);
+    *rest = tail;
+    std::str::from_utf8(num).ok()?.parse().ok()
+}
+
+fn expect(rest: &mut &[u8], byte: u8) -> Option<()> {
+    let (&first, tail) = rest.split_first()?;
+    (first == byte).then(|| *rest = tail)
+}
+
+/// One cell and its children (`layout_construct`).
+fn construct(rest: &mut &[u8], depth: usize, panes: &mut u32) -> Option<LayoutGeometry> {
+    if depth > IMPORT_MAX_DEPTH {
+        return None;
+    }
+    let cols = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b'x')?;
+    let rows = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b',')?;
+    let x = u16::try_from(digits(rest)?).ok()?;
+    expect(rest, b',')?;
+    let y = u16::try_from(digits(rest)?).ok()?;
+    // A pane number, unless the digits after the comma start the next
+    // cell (`WxH`).
+    if let [b',', tail @ ..] = *rest {
+        let mut after = tail;
+        let _ = digits(&mut after);
+        if after.first() != Some(&b'x') {
+            *rest = after;
+        }
+    }
+    let dir = match rest.first() {
+        None | Some(b',' | b'}' | b']' | b'>') => {
+            *panes += 1;
+            let cell = GeometryCell::Pane(PaneId(*panes - 1));
+            return Some(LayoutGeometry {
+                x,
+                y,
+                cols,
+                rows,
+                cell,
+            });
+        }
+        Some(b'{') => Dir::Horizontal,
+        Some(b'[') => Dir::Vertical,
+        Some(_) => return None,
+    };
+    let mut children = Vec::new();
+    loop {
+        *rest = &rest[1..];
+        children.push(construct(rest, depth + 1, panes)?);
+        if rest.first() != Some(&b',') {
+            break;
+        }
+    }
+    expect(rest, if dir == Dir::Horizontal { b'}' } else { b']' })?;
+    Some(LayoutGeometry {
+        x,
+        y,
+        cols,
+        rows,
+        cell: GeometryCell::Split { dir, children },
+    })
+}
+
+fn count_cells(g: &LayoutGeometry, n: &mut usize) {
+    match &g.cell {
+        GeometryCell::Pane(_) => *n += 1,
+        GeometryCell::Split { children, .. } => children.iter().for_each(|c| count_cells(c, n)),
+    }
+}
+
+/// tmux's fix for layouts older versions wrote with a wrong top cell size:
+/// a split root takes its size from its children.
+fn fix_root_size(g: &mut LayoutGeometry) {
+    let GeometryCell::Split { dir, children } = &g.cell else {
+        return;
+    };
+    let (mut cols, mut rows) = (0u32, 0u32);
+    for c in children {
+        match dir {
+            Dir::Horizontal => {
+                rows = u32::from(c.rows) + 1;
+                cols += u32::from(c.cols) + 1;
+            }
+            Dir::Vertical => {
+                cols = u32::from(c.cols) + 1;
+                rows += u32::from(c.rows) + 1;
+            }
+        }
+    }
+    g.cols = u16::try_from(cols.saturating_sub(1)).unwrap_or(u16::MAX);
+    g.rows = u16::try_from(rows.saturating_sub(1)).unwrap_or(u16::MAX);
 }
 
 #[cfg(test)]
@@ -1406,9 +2243,11 @@ mod tests {
         tree.split(area, B, Dir::Vertical, D, SplitSize::Cells(2))
             .unwrap();
         tree.remove(A);
+        // tmux 3.7b (8x15, the same splits, `kill-pane` A): the 10 rows
+        // go round-robin to B and D, 7 and 7.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&B].rows, 12);
-        assert_eq!(rects[&D].rows, 2);
+        assert_eq!(rects[&B].rows, 7);
+        assert_eq!(rects[&D].rows, 7);
         assert_eq!(rects[&C].cols, 3);
     }
 
@@ -1448,15 +2287,18 @@ mod tests {
             .unwrap();
         tree.remove(A);
 
+        // tmux 3.7b (80x10, the same splits, `kill-pane` A, then
+        // `resize-pane -t C -L 5`): the 60 columns go round-robin to C and
+        // D.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 66);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 36);
+        assert_eq!(rects[&D].cols, 32);
 
         // A follow-up resize inside the neighbour must still be exact.
         tree.resize(area, D, Edge::Left, 5);
         let after: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(after[&C].cols, 61);
-        assert_eq!(after[&D].cols, 7);
+        assert_eq!(after[&C].cols, 31);
+        assert_eq!(after[&D].cols, 37);
     }
 
     /// root (Horizontal) [A(59), P (Vertical, weight 20) [
@@ -1496,9 +2338,11 @@ mod tests {
         // that shrink pushed down into them too.
         let (mut tree, area) = resize_hole_tree();
         tree.resize(area, A, Edge::Right, 5);
+        // tmux 3.7b (`resize-pane -t A -R 5`): the shrink is taken
+        // round-robin, C 13 and D 1.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 12);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 13);
+        assert_eq!(rects[&D].cols, 1);
     }
 
     #[test]
@@ -1513,9 +2357,10 @@ mod tests {
         let (mut tree, area) = resize_hole_tree();
         tree.remove(B);
         tree.resize(area, C, Edge::Left, 4);
+        // tmux 3.7b (`kill-pane` B, `resize-pane -t A -L 4`): C 19, D 4.
         let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
-        assert_eq!(rects[&C].cols, 21);
-        assert_eq!(rects[&D].cols, 2);
+        assert_eq!(rects[&C].cols, 19);
+        assert_eq!(rects[&D].cols, 4);
     }
 
     #[test]
@@ -2332,17 +3177,21 @@ mod tests {
 
     #[test]
     fn preset_names_parse_as_tmux_spells_them() {
-        assert_eq!(Preset::from_name("main-vertical"), Some(MAIN_80));
-        assert_eq!(
-            Preset::from_name("even-horizontal"),
-            Some(Preset::EvenHorizontal)
-        );
-        assert_eq!(
-            Preset::from_name("even-vertical"),
-            Some(Preset::EvenVertical)
-        );
-        assert_eq!(Preset::from_name("tiled"), None);
-        assert_eq!(Preset::from_name("nope"), None);
+        let (w, h) = (MainSize::Percent(50), MainSize::Cells(10));
+        let want = [
+            Preset::EvenHorizontal,
+            Preset::EvenVertical,
+            Preset::MainHorizontal { main: h },
+            Preset::MainHorizontalMirrored { main: h },
+            Preset::MainVertical { main: w },
+            Preset::MainVerticalMirrored { main: w },
+            Preset::Tiled,
+        ];
+        for (i, (name, preset)) in Preset::NAMES.iter().zip(want).enumerate() {
+            assert_eq!(Preset::from_name(name, w, h), Some(preset), "{name}");
+            assert_eq!(preset.index(), i, "{name}");
+        }
+        assert_eq!(Preset::from_name("nope", w, h), None);
     }
 
     #[test]
@@ -2367,6 +3216,16 @@ mod tests {
         prop_oneof![
             Just(Preset::EvenHorizontal),
             Just(Preset::EvenVertical),
+            Just(Preset::Tiled),
+            (0u16..60).prop_map(|c| Preset::MainHorizontal {
+                main: MainSize::Cells(c)
+            }),
+            (0u8..=100).prop_map(|p| Preset::MainHorizontalMirrored {
+                main: MainSize::Percent(p)
+            }),
+            (0u16..120).prop_map(|c| Preset::MainVerticalMirrored {
+                main: MainSize::Cells(c)
+            }),
             (0u16..120).prop_map(|c| Preset::MainVertical {
                 main: MainSize::Cells(c)
             }),
@@ -2445,5 +3304,868 @@ mod tests {
             prop_assert!(tiles_exactly(area, &tree.compute(area), &tree.borders(area)));
             prop_assert_eq!(tree.compute(area).len(), alive.len());
         }
+    }
+
+    // ---- TC.8: structure operations. Goldens recorded on tmux 3.7b
+    // (`-L grofe-tc8 -f /dev/null`, `status off`), as `left,top WxH` in
+    // index order. ----
+
+    fn panes(n: u32) -> Vec<PaneId> {
+        (1..=n).map(PaneId).collect()
+    }
+
+    /// A tree over `panes`, of any shape: every preset throws it away.
+    fn stacked(area: Rect, panes: &[PaneId]) -> LayoutTree {
+        let mut tree = LayoutTree::new(panes[0]);
+        for (i, p) in panes.iter().enumerate().skip(1) {
+            let dir = if i % 2 == 0 {
+                Dir::Vertical
+            } else {
+                Dir::Horizontal
+            };
+            tree.split(area, panes[i - 1], dir, *p, SplitSize::Half)
+                .unwrap();
+        }
+        tree
+    }
+
+    fn rows(golden: &str) -> Vec<String> {
+        golden
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_other_presets_match_the_tmux_goldens() {
+        let mh = Preset::MainHorizontal {
+            main: MainSize::HEIGHT,
+        };
+        let mhm = Preset::MainHorizontalMirrored {
+            main: MainSize::HEIGHT,
+        };
+        let mvm = Preset::MainVerticalMirrored {
+            main: MainSize::WIDTH,
+        };
+        let t = Preset::Tiled;
+        let cases: &[((u16, u16), u32, Preset, &str)] = &[
+            ((200, 50), 2, mh, "0,0 200x24;0,25 200x25"),
+            ((200, 50), 2, mhm, "0,26 200x24;0,0 200x25"),
+            ((200, 50), 2, mvm, "120,0 80x50;0,0 119x50"),
+            ((200, 50), 2, t, "0,0 200x24;0,25 200x25"),
+            ((200, 50), 3, mh, "0,0 200x24;0,25 100x25;101,25 99x25"),
+            ((200, 50), 3, mvm, "120,0 80x50;0,0 119x25;0,26 119x24"),
+            ((200, 50), 3, t, "0,0 99x24;100,0 100x24;0,25 200x25"),
+            (
+                (200, 50),
+                4,
+                mhm,
+                "0,26 200x24;0,0 66x25;67,0 66x25;134,0 66x25",
+            ),
+            (
+                (200, 50),
+                4,
+                t,
+                "0,0 99x24;100,0 100x24;0,25 99x25;100,25 100x25",
+            ),
+            (
+                (200, 50),
+                5,
+                mvm,
+                "120,0 80x50;0,0 119x12;0,13 119x12;0,26 119x12;0,39 119x11",
+            ),
+            (
+                (200, 50),
+                5,
+                t,
+                "0,0 99x16;100,0 100x16;0,17 99x16;100,17 100x16;0,34 200x16",
+            ),
+            (
+                (200, 50),
+                7,
+                mh,
+                "0,0 200x24;0,25 33x25;34,25 33x25;68,25 33x25;102,25 32x25;135,25 32x25;168,25 32x25",
+            ),
+            (
+                (200, 50),
+                8,
+                t,
+                "0,0 66x16;67,0 66x16;134,0 66x16;0,17 66x16;67,17 66x16;134,17 66x16;0,34 66x16;67,34 133x16",
+            ),
+            ((80, 24), 2, mh, "0,0 80x22;0,23 80x1"),
+            ((80, 24), 2, mhm, "0,2 80x22;0,0 80x1"),
+            ((80, 24), 2, mvm, "2,0 78x24;0,0 1x24"),
+            ((80, 24), 2, t, "0,0 80x11;0,12 80x12"),
+            ((80, 24), 4, mh, "0,0 80x22;0,23 26x1;27,23 26x1;54,23 26x1"),
+            ((80, 24), 4, mvm, "2,0 78x24;0,0 1x8;0,9 1x7;0,17 1x7"),
+            (
+                (80, 24),
+                5,
+                t,
+                "0,0 39x7;40,0 40x7;0,8 39x7;40,8 40x7;0,16 80x8",
+            ),
+            (
+                (80, 24),
+                8,
+                t,
+                "0,0 26x7;27,0 26x7;54,0 26x7;0,8 26x7;27,8 26x7;54,8 26x7;0,16 26x8;27,16 53x8",
+            ),
+            ((37, 29), 2, mh, "0,0 37x24;0,25 37x4"),
+            ((37, 29), 4, mhm, "0,5 37x24;0,0 12x4;13,0 12x4;26,0 11x4"),
+            ((37, 29), 3, mvm, "2,0 35x29;0,0 1x14;0,15 1x14"),
+            (
+                (37, 29),
+                7,
+                t,
+                "0,0 11x9;12,0 11x9;24,0 13x9;0,10 11x9;12,10 11x9;24,10 13x9;0,20 37x9",
+            ),
+        ];
+        for &((cols, rows_), n, preset, want) in cases {
+            let area = rect(cols, rows_);
+            let order = panes(n);
+            let mut tree = stacked(area, &order);
+            assert!(
+                tree.preset(area, preset, &order),
+                "{preset:?} {cols}x{rows_} n={n}"
+            );
+            assert_eq!(
+                geometry(&tree, area),
+                rows(want),
+                "{preset:?} {cols}x{rows_} n={n}"
+            );
+            // The main pane stays first in index order, mirrored or not.
+            let after: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+            assert_eq!(after, order);
+            assert!(all_exact(&tree.root, area));
+            assert!(tiles_exactly(
+                area,
+                &tree.compute(area),
+                &tree.borders(area)
+            ));
+        }
+    }
+
+    /// `main-pane-width` past the columns left is tmux's default of 80
+    /// instead, then clamped as any width is (tmux 3.7b, three panes).
+    #[test]
+    fn main_pane_width_past_the_window_falls_back_to_80() {
+        let cases = [
+            (100, MainSize::Cells(150), 80),
+            (60, MainSize::Cells(150), 58),
+            (100, MainSize::Cells(99), 98),
+            (200, MainSize::Cells(98), 98),
+            (200, MainSize::Cells(150), 150),
+            (100, MainSize::Percent(100), 98),
+            (100, MainSize::Percent(50), 49),
+        ];
+        for (cols, main, want) in cases {
+            let area = rect(cols, 30);
+            let order = panes(3);
+            let mut tree = stacked(area, &order);
+            assert!(tree.preset(area, Preset::MainVertical { main }, &order));
+            assert_eq!(tree.compute(area)[0].1.cols, want, "{cols} {main:?}");
+        }
+        assert_eq!(MainSize::parse("50%"), Some(MainSize::Percent(50)));
+        assert_eq!(MainSize::parse("80"), Some(MainSize::Cells(80)));
+        for bad in ["abc", "101%", "-1", ""] {
+            assert_eq!(MainSize::parse(bad), None, "{bad}");
+        }
+    }
+
+    /// Each preset that needs more room than the area has changes nothing
+    /// (D18, deliberate for M3.6), but still counts as the last preset.
+    #[test]
+    fn a_preset_that_does_not_fit_changes_nothing_but_is_remembered() {
+        let area = rect(8, 10);
+        let order = panes(5);
+        let mut tree = stacked(area, &order);
+        let before = tree.compute(area);
+        for (i, name) in Preset::NAMES.iter().enumerate() {
+            let preset = Preset::from_name(name, MainSize::WIDTH, MainSize::HEIGHT).unwrap();
+            let mut t = tree.clone();
+            let applied = t.preset(rect(3, 3), preset, &order);
+            assert!(!applied, "{name}");
+            assert_eq!(t.compute(area), before, "{name}");
+            assert_eq!(t.last_preset(), Some(i), "{name}");
+        }
+        assert_eq!(tree.last_preset(), None);
+        assert!(tree.preset(area, Preset::EvenVertical, &order));
+    }
+
+    /// The tmux 3.7b base for the join goldens: `A | B / C` on 200x50.
+    fn a_beside_bc() -> (LayoutTree, Rect) {
+        let area = rect(200, 50);
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, C, SplitSize::Half)
+            .unwrap();
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 100x50", "101,0 99x25", "101,26 99x24"]
+        );
+        (tree, area)
+    }
+
+    fn ins(dir: Dir, size: SplitSize, before: bool, full: bool) -> Insert {
+        Insert {
+            dir,
+            size,
+            before,
+            full,
+        }
+    }
+
+    #[test]
+    fn insert_matches_the_tmux_join_goldens() {
+        let h = Dir::Horizontal;
+        let cases = [
+            // join-pane -d -t A (below A).
+            (
+                A,
+                ins(Dir::Vertical, SplitSize::Half, false, false),
+                "0,0 100x25;0,26 100x24;101,0 99x25;101,26 99x24",
+                [A, E, B, C],
+            ),
+            // join-pane -h -t B.
+            (
+                B,
+                ins(h, SplitSize::Half, false, false),
+                "0,0 100x50;101,0 49x25;151,0 49x25;101,26 99x24",
+                [A, B, E, C],
+            ),
+            // join-pane -b -h -l 30 -t B: left of B, yet after it in
+            // index order.
+            (
+                B,
+                ins(h, SplitSize::Cells(30), true, false),
+                "0,0 100x50;132,0 68x25;101,0 30x25;101,26 99x24",
+                [A, B, E, C],
+            ),
+            // join-pane -f -h -t B: the whole window's right.
+            (
+                B,
+                ins(h, SplitSize::Half, false, true),
+                "0,0 50x50;51,0 49x25;101,0 99x50;51,26 49x24",
+                [A, B, E, C],
+            ),
+            // join-pane -b -f -h -l 40 -t B: the whole window's left.
+            (
+                B,
+                ins(h, SplitSize::Cells(40), true, true),
+                "41,0 79x50;121,0 79x25;0,0 40x50;121,26 79x24",
+                [A, B, E, C],
+            ),
+        ];
+        for (target, how, want, order) in cases {
+            let (mut tree, area) = a_beside_bc();
+            tree.insert(area, target, E, how).unwrap();
+            assert_eq!(geometry(&tree, area), rows(want), "{how:?}");
+            let got: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
+            assert_eq!(got, order, "{how:?}");
+            assert!(all_exact(&tree.root, area), "{how:?}");
+            assert!(tiles_exactly(
+                area,
+                &tree.compute(area),
+                &tree.borders(area)
+            ));
+        }
+    }
+
+    /// tmux's `split-window -b -v` half split: the new (upper) pane gets
+    /// the odd row.
+    #[test]
+    fn a_half_split_before_gives_the_new_pane_the_odd_cell() {
+        let (mut tree, area) = a_beside_bc();
+        tree.remove(C);
+        tree.insert(area, B, C, ins(Dir::Vertical, SplitSize::Half, true, false))
+            .unwrap();
+        let rects: std::collections::HashMap<_, _> = tree.compute(area).into_iter().collect();
+        assert_eq!((rects[&C].y, rects[&C].rows), (0, 25));
+        assert_eq!((rects[&B].y, rects[&B].rows), (26, 24));
+    }
+
+    #[test]
+    fn insert_full_needs_room_for_the_whole_layout() {
+        let area = rect(9, 5);
+        let order = panes(4);
+        let mut tree = LayoutTree::new(order[0]);
+        for p in &order[1..] {
+            tree.split(area, order[0], Dir::Horizontal, *p, SplitSize::Cells(1))
+                .ok();
+        }
+        let before = tree.compute(area);
+        let how = ins(Dir::Horizontal, SplitSize::Cells(3), false, true);
+        assert_eq!(
+            tree.insert(area, order[0], E, how),
+            Err(LayoutError::TooSmall(order[0]))
+        );
+        assert_eq!(tree.compute(area), before);
+        assert_eq!(
+            tree.insert(area, PaneId(99), E, how),
+            Err(LayoutError::NotFound(PaneId(99)))
+        );
+    }
+
+    /// `rotate-window` on tmux 3.7b: `-D` moves the last pane first, each
+    /// pane taking the next position's cell; the default `-U` the other way.
+    #[test]
+    fn rotate_moves_every_pane_one_position() {
+        let (mut tree, area) = a_beside_bc();
+        let ids =
+            |t: &LayoutTree| -> Vec<PaneId> { t.compute(area).iter().map(|(p, _)| *p).collect() };
+        let cells = geometry(&tree, area);
+        tree.rotate(true);
+        assert_eq!(ids(&tree), [C, A, B]);
+        assert_eq!(geometry(&tree, area), cells);
+        tree.rotate(false);
+        tree.rotate(false);
+        assert_eq!(ids(&tree), [B, C, A]);
+        assert_eq!(geometry(&tree, area), cells);
+    }
+
+    #[test]
+    fn swap_and_replace_exchange_cells_and_positions() {
+        let (mut tree, area) = a_beside_bc();
+        let ids =
+            |t: &LayoutTree| -> Vec<PaneId> { t.compute(area).iter().map(|(p, _)| *p).collect() };
+        let cells = geometry(&tree, area);
+        assert!(tree.swap(A, C));
+        assert_eq!(ids(&tree), [C, B, A]);
+        assert_eq!(geometry(&tree, area), cells);
+        assert!(!tree.swap(A, D));
+        assert!(tree.replace(B, D));
+        assert_eq!(ids(&tree), [C, D, A]);
+        assert!(!tree.replace(B, E), "B is gone");
+        assert!(!tree.replace(C, A), "A is already in the tree");
+        assert!(tree.contains(D) && !tree.contains(B));
+    }
+
+    /// `resize-pane -x`/`-y` goldens on `A | B / C` (tmux 3.7b).
+    #[test]
+    fn resize_to_matches_the_tmux_goldens() {
+        type Step = (PaneId, Dir, u16);
+        let (h, v) = (Dir::Horizontal, Dir::Vertical);
+        let cases: [(&[Step], &str); 8] = [
+            (&[(A, h, 60)], "0,0 60x50;61,0 139x25;61,26 139x24"),
+            (&[(B, h, 60)], "0,0 139x50;140,0 60x25;140,26 60x24"),
+            (&[(B, v, 10)], "0,0 100x50;101,0 99x10;101,11 99x39"),
+            (&[(C, v, 10)], "0,0 100x50;101,0 99x39;101,40 99x10"),
+            (
+                &[(C, h, 30), (C, v, 40)],
+                "0,0 169x50;170,0 30x9;170,10 30x40",
+            ),
+            // No split across A: nothing to do.
+            (&[(A, v, 10)], "0,0 100x50;101,0 99x25;101,26 99x24"),
+            (&[(A, h, 199)], "0,0 198x50;199,0 1x25;199,26 1x24"),
+            (&[(A, h, 0)], "0,0 1x50;2,0 198x25;2,26 198x24"),
+        ];
+        for (ops, want) in cases {
+            let (mut tree, area) = a_beside_bc();
+            for &(pane, dir, cells) in ops {
+                tree.resize_to(area, pane, dir, cells);
+            }
+            assert_eq!(geometry(&tree, area), rows(want), "{ops:?}");
+            assert!(all_exact(&tree.root, area));
+        }
+    }
+
+    /// Growing takes from later cells past one with no room left, as
+    /// tmux's `layout_resize_pane_grow` does.
+    #[test]
+    fn resize_to_takes_room_from_more_than_one_cell() {
+        let area = rect(200, 10);
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Cells(66))
+            .unwrap();
+        tree.split(area, B, Dir::Horizontal, C, SplitSize::Cells(33))
+            .unwrap();
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 133x10", "134,0 32x10", "167,0 33x10"]
+        );
+        let steps = [
+            (A, 190, ["0,0 190x10", "191,0 1x10", "193,0 7x10"]),
+            // The last cell moves the border before it; the cell there
+            // has no room, so it comes from the first.
+            (C, 50, ["0,0 147x10", "148,0 1x10", "150,0 50x10"]),
+            (B, 50, ["0,0 147x10", "148,0 50x10", "199,0 1x10"]),
+        ];
+        for (pane, cells, want) in steps {
+            tree.resize_to(area, pane, Dir::Horizontal, cells);
+            assert_eq!(geometry(&tree, area), want, "{pane} {cells}");
+            assert!(all_exact(&tree.root, area));
+        }
+    }
+
+    /// `select-layout -E` goldens (tmux 3.7b).
+    #[test]
+    fn spread_matches_the_tmux_goldens() {
+        let area = rect(200, 50);
+        let h = Dir::Horizontal;
+        let v = Dir::Vertical;
+        // Three columns 148, 30, 20.
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, h, B, SplitSize::Cells(20)).unwrap();
+        tree.split(area, A, h, C, SplitSize::Cells(30)).unwrap();
+        assert!(tree.spread(area, A));
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 66x50", "67,0 66x50", "134,0 66x50"]
+        );
+        // Already even: nothing above to spread.
+        assert!(!tree.spread(area, A));
+
+        // A | (B / D / C), the right column uneven: -E on B spreads it.
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, h, B, SplitSize::Cells(20)).unwrap();
+        tree.split(area, B, v, C, SplitSize::Cells(10)).unwrap();
+        tree.split(area, B, v, D, SplitSize::Cells(5)).unwrap();
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 179x50", "180,0 20x33", "180,34 20x5", "180,40 20x10"]
+        );
+        let mut on_b = tree.clone();
+        assert!(on_b.spread(area, B));
+        assert_eq!(
+            geometry(&on_b, area),
+            ["0,0 179x50", "180,0 20x16", "180,17 20x16", "180,34 20x16"]
+        );
+        // On A, whose parent is the root: the columns even out.
+        assert!(tree.spread(area, A));
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 100x50", "101,0 99x33", "101,34 99x5", "101,40 99x10"]
+        );
+        // An even column goes on to its parent.
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, h, B, SplitSize::Cells(150)).unwrap();
+        tree.split(area, B, v, C, SplitSize::Cells(24)).unwrap();
+        assert!(tree.spread(area, C));
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 100x50", "101,0 99x25", "101,26 99x24"]
+        );
+
+        // Four columns: the extra cell goes first.
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, h, B, SplitSize::Cells(150)).unwrap();
+        tree.split(area, B, h, C, SplitSize::Cells(37)).unwrap();
+        tree.split(area, C, h, D, SplitSize::Cells(12)).unwrap();
+        assert!(tree.spread(area, A));
+        assert_eq!(
+            geometry(&tree, area),
+            ["0,0 50x50", "51,0 49x50", "101,0 49x50", "151,0 49x50"]
+        );
+        assert!(!LayoutTree::new(A).spread(area, A));
+    }
+
+    #[test]
+    fn export_then_import_reproduces_the_layout() {
+        let (mut tree, area) = a_beside_bc();
+        tree.split(area, A, Dir::Vertical, D, SplitSize::Cells(7))
+            .unwrap();
+        let before = tree.compute(area);
+        let borders = tree.borders(area);
+        let exported = tree.export(area);
+        assert_eq!(
+            (exported.x, exported.y, exported.cols, exported.rows),
+            (0, 0, 200, 50)
+        );
+
+        tree.resize(area, A, Edge::Right, 30);
+        tree.resize_to(area, D, Dir::Vertical, 3);
+        assert!(tree.preset(area, Preset::Tiled, &[A, D, B, C]));
+        assert_ne!(tree.compute(area), before);
+
+        tree.import(&exported).unwrap();
+        assert_eq!(tree.compute(area), before);
+        assert_eq!(tree.borders(area), borders);
+        assert_eq!(tree.export(area), exported);
+        assert!(all_exact(&tree.root, area));
+    }
+
+    /// Geometry from a user's string is bounded before it is walked: a
+    /// chain nested far too deep, or a split with more cells than the
+    /// tree has panes, is refused without recursing through it.
+    #[test]
+    fn import_bounds_depth_and_size_first() {
+        let (mut tree, area) = a_beside_bc();
+        let before = tree.compute(area);
+        let pane = |p| LayoutGeometry {
+            x: 0,
+            y: 0,
+            cols: 10,
+            rows: 10,
+            cell: GeometryCell::Pane(p),
+        };
+        let mut deep = pane(A);
+        for _ in 0..100_000 {
+            deep = LayoutGeometry {
+                cell: GeometryCell::Split {
+                    dir: Dir::Horizontal,
+                    children: vec![deep],
+                },
+                ..pane(A)
+            };
+        }
+        assert_eq!(tree.import(&deep), Err(LayoutError::Invalid));
+        let wide = LayoutGeometry {
+            cell: GeometryCell::Split {
+                dir: Dir::Horizontal,
+                children: vec![pane(A); 1_000_000],
+            },
+            ..pane(A)
+        };
+        assert_eq!(tree.import(&wide), Err(LayoutError::Invalid));
+        assert_eq!(tree.compute(area), before);
+        // Dropping the deep chain recurses too; unwind it by hand.
+        let mut node = Some(deep);
+        while let Some(LayoutGeometry {
+            cell: GeometryCell::Split { mut children, .. },
+            ..
+        }) = node
+        {
+            node = children.pop();
+        }
+    }
+
+    #[test]
+    fn import_refuses_geometry_that_does_not_tile() {
+        let (mut tree, area) = a_beside_bc();
+        let good = tree.export(area);
+        let before = tree.compute(area);
+        let GeometryCell::Split { children, .. } = &good.cell else {
+            panic!("a split");
+        };
+        let mut bad = Vec::new();
+        // A gap before the second column.
+        let mut g = good.clone();
+        if let GeometryCell::Split { children, .. } = &mut g.cell {
+            children[1].x += 1;
+        }
+        bad.push(g);
+        // A column of the wrong height.
+        let mut g = good.clone();
+        if let GeometryCell::Split { children, .. } = &mut g.cell {
+            children[0].rows = 49;
+        }
+        bad.push(g);
+        // A pane the tree does not hold.
+        let mut g = good.clone();
+        if let GeometryCell::Split { children, .. } = &mut g.cell {
+            children[0].cell = GeometryCell::Pane(E);
+        }
+        bad.push(g);
+        // A split of one.
+        let mut g = good.clone();
+        g.cell = GeometryCell::Split {
+            dir: Dir::Horizontal,
+            children: vec![children[0].clone()],
+        };
+        bad.push(g);
+        // Not at the origin.
+        let mut g = good.clone();
+        g.x = 1;
+        bad.push(g);
+        for g in bad {
+            assert_eq!(tree.import(&g), Err(LayoutError::Invalid), "{g:?}");
+            assert_eq!(tree.compute(area), before);
+        }
+    }
+    fn structure_op_strategy() -> impl Strategy<Value = (u8, [bool; 3], usize, usize, u16, u8)> {
+        (
+            0u8..10,
+            any::<[bool; 3]>(),
+            any::<usize>(),
+            any::<usize>(),
+            0u16..60,
+            // Which area: the build area twice as often as each other.
+            0u8..4,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// T1.3's invariant after every TC.8 operation (the acceptance
+        /// clause): random inserts (before, full), removes, swaps,
+        /// replaces, rotations, `resize_to`, spreads, presets and
+        /// export/import round trips, on random areas.
+        #[test]
+        fn structure_ops_keep_the_tree_tiling_exactly(
+            ops in prop::collection::vec(structure_op_strategy(), 0..32),
+            build in (8u16..60, 6u16..40),
+            other in (1u16..60, 1u16..40),
+            small in (1u16..12, 1u16..10),
+        ) {
+            let areas = [
+                rect(build.0, build.1),
+                rect(build.0, build.1),
+                rect(other.0, other.1),
+                rect(small.0, small.1),
+            ];
+            let mut tree = LayoutTree::new(PaneId(0));
+            let mut alive = vec![PaneId(0)];
+            let mut next_id = 1u32;
+            for (kind, flags, a, b, n, area_kind) in ops {
+                let area = areas[area_kind as usize];
+                let pa = alive[a % alive.len()];
+                let pb = alive[b % alive.len()];
+                let dir = if flags[0] { Dir::Horizontal } else { Dir::Vertical };
+                match kind {
+                    0 | 1 => {
+                        let size = if flags[1] { SplitSize::Half } else { SplitSize::Cells(n) };
+                        let how = Insert { dir, size, before: flags[1] ^ flags[2], full: flags[2] };
+                        if tree.insert(area, pa, PaneId(next_id), how).is_ok() {
+                            alive.push(PaneId(next_id));
+                            next_id += 1;
+                        }
+                    }
+                    2 => {
+                        if alive.len() > 1 {
+                            tree.remove(pa);
+                            alive.retain(|p| *p != pa);
+                        }
+                    }
+                    3 => {
+                        prop_assert_eq!(tree.swap(pa, pb), true);
+                    }
+                    4 => {
+                        prop_assert!(tree.replace(pa, PaneId(next_id)));
+                        alive.retain(|p| *p != pa);
+                        alive.push(PaneId(next_id));
+                        next_id += 1;
+                    }
+                    5 => tree.rotate(flags[0]),
+                    6 => tree.resize_to(area, pa, dir, n),
+                    7 => {
+                        tree.spread(area, pa);
+                    }
+                    8 => {
+                        let name = Preset::NAMES[a % Preset::NAMES.len()];
+                        let main = if flags[1] { MainSize::Cells(n) } else { MainSize::Percent(n as u8) };
+                        let preset = Preset::from_name(name, main, main).unwrap();
+                        let order: Vec<PaneId> = tree.order.clone();
+                        let old = tree.clone();
+                        if !tree.preset(area, preset, &order) {
+                            prop_assert_eq!(tree.compute(area), old.compute(area));
+                        }
+                    }
+                    _ => {
+                        let before = tree.compute(area);
+                        let exported = tree.export(area);
+                        let mut copy = tree.clone();
+                        copy.rotate(true);
+                        // Every pane gets its cell back; index order is
+                        // the pane list's, which a layout leaves alone.
+                        // Below the floor some cell has no room, which no
+                        // layout can say.
+                        let fits = renders_nonzero(&tree.root, area);
+                        prop_assert_eq!(copy.import(&exported).is_ok(), fits);
+                        if !fits {
+                            continue;
+                        }
+                        let by_id = |mut r: Vec<(PaneId, Rect)>| {
+                            r.sort_by_key(|(p, _)| *p);
+                            r
+                        };
+                        prop_assert_eq!(by_id(copy.compute(area)), by_id(before));
+                        prop_assert_eq!(&copy.order, &{
+                            let mut o = tree.order.clone();
+                            o.rotate_right(1);
+                            o
+                        });
+                    }
+                }
+
+                // The order is always every pane, once.
+                let mut order = tree.order.clone();
+                order.sort();
+                let mut leaves_now = Vec::new();
+                leaves(&tree.root, &mut leaves_now);
+                leaves_now.sort();
+                prop_assert_eq!(&order, &leaves_now);
+                let mut want = alive.clone();
+                want.sort();
+                prop_assert_eq!(&order, &want);
+
+                match tree.exact_for {
+                    None => prop_assert!(matches!(tree.root, Node::Leaf(_))),
+                    Some((cols, rows)) => {
+                        let exact = rect(cols, rows);
+                        prop_assert!(all_exact(&tree.root, exact));
+                        prop_assert!(weights_within(&tree.root, exact));
+                        let rects = tree.compute(exact);
+                        prop_assert!(rects.iter().all(|(_, r)| r.cols >= 1 && r.rows >= 1));
+                        prop_assert!(tiles_exactly(exact, &rects, &tree.borders(exact)));
+                    }
+                }
+                let rects = tree.compute(area);
+                prop_assert!(tiles_exactly(area, &rects, &tree.borders(area)));
+                prop_assert!(no_child_zeroed_where_it_fits(&tree.root, area));
+            }
+        }
+    }
+
+    /// The tmux 3.7b layout string after `split -h`, `split -v` on the new
+    /// pane, then `split -h` on the first, at 200x50 (recorded).
+    const RECORDED: &str =
+        "423d,200x50,0,0{50x50,0,0,0,49x50,51,0,3,99x50,101,0[99x25,101,0,1,99x24,101,26,2]}";
+
+    fn recorded_tree() -> LayoutTree {
+        let area = rect(200, 50);
+        let p = PaneId;
+        let mut tree = LayoutTree::new(p(0));
+        tree.split(area, p(0), Dir::Horizontal, p(1), SplitSize::Half)
+            .unwrap();
+        tree.split(area, p(1), Dir::Vertical, p(2), SplitSize::Half)
+            .unwrap();
+        tree.split(area, p(0), Dir::Horizontal, p(3), SplitSize::Half)
+            .unwrap();
+        tree
+    }
+
+    #[test]
+    fn a_layout_writes_tmux_s_string() {
+        let tree = recorded_tree();
+        assert_eq!(
+            tmux_layout(&tree.export(rect(200, 50)), &[], true),
+            RECORDED
+        );
+        let one = LayoutTree::new(PaneId(7));
+        let g = one.export(rect(80, 24));
+        let sum = tmux_checksum("80x24,0,0,7");
+        assert_eq!(tmux_layout(&g, &[], true), format!("{sum:04x},80x24,0,0,7"));
+        let float = |pane, z| FloatingCell {
+            pane: PaneId(pane),
+            x: -2,
+            y: 3,
+            cols: 10,
+            rows: 5,
+            z,
+        };
+        let s = tmux_layout(&g, &[float(9, 1)], true);
+        assert!(
+            s.ends_with(",80x24,0,0[80x24,0,0,7,10x5,-2,3,9]<10x5,-2,3,9>"),
+            "{s}"
+        );
+        // `fe_2/layout`'s recorded string, byte for byte.
+        let lone = LayoutTree::new(PaneId(5)).export(rect(200, 50));
+        let recorded = FloatingCell {
+            pane: PaneId(6),
+            x: 3,
+            y: 4,
+            cols: 20,
+            rows: 5,
+            z: 1,
+        };
+        assert_eq!(
+            tmux_layout(&lone, &[recorded], true),
+            "27a7,200x50,0,0[200x50,0,0,5,20x5,3,4,6]<20x5,3,4,6>"
+        );
+        // In the root in the order made, in `<>` topmost first (recorded).
+        let tree = recorded_tree();
+        let s = tmux_layout(
+            &tree.export(rect(200, 50)),
+            &[float(8, 1), float(9, 2)],
+            true,
+        );
+        assert!(
+            s.ends_with(",99x24,101,26,2],10x5,-2,3,8,10x5,-2,3,9}<10x5,-2,3,9,10x5,-2,3,8>"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn a_tmux_string_round_trips_with_the_window_s_panes() {
+        let mut tree = LayoutTree::new(PaneId(5));
+        let panes: Vec<PaneId> = [5, 6, 7, 8].map(PaneId).to_vec();
+        for p in &panes[1..] {
+            let area = rect(200, 50);
+            tree.split(area, PaneId(5), Dir::Vertical, *p, SplitSize::Half)
+                .unwrap();
+        }
+        tree.apply_tmux_layout(RECORDED, &panes).unwrap();
+        // The cells take the panes in order, whatever the string numbers.
+        let want = RECORDED
+            .replace(",0,0,0,", ",0,0,5,")
+            .replace(",51,0,3,", ",51,0,6,")
+            .replace(",101,0,1,", ",101,0,7,")
+            .replace(",101,26,2]", ",101,26,8]");
+        let got = tmux_layout(&tree.export(rect(200, 50)), &[], true);
+        assert_eq!(got[5..], want[5..]);
+        assert_eq!(tree.order, panes);
+    }
+
+    #[test]
+    fn tmux_s_layout_errors() {
+        let mut tree = recorded_tree();
+        let panes: Vec<PaneId> = (0..4).map(PaneId).collect();
+        let with_sum = |body: &str| format!("{:04x},{body}", tmux_checksum(body));
+        let mut err = |s: &str, panes: &[PaneId]| tree.apply_tmux_layout(s, panes).unwrap_err();
+        assert_eq!(err("nope", &panes), "invalid layout");
+        assert_eq!(
+            err(&format!("ffff{}", &RECORDED[4..]), &panes),
+            "invalid layout"
+        );
+        let two = with_sum("80x24,0,0{40x24,0,0,1,39x24,41,0,2}");
+        assert_eq!(err(&two, &panes), "have 4 panes but need 2");
+        let gap = with_sum("80x24,0,0{40x24,0,0,1,39x23,41,0,2}");
+        assert_eq!(
+            err(&gap, &panes[..2]),
+            "size mismatch after applying layout"
+        );
+        let deep = "1x1,0,0[".repeat(300);
+        assert!(parse_tmux_layout(&with_sum(&deep)).is_none());
+        // Nothing changed.
+        assert_eq!(
+            tmux_layout(&tree.export(rect(200, 50)), &[], true),
+            RECORDED
+        );
+    }
+
+    /// Fewer panes than cells: the bottom-right cell goes, its room to its
+    /// neighbour, until they match, as tmux's `layout_parse`.
+    #[test]
+    fn spare_cells_go_from_the_bottom_right() {
+        let mut tree = LayoutTree::new(PaneId(0));
+        let area = rect(200, 50);
+        tree.split(area, PaneId(0), Dir::Horizontal, PaneId(1), SplitSize::Half)
+            .unwrap();
+        tree.apply_tmux_layout(RECORDED, &[PaneId(0), PaneId(1)])
+            .unwrap();
+        let got = tmux_layout(&tree.export(area), &[], true);
+        assert_eq!(&got[5..], "200x50,0,0{50x50,0,0,0,149x50,51,0,1}");
+    }
+
+    /// A string of `n` one-cell panes side by side, checksummed.
+    fn flat_layout(n: usize) -> String {
+        let cells: Vec<String> = (0..n).map(|i| format!("1x1,{},0,{i}", 2 * i)).collect();
+        let body = format!("{}x1,0,0{{{}}}", 2 * n - 1, cells.join(","));
+        format!("{:04x},{body}", tmux_checksum(&body))
+    }
+
+    /// Spare cells go in O(depth) each, and a string past the cell cap is
+    /// refused before any is walked, so a huge layout (from `source-file`)
+    /// cannot stall the actor.
+    #[test]
+    fn a_big_layout_is_quick_and_a_huge_one_refused() {
+        let panes = [PaneId(0), PaneId(1)];
+        let mut tree = LayoutTree::new(PaneId(0));
+        let area = rect(80, 24);
+        tree.split(area, PaneId(0), Dir::Horizontal, PaneId(1), SplitSize::Half)
+            .unwrap();
+        let start = std::time::Instant::now();
+        tree.apply_tmux_layout(&flat_layout(MAX_LAYOUT_CELLS), &panes)
+            .unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        let got = tmux_layout(&tree.export(rect(8191, 1)), &[], true);
+        assert_eq!(&got[5..], "8191x1,0,0{1x1,0,0,0,8189x1,2,0,1}");
+        let start = std::time::Instant::now();
+        let err = tree.apply_tmux_layout(&flat_layout(30000), &panes);
+        assert_eq!(err.unwrap_err(), "invalid layout");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 }

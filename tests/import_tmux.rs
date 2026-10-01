@@ -170,11 +170,197 @@ fn golden_dotfiles() {
     );
 }
 
+// ---- M3.6 (TP.0): one small fixture per feature the converter learned ----
+
+/// The per-feature fixtures (TP.0 case 3), each a `home/.tmux.conf` with
+/// its golden output and report.
+const M36_FIXTURES: &[&str] = &[
+    "m36-sources",
+    "m36-if-shell",
+    "m36-hooks",
+    "m36-environment",
+    "m36-alias",
+    "m36-table",
+    "m36-mouse",
+    "m36-overlays",
+    "m36-status-rows",
+    "m36-front-end",
+];
+
+/// Every fixture: TI.1's two and TP.0's.
+fn all_fixtures() -> Vec<&'static str> {
+    let mut all = vec!["canopy", "dotfiles"];
+    all.extend(M36_FIXTURES);
+    all
+}
+
+#[test]
+fn golden_m36_fixtures() {
+    for name in M36_FIXTURES {
+        let f = Fixture::new(name);
+        let out = f.run(&[]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "[{name}] stderr:\n{}",
+            out.stderr
+        );
+        assert_golden(&fixture_dir(name).join("expected.toml"), &out.stdout);
+        assert_golden(&fixture_dir(name).join("expected.report"), &out.stderr);
+    }
+}
+
+/// Every report line, without its `file:line: `.
+fn report_lines(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|l| l.split_once(": ").map(|(_, rest)| rest.to_string()))
+        .collect()
+}
+
+/// A note that accounts for a line that did convert (it was followed,
+/// replaced by a later line, spelled natively, kept with no effect), as
+/// against a line left out, which is always a report line of its own.
+fn accounting_note(rest: &str) -> bool {
+    let Some(note) = rest.strip_prefix("note: ") else {
+        return false;
+    };
+    [
+        "source-file found ",
+        "source-file -q found ",
+        "source-file of the imported config rewritten to reload",
+        " is overridden by a later ",
+        " is replaced by ",
+        " unset here (-u)",
+        " is unset by ",
+        ": grofe keeps and shows it, with no effect",
+        " is expanded ",
+        " dropped: cosmetic",
+        " toggles it, as tmux does",
+        " replaced by the built-in mouse model",
+        " is already set, so -o leaves it",
+    ]
+    .iter()
+    .any(|a| note.starts_with(a.trim_start()) || note.contains(a))
+}
+
+/// TP.0's acceptance: on the canopy-style fixture every report line is a
+/// plugin or TPM line, one of spec 4.5's out-of-scope items (`%if`, and
+/// what it guards), or a note accounting for a line that converted.
+#[test]
+fn the_canopy_report_is_only_plugins_and_out_of_scope_items() {
+    let f = Fixture::new("canopy");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let allowed = ["plugins and TPM: ", "%if: ", "%endif: ", "inside %if at "];
+    let left: Vec<String> = report_lines(&out.stderr)
+        .into_iter()
+        .filter(|rest| !allowed.iter().any(|a| rest.starts_with(a)) && !accounting_note(rest))
+        .collect();
+    assert!(left.is_empty(), "left in the report: {left:#?}");
+}
+
+/// The dotfiles fixture's report: plugins and TPM and accounting notes,
+/// plus exactly these, none a gap TP.0 closes (an option grofe does not
+/// have, M5's copy mode twice, a `-q` source-file that matched no file).
+#[test]
+fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
+    let f = Fixture::new("dotfiles");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let left: Vec<String> = report_lines(&out.stderr)
+        .into_iter()
+        .filter(|rest| !rest.starts_with("plugins and TPM: ") && !accounting_note(rest))
+        .collect();
+    let expected = [
+        "option grofe does not have: set -ga terminal-overrides",
+        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi v",
+        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi y",
+        "skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf",
+    ];
+    assert_eq!(left.len(), expected.len(), "left: {left:#?}");
+    for (got, want) in left.iter().zip(expected) {
+        assert!(
+            got.starts_with(want),
+            "{got:?} does not start with {want:?}"
+        );
+    }
+}
+
+/// Every note in every fixture's report accounts for a converted line: a
+/// line left out is never only a note.
+#[test]
+fn no_fixture_leaves_a_line_out_as_a_note() {
+    for name in all_fixtures() {
+        let f = Fixture::new(name);
+        let out = f.run(&[]);
+        for rest in report_lines(&out.stderr) {
+            if rest.starts_with("note: ") {
+                assert!(accounting_note(&rest), "[{name}] {rest}");
+            }
+        }
+    }
+}
+
+/// Case 5: `neww`, `setw`, `display` and `-t =x` are written in grofe's
+/// own spelling, as the front end's table translates them.
+#[test]
+fn front_end_forms_are_written_natively() {
+    let f = Fixture::new("m36-front-end");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let doc: toml::Table = out.stdout.parse().expect("valid toml");
+    let prefix = doc["keys"]["prefix"].as_table().expect("keys.prefix");
+    let cmd = |k: &str| prefix[k].as_str().expect("a command string").to_string();
+    assert_eq!(cmd("N"), "new-window -n scratch");
+    assert_eq!(cmd("W"), "set-option -w -g automatic-rename off");
+    // `=` means exact natively too, so an exact target is written as it is.
+    assert_eq!(cmd("X"), "select-pane -t =work:1.2");
+    assert_eq!(cmd("Y"), "kill-session -t =work");
+    assert_eq!(cmd("D"), "display-message \"on #{session_name}\"");
+    assert!(
+        !prefix.contains_key("O"),
+        "an offset target has no native spelling"
+    );
+}
+
+/// Case 2: a converted `#()` source, loaded by a server, shows its cached
+/// value where the rewritten format reads it.
+#[test]
+fn a_converted_source_shows_its_cached_value_on_a_server() {
+    let f = Fixture::new("m36-sources");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let doc: toml::Table = out.stdout.parse().expect("valid toml");
+    let right = doc["status"]["right"]
+        .as_str()
+        .expect("status.right")
+        .to_string();
+    assert!(right.starts_with("#{@src-"), "{right}");
+
+    let srv = common::TestServer::start();
+    let dir = srv.config_home.join("grofe");
+    fs::create_dir_all(&dir).expect("config dir");
+    fs::write(dir.join("config.toml"), &out.stdout).expect("write config");
+    srv.cmd(&["reload"]).expect("reload");
+    srv.cmd(&["new-session", "-d", "-s", "s"])
+        .expect("new-session");
+    let shown = || {
+        srv.cmd(&["display-message", "-p", &right])
+            .unwrap_or_default()
+    };
+    srv.wait_for(
+        || shown().starts_with("tp0-source "),
+        Duration::from_secs(10),
+    )
+    .unwrap_or_else(|_| panic!("the source never showed: {:?}", shown()));
+}
+
 // ---- case 3: the output loads with `show-config --file` ----
 
 #[test]
 fn case3_output_loads_with_show_config() {
-    for name in ["canopy", "dotfiles"] {
+    for name in all_fixtures() {
         let f = Fixture::new(name);
         let out_path = f.tmp.path().join("out.toml");
         let out = f.run(&["-o", out_path.to_str().expect("utf8 path")]);
@@ -229,7 +415,7 @@ fn case3_output_loads_with_show_config() {
 /// reason. A silently dropped line fails this.
 #[test]
 fn case4_report_completeness() {
-    for name in ["canopy", "dotfiles"] {
+    for name in all_fixtures() {
         let f = Fixture::new(name);
         let out = f.run(&[]);
         assert_eq!(
@@ -422,7 +608,7 @@ fn case8_canopy_store_in_the_importers_env_never_changes_stdout() {
 /// back (spec 5.5 "Binding command strings").
 #[test]
 fn case10_every_binding_round_trips_through_split_command_string() {
-    for name in ["canopy", "dotfiles"] {
+    for name in all_fixtures() {
         let f = Fixture::new(name);
         let out = f.run(&[]);
         assert_eq!(
@@ -432,12 +618,21 @@ fn case10_every_binding_round_trips_through_split_command_string() {
             out.stderr
         );
         let doc: toml::Table = out.stdout.parse().expect("valid toml");
-        let Some(keys) = doc.get("keys").and_then(toml::Value::as_table) else {
-            panic!("[{name}] no [keys] table in the output");
-        };
+        let empty = toml::Table::new();
+        let keys = doc
+            .get("keys")
+            .and_then(toml::Value::as_table)
+            .unwrap_or(&empty);
+        let aliases: Vec<&str> = doc
+            .get("command-alias")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .collect();
         let mut checked = 0;
-        for table_name in ["prefix", "root"] {
-            let Some(table) = keys.get(table_name).and_then(toml::Value::as_table) else {
+        for (table_name, table) in keys {
+            let Some(table) = table.as_table() else {
                 continue;
             };
             for (key, v) in table {
@@ -461,6 +656,13 @@ fn case10_every_binding_round_trips_through_split_command_string() {
                     "[{name}] keys.{table_name}.{key} = {cmd:?}: no command"
                 );
                 for words in &argv {
+                    // A `command-alias` name: the loader expands it first.
+                    if aliases
+                        .iter()
+                        .any(|a| a.split_once('=').is_some_and(|(n, _)| n == words[0]))
+                    {
+                        continue;
+                    }
                     grofe::cmd::parse(words).unwrap_or_else(|e| {
                         panic!("[{name}] keys.{table_name}.{key} = {cmd:?}: parse {words:?}: {e}")
                     });
@@ -468,7 +670,30 @@ fn case10_every_binding_round_trips_through_split_command_string() {
                 checked += 1;
             }
         }
-        assert!(checked > 0, "[{name}] no bindings found to check");
+        let load = doc.get("load-commands").and_then(toml::Value::as_array);
+        for v in load.into_iter().flatten() {
+            let cmd = v.as_str().expect("a load command string");
+            for words in grofe::cmd::split_command_string(cmd).expect("split") {
+                grofe::cmd::parse(&words)
+                    .unwrap_or_else(|e| panic!("[{name}] load-commands {cmd:?}: {e}"));
+            }
+            checked += 1;
+        }
+        let hooks = doc.get("hooks").and_then(toml::Value::as_table);
+        for (event, v) in hooks.into_iter().flatten() {
+            let cmd = v.as_str().expect("a hook command string");
+            for words in grofe::cmd::split_command_string(cmd).expect("split") {
+                grofe::cmd::parse(&words)
+                    .unwrap_or_else(|e| panic!("[{name}] hooks.{event} = {cmd:?}: {e}"));
+            }
+            checked += 1;
+        }
+        let converts_something =
+            !matches!(name, "m36-sources" | "m36-environment" | "m36-status-rows");
+        assert!(
+            checked > 0 || !converts_something,
+            "[{name}] no bindings or hooks found to check"
+        );
     }
 }
 
@@ -556,4 +781,74 @@ fn git_user_email() -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// A `$VAR` in a converted binding expands from `[environment]`, as tmux
+/// expands it from the `set-environment -g` it read first: canopy's `M-s`
+/// finds `$CANOPY_STORE`.
+#[test]
+fn a_binding_reads_canopy_store_from_the_converted_environment() {
+    let f = Fixture::new("canopy");
+    let out_path = f.tmp.path().join("out.toml");
+    let out = f.run(&["-o", out_path.to_str().expect("utf8 path")]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let env = grofe::config::Env {
+        config_dir: None,
+        home: None,
+    };
+    let r = grofe::config::load_with_file(&env, std::slice::from_ref(&out_path))
+        .unwrap_or_else(|e| panic!("load: {e:?}"));
+    let home = std::env::var("HOME").expect("HOME");
+    let m_s = r
+        .keys
+        .iter()
+        .find(|b| b.table == "prefix" && b.key.to_string() == "M-s")
+        .expect("keys.prefix.M-s");
+    assert_eq!(
+        m_s.cmds,
+        [vec![
+            "run-shell".to_string(),
+            format!("{home}/.local/share/canopy/plugins/tmux-resurrect/scripts/save.sh"),
+        ]]
+    );
+}
+
+/// `show-config` lists `[user-options]`, `[environment]` and
+/// `load-commands` too, and what it prints loads back to the same.
+#[test]
+fn show_config_round_trips_the_new_keys() {
+    let f = Fixture::new("canopy");
+    let out_path = f.tmp.path().join("out.toml");
+    let out = f.run(&["-o", out_path.to_str().expect("utf8 path")]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let show = |path: &Path| {
+        let none = f.tmp.path().join("xdg-none");
+        fs::create_dir_all(&none).expect("mkdir");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.arg("-S")
+            .arg(f.tmp.path().join("none.sock"))
+            .arg("show-config")
+            .arg("--file")
+            .arg(path)
+            .env("HOME", &f.home)
+            .env("XDG_CONFIG_HOME", &none);
+        let got = run_bounded(cmd, TIMEOUT);
+        assert_eq!(got.status.code(), Some(0), "stderr:\n{}", got.stderr);
+        got.stdout
+    };
+    let first = show(&out_path);
+    for want in [
+        "user-options.theme_blue = \"#458588\"\n",
+        "environment.CANOPY_STORE = \"$HOME/.local/share/canopy\"\n",
+        "load-commands = [\"run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'\"",
+    ] {
+        assert!(first.contains(want), "{want:?} missing from:\n{first}");
+    }
+    let again = f.tmp.path().join("again.toml");
+    fs::write(&again, &first).expect("write");
+    assert_eq!(
+        show(&again),
+        first,
+        "show-config's output loads back to itself"
+    );
 }

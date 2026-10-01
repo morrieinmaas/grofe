@@ -11,12 +11,13 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
 use super::{
-    ConfigError, Env, KeyBinding, Layer, OPTION_NAMES, Provenance, Resolved, Source, Ty, closest,
-    tmux_name, toml_type,
+    ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
+    OPTION_NAMES, Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
 use crate::server::input::{Key, parse_key};
+use crate::server::sources::MAX_SECONDS;
 
 /// Loads the machine's config chain: built-in defaults, `config.toml`,
 /// `conf.d/*.toml` in lexical order, `user.toml`. All errors, or none.
@@ -86,8 +87,17 @@ struct Loader {
     /// config value is refused exactly as `set-option` would refuse it.
     store: Options,
     options: BTreeMap<&'static str, String>,
+    lists: BTreeMap<&'static str, Vec<String>>,
     provenance: Provenance,
     keys: Vec<KeyBinding>,
+    hooks: BTreeMap<String, ConfigHook>,
+    sources: BTreeMap<String, ConfigSource>,
+    user_options: BTreeMap<String, String>,
+    environment: Vec<(String, String)>,
+    load_commands: Vec<ConfigCommand>,
+    /// `environment` so far with each value expanded: what a later
+    /// binding's, hook's or load command's `$NAME` reads (TP.0).
+    env_expanded: Vec<(String, String)>,
     errors: Vec<ConfigError>,
     warnings: Vec<String>,
     /// The include chain being loaded, for cycle detection.
@@ -141,12 +151,26 @@ impl Loader {
                 provenance.set(toml, Source::defaults());
             }
         }
+        let mut lists = BTreeMap::new();
+        for (toml, tmux) in LIST_NAMES.iter().filter(|_| defaults) {
+            if let Some(l) = store.list(Owner::Global, tmux) {
+                lists.insert(*toml, l.items.values().cloned().collect());
+                provenance.set(toml, Source::defaults());
+            }
+        }
         Loader {
             home: env.home.clone(),
             store,
             options,
+            lists,
             provenance,
             keys: Vec::new(),
+            hooks: BTreeMap::new(),
+            sources: BTreeMap::new(),
+            user_options: BTreeMap::new(),
+            environment: Vec::new(),
+            load_commands: Vec::new(),
+            env_expanded: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             stack: Vec::new(),
@@ -159,7 +183,13 @@ impl Loader {
         }
         Ok(Resolved {
             options: self.options,
+            lists: self.lists,
             keys: self.keys,
+            hooks: self.hooks,
+            sources: self.sources,
+            user_options: self.user_options,
+            environment: self.environment,
+            load_commands: self.load_commands,
             provenance: self.provenance,
             warnings: self.warnings,
         })
@@ -234,6 +264,10 @@ impl Loader {
                 "requires" => {}
                 "source-file" => self.include_list(&f, line, v.get_ref(), &mut includes),
                 "keys" => self.key_tables(&f, line, v.get_ref()),
+                "hooks" => self.hooks(&f, line, v.get_ref()),
+                "user-options" => self.user_options(&f, line, v.get_ref()),
+                "environment" => self.environment(&f, line, v.get_ref()),
+                "load-commands" => self.load_commands(&f, line, v.get_ref()),
                 _ => self.option_entry(&f, "", k, v),
             }
         }
@@ -355,8 +389,14 @@ impl Loader {
     ) {
         let full = join(prefix, k.get_ref());
         let line = f.line(k.span().start);
+        if full == "status.sources" {
+            return self.sources(f, line, v.get_ref());
+        }
         if let Some(toml) = OPTION_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
             return self.set_option(f, line, toml, v.get_ref());
+        }
+        if let Some(toml) = LIST_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
+            return self.set_list(f, line, toml, v.get_ref());
         }
         match v.get_ref() {
             DeValue::Table(t) if is_section(&full) || !t.is_empty() => {
@@ -366,11 +406,20 @@ impl Loader {
             }
             _ => {
                 let mut msg = "unknown key".to_string();
-                let known =
-                    OPTION_NAMES
-                        .iter()
-                        .map(|(t, _)| *t)
-                        .chain(["requires", "source-file", "keys"]);
+                let known = OPTION_NAMES
+                    .iter()
+                    .chain(LIST_NAMES)
+                    .map(|(t, _)| *t)
+                    .chain([
+                        "requires",
+                        "source-file",
+                        "keys",
+                        "hooks",
+                        "status.sources",
+                        "user-options",
+                        "environment",
+                        "load-commands",
+                    ]);
                 if let Some(s) = closest(&full, known) {
                     msg.push_str(&format!(", did you mean {s}?"));
                 }
@@ -396,6 +445,26 @@ impl Loader {
         self.provenance.set(toml, f.source(line));
     }
 
+    /// A list option (TC.2b): an array of strings, the whole list.
+    fn set_list(&mut self, f: &FileCtx, line: usize, toml: &'static str, v: &DeValue) {
+        let bad = |found: &str| format!("expected an array of strings, found {found}");
+        let DeValue::Array(a) = v else {
+            return self.error(f.path, line, toml, bad(v.type_str()));
+        };
+        let mut items = Vec::new();
+        for item in a {
+            match item.get_ref() {
+                DeValue::String(s) => items.push(s.to_string()),
+                other => {
+                    let item_line = f.line(item.span().start);
+                    return self.error(f.path, item_line, toml, bad(other.type_str()));
+                }
+            }
+        }
+        self.lists.insert(toml, items);
+        self.provenance.set(toml, f.source(line));
+    }
+
     /// `[keys.<table>]` sections.
     fn key_tables(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
         let DeValue::Table(tables) = v else {
@@ -409,6 +478,203 @@ impl Loader {
                 other => {
                     let msg = format!("expected a key table, found {}", other.type_str());
                     self.error(f.path, f.line(name.span().start), &key, msg);
+                }
+            }
+        }
+    }
+
+    /// `[hooks]`: `<event> = "<command>"` (TC.5). The event must be one of
+    /// grofe's (`server::hooks::EVENTS`) and every command must parse, as
+    /// `set-hook -g` checks; a later layer replaces an earlier one's, and an
+    /// empty string removes it.
+    fn hooks(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table of hooks, found {}", v.type_str());
+            return self.error(f.path, line, "hooks", msg);
+        };
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let path = format!("hooks.{name}");
+            let line = f.line(k.span().start);
+            if crate::server::hooks::event(&name).is_none() {
+                let mut msg = "unknown hook".to_string();
+                let names = crate::server::hooks::EVENTS.iter().map(|e| e.name);
+                if let Some(s) = closest(&name, names) {
+                    msg.push_str(&format!(", did you mean {s}?"));
+                }
+                self.error(f.path, line, &path, msg);
+                continue;
+            }
+            let Some(command) = v.get_ref().as_str() else {
+                let msg = format!(
+                    "expected a command string, found {}",
+                    v.get_ref().type_str()
+                );
+                self.error(f.path, line, &path, msg);
+                continue;
+            };
+            let vars = &self.env_expanded;
+            let checked =
+                cmd::parse::with_variables(vars, || crate::server::hooks::check_command(command));
+            let cmds = match checked {
+                Ok(cmds) => cmds,
+                Err(msg) => {
+                    self.error(f.path, line, &path, msg);
+                    continue;
+                }
+            };
+            let hook = ConfigHook {
+                command: command.to_string(),
+                cmds,
+                source: f.source(line),
+            };
+            self.hooks.insert(name, hook);
+        }
+    }
+
+    /// `[user-options]` (TP.0): `<name> = "<value>"` sets the global user
+    /// option `@<name>` when the config is applied, as `set -g @<name>`
+    /// would; a runtime `set` of it wins after that. A later layer replaces
+    /// an earlier one's value.
+    fn user_options(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        for (name, value, _) in self.string_table(f, line, v, "user-options") {
+            self.user_options.insert(format!("@{name}"), value);
+        }
+    }
+
+    /// `[environment]` (TP.0): `<NAME> = "<value>"` sets a global
+    /// environment variable when the config is applied, as
+    /// `set-environment -g` would. `$NAME`, `${NAME}` and a leading `~` in
+    /// the value expand then, from the global environment, as tmux expands
+    /// them when it reads the line. A later layer replaces an earlier one's
+    /// value.
+    fn environment(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        for (name, value, line) in self.string_table(f, line, v, "environment") {
+            if name.contains('=') {
+                let msg = "a variable name has no =".to_string();
+                self.error(f.path, line, &format!("environment.{name}"), msg);
+                continue;
+            }
+            let vars = self.env_expanded.clone();
+            let get = |n: &str| cmd::parse::with_variables(&vars, || cmd::parse::env_var(n));
+            let expanded = super::expand_value(&value, &get);
+            self.env_expanded.retain(|(n, _)| *n != name);
+            self.env_expanded.push((name.clone(), expanded));
+            match self.environment.iter_mut().find(|(n, _)| *n == name) {
+                Some(entry) => entry.1 = value,
+                None => self.environment.push((name, value)),
+            }
+        }
+    }
+
+    /// A table of string values, `(key, value, line)` in file order; a
+    /// value of another type is an error.
+    fn string_table(
+        &mut self,
+        f: &FileCtx,
+        line: usize,
+        v: &DeValue,
+        table: &str,
+    ) -> Vec<(String, String, usize)> {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table, found {}", v.type_str());
+            self.error(f.path, line, table, msg);
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let line = f.line(k.span().start);
+            match v.get_ref() {
+                DeValue::String(s) if !name.is_empty() => out.push((name, s.to_string(), line)),
+                DeValue::String(_) => {
+                    self.error(f.path, line, table, "a name must not be empty".to_string());
+                }
+                other => {
+                    let msg = format!("expected a string, found {}", other.type_str());
+                    self.error(f.path, line, &format!("{table}.{name}"), msg);
+                }
+            }
+        }
+        out
+    }
+
+    /// `load-commands = ["<command>", ...]` (TP.0): command strings run in
+    /// order each time the config is applied (server start and `reload`),
+    /// as tmux runs a config file's commands each time it reads it, after
+    /// the previous layers' ones. Each must parse, as a binding's must.
+    fn load_commands(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let bad = |found: &str| format!("expected an array of command strings, found {found}");
+        let DeValue::Array(a) = v else {
+            return self.error(f.path, line, "load-commands", bad(v.type_str()));
+        };
+        for item in a {
+            let item_line = f.line(item.span().start);
+            let DeValue::String(s) = item.get_ref() else {
+                let msg = bad(item.get_ref().type_str());
+                self.error(f.path, item_line, "load-commands", msg);
+                continue;
+            };
+            let split = cmd::parse::with_variables(&self.env_expanded, || commands(s));
+            let checked = split.and_then(|cmds| {
+                let b = Parsed {
+                    command: s.to_string(),
+                    cmds,
+                    ..Parsed::default()
+                };
+                self.expand_aliases(b)
+            });
+            match checked {
+                Ok(b) if b.cmds.is_empty() => {
+                    let msg = "an empty command".to_string();
+                    self.error(f.path, item_line, "load-commands", msg);
+                }
+                Ok(b) => self.load_commands.push(ConfigCommand {
+                    command: b.command,
+                    cmds: b.cmds,
+                    source: f.source(item_line),
+                }),
+                Err(msg) => self.error(f.path, item_line, "load-commands", msg),
+            }
+        }
+    }
+
+    /// `[status.sources.<name>]` (TC.4): `cmd` (required), `interval` and
+    /// `timeout` in whole seconds, 1 to tmux's `INT_MAX`. The value lands in
+    /// `@<name>`, so a name is letters, digits, `-` and `_`. A later layer
+    /// replaces an earlier one's source of the same name, and an empty
+    /// `cmd` removes it.
+    fn sources(&mut self, f: &FileCtx, line: usize, v: &DeValue) {
+        let DeValue::Table(t) = v else {
+            let msg = format!("expected a table of sources, found {}", v.type_str());
+            return self.error(f.path, line, "status.sources", msg);
+        };
+        for (k, v) in entries(t) {
+            let name = k.get_ref().to_string();
+            let path = format!("status.sources.{name}");
+            let line = f.line(k.span().start);
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid {
+                let msg = "a source name is letters, digits, - and _".to_string();
+                self.error(f.path, line, &path, msg);
+                continue;
+            }
+            match source(f, v.get_ref()) {
+                Err((at, msg)) => self.error(f.path, at.unwrap_or(line), &path, msg),
+                Ok((cmd, _, _)) if cmd.trim().is_empty() => {
+                    self.sources.remove(&name);
+                }
+                Ok((cmd, interval, timeout)) => {
+                    let s = ConfigSource {
+                        cmd,
+                        interval,
+                        timeout,
+                        source: f.source(line),
+                    };
+                    self.sources.insert(name, s);
                 }
             }
         }
@@ -438,7 +704,9 @@ impl Loader {
                 continue;
             }
             seen.push((key, spelled, line));
-            let b = match binding(v.get_ref()) {
+            let vars = &self.env_expanded;
+            let parsed = cmd::parse::with_variables(vars, || binding(v.get_ref()));
+            let b = match parsed.and_then(|b| self.expand_aliases(b)) {
                 Ok(b) => b,
                 Err(msg) => {
                     self.error(f.path, line, &path, msg);
@@ -459,6 +727,28 @@ impl Loader {
                 source: f.source(line),
             });
         }
+    }
+
+    /// A binding's commands with a `command-alias` verb expanded, as
+    /// `bind-key` expands it when the key is bound (a key press runs them
+    /// as bound), with the aliases the config has set so far, then checked:
+    /// each must parse.
+    fn expand_aliases(&self, mut b: Parsed) -> Result<Parsed, String> {
+        let aliases = self
+            .lists
+            .get("command-alias")
+            .map_or(&[][..], Vec::as_slice);
+        b.cmds = std::mem::take(&mut b.cmds)
+            .into_iter()
+            .flat_map(|argv| {
+                crate::server::dispatch::menu::expand_alias(aliases, &argv)
+                    .unwrap_or_else(|| vec![argv])
+            })
+            .collect();
+        for argv in &b.cmds {
+            cmd::parse(argv).map_err(|e| e.to_string())?;
+        }
+        Ok(b)
     }
 
     /// A `name` is unique across the merged config (R6).
@@ -604,6 +894,59 @@ fn binding(v: &DeValue) -> Result<Parsed, String> {
     Ok(b)
 }
 
+/// A source's `cmd`, `interval` and `timeout`.
+type SourceFields = (String, Option<u64>, Option<u64>);
+
+/// A source's `{ cmd, interval, timeout }` table. An error carries the line
+/// of the field it is about (`None`: the source's own line).
+fn source(f: &FileCtx, v: &DeValue) -> Result<SourceFields, (Option<usize>, String)> {
+    let DeValue::Table(t) = v else {
+        return Err((None, format!("expected a table, found {}", v.type_str())));
+    };
+    let (mut cmd, mut interval, mut timeout) = (None, None, None);
+    for (k, v) in entries(t) {
+        let field = k.get_ref().as_ref();
+        let at = Some(f.line(k.span().start));
+        let seconds = || match v.get_ref() {
+            DeValue::Integer(i) => i64::from_str_radix(i.as_str(), i.radix())
+                .ok()
+                .and_then(|n| u64::try_from(n).ok())
+                .filter(|n| (1..=MAX_SECONDS).contains(n))
+                .ok_or_else(|| {
+                    let msg = format!("{field}: expected 1 to {MAX_SECONDS} seconds, found {i}");
+                    (at, msg)
+                }),
+            other => Err((
+                at,
+                format!(
+                    "{field}: expected an integer (seconds), found {}",
+                    other.type_str()
+                ),
+            )),
+        };
+        match field {
+            "cmd" => match v.get_ref() {
+                DeValue::String(s) => cmd = Some(s.to_string()),
+                other => {
+                    let msg = format!("cmd: expected a string, found {}", other.type_str());
+                    return Err((at, msg));
+                }
+            },
+            "interval" => interval = Some(seconds()?),
+            "timeout" => timeout = Some(seconds()?),
+            other => {
+                let mut msg = format!("unknown field {other}");
+                if let Some(s) = closest(other, ["cmd", "interval", "timeout"]) {
+                    msg.push_str(&format!(", did you mean {s}?"));
+                }
+                return Err((at, msg));
+            }
+        }
+    }
+    let cmd = cmd.ok_or((None, "missing cmd".to_string()))?;
+    Ok((cmd, interval, timeout))
+}
+
 /// A binding's command string as a checked sequence; empty unbinds (R11).
 fn commands(s: &str) -> Result<Vec<Vec<String>>, String> {
     if s.trim().is_empty() {
@@ -613,9 +956,7 @@ fn commands(s: &str) -> Result<Vec<Vec<String>>, String> {
     if cmds.is_empty() {
         return Err(format!("no command in {s:?}"));
     }
-    for argv in &cmds {
-        cmd::parse(argv).map_err(|e| e.to_string())?;
-    }
+    // Each must parse, checked once aliases are known (`expand_aliases`).
     Ok(cmds)
 }
 

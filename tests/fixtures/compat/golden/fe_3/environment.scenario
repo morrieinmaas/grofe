@@ -1,0 +1,23 @@
+# FE.3: set-environment and show-environment flags (-g, -u, -gu, -h, -t)
+# onto TC.5's environment, and the whole show-environment -g.
+$ new-session -d -s main -x 80 -y 24 cat
+$ show-environment -g
+$ set-environment -g OPENSESSIONS_DIR /opt/os
+$ show-environment -g OPENSESSIONS_DIR
+$ set-environment -g -u OPENSESSIONS_DIR
+$ show-environment -g OPENSESSIONS_DIR
+$ set-environment -g OPENSESSIONS_WIDTH 30
+$ set-environment -gu OPENSESSIONS_WIDTH
+$ show-environment -g OPENSESSIONS_WIDTH
+$ setenv -h log_info INFO
+$ showenv -h log_info
+$ showenv log_info
+$ setenv -t main SMUG_SESSION work
+$ showenv -t main SMUG_SESSION
+$ showenv -g SMUG_SESSION
+$ start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+$ set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
+$ start-server \; show-environment -g TMUX_PLUGIN_MANAGER_PATH
+$ setenv -g A=B c
+$ setenv -gu X y
+$ setenv -g ONLY

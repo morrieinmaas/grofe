@@ -1,0 +1,120 @@
+# ~/.config/grofe/user.toml, managed by chezmoi. The port of
+# ~/.config/canopy/user.conf to grofe, and like it the last layer grofe
+# reads, after every canopy fragment in conf.d, so anything set here wins.
+# What lives here is what canopy cannot ship: keys that launch this
+# machine's tools, a status bar that calls this machine's scripts, and the
+# settings the plugins read.
+#
+# Left out, on purpose:
+#
+#   the TPM block (@tpm_plugins, TMUX_PLUGIN_MANAGER_PATH, the clone, `run
+#   .../tpm`)       canopy's plugin layer loads plugins on grofe, through its
+#                   own loader, once that exists
+#   `bind C-s send-prefix` after TPM
+#                   the re-assert against opensessions taking prefix C-s. canopy's
+#                   key table binds C-s already, and until a plugin loads
+#                   nothing takes it; once one does, the re-assert belongs in
+#                   load-commands below, which run after canopy's plugin layer
+#   continuum_save.sh at the end of status-right
+#                   continuum's autosave hook. On tmux this file set status-right
+#                   after continuum had prepended its hook, so it put the hook
+#                   back by hand. On grofe, continuum loads from canopy's plugin
+#                   layer as a load command, after every file here is applied,
+#                   so it prepends its hook to this bar itself, on each start and
+#                   each reload
+#   @pet, @batt, @net switched "on"
+#                   each segment is a status source now, and a segment shows
+#                   when its source has something to say; to switch one off,
+#                   delete its [status.sources.<name>] table below
+
+# --- what canopy does not set ------------------------------------------------
+
+# The cockpit layout's left pane. canopy binds the layout (prefix c, prefix V)
+# but takes no view on how wide it should be.
+main-pane-width = "50%"
+
+# Pin the pane shell. default-shell must be an absolute path, hence lookPath
+# at render time.
+default-shell = "/bin/zsh"
+
+# Run once the whole config is applied, at server start and on every reload,
+# after canopy's own load commands.
+load-commands = [
+  # which-key rebuilds its menu after the plugin layer sources it, so this
+  # waits for that rather than running inline.
+  "run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'",
+  # Honour a theme picked in an earlier session, over canopy's defaults.
+  """if-shell '[ -r ~/.config/themes/active ]' 'run-shell "~/.config/themes/apply-tmux.sh"'""",
+]
+
+# --- the plugins' settings -----------------------------------------------------
+[user-options]
+fzf-url-history-limit = "2000"
+claude_launch_key = "a"
+claude_list_key = "A"
+sessionx-bind = "s"
+sessionx-zoxide-mode = "on"
+sessionx-window-mode = "on"
+
+# --- the status bar --------------------------------------------------------------
+# This machine's bar, kept whole, over canopy's own. Its colours come from
+# the same @theme_* options the `theme` picker writes, so a theme still
+# repaints everything.
+[status]
+lines = 2
+rows = ["", ""]
+justify = "left"
+interval = 5
+style = "bg=default,fg=#{@theme_fg}"
+left-length = 100
+right-length = 200
+left = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey},bold] #{host_short} #[fg=#{@theme_grey},bg=default,nobold]#{@pill_r} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bold] #{session_name} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default,nobold]#{@pill_r}  "
+# The pet, network and battery segments read status sources, each in its
+# own @<name>. The network pills sit in one #[range=user|net], which the
+# MouseDown1Status binding below reads.
+right = "#{?#{!=:#{@pet},},#[bg=default] #{@pet}  ,}#{?#{!=:#{@network},},#[bg=default]#[range=user|net]#{@network}#[norange]  ,}#{?#{!=:#{@battery},},#[bg=default]#{@battery}  ,}#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_grey}] %a %d %b #[fg=#{@theme_grey},bg=default]#{@pill_r}  #[fg=#{@theme_green},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_green},bold] %H:%M #[fg=#{@theme_green},bg=default,nobold]#{@pill_r} "
+
+[status.window]
+separator = " "
+format = "#[fg=#{@theme_muted},bg=default] #{window_index}#{?#{window_name}, #{window_name},} "
+current-format = "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_yellow},bold] #{window_index}#{?#{window_name}, #{window_name},}#{?window_zoomed_flag, #{@pill_zoom},} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r}"
+
+[status.sources.pet]
+cmd = "$HOME/.config/tmux/pet.sh"
+
+[status.sources.network]
+cmd = "$HOME/.config/tmux/net.sh"
+
+[status.sources.battery]
+cmd = "$HOME/.config/tmux/battery.sh"
+
+# This bar does not read canopy's aggregator, and grofe runs a declared
+# source whether or not a format reads it, so it is switched off rather than
+# left running every interval for nothing.
+[status.sources.canopy-status]
+cmd = ""
+
+# --- this machine's keys -------------------------------------------------------
+# Every one of these names a tool or a path that belongs to this machine, so
+# none of them could ship in a distribution. The mise shims are called by
+# absolute path on purpose: a popup runs its command in the server's
+# environment, which never sourced a shell rc.
+[keys.prefix]
+B = "run-shell '$HOME/.local/bin/cockpit'"
+g = "display-popup -E -w 95% -h 90% '$HOME/.config/themes/apply-ghdash.sh 2>/dev/null; exec $HOME/.local/share/mise/shims/gh-dash'"
+G = "display-popup -E -w 95% -h 90% -d '#{pane_current_path}' '$HOME/.config/tmux/enhance-pr.sh'"
+M = "new-window -n slack '$HOME/.config/themes/apply-slk.sh 2>/dev/null; exec $HOME/.local/share/mise/shims/slk'"
+N = "new-window -n mattermost '$HOME/.local/bin/matterhorn'"
+P = "display-popup -E -b none -w 60% -h 80% '$HOME/.config/tmux/pet-pick.sh'"
+T = "display-popup -E -b none -w 50% -h 55% 'THEME_POPUP=1 $HOME/.local/bin/theme'"
+W = """display-popup -E -b rounded -T " network " -w 66 -h 26 '$HOME/.config/tmux/net-popup.sh'"""
+K = "run-shell '$HOME/.local/bin/tsess'"
+# A searchable list of every binding, over the whole key table.
+"?" = "run-shell '$HOME/.config/tmux/keys-popup.sh'"
+
+# Click the network pills for detail. The else branch is what an unbound
+# status click does in grofe's built-in mouse model: `switch-client -t =`,
+# where a bare `=` inside a mouse key's command is whatever is under the
+# pointer. Binding the key replaces the built-in, so the branch has to say it.
+[keys.root]
+MouseDown1Status = """if-shell -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E -b rounded -T " network " -w 66 -h 26 "$HOME/.config/tmux/net-popup.sh #{mouse_status_range}"' 'switch-client -t ='"""

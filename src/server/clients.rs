@@ -29,7 +29,7 @@
 //!   (mouse modes, passthrough, graphics) ahead of the client's next frame,
 //!   in the same `Output` frame.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -37,7 +37,7 @@ use nix::libc;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
-use crate::protocol::{Caps, ClientCtx, Frame};
+use crate::protocol::{Caps, ClientCtx, Dialect, Failure, Frame};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
@@ -47,18 +47,20 @@ use crate::server::input::{
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
-use crate::server::status::{self, Span, StatusInputs, StyledLine, WindowStatus};
-use crate::server::{State, dispatch, graphics};
-use crate::types::{ClientId, PaneId, Rect, SessionId, cap_size};
+use crate::server::status::{
+    self, RangeKind, StatusInputs, StatusRow, StyledLine, WindowOptions, WindowStatus,
+};
+use crate::server::{State, dispatch, graphics, hooks};
+use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// At most one frame per client per this long (spec §4.4: ~16 ms).
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
-/// How long a status-line message stays up (tmux's `display-time`).
-// ponytail: `display-time` and `message-style` are fixed at tmux's
-// defaults until they are options.
+/// How long a status-line message stays up (tmux's `display-time`), when
+/// the session has no `display-time` option.
 pub const DISPLAY_TIME: Duration = Duration::from_millis(750);
-const MESSAGE_STYLE: &str = "bg=yellow,fg=black";
+/// tmux 3.7b's `message-style`, when the session has no such option.
+const MESSAGE_STYLE: &str = "bg=yellow,fg=black,fill=yellow";
 
 /// How often window names are checked for `automatic-rename` while clients
 /// are attached (tmux's `NAME_INTERVAL`).
@@ -80,6 +82,8 @@ pub struct AttachRequest {
     pub target: Option<String>,
     pub detach_others: bool,
     pub nest: bool,
+    /// The client's terminal device, if it said (`client_tty`).
+    pub tty: Option<String>,
 }
 
 /// An accepted attach: the connection writes `output` (one frame at a
@@ -90,6 +94,9 @@ pub struct Accepted {
     pub output: mpsc::Receiver<Vec<u8>>,
     /// Dropped without a value when the server goes away mid-write.
     pub exit: oneshot::Receiver<String>,
+    /// A value asks the client to suspend itself (`suspend-client`, TC.9):
+    /// its connection sends a `suspend` frame after the output before it.
+    pub suspend: mpsc::Receiver<()>,
 }
 
 /// A client's one-slot output: the actor offers each new screen, and the
@@ -178,8 +185,12 @@ impl Outbox {
 
 /// One attached client, keyed by `ClientId` in `State::clients`.
 pub struct ClientEntry {
-    /// `client_name`, what `detach-client -t` takes.
+    /// `client_name`, what `detach-client -t` takes: its tty when it
+    /// attached in the tmux dialect, as tmux names clients, else
+    /// `client-N`.
     pub name: String,
+    /// `client_tty`: the client's terminal device, if it said.
+    pub tty: Option<String>,
     pub session: SessionId,
     /// The attaching CLI's context, with `client` set to this client.
     pub ctx: ClientCtx,
@@ -201,15 +212,37 @@ pub struct ClientEntry {
     /// Whether the outer terminal has focus, from its focus reports (the
     /// client asks for them); a client starts focused, as in tmux.
     pub focused: bool,
-    /// A message shown instead of the status line until it expires or a
-    /// key is pressed (a failed binding's error, as tmux shows it).
-    message: Option<(String, Instant)>,
+    /// A message shown on the status line's first row until it expires or
+    /// a key is pressed (a failed binding's error, as tmux shows it), in
+    /// the language [`status::draw`] reads, and when it expires (`None`
+    /// with `display-time 0`: only a key takes it down, as in tmux).
+    message: Option<(String, Option<Instant>)>,
+    /// The status rows as last drawn, top first, for their click ranges,
+    /// and the client row the first of them was drawn on.
+    status_rows: Vec<StatusRow>,
+    status_at: u16,
     /// The window cell drawn at the client's top-left (crop, D6), as last
     /// drawn.
     pub viewport: (u16, u16),
+    /// Set by `refresh-client -L/-R/-U/-D` (TC.9): the window whose
+    /// visible part the client moved by hand, and where it is; the view
+    /// then stops following the cursor until `-c`, another window, or the
+    /// window fitting the client, as tmux's `pan_window`.
+    pan: Option<(WindowId, u16, u16)>,
+    /// `suspend-client` stopped the client (TC.9): nothing is drawn for it
+    /// until it resumes and sends its size, which redraws it in full.
+    suspended: bool,
+    suspend_tx: mpsc::Sender<()>,
     /// The outer terminal's mouse modes as last written (R2); `None`
     /// before the first write.
     mouse_modes: Option<bool>,
+    /// Input held while a binding's shell condition runs ([`hold_input`]),
+    /// in order, and how many conditions hold it.
+    held: VecDeque<Held>,
+    held_bytes: usize,
+    holds: u32,
+    /// The hold passed its cap: all input is dropped until it is released.
+    held_full: bool,
     /// Needs a new frame.
     dirty: bool,
     outbox: Outbox,
@@ -276,6 +309,11 @@ pub struct Registry {
     status_at: Option<Instant>,
     /// When window names are next checked (`automatic-rename`).
     names_at: Option<Instant>,
+    /// The status-line messages `show-messages` prints (TC.9), oldest
+    /// first, with when each was shown.
+    messages: VecDeque<(SystemTime, String)>,
+    /// `wait-for` channels (TC.9).
+    waits: BTreeMap<String, WaitChannel>,
 }
 
 impl Default for Registry {
@@ -290,6 +328,8 @@ impl Default for Registry {
             last_render: None,
             status_at: None,
             names_at: None,
+            messages: VecDeque::new(),
+            waits: BTreeMap::new(),
         }
     }
 }
@@ -308,6 +348,11 @@ pub fn client_name(id: ClientId) -> String {
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
     let target = match &req.target {
+        // A tmux attach reads `-t` the tmux way (`=name` exact, FE.1).
+        Some(raw) if req.ctx.dialect == crate::protocol::Dialect::Tmux => {
+            cmd::target::with_tmux_targets(|| cmd::target::parse_target(raw))
+                .map_err(|e| e.to_string())?
+        }
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
@@ -321,14 +366,23 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     state.registry.next_id += 1;
     let (outbox, output) = Outbox::new();
     let (exit_tx, exit) = oneshot::channel();
+    let (suspend_tx, suspend) = mpsc::channel(1);
     let ctx = ClientCtx {
         client: Some(id),
         ..req.ctx
     };
+    // The tty comes from the client: one that is not a device path is
+    // taken as none.
+    let tty = req.tty.filter(|t| usable_tty(t));
+    let name = match &tty {
+        Some(tty) if ctx.dialect == crate::protocol::Dialect::Tmux => tty.clone(),
+        _ => client_name(id),
+    };
     state.clients.insert(
         id,
         ClientEntry {
-            name: client_name(id),
+            name,
+            tty,
             session,
             ctx,
             size: clamp_size(req.size),
@@ -341,7 +395,16 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             keys: KeyState::new(),
             focused: true,
             message: None,
+            status_rows: Vec::new(),
+            status_at: 0,
+            held: VecDeque::new(),
+            held_bytes: 0,
+            holds: 0,
+            held_full: false,
             viewport: (0, 0),
+            pan: None,
+            suspended: false,
+            suspend_tx,
             mouse_modes: None,
             dirty: true,
             outbox,
@@ -352,7 +415,27 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     touch_session(&mut state.model, session);
     sync_attached(state);
     changed(state);
-    Ok(Accepted { id, output, exit })
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
+    // As tmux 3.7b (recorded): an attach is a session change, then a resize.
+    hooks::client_session_changed(state, id);
+    hooks::client_resized(state, id);
+    Ok(Accepted {
+        id,
+        output,
+        exit,
+        suspend,
+    })
+}
+
+/// Whether an attach hello's tty can name its client: a path under
+/// `/dev/`, no longer than `PATH_MAX`, with no control characters (it
+/// reaches `list-clients`, the message log and scripts that parse them).
+fn usable_tty(tty: &str) -> bool {
+    tty.starts_with("/dev/")
+        && tty.len() <= libc::PATH_MAX as usize
+        && !tty.chars().any(char::is_control)
 }
 
 /// Everything attach refuses before it changes anything, in tmux's order:
@@ -379,6 +462,9 @@ fn check_target(
         && let Some(p) = model.panes.get(&pane)
         && model.windows.get(&p.window).map(|w| w.session) == Some(session)
     {
+        if ctx.dialect == crate::protocol::Dialect::Tmux {
+            return Err(crate::compat::TMUX_NESTED.to_string());
+        }
         return Err(format!(
             "refusing to attach session {} from inside itself (use --nest to force)",
             model.sessions[&session].name
@@ -394,8 +480,10 @@ pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<S
     let argv: Vec<String> = std::iter::once("attach-session".to_string())
         .chain(args.iter().cloned())
         .collect();
-    match cmd::parse(&argv).map_err(|e| e.to_string())? {
-        cmd::Command::AttachSession(c) => {
+    // In the request's dialect, so a tmux `attach -t =name` is exact (FE.1).
+    let parsed = crate::compat::parse_split(ctx, &argv)?;
+    match parsed.into_iter().next() {
+        Some(cmd::Command::AttachSession(c)) => {
             check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
         }
         _ => Err("attach-session: unexpected command".to_string()),
@@ -415,7 +503,7 @@ pub(crate) fn select_target(
         if let Target::Pane(_) = target {
             let pane = model.resolve_pane(target, ctx)?;
             if let Some(w) = model.windows.get_mut(&window) {
-                w.active = pane;
+                w.set_active(pane);
             }
         }
         model.select_window(window);
@@ -441,6 +529,10 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     state.registry.owners.insert(session, SizeOwner::new(id));
     touch_session(&mut state.model, session);
     sync_attached(state);
+    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+        hooks::update_environment(state, session, &client_env);
+    }
+    hooks::client_session_changed(state, id);
 }
 
 /// Session activity (tmux's `session_update_activity`): what makes it the
@@ -471,14 +563,379 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
     }
 }
 
-/// Shows `text` on client `id`'s status row for [`DISPLAY_TIME`].
+/// Shows `text` as it is (styles in it are not drawn, as tmux shows a
+/// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
+    log_message(state, id, text);
+    set_message(state, id, status::escape_hashes(text), None);
+}
+
+/// The status-line message area (spec §4.10) for `display-message`
+/// without `-p` (TC.9): `text` is already expanded, and `#[...]` styles in
+/// it are drawn, as tmux draws a `display-message`. It replaces the first
+/// status row (tmux's `message-line 0`) for `display-time`, or until a key
+/// is pressed; the rows below stay.
+/// `delay` overrides `display-time` (`display-message -d`).
+pub fn display_message(state: &mut State, id: ClientId, text: &str, delay: Option<Duration>) {
+    log_message(state, id, text);
+    set_message(state, id, text.to_string(), delay);
+}
+
+/// How many messages `show-messages` keeps: tmux's `message-limit`
+/// default.
+// ponytail: fixed until `message-limit` is an option.
+const MESSAGE_LIMIT: usize = 1000;
+
+/// Adds a status-line message for client `id` to the server's message
+/// log, worded as tmux's `status_message_set` logs it.
+fn log_message(state: &mut State, id: ClientId, text: &str) {
+    let Some(name) = state.clients.get(&id).map(|c| c.name.clone()) else {
+        return;
+    };
+    push_message(state, format!("{name} message: {text}"));
+}
+
+fn push_message(state: &mut State, line: String) {
+    let log = &mut state.registry.messages;
+    log.push_back((SystemTime::now(), line));
+    while log.len() > MESSAGE_LIMIT {
+        log.pop_front();
+    }
+}
+
+/// Plans the log lines of a CLI request's commands, as tmux 3.7b's
+/// `cmdq_add_message` logs each command as it fires (`<client> command:
+/// <cmd>`, re-printed with its full name, recorded): one line per command
+/// of `argv`, with how many native commands it parsed to, so
+/// [`log_fired`] logs it as the first of those runs. `who` is the
+/// requesting client. Empty when the request does not parse, as tmux
+/// fires nothing then, or when its commands cannot be told apart.
+// ponytail: only CLI requests are logged, and not the rest held behind a
+// wait. tmux also logs the commands of bindings (`<client> key <key>:
+// <cmd>`), hooks and sourced files, and names a CLI run from a terminal by
+// its tty.
+pub(crate) fn plan_command_log(
+    state: &State,
+    who: &str,
+    ctx: &ClientCtx,
+    argv: &[String],
+    parsed: usize,
+) -> VecDeque<(usize, Option<String>)> {
+    let mut plan = VecDeque::new();
+    if argv.first().is_some_and(|verb| verb.starts_with("__")) {
+        return plan;
+    }
+    for cmd in cmd::parse::split_argv(argv) {
+        // Parsed again only to count, so the front end notes nothing.
+        let parsed_again =
+            crate::compat::quietly(|| crate::server::dispatch::parse_split(state, ctx, &cmd));
+        let Ok(count) = parsed_again.map(|c| c.len()) else {
+            return VecDeque::new();
+        };
+        let printed = match ctx.dialect {
+            crate::protocol::Dialect::Tmux => tmux_print(&cmd),
+            crate::protocol::Dialect::Grofe => None,
+        };
+        let printed = printed.unwrap_or_else(|| {
+            let words: Vec<String> = cmd
+                .iter()
+                .map(|w| crate::server::dispatch::options::escape_arg(w))
+                .collect();
+            words.join(" ")
+        });
+        plan.push_back((count, Some(format!("{who} command: {printed}"))));
+    }
+    if plan.iter().map(|(n, _)| n).sum::<usize>() != parsed {
+        return VecDeque::new();
+    }
+    plan
+}
+
+/// Logs the planned line of the request command whose first native
+/// command is about to run ([`plan_command_log`]), and any before it that
+/// ran as no command at all.
+pub(crate) fn log_fired(state: &mut State) {
+    while let Some((left, line)) = state.command_log.front_mut() {
+        let (left, line) = (std::mem::take(left), line.take());
+        if let Some(line) = line {
+            push_message(state, line);
+        }
+        if left > 1 {
+            if let Some(front) = state.command_log.front_mut() {
+                front.0 = left - 1;
+            }
+            return;
+        }
+        state.command_log.pop_front();
+        if left == 1 {
+            return;
+        }
+    }
+}
+
+/// A request's error, as tmux's `cmdq_error` logs it for a client.
+pub(crate) fn log_error(state: &mut State, who: &str, err: &str) {
+    push_message(state, format!("{who} message: {err}"));
+}
+
+/// A tmux command as tmux's `cmd_print` prints it: the full name, the
+/// flags with no value together and sorted, then each flag with a value,
+/// sorted, then the arguments, each quoted as `args_escape` quotes it.
+/// `None` for a verb tmux does not have.
+fn tmux_print(argv: &[String]) -> Option<String> {
+    use crate::server::dispatch::options::escape_arg;
+    let (name, args) = argv.split_first()?;
+    let spec = crate::compat::tmux::resolve(name).ok()?;
+    // `[-c working-directory]` takes a value, `[-dErx]` does not.
+    let takes = |flag: char| {
+        spec.usage.split("[-").skip(1).any(|part| {
+            let mut chars = part.chars();
+            chars.next() == Some(flag) && chars.next() == Some(' ')
+        }) || (spec.name == "select-pane" && flag == 'P')
+    };
+    let mut bare: std::collections::BTreeMap<char, usize> = Default::default();
+    let mut valued: std::collections::BTreeMap<char, Vec<&str>> = Default::default();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if arg == "--" {
+            i += 1;
+            break;
+        }
+        let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
+            break;
+        };
+        i += 1;
+        for (at, flag) in letters.char_indices() {
+            if !takes(flag) {
+                *bare.entry(flag).or_default() += 1;
+                continue;
+            }
+            let rest = &letters[at + flag.len_utf8()..];
+            let value = if rest.is_empty() {
+                let next = args.get(i).map(String::as_str);
+                i += 1;
+                next.unwrap_or_default()
+            } else {
+                rest
+            };
+            valued.entry(flag).or_default().push(value);
+            break;
+        }
+    }
+    let mut out = spec.name.to_string();
+    if !bare.is_empty() {
+        out.push_str(" -");
+        for (flag, n) in bare {
+            out.extend(std::iter::repeat_n(flag, n));
+        }
+    }
+    for (flag, values) in valued {
+        for v in values {
+            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+        }
+    }
+    for word in args.get(i..).unwrap_or_default() {
+        out.push(' ');
+        out.push_str(&escape_arg(word));
+    }
+    Some(out)
+}
+
+/// The message log (TC.9's `show-messages`), oldest first.
+pub(crate) fn messages(state: &State) -> impl DoubleEndedIterator<Item = &(SystemTime, String)> {
+    state.registry.messages.iter()
+}
+
+/// tmux's `format_pretty_time` without seconds (`#{t/p:...}`): `HH:MM`
+/// within a day, `%a%d` within the month or 28 days, `%d%b` within the
+/// year, else `%b%y`.
+pub(crate) fn pretty_time(t: SystemTime) -> String {
+    let secs = |t: SystemTime| {
+        t.duration_since(UNIX_EPOCH)
+            .map_or(0, |d| libc::time_t::try_from(d.as_secs()).unwrap_or(0))
+    };
+    let then = secs(t);
+    let now = secs(SystemTime::now()).max(then);
+    let age = now - then;
+    let (tm, now_tm) = (local_tm(then), local_tm(now));
+    let format = if age < 24 * 3600 {
+        "%H:%M"
+    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
+        "%a%d"
+    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
+        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
+    {
+        "%d%b"
+    } else {
+        "%b%y"
+    };
+    strftime(format, &tm)
+}
+
+fn local_tm(t: libc::time_t) -> libc::tm {
+    // SAFETY: `localtime_r` writes into the zeroed `tm` we own (all-zero
+    // is a valid `tm`).
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        tm
+    }
+}
+
+fn strftime(format: &str, tm: &libc::tm) -> String {
+    let Ok(format) = std::ffi::CString::new(format) else {
+        return String::new();
+    };
+    let mut buf = [0u8; 64];
+    // SAFETY: `buf` is writable for its length and `strftime` writes at
+    // most that many bytes, returning how many (0 on overflow).
+    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), tm) };
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+/// Client `id` redraws (`refresh-client`): only its status line with
+/// `status_only`, else everything, as if it had just attached.
+pub(crate) fn refresh(state: &mut State, id: ClientId, status_only: bool) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if !status_only {
+        c.outbox.prev = None;
+    }
+    c.dirty = true;
+    request_render(state, Instant::now());
+}
+
+/// Client `id`'s status rows as last drawn, and whether they are at the
+/// top of its screen (TC.9's `choose-client` preview copies them).
+pub(crate) fn drawn_status(state: &State, id: ClientId) -> Option<(&[StatusRow], bool)> {
+    let c = state.clients.get(&id)?;
+    Some((
+        &c.status_rows,
+        c.status_at == 0 && !c.status_rows.is_empty(),
+    ))
+}
+
+/// `suspend-client` (TC.9): client `id` is asked to stop itself with
+/// SIGTSTP, as tmux 3.7b's MSG_SUSPEND; nothing is drawn for it until it
+/// resumes.
+pub(crate) fn suspend(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id)
+        && !c.suspended
+        && c.suspend_tx.try_send(()).is_ok()
+    {
+        c.suspended = true;
+    }
+}
+
+/// A client named on the command line (`-c` or `-t` of the client
+/// verbs), else the current client ([`current_client`]).
+pub(crate) fn target_client(
+    state: &State,
+    ctx: &ClientCtx,
+    name: Option<&str>,
+) -> Result<ClientId, String> {
+    match name {
+        Some(name) => client_by_name(state, name),
+        None => current_client(state, ctx).ok_or_else(|| "no current client".to_string()),
+    }
+}
+
+/// One `wait-for` channel (TC.9, M36-R1): signalled with nobody waiting,
+/// it stays woken until the next wait, as in tmux.
+#[derive(Default)]
+struct WaitChannel {
+    woken: bool,
+    waiters: Vec<oneshot::Sender<Result<String, Failure>>>,
+}
+
+/// `wait-for -S`: every waiter on `channel` is released; with none, the
+/// channel stays woken for the next wait.
+pub(crate) fn signal_channel(state: &mut State, channel: &str) {
+    prune_waits(state);
+    let waits = &mut state.registry.waits;
+    let wc = waits.entry(channel.to_string()).or_default();
+    if wc.waiters.is_empty() {
+        wc.woken = true;
+        return;
+    }
+    for tx in wc.waiters.drain(..) {
+        let _ = tx.send(Ok(String::new()));
+    }
+    waits.remove(channel);
+}
+
+/// `wait-for`: returns at once when `channel` was woken; otherwise
+/// `reply` answers once it is signalled.
+pub(crate) fn wait_channel(
+    state: &mut State,
+    channel: &str,
+    reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
+) {
+    if state.registry.waits.get(channel).is_some_and(|wc| wc.woken) {
+        state.registry.waits.remove(channel);
+        return;
+    }
+    prune_waits(state);
+    let tx = reply(state);
+    let wc = state.registry.waits.entry(channel.to_string()).or_default();
+    wc.waiters.push(tx);
+}
+
+/// Drops the waits of callers that hung up, and the channels they leave
+/// empty and unwoken.
+fn prune_waits(state: &mut State) {
+    state.registry.waits.retain(|_, wc| {
+        wc.waiters.retain(|tx| !tx.is_closed());
+        wc.woken || !wc.waiters.is_empty()
+    });
+}
+
+fn set_message(state: &mut State, id: ClientId, text: String, delay: Option<Duration>) {
     let now = Instant::now();
+    let Some(session) = state.clients.get(&id).map(|c| c.session) else {
+        return;
+    };
+    let time = delay.unwrap_or_else(|| display_time(&state.model, session));
+    let until = (!time.is_zero()).then(|| now + time);
     if let Some(c) = state.clients.get_mut(&id) {
-        c.message = Some((text.to_string(), now + DISPLAY_TIME));
+        c.message = Some((text, until));
         c.dirty = true;
         request_render(state, now);
     }
+}
+
+/// The session's `display-time`, or tmux's default; 0 means until a key.
+fn display_time(model: &Model, session: SessionId) -> Duration {
+    model
+        .options
+        .lookup("display-time", &[Owner::Session(session)])
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(DISPLAY_TIME, Duration::from_millis)
+}
+
+/// What a click at client cell `(col, row)` hits on client `id`'s status
+/// line, as last drawn: when it is on a status row, that row's index
+/// among the status rows and the range under it, if any (TC.10 sets
+/// `mouse_status_range` and `mouse_y` from them). Rows and ranges both
+/// come from the last draw, so an option changed since then cannot move a
+/// click onto another row's ranges.
+pub fn status_at(
+    state: &State,
+    id: ClientId,
+    col: u16,
+    row: u16,
+) -> Option<(u16, Option<RangeKind>)> {
+    let c = state.clients.get(&id)?;
+    let line = row.checked_sub(c.status_at)?;
+    let drawn = c.status_rows.get(usize::from(line))?;
+    Some((line, drawn.range_at(col).map(|r| r.kind.clone())))
+}
+
+/// The range under a click at client cell `(col, row)` on client `id`'s
+/// status line as last drawn ([`status_at`]).
+pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
+    status_at(state, id, col, row).and_then(|(_, range)| range)
 }
 
 /// A client size within tmux's bounds and grofe's cell cap
@@ -495,12 +952,29 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
             let Some(c) = state.clients.get_mut(&id) else {
                 return;
             };
+            // A suspended client sends its size when it resumes: its
+            // terminal is its own again, so everything is drawn anew.
+            if c.suspended {
+                c.suspended = false;
+                c.outbox.prev = None;
+                c.mouse_modes = None;
+                c.dirty = true;
+                sync_mouse_modes(state);
+                let Some(c) = state.clients.get_mut(&id) else {
+                    return;
+                };
+                c.pending_size = Some(clamp_size((cols, rows)));
+                request_render(state, Instant::now());
+                hooks::client_resized(state, id);
+                return;
+            }
             c.pending_size = Some(clamp_size((cols, rows)));
             request_render(state, Instant::now());
+            hooks::client_resized(state, id);
         }
         Frame::Detach => detach(state, id),
         // Server-to-client kinds: ignored if a client sends them.
-        Frame::Output(_) | Frame::Exit(_) => {}
+        Frame::Output(_) | Frame::Exit(_) | Frame::Suspend => {}
     }
 }
 
@@ -546,6 +1020,9 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
         return;
     };
     crate::server::prompt::client_gone(state, id);
+    crate::server::menu::client_gone(state, id);
+    crate::server::popup::client_gone(state, id);
+    crate::server::tree::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
     }
@@ -584,6 +1061,7 @@ fn leave_session(state: &mut State, id: ClientId, session: SessionId) {
 
 /// Tells every client why it is going away and forgets them (server exit).
 pub fn shutdown(state: &mut State, reason: &str) {
+    crate::server::popup::shutdown(state);
     for (_, mut c) in std::mem::take(&mut state.clients) {
         if let Some(tx) = c.exit.take() {
             let _ = tx.send(reason.to_string());
@@ -708,7 +1186,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         [
             c.decoder.deadline(escape),
             c.keys.deadline(),
-            c.message.as_ref().map(|(_, until)| *until),
+            c.message.as_ref().and_then(|(_, until)| *until),
         ]
     });
     [r.render_at, r.status_at, r.names_at]
@@ -729,6 +1207,7 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     if resized {
+        crate::server::popup::clients_resized(state);
         changed(state);
     }
     let escape = escape_time(&state.model);
@@ -744,7 +1223,10 @@ pub fn tick(state: &mut State, now: Instant) {
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
-        if c.message.as_ref().is_some_and(|(_, until)| *until <= now) {
+        if c.message
+            .as_ref()
+            .is_some_and(|(_, until)| until.is_some_and(|u| u <= now))
+        {
             c.message = None;
             c.dirty = true;
             request_render(state, now);
@@ -754,7 +1236,7 @@ pub fn tick(state: &mut State, now: Instant) {
         };
         if c.decoder.deadline(escape).is_some_and(|d| d <= now) {
             for input in c.decoder.flush(now, escape) {
-                route(state, id, input, now);
+                deliver(state, id, input, now);
             }
         }
     }
@@ -805,7 +1287,7 @@ fn arm_status_clock(state: &mut State, now: Instant) {
     state.registry.status_at = state
         .clients
         .values()
-        .filter(|c| status_on(model, c.session))
+        .filter(|c| status_lines(model, c.session) > 0)
         .filter_map(|c| {
             model
                 .options
@@ -822,7 +1304,7 @@ fn render_dirty(state: &mut State) {
     let ids: Vec<ClientId> = state
         .clients
         .iter()
-        .filter(|(_, c)| c.dirty && c.outbox.ready())
+        .filter(|(_, c)| c.dirty && !c.suspended && c.outbox.ready())
         .map(|(id, _)| *id)
         .collect();
     for id in ids {
@@ -838,12 +1320,21 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         let composed = compose_client(state, id, c);
+        let fits = window_fits(&state.model, c);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
         c.dirty = false;
-        if let Some((screen, viewport)) = composed {
+        if let Some((screen, viewport, rows, status_at)) = composed {
             c.viewport = viewport;
+            c.pan = match (c.pan, fits) {
+                (Some((window, ..)), Some((current, false))) if window == current => {
+                    Some((window, viewport.0, viewport.1))
+                }
+                _ => None,
+            };
+            c.status_rows = rows;
+            c.status_at = status_at;
             let caps = c.caps;
             // A dropped frame keeps the client dirty, so it is redrawn once
             // its outbox has room even if nothing else changes.
@@ -852,18 +1343,108 @@ fn render_dirty(state: &mut State) {
     }
 }
 
-/// Whether `session` shows a status row.
-fn status_on(model: &Model, session: SessionId) -> bool {
-    model
+/// Client `c`'s current window, and whether it fits the client (then
+/// there is nothing to pan).
+fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
+    let w = model.windows.get(&model.sessions.get(&c.session)?.active)?;
+    let (cols, rows) = visible_size(model, c);
+    Some((w.id, w.cols <= cols && w.rows <= rows))
+}
+
+/// The part of client `c` that shows the window: its size less the
+/// status rows.
+fn visible_size(model: &Model, c: &ClientEntry) -> (u16, u16) {
+    let lines = status_geometry(model, c.session, c.size.1).lines;
+    (c.size.0, c.size.1.saturating_sub(lines))
+}
+
+/// `refresh-client -c/-L/-R/-U/-D` (TC.9): moves the visible part of a
+/// window larger than client `id` by `by` cells, or with `Reset` goes
+/// back to following the cursor, as tmux 3.7b's `cmd_refresh_client_exec`.
+pub(crate) fn pan(state: &mut State, id: ClientId, pan: cmd::Pan, by: u16) {
+    let model = &state.model;
+    let Some(c) = state.clients.get(&id) else {
+        return;
+    };
+    let Some(w) = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))
+    else {
+        return;
+    };
+    let (cols, rows) = visible_size(model, c);
+    let (wid, wcols, wrows) = (w.id, w.cols, w.rows);
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if pan == cmd::Pan::Reset {
+        // tmux 3.7b recomputes the offset from the cursor, which is 0 while
+        // the cursor is within the first screenful (recorded).
+        // ponytail: past that tmux centres the cursor; `follow` scrolls
+        // only as far as it must.
+        c.pan = None;
+        c.viewport = (0, 0);
+    } else {
+        let (_, mut x, mut y) = match c.pan {
+            Some(p) if p.0 == wid => p,
+            _ => (wid, c.viewport.0, c.viewport.1),
+        };
+        match pan {
+            cmd::Pan::Left => x = x.saturating_sub(by),
+            cmd::Pan::Right => x = x.saturating_add(by).min(wcols.saturating_sub(cols)),
+            cmd::Pan::Up => y = y.saturating_sub(by),
+            cmd::Pan::Down => y = y.saturating_add(by).min(wrows.saturating_sub(rows)),
+            cmd::Pan::Reset => {}
+        }
+        c.pan = Some((wid, x, y));
+    }
+    c.dirty = true;
+    request_render(state, Instant::now());
+}
+
+/// How many status rows `session` shows: `status` is `off`, `on` or 2 to
+/// 5 (spec §4.10).
+fn status_lines(model: &Model, session: SessionId) -> u16 {
+    match model.options.lookup("status", &[Owner::Session(session)]) {
+        Some("off") | None => 0,
+        Some("on") => 1,
+        Some(n) => n.parse().unwrap_or(1),
+    }
+}
+
+/// Where a client's status rows are, for a client `rows` tall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StatusGeometry {
+    /// How many rows the status line takes (never more than the client).
+    lines: u16,
+    /// `status-position top`: the rows are above the window.
+    top: bool,
+    /// The client row of the first status row, where a message or prompt
+    /// goes (tmux's `message-line 0`).
+    first_row: u16,
+    /// The client row the window's top row is drawn on.
+    window_top: u16,
+}
+
+fn status_geometry(model: &Model, session: SessionId, rows: u16) -> StatusGeometry {
+    let lines = status_lines(model, session).min(rows);
+    let top = model
         .options
-        .lookup("status", &[Owner::Session(session)])
-        .is_some_and(|v| v != "off")
+        .lookup("status-position", &[Owner::Session(session)])
+        == Some("top");
+    StatusGeometry {
+        lines,
+        top,
+        first_row: if top { 0 } else { rows - lines },
+        window_top: if top { lines } else { 0 },
+    }
 }
 
 /// The window size a client of `session` with `size` wants: its terminal
-/// less the status row, never below 1x1.
+/// less the status rows, never below 1x1.
 fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (u16, u16) {
-    let status = u16::from(status_on(model, session));
+    let status = status_lines(model, session);
     (cols.max(1), rows.saturating_sub(status).max(1))
 }
 
@@ -912,10 +1493,17 @@ fn resize_session(model: &mut Model, session: SessionId, (cols, rows): (u16, u16
     s.cols = cols;
     s.rows = rows;
     for id in s.windows.clone() {
+        // A window `resize-window` sized (`window-size manual`) keeps it.
+        let manual = model.windows.get(&id).is_some_and(|w| {
+            model
+                .options
+                .lookup("window-size", &options::chain(model, w.active))
+                == Some("manual")
+        });
         let Some(w) = model.windows.get_mut(&id) else {
             continue;
         };
-        if (w.cols, w.rows) == (cols, rows) {
+        if manual || (w.cols, w.rows) == (cols, rows) {
             continue;
         }
         w.cols = cols;
@@ -964,7 +1552,7 @@ pub fn follow(
 
 /// The visible panes of `w` and their rects in window coordinates (only
 /// the active pane when zoomed).
-fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
+pub(crate) fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
     if w.zoomed {
         vec![(w.active, w.area())]
     } else {
@@ -979,9 +1567,10 @@ fn overlay_ctx_at(
     c: &ClientEntry,
     viewport: (u16, u16),
 ) -> OverlayCtx {
-    let status = status_on(model, c.session);
     let (cols, rows) = c.size;
-    let win_rows = rows.saturating_sub(u16::from(status));
+    let geom = status_geometry(model, c.session, rows);
+    let win_rows = rows - geom.lines;
+    let top = u32::from(geom.window_top);
     let window = model
         .sessions
         .get(&c.session)
@@ -993,15 +1582,15 @@ fn overlay_ctx_at(
         .filter_map(|(pane, r)| {
             let (vx, vy) = (u32::from(viewport.0), u32::from(viewport.1));
             let left = u32::from(r.x).max(vx);
-            let top = u32::from(r.y).max(vy);
+            let upper = u32::from(r.y).max(vy);
             let right = (u32::from(r.x) + u32::from(r.cols)).min(vx + u32::from(cols));
             let bottom = (u32::from(r.y) + u32::from(r.rows)).min(vy + u32::from(win_rows));
-            (left < right && top < bottom).then(|| {
+            (left < right && upper < bottom).then(|| {
                 let rect = Rect {
                     x: (left - vx) as u16,
-                    y: (top - vy) as u16,
+                    y: (upper - vy + top) as u16,
                     cols: (right - left) as u16,
-                    rows: (bottom - top) as u16,
+                    rows: (bottom - upper) as u16,
                 };
                 (pane, rect)
             })
@@ -1010,7 +1599,8 @@ fn overlay_ctx_at(
     OverlayCtx {
         client: id,
         viewport,
-        status_row: (status && rows > 0).then(|| rows - 1),
+        status_row: (geom.lines > 0).then_some(geom.first_row),
+        window_top: geom.window_top,
         panes,
     }
 }
@@ -1028,15 +1618,20 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
-/// Composes client `c`'s next screen, and the viewport it was drawn with:
-/// the frame, then every overlay (lowest priority first), then the
-/// wide-pair fix-up.
-fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Screen, (u16, u16))> {
+/// A composed frame: the screen, its viewport, its status rows and the
+/// client row the first of them is on.
+type Composed = (Screen, (u16, u16), Vec<StatusRow>, u16);
+
+/// Composes client `c`'s next screen, the viewport it was drawn with, its
+/// status rows and the client row the first of them is on: the window,
+/// the status rows above or below it (`status-position`), then every
+/// overlay (lowest priority first), then the wide-pair fix-up.
+fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Composed> {
     let model = &state.model;
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
-    let status = status_on(model, s.id);
-    let visible = (c.size.0, c.size.1.saturating_sub(u16::from(status)));
+    let geom = status_geometry(model, s.id, c.size.1);
+    let visible = (c.size.0, c.size.1 - geom.lines);
     let area = w.area();
     let rects = visible_panes(w);
     let borders = if w.zoomed {
@@ -1059,18 +1654,17 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Scree
             Some((id, rect, snap))
         })
         .collect();
-    let viewport = follow(
-        c.viewport,
-        cursor.map(|p| (p.col, p.row)),
-        (w.cols, w.rows),
-        visible,
-    );
-    let status_line = match &c.message {
-        Some((text, _)) => Some(message_line(text, c.size.0)),
-        None => status.then(|| status_line(model, c, s)),
+    let viewport = match c.pan {
+        Some((window, x, y)) if window == w.id => follow((x, y), None, (w.cols, w.rows), visible),
+        _ => follow(
+            c.viewport,
+            cursor.map(|p| (p.col, p.row)),
+            (w.cols, w.rows),
+            visible,
+        ),
     };
-    let mut screen = render::compose(&FrameInputs {
-        client: c.size,
+    let mut window = render::compose(&FrameInputs {
+        client: visible,
         viewport,
         area,
         panes,
@@ -1078,22 +1672,79 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<(Scree
         border_style: window_style(model, w, "pane-border-style"),
         active_border_style: window_style(model, w, "pane-active-border-style"),
         active: w.active,
-        status: status_line,
+        status: None,
         cursor,
         graphics: state.graphics.remap(),
     });
+    if !w.zoomed && !w.floating.is_empty() {
+        let mut stack = w.floating.clone();
+        stack.sort_by_key(|f| f.z);
+        let floating: Vec<render::FloatingPane> = stack
+            .iter()
+            .filter_map(|f| {
+                let p = model.panes.get(&f.pane)?;
+                Some(render::FloatingPane {
+                    at: (f.x, f.y),
+                    size: (p.cols, p.rows),
+                    snap: p.handle.snapshot_rows(0..p.rows),
+                    active: f.pane == w.active,
+                })
+            })
+            .collect();
+        render::draw_floating(
+            &mut window,
+            &floating,
+            viewport,
+            &window_style(model, w, "pane-border-style"),
+            &window_style(model, w, "pane-active-border-style"),
+        );
+    }
+    let (rows, message) = status_rows(state, c, s, geom.lines);
+    let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
+    let mut screen = if let Some(first) = lines.first_mut() {
+        if let Some(m) = &message {
+            *first = m.line.clone();
+        }
+        render::with_status(window, &lines, geom.top)
+    } else {
+        // ponytail: with `status off` a message still takes the last row,
+        // drawn over the window's last row while it shows.
+        let mut window = window;
+        if let Some(m) = &message
+            && let Some(last) = window.rows.checked_sub(1)
+        {
+            render::draw_row(&mut window, last, &m.line);
+        }
+        window
+    };
     let cx = overlay_ctx_at(model, id, c, viewport);
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
+    // tmux 3.7b hides the cursor while a message shows (`TTY_NOCURSOR`).
+    if message.is_some() {
+        screen.cursor = None;
+    }
     render::fix_wide_pairs(&mut screen);
-    Some((screen, viewport))
+    Some((screen, viewport, rows, geom.first_row))
 }
 
-/// The status row for client `c` on session `s` (spec §4.10): options
-/// looked up from the current window's active pane, the window list with
-/// each window's own format and variables, the local time.
-fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
+/// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
+/// message row if one shows. Row N draws `status-format[N]`; an empty
+/// `status-format[0]` (the default) is tmux's default row, spelled by
+/// [`status::render_row`]; a row with no entry is blank in `status-style`.
+/// Formats expand against the current window's active pane with the
+/// server's and the client's variables over it (D9: `pane_title` and the
+/// host), options come from that pane's chain, and every window of the
+/// list expands against its own active pane.
+fn status_rows(
+    state: &State,
+    c: &ClientEntry,
+    s: &Session,
+    lines: u16,
+) -> (Vec<StatusRow>, Option<StatusRow>) {
+    let model = &state.model;
+    let width = c.size.0;
     let active = model.windows.get(&s.active).map(|w| w.active);
     let chain = active.map(|p| options::chain(model, p)).unwrap_or_default();
     let chain = if chain.is_empty() {
@@ -1101,62 +1752,119 @@ fn status_line(model: &Model, c: &ClientEntry, s: &Session) -> StyledLine {
     } else {
         chain
     };
-    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
-    let length = |name: &str| opt(name).parse::<u16>().unwrap_or(0);
-    let vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
-    let windows: Vec<(String, ClientVars)> = s
+    let opt = |name: &str, default: &'static str| {
+        model
+            .options
+            .lookup(name, &chain)
+            .map_or(default, |v| v as &str)
+    };
+    let client_vars = ClientVars::new(model, c, active.map(|p| FormatCtx::new(model, p)));
+    let server_vars = active.map(|p| options::ServerVars::new(state, p, &client_vars));
+    let vars: &dyn FormatVars = match &server_vars {
+        Some(v) => v,
+        None => &client_vars,
+    };
+    let style = opt("status-style", "");
+    let message = c.message.as_ref().map(|(text, _)| {
+        status::message_row(text, opt("message-style", MESSAGE_STYLE), vars, width)
+    });
+    if lines == 0 {
+        return (Vec::new(), message);
+    }
+    let now = local_now();
+    let formats = model.options.lookup_list("status-format", &chain);
+    let rows = (0..u32::from(lines))
+        .map(|i| match formats.and_then(|f| f.get(&i)) {
+            Some(t) if t.is_empty() && i == 0 => default_row(state, c, s, &chain, vars, now),
+            Some(t) => status::draw_row(t, style, vars, width, &now),
+            None => status::blank_row(style, vars, width),
+        })
+        .collect();
+    (rows, message)
+}
+
+/// tmux's default status row for client `c` on session `s`: status-left,
+/// the window list, status-right.
+fn default_row(
+    state: &State,
+    c: &ClientEntry,
+    s: &Session,
+    chain: &[Owner],
+    vars: &dyn FormatVars,
+    now: libc::tm,
+) -> StatusRow {
+    let model = &state.model;
+    let opt = |name: &str, default: &'static str| {
+        model
+            .options
+            .lookup(name, chain)
+            .map_or(default, |v| v as &str)
+    };
+    let length = |name: &str| opt(name, "0").parse::<u16>().unwrap_or(0);
+    let listed: Vec<(&crate::server::model::Window, Vec<Owner>)> = s
         .windows
         .iter()
         .filter_map(|id| {
             let w = model.windows.get(id)?;
-            let name = if *id == s.active {
-                "window-status-current-format"
-            } else {
-                "window-status-format"
-            };
-            let format = model
-                .options
-                .lookup(name, &options::chain(model, w.active))
-                .unwrap_or("")
-                .to_string();
-            Some((
-                format,
-                ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))),
-            ))
+            Some((w, options::chain(model, w.active)))
         })
         .collect();
-    let entries: Vec<WindowStatus> = windows
+    let client_vars: Vec<ClientVars> = listed
         .iter()
-        .map(|(format, vars)| WindowStatus {
-            format,
-            vars: vars as &dyn FormatVars,
+        .map(|(w, _)| ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))))
+        .collect();
+    let server_vars: Vec<options::ServerVars> = listed
+        .iter()
+        .zip(&client_vars)
+        .map(|((w, _), v)| options::ServerVars::new(state, w.active, v))
+        .collect();
+    let entries: Vec<WindowStatus> = listed
+        .iter()
+        .zip(&server_vars)
+        .map(|((w, chain), vars)| {
+            let wopt = |name: &str, default: &'static str| {
+                model
+                    .options
+                    .lookup(name, chain)
+                    .map_or(default, |v| v as &str)
+            };
+            let defaults = WindowOptions::default();
+            let current = w.id == s.active;
+            WindowStatus {
+                format: if current {
+                    wopt("window-status-current-format", "")
+                } else {
+                    wopt("window-status-format", "")
+                },
+                vars,
+                index: w.index,
+                current,
+                last: s.last_windows.last() == Some(&w.id),
+                bell: w.bell_flag,
+                options: WindowOptions {
+                    separator: wopt("window-status-separator", defaults.separator),
+                    style: wopt("window-status-style", defaults.style),
+                    current_style: wopt("window-status-current-style", defaults.current_style),
+                    last_style: wopt("window-status-last-style", defaults.last_style),
+                    bell_style: wopt("window-status-bell-style", defaults.bell_style),
+                },
+            }
         })
         .collect();
-    status::render(&StatusInputs {
-        left: opt("status-left"),
-        right: opt("status-right"),
+    status::render_row(&StatusInputs {
+        left: opt("status-left", ""),
+        right: opt("status-right", ""),
         left_length: length("status-left-length"),
         right_length: length("status-right-length"),
-        style: opt("status-style"),
-        vars: &vars,
+        style: opt("status-style", ""),
+        left_style: opt("status-left-style", "default"),
+        right_style: opt("status-right-style", "default"),
+        justify: opt("status-justify", "left"),
+        vars,
         windows: &entries,
         width: c.size.0,
-        now: local_now(),
+        now,
     })
-}
-
-/// A message across the whole status row, in `message-style`.
-// ponytail: with `status off` the message still takes the last row,
-// drawn over the window's last row while it shows.
-fn message_line(text: &str, width: u16) -> StyledLine {
-    let used = unicode_width::UnicodeWidthStr::width(text);
-    let pad = usize::from(width).saturating_sub(used);
-    StyledLine {
-        spans: vec![Span {
-            text: format!("{text}{}", " ".repeat(pad)),
-            style: status::parse_style(MESSAGE_STYLE),
-        }],
-    }
 }
 
 /// The local broken-down time, for strftime sequences in the status line.
@@ -1210,6 +1918,7 @@ impl FormatVars for ClientVars<'_> {
             "client_width" => Some(c.size.0.to_string()),
             "client_height" => Some(c.size.1.to_string()),
             "client_name" => Some(c.name.clone()),
+            "client_tty" => Some(c.tty.clone().unwrap_or_default()),
             "client_termname" => Some(c.term.clone()),
             "client_key_table" => Some(c.keys.table().to_string()),
             // ponytail: grofe always speaks UTF-8 to the client.
@@ -1258,7 +1967,7 @@ fn escape_time(model: &Model) -> Duration {
 }
 
 /// The session's `prefix` and `repeat-time`.
-fn key_settings(model: &Model, session: SessionId) -> KeySettings {
+pub(crate) fn key_settings(model: &Model, session: SessionId) -> KeySettings {
     let chain = [Owner::Session(session)];
     let default = KeySettings::default();
     KeySettings {
@@ -1297,15 +2006,118 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
     }
     touch_session(&mut state.model, session);
     for input in inputs {
-        // As tmux: a key press takes a message down, and still counts.
-        if let Input::Key(_) = input
-            && let Some(c) = state.clients.get_mut(&id)
-            && c.message.take().is_some()
-        {
-            c.dirty = true;
-            request_render(state, now);
+        deliver(state, id, input, now);
+    }
+}
+
+/// How much input a client may have held ([`hold_input`]): paste bytes,
+/// and one for anything else. tmux holds without limit; past this grofe
+/// drops everything that arrives until the hold is released, and logs it.
+const HELD_CAP: usize = 1 << 20;
+
+/// One decoded input from client `id`: held behind a running shell
+/// condition, else routed.
+fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    if c.holds > 0 {
+        hold_item(state, id, Held::Input(input));
+        return;
+    }
+    // As tmux: a key press takes a message down, and still counts.
+    if let Input::Key(_) = input
+        && c.message.take().is_some()
+    {
+        c.dirty = true;
+        request_render(state, now);
+    }
+    route(state, id, input, now);
+}
+
+/// One thing held for a client, in the order it came.
+enum Held {
+    Input(Input),
+    /// Work queued behind the input ([`in_input_order`]).
+    Run(crate::server::Job),
+}
+
+impl Held {
+    /// What it counts against [`HELD_CAP`].
+    fn size(&self) -> usize {
+        match self {
+            Held::Input(Input::Paste { data, .. }) => data.len().max(1),
+            _ => 1,
         }
-        route(state, id, input, now);
+    }
+}
+
+/// Runs `job` for client `id` in input order: now, or after the input its
+/// hold keeps, as tmux appends a key event (the click timer's
+/// `DoubleClick`) to the client's queue behind what waits there.
+pub(crate) fn in_input_order(state: &mut State, id: ClientId, job: crate::server::Job) {
+    if state.clients.get(&id).is_some_and(|c| c.holds > 0) {
+        hold_item(state, id, Held::Run(job));
+    } else {
+        job(state);
+    }
+}
+
+/// Keeps `item` for held client `id`, unless the hold is full.
+fn hold_item(state: &mut State, id: ClientId, item: Held) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    let size = item.size();
+    if c.held_full || c.held_bytes + size > HELD_CAP {
+        if !c.held_full {
+            eprintln!("grofe server: input held for {} is full; dropped", c.name);
+        }
+        c.held_full = true;
+        return;
+    }
+    c.held_bytes += size;
+    c.held.push_back(item);
+}
+
+/// Holds client `id`'s input, in order, until [`release_input`]: a
+/// binding's shell condition runs off the actor, and as tmux's per-client
+/// command queue does, what the client types next waits for its branch
+/// (TC.10). Other clients are not held. A condition that never exits
+/// holds the client until it is killed or detaches, as in tmux.
+pub(crate) fn hold_input(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.holds += 1;
+    }
+}
+
+/// Ends one [`hold_input`]; with none left, the held input is routed in
+/// order, until an input starts another hold.
+pub(crate) fn release_input(state: &mut State, id: ClientId) {
+    let Some(c) = state.clients.get_mut(&id) else {
+        return;
+    };
+    c.holds = c.holds.saturating_sub(1);
+    if c.holds == 0 {
+        c.held_full = false;
+    }
+    let now = Instant::now();
+    loop {
+        let Some(c) = state.clients.get_mut(&id) else {
+            return;
+        };
+        if c.holds > 0 {
+            return;
+        }
+        let Some(item) = c.held.pop_front() else {
+            c.held_bytes = 0;
+            return;
+        };
+        c.held_bytes = c.held_bytes.saturating_sub(item.size());
+        match item {
+            Held::Input(input) => deliver(state, id, input, now),
+            Held::Run(job) => job(state),
+        }
     }
 }
 
@@ -1367,25 +2179,45 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
                 eprintln!("grofe server: input queue full for {}", p.id);
             }
         }
-        Routed::Command(cmds) => run_binding(state, id, &cmds),
+        Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
+        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true),
         Routed::Consumed => {}
     }
 }
 
 /// Runs bound commands for client `id` in order, each with the client's
-/// context and its active pane (as it is then) as the current pane; the
-/// first error stops the rest and shows on the client's status row, as
-/// tmux shows it. Output, and any deferred answer, is dropped.
-pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>]) {
+/// context and its active pane (as it is then) as the current pane, parsed
+/// in `dialect`, the binding's own (spec §4.5), never the attaching
+/// client's: a native binding stays native under `tmux attach`. The first
+/// error stops the rest and shows on the client's status row, as tmux shows
+/// it. Output, and any deferred answer, is dropped. An alias in `cmds`
+/// expands as each runs; a key binding's were expanded when it was bound
+/// ([`Routed::Bound`]).
+pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
+    run_commands_for(state, id, cmds, dialect, false);
+}
+
+fn run_commands_for(
+    state: &mut State,
+    id: ClientId,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+    bound: bool,
+) {
     for argv in cmds {
         let Some(c) = state.clients.get(&id) else {
             break;
         };
         let ctx = ClientCtx {
             pane: active_pane(&state.model, c.session),
+            dialect,
             ..c.ctx.clone()
         };
-        let result = dispatch::run_split(state, &ctx, argv);
+        let result = if bound {
+            dispatch::run_bound(state, &ctx, argv)
+        } else {
+            dispatch::run_split(state, &ctx, argv)
+        };
         state.deferred_reply = None;
         if let Err(e) = result {
             show_message(state, id, e.trim_end());
@@ -1417,12 +2249,23 @@ pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId>
 }
 
 fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
+    client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
+}
+
+/// The client `name` names, as tmux's `cmd_find_client` finds it: by its
+/// name or its tty, with or without `/dev/`, one trailing `:` ignored.
+pub(crate) fn client_named(state: &State, name: &str) -> Option<ClientId> {
+    let name = name.strip_suffix(':').unwrap_or(name);
     state
         .clients
         .iter()
-        .find(|(_, c)| c.name == name)
+        .find(|(_, c)| {
+            c.name == name
+                || c.tty
+                    .as_deref()
+                    .is_some_and(|t| t == name || t.strip_prefix("/dev/") == Some(name))
+        })
         .map(|(id, _)| *id)
-        .ok_or_else(|| format!("can't find client: {name}"))
 }
 
 /// `attach-session` run as a command: only an attached client can (its
@@ -1455,8 +2298,11 @@ pub fn detach_client(
     c: DetachClient,
 ) -> Result<String, String> {
     if let Some(target) = &c.session {
-        let session = state.model.resolve_session(target, ctx)?;
-        detach_session(state, session, None);
+        // tmux 3.7b finds `-s` with CMD_FIND_CANFAIL: no such session is
+        // not an error (recorded).
+        if let Ok(session) = state.model.resolve_session(target, ctx) {
+            detach_session(state, session, None);
+        }
         return Ok(String::new());
     }
     let id = match &c.client {
@@ -1478,22 +2324,38 @@ pub fn detach_client(
 /// `client_*` variables over the client's current pane's. The default line
 /// is tmux 3.7b's (its `[user ...]` part only shows for another user's
 /// client, which grofe never has).
-pub fn list_clients(state: &State, c: ListClients) -> Result<String, String> {
+/// `list-clients`: every client, or with `-t` those showing that
+/// session, that `-f` keeps.
+pub fn list_clients(state: &State, ctx: &ClientCtx, c: ListClients) -> Result<String, String> {
     let model = &state.model;
-    let format = c.format.unwrap_or_else(|| {
-        "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}] \
-         (#{client_flags})"
-            .to_string()
+    let session = match &c.target {
+        Some(target) => Some(model.resolve_session(target, ctx)?),
+        None => None,
+    };
+    let format = c.format.unwrap_or_else(|| match ctx.dialect {
+        crate::protocol::Dialect::Tmux => options::tmux_template(options::TMUX_LIST_CLIENTS),
+        crate::protocol::Dialect::Grofe => {
+            "#{client_name}: #{session_name} [#{client_width}x#{client_height} \
+             #{client_termname}] (#{client_flags})"
+                .to_string()
+        }
     });
-    Ok(state
-        .clients
-        .values()
-        .map(|client| {
-            let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
-            let vars = ClientVars::new(model, client, pane);
-            format!("{}\n", cmd::expand(&format, &vars))
-        })
-        .collect())
+    let mut out = String::new();
+    for client in state.clients.values() {
+        if session.is_some_and(|s| s != client.session) {
+            continue;
+        }
+        let pane = active_pane(model, client.session).map(|p| FormatCtx::new(model, p));
+        let vars = ClientVars::new(model, client, pane);
+        if let Some(filter) = &c.filter {
+            let got = cmd::expand(filter, &vars);
+            if got.is_empty() || got == "0" {
+                continue;
+            }
+        }
+        out.push_str(&format!("{}\n", cmd::expand(&format, &vars)));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1501,50 +2363,138 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use tokio::sync::Notify;
-
     use super::*;
-    use crate::server::{StartOptions, events, pane};
+
+    /// A hello's tty names the client only if it is a device path: else
+    /// it is taken as none and the client is `client-N`.
+    #[tokio::test]
+    async fn only_a_device_path_names_a_client() {
+        assert!(usable_tty("/dev/ttys003"));
+        assert!(usable_tty("/dev/pts/4"));
+        for bad in [
+            "ttys003",
+            "/tmp/x",
+            "/dev/pts/1\n/dev/pts/2",
+            "/dev/\x1b[31mred",
+            &format!("/dev/{}", "a".repeat(libc::PATH_MAX as usize)),
+        ] {
+            assert!(!usable_tty(bad), "{bad:?}");
+        }
+        let mut state = crate::server::test_state();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &[
+                "new-session".to_string(),
+                "-d".to_string(),
+                "-s".to_string(),
+                "main".to_string(),
+            ],
+        )
+        .expect("new-session");
+        let ctx = ClientCtx {
+            dialect: crate::protocol::Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        for (tty, name, kept) in [
+            ("/dev/ttys009", "/dev/ttys009", Some("/dev/ttys009")),
+            ("/dev/tty\x07s", "client-", None),
+        ] {
+            let accepted = attach(
+                &mut state,
+                AttachRequest {
+                    ctx: ctx.clone(),
+                    size: (80, 24),
+                    term: "xterm".to_string(),
+                    caps: Caps::default(),
+                    target: Some("main".to_string()),
+                    detach_others: false,
+                    nest: true,
+                    tty: Some(tty.to_string()),
+                },
+            )
+            .expect("attach");
+            let c = &state.clients[&accepted.id];
+            assert!(c.name.starts_with(name), "{}", c.name);
+            assert_eq!(c.tty.as_deref(), kept);
+        }
+    }
+
+    /// As tmux 3.7b's `show-messages` printed them (recorded on `-L
+    /// grofe-fe2 -f /dev/null`).
+    #[test]
+    fn commands_print_as_tmux_logs_them() {
+        let print = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            tmux_print(&argv).unwrap()
+        };
+        assert_eq!(
+            print(&["set", "-sg", "escape-time", "25"]),
+            "set-option -gs escape-time 25"
+        );
+        assert_eq!(
+            print(&["set", "-as", "terminal-features", "*:RGB"]),
+            "set-option -as terminal-features *:RGB"
+        );
+        assert_eq!(
+            print(&["ls", "-f", "#{==:#{session_name},b}"]),
+            "list-sessions -f \"#{==:#{session_name},b}\""
+        );
+        assert_eq!(print(&["has", "-t", "=ma"]), "has-session -t =ma");
+        assert_eq!(
+            print(&["new", "-d", "-s", "b", "-x", "80", "-y", "24"]),
+            "new-session -d -s b -x 80 -y 24"
+        );
+        assert_eq!(print(&["show-messages"]), "show-messages");
+        assert_eq!(print(&["show-messages", "-JT"]), "show-messages -JT");
+    }
+
+    #[test]
+    fn a_cli_request_is_logged_command_by_command_with_its_error() {
+        let mut state = crate::server::test_state();
+        let ctx = ClientCtx {
+            dialect: crate::protocol::Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let argv: Vec<String> = ["splitw", "-h", ";", "has", "-t", "=ma", ";", "ls"]
+            .map(String::from)
+            .to_vec();
+        state.command_log = plan_command_log(&state, "client-7", &ctx, &argv, 3);
+        // Two commands fire; the second fails, so the third never does.
+        log_fired(&mut state);
+        log_fired(&mut state);
+        log_error(&mut state, "client-7", "can't find session: ma");
+        let lines: Vec<&str> = messages(&state).map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "client-7 command: split-window -h",
+                "client-7 command: has-session -t =ma",
+                "client-7 message: can't find session: ma",
+            ]
+        );
+        // A plan whose parts do not add up to the request logs nothing.
+        assert!(plan_command_log(&state, "c", &ctx, &argv, 4).is_empty());
+    }
 
     /// A server state with no sessions and one client, as the actor
     /// would hold it.
     fn state_with_client() -> (State, ClientId) {
-        let (pane_events, _) = mpsc::channel(1);
-        let mut state = State {
-            socket: PathBuf::from("/nonexistent/grofe-test.sock"),
-            options: StartOptions {
-                restore_on_start: false,
-                remain_on_exit: false,
-            },
-            model: Model::new(false),
-            inner_term: pane::inner_term(),
-            pane_events,
-            wake: Arc::new(Notify::new()),
-            events: events::Events::default(),
-            clients: BTreeMap::new(),
-            registry: Registry::default(),
-            prompts: Default::default(),
-            mouse: Default::default(),
-            passthrough: Default::default(),
-            graphics: Default::default(),
-            deferred_reply: None,
-            exit: false,
-            exit_when_empty: false,
-            connections: 0,
-            socket_id: None,
-        };
+        let mut state = crate::server::test_state();
         let id = ClientId(1);
         let (outbox, _) = Outbox::new();
         state.clients.insert(
             id,
             ClientEntry {
                 name: client_name(id),
+                tty: None,
                 session: SessionId(0),
                 ctx: ClientCtx {
                     cwd: PathBuf::from("/"),
                     pane: None,
                     env: Vec::new(),
                     client: Some(id),
+                    dialect: crate::protocol::Dialect::Grofe,
                 },
                 size: (80, 24),
                 pending_size: None,
@@ -1556,7 +2506,16 @@ mod tests {
                 keys: KeyState::new(),
                 focused: true,
                 message: None,
+                status_rows: Vec::new(),
+                status_at: 0,
+                held: VecDeque::new(),
+                held_bytes: 0,
+                holds: 0,
+                held_full: false,
                 viewport: (0, 0),
+                pan: None,
+                suspended: false,
+                suspend_tx: mpsc::channel(1).0,
                 mouse_modes: None,
                 dirty: false,
                 outbox,
@@ -1572,6 +2531,7 @@ mod tests {
         show_message(&mut state, id, "no last window");
         let shown = state.clients[&id].message.clone();
         let (text, until) = shown.expect("message shown");
+        let until = until.expect("display-time 750 expires");
         assert_eq!(text, "no last window");
         // A focus report is not a key: the message stays.
         let now = Instant::now();
@@ -1584,15 +2544,242 @@ mod tests {
         assert!(state.clients[&id].dirty);
     }
 
-    /// R1/R2 and item 3: the M3 hooks and overlays are registered in
-    /// priority order, and until their tasks land every hook passes every
-    /// kind of input on and every overlay leaves the screen alone.
+    /// As tmux: with `display-time 0` a message stays until a key is
+    /// pressed, however long that is.
+    #[test]
+    fn display_time_zero_keeps_a_message_until_a_key() {
+        let (mut state, id) = state_with_client();
+        let session = state.clients[&id].session;
+        state
+            .model
+            .options
+            .set(Owner::Session(session), "display-time", "0", false)
+            .unwrap();
+        show_message(&mut state, id, "held");
+        assert_eq!(state.clients[&id].message, Some(("held".to_string(), None)));
+        let later = Instant::now() + Duration::from_secs(3600);
+        tick(&mut state, later);
+        assert!(state.clients[&id].message.is_some());
+        assert!(deadline(&state).is_none_or(|d| d > Instant::now() + DISPLAY_TIME));
+        input(&mut state, id, b"x", later);
+        assert!(state.clients[&id].message.is_none());
+    }
+
+    /// TC.9: every status-line message is logged for `show-messages`, as
+    /// tmux logs `<client> message: <text>`, and the log keeps tmux's
+    /// `message-limit` newest.
+    #[test]
+    fn messages_are_logged_and_capped() {
+        let (mut state, id) = state_with_client();
+        display_message(&mut state, id, "hi", None);
+        show_message(&mut state, id, "an #[error]");
+        let log: Vec<&str> = messages(&state).map(|(_, m)| m.as_str()).collect();
+        assert_eq!(
+            log,
+            ["client-1 message: hi", "client-1 message: an #[error]"]
+        );
+        for i in 0..MESSAGE_LIMIT {
+            display_message(&mut state, id, &i.to_string(), None);
+        }
+        assert_eq!(messages(&state).count(), MESSAGE_LIMIT);
+        assert_eq!(
+            messages(&state).next().map(|(_, m)| m.as_str()),
+            Some("client-1 message: 0")
+        );
+    }
+
+    /// tmux's `format_pretty_time`: the time of day within a day, else a
+    /// day and date, a date and month, or a month and year.
+    #[test]
+    fn pretty_times_follow_tmux() {
+        let now = SystemTime::now();
+        let t = pretty_time(now);
+        assert!(t.len() == 5 && t.as_bytes()[2] == b':', "{t}");
+        let year_ago = now - Duration::from_secs(400 * 24 * 3600);
+        let t = pretty_time(year_ago);
+        assert_eq!(t.len(), 5, "{t}");
+        assert!(t[3..].chars().all(|c| c.is_ascii_digit()), "{t}");
+        let week_ago = pretty_time(now - Duration::from_secs(7 * 24 * 3600));
+        assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    fn held_inputs(state: &State, id: ClientId) -> Vec<Input> {
+        let held = &state.clients[&id].held;
+        held.iter()
+            .filter_map(|h| match h {
+                Held::Input(input) => Some(input.clone()),
+                Held::Run(_) => None,
+            })
+            .collect()
+    }
+
+    /// TC.10 fix round 1: a held client's input waits in order, holds
+    /// nest, and past the cap new input is dropped.
+    #[test]
+    fn held_input_waits_in_order_until_the_last_release() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        hold_input(&mut state, id);
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab", now);
+        let held = held_inputs(&state, id);
+        assert_eq!(
+            held,
+            vec![
+                Input::Key(crate::server::input::parse_key("a").unwrap()),
+                Input::Key(crate::server::input::parse_key("b").unwrap()),
+            ]
+        );
+        release_input(&mut state, id);
+        assert_eq!(state.clients[&id].held.len(), 2, "one hold left");
+        release_input(&mut state, id);
+        assert!(state.clients[&id].held.is_empty());
+        assert_eq!(state.clients[&id].held_bytes, 0);
+
+        hold_input(&mut state, id);
+        state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP;
+        input(&mut state, id, b"c", now);
+        assert!(state.clients[&id].held.is_empty(), "dropped past the cap");
+    }
+
+    /// Past the cap, everything that arrives is dropped until the hold is
+    /// released, not only the input that did not fit: a later small key
+    /// would otherwise run with a gap before it.
+    #[test]
+    fn past_the_cap_held_input_is_dropped_until_release() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let key = |k: &str| Input::Key(crate::server::input::parse_key(k).unwrap());
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("a"), now);
+        state.clients.get_mut(&id).unwrap().held_bytes = HELD_CAP - 1;
+        let big = Input::Paste {
+            data: vec![b'x'; 2],
+            start: true,
+            end: true,
+        };
+        deliver(&mut state, id, big, now);
+        deliver(&mut state, id, key("b"), now);
+        assert_eq!(
+            held_inputs(&state, id),
+            vec![key("a")],
+            "b came after a dropped paste"
+        );
+        release_input(&mut state, id);
+        assert!(state.clients[&id].held.is_empty());
+        // A new hold holds again.
+        hold_input(&mut state, id);
+        deliver(&mut state, id, key("c"), now);
+        assert_eq!(state.clients[&id].held.len(), 1);
+    }
+
+    /// A job queued in input order (the click timer's `DoubleClick`) waits
+    /// behind the input a hold kept, as tmux appends it to the client's
+    /// queue, and runs at once when nothing is held.
+    #[test]
+    fn a_job_in_input_order_runs_after_the_held_input() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let job = |ran: &Arc<std::sync::Mutex<Vec<usize>>>| -> crate::server::Job {
+            let ran = Arc::clone(ran);
+            Box::new(move |state: &mut State| {
+                let held = state.clients[&id].held.len();
+                ran.lock().unwrap().push(held);
+            })
+        };
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab", now);
+        in_input_order(&mut state, id, job(&ran));
+        assert!(ran.lock().unwrap().is_empty(), "held behind a and b");
+        release_input(&mut state, id);
+        assert_eq!(*ran.lock().unwrap(), vec![0], "ran after both keys");
+        in_input_order(&mut state, id, job(&ran));
+        assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
+    }
+
+    /// tmux 3.7b (recorded): a binding keeps the alias expansion made when
+    /// it was bound, and a key press does not expand it again. With
+    /// `a=display-message` and `display-message=set @hit twice`, the key
+    /// bound to `a` runs `display-message`.
+    #[tokio::test]
+    async fn a_bound_alias_chain_expands_once() {
+        let (mut state, id) = state_with_client();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("run")
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]);
+        let session = *state.model.sessions.keys().next().expect("a session");
+        state.clients.get_mut(&id).expect("client").session = session;
+        run(
+            &mut state,
+            &["set", "-ag", "command-alias", "a=display-message"],
+        );
+        run(
+            &mut state,
+            &[
+                "set",
+                "-ag",
+                "command-alias",
+                "display-message=set -g @hit twice",
+            ],
+        );
+        run(&mut state, &["bind-key", "-n", "F5", "a"]);
+        run(&mut state, &["bind-key", "-n", "F6", "set -g @pressed yes"]);
+        input(&mut state, id, b"\x1b[15~\x1b[17~", Instant::now());
+        assert_eq!(state.model.options.lookup("@pressed", &[]), Some("yes"));
+        let hit = state.model.options.lookup("@hit", &[]);
+        assert_eq!(hit, None, "expanded a second time");
+    }
+
+    /// TC.11: a click maps onto the status row it lands on, at the bottom
+    /// by default and at the top with `status-position top`.
+    #[test]
+    fn a_status_click_finds_the_range_under_it() {
+        let (mut state, id) = state_with_client();
+        let net = status::draw(
+            "#[range=user|net]NET#[norange]",
+            status::Style::default(),
+            80,
+        );
+        let user = Some(RangeKind::User("net".to_string()));
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![net.clone()];
+        c.status_at = 23;
+        assert_eq!(status_range_at(&state, id, 1, 23), user);
+        assert_eq!(status_range_at(&state, id, 1, 22), None);
+        assert_eq!(status_range_at(&state, id, 40, 23), None);
+
+        let o = &mut state.model.options;
+        o.set(Owner::Global, "status", "2", false).unwrap();
+        o.set(Owner::Global, "status-position", "top", false)
+            .unwrap();
+        // TC.10: until the next draw, clicks still map onto the rows as
+        // they were drawn, not as the options now place them.
+        assert_eq!(status_range_at(&state, id, 1, 23), user);
+        assert_eq!(status_at(&state, id, 1, 0), None);
+        let c = state.clients.get_mut(&id).unwrap();
+        c.status_rows = vec![StatusRow::default(), net];
+        c.status_at = 0;
+        assert_eq!(status_range_at(&state, id, 1, 1), user);
+        assert_eq!(status_range_at(&state, id, 1, 0), None);
+        assert_eq!(status_at(&state, id, 1, 0), Some((0, None)));
+        assert_eq!(status_range_at(&state, id, 1, 23), None);
+        assert_eq!(status_at(&state, id, 1, 2), None);
+    }
+
+    /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
+    /// popup, chooser, mouse) are registered in priority order, and with
+    /// nothing open every hook passes every kind of input on and every
+    /// overlay leaves the screen alone.
     #[test]
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 2);
-        assert_eq!(state.registry.overlays.len(), 2);
+        assert_eq!(state.registry.input_hooks.len(), 5);
+        assert_eq!(state.registry.overlays.len(), 5);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),
@@ -1737,6 +2924,7 @@ mod tests {
             pane: None,
             env: Vec::new(),
             client: None,
+            dialect: crate::protocol::Dialect::Grofe,
         };
         let run = |state: &mut State, words: &[&str]| {
             let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();

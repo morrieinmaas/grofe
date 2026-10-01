@@ -1,0 +1,15 @@
+# FE.2: has-session's exit statuses with and without an exact match, and
+# info (show-messages -JT) with and without a server.
+$ has-session -t =x
+$ info
+$ new-session -d -s xy -x 80 -y 24 'sleep 1000'
+$ has-session -t =x
+$ has-session -t x
+$ has-session -t =xy
+$ new-session -d -s x -x 80 -y 24 'sleep 1000'
+$ has-session -t =x
+$ has-session -t =nope
+$ info
+$ server-info
+$ show-messages -JT
+$ show-messages -J

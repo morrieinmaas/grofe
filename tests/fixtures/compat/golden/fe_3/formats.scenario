@@ -1,0 +1,136 @@
+# FE.3: every token of docs/compat-coverage.md's "Format vocabulary" table,
+# expanded through display -p against a fixed model: session main, window
+# 1 (two panes) and window 2, every pane running cat. Short forms, `##`,
+# `##{`, `#,`, `#}`, `#{l:}` and `#(cmd)` are tmux syntax the front end
+# rewrites; the modifiers are grofe's own. Then the corpus's own format
+# strings, through list-* -F and -f.
+$ new-session -d -s main -n first -x 80 -y 24 cat -u
+$ split-window -d -t main:1 cat -u
+$ new-window -d -t main -n second cat -u
+$ set -g @opt value
+$ set -g @empty ''
+$ setenv -g log_info INFO
+$ display -p -t main:1.1 '#{@opt}'
+$ display -p -t main:1.1 '#{alternate_on}'
+$ display -p -t main:1.1 '#{buffer_size}'
+$ display -p -t main:1.1 '#{client_last_session}'
+$ display -p -t main:1.1 '#{client_name}'
+$ display -p -t main:1.1 '#{client_prefix}'
+$ display -p -t main:1.1 '#{client_session}'
+$ display -p -t main:1.1 '#{client_termname}'
+$ display -p -t main:1.1 '#{client_tty}'
+$ display -p -t main:1.1 '#{copy_cursor_word}'
+$ display -p -t main:1.1 '#{cursor_y}'
+$ display -p -t main:1.1 '#{history_bytes}'
+$ display -p -t main:1.1 '#{history_limit}'
+$ display -p -t main:1.1 '#{history_size}'
+$ display -p -t main:1.1 '#{log_info}'
+$ display -p -t main:1.1 '#{mouse_any_flag}'
+$ display -p -t main:1.1 '#{mouse_hyperlink}'
+$ display -p -t main:1.1 '#{mouse_line}'
+$ display -p -t main:1.1 '#{mouse_status_range}'
+$ display -p -t main:1.1 '#{mouse_word}'
+$ display -p -t main:1.1 '#{pane_active}'
+$ display -p -t main:1.1 '#{pane_at_left}'
+$ display -p -t main:1.1 '#{pane_current_command}'
+$ display -p -t main:1.1 '#{pane_current_path}'
+$ display -p -t main:1.1 '#{pane_dead}'
+$ display -p -t main:1.1 '#{pane_floating_flag}'
+$ display -p -t main:1.1 '#{pane_height}'
+$ display -p -t main:1.1 '#{pane_id}'
+$ display -p -t main:1.1 '#{pane_in_mode}'
+$ display -p -t main:1.1 '#{pane_index}'
+$ display -p -t main:1.1 '#{pane_left}'
+$ display -p -t main:1.1 '#{pane_marked_set}'
+$ display -p -t main:1.1 '#{pane_marked}'
+$ display -p -t main:1.1 '#{pane_mode}'
+$ display -p -t main:1.1 '#{pane_pid}'
+$ display -p -t main:1.1 '#{pane_right}'
+$ display -p -t main:1.1 '#{pane_search_string}'
+$ display -p -t main:1.1 '#{pane_start_command}'
+$ display -p -t main:1.1 '#{pane_title}'
+$ display -p -t main:1.1 '#{pane_tty}'
+$ display -p -t main:1.1 '#{pane_width}'
+$ display -p -t main:1.1 '#{pid}'
+$ display -p -t main:1.1 '#{session_attached}'
+$ display -p -t main:1.1 '#{session_created}'
+$ display -p -t main:1.1 '#{session_grouped}'
+$ display -p -t main:1.1 '#{session_group}'
+$ display -p -t main:1.1 '#{session_id}'
+$ display -p -t main:1.1 '#{session_name}'
+$ display -p -t main:1.1 '#{session_path}'
+$ display -p -t main:1.1 '#{session_windows}'
+$ display -p -t main:1.1 '#{socket_path}'
+$ display -p -t main:1.1 '#{start_time}'
+$ display -p -t main:1.1 '#{version}'
+$ display -p -t main:1.1 '#{window_active}'
+$ display -p -t main:1.1 '#{window_flags}'
+$ display -p -t main:1.1 '#{window_height}'
+$ display -p -t main:1.1 '#{window_id}'
+$ display -p -t main:1.1 '#{window_index}'
+$ display -p -t main:1.1 '#{window_layout}'
+$ display -p -t main:1.1 '#{window_name}'
+$ display -p -t main:1.1 '#{window_panes}'
+$ display -p -t main:1.1 '#{window_width}'
+$ display -p -t main:1.1 '#{window_zoomed_flag}'
+# Short forms, in and out of conditions.
+$ display -p -t main:1.1 '#S|#I|#P|#W|#F|#h|#D|#T|#H'
+$ display -p -t main:2 '#S:#I: #{window_name}'
+$ display -p -t main:1.2 '#S:#{window_index}.#{pane_index}'
+$ display -p -t main:1 '#{?#W,[#W],none} #{?#{==:#S,main},yes,no}'
+# Conditions on bare names.
+$ display -p -t main:1 '#{?@opt,set,unset} #{?@empty,set,unset} #{?@nope,set,unset} #{?session_name,a,b} #{?window_zoomed_flag,z,-}'
+# Escapes.
+$ display -p -t main:1 '## ##{pane_id} ##S #,#} a#{?session_name,x#,y,z} #{l:#S,#{x}} end#'
+$ display -p -t main:1 '#Q#1#-#!#a #[fg=red,bold]#S#[default] #[align=right]#[range=user|net]x#[norange]'
+# A job: tmux's CLI never reads back a job it starts for itself.
+$ display -p -t main:1 'a#(echo job)b'
+$ display -p -t main:1 'a#(echo job'
+$ display -p -t main:1 'a#{?session_name,b'
+# The modifiers grofe's language adopts.
+$ display -p -t main:1 '#{!=:#{session_name},x} #{==:#{window_panes},2} #{>:#{window_panes},1} #{>=:#{window_panes},3} #{>:10,9}'
+$ display -p -t main:1 '#{&&:#{window_active},#{!=:#{pane_title},sidebar}} #{&&:1,0,1} #{||:0,0,1} #{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}'
+$ display -p -t main:1 '#{b:pane_current_path} #{m:*ai*,#{session_name}} #{m:x*,#{session_name}} #{m/r:^ma.n$,#{session_name}} #{m/r:^n?vim$,#{pane_current_command}}'
+$ display -p -t main:1 '#{?window_active,#{?pane_active,both,window},none}'
+# tmux's conditions with two parts or many, and escapes in l: and bodies.
+$ display -p -t main:1 '#{?session_name,a}|#{?,b}|#{?,,,}|#{?,a,session_name,b,c}|#{?,a,,b}|#{?@nope,a,@opt,b,c}'
+$ display -p -t main:1 '#{l:a##b#,c#}d}|#{?session_name,a#}b,c}|#{?session_name,#{l:x#}y#,z},n}'
+# Modifiers grofe's language lacks.
+$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'
+$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'
+# Corpus format strings.
+$ list-panes -t main:1 -F '#{session_name}|#{window_index}|#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_left}|#{pane_top}'
+$ list-panes -t main:1 -F 'pane|#{session_name}|#{window_index}|#{window_active}|:#{window_flags}|#{pane_index}|#{pane_title}|#{pane_active}|#{pane_current_command}|#{history_size}'
+$ list-panes -a -f '#{&&:#{window_active},#{!=:#{pane_title},opensessions-sidebar}}' -F '#{session_name}|#{pane_index}'
+$ list-panes -a -f '#{&&:#{==:#{window_panes},1},#{==:#{pane_title},opensessions-sidebar}}' -F '#{session_name}'
+$ list-panes -a -f '#{==:#{pane_dead},1}' -F '#{pane_id}'
+$ list-panes -t main:1 -F '#S:#{window_index}.#{pane_index}: [#{window_name}:#{pane_title}] #{pane_current_command}  [#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}] #{?pane_active,[active],[inactive]}'
+$ list-panes -t main:1 -F '#F'
+$ list-sessions -F '#S'
+$ list-sessions -F '#S: sessions'
+$ list-sessions -F '#{session_grouped}|#{session_group}|#{session_id}|#{session_name}'
+$ list-sessions -F '#{session_id}' -f '#{==:#{session_name},main}'
+$ list-windows -t main -F '#{session_name}:#{window_index} #{window_name}'
+$ list-windows -t main -F '#{?window_active,▶ ,  }#{window_index}:#{window_name} (#{window_panes}p)'
+$ list-windows -t main -F '#{window_flags} #{window_index}'
+$ list-windows -t main -F 'window|#{session_name}|#{window_index}|:#{window_name}|#{window_active}|:#{window_flags}'
+$ display-message -p -t main:1 '#S:#I:'
+$ display-message -p -F '#{pane_index}' -t main:1.2
+$ new-window -d -t main -n third -P -F '#S:#I #{window_name}' cat -u
+$ split-window -d -t main:3 -P -F '#{session_name}:#{window_index}.#{pane_index}' cat -u
+$ if -F -t main:1 '#{window_zoomed_flag}' 'display -p zoomed' 'display -p "not #W"'
+$ if -F -t main:1 '#{m:*ai*,#S}' 'display -p match' 'display -p nomatch'
+$ run-shell 'echo "#S #{window_index} ##{pane_id}"'
+# run-shell -t expands against its pane; tmux shows the output in that
+# pane's view mode, so it goes to a file here.
+$ run-shell -t main:2 'echo "#I #{window_name}" > $HOME/rs.out'
+$ run-shell 'cat $HOME/rs.out'
+$ set -gF @expanded '#S-#W'
+$ show -gv @expanded
+$ set -g @kept '#S'
+$ show -gv @kept
+$ display -p -t main:1 '#{@kept}'
+$ rename-window -t main:2 'w#S#{window_index}'
+$ list-windows -t main -F '#{window_index} #W'
+$ rename-session -t main '#S-#I'
+$ list-sessions -F '#S'

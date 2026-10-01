@@ -1,0 +1,5 @@
+# The environment a pane gets from the recorder: the fixed variables plus
+# tmux's own. The pane signals the wait-for channel once env has printed.
+$ new-session -d -s env -x 200 -y 50 "env | LC_ALL=C sort; tmux wait-for -S env-done; exec cat"
+$ wait-for env-done
+$ capture-pane -pJ -t env

@@ -8,6 +8,7 @@
 
 pub mod io;
 pub mod procinfo;
+mod written;
 
 use std::ffi::OsString;
 use std::io as stdio;
@@ -37,7 +38,9 @@ use crate::protocol::Caps;
 use crate::server::passthrough::Scanner;
 use crate::server::render::write_sgr;
 use crate::server::status::Style;
-use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
+use crate::types::{
+    CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
+};
 use io::{InputQueue, Listener};
 use procinfo::ProcSample;
 
@@ -78,11 +81,15 @@ pub enum PaneEventKind {
 #[derive(Debug, Clone)]
 pub struct PaneSpawn {
     pub id: PaneId,
+    /// The session the pane's window belongs to (for `TMUX`, TC.1).
+    pub session: SessionId,
     /// `None` starts the user's shell (`$SHELL`, else `/bin/sh`) as a login shell.
     pub argv: Option<Vec<String>>,
     pub cwd: PathBuf,
-    /// Applied over the server's own environment; grofe's `TERM`, `COLORTERM`,
-    /// `GROFE` and `GROFE_PANE` are applied after it and always win.
+    /// The child's whole environment (the server's own is not inherited;
+    /// `dispatch::pane_env` builds it from the server environment, TC.5);
+    /// grofe's `TERM`, `COLORTERM`, `GROFE` and `GROFE_PANE` are applied
+    /// after it and always win.
     pub env: Vec<(String, String)>,
     pub cols: u16,
     pub rows: u16,
@@ -155,6 +162,9 @@ pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
 }
+
+/// alacritty's tab stops, every 8 columns.
+const TAB_STOP: usize = 8;
 
 /// The narrowest a pane's pty and emulator ever get: alacritty_terminal
 /// 0.26 panics writing a wide character into a 1-column terminal. A
@@ -307,6 +317,8 @@ pub struct PaneHandle {
     sample: Arc<Mutex<ProcSample>>,
     /// The cwd the pane itself reported (OSC 7, T3.3).
     reported_cwd: Mutex<Option<PathBuf>>,
+    /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
+    tty: Option<PathBuf>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -334,7 +346,7 @@ impl PaneHandle {
             cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
-        let (master, child) = spawn_child(&spec, size)?;
+        let (master, child, tty) = spawn_child(&spec, size)?;
         let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
@@ -388,6 +400,7 @@ impl PaneHandle {
             graphics_ok,
             cell_px: Mutex::new(spec.cell_px),
             reported_cwd: Mutex::new(None),
+            tty,
             tasks: vec![reader, writer, sampler],
         })
     }
@@ -402,6 +415,11 @@ impl PaneHandle {
             cols: cols.max(MIN_COLS),
             rows: rows.max(1),
         };
+        // ponytail: alacritty's reflow drops trailing blanks it counts as
+        // empty, written ones too ([`written`]), so a line shrunk narrower
+        // than its written blanks loses them and `-J` then trims them, where
+        // tmux keeps its width. Carrying widths across resizes misplaced them
+        // when lines moved or re-wrapped; the loss is the accepted divergence.
         lock(&self.emu).term.resize(size);
         self.set_winsize(size)
     }
@@ -449,6 +467,13 @@ impl PaneHandle {
     /// sequence from the renderer's `write_sgr` goes wherever the style
     /// changes, carried across lines as tmux does.
     pub fn capture(&self, opts: &CaptureOpts) -> String {
+        self.capture_lines(opts, false)
+    }
+
+    /// [`Self::capture`] with tmux's `-J` when `join`: a row that wraps
+    /// onto the next one is joined to it, and a row that does not ends at
+    /// its used width ([`written`]), the blanks the program wrote kept.
+    pub fn capture_lines(&self, opts: &CaptureOpts, join: bool) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
         let sgr_flags = CellFlags::BOLD
@@ -478,10 +503,40 @@ impl PaneHandle {
         let mut out = String::new();
         for line in start..=end {
             let row = &grid[Line(line)];
+            let wraps = join
+                && row[Column(grid.columns() - 1)]
+                    .flags
+                    .contains(CellFlags::WRAPLINE);
+            // Without a wrap, `-J` stops at the used width; a non-blank
+            // cell the program did not write (`DECALN`) still counts.
+            let cols = grid.columns();
+            let tab_stop = |col: usize| ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
+            let end = if join && !wraps {
+                // A tab counts as far as the stop it moved to (tmux's
+                // `cellused`), a blank or not.
+                (0..cols)
+                    .map(|c| match row[Column(c)].c {
+                        ' ' => 0,
+                        '\t' => tab_stop(c),
+                        _ => c + 1,
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    .max(written::used(row))
+            } else {
+                grid.columns()
+            };
             let mut text = String::new();
-            for col in 0..grid.columns() {
+            // A tab is its `\t` alone, as tmux captures it: the blank cells
+            // it moved over, up to the next tab stop, are not printed. One
+            // written over before its stop is a blank, like those cells.
+            let mut tab_end = 0;
+            for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if col < tab_end && cell.c == ' ' && !cell.flags.contains(written::WRITTEN) {
                     continue;
                 }
                 if opts.escapes {
@@ -502,12 +557,34 @@ impl PaneHandle {
                     text.push(' ');
                     continue;
                 }
-                text.push(cell.c);
+                if cell.c == '\t' {
+                    let stop = tab_stop(col);
+                    let intact = (col + 1..stop).all(|c| {
+                        let cell = &row[Column(c)];
+                        cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
+                    });
+                    if intact {
+                        text.push('\t');
+                        tab_end = stop;
+                    } else {
+                        text.push(' ');
+                    }
+                } else {
+                    text.push(cell.c);
+                }
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);
                 }
             }
-            out.push_str(text.trim_end_matches(' '));
+            if wraps {
+                out.push_str(&text);
+                continue;
+            }
+            if join {
+                out.push_str(&text);
+            } else {
+                out.push_str(text.trim_end_matches(' '));
+            }
             out.push('\n');
         }
         out
@@ -532,6 +609,13 @@ impl PaneHandle {
         lock(&self.sample).argv.clone()
     }
 
+    /// The pty's foreground process group, read now rather than sampled
+    /// ([`procinfo::foreground_group`]): for a command's formats, which must
+    /// see the process in front at the moment the key is pressed.
+    pub fn foreground_group(&self) -> Option<i32> {
+        procinfo::foreground_group(self.master.get_ref())
+    }
+
     /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
     /// else the foreground process's, from the last sample.
     pub fn current_path(&self) -> Option<PathBuf> {
@@ -544,6 +628,11 @@ impl PaneHandle {
     /// from now on.
     pub fn set_reported_cwd(&self, cwd: PathBuf) {
         *lock(&self.reported_cwd) = Some(cwd);
+    }
+
+    /// The pty slave's path, as `#{pane_tty}` shows it.
+    pub fn tty_path(&self) -> Option<&Path> {
+        self.tty.as_deref()
     }
 
     /// Scrollback lines kept above the visible screen.
@@ -631,7 +720,7 @@ fn snap_row(
                 c: cell.c,
                 fg: cell.fg,
                 bg: cell.bg,
-                flags: cell.flags,
+                flags: cell.flags.difference(written::WRITTEN),
                 zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                 underline_color: cell.underline_color(),
                 hyperlink: cell.hyperlink(),
@@ -660,17 +749,18 @@ fn cursor_state(term: &Term<Listener>) -> CursorState {
     }
 }
 
-/// The environment a pane's child gets on top of the server's own: the spawn
-/// env, a UTF-8 locale if none is set, then grofe's variables.
+/// The environment a pane's child gets: the spawn env, a UTF-8 locale if
+/// it sets none, then grofe's variables.
 fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> =
         spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
     let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| {
         let set = |v: &str| !v.is_empty();
-        match spec.env.iter().rev().find(|(name, _)| name == k) {
-            Some((_, v)) => set(v),
-            None => std::env::var(k).is_ok_and(|v| set(&v)),
-        }
+        spec.env
+            .iter()
+            .rev()
+            .find(|(name, _)| name == k)
+            .is_some_and(|(_, v)| set(v))
     });
     if !has_locale {
         let utf8 = if cfg!(target_os = "macos") {
@@ -688,23 +778,40 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
 }
 
 /// The shell for a pane with no argv: `SHELL` from the spawn env, then the
-/// server's; `/bin/sh` when neither is set or the one found is not an
-/// executable absolute path (tmux's `checkshell`).
+/// server's ([`pick_shell`]).
 fn default_shell(spec: &PaneSpawn) -> String {
-    spec.env
-        .iter()
-        .rev()
-        .find(|(k, _)| k == "SHELL")
-        .map(|(_, v)| v.clone())
-        .or_else(|| std::env::var("SHELL").ok())
-        .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
+    pick_shell(
+        spec.env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "SHELL")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("SHELL").ok()),
+    )
+}
+
+/// `candidate` when it is an executable absolute path (tmux's
+/// `checkshell`), else the user's passwd shell when that is, else
+/// `/bin/sh`, as tmux's `getshell` falls back (spec D2 in the M3.6 ledger).
+pub fn pick_shell(candidate: Option<String>) -> String {
+    let usable = |s: &String| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok();
+    candidate
+        .filter(usable)
+        .or_else(|| passwd_shell().filter(usable))
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
-/// The directory a pane starts in: `cwd` if it is one, else `$HOME`, else
-/// `/`, as tmux falls back when it cannot `chdir`.
+/// The login shell in the passwd entry of the server's user.
+fn passwd_shell() -> Option<String> {
+    let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
+    user.shell.into_os_string().into_string().ok()
+}
+
+/// The directory a pane starts in: `cwd` if it is one the server may enter
+/// (search permission, so an EACCES directory does not leave a dead pane),
+/// else `$HOME`, else `/`, as tmux falls back when it cannot `chdir`.
 pub fn usable_cwd(cwd: PathBuf) -> PathBuf {
-    if cwd.is_dir() {
+    if cwd.is_dir() && access(&cwd, AccessFlags::X_OK).is_ok() {
         return cwd;
     }
     std::env::var_os("HOME")
@@ -726,7 +833,7 @@ fn is_fork_error(e: &stdio::Error) -> bool {
 fn spawn_child(
     spec: &PaneSpawn,
     size: Size,
-) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>)> {
+) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>, Option<PathBuf>)> {
     let mut cmd = match &spec.argv {
         Some(argv) => {
             let (prog, args) = argv
@@ -747,7 +854,7 @@ fn spawn_child(
             cmd
         }
     };
-    cmd.current_dir(&spec.cwd).envs(child_env(spec));
+    cmd.current_dir(&spec.cwd).env_clear().envs(child_env(spec));
 
     let _guard = spawn_lock();
     let pty = openpty(&size.winsize(spec.cell_px), None)?;
@@ -779,12 +886,13 @@ fn spawn_child(
         Err(e) if is_fork_error(&e) => return Err(e),
         Err(_) => None,
     };
+    let tty = nix::unistd::ttyname(&pty.slave).ok();
     drop(pty.slave);
     drop(_guard);
 
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, child))
+    Ok((pty.master, child, tty))
 }
 
 #[cfg(test)]
@@ -794,6 +902,7 @@ mod tests {
     fn spec_with_term(term: &'static str) -> PaneSpawn {
         PaneSpawn {
             id: PaneId(0),
+            session: SessionId(0),
             argv: None,
             cwd: PathBuf::from("/"),
             env: Vec::new(),
@@ -880,6 +989,14 @@ mod tests {
         })
         .await;
         assert!(exited.is_ok(), "seq exited");
+        // The exit can be seen before the reader has parsed the last
+        // output, so wait for it under load.
+        for _ in 0..500 {
+            if handle.history_size() == 21 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
         let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);
@@ -947,21 +1064,57 @@ mod tests {
         assert_eq!(handle.current_path(), Some(there));
     }
 
+    /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's
+    /// `getshell` does, and to `/bin/sh` only when that is unusable too.
     #[test]
-    fn a_stale_shell_falls_back_to_bin_sh() {
+    fn a_stale_shell_falls_back_to_the_passwd_shell() {
         let spec = |shell: &str| PaneSpawn {
             env: vec![("SHELL".to_string(), shell.to_string())],
             ..spec_with_term("xterm-256color")
         };
-        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), "/bin/sh");
-        assert_eq!(default_shell(&spec("sh")), "/bin/sh");
-        assert_eq!(default_shell(&spec("/etc/hosts")), "/bin/sh");
+        let passwd = passwd_shell()
+            .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
+            .unwrap_or_else(|| "/bin/sh".into());
+        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), passwd);
+        assert_eq!(default_shell(&spec("sh")), passwd);
+        assert_eq!(default_shell(&spec("/etc/hosts")), passwd);
         assert_eq!(default_shell(&spec("/bin/sh")), "/bin/sh");
         let sh = std::fs::canonicalize("/bin/sh")
             .unwrap()
             .display()
             .to_string();
         assert_eq!(default_shell(&spec(&sh)), sh);
+    }
+
+    /// D2: with no `SHELL` anywhere, the passwd entry's shell.
+    #[test]
+    fn no_shell_at_all_is_the_passwd_shell() {
+        let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+            .unwrap()
+            .expect("a passwd entry");
+        let shell = user.shell.display().to_string();
+        assert!(shell.starts_with('/'), "{shell}");
+        assert_eq!(pick_shell(None), shell);
+    }
+
+    /// D5: a directory the server cannot enter (EACCES) falls back to
+    /// `$HOME`, where `is_dir` alone kept it and the pane died.
+    #[test]
+    fn an_unenterable_cwd_falls_back_to_home() {
+        use std::os::unix::fs::PermissionsExt;
+        if nix::unistd::geteuid().is_root() {
+            return; // root enters any directory
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(locked.is_dir());
+        let got = usable_cwd(locked.clone());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(got, home);
+        assert_eq!(usable_cwd(dir.path().to_path_buf()), dir.path());
     }
 
     #[test]

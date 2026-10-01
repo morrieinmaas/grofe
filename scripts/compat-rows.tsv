@@ -1,0 +1,148 @@
+# Which spec 4.5 row owns each corpus form (scripts/corpus.py, plan TC.0).
+#
+# Format: <pattern><TAB><row>. A pattern is a canonical tmux verb (or `tmux`
+# for global flags, `%if` for config directives, `(alias)` for a verb the
+# corpus defines through command-alias) followed by flags the form must all
+# have; the first matching line wins, so specific lines come first. Flag
+# tokens are as forms print them: `-t[=]` is a bare `=` target, `-x[M]` a
+# position letter, `-P!` a flag tmux 3.7b's usage leaves out.
+#
+# Rows: `area:<name>` is a row of 4.5's front-end table; `cmd:<milestone>` is
+# a line of 4.5's command table with that milestone that names the verb;
+# `oos:<text>` is the line of the out-of-scope table containing <text>.
+# scripts/corpus.py check refuses a row that names nothing in the spec.
+
+# --- out of scope first: mouse forms, marks, links, config language --------
+kill-pane -t[=]	oos:Mouse argv forms
+select-pane -t[=]	oos:Mouse argv forms
+copy-mode -t[=]	oos:Mouse argv forms
+send-keys -t[=]	oos:Mouse argv forms
+if-shell -t[=]	oos:Mouse argv forms
+display-menu -t[=]	oos:Mouse argv forms
+switch-client -t[=]	oos:Mouse argv forms
+send-keys -M	oos:Mouse argv forms
+resize-pane -M	oos:Mouse argv forms
+copy-mode -M	oos:Mouse argv forms
+display-menu -x[M]	oos:Mouse argv forms
+display-menu -y[M]	oos:Mouse argv forms
+display-menu -x[W]	oos:Mouse argv forms
+display-menu -y[W]	oos:Mouse argv forms
+display-menu -x[S]	oos:Mouse argv forms
+display-menu -y[S]	oos:Mouse argv forms
+select-pane -m	oos:Marked panes
+select-pane -M	oos:Marked panes
+link-window	oos:`link-window`
+unlink-window	oos:`link-window`
+new-session -t	oos:`link-window`
+%if	oos:`%if`
+%endif	oos:`%if`
+
+# --- invocation ---------------------------------------------------------------
+tmux	area:Invocation
+(alias)	area:Bindings
+
+# --- sessions and clients -------------------------------------------------------
+new-session -A	area:Sessions and clients
+new-session	cmd:M1
+has-session	area:Sessions and clients
+kill-session	cmd:M1
+kill-server	cmd:M1
+attach-session	cmd:M2
+detach-client -s	area:Sessions and clients
+detach-client	cmd:M2
+switch-client -c	area:Sessions and clients
+switch-client -T	area:Sessions and clients
+switch-client	cmd:M2
+refresh-client	area:Sessions and clients
+show-messages	area:Sessions and clients
+start-server	area:Sessions and clients
+suspend-client	area:Sessions and clients
+choose-client	area:Sessions and clients
+list-clients -F	area:Sessions and clients
+list-clients	cmd:M2
+rename-session	cmd:M2
+
+# --- windows and panes -----------------------------------------------------------
+new-window -n	area:Windows and panes
+new-window	cmd:M1
+select-window	area:Windows and panes
+kill-window	cmd:M1
+next-window -a	area:Windows and panes
+previous-window -a	area:Windows and panes
+next-window	cmd:M2
+previous-window	cmd:M2
+last-window	cmd:M2
+rename-window	cmd:M2
+split-window	cmd:M1
+kill-pane	cmd:M1
+select-pane	cmd:M1
+resize-pane -x	area:Windows and panes
+resize-pane -y	area:Windows and panes
+resize-pane	cmd:M1
+respawn-pane	area:Windows and panes
+respawn-window	area:Windows and panes
+join-pane	area:Windows and panes
+move-pane	area:Windows and panes
+swap-pane	area:Windows and panes
+swap-window	area:Windows and panes
+break-pane	area:Windows and panes
+resize-window	area:Windows and panes
+last-pane	area:Windows and panes
+rotate-window	area:Windows and panes
+move-window	area:Windows and panes
+find-window	area:Windows and panes
+select-layout -E	area:Windows and panes
+select-layout	cmd:M3
+next-layout	area:Windows and panes
+
+# --- listing, inspection, options ---------------------------------------------------
+list-sessions	area:Listing and inspection
+list-windows	area:Listing and inspection
+list-panes	area:Listing and inspection
+capture-pane	area:Listing and inspection
+display-message	area:Listing and inspection
+show-options	area:Listing and inspection
+show-window-options	area:Listing and inspection
+set-option	area:Options by tmux name
+set-window-option	area:Options by tmux name
+
+# --- bindings, prompts, overlays ------------------------------------------------------
+bind-key	area:Bindings
+unbind-key	cmd:M3
+list-keys -1	area:Overlays
+list-keys	cmd:M3
+source-file	cmd:M3
+if-shell	area:Bindings
+confirm-before	area:Bindings
+command-prompt -I	area:Bindings
+command-prompt	area:Overlays
+display-popup	area:Overlays
+display-menu	area:Overlays
+display-panes	area:Overlays
+choose-tree	area:Overlays
+# fzf --tmux (0.74) opens its popup as a tmux 3.7 floating pane and waits on
+# it with wait-for, after probing with list-commands: the Overlays row's
+# "whatever else the installed fzf's --tmux sends"
+new-pane	area:Overlays
+wait-for	area:Overlays
+list-commands	area:Overlays
+send-keys -X	area:Buffers and copy
+send-keys	cmd:M1
+send-prefix	cmd:M2
+
+# --- hooks, environment, run-shell ---------------------------------------------------
+run-shell -b	area:Hooks and environment
+run-shell	cmd:M3
+set-hook	area:Hooks and environment
+set-environment	area:Hooks and environment
+show-environment	area:Hooks and environment
+
+# --- copy mode and buffers (M5) ------------------------------------------------------
+copy-mode	area:Buffers and copy
+choose-buffer	area:Buffers and copy
+set-buffer	area:Buffers and copy
+paste-buffer	area:Buffers and copy
+delete-buffer	area:Buffers and copy
+list-buffers	area:Buffers and copy
+load-buffer	area:Buffers and copy
+show-buffer	area:Buffers and copy

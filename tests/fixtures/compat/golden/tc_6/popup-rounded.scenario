@@ -1,0 +1,8 @@
+# TC.6: a popup at 80% by 60% of a 60x15 client, rounded border and a
+# title, centred by default. display-popup blocks until the popup closes,
+# so it runs in the background ($&).
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& display-popup -c {client} -w 80% -h 60% -b rounded -T title "echo in-popup; exec cat"
+screen in-popup

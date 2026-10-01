@@ -62,6 +62,8 @@ pub struct Session {
     pub activity: Instant,
     /// How many clients show the session (`session_attached`).
     pub attached: usize,
+    /// When the session was created (`session_created`).
+    pub created: std::time::SystemTime,
 }
 
 pub struct Window {
@@ -77,9 +79,79 @@ pub struct Window {
     /// tmux's `window_bell_flag` (R13): set by a bell (T3.3), cleared when
     /// the window becomes its session's current window.
     pub bell_flag: bool,
+    /// The panes that were active before `active`, most recent last
+    /// (tmux's `last_panes`, for `last-pane`), kept by
+    /// [`Window::set_active`] and [`Window::lose_pane`].
+    pub last_panes: Vec<PaneId>,
+    /// Floating panes (tmux 3.7's `new-pane`, TC.6), in creation order:
+    /// panes of the window outside its layout, drawn over it.
+    pub floating: Vec<Floating>,
 }
 
+/// Where a floating pane is: the window cell of its top-left content
+/// cell (its border is drawn around it, and either may be off the
+/// window), its size, and its place in the stack, highest on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Floating {
+    pub pane: PaneId,
+    pub x: i32,
+    pub y: i32,
+    pub cols: u16,
+    pub rows: u16,
+    pub z: u32,
+}
+
+/// Stands in a window's layout once its last tiled pane has gone while
+/// floating panes remain (tmux 3.7b keeps such a window, recorded): no
+/// pane has this id, so nothing is drawn or listed for it.
+pub const HOLE: PaneId = PaneId(u32::MAX);
+
 impl Window {
+    /// Makes `pane` the active pane; the one it replaces becomes the most
+    /// recent last pane, as tmux's `window_set_active_pane` does.
+    pub fn set_active(&mut self, pane: PaneId) {
+        // A floating pane that becomes active comes to the top, as in
+        // tmux 3.7b (recorded: select-pane raises it).
+        let top = self.floating.iter().map(|f| f.z).max().unwrap_or(0);
+        if let Some(f) = self.floating.iter_mut().find(|f| f.pane == pane)
+            && f.z != top
+        {
+            f.z = top + 1;
+        }
+        if self.active == pane {
+            return;
+        }
+        let old = self.active;
+        self.last_panes.retain(|p| *p != pane && *p != old);
+        self.last_panes.push(old);
+        self.active = pane;
+    }
+
+    /// The pane `last-pane` goes back to.
+    pub fn last_pane(&self) -> Option<PaneId> {
+        self.last_panes.last().copied()
+    }
+
+    /// After `pane` left the window, whose index order was `order`: it
+    /// leaves the last-pane stack, and if it was active the last pane
+    /// takes over, else the one before it, else the one after (tmux's
+    /// `window_lost_pane`).
+    pub fn lose_pane(&mut self, order: &[PaneId], pane: PaneId) {
+        self.last_panes.retain(|p| *p != pane);
+        if self.active != pane {
+            return;
+        }
+        let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
+        let next = self
+            .last_pane()
+            .or_else(|| pos.checked_sub(1).map(|i| order[i]))
+            .or_else(|| order.get(pos + 1).copied());
+        if let Some(next) = next {
+            self.active = next;
+            self.last_panes.retain(|p| *p != next);
+        }
+    }
+
     /// The area the layout is computed against.
     pub fn area(&self) -> Rect {
         Rect {
@@ -90,14 +162,29 @@ impl Window {
         }
     }
 
-    /// Pane ids in layout order: position `i` is pane index
+    /// Pane ids in layout order, then the floating panes in creation
+    /// order, as tmux 3.7b indexes them: position `i` is pane index
     /// `i + pane-base-index`.
     pub fn pane_ids(&self) -> Vec<PaneId> {
+        let mut ids = self.tiled_ids();
+        ids.extend(self.floating.iter().map(|f| f.pane));
+        ids
+    }
+
+    /// The panes in the layout, in layout order: the only ones a layout
+    /// operation (presets, rotation, splits) may touch.
+    pub fn tiled_ids(&self) -> Vec<PaneId> {
         self.layout
             .compute(self.area())
             .into_iter()
             .map(|(id, _)| id)
+            .filter(|id| *id != HOLE)
             .collect()
+    }
+
+    /// `pane`'s place if it is a floating pane of this window.
+    pub fn floating(&self, pane: PaneId) -> Option<&Floating> {
+        self.floating.iter().find(|f| f.pane == pane)
     }
 }
 
@@ -132,6 +219,12 @@ pub struct Model {
     /// -l`). Switching a client records it; removing a session drops
     /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
+    /// Who the server says it is (spec D12), fixed at start by
+    /// `compat::server_started` (TC.1); grofe until then.
+    pub identity: crate::compat::Identity,
+    /// Sessions removed since `hooks::run_pending` last took them, as
+    /// `(id, name)`, for the `session-closed` hook (TC.5).
+    pub closed_sessions: Vec<(SessionId, String)>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -208,12 +301,19 @@ impl Model {
         self.had_session && self.sessions.is_empty()
     }
 
-    /// Whether `pane` stays after its process exits: `remain-on-exit`
-    /// looked up pane over window over session over global.
-    pub fn remain_on_exit(&self, pane: PaneId) -> bool {
-        self.options
+    /// Whether `pane` stays after its process exits with `status` (its
+    /// exit code, `None` when a signal ended it): `remain-on-exit` looked
+    /// up pane over window over session over global. `failed` keeps it
+    /// unless it exited 0, as tmux 3.7b (recorded: a signal keeps it too).
+    pub fn remain_on_exit(&self, pane: PaneId, status: Option<i32>) -> bool {
+        match self
+            .options
             .lookup(REMAIN_ON_EXIT, &options::chain(self, pane))
-            == Some("on")
+        {
+            Some("on") => true,
+            Some("failed") => status != Some(0),
+            _ => false,
+        }
     }
 
     pub fn session_by_name(&self, name: &str) -> Option<SessionId> {
@@ -245,6 +345,16 @@ impl Model {
             .lookup(name, chain)
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
+    }
+
+    /// `default-shell` for `session`: the shell a new pane starts, as tmux
+    /// starts it. Its default is the server's own shell, picked at start
+    /// as tmux's `getshell` picks it (`compat::server_started`).
+    pub fn default_shell(&self, session: SessionId) -> Option<String> {
+        self.options
+            .lookup("default-shell", &[options::Owner::Session(session)])
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
     }
 
     /// `base-index` for `session`: where new windows start numbering.
@@ -285,7 +395,7 @@ impl Model {
         if !self.panes.contains_key(&pane) {
             return;
         }
-        if self.remain_on_exit(pane) {
+        if self.remain_on_exit(pane, status) {
             if let Some(p) = self.panes.get_mut(&pane) {
                 p.dead = Some(status);
             }
@@ -309,13 +419,21 @@ impl Model {
         if order.len() <= 1 {
             return self.remove_window(window_id);
         }
-        let pos = order.iter().position(|p| *p == pane).unwrap_or(0);
+        if window.floating(pane).is_some() {
+            window.floating.retain(|f| f.pane != pane);
+            window.lose_pane(&order, pane);
+            return self.take_panes(&[pane]);
+        }
+        if window.tiled_ids().len() <= 1 {
+            // Floating panes remain: the window stays, as tmux 3.7b's does.
+            window.zoomed = false;
+            window.layout.replace(pane, HOLE);
+            window.lose_pane(&order, pane);
+            return self.take_panes(&[pane]);
+        }
         window.zoomed = false;
         window.layout.remove(pane);
-        if window.active == pane {
-            let rest: Vec<PaneId> = order.into_iter().filter(|p| *p != pane).collect();
-            window.active = rest[pos.min(rest.len() - 1)];
-        }
+        window.lose_pane(&order, pane);
         let removed = self.take_panes(&[pane]);
         self.relayout(window_id);
         removed
@@ -329,27 +447,56 @@ impl Model {
         };
         let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
         let removed = self.take_panes(&ids);
-        let Some(session) = self.sessions.get_mut(&w.session) else {
-            return removed;
+        self.unlink_window(w.session, window);
+        self.renumber_after_removal(w.session);
+        removed
+    }
+
+    /// With `renumber-windows` on, `session`'s windows are numbered again
+    /// from `base-index` in order, as tmux 3.7b does when one of them is
+    /// destroyed (recorded; not when one moves to another session).
+    fn renumber_after_removal(&mut self, session: SessionId) {
+        let on = self
+            .options
+            .lookup("renumber-windows", &[options::Owner::Session(session)])
+            == Some("on");
+        let Some(s) = self.sessions.get(&session).filter(|_| on) else {
+            return;
         };
-        let pos = session.windows.iter().position(|id| *id == window);
-        session.windows.retain(|id| *id != window);
-        if session.windows.is_empty() {
-            self.sessions.remove(&w.session);
-            self.client_last_session
-                .retain(|_, last| *last != w.session);
-            return removed;
+        let base = self.base_index(session);
+        for (i, id) in s.windows.clone().iter().enumerate() {
+            if let Some(w) = self.windows.get_mut(id) {
+                w.index = base + i as u32;
+            }
         }
-        session.last_windows.retain(|w| *w != window);
-        if session.active == window {
-            // As tmux: the last window takes over, else the one at the
-            // same position.
-            session.active = match session.last_windows.pop() {
-                Some(l) => l,
-                None => session.windows[pos.unwrap_or(0).min(session.windows.len() - 1)],
+    }
+
+    /// Takes `window` out of `session`'s window list and last-window
+    /// stack, as tmux's `session_detach` unlinks a winlink: if it was the
+    /// current window, the last window takes over, else the one before
+    /// it, else the one after. A session left with no windows goes. The
+    /// window itself (if still in the model) and its panes are untouched.
+    pub fn unlink_window(&mut self, session: SessionId, window: WindowId) {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return;
+        };
+        let pos = s.windows.iter().position(|id| *id == window);
+        s.windows.retain(|id| *id != window);
+        s.last_windows.retain(|id| *id != window);
+        if s.windows.is_empty() {
+            let name = std::mem::take(&mut s.name);
+            self.closed_sessions.push((session, name));
+            self.sessions.remove(&session);
+            self.client_last_session.retain(|_, last| *last != session);
+            return;
+        }
+        if s.active == window {
+            let pos = pos.unwrap_or(0);
+            s.active = match s.last_windows.pop() {
+                Some(last) => last,
+                None => s.windows[pos.saturating_sub(1).min(s.windows.len() - 1)],
             };
         }
-        removed
     }
 
     /// Removes a session with all its windows and panes. Returns the
@@ -358,6 +505,7 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        self.closed_sessions.push((session, s.name.clone()));
         self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {
             self.windows.remove(w);
@@ -401,7 +549,16 @@ impl Model {
         let Some(w) = self.windows.get(&window) else {
             return;
         };
-        for (id, rect) in w.layout.compute(w.area()) {
+        let floating = w.floating.iter().map(|f| {
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                cols: f.cols,
+                rows: f.rows,
+            };
+            (f.pane, rect)
+        });
+        for (id, rect) in w.layout.compute(w.area()).into_iter().chain(floating) {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
@@ -472,7 +629,11 @@ impl Model {
                 .contains_key(id)
                 .then_some(*id)
                 .ok_or_else(|| format!("can't find session: {id}")),
-            SessionRef::Name(name) => {
+            // tmux's `=name` as a session: never a prefix.
+            SessionRef::Bare(word) if word.len() > 1 && word.starts_with('=') => {
+                self.session_ref(&SessionRef::Exact(word[1..].to_string()), ctx)
+            }
+            SessionRef::Name(name) | SessionRef::Bare(name) => {
                 if let Some(id) = self.session_by_name(name) {
                     return Ok(id);
                 }
@@ -488,6 +649,11 @@ impl Model {
                     _ => Err(format!("ambiguous session: {name}")),
                 }
             }
+            // tmux's `=name` (FE.1): never a prefix.
+            SessionRef::Exact(name) => self
+                .session_by_name(name)
+                .ok_or_else(|| format!("can't find session: {name}")),
+            SessionRef::Mouse => Err(crate::cmd::target::NO_MOUSE_TARGET.to_string()),
         }
     }
 
@@ -517,6 +683,16 @@ impl Model {
                 let sid = self.session_ref(s, ctx)?;
                 self.window_at_index(sid, *index)
                     .ok_or_else(|| format!("can't find window: {index}"))
+            }
+            // tmux's `+N`/`-N` (FE.1): from the session's current window,
+            // by index order, wrapping (recorded on tmux 3.7b).
+            (s, WindowRef::Offset(n)) => {
+                let current = match s {
+                    SessionRef::Current => self.current_window(ctx)?,
+                    s => self.sessions[&self.session_ref(s, ctx)?].active,
+                };
+                let windows = &self.sessions[&self.windows[&current].session].windows;
+                Ok(step(windows, current, *n))
             }
             (s, WindowRef::Name(name)) => {
                 let sid = self.session_ref(s, ctx)?;
@@ -559,6 +735,13 @@ impl Model {
                 }
                 Ok(id)
             }
+            // tmux's `+N`/`-N` (FE.1): from the window's active pane, by
+            // index order, wrapping (recorded on tmux 3.7b).
+            PanePart::Offset(n) => {
+                let w = self.window_ref(&r.session, &r.window, ctx)?;
+                let window = &self.windows[&w];
+                Ok(step(&window.pane_ids(), window.active, n))
+            }
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
@@ -570,11 +753,121 @@ impl Model {
     }
 }
 
+impl Model {
+    /// tmux's bare word as a window (cmd-find.c): `=word` is `word`, read
+    /// the same way here since window names never match by prefix.
+    fn bare_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        let name = match word.strip_prefix('=') {
+            Some(name) if !name.is_empty() => name,
+            _ => word,
+        };
+        self.word_window(name, ctx)
+            .map_err(|_| format!("can't find window: {name}"))
+    }
+
+    /// A window of the current session by index, then by exact name, then
+    /// a session's current window, as cmd-find.c tries them.
+    fn word_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        let by_index = word.parse::<u32>().ok().and_then(|index| {
+            self.window_ref(&SessionRef::Current, &WindowRef::Index(index), ctx)
+                .ok()
+        });
+        if let Some(w) = by_index {
+            return Ok(w);
+        }
+        self.window_ref(
+            &SessionRef::Current,
+            &WindowRef::Name(word.to_string()),
+            ctx,
+        )
+        .or_else(|_| {
+            let sid = self.session_ref(&SessionRef::Name(word.to_string()), ctx)?;
+            Ok(self.sessions[&sid].active)
+        })
+    }
+
+    /// tmux's bare word as a pane (cmd-find.c): a pane index in the current
+    /// window, then a window's active pane ([`Model::word_window`]). A
+    /// leading `=` is part of the word here: tmux strips it only from a
+    /// session or window part.
+    fn bare_pane(&self, word: &str, ctx: &ClientCtx) -> Result<PaneId, String> {
+        if let Ok(index) = word.parse::<u32>() {
+            let pane = PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Index(index),
+            };
+            if let Ok(p) = self.pane_ref(&pane, ctx) {
+                return Ok(p);
+            }
+        }
+        self.word_window(word, ctx)
+            .map(|w| self.windows[&w].active)
+            .map_err(|_| format!("can't find pane: {word}"))
+    }
+
+    /// `target` read as tmux reads a pane target, for a verb whose `-t` is
+    /// a pane in tmux but whose grofe handler resolves it as a window or a
+    /// session (`set-option`, `set-hook`, `select-layout`): a bare word
+    /// becomes the pane it names. Every other target is returned as is.
+    pub fn pane_type(&self, target: &Target, ctx: &ClientCtx) -> Result<Target, String> {
+        match target {
+            Target::Session(SessionRef::Bare(word)) => Ok(Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::Current,
+                pane: PanePart::Id(self.bare_pane(word, ctx)?),
+            })),
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// `target` read as tmux reads a window-index target (`new-window -t`,
+    /// `move-window -t`): a bare number is that index in the current
+    /// session, used or not; another bare word is a window of the current
+    /// session by name, then a session. Every other target is returned as
+    /// is.
+    pub fn window_index_type(&self, target: &Target, ctx: &ClientCtx) -> Result<Target, String> {
+        let Target::Session(SessionRef::Bare(word)) = target else {
+            return Ok(target.clone());
+        };
+        let word = match word.strip_prefix('=') {
+            Some(name) if !name.is_empty() => name,
+            _ => word,
+        };
+        let session = SessionRef::Id(self.current_session(ctx)?);
+        if let Ok(index) = word.parse::<u32>() {
+            return Ok(Target::Window(session, WindowRef::Index(index)));
+        }
+        let name = WindowRef::Name(word.to_string());
+        if let Ok(w) = self.window_ref(&SessionRef::Current, &name, ctx) {
+            let index = WindowRef::Index(self.windows[&w].index);
+            return Ok(Target::Window(session, index));
+        }
+        match self.session_ref(&SessionRef::Name(word.to_string()), ctx) {
+            Ok(sid) => Ok(Target::Session(SessionRef::Id(sid))),
+            Err(_) => Err(format!("can't find window: {word}")),
+        }
+    }
+}
+
+/// The item `n` places after `from` in `items` (before it when `n` is
+/// negative), wrapping round; `from` itself when it is not there.
+fn step<T: Copy + PartialEq>(items: &[T], from: T, n: i32) -> T {
+    match items.iter().position(|i| *i == from) {
+        Some(at) => {
+            let len = items.len() as i64;
+            items[(at as i64 + n as i64).rem_euclid(len) as usize]
+        }
+        None => from,
+    }
+}
+
 impl Resolve for Model {
     fn resolve_pane(&self, target: &Target, ctx: &ClientCtx) -> Result<PaneId, String> {
         match target {
             Target::Current => self.current_pane(ctx),
             Target::Pane(r) => self.pane_ref(r, ctx),
+            Target::Session(SessionRef::Bare(word)) => self.bare_pane(word, ctx),
             Target::Session(_) | Target::Window(..) => {
                 let w = self.resolve_window(target, ctx)?;
                 Ok(self.windows[&w].active)
@@ -585,6 +878,7 @@ impl Resolve for Model {
     fn resolve_window(&self, target: &Target, ctx: &ClientCtx) -> Result<WindowId, String> {
         match target {
             Target::Current => self.current_window(ctx),
+            Target::Session(SessionRef::Bare(word)) => self.bare_window(word, ctx),
             Target::Session(s) => {
                 let sid = self.session_ref(s, ctx)?;
                 Ok(self.sessions[&sid].active)
@@ -633,6 +927,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let spec = PaneSpawn {
             id,
+            session: SessionId(0),
             argv: Some(vec!["sleep".to_string(), "30".to_string()]),
             cwd: std::env::temp_dir(),
             env: Vec::new(),
@@ -677,6 +972,7 @@ mod tests {
             last_windows: Vec::new(),
             activity: Instant::now(),
             attached: 0,
+            created: std::time::SystemTime::now(),
         });
         id
     }
@@ -687,6 +983,7 @@ mod tests {
             pane: None,
             env: Vec::new(),
             client: None,
+            dialect: crate::protocol::Dialect::Grofe,
         }
     }
 
@@ -711,6 +1008,8 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            last_panes: Vec::new(),
+            floating: Vec::new(),
         });
         model.insert_window(Window {
             id: w2,
@@ -723,6 +1022,8 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            last_panes: Vec::new(),
+            floating: Vec::new(),
         });
 
         // A second session, owning nothing of "a"'s.
@@ -752,6 +1053,46 @@ mod tests {
         assert!(err.contains(&format!("can't find pane: {p2}")), "{err}");
     }
 
+    /// tmux's `last_panes`: `set_active` pushes the pane it replaces, and a
+    /// pane that leaves drops out; the active one leaving hands over to
+    /// the last pane, else the one before, else the one after.
+    #[test]
+    fn the_last_pane_stack_follows_tmux() {
+        let (a, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+        let mut w = Window {
+            id: WindowId(0),
+            session: SessionId(0),
+            index: 0,
+            name: String::new(),
+            layout: LayoutTree::new(a),
+            active: a,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+            bell_flag: false,
+            last_panes: Vec::new(),
+            floating: Vec::new(),
+        };
+        assert_eq!(w.last_pane(), None);
+        w.set_active(b);
+        w.set_active(c);
+        assert_eq!(w.last_pane(), Some(b));
+        w.set_active(b);
+        assert_eq!((w.last_pane(), w.last_panes.len()), (Some(c), 2));
+        w.set_active(b);
+        assert_eq!(w.last_pane(), Some(c));
+        // The active pane leaves: the last pane takes over and leaves the
+        // stack.
+        w.lose_pane(&[a, b, c], b);
+        assert_eq!((w.active, w.last_pane()), (c, Some(a)));
+        // With no last pane: the one before, else the one after.
+        w.last_panes.clear();
+        w.lose_pane(&[a, c], c);
+        assert_eq!(w.active, a);
+        w.lose_pane(&[a, b], a);
+        assert_eq!(w.active, b);
+    }
+
     /// R13, as tmux 3.7b does it (recorded on a private socket): selecting
     /// a window clears its bell flag, reselecting the current window does
     /// not, and neither does anything to another window's flag.
@@ -773,6 +1114,8 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 bell_flag: true,
+                last_panes: Vec::new(),
+                floating: Vec::new(),
             });
         }
         let flag = |m: &Model, w| m.windows[&w].bell_flag;
@@ -783,5 +1126,39 @@ mod tests {
         assert!(flag(&model, w1), "the window left keeps its flag");
         model.select_window(w1);
         assert!(!flag(&model, w1));
+    }
+    /// tmux's `=name` (FE.1): only the exact name, where a plain name also
+    /// takes a unique prefix.
+    #[test]
+    fn an_exact_session_never_matches_a_prefix() {
+        let mut model = Model::new(true);
+        let xy = add_session(&mut model, "xy", WindowId(0));
+        let target = |r: SessionRef| Target::Session(r);
+        let name = |s: &str| target(SessionRef::Name(s.to_string()));
+        let exact = |s: &str| target(SessionRef::Exact(s.to_string()));
+        assert_eq!(model.resolve_session(&name("x"), &ctx()), Ok(xy));
+        assert_eq!(
+            model.resolve_session(&exact("x"), &ctx()),
+            Err("can't find session: x".to_string())
+        );
+        assert_eq!(model.resolve_session(&exact("xy"), &ctx()), Ok(xy));
+        let x = add_session(&mut model, "x", WindowId(0));
+        assert_eq!(model.resolve_session(&exact("x"), &ctx()), Ok(x));
+        assert_eq!(
+            model.resolve_session(&target(SessionRef::Mouse), &ctx()),
+            Err("no mouse target".to_string())
+        );
+    }
+
+    /// tmux's offsets wrap round in both directions.
+    #[test]
+    fn offsets_step_and_wrap() {
+        let items = [1, 2, 3];
+        assert_eq!(step(&items, 1, 1), 2);
+        assert_eq!(step(&items, 3, 1), 1);
+        assert_eq!(step(&items, 1, -1), 3);
+        assert_eq!(step(&items, 2, 5), 1);
+        assert_eq!(step(&items, 2, -7), 1);
+        assert_eq!(step(&items, 9, 1), 9);
     }
 }

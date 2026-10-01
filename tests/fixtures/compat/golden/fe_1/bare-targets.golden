@@ -1,0 +1,138 @@
+$ new-session -d -s other -x 200 -y 50
+? 0
+$ new-session -d -s 9 -x 200 -y 50
+? 0
+$ new-session -d -s main -x 200 -y 50
+? 0
+$ new-window -d -t main
+? 0
+$ new-window -d -t main -n foo
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ select-pane -t 1
+? 0
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+main:1.1
+? 0
+$ select-pane -t 3
+? 0
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+main:1.3
+? 0
+$ display -p -t 2 '#{session_name}:#{window_index}.#{pane_index}'
+main:1.2
+? 0
+$ display -p -t foo '#{session_name}:#{window_index}.#{pane_index}'
+main:3.1
+? 0
+$ display -p -t oth '#{session_name}:#{window_index}.#{pane_index}'
+other:1.1
+? 0
+$ display -p -t 3.1 '#{session_name}:#{window_index}.#{pane_index}'
+main:3.1
+? 0
+$ select-pane -t 9
+? 0
+$ select-pane -t 1x
+! can't find pane: 1x
+? 1
+$ list-panes -t 2 -F '#{session_name}:#{window_index}.#{pane_index}'
+main:2.1
+? 0
+$ list-panes -t oth -F '#{session_name}:#{window_index}.#{pane_index}'
+other:1.1
+? 0
+$ list-panes -t 7 -F '#{pane_index}'
+! can't find window: 7
+? 1
+$ has-session -t 1
+! can't find session: 1
+? 1
+$ list-windows -t 1
+! can't find session: 1
+? 1
+$ set -t 2 @bare yes
+? 0
+$ show -t main @bare
+@bare yes
+? 0
+$ set -w -t 2 @bare w
+? 0
+$ show -w -t main:1 @bare
+@bare w
+? 0
+$ select-layout -t 2 even-vertical
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_left},#{pane_top}'
+1 0,0
+2 0,17
+3 0,34
+? 0
+$ new-window -d -t 2
+! create window failed: index 2 in use
+? 1
+$ new-window -d -t foo
+! create window failed: index 3 in use
+? 1
+$ new-window -d -t zz
+! can't find window: zz
+? 1
+$ new-window -d -t 6
+? 0
+$ new-window -d -t oth
+? 0
+$ move-window -s main:6 -t 8
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index}'
+9:1
+main:1
+main:2
+main:3
+main:8
+other:1
+other:2
+? 0
+$ select-window -t 2
+? 0
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+main:2.1
+? 0
+$ new-window -d -t main:7 -n 9
+? 0
+$ display -p -t 9 '#{session_name}:#{window_index}.#{pane_index}'
+main:7.1
+? 0
+$ list-panes -t 9 -F '#{session_name}:#{window_index}.#{pane_index}'
+main:7.1
+? 0
+$ set -t 9 @nine yes
+? 0
+$ show -t main @nine
+@nine yes
+? 0
+$ list-panes -t =9 -F '#{session_name}:#{window_index}.#{pane_index}'
+main:7.1
+? 0
+$ list-panes -t =main -F '#{session_name}:#{window_index}.#{pane_index}'
+main:2.1
+? 0
+$ list-windows -t =9 -F '#{session_name}:#{window_index}'
+9:1
+? 0
+$ has-session -t =ma
+! can't find session: ma
+? 1
+$ select-pane -t =x
+! can't find pane: =x
+? 1
+$ select-pane -t =main
+! can't find pane: =main
+? 1
+$ select-window -t =9
+? 0
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+main:7.1
+? 0

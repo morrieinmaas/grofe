@@ -327,7 +327,7 @@ fn runtime_bind_key_is_marked_and_survives_reload() {
     assert_eq!(line, "bind-key -T prefix y split-window  # runtime");
     assert_eq!(
         key_line(&srv, "prefix", "c"),
-        "bind-key -T prefix c new-window -c \"#{pane_current_path}\"  # default"
+        "bind-key -T prefix c new-window -c \"#{pane_current_path}\"  # default: Create a new window"
     );
     srv.cmd(&["reload"]).expect("reload");
     assert_eq!(key_line(&srv, "prefix", "y"), line);
@@ -387,6 +387,23 @@ fn a_sequence_binding_runs_every_command() {
     srv.wait_for(|| panes(&srv).len() == 2, Duration::from_secs(10))
         .expect("two panes");
     assert_left_active(&srv);
+}
+
+/// A config key bound to a `command-alias` name runs the alias's command:
+/// the alias expands when the config's bindings load, as `bind-key`
+/// expands it, since a key press runs its commands as bound.
+#[test]
+fn a_config_binding_to_an_alias_runs_its_command() {
+    let srv = start(&[(
+        "config.toml",
+        "command-alias = [\"twopanes=split-window -h\"]\n[keys.prefix]\nz = \"twopanes\"\n",
+    )]);
+    eprintln!("KEY {:?}", key_line(&srv, "prefix", "z"));
+    let mut a = attach(&srv);
+    a.wait_for_output(b"\x1b[2J", 0);
+    a.send("\x02z");
+    srv.wait_for(|| panes(&srv).len() == 2, Duration::from_secs(10))
+        .expect("two panes");
 }
 
 /// R12: a quoted `';'` in a binding string is one literal argument.
@@ -508,7 +525,7 @@ fn an_empty_command_unbinds_a_stock_key() {
     fs::remove_file(config_dir(&srv).join("config.toml")).expect("rm");
     srv.cmd(&["reload"]).expect("reload");
     assert!(
-        key_line(&srv, "prefix", "\\%").ends_with("  # default"),
+        key_line(&srv, "prefix", "\\%").ends_with("  # default: Split window horizontally"),
         "{}",
         keys(&srv, "prefix")
     );

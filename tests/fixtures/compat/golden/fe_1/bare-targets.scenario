@@ -1,0 +1,61 @@
+# TC.13 regression: a target with no `:` is read as cmd-find.c reads it,
+# by the kind of target the verb wants. As a pane (select-pane,
+# display -t, set -t, select-layout -t), a number is a pane index in the
+# current window, then a window of the current session, then a session;
+# as a window (list-panes -t, select-window), a window, then a session; as
+# a session (has-session), a session only; as a window index (new-window
+# -t, move-window -t), an index of the current session whether used or
+# not. `w.p` is pane p of window w. canopy's `prefix c` ends with
+# `select-pane -t 1`. A number that is no window index is then a window
+# name, before a session. `=word` is exact as a session or a window, and
+# a literal word as a pane.
+$ new-session -d -s other -x 200 -y 50
+$ new-session -d -s 9 -x 200 -y 50
+$ new-session -d -s main -x 200 -y 50
+$ new-window -d -t main
+$ new-window -d -t main -n foo
+$ split-window -d -t main:1 cat
+$ split-window -d -t main:1 cat
+$ select-pane -t 1
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+$ select-pane -t 3
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+$ display -p -t 2 '#{session_name}:#{window_index}.#{pane_index}'
+$ display -p -t foo '#{session_name}:#{window_index}.#{pane_index}'
+$ display -p -t oth '#{session_name}:#{window_index}.#{pane_index}'
+$ display -p -t 3.1 '#{session_name}:#{window_index}.#{pane_index}'
+$ select-pane -t 9
+$ select-pane -t 1x
+$ list-panes -t 2 -F '#{session_name}:#{window_index}.#{pane_index}'
+$ list-panes -t oth -F '#{session_name}:#{window_index}.#{pane_index}'
+$ list-panes -t 7 -F '#{pane_index}'
+$ has-session -t 1
+$ list-windows -t 1
+$ set -t 2 @bare yes
+$ show -t main @bare
+$ set -w -t 2 @bare w
+$ show -w -t main:1 @bare
+$ select-layout -t 2 even-vertical
+$ list-panes -t main:1 -F '#{pane_index} #{pane_left},#{pane_top}'
+$ new-window -d -t 2
+$ new-window -d -t foo
+$ new-window -d -t zz
+$ new-window -d -t 6
+$ new-window -d -t oth
+$ move-window -s main:6 -t 8
+$ list-windows -a -F '#{session_name}:#{window_index}'
+$ select-window -t 2
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'
+$ new-window -d -t main:7 -n 9
+$ display -p -t 9 '#{session_name}:#{window_index}.#{pane_index}'
+$ list-panes -t 9 -F '#{session_name}:#{window_index}.#{pane_index}'
+$ set -t 9 @nine yes
+$ show -t main @nine
+$ list-panes -t =9 -F '#{session_name}:#{window_index}.#{pane_index}'
+$ list-panes -t =main -F '#{session_name}:#{window_index}.#{pane_index}'
+$ list-windows -t =9 -F '#{session_name}:#{window_index}'
+$ has-session -t =ma
+$ select-pane -t =x
+$ select-pane -t =main
+$ select-window -t =9
+$ display -p '#{session_name}:#{window_index}.#{pane_index}'

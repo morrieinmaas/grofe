@@ -1,0 +1,1 @@
+~/.tmux.conf:9: no native spelling for select-pane -t (a tmux-only target or form): bind O select-pane -t :.+

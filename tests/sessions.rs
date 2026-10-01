@@ -140,6 +140,8 @@ fn a_server_with_no_sessions_yet_stays_up() {
     assert!(srv.is_running());
 }
 
+/// The client's `update-environment` variables (here `DISPLAY`) and cwd;
+/// since TC.5 nothing else of the client's environment, as tmux 3.7b.
 #[test]
 fn session_panes_get_the_clients_env_and_cwd() {
     let srv = TestServer::start();
@@ -147,12 +149,12 @@ fn session_panes_get_the_clients_env_and_cwd() {
     fs::create_dir(&dir).unwrap();
     let out = srv.home.join("env.out");
     let script = format!(
-        "echo \"$T15A_VAR $(pwd -P)\" > '{}'; sleep 30",
+        "echo \"$DISPLAY $(pwd -P)\" > '{}'; sleep 30",
         out.display()
     );
 
     let mut cmd = srv.command();
-    cmd.env("T15A_VAR", "from-client").args([
+    cmd.env("DISPLAY", "from-client").args([
         "new-session",
         "-d",
         "-s",
@@ -219,11 +221,12 @@ fn kill_window_removes_it_and_the_last_one_closes_session_then_server() {
     srv.cmd(&["kill-window", "-t", "a:1"]).unwrap();
     let out = lines(&srv.cmd(&["list-windows", "-t", "a"]).unwrap());
     assert_eq!(out.len(), 1, "{out:?}");
-    assert!(out[0].starts_with("2: "), "{out:?}");
+    // grofe's `renumber-windows on`: the window left is numbered again.
+    assert!(out[0].starts_with("1: "), "{out:?}");
     assert!(out[0].contains("(active)"), "{out:?}");
 
     // The last window closes its session; others are untouched.
-    srv.cmd(&["kill-window", "-t", "a:2"]).unwrap();
+    srv.cmd(&["kill-window", "-t", "a:1"]).unwrap();
     assert!(srv.cmd(&["has-session", "-t", "a"]).is_err());
     assert!(srv.is_running());
 
@@ -380,4 +383,78 @@ fn grofe_pane_from_another_server_is_ignored() {
     let out = run_bounded(cmd, CMD_TIMEOUT);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout.trim(), b_pane, "a foreign GROFE_PANE was used");
+}
+
+/// FE.2: natively too, `list-windows -a` and `list-panes -a`/`-s` list
+/// every session's windows and panes, each line saying where it is, and
+/// `-f` keeps only the lines its format is true for.
+#[test]
+fn lists_take_all_session_and_filter_flags() {
+    let srv = TestServer::start();
+    new_session(&srv, "b");
+    new_session(&srv, "a");
+    let windows = srv.cmd(&["list-windows", "-a", "-F", "#{session_name}"]);
+    assert_eq!(windows.expect("list-windows -a"), "a\nb\n");
+    let all = srv.cmd(&["list-windows", "-a"]).expect("list-windows -a");
+    let heads: Vec<&str> = all.lines().filter_map(|l| l.split(' ').next()).collect();
+    assert_eq!(heads, ["a:1:", "b:1:"]);
+    srv.cmd(&["split-window", "-t", "a", "sleep", "30"])
+        .expect("split");
+    let panes = srv.cmd(&["list-panes", "-a"]).expect("list-panes -a");
+    let heads: Vec<&str> = panes.lines().filter_map(|l| l.split(' ').next()).collect();
+    assert_eq!(heads, ["a:1.1:", "a:1.2:", "b:1.1:"]);
+    let session = srv
+        .cmd(&["list-panes", "-s", "-t", "a"])
+        .expect("list-panes -s");
+    assert!(session.starts_with("1.1: "), "{session}");
+    let active = [
+        "list-panes",
+        "-a",
+        "-f",
+        "#{pane_active}",
+        "-F",
+        "#{session_name}",
+    ];
+    assert_eq!(srv.cmd(&active).expect("list-panes -f"), "a\nb\n");
+    let named = ["list-sessions", "-f", "#{==:#{session_name},b}"];
+    assert_eq!(lines(&srv.cmd(&named).expect("ls -f")), ["b: 1 windows"]);
+}
+
+/// FE.2: `show-messages` lists a request's commands as they fire, as tmux
+/// 3.7b logs them: after a failing command the rest never ran, so it is
+/// not listed; the error is.
+#[test]
+fn show_messages_lists_only_the_commands_that_ran() {
+    let srv = TestServer::start();
+    new_session(&srv, "main");
+    let chain = [
+        "display-message",
+        "-p",
+        "a",
+        ";",
+        "has-session",
+        "-t",
+        "nope",
+        ";",
+        "display-message",
+        "-p",
+        "b",
+    ];
+    assert!(srv.cmd(&chain).is_err());
+    let log = srv.cmd(&["show-messages"]).expect("show-messages");
+    let texts: Vec<&str> = log
+        .lines()
+        .filter_map(|l| l.split_once(": ").map(|(_, t)| t))
+        .filter_map(|t| t.split_once(' ').map(|(_, t)| t))
+        .collect();
+    assert_eq!(
+        &texts[..4],
+        [
+            "command: show-messages",
+            "message: can't find session: nope",
+            "command: has-session -t nope",
+            "command: display-message -p a",
+        ],
+        "{log}"
+    );
 }

@@ -1,0 +1,11 @@
+# The shape of every smug file the owner keeps (session, root, one
+# main-vertical window of three panes, no commands), with generic names.
+session: demo
+root: ~
+windows:
+  - name: main
+    layout: main-vertical
+    commands: []
+    panes:
+      - commands: []
+      - commands: []

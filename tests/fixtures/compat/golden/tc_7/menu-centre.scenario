@@ -1,0 +1,8 @@
+# TC.7 (M36-R5): a menu at -x C -y C, with a title, a separator, a disabled
+# item and keys in tmux's key column. display-menu blocks until the menu
+# closes, so it runs in the background ($&).
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$& display-menu -c {client} -T Title -x C -y C First a "display-message one" "" Second b "display-message two" -Disabled c "display-message three"
+screen Second
