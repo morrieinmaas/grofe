@@ -16,19 +16,18 @@
 //! 5. a bell in the agent session runs the plugin's `alert-bell` hook,
 //!    which forwards it to the origin window: `window_flags` shows `!`.
 //!
-//! The brief's last case, a nested attach to the popup's own session
-//! refused by TC.1's nesting rule, is not tmux 3.7b's behaviour: tmux
-//! attaches, and shows main nested in the popup. grofe refuses it, so
-//! those two steps are listed below as a gap (TC.1, TC.6).
+//! The brief's last case assumed a nested attach to the popup's own
+//! session is refused. tmux 3.7b attaches instead (its nesting check
+//! refuses only a client on one of its panes' terminals), and by the
+//! coordinator's ruling grofe does the same in the tmux dialect:
+//! `golden/tp_10/claude`'s last steps, and `popup-own-session`, which also
+//! detaches the nested client again (no hang, no recursion: the window
+//! shrinks to the popup's size and back). `smaller-window` pins the edge
+//! tmux draws round a window smaller than its client, which that shows.
 
 use std::path::Path;
 
 use crate::tp::check;
-
-/// The golden's last two steps: a popup attaching to main from main's own
-/// client.
-const NESTED_OWN_SESSION: &str = "grofe refuses a nested attach to the popup's own session (TC.1's \
-     nesting rule); tmux 3.7b attaches and shows main in the popup";
 
 #[test]
 fn claude_session_manager_matches_its_golden() {
@@ -41,12 +40,15 @@ fn claude_session_manager_matches_its_golden() {
         eprintln!("SKIPPED tp_10: {dir}/fzf would run the picker the golden recorded without fzf");
         return;
     }
-    check(
-        "tp_10",
-        "claude",
-        &[
-            ("screen", NESTED_OWN_SESSION),
-            ("$ list-clients -F '#{session_name}'", NESTED_OWN_SESSION),
-        ],
-    );
+    check("tp_10", "claude", &[]);
+}
+
+#[test]
+fn a_popup_attaching_to_its_own_session_matches_tmux() {
+    check("tp_10", "popup-own-session", &[]);
+}
+
+#[test]
+fn a_window_smaller_than_its_client_has_tmux_s_edge() {
+    check("tp_10", "smaller-window", &[]);
 }
