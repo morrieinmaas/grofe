@@ -660,14 +660,17 @@ impl PaneHandle {
     /// With each row goes which of its cells an intact tab covers (the
     /// blanks it moved over to its stop, as [`Self::capture_lines`] reads
     /// a tab), which copy mode treats as tmux treats a tab's padding.
-    pub fn copy_grid(&self, mut row: impl FnMut(Vec<SnapCell>, Vec<bool>)) -> (usize, CursorState) {
+    /// Both are buffers reused for the next row.
+    pub fn copy_grid(&self, mut row: impl FnMut(&mut [SnapCell], &[bool])) -> (usize, CursorState) {
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size();
         let cols = grid.columns();
+        let mut cells = Vec::with_capacity(cols);
+        let mut covered = vec![false; cols];
         for r in -(history as i32)..grid.screen_lines() as i32 {
             let line = &grid[Line(r)];
-            let mut covered = vec![false; cols];
+            covered.fill(false);
             for col in 0..cols {
                 if line[Column(col)].c != '\t' || covered[col] {
                     continue;
@@ -681,7 +684,8 @@ impl PaneHandle {
                     covered[col + 1..stop].fill(true);
                 }
             }
-            row(snap_row(line, cols), covered);
+            snap_row_into(&mut cells, line, cols);
+            row(&mut cells, &covered);
         }
         (history, cursor_state(&emu.term))
     }
@@ -746,20 +750,30 @@ fn snap_row(
     row: &alacritty_terminal::grid::Row<term::cell::Cell>,
     columns: usize,
 ) -> Vec<SnapCell> {
-    (0..columns)
-        .map(|c| {
-            let cell = &row[Column(c)];
-            SnapCell {
-                c: cell.c,
-                fg: cell.fg,
-                bg: cell.bg,
-                flags: cell.flags.difference(written::WRITTEN),
-                zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
-                underline_color: cell.underline_color(),
-                hyperlink: cell.hyperlink(),
-            }
-        })
-        .collect()
+    let mut cells = Vec::with_capacity(columns);
+    snap_row_into(&mut cells, row, columns);
+    cells
+}
+
+/// [`snap_row`] into `cells`, replacing what it held.
+fn snap_row_into(
+    cells: &mut Vec<SnapCell>,
+    row: &alacritty_terminal::grid::Row<term::cell::Cell>,
+    columns: usize,
+) {
+    cells.clear();
+    cells.extend((0..columns).map(|c| {
+        let cell = &row[Column(c)];
+        SnapCell {
+            c: cell.c,
+            fg: cell.fg,
+            bg: cell.bg,
+            flags: cell.flags.difference(written::WRITTEN),
+            zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+            underline_color: cell.underline_color(),
+            hyperlink: cell.hyperlink(),
+        }
+    }));
 }
 
 fn cursor_state(term: &Term<Listener>) -> CursorState {

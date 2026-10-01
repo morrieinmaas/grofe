@@ -4163,15 +4163,15 @@ mod tests {
         let area = rect(80, 24);
         tree.split(area, PaneId(0), Dir::Horizontal, PaneId(1), SplitSize::Half)
             .unwrap();
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         tree.apply_tmux_layout(&flat_layout(MAX_LAYOUT_CELLS), &panes)
             .unwrap();
-        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert!(crate::thread_cpu_time() - start < std::time::Duration::from_secs(2));
         let got = tmux_layout(&tree.export(rect(8191, 1)), &[], true);
         assert_eq!(&got[5..], "8191x1,0,0{1x1,0,0,0,8189x1,2,0,1}");
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         let err = tree.apply_tmux_layout(&flat_layout(30000), &panes);
         assert_eq!(err.unwrap_err(), "invalid layout");
-        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert!(crate::thread_cpu_time() - start < std::time::Duration::from_secs(2));
     }
 }

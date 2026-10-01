@@ -906,10 +906,10 @@ mod tests {
     fn fnmatch_does_not_backtrack_exponentially() {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*b";
         let s = "a".repeat(30);
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()));
         assert!(fnmatch(pattern.as_bytes(), format!("{s}b").as_bytes()));
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(50), "{took:?}");
     }
 
@@ -1005,11 +1005,11 @@ mod tests {
         let open = "#{!:".repeat(n);
         let closed = format!("{open}x{}", "}".repeat(n));
         let flat_open = "#{".repeat(n);
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert_eq!(expand(&closed, &vars(&[])), "0");
         assert_eq!(expand(&open, &vars(&[])), open);
         assert_eq!(expand(&flat_open, &vars(&[])), flat_open);
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 
@@ -1020,13 +1020,13 @@ mod tests {
     fn a_long_chain_of_conditions_is_not_nesting() {
         let arms = 20_000;
         let chain = |last: &str| format!("{}{last}{}", "#{?0,x,".repeat(arms), "}".repeat(arms));
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert_eq!(expand(&chain("last"), &vars(&[])), "last");
         assert_eq!(
             expand(&chain("#{?on,hit,miss}"), &vars(&[("on", "1")])),
             "hit"
         );
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 

@@ -393,3 +393,27 @@ fn a_huge_count_does_not_take_the_server_down() {
     assert_eq!(words[0], "0", "{got}");
     assert_eq!(words[1], words[2], "{got}");
 }
+
+/// A count of keys that are not only motions runs every repeat, even when
+/// the cursor stays put: three copies make three buffers.
+#[test]
+fn a_count_of_copies_runs_each_one() {
+    let srv = start();
+    srv.cmd(&[
+        "bind-key",
+        "-T",
+        "copy-mode-vi",
+        "y",
+        "send-keys",
+        "-X",
+        "copy-selection-no-clear",
+    ])
+    .unwrap();
+    srv.cmd(&["copy-mode", "-t", "main"]).unwrap();
+    srv.cmd(&["send-keys", "-t", "main", "-X", "begin-selection"])
+        .unwrap();
+    srv.cmd(&["send-keys", "-t", "main", "-N", "3", "y"])
+        .unwrap();
+    let names = srv.cmd(&["list-buffers", "-F", "#{buffer_name}"]).unwrap();
+    assert_eq!(names.lines().count(), 3, "{names}");
+}

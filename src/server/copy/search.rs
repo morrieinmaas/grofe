@@ -2390,9 +2390,9 @@ mod tests {
             top - start <= SEARCH_MAX_LINE.div_ceil(80) + 1,
             "{start} {top}"
         );
-        let t = Instant::now();
+        let t = crate::thread_cpu_time();
         let first = view_marks(&m).unwrap();
-        let took = t.elapsed();
+        let took = crate::thread_cpu_time() - t;
         let limit = if cfg!(debug_assertions) { 500 } else { 10 };
         assert!(took < Duration::from_millis(limit), "{took:?}");
         let again = view_marks(&m).unwrap();
