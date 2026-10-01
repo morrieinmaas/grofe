@@ -86,6 +86,31 @@ $ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
 $ set -g @claude_session_prefix mai
 ? 0
 keys C-b a
+screen Popup window already open
+| zz00
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 🫪  Popup window already open
 keys zz11
 screen zz00zz11
 | zz00zz11

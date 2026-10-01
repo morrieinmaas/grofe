@@ -69,6 +69,9 @@ pub enum KeyCode {
     Delete,
     /// `F(1)` is F1.
     F(u8),
+    /// tmux's `Any`: bound in a table, it takes every key that table
+    /// does not bind (see [`KeyTables::lookup`]); never typed or sent.
+    Any,
     /// A bindable mouse key (`MouseDown1Pane`, TC.10); never sent to a
     /// pane as a key.
     Mouse(MouseKey),
@@ -364,6 +367,7 @@ const NAMES: &[(&str, KeyCode)] = &[
     ("Insert", KeyCode::Insert),
     ("DC", KeyCode::Delete),
     ("Delete", KeyCode::Delete),
+    ("Any", KeyCode::Any),
 ];
 
 /// Parse a tmux key name (`C-b`, `M-Up`, `^a`, `PPage`, `%`), as tmux 3.7b
@@ -1242,6 +1246,15 @@ impl KeyTables {
                 .min_by_key(|(k, _)| k.to_string())
                 .map(|(_, b)| b)
         })
+    }
+
+    /// What a key pressed in `table` runs, as tmux 3.7b's key walk finds
+    /// it: [`KeyTables::get`], else the table's `Any` binding (recorded:
+    /// `Any` takes keys and mouse events alike, the prefix key still wins,
+    /// and an exact binding wins over it).
+    pub fn lookup(&self, table: &str, key: &Key) -> Option<&Binding> {
+        self.get(table, key)
+            .or_else(|| self.exact(table, &Key::new(KeyCode::Any, Mods::default())))
     }
 }
 
@@ -2346,7 +2359,7 @@ impl KeyState {
                 self.set_table(PREFIX_TABLE);
                 return Routed::Consumed;
             }
-            if let Some(b) = tables.get(&self.table, &key) {
+            if let Some(b) = tables.lookup(&self.table, &key) {
                 if repeating && !b.repeat {
                     // A non-repeating key ends the repeat and is tried
                     // again from root, as if typed fresh.
@@ -3276,6 +3289,45 @@ mod tests {
         assert_eq!(c.state.table(), ROOT_TABLE);
         // Back in root, `%` is typing.
         assert_eq!(c.send(b"%", t), vec![pane(b"%")]);
+    }
+
+    /// tmux 3.7b, recorded through an attached client: a table's `Any`
+    /// takes every key it does not bind, ahead of the retry in root; the
+    /// prefix key still wins; root's `Any` takes what root leaves, an
+    /// unbound key after the prefix included.
+    #[test]
+    fn any_takes_every_key_its_table_leaves_unbound() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables.bind("kp", k("Any"), argv(&["any-kp"]), false);
+        c.tables
+            .bind(ROOT_TABLE, k("C-h"), argv(&["root-ch"]), false);
+        c.tables
+            .bind(ROOT_TABLE, k("C-q"), argv(&["root-cq"]), false);
+        c.tables.bind("kp", k("C-q"), argv(&["kp-cq"]), false);
+        for (key, want) in [
+            (&b"\x08"[..], "any-kp"),
+            (b"q", "any-kp"),
+            (b"\x11", "kp-cq"),
+        ] {
+            c.state.set_table("kp");
+            assert_eq!(c.send(key, t), vec![cmd(&[want])], "{key:?}");
+            assert_eq!(c.state.table(), ROOT_TABLE);
+        }
+        c.state.set_table("kp");
+        assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
+        assert_eq!(c.state.table(), PREFIX_TABLE);
+        assert_eq!(k("Any").to_string(), "Any");
+
+        c.state.set_table(ROOT_TABLE);
+        c.tables
+            .bind(ROOT_TABLE, k("Any"), argv(&["any-root"]), false);
+        assert_eq!(c.send(b"z", t), vec![cmd(&["any-root"])]);
+        assert_eq!(c.send(b"\x08", t), vec![cmd(&["root-ch"])]);
+        assert_eq!(
+            c.send(b"\x02Q", t),
+            vec![Routed::Consumed, cmd(&["any-root"])]
+        );
     }
 
     #[test]

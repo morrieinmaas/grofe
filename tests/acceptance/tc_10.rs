@@ -600,6 +600,33 @@ fn a_custom_table_takes_the_next_key() {
     assert!(keys.contains("-T mine x set -g @t yes"), "{keys}");
 }
 
+/// tmux's `Any` takes mouse events as it takes keys (recorded on tmux 3.7b
+/// through an attached client): a click in a custom table runs the table's
+/// `Any` and ends the table; root's `Any` takes a click root leaves
+/// unbound.
+#[test]
+fn any_takes_a_mouse_event_its_table_leaves_unbound() {
+    let srv = start("exec cat");
+    bind(&srv, &["-T", "kp", "Any", "set", "-g", "@any", "kp"]);
+    bind(&srv, &["-n", "C-y", "switch-client", "-T", "kp"]);
+    let mut a = attach(&srv, 80, 24);
+    a.send(b"\x19");
+    let entered = wait_until(|| var(&srv, "main", "#{client_key_table}") == "kp", WAIT);
+    assert!(
+        entered.is_ok(),
+        "{}",
+        var(&srv, "main", "#{client_key_table}")
+    );
+    click(&mut a, 3, 5, 5);
+    wait_opt(&srv, "@any", "kp");
+    let back = wait_until(|| var(&srv, "main", "#{client_key_table}") == "root", WAIT);
+    assert!(back.is_ok(), "{}", var(&srv, "main", "#{client_key_table}"));
+
+    bind(&srv, &["-n", "Any", "set", "-g", "@any", "root"]);
+    click_alone(&mut a, 3, 5, 5);
+    wait_opt(&srv, "@any", "root");
+}
+
 /// Case 8 (D4): M-S-Tab from a kitty terminal sends a pane nothing.
 #[test]
 fn meta_shift_tab_sends_nothing() {
