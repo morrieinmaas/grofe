@@ -85,7 +85,9 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
 
 /// `args` with a pipe command's command expanded against `pane`, as tmux
 /// expands it before copying (so `#{selection_present}` still reads 1);
-/// any other command's `args` unchanged.
+/// any other command's `args` unchanged. A `--` goes before the expanded
+/// text, so text that reads as a flag (a pane title of `-C`) stays the
+/// command, as tmux expands after parsing.
 pub fn expand(state: &State, pane: PaneId, args: &[String]) -> Vec<String> {
     let mut args = args.to_vec();
     if !args
@@ -105,9 +107,13 @@ pub fn expand(state: &State, pane: PaneId, args: &[String]) -> Vec<String> {
         }
         at += 1;
     }
-    if let Some(arg) = args.get_mut(at) {
+    if let Some(arg) = args.get(at) {
         let vars = FormatCtx::new(&state.model, pane);
-        *arg = cmd::expand(arg, &ServerVars::new(state, pane, &vars));
+        let expanded = cmd::expand(arg, &ServerVars::new(state, pane, &vars));
+        args[at] = expanded;
+        if args[at - 1] != "--" {
+            args.insert(at, "--".to_string());
+        }
     }
     args
 }

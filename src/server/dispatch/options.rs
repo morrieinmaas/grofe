@@ -2707,6 +2707,12 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
+            // What the pane reported with OSC 7, decoded.
+            "pane_path" => p
+                .handle
+                .reported_cwd()
+                .map(|c| c.display().to_string())
+                .unwrap_or_default(),
             "pane_left" => match w.floating(p.id) {
                 Some(f) => f.x.to_string(),
                 None => pane_origin(w, p.id)?.0.to_string(),

@@ -343,8 +343,9 @@ The clipboard follows `set-clipboard`:
   empty selection parameter as tmux sends it, to every client whose
   current window holds the pane. A client of another session, or one on
   another window, gets nothing. Under `off` nothing is sent.
-- A pane's own OSC 52 store makes a new buffer and reaches the session's
-  clients only under `on`. Under `external` and `off` it is dropped whole,
+- A pane's own OSC 52 store makes a new buffer and reaches the clients
+  showing the pane's window, with the pane's own selection parameter (kept
+  to tmux's `cpqs01234567`), only under `on`. Under `external` and `off` it is dropped whole,
   as tmux's `input_osc_52` does: the plan's case that `external` still
   forwards it does not match tmux.
 - A pane cannot read the clipboard: an OSC 52 query (`?`) is neither
@@ -355,14 +356,12 @@ Where grofe differs:
 
 - **Bounds.** A pane's store is acted on only up to what tmux's default
   `input-buffer-size` (1 MiB of sequence) holds, as tmux does. A copy is
-  sent as OSC 52 only up to 8 MiB; tmux sends any size. A pipe command
+  sent as OSC 52 only up to 8 MiB; tmux sends any size. An OSC 52 that
+  does not fit a blocked client's held output (16 MiB) is dropped and
+  logged; tmux never drops one. A pipe command
   still running after 60 s has its process group killed, so a hung
   command cannot linger; tmux never kills one. A clipboard tool that
   stays to serve the selection forks first, so it is not touched.
-- **Recipients of a pane's store.** grofe forwards it to every client of
-  the session (T3.3), tmux only to those showing the pane's window.
-- **The selection parameter of a pane's store** is `c` when forwarded,
-  whatever the pane sent; tmux passes the pane's own (`p`, `s`, empty).
 - **No `pane-set-clipboard` hook** runs.
 - **The `prefix` argument** is accepted and ignored, as for the copy
   commands.

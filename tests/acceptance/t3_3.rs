@@ -329,10 +329,11 @@ fn file_uri(path: &Path) -> String {
     )
 }
 
-/// Case 6: OSC 7 sets `pane_current_path`, over the sampled cwd of the
-/// shell (which stays in `A`), whole and split across two writes.
+/// Case 6: OSC 7 sets `pane_path`, whole and split across two writes.
+/// `pane_current_path` stays the shell's own cwd (`A`), as tmux 3.7b reads
+/// it from the process, never from what the pane wrote (TM.5 review).
 #[test]
-fn osc7_sets_the_pane_current_path() {
+fn osc7_sets_the_pane_path() {
     let a_dir = tempfile::tempdir().expect("tempdir");
     let root = tempfile::tempdir().expect("tempdir");
     let b1 = root.path().join("b one");
@@ -362,11 +363,13 @@ fn osc7_sets_the_pane_current_path() {
     for (target, want) in [("main:1", &b1), ("main:2", &b2)] {
         srv.cmd(&["send-keys", "-t", target, "Enter"])
             .expect("send-keys");
+        wait_display(&srv, target, "#{pane_path}", &want.display().to_string());
+        let real = a_dir.path().canonicalize().expect("canonicalize");
         wait_display(
             &srv,
             target,
             "#{pane_current_path}",
-            &want.display().to_string(),
+            &real.display().to_string(),
         );
     }
 }

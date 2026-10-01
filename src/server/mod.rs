@@ -302,7 +302,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
         kind @ (PaneEventKind::Title(_)
         | PaneEventKind::Bell
-        | PaneEventKind::Clipboard(_)
+        | PaneEventKind::Clipboard { .. }
         | PaneEventKind::Cwd(_)
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),

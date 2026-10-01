@@ -206,8 +206,8 @@ fn osc52_goes_to_the_clients_showing_the_pane() {
 /// Case 4: a `copy-pipe` whose command sleeps 10 s delays neither the
 /// next key nor a frame: the key after it moves the cursor at once, and
 /// two clients typing into another session see no frame gap over 50 ms
-/// (or twice the machine's own baseline, as TC.4 allows) while it runs.
-/// The command still finishes.
+/// (or twice the machine's own baseline over as long a run, as TC.4
+/// allows: [`frame_bound`]) while it runs. The command still finishes.
 #[test]
 fn a_slow_pipe_delays_neither_a_key_nor_a_frame() {
     let dir = tempfile::tempdir().unwrap();
@@ -233,7 +233,9 @@ fn a_slow_pipe_delays_neither_a_key_nor_a_frame() {
             text.lines().last().unwrap_or_default().starts_with("[s]")
         });
     }
-    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(3), || false);
+    // As long as the pipe runs, so a loaded machine's worst gap counts in
+    // the baseline as it would during the pipe.
+    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(10), || false);
 
     select_first_line(&srv);
     assert_eq!(display(&srv, "#{copy_cursor_y}"), "0");
@@ -248,7 +250,7 @@ fn a_slow_pipe_delays_neither_a_key_nor_a_frame() {
 
     let (longest, frames) = force_frames(&mut a, &mut b, Duration::from_secs(30), || done.exists());
     let ran = pressed.elapsed();
-    let bound = Duration::from_millis(50).max(baseline * 2);
+    let bound = frame_bound(baseline);
     eprintln!("pipe ran {ran:?}; longest frame gap {longest:?}, baseline {baseline:?}");
     wait_file(&done, "slept\n");
     assert!(
@@ -265,6 +267,16 @@ fn a_slow_pipe_delays_neither_a_key_nor_a_frame() {
 
 /// A forced frame every 1/60 s.
 const FRAME: Duration = Duration::from_micros(16_667);
+/// The longest frame interval the acceptance text allows.
+const FRAME_LIMIT: Duration = Duration::from_millis(50);
+
+/// The frame gap to hold a run to, as `tests/sources.rs` does: the
+/// acceptance limit, or on a machine whose own baseline is already near it
+/// (a loaded host), twice that. A frame that waited on the pipe would wait
+/// its 10 s, far past either.
+fn frame_bound(baseline: Duration) -> Duration {
+    FRAME_LIMIT.max(baseline * 2)
+}
 
 /// Types into `a` at 60 Hz and reads both clients until `done` holds or
 /// `max` passes: the longest gap between two reads that brought a client
@@ -538,4 +550,79 @@ fn the_forms_copy_and_pipe_as_tmux() {
         buffers(&srv),
         ["hello world", "ello world", "hello world\\n"]
     );
+}
+
+/// A pane's store goes, with the pane's own selection parameter, only to
+/// the clients showing its window (tmux 3.7b, recorded), and its
+/// parameter keeps only tmux's characters.
+#[test]
+fn a_panes_store_goes_to_the_clients_showing_it() {
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+    let srv = start("while read p d; do printf '\\033]52;%s;%s\\007' \"$p\" \"$d\"; done");
+    new_session(&srv, "other", "exec sleep 100000");
+    let mut a = attach(&srv, "main");
+    let mut b = attach(&srv, "other");
+    srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
+    srv.cmd(&[
+        "send-keys",
+        "-t",
+        "main",
+        &format!("p {}", b64("prim")),
+        "Enter",
+    ])
+    .unwrap();
+    a.wait_for_output(format!("\x1b]52;p;{}\x07", b64("prim")).as_bytes(), 0);
+    srv.cmd(&[
+        "send-keys",
+        "-t",
+        "main",
+        &format!("sx {}", b64("bad")),
+        "Enter",
+    ])
+    .unwrap();
+    a.wait_for_output(format!("\x1b]52;s;{}\x07", b64("bad")).as_bytes(), 0);
+    sleep(Duration::from_millis(300));
+    assert_eq!(count(b.output(), b"\x1b]52;"), 0);
+    assert_eq!(buffers(&srv), ["bad", "prim"]);
+}
+
+/// An expanded command that reads as a flag (`-P` here, as a pane title
+/// could) stays the command: the copy still stores its buffer.
+#[test]
+fn an_expanded_command_cannot_become_a_flag() {
+    let srv = start(TEXT);
+    srv.cmd(&["set", "-g", "@tm5", "-P"]).unwrap();
+    select_first_line(&srv);
+    x(&srv, &["copy-pipe-and-cancel", "#{@tm5}"]);
+    wait_display(&srv, "#{pane_in_mode}", "0");
+    assert_eq!(buffers(&srv), ["hello world\\n"]);
+}
+
+/// `#{pane_current_path}` is the pane process's own cwd, as tmux 3.7b
+/// reads it, never the text an OSC 7 carried, so a reported path with a
+/// newline and braces cannot reach a `-c '#{pane_current_path}'` or a
+/// shell line. `#{pane_path}` keeps what OSC 7 reported, and a path with a
+/// control character is not taken at all.
+#[test]
+fn an_osc7_path_never_becomes_the_current_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().canonicalize().unwrap();
+    let srv = start(&format!(
+        "cd {}; while read u; do printf '\\033]7;%s\\007' \"$u\"; echo set; done",
+        quote(&real)
+    ));
+    let send = |uri: &str| {
+        srv.cmd(&["send-keys", "-t", "main", uri, "Enter"]).unwrap();
+    };
+    send("file://localhost/tmp/x{y}");
+    wait_display(&srv, "#{pane_path}", "/tmp/x{y}");
+    send("file://localhost/tmp/a%0A{b};touch%20x");
+    send("file://localhost/tmp/c%1Bd");
+    send("file://localhost/tmp/done");
+    wait_display(&srv, "#{pane_path}", "/tmp/done");
+    wait_display(&srv, "#{pane_current_path}", &real.display().to_string());
+    let shown = srv
+        .cmd(&["list-panes", "-F", "#{pane_path}|#{pane_current_path}"])
+        .unwrap();
+    assert!(!shown.trim_end().chars().any(char::is_control), "{shown:?}");
 }
