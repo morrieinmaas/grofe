@@ -14,7 +14,7 @@ pub mod target;
 
 pub use format::{FormatVars, expand};
 pub use keys::{is_key_name, key_bytes};
-pub use parse::{parse, parse_sequence, split_command_string};
+pub use parse::{parse, parse_sequence, split_command_string, split_config_file};
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
 use crate::types::{CaptureOpts, Dir, Edge, SplitSize};

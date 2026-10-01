@@ -1969,11 +1969,17 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     line
 }
 
-/// `source-file [-q] path`: loads one TOML file (and its includes) at
-/// runtime (spec §5.1). A relative path is the requester's cwd's, as in
-/// tmux; the file's own includes resolve against it. Its values and
-/// bindings count as runtime (R10): `reload` keeps them. All errors or
-/// nothing, as `reload`; `-q` hides only a missing file.
+/// `source-file [-q] path`: loads one file at runtime, read by its name.
+/// A relative path is the requester's cwd's, as in tmux; `-q` hides only a
+/// missing file.
+///
+/// - `*.toml` is grofe's config (spec §5.1), with its includes resolved
+///   against it. Its values and bindings count as runtime (R10): `reload`
+///   keeps them. All errors or nothing, as `reload`.
+/// - `*.lua` is M6's.
+/// - Any other file is a tmux config, in either dialect and under either
+///   identity: tmux's plugins source their own `*.tmux` and `*.conf`
+///   files ([`source_tmux_file`]).
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
     let path = ctx.cwd.join(&c.path);
     if !path.exists() {
@@ -1985,6 +1991,9 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     // ponytail: Lua config is layer 5, T6.4's (M6).
     if path.extension().is_some_and(|e| e == "lua") {
         return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
+    }
+    if path.extension().is_none_or(|e| e != "toml") {
+        return source_tmux_file(state, ctx, &path);
     }
     let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
@@ -2010,6 +2019,59 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         tables.insert(&k.table, k.key, b);
     }
     Ok(String::new())
+}
+
+/// A tmux config file, read as tmux 3.7b's `source-file` reads one
+/// (recorded): split into lines ([`cmd::split_config_file`]) and every
+/// command parsed through the tmux front end before any runs, so an error
+/// anywhere (a syntax error, an unknown command or flag) runs nothing and
+/// is `<path>:<line>: <error>`. Then each line's commands run as one
+/// group: an error stops the rest of its line, the next line still runs,
+/// and the request fails at the end with every error, after what the
+/// commands printed. A command that holds the request (`run-shell`
+/// without `-b`, `wait-for`) holds the lines after it too, as tmux's queue
+/// waits.
+// ponytail: once a line holds, a later line's error stops the lines after
+// it (held lines run as one request's rest), and an error before the hold
+// is dropped with the request's answer.
+fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
+    let ctx = ClientCtx {
+        dialect: Dialect::Tmux,
+        ..ctx.clone()
+    };
+    let mut groups = Vec::new();
+    for (line, cmds) in crate::cmd::split_config_file(&text).map_err(|(l, e)| at(l, &e))? {
+        let mut group = Vec::new();
+        for argv in cmds {
+            group.extend(super::parse_split(state, &ctx, &argv).map_err(|e| at(line, &e))?);
+        }
+        groups.push(group);
+    }
+    let mut out = String::new();
+    let mut errors = Vec::new();
+    let mut groups = groups.into_iter();
+    while let Some(group) = groups.next() {
+        match super::run_commands(state, &ctx, group) {
+            Ok(text) => out.push_str(&text),
+            Err(e) => {
+                out.push_str(&std::mem::take(&mut state.failed_out));
+                errors.push(e);
+            }
+        }
+        if state.held.is_some() {
+            let held = state.held.get_or_insert_default();
+            held.frames
+                .extend(groups.by_ref().map(|g| (ctx.clone(), g)));
+            return Ok(out);
+        }
+    }
+    if errors.is_empty() {
+        return Ok(out);
+    }
+    state.failed_out = out;
+    Err(errors.join("\n"))
 }
 
 /// A `name` is unique across the live tables too (R6): `load_one` checks

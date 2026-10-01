@@ -357,7 +357,7 @@ lands in the milestone shown.
 |---|---|
 | `{mouse}`, `{last}`, `{marked}` target tokens, `!`, `+`/`-` offsets, fnmatch target patterns | Not in the owner's scripts. Mouse bindings act on the pane under the pointer without a token; `=name` covers exact matching |
 | `link-window`, `unlink-window`, session groups | A window belongs to one session in grofe. sessionx's unlink flow is replaced in the port; `session_grouped` is always 0 |
-| `source-file` of a `tmux.conf`, `%if`, parsing `list-keys` output in tmux's format | Config is ported once (D1). Only sensible and TPM parse `list-keys`, and both are dropped in the port |
+| `%if`, `%hidden` and `NAME=value` lines in a sourced tmux file; parsing `list-keys` output in tmux's format | Config is ported once (D1); a plugin's own tmux file is read (§5.1), but none the owner runs uses them. Only sensible and TPM parse `list-keys`, and both are dropped in the port |
 | tmux's `-C` and `-CC` control mode | Not shipped in v1; nothing the owner runs uses it; possible M8. grofe's own control mode (§4.6) is always grofe dialect |
 | Marked panes: `select-pane -m`/`-M`, the stock `m` binding | The mark only feeds `{marked}` targets and `-s` defaults, which the owner's scripts never use; `m` stays unbound and TP.9 lists it |
 | Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `copy-mode -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
@@ -616,7 +616,10 @@ every generated fragment, so the user's own settings always win over a tool's.
 
 `source-file <path>` loads another TOML file at the current layer. A relative
 path resolves against the directory of the file that includes it, never the
-server's cwd or environment. `reload` (bound to `prefix r`) re-reads layers 1
+server's cwd or environment. At runtime, `source-file` of a file not named
+`*.toml` (or `*.lua`) reads it as a tmux config through the tmux front end,
+as tmux does, in either dialect: tmux plugins source their own `*.tmux`
+files (M3.7). `reload` (bound to `prefix r`) re-reads layers 1
 to 4 and applies the diff (§5.4).
 
 ### 5.2 Schema
