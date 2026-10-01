@@ -19,8 +19,17 @@
 127.0.0.1:<port>/client-resized
 ## pane exits
 127.0.0.1:<port>/pane-exited
+hook pane-exited
 ## kill-pane
 127.0.0.1:<port>/pane-exited
+hook after-kill-pane
+## remain-on-exit on
+## split one
+## pane dies
+127.0.0.1:<port>/pane-exited
+127.0.0.1:<port>/pane-exited
+hook after-kill-pane
+hook pane-died
 ## switch-client main
 127.0.0.1:<port>/ensure-sidebar -d <tty>|main|@2|%2|1
 127.0.0.1:<port>/focus -d <tty>|main|@2|%2|1

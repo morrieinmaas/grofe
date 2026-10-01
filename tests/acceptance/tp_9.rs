@@ -10,9 +10,11 @@
 //!
 //! - Case 1: with the server started by the plugin's own
 //!   `ensure-sidebar.sh` (the sidebar starts hidden, so none opens), a
-//!   scripted session (a session created, two windows, a split, a pane
-//!   killed, a session closed) fires the same hook calls, step by step, as
-//!   tmux 3.7b does. Calls a step starts run in the background, so within
+//!   scripted session (sessions, windows, splits, selections, resizes,
+//!   client switches, a pane exiting, one killed, and one dying under
+//!   `remain-on-exit on`, which fires `pane-died` and not `pane-exited`)
+//!   fires the same hook calls, step by step, as tmux 3.7b does: all
+//!   twelve hooks. Calls a step starts run in the background, so within
 //!   a step they are compared as a set.
 //! - Case 2: prefix o t (the plugin's toggle) opens the sidebar at
 //!   `@opensessions_width`.
@@ -40,7 +42,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::harness::Harness;
-use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, wait_until, write_golden};
+use crate::plugin_rig::{
+    PREFIX, Rig, WAIT, private_tmp, read_golden, recording_tmux, wait_until, write_golden,
+};
 
 const TASK: &str = "tp9";
 const GOLDEN: &str = "tp_9";
@@ -144,7 +148,7 @@ fn posts(os: &Opensessions, from: usize) -> Vec<String> {
     let log = fs::read_to_string(os.rig.path("curl.log")).unwrap_or_default();
     log.lines()
         .skip(from)
-        .filter(|l| l.contains("-X POST"))
+        .filter(|l| l.contains("-X POST") || l.starts_with("hook "))
         .map(|l| {
             let l = l.replace(&os.port.to_string(), "<port>");
             let l = l
@@ -258,6 +262,20 @@ fn hook_calls(os: &Opensessions) -> String {
     ]);
     wait_hooks(os);
     assert!(sidebar(rig, "main:0").is_none(), "a hidden sidebar opened");
+    // Which of the exit hooks fired, beside the plugin's own handlers: a
+    // marker line into curl.log after each one's commands. (Re-set with
+    // the command appended, since grofe keeps one command per hook where
+    // tmux has `set-hook -a`; both run it last.)
+    let log = rig.path("curl.log").display().to_string();
+    for hook in ["pane-died", "pane-exited", "after-kill-pane"] {
+        let shown = rig.t(&["show-hooks", "-g", hook]);
+        let own = shown
+            .trim_end()
+            .strip_prefix(&format!("{hook}[0] "))
+            .unwrap_or_else(|| panic!("{hook} not installed: {shown}"));
+        let cmd = format!("{own} ; run-shell -b \"echo hook {hook} >> '{log}'\"");
+        rig.t(&["set-hook", "-g", hook, &cmd]);
+    }
     let home = rig.path("home").display().to_string();
     let tty = rig.t(&["list-clients", "-F", "#{client_tty}"]);
     let tty = tty.trim();
@@ -290,6 +308,15 @@ fn hook_calls(os: &Opensessions) -> String {
         ),
         ("kill-pane", &["kill-pane", "-t", "main:two.0"]),
         (
+            "remain-on-exit on",
+            &["set-option", "-w", "-t", "main:one", "remain-on-exit", "on"],
+        ),
+        ("split one", &["split-window", "-t", "main:one"]),
+        (
+            "pane dies",
+            &["send-keys", "-t", "main:one.1", "exit", "Enter"],
+        ),
+        (
             "switch-client main",
             &["switch-client", "-c", tty, "-t", "main"],
         ),
@@ -312,17 +339,6 @@ fn hook_calls(os: &Opensessions) -> String {
         }
     }
     out
-}
-
-/// Whether the sidebar cases may run here: only with a private /tmp.
-fn private_tmp() -> bool {
-    let ok = std::env::var_os("GROFE_TEST_PRIVATE_TMP").is_some_and(|v| v == "1");
-    if !ok {
-        eprintln!(
-            "skipping: the sidebar writes /tmp/opensessions-err.log; set GROFE_TEST_PRIVATE_TMP=1 where /tmp is private"
-        );
-    }
-    ok
 }
 
 /// Cases 2 and 3: the sidebar's width and the option, then after a
@@ -348,7 +364,7 @@ fn case_1_hooks_fire_as_on_tmux() {
 #[test]
 fn case_2_and_3_the_sidebar_keeps_its_width() {
     let Some(bin) = tools() else { return };
-    if !private_tmp() {
+    if !private_tmp("/tmp/opensessions-err.log") {
         return;
     }
     let got = widths(&rig(None, &bin));
@@ -363,7 +379,7 @@ fn record_tp9_goldens() {
     let tmux = recording_tmux("GROFE_TP9_TMUX");
     let bin = binaries().expect("opensessions binaries at $GROFE_TEST_OPENSESSIONS");
     write_golden(GOLDEN, "hook-calls", &hook_calls(&rig(Some(&tmux), &bin)));
-    if private_tmp() {
+    if private_tmp("/tmp/opensessions-err.log") {
         write_golden(GOLDEN, "widths", &widths(&rig(Some(&tmux), &bin)));
     }
 }
