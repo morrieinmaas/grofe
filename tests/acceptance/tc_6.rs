@@ -99,6 +99,17 @@ fn exists(pid: &str) -> bool {
     !String::from_utf8_lossy(&out.stdout).trim().is_empty()
 }
 
+/// `pid`'s parent and state (`ps -o ppid=,stat=`), if it is in the table.
+fn parent_and_state(pid: &str) -> Option<(String, String)> {
+    let out = Command::new("ps")
+        .args(["-o", "ppid=,stat=", "-p", pid])
+        .output()
+        .expect("ps");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut f = text.split_whitespace();
+    Some((f.next()?.to_string(), f.next()?.to_string()))
+}
+
 /// Case 1: `-w 80% -h 60% -b rounded -T title -d <dir>` on a 60x15
 /// client, cell for cell as tmux 3.7b draws it (48x9 at (5, 2)), and the
 /// command runs in `<dir>`. Keys go to the command; Escape closes a popup
@@ -330,9 +341,26 @@ fn closing_a_popup_ends_its_process_group_without_zombies() {
     let pids: Vec<&str> = line.split_whitespace().collect();
     assert_eq!(pids.len(), 2, "{line:?}");
     assert!(pids.iter().all(|p| exists(p)));
+    let server = srv.cmd(&["display-message", "-p", "#{pid}"]).expect("pid");
+    let server = server.trim();
     a.send("\x1b");
-    wait_until(|| pids.iter().all(|p| !exists(p)), WAIT)
-        .unwrap_or_else(|e| panic!("popup processes still there: {e}"));
+    // The command is the server's child, so the server must reap it. The
+    // background job is orphaned when the command dies and goes to init;
+    // an init that never reaps (a CI container's `tail -f /dev/null`)
+    // leaves it a zombie, which is not the server's to reap, so a zombie
+    // counts as gone unless its parent is the server.
+    let (shell, job) = (pids[0], pids[1]);
+    let gone = |pid: &str| match parent_and_state(pid) {
+        None => true,
+        Some((parent, state)) => state.starts_with('Z') && parent != server,
+    };
+    wait_until(|| !exists(shell) && gone(job), WAIT).unwrap_or_else(|e| {
+        panic!(
+            "popup processes still there: {e}: {:?} {:?}",
+            parent_and_state(shell),
+            parent_and_state(job)
+        )
+    });
     assert_eq!(wait_child(child, WAIT).expect("answers").code(), Some(129));
 }
 
