@@ -43,9 +43,10 @@ pub enum SessionRef {
     /// A bare word with no `:` or `.`, read as tmux's `cmd-find.c` reads it:
     /// what it names depends on the kind of target the verb wants. As a
     /// pane, a number is a pane index in the current window, then a window
-    /// in the current session, then a session; as a window, a window in
-    /// the current session, then a session; as a session, a session only.
-    /// Natively too: the canopy port's `select-pane -t 1` means pane 1,
+    /// in the current session (by index, then exact name), then a session;
+    /// as a window, a window in the current session, then a session; as a
+    /// session, a session only. A leading `=` makes a session or window
+    /// match exact and stays part of the word for a pane. Natively too: the canopy port's `select-pane -t 1` means pane 1,
     /// as in tmux. Only the front end reads `window.pane` with no `:`.
     Bare(String),
 }
@@ -163,6 +164,11 @@ pub fn parse_target(s: &str) -> Result<Target, ParseError> {
     if tmux_targets() {
         if s == "=" {
             return Ok(Target::Session(SessionRef::Mouse));
+        }
+        // `=word` with no `:` or `.`: left for the resolver, which strips
+        // the `=` from a session or window but not from a pane (cmd-find.c).
+        if s.starts_with('=') && !s.contains([':', '.']) {
+            return Ok(Target::Session(SessionRef::Bare(s.to_string())));
         }
         if let Some(rest) = s.strip_prefix('=') {
             return parse_position(rest).map(exact_session);
@@ -646,7 +652,12 @@ mod tests {
     fn the_front_end_reads_exact_sessions_windows_and_offsets() {
         let exact = |s: &str| SessionRef::Exact(s.to_string());
         let t = |s: &str| with_tmux_targets(|| parse_target(s));
-        assert_eq!(t("=x").unwrap(), Target::Session(exact("x")));
+        // A bare `=x` is left for the resolver: exact as a session or a
+        // window, a literal word as a pane.
+        assert_eq!(
+            t("=x").unwrap(),
+            Target::Session(SessionRef::Bare("=x".to_string()))
+        );
         assert_eq!(
             t("=x:2").unwrap(),
             Target::Window(exact("x"), WindowRef::Index(2))

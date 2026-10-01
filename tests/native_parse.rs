@@ -957,11 +957,11 @@ fn tmux_only_names_are_unknown_natively() {
     }
 }
 
-/// Natively `=x` is the literal word `=x`, looked up as any bare word is
-/// (a pane target: a window, then a session); `=name` as an exact match is
-/// FE.1's front-end form.
+/// Natively, as in the front end, `=x` is a bare word: the resolver reads
+/// it as cmd-find.c does (exact as a session or a window, literal as a
+/// pane).
 #[test]
-fn equals_targets_are_literal_session_names() {
+fn equals_targets_are_bare_words() {
     for (given, name) in [("=", "="), ("=foo", "=foo")] {
         assert_eq!(
             p(&["select-pane", "-t", given]),
@@ -977,11 +977,17 @@ fn equals_targets_are_literal_session_names() {
     }
 }
 
+/// As tmux 3.7b (recorded): `=x` names exactly session `x`, never a
+/// prefix, and is no pane.
 #[test]
-fn equals_targets_find_no_session_at_run_time() {
+fn equals_targets_are_exact_sessions_and_no_pane() {
     let srv = TestServer::start();
     srv.cmd(&["new-session", "-d", "-s", "x", "sleep", "30"])
         .expect("new-session");
+    srv.cmd(&["has-session", "-t", "=x"])
+        .expect("=x is session x");
+    let e = srv.cmd(&["has-session", "-t", "=y"]).unwrap_err();
+    assert_eq!(e.trim_end(), "can't find session: y");
     let e = srv.cmd(&["select-pane", "-t", "=x"]).unwrap_err();
     assert_eq!(e.trim_end(), "can't find pane: =x");
     let e = srv.cmd(&["select-pane", "-t", "="]).unwrap_err();

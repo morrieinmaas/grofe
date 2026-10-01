@@ -630,6 +630,10 @@ impl Model {
                 .contains_key(id)
                 .then_some(*id)
                 .ok_or_else(|| format!("can't find session: {id}")),
+            // tmux's `=name` as a session: never a prefix.
+            SessionRef::Bare(word) if word.len() > 1 && word.starts_with('=') => {
+                self.session_ref(&SessionRef::Exact(word[1..].to_string()), ctx)
+            }
             SessionRef::Name(name) | SessionRef::Bare(name) => {
                 if let Some(id) = self.session_by_name(name) {
                     return Ok(id);
@@ -751,23 +755,42 @@ impl Model {
 }
 
 impl Model {
-    /// tmux's bare word as a window (cmd-find.c): a window of the current
-    /// session by index or name, then a session's current window.
+    /// tmux's bare word as a window (cmd-find.c): `=word` is `word`, read
+    /// the same way here since window names never match by prefix.
     fn bare_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
-        let window = match word.parse::<u32>() {
-            Ok(index) => WindowRef::Index(index),
-            Err(_) => WindowRef::Name(word.to_string()),
+        let name = match word.strip_prefix('=') {
+            Some(name) if !name.is_empty() => name,
+            _ => word,
         };
-        self.window_ref(&SessionRef::Current, &window, ctx)
-            .or_else(|_| {
-                let sid = self.session_ref(&SessionRef::Name(word.to_string()), ctx)?;
-                Ok(self.sessions[&sid].active)
-            })
-            .map_err(|_: String| format!("can't find window: {word}"))
+        self.word_window(name, ctx)
+            .map_err(|_| format!("can't find window: {name}"))
+    }
+
+    /// A window of the current session by index, then by exact name, then
+    /// a session's current window, as cmd-find.c tries them.
+    fn word_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        let by_index = word.parse::<u32>().ok().and_then(|index| {
+            self.window_ref(&SessionRef::Current, &WindowRef::Index(index), ctx)
+                .ok()
+        });
+        if let Some(w) = by_index {
+            return Ok(w);
+        }
+        self.window_ref(
+            &SessionRef::Current,
+            &WindowRef::Name(word.to_string()),
+            ctx,
+        )
+        .or_else(|_| {
+            let sid = self.session_ref(&SessionRef::Name(word.to_string()), ctx)?;
+            Ok(self.sessions[&sid].active)
+        })
     }
 
     /// tmux's bare word as a pane (cmd-find.c): a pane index in the current
-    /// window, then a window's active pane ([`Model::bare_window`]).
+    /// window, then a window's active pane ([`Model::word_window`]). A
+    /// leading `=` is part of the word here: tmux strips it only from a
+    /// session or window part.
     fn bare_pane(&self, word: &str, ctx: &ClientCtx) -> Result<PaneId, String> {
         if let Ok(index) = word.parse::<u32>() {
             let pane = PaneRef {
@@ -779,7 +802,7 @@ impl Model {
                 return Ok(p);
             }
         }
-        self.bare_window(word, ctx)
+        self.word_window(word, ctx)
             .map(|w| self.windows[&w].active)
             .map_err(|_| format!("can't find pane: {word}"))
     }
@@ -808,16 +831,20 @@ impl Model {
         let Target::Session(SessionRef::Bare(word)) = target else {
             return Ok(target.clone());
         };
+        let word = match word.strip_prefix('=') {
+            Some(name) if !name.is_empty() => name,
+            _ => word,
+        };
         let session = SessionRef::Id(self.current_session(ctx)?);
         if let Ok(index) = word.parse::<u32>() {
             return Ok(Target::Window(session, WindowRef::Index(index)));
         }
-        let name = WindowRef::Name(word.clone());
+        let name = WindowRef::Name(word.to_string());
         if let Ok(w) = self.window_ref(&SessionRef::Current, &name, ctx) {
             let index = WindowRef::Index(self.windows[&w].index);
             return Ok(Target::Window(session, index));
         }
-        match self.session_ref(&SessionRef::Name(word.clone()), ctx) {
+        match self.session_ref(&SessionRef::Name(word.to_string()), ctx) {
             Ok(sid) => Ok(Target::Session(SessionRef::Id(sid))),
             Err(_) => Err(format!("can't find window: {word}")),
         }

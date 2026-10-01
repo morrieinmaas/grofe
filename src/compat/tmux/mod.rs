@@ -1807,7 +1807,7 @@ mod tests {
         let Command::HasSession(c) = one(&["has", "-t", "=x"]).unwrap() else {
             panic!()
         };
-        assert_eq!(c.target, Target::Session(SessionRef::Exact("x".into())));
+        assert_eq!(c.target, Target::Session(SessionRef::Bare("=x".into())));
         let Command::SelectWindow(c) = one(&["selectw", "-t", "=x:2"]).unwrap() else {
             panic!()
         };
