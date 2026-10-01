@@ -142,9 +142,11 @@ fn force_frames(
 }
 
 /// The frame gap to hold a run to: the acceptance limit, or on a machine
-/// whose own baseline is already near it, half as much again as that.
+/// whose own baseline is already near it (a loaded CI VM), twice that. A
+/// frame that waited on the source would wait about its 2 s timeout, far
+/// past either.
 fn frame_bound(baseline: Duration) -> Duration {
-    FRAME_LIMIT.max(baseline + baseline / 2)
+    FRAME_LIMIT.max(baseline * 2)
 }
 
 /// Whether any process in group `pgid` is alive (a zombie is not).
@@ -259,7 +261,8 @@ fn a_hung_source_never_delays_a_frame_and_is_killed_at_its_timeout() {
     let pidfile = path(&srv, "pid");
     let mut a = attach(&srv);
     let mut b = attach(&srv);
-    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(1), || false);
+    // As long as the measured run below, so both longest gaps sample alike.
+    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
     load(
         &srv,
         &format!(
