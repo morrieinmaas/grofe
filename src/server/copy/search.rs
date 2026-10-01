@@ -32,6 +32,7 @@
 //! them out for the rows on view, which bounds them by the pane's size.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -408,7 +409,7 @@ pub fn translate(pattern: &str, cis: bool) -> Option<Translated> {
                 i = next;
                 continue;
             }
-            '^' => assert(&mut out, "^", "(?:\\b\\B)"),
+            '^' => assert(&mut out, "^", "[^\\s\\S]"),
             '$' => assert(&mut out, "$", "$"),
             '.' => {
                 out.push(".");
@@ -976,6 +977,8 @@ struct Run<'a> {
     kept: Kept,
     /// The marks of the rows on view, as the last marking left them.
     marks: Option<Marks>,
+    /// The last pattern compiled, so a count's repeats compile it once.
+    compiled: Option<(String, bool, Arc<Pattern>)>,
     wrap: bool,
     vi: bool,
 }
@@ -1267,9 +1270,15 @@ impl Run<'_> {
         if UnicodeWidthStr::width(text) == 0 {
             return false;
         }
-        let Some(pat) = Pattern::compile(text, regex).map(Arc::new) else {
+        let cached = self
+            .compiled
+            .as_ref()
+            .filter(|(t, r, _)| t == text && *r == regex)
+            .map(|(_, _, p)| Arc::clone(p));
+        let Some(pat) = cached.or_else(|| Pattern::compile(text, regex).map(Arc::new)) else {
             return false;
         };
+        self.compiled = Some((text.to_string(), regex, Arc::clone(&pat)));
         let wrap = self.wrap;
         let endline = if down {
             if self.vi {
@@ -1400,9 +1409,15 @@ impl Run<'_> {
 
 /// tmux's `window_copy_visible_lines`: the rows on view, from the start
 /// of the soft-wrapped line the top row is part of.
+///
+/// A row more than [`SEARCH_MAX_LINE`] cells above the top cannot start a
+/// match that reaches it (a search sees at most that many cells from where
+/// it starts), so the walk stops there, however long the line.
 fn visible_lines(gd: &Grid, oy: usize) -> (usize, usize) {
-    let mut start = gd.hsize - oy;
-    while start > 0 && gd.wrapped(start - 1) {
+    let top = gd.hsize - oy;
+    let reach = SEARCH_MAX_LINE.div_ceil(gd.sx.max(1)) + 1;
+    let mut start = top;
+    while start > 0 && top - start < reach && gd.wrapped(start - 1) {
         start -= 1;
     }
     (start, gd.hsize - oy + gd.sy)
@@ -1486,6 +1501,7 @@ fn scan(req: Request) -> Outcome {
         text: Arc::clone(&whole),
         view: req.view,
         marks: None,
+        compiled: None,
         kept: req.kept,
         wrap: req.wrap,
         vi: req.vi,
@@ -1545,6 +1561,15 @@ struct Pending {
     times: u32,
 }
 
+/// What [`view_marks`] keeps its marks by: the copy, the offset and the
+/// pattern. Weak references keep the addresses from being reused while the
+/// key names them.
+type ViewKey = (Weak<Grid>, usize, Weak<Pattern>);
+
+/// Numbers each launch, across modes, so a search's `finish` ends only
+/// its own flight (a pane respawned mid-search has a new mode).
+static LAUNCHES: AtomicU64 = AtomicU64::new(0);
+
 /// One mode's search and jump state. Lives on `Mode.search`.
 #[derive(Debug, Default)]
 pub struct Search {
@@ -1559,6 +1584,13 @@ pub struct Search {
     /// The copy a search in flight reads; commands wait until it ends.
     busy: Option<Arc<Grid>>,
     held: VecDeque<Vec<String>>,
+    /// The last marks worked out for the view, by copy, offset and
+    /// pattern ([`view_marks`]).
+    view: Mutex<Option<(ViewKey, Arc<Marks>)>>,
+    /// The search in flight: its launch, so only its own `finish` ends it,
+    /// and what it searches for, which the pane remembers if the mode goes
+    /// first.
+    flight: Option<(u64, (String, bool))>,
     /// The prefilter's string of the copy, kept for the next search, and
     /// the copy it is of.
     whole: Option<(Weak<Grid>, Arc<Text>)>,
@@ -1582,7 +1614,11 @@ pub struct Remembered(String, bool);
 
 /// What the pane remembers when its mode ends.
 pub fn remember(mode: &Mode) -> Option<Remembered> {
-    let (text, regex) = mode.search.kept.last.clone()?;
+    let (text, regex) = match &mode.search.flight {
+        // tmux sets the pane's search as it starts one.
+        Some((_, searching)) => searching.clone(),
+        None => mode.search.kept.last.clone()?,
+    };
     Some(Remembered(text, regex))
 }
 
@@ -1728,8 +1764,11 @@ pub fn launch(state: &mut State, pane: PaneId, wait: bool) {
         return;
     };
     let waiter = (wait && state.deferred_reply.is_none()).then(|| dispatch::defer_reply(state));
+    let id = LAUNCHES.fetch_add(1, Ordering::Relaxed);
+    let searching = (req.text.clone(), req.regex && has_regex_chars(&req.text));
     if let Some(mode) = state.copy.get_mut(pane) {
         mode.search.busy = Some(Arc::clone(&req.grid));
+        mode.search.flight = Some((id, searching));
         mode.search.waiters.extend(waiter);
     }
     match tokio::runtime::Handle::try_current() {
@@ -1739,12 +1778,13 @@ pub fn launch(state: &mut State, pane: PaneId, wait: bool) {
                 // A scan that panics still lets the mode go on (unbusy, its
                 // held commands run), rather than leaving it busy for good.
                 let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(req))).ok();
-                let _ =
-                    jobs.blocking_send(Box::new(move |state: &mut State| finish(state, pane, out)));
+                let _ = jobs.blocking_send(Box::new(move |state: &mut State| {
+                    finish(state, pane, id, out)
+                }));
             });
         }
         // No runtime (unit tests): there is no actor to keep free.
-        Err(_) => finish(state, pane, Some(scan(req))),
+        Err(_) => finish(state, pane, id, Some(scan(req))),
     }
 }
 
@@ -1799,17 +1839,31 @@ fn apply(mode: &mut Mode, out: Outcome) {
     select::update_selection(mode);
 }
 
-/// On the actor once the scan is done: the outcome lands, the held
-/// commands run in order (one may start the next search), and once
-/// nothing is in flight the waiting replies go.
-fn finish(state: &mut State, pane: PaneId, out: Option<Outcome>) {
-    let Some(mode) = state.copy.get_mut(pane) else {
-        return;
-    };
+/// The outcome of launch `id` lands on `mode` and ends its flight; `false`,
+/// and nothing changes, when the mode is not waiting for that launch (it
+/// is a newer mode of a respawned pane, or busy with a later search).
+fn land(mode: &mut Mode, id: u64, out: Option<Outcome>) -> bool {
+    if mode.search.flight.as_ref().map(|(f, _)| *f) != Some(id) {
+        return false;
+    }
     if let Some(out) = out {
         apply(mode, out);
     }
     mode.search.busy = None;
+    mode.search.flight = None;
+    true
+}
+
+/// On the actor once the scan is done: the outcome lands, the held
+/// commands run in order (one may start the next search), and once
+/// nothing is in flight the waiting replies go.
+fn finish(state: &mut State, pane: PaneId, id: u64, out: Option<Outcome>) {
+    let Some(mode) = state.copy.get_mut(pane) else {
+        return;
+    };
+    if !land(mode, id, out) {
+        return;
+    }
     while let Some(mode) = state.copy.get_mut(pane) {
         if mode.search.busy.is_some() {
             break;
@@ -1936,7 +1990,7 @@ fn jump(mode: &mut Mode, kind: Jump) {
 /// The marks on view and the match the cursor is on, worked out once per
 /// frame for a pane ([`view_marks`]).
 pub struct ViewMarks {
-    marks: Marks,
+    marks: Arc<Marks>,
     sx: usize,
     /// The current match's first and last marks index (tmux's
     /// `window_copy_match_start_end` at the cursor).
@@ -1962,10 +2016,29 @@ fn cursor_at(mode: &Mode) -> Option<usize> {
     mark_at(&mode.grid, mode.oy, mode.cx, py)
 }
 
-/// The marks of `mode`'s rows on view, if it has any.
+/// The marks of `mode`'s rows on view, if it has any. They are worked out
+/// once per copy, offset and pattern and kept, so a frame that changes
+/// none of these reads them back instead of searching the view again.
 pub fn view_marks(mode: &Mode) -> Option<ViewMarks> {
     let pat = mode.search.kept.marks.as_ref()?;
-    let marks = view_marks_of(&mut Scanner::new(&mode.grid), pat, mode.oy);
+    let same = |k: &ViewKey| {
+        Weak::ptr_eq(&k.0, &Arc::downgrade(&mode.grid))
+            && k.1 == mode.oy
+            && Weak::ptr_eq(&k.2, &Arc::downgrade(pat))
+    };
+    let cached = mode.search.view.lock().ok().and_then(|c| {
+        c.as_ref()
+            .filter(|(k, _)| same(k))
+            .map(|(_, m)| Arc::clone(m))
+    });
+    let marks = cached.unwrap_or_else(|| {
+        let marks = Arc::new(view_marks_of(&mut Scanner::new(&mode.grid), pat, mode.oy));
+        if let Ok(mut c) = mode.search.view.lock() {
+            let key = (Arc::downgrade(&mode.grid), mode.oy, Arc::downgrade(pat));
+            *c = Some((key, Arc::clone(&marks)));
+        }
+        marks
+    });
     let at = |i: usize| marks.get(i).copied().unwrap_or(0);
     let current = cursor_at(mode).and_then(|cursor| {
         let c = if cursor != 0 && !mode.vi && mode.search.kept.down {
@@ -2186,7 +2259,7 @@ mod tests {
         assert_eq!(t("a{x"), None);
         assert_eq!(t("(a"), None);
         assert_eq!(t("\\1"), None);
-        assert_eq!(translate("^a", false).unwrap().notbol, "(?:\\b\\B)a");
+        assert_eq!(translate("^a", false).unwrap().notbol, "[^\\s\\S]a");
     }
 
     /// A match the terminal split over a soft wrap is found whole.
@@ -2294,5 +2367,55 @@ mod tests {
             }
         }
         assert_eq!(found(&m), "line 99995 of");
+    }
+
+    /// One soft-wrapped line of 45 000 rows (3.6 MB): the marks on view
+    /// read only the rows that can reach it, and the next frame reads
+    /// them back.
+    #[test]
+    fn marks_under_a_huge_wrapped_line_are_bounded_and_kept() {
+        let mut rows = vec!["x".repeat(80); 45_000];
+        rows[44_990] = format!("{}yy{}", "x".repeat(40), "x".repeat(38));
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let mut g = Grid::from_text(80, 45_000 - 24, &refs);
+        for r in &mut g.rows[..44_999] {
+            r.wrapped = true;
+        }
+        let mut m = Mode::new(g, (0, 23), true);
+        x(&mut m, &["search-backward", "yy"]);
+        assert_eq!(found(&m), "yy");
+        let top = m.grid.hsize - m.oy;
+        let (start, _) = visible_lines(&m.grid, m.oy);
+        assert!(
+            top - start <= SEARCH_MAX_LINE.div_ceil(80) + 1,
+            "{start} {top}"
+        );
+        let t = Instant::now();
+        let first = view_marks(&m).unwrap();
+        let took = t.elapsed();
+        let limit = if cfg!(debug_assertions) { 500 } else { 10 };
+        assert!(took < Duration::from_millis(limit), "{took:?}");
+        let again = view_marks(&m).unwrap();
+        assert!(Arc::ptr_eq(&first.marks, &again.marks), "not kept");
+        x(&mut m, &["scroll-up"]);
+        let moved = view_marks(&m).unwrap();
+        assert!(
+            !Arc::ptr_eq(&first.marks, &moved.marks),
+            "kept past a scroll"
+        );
+    }
+
+    /// A `finish` for another launch (a pane respawned mid-search has a new
+    /// mode, busy with its own search) changes nothing.
+    #[test]
+    fn a_stale_finish_leaves_a_newer_flight_alone() {
+        let mut m = mode(&["foo bar", ""], 0, (0, 1));
+        m.search.busy = Some(Arc::clone(&m.grid));
+        m.search.flight = Some((7, ("bar".into(), false)));
+        assert!(!land(&mut m, 6, None));
+        assert!(m.search.busy.is_some());
+        assert_eq!(remember(&m).map(|r| r.0), Some("bar".into()));
+        assert!(land(&mut m, 7, None));
+        assert!(m.search.busy.is_none());
     }
 }

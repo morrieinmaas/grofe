@@ -512,7 +512,7 @@ fn force_frames(
 /// Case 7: two clients attached to a session running `cat`, frames forced
 /// at 60 Hz; meanwhile a 50 000-line history in another session is
 /// searched end to end for a pattern it does not hold, ten times over
-/// (`-N 10`, each wrapping once). No frame waits more than 50 ms (or twice
+/// in a debug build and 400 in a release one (`-N`, each wrapping once). No frame waits more than 50 ms (or twice
 /// the machine's own baseline, on a loaded machine, as TC.4 allows), and
 /// the request waits for the whole search.
 #[test]
@@ -559,6 +559,9 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
     }
     let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(3), || false);
 
+    // About a second of searching in either build: a release one searches
+    // the history some hundred times faster.
+    let count = if cfg!(debug_assertions) { "10" } else { "400" };
     let search = {
         let mut cmd = srv.command();
         cmd.args([
@@ -567,7 +570,7 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
             "big",
             "-X",
             "-N",
-            "10",
+            count,
             "search-backward",
             "no(such|line)[x-z]+",
         ]);
@@ -675,4 +678,76 @@ fn commands_behind_a_search_run_in_order() {
     ])
     .unwrap();
     assert_eq!(display(&srv, "main", "#{pane_in_mode}"), "0");
+}
+
+/// A pane respawned while its copy mode searches: the request that sent
+/// the search is answered, the new pane's copy mode searches its own text,
+/// and the old search's end leaves the new mode alone.
+#[test]
+fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "big",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "seq -f 'line %g of the history' 1 50100; exec sleep 100000",
+    ])
+    .unwrap();
+    wait_until(
+        || display(&srv, "big", "#{history_size}") == "50000",
+        Duration::from_secs(30),
+    )
+    .expect("a full history");
+    srv.cmd(&["copy-mode", "-t", "big"]).unwrap();
+    // Long enough (seconds, in either build) that the respawn below lands
+    // while it runs: nothing tells a client a search is in flight.
+    let count = if cfg!(debug_assertions) { "20" } else { "2000" };
+    let search = {
+        let mut cmd = srv.command();
+        cmd.args([
+            "send-keys",
+            "-t",
+            "big",
+            "-X",
+            "-N",
+            count,
+            "search-backward",
+            "no(such|line)[x-z]+",
+        ]);
+        std::thread::spawn(move || cmd.output().expect("search"))
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!search.is_finished(), "the search ended before the respawn");
+    srv.cmd(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        "big",
+        "printf 'after one\\nafter two\\n'; exec sleep 100000",
+    ])
+    .unwrap();
+    wait_until(|| srv.capture("big").contains("after two"), CMD_TIMEOUT).unwrap();
+    srv.cmd(&["copy-mode", "-t", "big"]).unwrap();
+    srv.cmd(&["send-keys", "-t", "big", "-X", "search-backward", "after"])
+        .unwrap();
+    let out = search.join().unwrap();
+    assert!(
+        out.status.success(),
+        "the first search's request failed: {out:?}"
+    );
+    srv.cmd(&["send-keys", "-t", "big", "-X", "search-again"])
+        .unwrap();
+    assert_eq!(
+        display(
+            &srv,
+            "big",
+            "#{copy_cursor_x},#{copy_cursor_y} #{search_match}"
+        ),
+        "0,0 after"
+    );
 }
