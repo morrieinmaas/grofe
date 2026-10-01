@@ -12,6 +12,7 @@
 mod harness;
 mod m2_gate;
 mod m2_robust;
+mod plugin_rig;
 mod self_test;
 mod t2_5a;
 mod t2_5b;
@@ -28,3 +29,4 @@ mod tc_7;
 mod tc_9;
 mod tp_12;
 mod tp_2;
+mod tp_7;

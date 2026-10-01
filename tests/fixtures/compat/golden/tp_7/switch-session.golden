@@ -1,0 +1,7 @@
+main windows=1
+two windows=1
+main:0 bash active=1 aafd,120x40,0,0,0
+two:0 bash active=1 aafe,120x40,0,0,1
+main:0.0 active=1 <root>/home
+two:0.0 active=1 <root>/home
+client session=two

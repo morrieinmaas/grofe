@@ -130,16 +130,30 @@ for f in "$fixtures"/conf.d/*.toml; do
   fi
 done
 
-# The canopy store tests/acceptance/tp_12.rs runs resurrect and continuum
-# from: the loader, the save and restore strategies with the libraries they
-# source, and the two vendored plugins' runtime files, byte for byte and
-# with their modes.
+# The canopy store the plugin checks (tests/acceptance/plugin_rig.rs) run
+# plugins from: the loader, the save and restore strategies with the
+# libraries they source, and each plugin's runtime files (its entry point,
+# what that runs, its license), byte for byte and with their modes. What
+# plugins/LOCAL names (release binaries, files a plugin writes) is left out.
+store_plugin_paths() {
+  case "$1" in
+    tmux-resurrect) echo scripts save_command_strategies strategies ;;
+    tmux-continuum) echo scripts ;;
+    tmux-fzf) echo main.sh scripts ;;
+    tmux-fzf-url) echo fzf-url.sh ;;
+    opensessions) echo package.json integrations/tmux-plugin ;;
+  esac
+}
 store_files() {
   (cd "$1" && {
     printf '%s\n' lib/env.sh lib/plugins.sh lib/adapter.sh lib/pane.sh lib/resume.sh plugins/VERSIONS
     find plugins/strategies -type f -name '*.sh'
-    find plugins/tmux-resurrect plugins/tmux-continuum -type f \( -name '*.tmux' -o -name 'LICENSE*' \
-      -o -path '*/scripts/*' -o -path '*/save_command_strategies/*' -o -path '*/strategies/*' \)
+    for name in tmux-resurrect tmux-continuum tmux-fzf tmux-fzf-url opensessions; do
+      find "plugins/$name" -maxdepth 1 -type f \( -name '*.tmux' -o -name 'LICENSE*' -o -name '*-LICENSE' \)
+      for rel in $(store_plugin_paths "$name"); do
+        find "plugins/$name/$rel" -type f
+      done
+    done
   } | LC_ALL=C sort)
 }
 store="$fixtures/store"
