@@ -91,6 +91,7 @@ pub fn to_native(fmt: &str, jobs: Jobs) -> Rewritten {
     let mut r = Rewriter {
         jobs,
         before: Vec::new(),
+        depth: 0,
     };
     let value = r.convert(fmt, false);
     Rewritten {
@@ -102,6 +103,8 @@ pub fn to_native(fmt: &str, jobs: Jobs) -> Rewritten {
 struct Rewriter {
     jobs: Jobs,
     before: Vec<Command>,
+    /// How many `#{` the text being rewritten is inside.
+    depth: usize,
 }
 
 impl Rewriter {
@@ -143,7 +146,14 @@ impl Rewriter {
                         break;
                     };
                     let body = &s[i + 2..i + 2 + len];
-                    out.push_str(&self.brace(body, in_body));
+                    // tmux never reaches a `#{` this deep (its loop limit
+                    // has given nothing a level above), and grofe's
+                    // expander stops at the same depth, so its text goes.
+                    if self.depth <= crate::cmd::format::LOOP_LIMIT {
+                        self.depth += 1;
+                        out.push_str(&self.brace(body, in_body));
+                        self.depth -= 1;
+                    }
                     i += 2 + len + 1;
                 }
                 '(' => {
@@ -193,17 +203,23 @@ impl Rewriter {
     /// first true condition's value, else the last part when the count is
     /// odd, else nothing (recorded: `#{?1,a}` and `#{?,,,}` are empty,
     /// `#{?,a,session_name,b,c}` is `b`).
+    /// The chain is one native level deep however long it is: grofe's
+    /// expander takes an else branch that is a whole `#{?...}` in a loop.
     fn branches(&mut self, parts: &[&str]) -> String {
-        match parts {
-            [] => String::new(),
-            [last] => self.convert(last, true),
-            [cond, value, rest @ ..] => {
-                let cond = self.convert(cond, true);
-                let value = self.convert(value, true);
-                let rest = self.branches(rest);
-                format!("#{{?{cond},{value},{rest}}}")
-            }
+        let mut out = String::new();
+        let mut pairs = parts.chunks_exact(2);
+        let mut open = 0;
+        for pair in pairs.by_ref() {
+            let cond = self.convert(pair[0], true);
+            let value = self.convert(pair[1], true);
+            let _ = write!(out, "#{{?{cond},{value},");
+            open += 1;
         }
+        if let [last] = pairs.remainder() {
+            out.push_str(&self.convert(last, true));
+        }
+        out.push_str(&"}".repeat(open));
+        out
     }
 
     /// `#{l:text}`: `text` with tmux's escapes (`##`, `#,`, `#}`) undone and
@@ -876,6 +892,31 @@ mod tests {
         let got = to_native(fmt, Jobs::Empty);
         assert!(got.before.is_empty());
         got.value
+    }
+
+    struct NoVars;
+
+    impl crate::cmd::FormatVars for NoVars {
+        fn get(&self, _: &str) -> Option<String> {
+            None
+        }
+    }
+
+    /// Hostile nesting is rewritten and expanded at once, with tmux's
+    /// answers: from 100 deep `#{!:x}` gives `0` (recorded), and a flat
+    /// chain of conditions is not nesting at all in tmux.
+    #[test]
+    fn deep_and_long_formats_are_bounded() {
+        let start = std::time::Instant::now();
+        let n = 100_000;
+        let deep = format!("{}x{}", "#{!:".repeat(n), "}".repeat(n));
+        assert_eq!(crate::cmd::expand(&native(&deep), &NoVars), "0");
+        let unclosed = format!("a{}", "#{!:".repeat(n));
+        assert_eq!(crate::cmd::expand(&native(&unclosed), &NoVars), "a");
+        let chain = format!("#{{?0,x{},last}}", ",0,a".repeat(n));
+        assert_eq!(crate::cmd::expand(&native(&chain), &NoVars), "last");
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_millis(900), "{took:?}");
     }
 
     #[test]

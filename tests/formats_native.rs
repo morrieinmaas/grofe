@@ -408,3 +408,57 @@ fn session_created_is_when_the_session_was_made() {
         assert_eq!(shown, want);
     }
 }
+
+/// Hostile formats (M3.6 gate): 100,000 nested `#{!:` levels answer at
+/// once with tmux 3.7b's result (its loop limit stops at 100), `if -F`
+/// nested past grofe's limit fails at once, and the server keeps serving
+/// another client meanwhile.
+#[test]
+fn deep_nesting_answers_at_once_and_the_server_keeps_serving() {
+    let srv = scripted();
+    let n = 100_000;
+    let deep = format!("{}x{}", "#{!:".repeat(n), "}".repeat(n));
+    let unclosed = format!("a{}", "#{!:".repeat(n));
+    let nested_if = |depth: usize| {
+        format!(
+            "{}display-message -p deepest{}",
+            "if-shell -F 1 { ".repeat(depth),
+            " }".repeat(depth)
+        )
+    };
+    let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    std::thread::scope(|s| {
+        let busy = s.spawn(|| {
+            let start = std::time::Instant::now();
+            for fmt in [&deep, &unclosed] {
+                let got = srv.request(&argv(&["display-message", "-p", fmt]), WAIT);
+                assert!(got.is_ok(), "{:?}", got.map(|o| o.len()));
+            }
+            start.elapsed()
+        });
+        // Another client is answered while the hostile ones run.
+        for _ in 0..5 {
+            assert_eq!(display(&srv, "alpha", "#{session_name}"), "alpha");
+        }
+        let took = busy.join().expect("busy client");
+        assert!(took < Duration::from_secs(1), "{took:?}");
+    });
+    assert_eq!(
+        srv.request(&argv(&["display-message", "-p", &deep]), WAIT),
+        Ok("0\n".to_string())
+    );
+    // Branches nest 100 deep, then fail at once. (tmux runs them all: 1990
+    // deep takes it 16 s.)
+    let start = std::time::Instant::now();
+    assert_eq!(
+        srv.request(&argv(&["if-shell", "-F", "1", &nested_if(98)]), WAIT),
+        Ok("deepest\n".to_string())
+    );
+    assert_eq!(
+        srv.request(&argv(&["if-shell", "-F", "1", &nested_if(300)]), WAIT),
+        Err("if-shell: nested more than 100 deep".to_string())
+    );
+    let took = start.elapsed();
+    assert!(took < Duration::from_secs(1), "{took:?}");
+    assert_eq!(display(&srv, "alpha", "#{session_name}"), "alpha");
+}

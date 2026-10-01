@@ -132,11 +132,24 @@ fn shell_form(
     });
 }
 
+/// How deep `if-shell` branches (and the commands that run them) may nest.
+const BRANCH_DEPTH_LIMIT: u32 = 100;
+
 /// Runs a branch's command string in `ctx`, parsed whole first as tmux
 /// parses it, then each command in turn as one sequence, so a hook's
 /// shell or a `wait-for` holds the rest of it (and of the request); the
 /// first error stops the rest.
+///
+/// Branches nest at most [`BRANCH_DEPTH_LIMIT`] deep. tmux 3.7b has no
+/// limit (recorded: `if -F` nested 1990 deep runs, in 16 s, since each
+/// level re-parses the rest); grofe runs a branch on the actor's stack and
+/// re-splits its text, so it stops there with an error instead.
 fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, String> {
+    if hooks::depth(state) >= BRANCH_DEPTH_LIMIT {
+        return Err(format!(
+            "if-shell: nested more than {BRANCH_DEPTH_LIMIT} deep"
+        ));
+    }
     let mut cmds = Vec::new();
     for argv in cmd::split_command_string(text).map_err(|e| e.to_string())? {
         let argv = mouse::resolve_targets(state, &argv);

@@ -220,6 +220,30 @@ impl TestServer {
         }
     }
 
+    /// Sends one request over a control connection, so its arguments can
+    /// be larger than `exec` allows: `Ok(out)` or `Err(err)`.
+    pub fn request(&self, argv: &[String], timeout: Duration) -> Result<String, String> {
+        let stream = UnixStream::connect(&self.socket).map_err(|e| format!("connect: {e}"))?;
+        let mut sub = Subscription {
+            reader: BufReader::new(stream.try_clone().map_err(|e| e.to_string())?),
+            writer: stream,
+        };
+        let hello = encode_hello(&Hello::Control(self.ctx())).map_err(|e| e.to_string())?;
+        let req = serde_json::to_string(&Request {
+            id: 1,
+            argv: argv.to_vec(),
+        })
+        .map_err(|e| e.to_string())?;
+        writeln!(sub.writer, "{hello}\n{req}").map_err(|e| e.to_string())?;
+        loop {
+            match sub.read_reply(timeout)? {
+                Reply::Ok { out, .. } => return Ok(out),
+                Reply::Err { err, .. } => return Err(err),
+                Reply::Event(_) => continue,
+            }
+        }
+    }
+
     /// Opens a control connection and sends `subscribe <events...>`.
     /// Returns once the server has accepted the subscription.
     pub fn subscribe(&self, events: &[&str]) -> Result<Subscription, String> {
