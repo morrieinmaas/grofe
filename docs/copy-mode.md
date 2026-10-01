@@ -183,16 +183,37 @@ Where grofe differs:
 
 ## Selection over wrapped lines
 
-A selection runs over logical lines, not screen rows. Rows that alacritty
-marks `WRAPLINE` (a soft wrap) join into one line with nothing between them;
-a hard newline stays a newline. Trailing blanks on each line are trimmed. A
-wide character is copied whole when the selection touches either of its
-cells, and combining marks stay with their base character. A rectangle
-(`v`, `C-v`) is the exception: it copies the same columns from each screen
-row, one line per row. A selection is stored as positions in logical lines,
-so it survives a resize that reflows them. Where tmux's own result differs
-in a detail (a trailing newline after a line selection, a wide character cut
-by a rectangle edge), TM.2's goldens decide and grofe follows tmux.
+A selection runs over logical lines, not screen rows, as tmux 3.7b's
+`window_copy_get_selection` does, checked byte for byte against TM.2's
+goldens (`tests/fixtures/compat/golden/tm_2/`). Rows that alacritty marks
+`WRAPLINE` (a soft wrap) join into one line with nothing between them; a
+hard newline stays a newline. Trailing blanks on each line are trimmed,
+whatever their colour, but a soft-wrapped row keeps every cell, so a
+blank at the wrap point stays, and so does the empty cell a wide
+character too wide for the edge left. A wide character is copied whole
+when the selection includes its first cell, combining marks stay with
+their base character, and a tab comes back as a tab. A rectangle (`v`,
+`C-v`) copies the same columns from each row, one line per row; an edge
+through a wide character's second cell drops the character rather than
+rounding outward.
+
+Where tmux's details differ from what one might expect, grofe follows
+tmux:
+
+- **The final newline.** A selection whose end runs past the end of its
+  line keeps a trailing newline: `select-line` always does, a stream
+  selection ending at `$` does not. A selection ending part way into a
+  soft-wrapped row that is the end of its line's text keeps one too.
+- **Resize.** A resize clears the selection, as in tmux
+  (`window_copy_size_changed`); selecting the line again after the
+  reflow copies the same text.
+- **`append-selection`** appends to the newest automatic buffer with no
+  separator and stores the result by that buffer's name, which makes it a
+  named buffer (so `show-buffer` with no `-b` skips it); with no buffer
+  it makes a new automatic one.
+- The copy commands' `prefix` argument is accepted and ignored, and a
+  copy with no selection copies nothing (tmux copies the search match at
+  the cursor, which waits on TM.3).
 
 ## Search
 

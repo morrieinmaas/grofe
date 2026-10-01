@@ -1,0 +1,188 @@
+# TM.2: select-word with the default word-separators on foo/bar-baz.rs: the
+# cursor on each column of "see foo/bar-baz.rs  x" in turn (letters,
+# separators, the blanks between words), then on a word that wraps at the
+# 20-column edge, then with word-separators set to "" (only blanks
+# separate). Last, a line whose wide character does not fit at the edge
+# and wraps whole. Each selection is copied and shown with its exact size.
+$ new-session -d -s main -x 20 -y 10 'printf "see foo/bar-baz.rs  x\n"; printf "123456789012345 wrapping-word end\n"; printf "1234567890123456789\344\270\255x\n"; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 2 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 4 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 6 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 7 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 8 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 10 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 11 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 12 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 14 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 15 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 16 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 17 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 18 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 19 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X -N 2 cursor-right
+$ send-keys -t main -X select-word
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X select-word
+$ send-keys -t main -X cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 8 cursor-right
+$ send-keys -t main -X select-word
+$ send-keys -t main -X -N 2 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X cursor-left
+$ send-keys -t main -X cursor-left
+$ send-keys -t main -X cursor-left
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ set -g word-separators ''
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 8 cursor-right
+$ send-keys -t main -X select-word
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 4 cursor-down
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 4 cursor-down
+$ send-keys -t main -X -N 18 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

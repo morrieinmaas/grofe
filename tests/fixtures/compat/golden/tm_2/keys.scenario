@@ -1,0 +1,35 @@
+# TM.2: the selection rows typed on an attached client: Space, o, v, C-v,
+# V and A (append-selection-and-cancel), which with no buffer makes a new
+# one and then appends to it. Escape goes through send-keys: typed alone
+# on the pty, tmux holds it and reads it with the next key as M-Space.
+$ new-session -d -s main -x 80 -y 24 'printf "alpha beta\ngamma delta\n"; exec sleep 100000'
+$ run-shell 'sleep 1'
+client 80x25 attach -t main
+keys C-b [
+$ send-keys -t main -X history-top
+keys Space
+keys l l l
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+keys o
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+keys v
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+keys C-v
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+keys V
+$ display -p -t main '#{selection_present} #{selection_mode} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main Escape
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{selection_active}'
+keys Space
+keys j
+keys A
+$ display -p -t main '#{pane_in_mode}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+keys C-b [
+$ send-keys -t main -X history-top
+keys w
+keys Space
+keys e
+keys A
+$ display -p -t main '#{pane_in_mode}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
