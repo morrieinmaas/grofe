@@ -22,6 +22,7 @@ mod tp_1;
 mod tp_10;
 mod tp_4;
 mod tp_5;
+mod tp_6;
 
 use std::collections::BTreeSet;
 use std::fs;

@@ -134,7 +134,7 @@ done
 # of each tree, the files its entry point runs, byte for byte and with
 # their modes, and its license. Files plugins/LOCAL names are written by
 # the plugin itself and are left out.
-plugins=(tmux-which-key tmux-claude-session-manager tmux-sensible)
+plugins=(tmux-which-key tmux-claude-session-manager tmux-sensible tmux-sessionx)
 plugin_files() {
   local local_files
   local_files="$(awk -v n="$2" 'NF > 0 && substr($1, 1, 1) != "#" && $1 == n { print $2 }' \
