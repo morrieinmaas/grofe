@@ -34,7 +34,7 @@ load-commands = [
   "set-environment -g OPENSESSIONS_SKIP_BINARY_DOWNLOAD 1",
   # The plugin loader, over the ten names in tmux.conf's order. It loads into
   # the server in $TMUX and no other.
-  '''run-shell 'f="$CANOPY_STORE/lib/plugins.sh"; [ -r "$f" ] || exit 0; . "$f"; canopy_load_plugins tmux-resurrect tmux-continuum tmux-sensible tmux-yank tmux-fzf tmux-sessionx tmux-which-key opensessions tmux-fzf-url tmux-claude-session-manager'''',
+  '''run-shell 'f="$CANOPY_STORE/lib/plugins.sh"; [ -r "$f" ] || exit 0; . "$CANOPY_STORE/lib/env.sh"; . "$f"; canopy_load_plugins tmux-resurrect tmux-continuum tmux-sensible tmux-yank tmux-fzf tmux-sessionx tmux-which-key opensessions tmux-fzf-url tmux-claude-session-manager'''',
   # opensessions binds prefix C-s to its sidebar when it loads; this takes it
   # back for the key table's prefix-send row.
   "bind-key C-s send-prefix",
