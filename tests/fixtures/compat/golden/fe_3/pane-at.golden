@@ -1,0 +1,21 @@
+$ new-session -d -s main -x 80 -y 24
+? 0
+$ split-window -d -h -t main:1.1
+? 0
+$ split-window -d -v -t main:1.2
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height} L#{pane_at_left} R#{pane_at_right} T#{pane_at_top} B#{pane_at_bottom}'
+1 0,0 40x24 L1 R0 T1 B1
+2 41,0 39x12 L0 R1 T1 B0
+3 41,13 39x11 L0 R1 T0 B1
+? 0
+$ resize-pane -Z -t main:1.3
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_left},#{pane_top} #{pane_width}x#{pane_height} L#{pane_at_left} R#{pane_at_right} T#{pane_at_top} B#{pane_at_bottom}'
+1 0,0 40x24 L1 R0 T1 B1
+2 41,0 39x12 L0 R1 T1 B0
+3 0,0 80x24 L1 R1 T1 B1
+? 0
+$ display -p -t main:1.3 '#{pane_at_left}#{pane_at_right}#{pane_at_top}#{pane_at_bottom}'
+1111
+? 0

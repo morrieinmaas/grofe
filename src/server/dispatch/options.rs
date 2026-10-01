@@ -2482,6 +2482,19 @@ impl FormatVars for FormatCtx<'_> {
                 let top: u32 = self.get("pane_top")?.parse().ok()?;
                 (top + u32::from(p.rows)).saturating_sub(1).to_string()
             }
+            // Whether the pane touches that edge of the window, as tmux's
+            // format.c decides (grofe has no pane-border-status to move the
+            // top and bottom edges).
+            "pane_at_left" => flag(self.get("pane_left")? == "0"),
+            "pane_at_top" => flag(self.get("pane_top")? == "0"),
+            "pane_at_right" => {
+                let left: u32 = self.get("pane_left")?.parse().ok()?;
+                flag(left + u32::from(p.cols) >= u32::from(w.cols))
+            }
+            "pane_at_bottom" => {
+                let top: u32 = self.get("pane_top")?.parse().ok()?;
+                flag(top + u32::from(p.rows) >= u32::from(w.rows))
+            }
             // The place in the stack, 0 on top: the floating panes, then
             // every tiled pane one below them all (tmux's z_index).
             "pane_z" => match w.floating(p.id) {

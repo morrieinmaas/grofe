@@ -195,6 +195,13 @@ fn the_canopy_status_matches_its_golden() {
     check("canopy", &[], same);
 }
 
+/// TC.13 regression: `#{pane_at_left}` and its siblings say which window
+/// edges a pane touches, zoomed or not.
+#[test]
+fn pane_at_edges_match_their_golden() {
+    check("pane-at", &[], same);
+}
+
 /// Case 3: `show` output, arrays and appends.
 #[test]
 fn show_options_match_their_golden() {

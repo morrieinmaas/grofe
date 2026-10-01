@@ -77,23 +77,7 @@ pub const TSESS_PATH_TMUX: &str = "/opt/nanobrew/prefix/bin/tmux";
 /// Scenario steps (by scenario and first line) where grofe is known to
 /// differ from tmux 3.7b, each with the gap and its owner. A listed step
 /// must still differ, so a fix shows up as a stale entry.
-const KNOWN: &[(&str, &str, &str)] = &[
-    (
-        "nav",
-        "$ display-message -p '#{pane_id} #{pane_at_left} #{pane_at_right}'",
-        PANE_AT,
-    ),
-    (
-        "nav",
-        "$ display-message -p '#{pane_id} #{pane_at_left}'",
-        PANE_AT,
-    ),
-];
-
-/// `#{pane_at_left}` and its siblings are empty: no inventory row names
-/// them (docs/compat-coverage.md, "Variable named: no"). The navigator's
-/// no-wrap mode reads them; the owner does not set it. Owner: TC.3.
-const PANE_AT: &str = "#{pane_at_left} and #{pane_at_right} are empty (TC.3 inventory)";
+const KNOWN: &[(&str, &str, &str)] = &[];
 
 /// The canopy and athome checkouts under test.
 pub struct Checkouts {
