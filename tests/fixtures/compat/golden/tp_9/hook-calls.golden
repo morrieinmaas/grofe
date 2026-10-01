@@ -1,0 +1,28 @@
+## new-session two
+127.0.0.1:<port>/refresh
+## new-window one
+127.0.0.1:<port>/ensure-sidebar -d <tty>|main|@2|%2|1
+## new-window two
+127.0.0.1:<port>/ensure-sidebar -d <tty>|main|@3|%3|1
+## split-window
+## select-pane
+127.0.0.1:<port>/focus -d <tty>|main|@3|%3|1
+## select-window
+127.0.0.1:<port>/ensure-sidebar -d <tty>|main|@2|%2|1
+## resize-pane
+## resize-window
+127.0.0.1:<port>/pane-layout-changed
+## switch-client two
+127.0.0.1:<port>/ensure-sidebar -d <tty>|two|@1|%1|1
+127.0.0.1:<port>/focus -d <tty>|two|@1|%1|1
+## client resized
+127.0.0.1:<port>/client-resized
+## pane exits
+127.0.0.1:<port>/pane-exited
+## kill-pane
+127.0.0.1:<port>/pane-exited
+## switch-client main
+127.0.0.1:<port>/ensure-sidebar -d <tty>|main|@2|%2|1
+127.0.0.1:<port>/focus -d <tty>|main|@2|%2|1
+## kill-session two
+127.0.0.1:<port>/refresh

@@ -114,6 +114,9 @@ pub struct Rig {
     socket: String,
     plugins: Vec<String>,
     options: Vec<(String, String)>,
+    /// What a plugin reads from the server's environment, set with
+    /// [`Rig::server_env`].
+    extra_env: Vec<(String, String)>,
 }
 
 impl Rig {
@@ -156,8 +159,7 @@ impl Rig {
         }
         let ps = ["/bin/ps", "/usr/bin/ps"]
             .into_iter()
-            .find(|p| Path::new(p).exists())
-            .expect("a ps");
+            .find(|p| Path::new(p).exists());
         let rig = Rig {
             _dir: dir,
             real_tmux: real.is_some(),
@@ -168,8 +170,12 @@ impl Rig {
                 .map(|(k, v)| (k, v.replace("<root>", &root.display().to_string())))
                 .collect(),
             root,
+            extra_env: Vec::new(),
         };
-        rig.install("ps", &PS_SHIM.replace("@REAL@", ps));
+        // A machine with no ps (a slim container) runs no other tmux either.
+        if let Some(ps) = ps {
+            rig.install("ps", &PS_SHIM.replace("@REAL@", ps));
+        }
 
         let fixture = fixtures().join("canopy-port/store");
         let store = rig.store();
@@ -212,6 +218,13 @@ impl Rig {
         rig
     }
 
+    /// Adds `env` to every command's environment, so the server a command
+    /// starts holds it in its global environment, on grofe and on tmux.
+    pub fn server_env(&mut self, env: &[(&str, String)]) {
+        self.extra_env
+            .extend(env.iter().map(|(k, v)| (k.to_string(), v.clone())));
+    }
+
     pub fn path(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
     }
@@ -251,6 +264,9 @@ impl Rig {
             ("CANOPY_STATE".into(), p("cstate")),
             ("CANOPY_CONFIG".into(), p("cconf")),
         ]
+        .into_iter()
+        .chain(self.extra_env.iter().cloned())
+        .collect()
     }
 
     fn base(&self, program: &Path) -> Command {

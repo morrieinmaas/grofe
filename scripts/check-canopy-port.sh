@@ -141,7 +141,7 @@ store_plugin_paths() {
     tmux-continuum) echo scripts ;;
     tmux-fzf) echo main.sh scripts ;;
     tmux-fzf-url) echo fzf-url.sh ;;
-    opensessions) echo package.json integrations/tmux-plugin ;;
+    opensessions) echo package.json integrations/tmux-plugin apps/tui/scripts ;;
   esac
 }
 store_files() {
