@@ -232,7 +232,20 @@ fn popup_env_is_tmux_s() {
     let parsed = parse_scenario(&fs::read_to_string(&scenario).unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cli = with_client_ttys(grofe_cli(dir.path()), dir.path());
-    let got = replay(&cli, &parsed).normalized(&Normalizer::load());
+    let mut run = replay(&cli, &parsed);
+    // The server's pid exactly, from `TMUX` (`<socket>,<pid>,<session>`),
+    // in place of the replayer's pid window, which a busy machine can
+    // outrun (as `fe_3::exact_pids` does for steps that print a pid).
+    let pid = run
+        .text
+        .lines()
+        .find_map(|l| l.strip_prefix("TMUX="))
+        .and_then(|v| v.rsplit(',').nth(1))
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("no TMUX in the popup's env:\n{}", run.text));
+    run.ctx.pids = None;
+    run.ctx.exact_pids = vec![pid];
+    let got = run.normalized(&Normalizer::load());
     let (got_keys, want) = (keys(&got), keys(&golden));
     let missing: Vec<&String> = want.difference(&got_keys).collect();
     let extra: Vec<&String> = got_keys
