@@ -142,6 +142,13 @@ fn set_buffer_append_rename_and_errors_equal_the_golden() {
     replay("append");
 }
 
+/// A control character in a name given with `-b` or `-n` is refused with
+/// tmux's text.
+#[test]
+fn buffer_names_with_control_characters_equal_the_golden() {
+    replay("names");
+}
+
 /// Case 5: the 51st automatic buffer evicts the oldest.
 #[test]
 fn the_51st_automatic_buffer_evicts_the_oldest() {

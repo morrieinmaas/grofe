@@ -1,0 +1,31 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set-buffer -b 'a	b' x
+! invalid buffer name: a	b
+? 1
+$ if-shell -F 1 'set-buffer -b "a\eb" x'
+! invalid buffer name: ab
+? 1
+$ if-shell -F 1 'set-buffer -b "a\nb" x'
+! invalid buffer name: a
+! b
+? 1
+$ set-buffer -b ok x
+? 0
+$ if-shell -F 1 'set-buffer -b ok -n "a\eb"'
+! invalid buffer name: ab
+? 1
+$ set-buffer -b ok -n 'a	b'
+! invalid buffer name: a	b
+? 1
+$ set-buffer -b ok -n 'a b'
+? 0
+$ set-buffer -b é y
+? 0
+$ show-buffer -b 'a	b'
+! no buffer a	b
+? 1
+$ list-buffers
+é: 1 bytes: "y"
+a b: 1 bytes: "x"
+? 0

@@ -11,8 +11,10 @@
 //!   automatic buffer ([`Buffers::top`]).
 //!
 //! Each buffer is bounded ([`MAX_BUFFER_BYTES`]) and so is the sum of all
-//! of them with their names ([`MAX_TOTAL_BYTES`]), so a hostile caller can
-//! grow the server's memory only so far; tmux bounds neither. A paste is
+//! of them with their names and a fixed [`OVERHEAD`] each
+//! ([`MAX_TOTAL_BYTES`]), so a hostile caller can grow the server's memory
+//! only so far; tmux bounds neither. A name with a control character is
+//! refused, as tmux does, and a name past [`MAX_NAME_BYTES`] too. A paste is
 //! made by [`paste_bytes`], bounded by [`MAX_PASTE_BYTES`].
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,6 +29,10 @@ pub const MAX_BUFFER_BYTES: usize = 4 << 20;
 pub const MAX_TOTAL_BYTES: usize = 64 << 20;
 /// The most one paste may write, separators and escapes included.
 pub const MAX_PASTE_BYTES: usize = 16 << 20;
+/// What each buffer costs beyond its name and data.
+pub const OVERHEAD: usize = 64;
+/// The longest buffer name (tmux has no limit).
+pub const MAX_NAME_BYTES: usize = 1024;
 /// tmux's `buffer-limit` default.
 pub const DEFAULT_LIMIT: usize = 50;
 /// How much of a buffer `buffer_sample` shows (tmux's `paste_make_sample`).
@@ -51,8 +57,10 @@ pub struct Buffer {
 }
 
 impl Buffer {
+    /// What the buffer counts against [`MAX_TOTAL_BYTES`]: its name, its
+    /// data and [`OVERHEAD`], so many tiny buffers count too.
     fn cost(&self) -> usize {
-        self.name.len() + self.data.len()
+        OVERHEAD + self.name.len() + self.data.len()
     }
 }
 
@@ -69,6 +77,21 @@ fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// tmux 3.7b's check on a name a buffer is given (`-b`, `-n`): no control
+/// character (below 0x20, or DEL); grofe also bounds its length.
+fn check_name(name: &str) -> Result<(), String> {
+    if name.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(format!("invalid buffer name: {name}"));
+    }
+    if name.len() > MAX_NAME_BYTES {
+        return Err(format!(
+            "buffer name too long: {} bytes (limit {MAX_NAME_BYTES})",
+            name.len()
+        ));
+    }
+    Ok(())
 }
 
 fn too_large(len: usize) -> String {
@@ -145,6 +168,7 @@ impl Buffers {
         if name.is_empty() {
             return Err("empty buffer name".to_string());
         }
+        check_name(name)?;
         if data.is_empty() {
             return Ok(());
         }
@@ -177,11 +201,16 @@ impl Buffers {
         if new.is_empty() {
             return Err("new name is empty".to_string());
         }
+        check_name(new)?;
         if self.get(old).is_none() {
             return Err(format!("no buffer {old}"));
         }
         if old == new {
             return Ok(());
+        }
+        let replaced = self.get(new).map_or(0, Buffer::cost);
+        if self.total - replaced - old.len() + new.len() > MAX_TOTAL_BYTES {
+            return Err("buffers full".to_string());
         }
         self.delete(new);
         if let Some(b) = self.list.iter_mut().find(|b| b.name == old) {
@@ -464,6 +493,65 @@ mod tests {
         );
     }
 
+    /// Recorded on tmux 3.7b: a control character (ESC, tab, DEL, LF) in
+    /// a new name is refused, for a write and a rename; UTF-8, C1 and
+    /// spaces are fine.
+    #[test]
+    fn names_with_control_characters_are_refused() {
+        let mut b = Buffers::default();
+        for name in ["a\x1bb", "a\tb", "a\x7fb", "a\nb", "a\x01"] {
+            assert_eq!(
+                b.set(name, b"x".to_vec()),
+                Err(format!("invalid buffer name: {name}"))
+            );
+        }
+        for name in ["a b", "é", "a\u{9b}b"] {
+            b.set(name, b"x".to_vec()).unwrap();
+        }
+        assert_eq!(
+            b.rename("a b", "a\x1bb"),
+            Err("invalid buffer name: a\x1bb".to_string())
+        );
+        assert!(b.get("a b").is_some());
+        let long = "n".repeat(MAX_NAME_BYTES + 1);
+        assert!(
+            b.set(&long, b"x".to_vec())
+                .unwrap_err()
+                .contains("too long")
+        );
+        assert!(b.rename("a b", &long).unwrap_err().contains("too long"));
+        b.set(&long[1..], b"x".to_vec()).unwrap();
+    }
+
+    /// A rename that would pass the total is refused, and leaves both the
+    /// buffer and any buffer of the new name alone; tiny buffers count
+    /// their overhead.
+    #[test]
+    fn renames_and_tiny_buffers_count_against_the_total() {
+        let mut b = Buffers::default();
+        let name = "n".repeat(MAX_NAME_BYTES);
+        let mut i = 0;
+        let full = vec![b'x'; MAX_BUFFER_BYTES];
+        while b.total + MAX_BUFFER_BYTES + OVERHEAD + 8 < MAX_TOTAL_BYTES {
+            b.set(&format!("f{i}"), full.clone()).unwrap();
+            i += 1;
+        }
+        let room = MAX_TOTAL_BYTES - b.total;
+        let fill = room - OVERHEAD - 1 - 10;
+        b.set("s", vec![b'y'; fill]).unwrap();
+        assert!(MAX_TOTAL_BYTES - b.total < MAX_NAME_BYTES);
+        assert_eq!(b.rename("s", &name), Err("buffers full".to_string()));
+        assert!(b.get("s").is_some());
+        b.rename("s", "short").unwrap();
+        let sum: usize = b.iter().map(Buffer::cost).sum();
+        assert_eq!(sum, b.total);
+
+        let mut t = Buffers::default();
+        t.set("a", b"x".to_vec()).unwrap();
+        t.add(b"y".to_vec(), 50).unwrap();
+        assert_eq!(t.total, 2 * OVERHEAD + 2 + "buffer0".len() + 1);
+    }
+
     #[test]
     fn sizes_are_bounded() {
         let mut b = Buffers::default();
@@ -477,8 +565,8 @@ mod tests {
         assert_eq!(b.set("last", full.clone()), Err("buffers full".into()));
         // An automatic add drops older automatic buffers to fit, and fails
         // only when named ones fill the space.
-        b.add(vec![b'y'; MAX_BUFFER_BYTES - 100], 50).unwrap();
-        b.add(vec![b'z'; MAX_BUFFER_BYTES - 100], 50).unwrap();
+        b.add(vec![b'y'; MAX_BUFFER_BYTES - 2000], 50).unwrap();
+        b.add(vec![b'z'; MAX_BUFFER_BYTES - 2000], 50).unwrap();
         assert_eq!(b.iter().filter(|b| b.automatic).count(), 1);
         assert!(b.total <= MAX_TOTAL_BYTES);
         b.set("n0", b"small".to_vec()).unwrap();

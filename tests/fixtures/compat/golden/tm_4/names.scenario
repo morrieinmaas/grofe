@@ -1,0 +1,14 @@
+# TM.4: a buffer name with a control character (tab, ESC, LF) is
+# refused for -b and for -n, with tmux's text; spaces and UTF-8 are
+# fine; a lookup by such a name is only a missing buffer.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-buffer -b 'a	b' x
+$ if-shell -F 1 'set-buffer -b "a\eb" x'
+$ if-shell -F 1 'set-buffer -b "a\nb" x'
+$ set-buffer -b ok x
+$ if-shell -F 1 'set-buffer -b ok -n "a\eb"'
+$ set-buffer -b ok -n 'a	b'
+$ set-buffer -b ok -n 'a b'
+$ set-buffer -b é y
+$ show-buffer -b 'a	b'
+$ list-buffers
