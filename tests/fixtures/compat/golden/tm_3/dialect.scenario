@@ -1,0 +1,272 @@
+# TM.3: the regex dialect. Each pattern is searched forward from the top
+# of history and backward from the bottom: POSIX extended syntax as
+# glibc reads it (\d is a plain d, a backslash in brackets is itself),
+# word boundaries, classes, intervals and anchors, and patterns glibc
+# refuses, which find nothing.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\d'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\d'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'd\d'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'd\d'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\D'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\D'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '[[:digit:]]+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '[[:digit:]]+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '[\d]+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '[\d]+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'x[0-9]y'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'x[0-9]y'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\<bar'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\<bar'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'bar\>'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'bar\>'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\bbar\b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\bbar\b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\Bar'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\Bar'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\w+,'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\w+,'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\W\w'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\W\w'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\s\S'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\s\S'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\S+\s'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\S+\s'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'e{2}'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'e{2}'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'd{2,}'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'd{2,}'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'b{'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'b{'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '{'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '{'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'a{,2}b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'a{,2}b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '^filler 4'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '^filler 4'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'here$'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'here$'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '^'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '^'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '$'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '$'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '.*'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '.*'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'x*'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'x*'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(ab)+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(ab)+'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'ab|abab'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'ab|abab'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(a|ab)(c|bcd)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(a|ab)(c|bcd)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'back\\slash'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'back\\slash'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '[]a]x'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '[]a]x'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '[^a-z ]'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '[^a-z ]'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\t'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\t'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'tab\	'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'tab\	'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\n'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\n'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\pL'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\pL'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\x41'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\x41'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(?i)foo'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(?i)foo'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'a**'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'a**'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '+foo'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '+foo'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '('
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '('
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward ')'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward ')'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '[a'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '[a'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '\'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '\'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'

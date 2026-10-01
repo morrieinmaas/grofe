@@ -1,0 +1,76 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '(a|ab)'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,18,24 1 32 a
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '(a|ab)'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+12,22,0 1 32 a
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '(ab|abab)+ '
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,18,8 1 1 abab 
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '(ab|abab)+ '
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,10,0 1 1 abab 
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'd(e|ee)'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+28,18,21 1 2 de
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'd(e|ee)'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+15,10,0 1 2 dee
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '(ab)\1'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,18,8 1 1 abab
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '(ab)\1'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,10,0 1 1 abab
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'fo(o|oo)[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,24 1 6 foo1
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'fo(o|oo)[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 6 foo8
+? 0

@@ -1,0 +1,98 @@
+# TM.3: the jumps on the jump line (alpha,beta;gamma,delta;epsilon x y x)
+# and across a wrap, through send-keys -X: jump-forward (f),
+# jump-backward (F), jump-to-forward (t), jump-to-backward (T), then
+# jump-again (;) and jump-reverse (,) after each, with counts.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'jump line'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward ','
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward 'x'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-backward 'a'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-forward ';'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-backward ','
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward 'z'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-backward 'q'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X start-of-line
+$ send-keys -t main -X -N 2 jump-forward a
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 3 jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 2 jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X end-of-line
+$ send-keys -t main -X -N 2 jump-to-backward a
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward ''
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+# Across the wrap on line 41: from the start, f 7 lands on the next row.
+$ send-keys -t main -X search-forward 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxf'
+$ send-keys -t main -X start-of-line
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward '7'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-backward 'x'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-forward 'e'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-backward 'o'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-forward 'f'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+# A tab: f with a tab argument, on the classes line.
+$ send-keys -t main -X search-forward 'classes'
+$ send-keys -t main -X jump-forward '	'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-forward 'h'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X jump-to-backward '	'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'

@@ -1,0 +1,51 @@
+# TM.3: search-forward-text and search-backward-text take the pattern as
+# plain text: a.b matches only a literal a.b, where the regex a.b also
+# matches axb and a-b. A lower-case pattern ignores case (A.B); one with
+# an upper-case letter does not.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-reverse
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward-text 'A.B'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward-text 'A.B'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-backward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-backward-text 'a.b'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-forward-text 'tab	here'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X search-backward-text 'back\slash'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'

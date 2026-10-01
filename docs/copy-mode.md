@@ -201,28 +201,56 @@ by a rectangle edge), TM.2's goldens decide and grofe follows tmux.
 search for `#{copy_cursor_word}`. As in tmux, a pattern with no upper-case
 letter matches without regard to case, `wrap-search` decides whether `n`
 wraps at the end, and a match may span a soft wrap but never a hard newline.
-The search runs on a copy of the grid, off the server's actor.
+A new copy mode starts with the pane's last search, upwards, so `n` repeats
+it. Matches are drawn in `copy-mode-match-style`, the one under the cursor
+in `copy-mode-current-match-style`.
+
+The search runs off the server's actor, on a shared copy of the pane. Until
+it ends, the mode's next commands wait in order, and so does the reply to
+whichever request sent them, so `send -X search-forward x \; display -p
+'#{copy_cursor_x}'` prints where the search landed. The marks are worked
+out for the rows on view only, so drawing them costs the pane's size, not
+the history's. A pattern bigger than 1 MiB compiled is refused.
+
+tmux 3.7b's own quirks are kept, because the goldens show them
+(`tests/fixtures/compat/golden/tm_3/`):
+
+- A pattern with none of `^$*+()?[].\` is searched as plain text even by
+  `search-forward`, so `ab|abab` and `x{3}f` look for those characters.
+- A line is searched padded to the pane's width with blanks, so `here$`
+  matches nothing and `.*` takes the whole width.
+- An empty match counts as none, so `x*` finds only lines starting with x.
 
 tmux compiles the pattern with POSIX `regcomp` (extended syntax); the golden
-recorder runs on Debian, so the goldens show glibc's dialect. grofe uses the
-`regex` crate. Where they differ, grofe behaves as follows. TM.3 records
-each case from tmux 3.7b and tests grofe's side; a case that turns out not
-to differ is dropped from this list.
+recorder runs on Debian, so the goldens show glibc's dialect. grofe reads the
+pattern as glibc does and runs it with the `regex` crate. These behave as in
+tmux, checked by the `tm_3/dialect` golden:
 
-1. **Back-references** (`\(a\)\1`, `(a)\1`): glibc accepts them, the crate
-   does not. grofe treats the pattern as invalid and finds nothing.
-2. **Alternation**: POSIX takes the longest match at a position, the crate
-   the first alternative that matches. `a|ab` on `ab` matches `ab` in tmux
-   and `a` in grofe. The cursor lands in the same place; the highlighted
-   match and `search-forward`'s end position can differ.
-3. **Perl classes**: `\d`, `\D` and `\pL` are digit, non-digit and letter in
-   grofe. glibc reads `\d` as a plain `d`.
-4. **Unicode**: `\w`, `\s`, `\b` and `.` follow Unicode in grofe. glibc
-   follows the locale (`C.UTF-8` in the recorder), which agrees for ASCII
-   and can differ for other scripts.
+- `\w`, `\W`, `\s`, `\S`, `\b`, `\B`, `\<` and `\>` are GNU's classes and
+  boundaries. Any other letter or digit after `\` (`\d`, `\n`, `\t`,
+  `\pL`, `\x41`) makes the pattern invalid, so it finds nothing. Before
+  any other character, `\` makes it literal.
+- In a bracket expression, `\` is itself and `[:digit:]` is a class, so
+  `[\d]` matches a backslash or a d. `]` first is itself.
+- Intervals work, and `{,2}` is `{0,2}`. A `(?` and a repetition with
+  nothing to repeat are invalid.
 
-`\<` and `\>`, bracket expressions and `[[:alpha:]]` classes behave the
-same. The `-text` forms take the pattern as plain text in both.
+These still differ, checked by the `tm_3/differs` golden:
+
+1. **Alternation**: POSIX takes the longest match at the leftmost
+   position, while the crate takes the first alternative that matches.
+   `d(e|ee)` matches `dee` in tmux and `de` in grofe. The cursor lands in
+   the same place, but the highlighted match and `#{search_match}` can
+   differ. Matching tmux would need the `regex-automata` crate's
+   leftmost-longest search, which grofe does not depend on.
+2. **Back-references** (`(ab)\1`): glibc accepts them, but the crate
+   cannot match them, so grofe finds nothing.
+3. **Unicode**: `\w`, `\s`, `\b` and `.` follow Unicode in grofe.
+   glibc follows the locale (`C.UTF-8` in the recorder). They agree for
+   ASCII and can differ for other scripts.
+
+The incremental searches (`search-forward-incremental`, emacs `C-s`) are
+out of scope, as is the timestamp `copy-mode-position-format` can show.
 
 ## Buffers
 
@@ -284,10 +312,9 @@ the read-only scrollback view from T3.2 and the shift-drag fallback.
    and triple click rows use `copy-mode -H`. The proposal is that TM.6
    accepts both with only those meanings (start a selection at the mouse;
    hide the position indicator), so the stock rows run unchanged.
-4. **The regex dialect.** grofe finds nothing for a back-reference, takes
-   the first alternative rather than the longest, and reads `\d` as a digit.
-   The proposal is to keep these differences rather than write a POSIX
-   matcher.
+4. **The regex dialect.** Settled by the M5 addendum: grofe reads patterns
+   as glibc does where that is cheap (`\d` finds nothing, as in tmux), and
+   keeps the differences the Search section lists.
 5. **Default bindings.** The stub edit is to load "the 93 rows from TM.0's
    golden" as grofe's default table. The proposal is that grofe's default
    table holds only the 88 stock rows; yank's five come from the plugin

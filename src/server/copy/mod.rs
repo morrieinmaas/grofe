@@ -72,6 +72,8 @@ pub const FORMAT_COMMANDS: &[&str] = &[
 #[derive(Default)]
 pub struct Copies {
     modes: BTreeMap<PaneId, Mode>,
+    /// Each pane's last search, for its next copy mode (TM.3).
+    searches: BTreeMap<PaneId, search::Remembered>,
 }
 
 impl Copies {
@@ -93,12 +95,19 @@ impl Copies {
 
     /// Leaves copy mode in `pane`; whether it was in it.
     pub fn remove(&mut self, pane: PaneId) -> bool {
-        self.modes.remove(&pane).is_some()
+        let Some(mode) = self.modes.remove(&pane) else {
+            return false;
+        };
+        if let Some(last) = search::remember(&mode) {
+            self.searches.insert(pane, last);
+        }
+        true
     }
 
     /// Drops the modes of panes that are gone.
     pub fn retain(&mut self, live: impl Fn(PaneId) -> bool) {
         self.modes.retain(|p, _| live(*p));
+        self.searches.retain(|p, _| live(*p));
     }
 }
 
@@ -759,8 +768,9 @@ pub enum LineSel {
 /// One pane's copy mode (tmux's `window_copy_mode_data`).
 #[derive(Debug)]
 pub struct Mode {
-    /// The copy of the pane, taken on entry (`backing`).
-    pub grid: Grid,
+    /// The copy of the pane, taken on entry (`backing`); shared with a
+    /// search running off the actor.
+    pub grid: Arc<Grid>,
     /// The cursor on the view.
     pub cx: usize,
     pub cy: usize,
@@ -795,6 +805,8 @@ pub struct Mode {
     /// The last search's string (tmux's `searchstr`), as `send-keys -F`
     /// expanded it; TM.3 searches for it.
     pub search_str: Option<String>,
+    /// The search's and the jumps' own state (TM.3).
+    pub search: search::Search,
 }
 
 /// What a command asks of the mode afterwards (tmux's
@@ -821,7 +833,7 @@ impl Mode {
         let cy = row.min(grid.sy.saturating_sub(1));
         let my = grid.hsize + cy;
         Mode {
-            grid,
+            grid: Arc::new(grid),
             cx,
             cy,
             oy: 0,
@@ -840,6 +852,7 @@ impl Mode {
             sel_start: (0, 0),
             sel_end: (0, 0),
             search_str: None,
+            search: search::Search::default(),
         }
     }
 
@@ -1453,7 +1466,7 @@ impl Mode {
         let hsize = self.grid.hsize;
         self.oy = self.oy.min(hsize);
         let from_top = hsize - self.oy;
-        self.grid = grid;
+        self.grid = Arc::new(grid);
         let hsize = self.grid.hsize;
         if from_top <= hsize {
             self.oy = hsize - from_top;
@@ -1516,9 +1529,10 @@ pub fn run(mode: &mut Mode, args: &[String], ctx: &Ctx<'_>) -> Action {
     let Some((name, rest)) = args.split_first() else {
         return Action::Nothing;
     };
-    let action = command(mode, name, rest, ctx).unwrap_or(Action::Nothing);
+    let action = command(mode, name, rest, ctx);
+    search::after_command(mode, name, action.is_some());
     mode.prefix = 1;
-    action
+    action.unwrap_or(Action::Nothing)
 }
 
 fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Option<Action> {
@@ -1781,6 +1795,9 @@ pub fn enter(state: &mut State, pane: PaneId, scroll_exit: bool) -> bool {
     }
     let mut mode = Mode::new(grid, cursor, vi);
     mode.scroll_exit = scroll_exit;
+    if let Some(last) = state.copy.searches.get(&pane) {
+        search::restore(&mut mode, last);
+    }
     state.copy.insert(pane, mode);
     true
 }
@@ -1810,6 +1827,21 @@ pub fn refresh(state: &mut State, pane: PaneId) {
 /// if the command says so. `Err` when the pane is in no mode, with tmux's
 /// text.
 pub fn command_in(state: &mut State, pane: PaneId, args: &[String]) -> Result<(), String> {
+    if !state.copy.is_active(pane) {
+        return Err("not in a mode".to_string());
+    }
+    // A search in flight (TM.3): the command waits its turn.
+    if search::busy(state, pane) {
+        search::hold(state, pane, args);
+        return Ok(());
+    }
+    command_now(state, pane, args)?;
+    search::launch(state, pane, true);
+    Ok(())
+}
+
+/// [`command_in`] for a mode with no search in flight.
+fn command_now(state: &mut State, pane: PaneId, args: &[String]) -> Result<(), String> {
     if !state.copy.is_active(pane) {
         return Err("not in a mode".to_string());
     }
@@ -2010,6 +2042,9 @@ impl Overlay for CopyOverlay {
                 status::parse_style(state.model.options.lookup(name, &chain).unwrap_or(default))
             };
             let mark = status::parse_style(MARK_STYLE);
+            let found = search::view_marks(mode);
+            let all = style("copy-mode-match-style", search::MATCH_STYLE);
+            let current = style("copy-mode-current-match-style", search::CURRENT_MATCH_STYLE);
             let (cols, rows) = (usize::from(rect.cols), usize::from(rect.rows));
             let top = mode.grid.hsize - mode.oy;
             for y in 0..rows.min(mode.grid.sy) {
@@ -2025,6 +2060,10 @@ impl Overlay for CopyOverlay {
                         cell.fg = fg;
                         cell.bg = bg;
                         cell.flags = (cell.flags & !STYLE_FLAGS) | mark.attrs;
+                    }
+                    if let Some(found) = &found {
+                        let inv = mode.showmark && fy == mode.my && x == mode.mx;
+                        found.restyle(x, y, inv, &all, &current, &mut cell);
                     }
                     put(x, y, cell);
                 }
@@ -2192,7 +2231,6 @@ mod tests {
     #[test]
     fn a_tab_is_one_wide_cell() {
         let mut m = mode(&["a\tb\tc", ""], 0, (0, 0));
-        m.grid.sx = 20;
         let mut seen = vec![m.cx];
         for _ in 0..4 {
             x(&mut m, &["cursor-right"]);
