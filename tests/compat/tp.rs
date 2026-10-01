@@ -32,9 +32,26 @@ pub fn steps(transcript: &str) -> Vec<String> {
 
 /// `golden/<task>/<name>` replayed on grofe against its golden: every step
 /// equal, except the listed ones (by first line, each with its reason),
-/// which must still differ. Returns grofe's transcript.
-pub fn check(task: &str, name: &str, diverges: &[(&str, &str)]) -> String {
+/// which must still differ.
+pub fn check(task: &str, name: &str, diverges: &[(&str, &str)]) -> Replayed {
     check_with(task, name, diverges, |s| s.to_string(), |g| g.to_string())
+}
+
+/// What a [`check`] replayed: grofe's transcript, and the lines its
+/// server wrote to `compat-miss.log` (without their timestamps).
+pub struct Replayed {
+    pub transcript: String,
+    pub misses: Vec<String>,
+}
+
+/// The `compat-miss.log` lines of the grofe [`grofe_cli`] ran in `dir`,
+/// each without its timestamp.
+pub fn misses(dir: &std::path::Path) -> Vec<String> {
+    fs::read_to_string(dir.join("state/grofe/compat-miss.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.split_once(' ').map_or(l, |(_, what)| what).to_string())
+        .collect()
 }
 
 /// [`check`], with the scenario edited by `scenario` before grofe replays
@@ -46,7 +63,7 @@ pub fn check_with(
     diverges: &[(&str, &str)],
     scenario: impl Fn(&str) -> String,
     golden: impl Fn(&str) -> String,
-) -> String {
+) -> Replayed {
     let path = fixtures_dir().join(format!("golden/{task}/{name}.scenario"));
     let parsed = parse_scenario(&scenario(&fs::read_to_string(&path).unwrap())).unwrap();
     let golden = golden(
@@ -83,5 +100,8 @@ pub fn check_with(
         stale.is_empty(),
         "{task}/{name}: listed steps now match: {stale:#?}"
     );
-    got
+    Replayed {
+        transcript: got,
+        misses: misses(dir.path()),
+    }
 }

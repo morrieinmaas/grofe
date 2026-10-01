@@ -28,6 +28,6 @@ fn which_key_matches_its_golden() {
 #[test]
 fn escape_closes_the_menu_as_q_does() {
     let escape = |text: &str| text.replace("keys q\n", "keys Escape\n");
-    let got = check_with("tp_5", "which-key", &[], escape, escape);
+    let got = check_with("tp_5", "which-key", &[], escape, escape).transcript;
     assert_eq!(got.matches("keys Escape\n").count(), 2, "{got}");
 }

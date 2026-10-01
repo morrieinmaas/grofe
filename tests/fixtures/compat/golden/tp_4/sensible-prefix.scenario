@@ -1,0 +1,26 @@
+# TP.4: tmux-sensible's own script, unchanged (canopy's vendored copy),
+# loaded alone as canopy's loader loads it: a run-shell of its entry
+# point, its output discarded. First the options it tests are put back at
+# tmux's own defaults, which the recorder's tmux-defaults.conf moved, so
+# each of its branches decides as on a bare tmux. Then every option and
+# key it sets is read back. The key lines have their padding squeezed,
+# since list-keys pads to the table's longest key.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set -s escape-time 500
+$ set -g history-limit 2000
+$ set -s focus-events off
+$ set -g prefix C-a
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-sensible "$HOME/sens"'
+$ run-shell '"$HOME/sens/sensible.tmux" >/dev/null 2>&1'
+$ show -sv escape-time
+$ show -gv history-limit
+$ show -gv display-time
+$ show -gv status-interval
+$ show -gv default-command
+$ show -gv default-terminal
+$ show -sv default-terminal
+$ show -gv status-keys
+$ show -sv focus-events
+$ show -gwv aggressive-resize
+$ show -gv prefix
+$ run-shell 'tmux list-keys -T prefix | grep -E "^bind-key +(-r +)?-T prefix +(C-a|C-b|C-n|C-p|a|b|R) " | tr -s " "'
