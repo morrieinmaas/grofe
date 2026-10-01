@@ -555,10 +555,12 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     if bytes.is_empty() {
         return Ok(String::new());
     }
-    // The repeats go in bounded chunks, so a huge `-N` stops at the full
-    // input queue instead of building every repeat first.
+    // The repeats go in bounded chunks, at most `copy::MAX_REPEAT` of them,
+    // so a huge `-N` neither builds every repeat first nor holds the actor
+    // while a fast reader drains billions of them.
+    // ponytail: tmux 3.7b runs every repeat and stops answering; grofe caps.
     let per_chunk = (SEND_CHUNK / bytes.len()).max(1);
-    let mut left = u64::from(repeat);
+    let mut left = u64::from(repeat.min(copy::MAX_REPEAT));
     while left > 0 {
         let n = left.min(per_chunk as u64);
         let chunk = bytes.repeat(n as usize);

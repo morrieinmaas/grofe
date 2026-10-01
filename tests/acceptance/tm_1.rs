@@ -369,8 +369,9 @@ fn respawn_and_kill_leave_copy_mode() {
     assert_eq!(pane_var(&srv, "#{pane_in_mode}"), "0");
 }
 
-/// A huge `-N` outside copy mode stops at the pane's full input queue
-/// and the server keeps answering (tmux 3.7b stops answering, recorded).
+/// A huge `-N` outside copy mode is capped at `MAX_REPEAT` (or stops at the
+/// pane's full input queue) and the server keeps answering (tmux 3.7b stops
+/// answering, recorded).
 #[test]
 fn a_huge_count_does_not_take_the_server_down() {
     let srv = start();
