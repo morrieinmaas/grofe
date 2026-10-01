@@ -793,7 +793,7 @@ fn default_shell(spec: &PaneSpawn) -> String {
 /// `candidate` when it is an executable absolute path (tmux's
 /// `checkshell`), else the user's passwd shell when that is, else
 /// `/bin/sh`, as tmux's `getshell` falls back (spec D2 in the M3.6 ledger).
-fn pick_shell(candidate: Option<String>) -> String {
+pub fn pick_shell(candidate: Option<String>) -> String {
     let usable = |s: &String| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok();
     candidate
         .filter(usable)

@@ -620,3 +620,45 @@ fn show_s_lists_the_server_table_and_names_what_set_s_stored() {
         assert!(!listed, "{absent} in {table}");
     }
 }
+
+/// TC.13 regression: `tmux -c <shell-command>` (tmux-fzf's `menu.sh`) runs
+/// the command with the default shell, as tmux 3.7b's `client_exec` does:
+/// `argv[0]` the shell's name, `$SHELL` the shell, no `$TMUX`, and the
+/// command's exit status; with no server running it uses `$SHELL`, and a
+/// running server's `default-shell` wins. A command after it is a usage
+/// error (all recorded on a private tmux 3.7b socket).
+#[test]
+fn tmux_c_runs_the_command_with_the_default_shell() {
+    let srv = TestServer::unstarted();
+    let mut cmd = Command::new(tmux_link(&srv));
+    isolate(&srv, &mut cmd);
+    cmd.env("SHELL", "/bin/sh").args([
+        "-S",
+        &srv.socket.display().to_string(),
+        "-c",
+        "echo \"$0 $SHELL ${TMUX-unset}\"; exit 3",
+    ]);
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert_eq!(out.status.code(), Some(3), "{}", out.stderr);
+    assert_eq!(out.stdout, "sh /bin/sh unset\n");
+
+    let out = tmux(&srv, &["-c", "true", "ls"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stderr.starts_with("usage: tmux [-2CDhlNuVv]"),
+        "{}",
+        out.stderr
+    );
+
+    let srv = start_as_tmux();
+    let shell = srv.home.join("marker-shell");
+    fs::write(&shell, "#!/bin/sh\necho \"marker $SHELL\"\n").unwrap();
+    fs::set_permissions(&shell, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let shell = shell.display().to_string();
+    let out = tmux(&srv, &["set", "-g", "default-shell", &shell]);
+    assert!(out.status.success(), "{}", out.stderr);
+    let out = tmux(&srv, &["-c", "echo not this shell"]);
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("marker {shell}\n"));
+    let _ = tmux(&srv, &["kill-server"]);
+}

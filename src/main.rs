@@ -72,6 +72,9 @@ fn main() -> ExitCode {
                 if let Err(e) = grofe::compat::refuse_tmux_socket(&globals.socket(), &dirs) {
                     return fail(&e);
                 }
+                if let Some(command) = &cli.shell_command {
+                    return shell_command(&globals, command);
+                }
                 (globals, cli.argv)
             }
             Err(e) => return fail(&e),
@@ -504,6 +507,37 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
     }
+}
+
+/// tmux's `-c <shell-command>`: the command run by the default shell, as
+/// `<shell> -c <command>` with `argv[0]` the shell's name and `$SHELL` set
+/// to it, as tmux's `client_exec` runs it. The shell is a running server's
+/// `default-shell` when one is set, else what a server started now would
+/// pick (`$SHELL`, the passwd shell, `/bin/sh`). tmux starts a server only
+/// to ask; one with no sessions exits at once, so none is started here.
+fn shell_command(globals: &Globals, command: &str) -> ExitCode {
+    let (socket, _) = globals.resolve();
+    let ask = ["show-options", "-gv", "default-shell"].map(String::from);
+    let set = connect(&socket)
+        .and_then(|s| request(s, &socket, &ask))
+        .ok()
+        .and_then(|reply| match reply {
+            Reply::Ok { out, .. } => Some(out.trim_end().to_string()),
+            _ => None,
+        })
+        // grofe's built-in `/bin/sh` reads as unset (`Model::default_shell`).
+        .filter(|v| !v.is_empty() && v != "/bin/sh");
+    let shell = server::pane::pick_shell(set.or_else(|| std::env::var("SHELL").ok()));
+    let name = Path::new(&shell)
+        .file_name()
+        .map_or_else(|| shell.clone(), |n| n.to_string_lossy().into_owned());
+    let err = Command::new(&shell)
+        .arg0(name)
+        .arg("-c")
+        .arg(command)
+        .env("SHELL", &shell)
+        .exec();
+    fail(&format!("execl failed: {err}"))
 }
 
 /// `attach-session`: the attach client (spec §4.6), in this process. It

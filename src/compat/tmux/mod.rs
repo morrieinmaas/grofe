@@ -1567,6 +1567,9 @@ pub struct TmuxCli {
     /// `-f <file>`, each one given: the config a server this call starts
     /// loads, alone (`compat::start_config`).
     pub files: Vec<PathBuf>,
+    /// `-c <shell-command>`: run it with the default shell instead of a
+    /// command (tmux-fzf's `menu.sh`). The last `-c` wins, as in tmux.
+    pub shell_command: Option<String>,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
@@ -1575,7 +1578,7 @@ const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L s
 
 /// tmux's other global flags, those taking a value first. Valid for tmux,
 /// not implemented in grofe.
-const OTHER_WITH_VALUE: &[char] = &['c', 'T'];
+const OTHER_WITH_VALUE: &[char] = &['T'];
 const OTHER_FLAGS: &[char] = &['C', 'D', 'h', 'l', 'N', 'q', 'U', 'v'];
 
 /// Reads the argv of the CLI run as `tmux` (`args` follow `argv[0]`), or
@@ -1594,6 +1597,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         dialect: Dialect::Tmux,
         version: false,
         files: Vec::new(),
+        shell_command: None,
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1607,7 +1611,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         };
         for (at, flag) in flags.char_indices() {
             match flag {
-                'L' | 'S' | 'f' => {
+                'L' | 'S' | 'f' | 'c' => {
                     let attached = &flags[at + 1..];
                     let value = if attached.is_empty() {
                         i += 1;
@@ -1627,6 +1631,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                     match flag {
                         'L' => out.name = Some(value),
                         'S' => out.socket = Some(PathBuf::from(value)),
+                        'c' => out.shell_command = Some(value),
                         _ => out.files.push(PathBuf::from(value)),
                     }
                     continue 'args;
@@ -1645,6 +1650,13 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         }
     }
     out.argv = args[i..].to_vec();
+    // tmux 3.7b: `-c` takes no command after it (recorded: usage, exit 1).
+    if out.shell_command.is_some() {
+        if !out.argv.is_empty() {
+            return Err(USAGE.to_string());
+        }
+        return Ok(out);
+    }
     // tmux 3.7b's client packs the command into one message (recorded:
     // up to 16364 bytes, a NUL after each argument, goes; to 16380 is
     // `failed to send command`; past that `command too long`).
@@ -2315,8 +2327,13 @@ mod tests {
         assert!(err.starts_with("tmux: unknown option -- Z\nusage: tmux [-2CDhlNuVv]"));
         let err = cli(&args(&["-L"])).unwrap_err();
         assert!(err.starts_with("tmux: option requires an argument -- L\nusage: tmux"));
-        let err = cli(&args(&["-c", "true"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: -c");
+        let err = cli(&args(&["-T", "x"])).unwrap_err();
+        assert_eq!(err, "tmux front end is not implemented: -T");
+        let got = cli(&args(&["-c", "echo a", "-cecho b"])).unwrap();
+        assert_eq!(got.shell_command.as_deref(), Some("echo b"));
+        assert!(got.argv.is_empty());
+        let err = cli(&args(&["-c", "true", "ls"])).unwrap_err();
+        assert!(err.starts_with("usage: tmux [-2CDhlNuVv]"), "{err}");
         let got = cli(&args(&["-L", "x", "-f", "/dev/null", "ls"])).unwrap();
         assert_eq!(got.files, [PathBuf::from("/dev/null")]);
         let got = cli(&args(&["-f", "a.toml", "-fb.toml", "ls"])).unwrap();

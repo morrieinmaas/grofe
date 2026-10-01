@@ -130,11 +130,7 @@ const GROUPS: &str = "linked windows and session groups (spec 4.5 out of scope, 
 
 /// Corpus lines that still fail the replay, each with the task whose claim
 /// it contradicts. A listed line must still fail, so a fix shows up.
-const KNOWN_FAILING: &[(&str, &str)] = &[(
-    "-c {}",
-    "FE.1, Invocation row: `tmux -c <command>` answers `tmux front end is not \
-     implemented: -c`; tmux-fzf's menu.sh sends it, and M3.7 runs tmux-fzf unchanged",
-)];
+const KNOWN_FAILING: &[(&str, &str)] = &[];
 
 /// Words in a reply that mean the front end does not know a form.
 const FORBIDDEN: &[&str] = &["unknown command", "not implemented"];
