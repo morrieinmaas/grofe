@@ -69,6 +69,23 @@ pub fn recording_tmux(var: &str) -> PathBuf {
     tmux
 }
 
+/// Whether a case whose plugin writes a fixed shared `/tmp` path may run:
+/// only where `/tmp` is the test's own, as `GROFE_TEST_PRIVATE_TMP=1` (a
+/// container) says. Elsewhere it skips, saying why; under `CI` a missing
+/// flag fails, so CI cannot skip it quietly.
+pub fn private_tmp(path: &str) -> bool {
+    if std::env::var_os("GROFE_TEST_PRIVATE_TMP").is_some_and(|v| v == "1") {
+        return true;
+    }
+    let why =
+        format!("the plugin writes {path}; set GROFE_TEST_PRIVATE_TMP=1 where /tmp is private");
+    if std::env::var_os("CI").is_some() {
+        panic!("{why} (required under CI)");
+    }
+    eprintln!("SKIPPING (not run): {why}");
+    false
+}
+
 /// The ps every plugin call finds first: the `-u <uid> -o "command pid"`
 /// listing continuum counts servers with, cut to this server's tree.
 const PS_SHIM: &str = r#"#!/bin/sh
@@ -338,6 +355,12 @@ impl Rig {
                 self.plugins.join(" ")
             );
             self.t(&["run-shell", &load]);
+            // What tmux.conf sets after the loader, as the grofe fragment does.
+            if self.plugins.iter().any(|p| p == "tmux-resurrect") {
+                let wrapper = self.store().join("plugins/strategies/canopy_save.sh");
+                let wrapper = wrapper.display().to_string();
+                self.t(&["set-option", "-g", "@resurrect-save-script-path", &wrapper]);
+            }
         }
         let loaded = wait_until(|| self.plugins.iter().all(|p| self.loaded(p)), WAIT);
         assert!(
@@ -434,6 +457,18 @@ impl Rig {
             "-F",
             "#{session_name}:#{window_index}.#{pane_index} active=#{pane_active} #{pane_current_path}",
         ]);
+        // A window named after its shell is `<shell>`: /bin/sh is bash on
+        // macOS and dash on Debian, on tmux and grofe alike.
+        let windows: String = windows
+            .lines()
+            .map(|l| match l.split_once(' ') {
+                Some((at, rest)) if rest.starts_with("bash ") || rest.starts_with("sh ") => {
+                    let (_, tail) = rest.split_once(' ').unwrap_or_default();
+                    format!("{at} <shell> {tail}\n")
+                }
+                _ => format!("{l}\n"),
+            })
+            .collect();
         format!("{sessions}{windows}{panes}").replace(&self.root.display().to_string(), "<root>")
     }
 

@@ -16,6 +16,11 @@
 //! (`record_tp8_goldens`, ignored: `GROFE_TP8_TMUX=<absolute path to tmux
 //! 3.7b> cargo test --test acceptance record_tp8 -- --ignored`).
 //!
+//! The plugin sends its open command's output to `/tmp/tmux-<uid>-fzf-url.log`,
+//! a fixed path the owner's own tmux-fzf-url writes too, so every case
+//! runs only with `GROFE_TEST_PRIVATE_TMP=1` (a container), skips loudly
+//! elsewhere, and fails without it under `CI`.
+//!
 //! `xre` is not vendored, and fetching it means the network, so the test
 //! needs one at `$GROFE_TEST_XRE` or on PATH that reports 0.1.1: without
 //! one it skips, and under `CI` it fails. Any other version would make the
@@ -27,10 +32,14 @@ use std::process::Command;
 
 use crate::harness::{Harness, require_tool};
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, host_tool, read_golden, recording_tmux, wait_until, write_golden,
+    PREFIX, Rig, WAIT, host_tool, private_tmp, read_golden, recording_tmux, wait_until,
+    write_golden,
 };
 
 const TASK: &str = "tp8";
+/// Where the plugin sends its open command's output, a fixed path the
+/// owner's own tmux-fzf-url writes too.
+const FZF_URL_LOG: &str = "/tmp/tmux-<uid>-fzf-url.log";
 const GOLDEN: &str = "tp_8";
 
 /// Records its argv, one line for the count and one per argument.
@@ -49,7 +58,7 @@ fn xre() -> Option<PathBuf> {
 /// Whether the tools the plugin needs are here; skips (or, under CI,
 /// fails) when not.
 fn tools() -> Option<PathBuf> {
-    if !require_tool("fzf") {
+    if !private_tmp(FZF_URL_LOG) || !require_tool("fzf") {
         return None;
     }
     match xre() {
@@ -198,6 +207,10 @@ fn case_3_scans_only_the_history_limit() {
 #[ignore]
 fn record_tp8_goldens() {
     let tmux = recording_tmux("GROFE_TP8_TMUX");
+    assert!(
+        private_tmp(FZF_URL_LOG),
+        "record only where /tmp is private"
+    );
     let xre = xre().expect("an xre 0.1.1 at $GROFE_TEST_XRE or on PATH");
     write_golden(GOLDEN, "pick-one", &pick_one(&rig(Some(&tmux), &xre)));
     write_golden(
