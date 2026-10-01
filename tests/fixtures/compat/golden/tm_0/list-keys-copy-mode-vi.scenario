@@ -1,0 +1,8 @@
+# TM.0: the owner's copy-mode-vi table, M5's whole scope. tmux 3.7b's stock
+# table under tmux-defaults.conf, then the bindings tmux-yank and canopy's
+# vim-tmux-navigator port add (copy-mode.conf). list-keys-copy-mode-vi.txt
+# is this golden's list-keys output alone; scripts/check-copy-scope.sh
+# checks the two agree and that docs/copy-mode.md has one row per line.
+$ new-session -d -s main -x 80 -y 24 cat
+$ source-file {fixtures}/copy-mode.conf
+$ list-keys -T copy-mode-vi
