@@ -358,6 +358,11 @@ fn copy_line(mode: &Mode, buf: &mut Vec<u8>, y: usize, mut sx: usize, mut ex: us
             buf.push(b'\t');
             continue;
         }
+        // One ASCII byte with nothing combined, most cells.
+        if gc.single {
+            buf.push(gc.c as u8);
+            continue;
+        }
         buf.extend_from_slice(gc.c.encode_utf8(&mut utf8).as_bytes());
         if let Some((_, look)) = mode.grid.look(x, y) {
             for c in &look.zerowidth {
