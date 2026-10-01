@@ -9,6 +9,11 @@ their sources, by:
   config.toml       athome home/dot_config/grofe/config.toml
   user.toml         athome home/dot_config/grofe/user.toml.tmpl, rendered
   user.conf         athome home/dot_config/canopy/user.conf.tmpl, rendered
+  plugins/<name>/   canopy plugins/<name>/, the vendored plugins the M3.7
+                    checks run (tests/compat/tp_*.rs): each tree's *.tmux
+                    entry point, scripts/, plugin/, config.example.yaml and
+                    license, byte for byte and with their modes; files
+                    plugins/LOCAL names are left out
 
 The two templates are rendered without chezmoi: the lookPath block becomes
 /bin/zsh and {{ .chezmoi.homeDir }} becomes ~. user.conf is athome's text as
@@ -19,3 +24,6 @@ it cannot run; the copy itself keeps /bin/zsh.
 
 canopy is Apache License 2.0, copyright 2026 morrieinmaas (see
 tests/fixtures/import-tmux/canopy/SOURCE for its NOTICE attribution).
+
+Each plugin under plugins/ keeps its upstream license file beside it
+(tmux-which-key: MIT).
