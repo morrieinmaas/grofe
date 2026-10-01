@@ -29,7 +29,11 @@ load-commands = [
   # Which saved commands resurrect may replay, generated from the installed
   # adapters, before resurrect loads.
   """if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'""",
-  # The plugin loader, over the ten names in 30-plugins.conf's order.
+  # opensessions never downloads its binaries itself: canopy install puts
+  # them in place (plugins/ARTIFACTS).
+  "set-environment -g OPENSESSIONS_SKIP_BINARY_DOWNLOAD 1",
+  # The plugin loader, over the ten names in tmux.conf's order. It loads into
+  # the server in $TMUX and no other.
   '''run-shell 'f="$CANOPY_STORE/lib/plugins.sh"; [ -r "$f" ] || exit 0; . "$f"; canopy_load_plugins tmux-resurrect tmux-continuum tmux-sensible tmux-yank tmux-fzf tmux-sessionx tmux-which-key opensessions tmux-fzf-url tmux-claude-session-manager'''',
   # opensessions binds prefix C-s to its sidebar when it loads; this takes it
   # back for the key table's prefix-send row.
@@ -49,8 +53,6 @@ resurrect-save-command-strategy = "../../strategies/canopy_save_command"
 # takes canopy's prefix-send binding.
 resurrect-save = "M-s"
 resurrect-restore = "M-r"
-# tmux-which-key writes its config and built menu under XDG rather than into
-# its vendored tree, and loads its prebuilt default menu, because its build
-# needs a git submodule vendoring leaves out.
-tmux-which-key-xdg-enable = "1"
+# tmux-which-key loads its prebuilt default menu, because its build needs a
+# git submodule vendoring leaves out.
 tmux-which-key-disable-autobuild = "1"
