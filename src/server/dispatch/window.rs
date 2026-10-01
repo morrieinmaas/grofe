@@ -366,12 +366,20 @@ pub fn select_layout(
     w.zoomed = false;
     let Some(preset) = Preset::from_name(&c.name, width, height) else {
         // Not a preset: a tmux layout string (spec §4.3), which puts every
-        // pane, floating ones too, into its cells, as tmux 3.7b does.
+        // pane, floating ones too, into its cells, as tmux 3.7b does. tmux
+        // also resizes the window to the layout's size; a client showing
+        // the session sizes it back, and with none it keeps that size.
+        let session = model.windows[&window].session;
+        let shown = state.clients.values().any(|cl| cl.session == session);
+        let model = &mut state.model;
         let applied = model.windows.get_mut(&window).map(|w| {
             let panes = w.pane_ids();
             let applied = w.layout.apply_tmux_layout(&c.name, &panes);
             if applied.is_ok() {
                 w.floating.clear();
+                if !shown && let Some((cols, rows)) = w.layout.exact_size() {
+                    (w.cols, w.rows) = crate::types::cap_size(cols, rows);
+                }
             }
             applied
         });

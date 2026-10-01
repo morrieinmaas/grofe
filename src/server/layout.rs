@@ -243,6 +243,12 @@ impl LayoutTree {
         }
     }
 
+    /// The area size the tree's weights are exact for, if any: after
+    /// [`Self::apply_tmux_layout`], the layout string's own size.
+    pub fn exact_size(&self) -> Option<(u16, u16)> {
+        self.exact_for
+    }
+
     /// Makes the tree exact on `area`: overwrites every split's weights with
     /// the sizes `compute(area)` renders and records `area` as `exact_for`.
     /// `compute(area)` is unchanged by this, since a group whose weights sum
