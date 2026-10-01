@@ -2064,13 +2064,11 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
     if tmux && path.extension().is_none_or(|e| e != "toml") {
-        if SOURCE_DEPTH.get() >= MAX_SOURCE_DEPTH {
+        let depth = source_depth();
+        if depth >= MAX_SOURCE_DEPTH {
             return Err("too many nested files".to_string());
         }
-        SOURCE_DEPTH.set(SOURCE_DEPTH.get() + 1);
-        let out = source_tmux_file(state, ctx, &path);
-        SOURCE_DEPTH.set(SOURCE_DEPTH.get() - 1);
-        return out;
+        return with_source_depth(depth + 1, || source_tmux_file(state, ctx, &path));
     }
     let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
@@ -2105,8 +2103,23 @@ const MAX_SOURCE_DEPTH: u32 = 50;
 
 thread_local! {
     /// The tmux files being sourced now, one inside another (the actor's
-    /// stack: a held file's later lines run outside it).
+    /// stack). A held file's later lines run outside it, so a
+    /// [`super::client::HeldFrame`] carries the depth it was held at and
+    /// runs under it again ([`with_source_depth`]).
     static SOURCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// How many tmux files are being sourced, one inside another, right now.
+pub(crate) fn source_depth() -> u32 {
+    SOURCE_DEPTH.get()
+}
+
+/// Runs `f` at source-file depth `depth`, then puts the old depth back.
+pub(crate) fn with_source_depth<T>(depth: u32, f: impl FnOnce() -> T) -> T {
+    let old = SOURCE_DEPTH.replace(depth);
+    let out = f();
+    SOURCE_DEPTH.set(old);
+    out
 }
 
 /// A tmux config file, read as tmux 3.7b's `source-file` reads one
@@ -2154,6 +2167,7 @@ fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<S
                     ctx: ctx.clone(),
                     cmds,
                     keep_going: true,
+                    depth: source_depth(),
                 }));
             return Ok(out);
         }
