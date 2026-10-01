@@ -8,7 +8,9 @@
 //!
 //! canopy and athome are read from the checkouts `GROFE_COMPAT_CANOPY` and
 //! `GROFE_COMPAT_ATHOME` name, which must sit at the commits in
-//! `golden/tc_13/PINS`; with either unset the suite is skipped, loudly.
+//! `golden/tc_13/PINS`; with either unset the suite is skipped, loudly,
+//! unless `GROFE_COMPAT_REQUIRED=1` (the gate sets it), which makes a
+//! missing checkout a failure.
 //!
 //! [`tc_13_suite`] runs, in order, and reports every failure at the end:
 //!
@@ -144,8 +146,9 @@ pub struct Checkouts {
     pub athome: PathBuf,
 }
 
-/// Both checkouts, or `None` (said loudly) when either variable is unset.
-/// A checkout at another commit than `PINS` is an error: the goldens were
+/// Both checkouts, or `None` (said loudly) when either variable is unset;
+/// with `GROFE_COMPAT_REQUIRED=1` an unset one fails the run instead. A
+/// checkout at another commit than `PINS` is an error: the goldens were
 /// recorded against those.
 fn checkouts() -> Option<Checkouts> {
     let get = |key: &str| {
@@ -155,10 +158,13 @@ fn checkouts() -> Option<Checkouts> {
     };
     let (Some(canopy), Some(athome)) = (get("GROFE_COMPAT_CANOPY"), get("GROFE_COMPAT_ATHOME"))
     else {
-        eprintln!(
-            "SKIPPED tc_13: set GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME to canopy and \
-             athome checkouts at the commits in tests/fixtures/compat/golden/tc_13/PINS"
+        let why = "set GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME to canopy and athome \
+                   checkouts at the commits in tests/fixtures/compat/golden/tc_13/PINS";
+        assert!(
+            std::env::var_os("GROFE_COMPAT_REQUIRED").is_none_or(|v| v != "1"),
+            "tc_13 is required (GROFE_COMPAT_REQUIRED=1): {why}"
         );
+        eprintln!("SKIPPED tc_13: {why}");
         return None;
     };
     let pins = fs::read_to_string(fixtures_dir().join("golden/tc_13/PINS")).unwrap();

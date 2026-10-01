@@ -11,7 +11,10 @@ name: compat
 # both pinned commits are on local branches that are not pushed (canopy
 # `grofe-backend`, athome `grofe-config`). There is no workflow_dispatch
 # trigger, so `scripts/ci-local.sh` (`act workflow_dispatch`) leaves it out
-# until they are.
+# until they are. The suite still runs in the gate: ci-local passes
+# GROFE_COMPAT_CANOPY, GROFE_COMPAT_ATHOME and GROFE_COMPAT_REQUIRED through
+# to both legs, mounting the checkouts read-only for act, and the CI
+# workflow's `cargo test --test '*'` runs it.
 
 on:
   push:
