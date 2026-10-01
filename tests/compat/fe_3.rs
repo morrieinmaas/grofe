@@ -161,10 +161,6 @@ const FORMAT_GAPS: &[(&str, &str)] = &[
          environment; grofe's FormatVars do not",
     ),
     (
-        "$ display -p -t main:1.1 '#{pane_at_left}'",
-        "native: no pane_at_left variable (TC.3's FormatVars)",
-    ),
-    (
         "$ display -p -t main:1.1 '#{pane_marked_set}'",
         "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
     ),
