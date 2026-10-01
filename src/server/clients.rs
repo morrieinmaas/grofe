@@ -1112,6 +1112,9 @@ pub fn changed(state: &mut State) {
     }
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
+    // A killed pane's copy mode goes with it (M5).
+    let panes = &state.model.panes;
+    state.copy.retain(|p| panes.contains_key(&p));
     apply_sizes(state);
     graphics::on_clients_changed(state);
     sync_mouse_modes(state);

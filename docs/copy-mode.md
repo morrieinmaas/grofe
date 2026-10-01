@@ -156,6 +156,31 @@ The same tasks also own these bindings outside the table: `prefix [`
 (`copy-mode -M`), `DoubleClick1Pane` and `TripleClick1Pane`
 (`copy-mode -H`, then `select-word` or `select-line` and a copy) for TM.6.
 
+## The copy and its limits
+
+As tmux 3.7b does, copy mode works on a copy of the pane's history and
+screen, taken on entry: output that arrives meanwhile moves neither the
+view nor the text, and `refresh-from-pane` (`r`) takes a new copy,
+keeping the view's distance from the top of history. A killed or
+respawned pane leaves the mode and its copy is freed. A tab is one cell
+as wide as the stop it moved to, as in tmux, so motions step over it
+whole.
+
+Where grofe differs:
+
+- **Resize.** A pane resized while in copy mode gets a fresh copy at its
+  new size, as `refresh-from-pane` would, on the next copy-mode command;
+  the cursor keeps its place, clamped to its line. tmux instead reflows
+  the old copy (`window_copy_resize`), so output that arrived since entry
+  stays out of the view there and appears here.
+- **Counts.** A count (`send-keys -N`, the `1` to `9` prompt) runs at
+  most 100 000 times in copy mode. tmux runs every repeat and stops
+  answering for a huge count (recorded with `-N 4294967295`); outside
+  the mode grofe queues the repeats in chunks and stops with `pane input
+  queue is full`.
+- **The indicator** is `[offset/size]` in `mode-style`, without the line
+  time `copy-mode-position-format` puts before it.
+
 ## Selection over wrapped lines
 
 A selection runs over logical lines, not screen rows. Rows that alacritty

@@ -24,7 +24,7 @@ pub mod pipe;
 pub mod search;
 pub mod select;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -53,6 +53,20 @@ const WHITESPACE: &str = "\t ";
 const MARK_STYLE: &str = "bg=red,fg=black";
 /// `mode-style`'s default, if the option is missing.
 const MODE_STYLE: &str = "noattr,bg=yellow,fg=black";
+
+/// The most repeats a count runs (`send-keys -N`, a mode's prefix).
+// ponytail: tmux 3.7b runs every one, and for `-N 4294967295` stops
+// answering (recorded); grofe runs this many.
+pub const MAX_REPEAT: u32 = 100_000;
+
+/// The commands whose string `send-keys -F` expands as a format (tmux's
+/// `window_copy_expand_search_string`).
+pub const FORMAT_COMMANDS: &[&str] = &[
+    "search-backward",
+    "search-backward-text",
+    "search-forward",
+    "search-forward-text",
+];
 
 /// The panes in copy mode. Lives on `State.copy`.
 #[derive(Default)]
@@ -91,12 +105,16 @@ impl Copies {
 // ---- The copy of the pane ------------------------------------------------
 
 /// One cell of the copy: its character and how it looks, an index into
-/// [`Grid::looks`].
+/// [`Grid::looks`]. A tab is `\t`, and each cell after it up to its stop
+/// is [`TAB_PAD`] (tmux's `GRID_FLAG_TAB` cell and its padding).
 #[derive(Debug, Clone, Copy)]
 struct Cell {
     c: char,
     look: u32,
 }
+
+/// A cell an intact tab covers.
+const TAB_PAD: char = '\0';
 
 #[derive(Debug, Default)]
 struct Row {
@@ -116,6 +134,40 @@ pub struct Grid {
     rows: Vec<Row>,
     /// Each distinct look, with `c` unused; 0 is the default blank.
     looks: Vec<SnapCell>,
+    /// Interns [`Grid::looks`].
+    look_ids: HashMap<LookKey, u32>,
+}
+
+/// A look as a hashable key (the colours as numbers).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LookKey {
+    fg: u32,
+    bg: u32,
+    flags: u16,
+    underline: Option<u32>,
+    zerowidth: Vec<char>,
+    hyperlink: Option<crate::server::pane::Hyperlink>,
+}
+
+fn colour_key(c: Color) -> u32 {
+    match c {
+        Color::Named(n) => 0x0100_0000 | n as u32,
+        Color::Indexed(i) => 0x0200_0000 | u32::from(i),
+        Color::Spec(rgb) => {
+            0x0300_0000 | u32::from(rgb.r) << 16 | u32::from(rgb.g) << 8 | u32::from(rgb.b)
+        }
+    }
+}
+
+fn look_key(cell: &SnapCell) -> LookKey {
+    LookKey {
+        fg: colour_key(cell.fg),
+        bg: colour_key(cell.bg),
+        flags: cell.flags.bits(),
+        underline: cell.underline_color.map(colour_key),
+        zerowidth: cell.zerowidth.clone(),
+        hyperlink: cell.hyperlink.clone(),
+    }
 }
 
 /// What tmux's `grid_get_cell` tells a motion about one cell.
@@ -126,6 +178,8 @@ pub struct GridCell {
     pub padding: bool,
     /// One byte of UTF-8 (`gc.data.size == 1`).
     pub single: bool,
+    /// A tab's width (tmux's `GRID_FLAG_TAB`), 0 for any other cell.
+    pub tab: usize,
 }
 
 fn blank() -> SnapCell {
@@ -141,17 +195,26 @@ fn blank() -> SnapCell {
 }
 
 impl Grid {
+    fn empty(sx: usize, hsize: usize, sy: usize) -> Grid {
+        let mut look_ids = HashMap::new();
+        look_ids.insert(look_key(&blank()), 0);
+        Grid {
+            sx,
+            hsize,
+            sy,
+            rows: Vec::new(),
+            looks: vec![blank()],
+            look_ids,
+        }
+    }
+
     /// Copies `handle`'s grid; also returns the cursor (column, row on the
     /// screen).
     pub fn from_pane(handle: &PaneHandle) -> (Grid, (usize, usize)) {
-        let mut grid = Grid {
-            sx: 0,
-            hsize: 0,
-            sy: 0,
-            rows: Vec::new(),
-            looks: vec![blank()],
-        };
-        let (hsize, cursor) = handle.copy_grid(|cells| grid.push_row(cells));
+        let mut grid = Grid::empty(0, 0, 0);
+        let (hsize, cursor) = handle.copy_grid(|cells, tabs| grid.push_row(cells, &tabs));
+        grid.rows.shrink_to_fit();
+        grid.looks.shrink_to_fit();
         grid.hsize = hsize.min(grid.rows.len());
         grid.sy = grid.rows.len() - grid.hsize;
         (grid, (usize::from(cursor.col), usize::from(cursor.row)))
@@ -160,23 +223,50 @@ impl Grid {
     /// A grid of plain text rows, for tests: `hsize` of them history.
     #[cfg(test)]
     pub fn from_text(sx: usize, hsize: usize, rows: &[&str]) -> Grid {
-        let mut grid = Grid {
-            sx,
-            hsize,
-            sy: rows.len() - hsize,
-            rows: Vec::new(),
-            looks: vec![blank()],
-        };
+        let mut grid = Grid::empty(sx, hsize, rows.len() - hsize);
         for text in rows {
-            let mut cells: Vec<SnapCell> =
-                text.chars().map(|c| SnapCell { c, ..blank() }).collect();
+            // A tab runs to the next stop of 8, as a terminal moves it.
+            let mut cells: Vec<SnapCell> = Vec::new();
+            let mut tabs = Vec::new();
+            for c in text.chars() {
+                cells.push(SnapCell { c, ..blank() });
+                tabs.push(false);
+                if c == '\t' {
+                    while cells.len() % 8 != 0 {
+                        cells.push(blank());
+                        tabs.push(true);
+                    }
+                }
+            }
             cells.resize(sx, blank());
-            grid.push_row(cells);
+            tabs.resize(sx, false);
+            grid.push_row(cells, &tabs);
         }
         grid
     }
 
-    fn push_row(&mut self, cells: Vec<SnapCell>) {
+    /// The copy's heap size, roughly: its cells, rows and looks.
+    pub fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let cells: usize = self.rows.iter().map(|r| r.cells.capacity()).sum();
+        cells * size_of::<Cell>()
+            + self.rows.capacity() * size_of::<Row>()
+            + self.looks.capacity() * size_of::<SnapCell>()
+            + self.look_ids.capacity() * (size_of::<LookKey>() + size_of::<u32>())
+    }
+
+    fn intern(&mut self, cell: &SnapCell) -> u32 {
+        let key = look_key(cell);
+        if let Some(&id) = self.look_ids.get(&key) {
+            return id;
+        }
+        let id = self.looks.len() as u32;
+        self.looks.push(cell.clone());
+        self.look_ids.insert(key, id);
+        id
+    }
+
+    fn push_row(&mut self, cells: Vec<SnapCell>, tabs: &[bool]) {
         self.sx = self.sx.max(cells.len());
         let wrapped = cells
             .last()
@@ -185,28 +275,32 @@ impl Grid {
             cells: Vec::with_capacity(cells.len()),
             wrapped,
         };
-        let mut last = 0usize;
-        for mut cell in cells {
-            let c = cell.c;
+        let mut last: Option<(SnapCell, u32)> = None;
+        for (i, mut cell) in cells.into_iter().enumerate() {
+            let covered = tabs.get(i).copied().unwrap_or(false);
+            let c = match cell.c {
+                _ if covered => TAB_PAD,
+                // A tab written over before its stop is a blank, as
+                // `capture-pane` reads it.
+                '\t' if !tabs.get(i + 1).copied().unwrap_or(false) && i + 1 < tabs.len() => ' ',
+                c => c,
+            };
             cell.flags.remove(CellFlags::WRAPLINE);
             cell.c = ' ';
-            let look = if self.looks[last] == cell {
-                last
-            } else if self.looks[0] == cell {
-                0
-            } else {
-                self.looks.push(cell);
-                self.looks.len() - 1
+            let look = match &last {
+                Some((prev, id)) if *prev == cell => *id,
+                _ => {
+                    let id = self.intern(&cell);
+                    last = Some((cell, id));
+                    id
+                }
             };
-            last = look;
-            row.cells.push(Cell {
-                c,
-                look: look as u32,
-            });
+            row.cells.push(Cell { c, look });
         }
         while row.cells.last().is_some_and(|c| c.c == ' ' && c.look == 0) {
             row.cells.pop();
         }
+        row.cells.shrink_to_fit();
         self.rows.push(row);
     }
 
@@ -220,9 +314,38 @@ impl Grid {
         Some((cell.c, &self.looks[cell.look as usize]))
     }
 
+    /// A tab's width: itself and the padding after it.
+    fn tab_width(&self, x: usize, y: usize) -> usize {
+        let cells = self
+            .rows
+            .get(y)
+            .map(|r| r.cells.as_slice())
+            .unwrap_or_default();
+        1 + cells
+            .iter()
+            .skip(x + 1)
+            .take_while(|c| c.c == TAB_PAD)
+            .count()
+    }
+
     /// tmux's `grid_get_cell`: past the end of a row, a blank.
     pub fn get(&self, x: usize, y: usize) -> GridCell {
         match self.look(x, y) {
+            Some((TAB_PAD, _)) => GridCell {
+                c: ' ',
+                padding: true,
+                single: true,
+                tab: 0,
+            },
+            Some(('\t', _)) => {
+                let tab = self.tab_width(x, y);
+                GridCell {
+                    c: if tab == 1 { ' ' } else { '\t' },
+                    padding: false,
+                    single: tab == 1,
+                    tab,
+                }
+            }
             Some((c, look)) => {
                 let padding = look.flags.contains(CellFlags::WIDE_CHAR_SPACER);
                 let c = if look.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
@@ -234,19 +357,25 @@ impl Grid {
                     c,
                     padding,
                     single: c.is_ascii() && look.zerowidth.is_empty(),
+                    tab: 0,
                 }
             }
             None => GridCell {
                 c: ' ',
                 padding: false,
                 single: true,
+                tab: 0,
             },
         }
     }
 
-    /// The cell as drawn.
+    /// The cell as drawn: a tab and its padding are blanks.
     pub fn snap(&self, x: usize, y: usize) -> SnapCell {
         match self.look(x, y) {
+            Some((TAB_PAD | '\t', look)) => SnapCell {
+                c: ' ',
+                ..look.clone()
+            },
             Some((c, look)) => SnapCell { c, ..look.clone() },
             None => blank(),
         }
@@ -273,13 +402,81 @@ impl Grid {
     }
 
     /// tmux's `grid_in_set`: 1 when the cell's character is in `set`, 0
-    /// for padding or a character outside it.
+    /// for padding or a character outside it. With a tab in `set`, a tab
+    /// counts as its width, and its padding as the width left.
     pub fn in_set(&self, x: usize, y: usize, set: &str) -> usize {
         let gc = self.get(x, y);
+        if set.contains('\t') {
+            if gc.padding && self.look(x, y).is_some_and(|(c, _)| c == TAB_PAD) {
+                let mut start = x;
+                while start > 0 && self.get(start, y).padding {
+                    start -= 1;
+                }
+                let tab = self.get(start, y).tab;
+                if tab > 0 {
+                    return tab - (x - start);
+                }
+            } else if gc.tab > 0 {
+                return gc.tab;
+            }
+        }
         if gc.padding {
             return 0;
         }
         usize::from(set.contains(gc.c))
+    }
+
+    /// tmux's `format_grid_word`: the word around `(x, y)`, between
+    /// `separators`, blanks and tabs, joined across wraps.
+    pub fn word(&self, mut x: usize, mut y: usize, separators: &str) -> String {
+        let is_sep = |gc: &GridCell| separators.contains(gc.c) || gc.tab > 0 || gc.c == ' ';
+        let mut found = false;
+        loop {
+            let gc = self.get(x, y);
+            if !gc.padding && is_sep(&gc) {
+                found = true;
+                break;
+            }
+            if x == 0 {
+                if y == 0 || !self.wrapped(y - 1) {
+                    break;
+                }
+                y -= 1;
+                x = self.line_length(y);
+                if x == 0 {
+                    break;
+                }
+            }
+            x -= 1;
+        }
+        let mut out = String::new();
+        loop {
+            if found {
+                let end = self.line_length(y);
+                if end == 0 || x == end - 1 {
+                    if y == self.total() - 1 || !self.wrapped(y) {
+                        break;
+                    }
+                    y += 1;
+                    x = 0;
+                } else {
+                    x += 1;
+                }
+            }
+            found = true;
+            let gc = self.get(x, y);
+            if gc.padding {
+                continue;
+            }
+            if is_sep(&gc) {
+                break;
+            }
+            out.push(gc.c);
+            if let Some((_, look)) = self.look(x, y) {
+                out.extend(&look.zerowidth);
+            }
+        }
+        out
     }
 }
 
@@ -533,7 +730,7 @@ impl Reader<'_> {
             let xx = self.gd.line_length(py);
             for px in 0..xx {
                 let gc = self.gd.get(px, py);
-                if !(gc.single && gc.c == ' ') && gc.c != '\t' && !gc.padding {
+                if !(gc.single && gc.c == ' ') && gc.tab == 0 && !gc.padding {
                     self.cx = px;
                     self.cy = py;
                     return;
@@ -595,6 +792,9 @@ pub struct Mode {
     /// (`selx`, `sely`, `endselx`, `endsely`, TM.2).
     pub sel_start: (usize, usize),
     pub sel_end: (usize, usize),
+    /// The last search's string (tmux's `searchstr`), as `send-keys -F`
+    /// expanded it; TM.3 searches for it.
+    pub search_str: Option<String>,
 }
 
 /// What a command asks of the mode afterwards (tmux's
@@ -639,6 +839,7 @@ impl Mode {
             line_sel: LineSel::None,
             sel_start: (0, 0),
             sel_end: (0, 0),
+            search_str: None,
         }
     }
 
@@ -1271,9 +1472,10 @@ impl Mode {
         search::clear_marks(self);
     }
 
-    /// `#{copy_cursor_word}` (TM.3 computes it).
-    pub fn cursor_word(&self) -> String {
-        search::cursor_word(self)
+    /// `#{copy_cursor_word}`: the word under the cursor, by `separators`
+    /// (the global `word-separators`, as tmux reads it).
+    pub fn cursor_word(&self, separators: &str) -> String {
+        self.grid.word(self.cx, self.py(), separators)
     }
 }
 
@@ -1513,6 +1715,16 @@ fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Optio
             none(rest)?;
             Cancel
         }
+        // As tmux's `window_copy_expand_search_string`: an empty string
+        // searches for nothing; any other is kept for the search (TM.3).
+        _ if FORMAT_COMMANDS.contains(&name) => {
+            let text = positionals(rest, 0, 1)?;
+            match text.first() {
+                Some(t) if !t.is_empty() => mode.search_str = Some(t.clone()),
+                _ => return Some(Nothing),
+            }
+            return search::command(mode, name, rest, ctx).or(Some(Nothing));
+        }
         // The other commands are TM.2's, TM.3's and TM.5's.
         _ => {
             return select::command(mode, name, rest, ctx)
@@ -1631,7 +1843,7 @@ pub fn set_prefix(state: &mut State, pane: PaneId, count: u32) -> Result<(), Str
         .copy
         .get_mut(pane)
         .ok_or_else(|| "not in a mode".to_string())?;
-    mode.prefix = count;
+    mode.prefix = count.min(MAX_REPEAT);
     Ok(())
 }
 
@@ -1669,7 +1881,10 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
         "scroll_position" => mode.oy.to_string(),
         "copy_position" => mode.oy.to_string(),
         "copy_position_limit" => mode.grid.hsize.to_string(),
-        "copy_cursor_word" => mode.cursor_word(),
+        "copy_cursor_word" => {
+            let seps = state.model.options.lookup("word-separators", &[]);
+            mode.cursor_word(seps.unwrap_or_default())
+        }
         _ => {
             return select::format_var(mode, name).or_else(|| search::format_var(mode, name));
         }
@@ -1970,6 +2185,83 @@ mod tests {
         let t = crate::server::input::default_bindings();
         assert_eq!(t.keys(VI_TABLE).len(), 88);
         assert_eq!(crate::server::input::COPY_MODE_VI.len(), 88);
+    }
+
+    /// Recorded on tmux 3.7b: `l` over `a<Tab>b<Tab>c` steps 0, 1, 8, 9,
+    /// 16; a tab is whitespace to `w`, and a separator to the word.
+    #[test]
+    fn a_tab_is_one_wide_cell() {
+        let mut m = mode(&["a\tb\tc", ""], 0, (0, 0));
+        m.grid.sx = 20;
+        let mut seen = vec![m.cx];
+        for _ in 0..4 {
+            x(&mut m, &["cursor-right"]);
+            seen.push(m.cx);
+        }
+        assert_eq!(seen, [0, 1, 8, 9, 16]);
+        x(&mut m, &["start-of-line"]);
+        x(&mut m, &["next-word"]);
+        assert_eq!(m.cx, 8);
+        assert_eq!(m.grid.word(8, 0, ""), "b");
+        // As tmux (recorded): left from after a tab lands in its padding.
+        x(&mut m, &["cursor-left"]);
+        assert_eq!(m.cx, 7);
+    }
+
+    #[test]
+    fn the_cursor_word_stops_at_separators() {
+        let m = mode(&["foo.bar baz", ""], 0, (5, 0));
+        assert_eq!(m.cursor_word(&ctx().separators), "bar");
+        assert_eq!(m.cursor_word(""), "foo.bar");
+    }
+
+    /// The copy costs about 8 bytes a written cell: 100 000 rows of 80
+    /// cells in alternating colours (`history-limit 100000`) stay under
+    /// 100 000 * (80 * 8 + 64) bytes, with a handful of looks.
+    #[test]
+    fn a_full_history_copy_is_bounded() {
+        let red = SnapCell {
+            fg: Color::Named(NamedColor::Red),
+            ..blank()
+        };
+        let mut g = Grid::empty(80, 0, 0);
+        for y in 0..100_000usize {
+            let cells: Vec<SnapCell> = (0..80)
+                .map(|x| {
+                    let look = if (x / 4 + y) % 2 == 0 {
+                        red.clone()
+                    } else {
+                        blank()
+                    };
+                    SnapCell { c: 'x', ..look }
+                })
+                .collect();
+            g.push_row(cells, &[]);
+        }
+        g.hsize = 100_000 - 24;
+        g.sy = 24;
+        assert_eq!(g.looks.len(), 2);
+        assert!(
+            g.heap_bytes() < 100_000 * (80 * 8 + 64),
+            "{} bytes",
+            g.heap_bytes()
+        );
+        // Blank rows cost no cells.
+        let mut blank_rows = Grid::empty(80, 0, 0);
+        for _ in 0..1000 {
+            blank_rows.push_row(vec![blank(); 80], &[]);
+        }
+        assert!(blank_rows.rows.iter().all(|r| r.cells.capacity() == 0));
+    }
+
+    /// What `#` and `*` hand the search: the word `send-keys -F` expanded.
+    #[test]
+    fn a_search_keeps_its_string() {
+        let mut m = mode(&["abc", ""], 0, (0, 1));
+        x(&mut m, &["search-backward", "--", "foo"]);
+        assert_eq!(m.search_str.as_deref(), Some("foo"));
+        x(&mut m, &["search-forward", ""]);
+        assert_eq!(m.search_str.as_deref(), Some("foo"));
     }
 
     #[test]

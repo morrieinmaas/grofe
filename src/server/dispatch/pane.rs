@@ -419,6 +419,9 @@ pub(crate) fn respawn(
     command: Option<Vec<String>>,
     cwd: Option<PathBuf>,
 ) -> Result<(), String> {
+    // As tmux's `window_pane_reset_mode_all`: a respawned pane leaves its
+    // modes, and its copy is freed (M5).
+    state.copy.remove(pane);
     let model = &state.model;
     let p = model
         .panes
@@ -482,7 +485,27 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         }
     }
     if c.command {
-        let args: Vec<String> = c.items.into_iter().map(item_text).collect();
+        let mut args: Vec<String> = c.items.into_iter().map(item_text).collect();
+        // `-F`: a search's string is a format, expanded against the pane
+        // (the stock `#` and `*` rows search for `#{copy_cursor_word}`).
+        // As tmux 3.7b (recorded), no other command's arguments expand.
+        let searches = args
+            .first()
+            .is_some_and(|name| copy::FORMAT_COMMANDS.contains(&name.as_str()));
+        if c.format && searches && state.copy.is_active(pane) {
+            let at = ClientCtx {
+                pane: Some(pane),
+                ..ctx.clone()
+            };
+            let first = if args.get(1).is_some_and(|a| a == "--") {
+                2
+            } else {
+                1
+            };
+            if let Some(arg) = args.get_mut(first) {
+                *arg = prompt::expand_command(state, &at, arg);
+            }
+        }
         copy::command_in(state, pane, &args)?;
         return Ok(String::new());
     }
@@ -495,7 +518,10 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
             pane: Some(pane),
             ..ctx.clone()
         };
-        for _ in 0..repeat {
+        // ponytail: tmux 3.7b runs every repeat and stops answering for a
+        // huge count (recorded: `-N 4294967295` hangs it); grofe runs at
+        // most `copy::MAX_REPEAT`.
+        for _ in 0..repeat.min(copy::MAX_REPEAT) {
             for item in &c.items {
                 for key in mode_keys(item) {
                     if let Some((cmds, dialect)) = copy::binding_for(state, pane, &key) {
@@ -516,8 +542,7 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     let handle = &model.panes[&pane].handle;
     let modes = handle.modes();
     let mut bytes = Vec::new();
-    let items: Vec<SendKeysItem> = (0..repeat).flat_map(|_| c.items.clone()).collect();
-    for item in items {
+    for item in c.items {
         match item {
             SendKeysItem::Key(name) => match cmd::key_bytes(&name, &modes) {
                 Some(b) => bytes.extend(b),
@@ -530,11 +555,23 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     if bytes.is_empty() {
         return Ok(String::new());
     }
-    handle
-        .enqueue_input(bytes)
-        .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+    // The repeats go in bounded chunks, so a huge `-N` stops at the full
+    // input queue instead of building every repeat first.
+    let per_chunk = (SEND_CHUNK / bytes.len()).max(1);
+    let mut left = u64::from(repeat);
+    while left > 0 {
+        let n = left.min(per_chunk as u64);
+        let chunk = bytes.repeat(n as usize);
+        handle
+            .enqueue_input(chunk)
+            .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+        left -= n;
+    }
     Ok(String::new())
 }
+
+/// Most bytes `send-keys` queues at once.
+const SEND_CHUNK: usize = 64 * 1024;
 
 /// A `send-keys -X` word as given.
 fn item_text(item: SendKeysItem) -> String {

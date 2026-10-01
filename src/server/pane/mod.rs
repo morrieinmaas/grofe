@@ -657,12 +657,31 @@ impl PaneHandle {
     /// screen, each passed to `row`, under one lock: copy mode's copy of
     /// the pane (M5, TM.1). Returns the number of history rows and the
     /// cursor.
-    pub fn copy_grid(&self, mut row: impl FnMut(Vec<SnapCell>)) -> (usize, CursorState) {
+    /// With each row goes which of its cells an intact tab covers (the
+    /// blanks it moved over to its stop, as [`Self::capture_lines`] reads
+    /// a tab), which copy mode treats as tmux treats a tab's padding.
+    pub fn copy_grid(&self, mut row: impl FnMut(Vec<SnapCell>, Vec<bool>)) -> (usize, CursorState) {
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size();
+        let cols = grid.columns();
         for r in -(history as i32)..grid.screen_lines() as i32 {
-            row(snap_row(&grid[Line(r)], grid.columns()));
+            let line = &grid[Line(r)];
+            let mut covered = vec![false; cols];
+            for col in 0..cols {
+                if line[Column(col)].c != '\t' || covered[col] {
+                    continue;
+                }
+                let stop = ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
+                let intact = (col + 1..stop).all(|c| {
+                    let cell = &line[Column(c)];
+                    cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
+                });
+                if intact {
+                    covered[col + 1..stop].fill(true);
+                }
+            }
+            row(snap_row(line, cols), covered);
         }
         (history, cursor_state(&emu.term))
     }
