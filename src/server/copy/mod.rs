@@ -221,7 +221,7 @@ impl Grid {
     /// screen).
     pub fn from_pane(handle: &PaneHandle) -> (Grid, (usize, usize)) {
         let mut grid = Grid::empty(0, 0, 0);
-        let (hsize, cursor) = handle.copy_grid(|cells, tabs| grid.push_row(cells, &tabs));
+        let (hsize, cursor) = handle.copy_grid(|cells, tabs| grid.push_row(cells, tabs));
         grid.rows.shrink_to_fit();
         grid.looks.shrink_to_fit();
         grid.hsize = hsize.min(grid.rows.len());
@@ -249,7 +249,7 @@ impl Grid {
             }
             cells.resize(sx, blank());
             tabs.resize(sx, false);
-            grid.push_row(cells, &tabs);
+            grid.push_row(&mut cells, &tabs);
         }
         grid
     }
@@ -275,7 +275,8 @@ impl Grid {
         id
     }
 
-    fn push_row(&mut self, cells: Vec<SnapCell>, tabs: &[bool]) {
+    /// Takes row `cells` (their characters and wrap flags are cleared).
+    fn push_row(&mut self, cells: &mut [SnapCell], tabs: &[bool]) {
         self.sx = self.sx.max(cells.len());
         let wrapped = cells
             .last()
@@ -284,10 +285,11 @@ impl Grid {
             cells: Vec::with_capacity(cells.len()),
             wrapped,
         };
-        let mut last: Option<(SnapCell, u32)> = None;
-        for (i, mut cell) in cells.into_iter().enumerate() {
+        // The cell with the latest interned look, and that look.
+        let mut last: Option<(usize, u32)> = None;
+        for i in 0..cells.len() {
             let covered = tabs.get(i).copied().unwrap_or(false);
-            let c = match cell.c {
+            let c = match cells[i].c {
                 _ if covered => TAB_PAD,
                 // A tab written over before its stop is a blank, as
                 // `capture-pane` reads it; one a cell wide covers nothing.
@@ -299,13 +301,13 @@ impl Grid {
                 }
                 c => c,
             };
-            cell.flags.remove(CellFlags::WRAPLINE);
-            cell.c = ' ';
-            let look = match &last {
-                Some((prev, id)) if *prev == cell => *id,
+            cells[i].flags.remove(CellFlags::WRAPLINE);
+            cells[i].c = ' ';
+            let look = match last {
+                Some((prev, id)) if cells[prev] == cells[i] => id,
                 _ => {
-                    let id = self.intern(&cell);
-                    last = Some((cell, id));
+                    let id = self.intern(&cells[i]);
+                    last = Some((i, id));
                     id
                 }
             };
@@ -2286,7 +2288,7 @@ mod tests {
         };
         let mut g = Grid::empty(80, 0, 0);
         for y in 0..100_000usize {
-            let cells: Vec<SnapCell> = (0..80)
+            let mut cells: Vec<SnapCell> = (0..80)
                 .map(|x| {
                     let look = if (x / 4 + y) % 2 == 0 {
                         red.clone()
@@ -2296,7 +2298,7 @@ mod tests {
                     SnapCell { c: 'x', ..look }
                 })
                 .collect();
-            g.push_row(cells, &[]);
+            g.push_row(&mut cells, &[]);
         }
         g.hsize = 100_000 - 24;
         g.sy = 24;
@@ -2309,7 +2311,7 @@ mod tests {
         // Blank rows cost no cells.
         let mut blank_rows = Grid::empty(80, 0, 0);
         for _ in 0..1000 {
-            blank_rows.push_row(vec![blank(); 80], &[]);
+            blank_rows.push_row(&mut vec![blank(); 80], &[]);
         }
         assert!(blank_rows.rows.iter().all(|r| r.cells.capacity() == 0));
     }
