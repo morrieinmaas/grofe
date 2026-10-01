@@ -1,0 +1,183 @@
+$ new-session -d -s main -x 80 -y 24 'printf "a\344\270\255b\346\226\207c\n\344\270\255a\346\226\207b\360\237\230\200\nabcdefgh\ne\314\201x\344\270\255y\n"; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} [#{copy_cursor_word}]'
+4,0 [a中b文c]
+? 0
+$ send-keys -t main -X rectangle-toggle
+? 0
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+1 0
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 1 4,0 5,3 5,3
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+文
+b
+ef
+y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 11
+? 0
+$ delete-buffer
+? 0
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+1 0 5,3
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 2 cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+$ send-keys -t main -X -N 2 cursor-right
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+3,0 5,3 5,3
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+b文
+文b
+def
+y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 16
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 6 cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 2 cursor-down
+? 0
+$ send-keys -t main -X -N 5 cursor-left
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+2,1 6,2 6,2
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+a文b😀
+cdefg
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 15
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 4 cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+$ send-keys -t main -X -N 6 cursor-right
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+6,0 12,3 12,3
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+c
+😀
+gh
+
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer3 11
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 1 cursor-down
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X rectangle-toggle
+? 0
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+0 1 0,0 5,1 5,1
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+a中b文c
+中a文b
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer4 18
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+$ send-keys -t main -X -N 2 cursor-right
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1,0 4,3 4,3
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+中b文c
+中a文b😀
+abcdefgh
+éx中y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer5 39
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+éx中y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer6 9
+? 0

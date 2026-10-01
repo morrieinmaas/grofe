@@ -281,8 +281,13 @@ impl Grid {
             let c = match cell.c {
                 _ if covered => TAB_PAD,
                 // A tab written over before its stop is a blank, as
-                // `capture-pane` reads it.
-                '\t' if !tabs.get(i + 1).copied().unwrap_or(false) && i + 1 < tabs.len() => ' ',
+                // `capture-pane` reads it; one a cell wide covers nothing.
+                '\t' if !tabs.get(i + 1).copied().unwrap_or(false)
+                    && i + 1 < tabs.len()
+                    && !(i + 1).is_multiple_of(8) =>
+                {
+                    ' '
+                }
                 c => c,
             };
             cell.flags.remove(CellFlags::WRAPLINE);
@@ -792,6 +797,8 @@ pub struct Mode {
     /// (`selx`, `sely`, `endselx`, `endsely`, TM.2).
     pub sel_start: (usize, usize),
     pub sel_end: (usize, usize),
+    /// The rest of the selection's state (TM.2).
+    pub sel: select::Sel,
     /// The last search's string (tmux's `searchstr`), as `send-keys -F`
     /// expanded it; TM.3 searches for it.
     pub search_str: Option<String>,
@@ -839,6 +846,7 @@ impl Mode {
             line_sel: LineSel::None,
             sel_start: (0, 0),
             sel_end: (0, 0),
+            sel: select::Sel::default(),
             search_str: None,
         }
     }
@@ -1830,9 +1838,12 @@ pub fn command_in(state: &mut State, pane: PaneId, args: &[String]) -> Result<()
     };
     mode.vi = vi;
     let ctx = Ctx { separators: &seps };
-    if run(mode, args, &ctx) == Action::Cancel {
+    let action = run(mode, args, &ctx);
+    let copied = std::mem::take(&mut mode.sel.copied);
+    if action == Action::Cancel {
         state.copy.remove(pane);
     }
+    select::store(state, copied);
     Ok(())
 }
 
@@ -1886,7 +1897,13 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
             mode.cursor_word(seps.unwrap_or_default())
         }
         _ => {
-            return select::format_var(mode, name).or_else(|| search::format_var(mode, name));
+            // A resize not yet applied clears the selection (tmux's
+            // `window_copy_size_changed`).
+            let stale = state.model.panes.get(&pane).is_some_and(|p| {
+                mode.grid.sy != usize::from(p.rows) || mode.grid.sx != usize::from(p.cols)
+            });
+            return select::format_var(mode, name, stale)
+                .or_else(|| search::format_var(mode, name));
         }
     })
 }
@@ -2010,12 +2027,18 @@ impl Overlay for CopyOverlay {
                 status::parse_style(state.model.options.lookup(name, &chain).unwrap_or(default))
             };
             let mark = status::parse_style(MARK_STYLE);
+            let selected = style("mode-style", MODE_STYLE);
             let (cols, rows) = (usize::from(rect.cols), usize::from(rect.rows));
             let top = mode.grid.hsize - mode.oy;
             for y in 0..rows.min(mode.grid.sy) {
                 let fy = top + y;
                 for x in 0..cols {
                     let mut cell = mode.grid.snap(x, fy);
+                    if select::highlighted(mode, x, fy) {
+                        cell.fg = selected.fg;
+                        cell.bg = selected.bg;
+                        cell.flags = (cell.flags & !STYLE_FLAGS) | selected.attrs;
+                    }
                     if mode.showmark && fy == mode.my {
                         let (fg, bg) = if x == mode.mx {
                             (mark.bg, mark.fg)

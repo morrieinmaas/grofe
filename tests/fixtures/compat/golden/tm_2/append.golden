@@ -1,0 +1,227 @@
+$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X append-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 4 cursor-right
+? 0
+$ send-keys -t main -X append-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer0 5 first
+? 0
+$ show-buffer
+first
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X start-of-line
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ send-keys -t main -X append-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+1 0 10,1
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer0 16 firstsecond line
+? 0
+$ show-buffer
+! no buffers
+? 1
+$ show-buffer -b buffer0
+firstsecond line
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-selection-no-clear
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 1 0,1 11,1
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ send-keys -t main -X copy-selection -P
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present}'
+1 0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 6 cursor-right
+? 0
+$ send-keys -t main -X copy-end-of-line
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+1 0 6,0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer2 9 line here
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ show-buffer
+line here
+? 0
+$ send-keys -t main -X -N 2 copy-end-of-line
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+1 0 6,0
+? 0
+$ show-buffer
+line here
+second line
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer3 21
+buffer2 9
+buffer1 12
+buffer0 16
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X other-end
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+6,0 6,1 6,0
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+7,0 6,1 7,0
+? 0
+$ send-keys -t main -X -N 2 other-end
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+7,0 6,1 7,0
+? 0
+$ send-keys -t main -X other-end
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+7,0 6,1 6,1
+? 0
+$ send-keys -t main -X clear-selection
+? 0
+$ display -p -t main '#{selection_present} #{selection_active} #{copy_cursor_x},#{copy_cursor_y}'
+0 0 6,1
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer3 21
+buffer2 9
+buffer1 12
+buffer0 16
+? 0
+$ send-keys -t main -X other-end
+? 0
+$ display -p -t main '#{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+0 6,1
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ display -p -t main '#{selection_present} #{selection_active} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+0 1 7,1 7,1
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ send-keys -t main -X copy-selection-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer4 2 li
+buffer3 21 line here\nsecond line
+buffer2 9 line here
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ send-keys -t main -X append-selection-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer4 4 lifi
+buffer3 21 line here\nsecond line
+buffer2 9 line here
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 2 cursor-down
+? 0
+$ send-keys -t main -X copy-end-of-line-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer5 1 \n
+buffer4 4 lifi
+buffer3 21 line here\nsecond line
+buffer2 9 line here
+buffer1 12 second line\n
+buffer0 16 firstsecond line
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X copy-selection -x
+? 0
+$ send-keys -t main -X copy-selection a b
+? 0
+$ send-keys -t main -X append-selection x
+? 0
+$ display -p -t main '#{selection_present}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer5 1
+buffer4 4
+buffer3 21
+buffer2 9
+buffer1 12
+buffer0 16
+? 0

@@ -1,0 +1,89 @@
+# TM.2: append-selection onto a buffer a prior copy made, and the other
+# copy commands. tmux appends to the newest automatic buffer with no
+# separator and stores the result under that name, which makes it a
+# named buffer (show-buffer with no -b then skips it); with no buffer it
+# makes a new automatic one. -and-cancel leaves the mode, -no-clear keeps
+# the selection, -P stores nothing, copy-end-of-line copies from the
+# cursor to the end of its line (-N lines down) and puts the cursor back.
+$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X append-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 4 cursor-right
+$ send-keys -t main -X append-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ show-buffer
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X start-of-line
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X end-of-line
+$ send-keys -t main -X append-selection
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ show-buffer
+$ show-buffer -b buffer0
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection-no-clear
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ send-keys -t main -X copy-selection -P
+$ display -p -t main '#{pane_in_mode} #{selection_present}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 6 cursor-right
+$ send-keys -t main -X copy-end-of-line
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ show-buffer
+$ send-keys -t main -X -N 2 copy-end-of-line
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X other-end
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X cursor-right
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X -N 2 other-end
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X other-end
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X clear-selection
+$ display -p -t main '#{selection_present} #{selection_active} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X other-end
+$ display -p -t main '#{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-right
+$ send-keys -t main -X begin-selection
+$ display -p -t main '#{selection_present} #{selection_active} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X cursor-right
+$ send-keys -t main -X copy-selection-and-cancel
+$ display -p -t main '#{pane_in_mode}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-right
+$ send-keys -t main -X append-selection-and-cancel
+$ display -p -t main '#{pane_in_mode}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ copy-mode -t main
+$ send-keys -t main -X -N 2 cursor-down
+$ send-keys -t main -X copy-end-of-line-and-cancel
+$ display -p -t main '#{pane_in_mode}'
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+$ copy-mode -t main
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X copy-selection -x
+$ send-keys -t main -X copy-selection a b
+$ send-keys -t main -X append-selection x
+$ display -p -t main '#{selection_present}'
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
