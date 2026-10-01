@@ -7,18 +7,18 @@ requires = "grofe >= 0.1"
 # tmux/conf.d/30-plugins.conf, and every setting here is that file's, with
 # the reasoning left there rather than copied.
 #
-# tmux-resurrect and tmux-continuum run on grofe unchanged, as plugins,
-# until grofe's own persistence imports their last save and replaces them.
-# The key table's save-now (M-s) and restore-now (M-r) rows run resurrect's
-# scripts.
+# Every vendored plugin runs on grofe unchanged, through the same loader the
+# tmux layer calls: canopy_load_plugins in lib/plugins.sh, over the same ten
+# names in the same order. Each runs as tmux ran it, through `tmux
+# run-shell`, which grofe answers to the tmux name. tmux-resurrect and
+# tmux-continuum are among them until grofe's own persistence imports their
+# last save and replaces them; the key table's save-now (M-s) and
+# restore-now (M-r) rows run resurrect's scripts.
 #
-# Loading them is not here yet. The plugin loader will go into
-# load-commands below: one load command over a fixed list of ten vendored
-# plugins, resurrect and continuum among them, each loaded only when bash
-# and its entry point are present. grofe runs load commands once the whole
-# config is applied, at server start and again on every `reload`, as tmux ran
-# a plugin's entry point from source-file, and layer by layer, so user.toml's
-# own run after these. Every option below is set before any of them runs.
+# grofe runs load commands once the whole config is applied, at server start
+# and again on every `reload`, as tmux ran a plugin's entry point from
+# source-file, and layer by layer, so user.toml's own run after these. Every
+# option below is set before any of them runs.
 
 load-commands = [
   # Where resurrect keeps its saves: canopy's own state directory. A load
@@ -27,8 +27,13 @@ load-commands = [
   # grofe expands $CANOPY_STATE from [environment] when the config loads.
   'set-option -g @resurrect-dir "$CANOPY_STATE/resurrect"',
   # Which saved commands resurrect may replay, generated from the installed
-  # adapters. It runs with the loader (TP.3), before resurrect loads:
-  # """if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'""",
+  # adapters, before resurrect loads.
+  """if-shell '[ -x "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh" ]' 'run-shell "$CANOPY_STORE/plugins/strategies/canopy_restore_processes.sh"'""",
+  # The plugin loader, over the ten names in 30-plugins.conf's order.
+  '''run-shell 'f="$CANOPY_STORE/lib/plugins.sh"; [ -r "$f" ] || exit 0; . "$f"; canopy_load_plugins tmux-resurrect tmux-continuum tmux-sensible tmux-yank tmux-fzf tmux-sessionx tmux-which-key opensessions tmux-fzf-url tmux-claude-session-manager'''',
+  # opensessions binds prefix C-s to its sidebar when it loads; this takes it
+  # back for the key table's prefix-send row.
+  "bind-key C-s send-prefix",
 ]
 
 [user-options]
@@ -44,3 +49,8 @@ resurrect-save-command-strategy = "../../strategies/canopy_save_command"
 # takes canopy's prefix-send binding.
 resurrect-save = "M-s"
 resurrect-restore = "M-r"
+# tmux-which-key writes its config and built menu under XDG rather than into
+# its vendored tree, and loads its prebuilt default menu, because its build
+# needs a git submodule vendoring leaves out.
+tmux-which-key-xdg-enable = "1"
+tmux-which-key-disable-autobuild = "1"
