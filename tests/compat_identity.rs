@@ -662,3 +662,31 @@ fn tmux_c_runs_the_command_with_the_default_shell() {
     assert_eq!(out.stdout, format!("marker {shell}\n"));
     let _ = tmux(&srv, &["kill-server"]);
 }
+
+/// TC.13 regression: a `run-shell` or `if-shell` job gets what tmux 3.7b's
+/// `environ_for_session` sets (recorded): `$TMUX` naming the job's session,
+/// tmux's `TERM_PROGRAM`, and no `$TMUX_PANE`. fzf's `--tmux` decides from
+/// `$TMUX`, so `bind K run-shell tsess` opens its picker.
+#[test]
+fn run_shell_jobs_get_tmux_s_variables() {
+    let srv = start_as_tmux();
+    grofe(&srv, &["new-session", "-d", "-s", "a"]).expect("new-session");
+    let probe = "echo \"$TMUX ${TMUX_PANE-unset} $TERM_PROGRAM $TERM_PROGRAM_VERSION\"";
+    let out = tmux(&srv, &["run-shell", probe]);
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!("{} unset tmux 3.7b\n", expected_tmux(&srv, "a"))
+    );
+    let out = tmux(
+        &srv,
+        &[
+            "if-shell",
+            "[ -n \"$TMUX\" ] && [ -z \"$TMUX_PANE\" ]",
+            "display -p yes",
+            "display -p no",
+        ],
+    );
+    assert_eq!(out.stdout, "yes\n", "{}", out.stderr);
+    let _ = tmux(&srv, &["kill-server"]);
+}

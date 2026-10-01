@@ -984,12 +984,20 @@ pub fn pane_env(state: &State, session: SessionId) -> Vec<(String, String)> {
 /// (`run-shell`, popups, status sources): as a pane's, the global
 /// environment under the session's, without hidden variables, as tmux
 /// 3.7b's `run-shell`.
+/// Over it, the variables tmux sets for every job (`compat::job_env`).
 pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, String)> {
-    let Some(s) = session.and_then(|s| state.model.sessions.get(&s)) else {
-        return visible(&state.hooks.global());
+    let session = session.filter(|s| state.model.sessions.contains_key(s));
+    let mut env = match session {
+        Some(s) => {
+            let mut env = pane_env(state, s);
+            env.extend(state.model.sessions[&s].env.iter().cloned());
+            env
+        }
+        None => visible(&state.hooks.global()),
     };
-    let mut env = pane_env(state, s.id);
-    env.extend(s.env.iter().cloned());
+    let set = crate::compat::job_env(state, session);
+    env.retain(|(k, _)| !set.iter().any(|(name, _)| name == k));
+    env.extend(set);
     env
 }
 

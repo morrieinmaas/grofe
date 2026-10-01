@@ -112,6 +112,33 @@ pub fn tmux_value(socket: &Path, pid: u32, session: SessionId) -> String {
     format!("{},{pid},{}", socket.display(), session.0)
 }
 
+/// Variables a job the server runs for `session` gets (`run-shell`,
+/// `if-shell`, popups, status sources), as tmux 3.7b's
+/// `environ_for_session` sets them over the environment (recorded):
+/// `TMUX` naming the session, or `-1` with none, the panes' `TERM`,
+/// `COLORTERM`, and under tmux identity `TERM_PROGRAM=tmux` with the
+/// compat level as its version. No `TMUX_PANE`: a job has no pane.
+pub fn job_env(state: &State, session: Option<SessionId>) -> Vec<(String, String)> {
+    let socket = &state.socket;
+    let tmux = match session {
+        Some(s) => tmux_value(socket, std::process::id(), s),
+        None => format!("{},{},-1", socket.display(), std::process::id()),
+    };
+    let mut env = vec![
+        ("TERM".to_string(), state.inner_term.to_string()),
+        ("COLORTERM".to_string(), crate::term::COLORTERM.to_string()),
+        ("TMUX".to_string(), tmux),
+    ];
+    if state.model.identity == Identity::Tmux {
+        env.push(("TERM_PROGRAM".to_string(), "tmux".to_string()));
+        env.push((
+            "TERM_PROGRAM_VERSION".to_string(),
+            compat_level().to_string(),
+        ));
+    }
+    env
+}
+
 /// Variables a new or respawned pane of `session` gets from the server's
 /// identity, applied over the session's environment (spec D12, §4.2):
 /// `TMUX` and `TMUX_PANE` under both identities, and under tmux identity

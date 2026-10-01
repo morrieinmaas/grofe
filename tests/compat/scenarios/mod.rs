@@ -79,11 +79,6 @@ pub const TSESS_PATH_TMUX: &str = "/opt/nanobrew/prefix/bin/tmux";
 /// must still differ, so a fix shows up as a stale entry.
 const KNOWN: &[(&str, &str, &str)] = &[
     (
-        "canopy-agent",
-        r#"$ run-shell 'echo "TMUX ${TMUX:+set} TMUX_PANE ${TMUX_PANE:-unset}"'"#,
-        JOB_TMUX,
-    ),
-    (
         "nav",
         "$ display-message -p '#{pane_id} #{pane_at_left} #{pane_at_right}'",
         PANE_AT,
@@ -94,13 +89,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
         PANE_AT,
     ),
 ];
-
-/// tmux 3.7b gives every job `$TMUX` (`environ_for_session`); grofe's
-/// run-shell jobs get only `$GROFE`. Scripts still reach grofe through its
-/// own variable, but anything that tests `$TMUX` sees no tmux: fzf's
-/// `--tmux` decides from `$TMUX`, so `bind K run-shell tsess` would open
-/// no floating pane. Owner: run-shell's job env (TC.5; TC.1 set it in panes).
-const JOB_TMUX: &str = "run-shell jobs have no $TMUX (TC.5, run-shell's environment)";
 
 /// `#{pane_at_left}` and its siblings are empty: no inventory row names
 /// them (docs/compat-coverage.md, "Variable named: no"). The navigator's
