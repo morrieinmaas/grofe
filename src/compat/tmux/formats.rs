@@ -207,18 +207,16 @@ impl Rewriter {
     /// expander takes an else branch that is a whole `#{?...}` in a loop.
     fn branches(&mut self, parts: &[&str]) -> String {
         let mut out = String::new();
-        let mut pairs = parts.chunks_exact(2);
-        let mut open = 0;
-        for pair in pairs.by_ref() {
-            let cond = self.convert(pair[0], true);
-            let value = self.convert(pair[1], true);
+        let (pairs, last) = parts.as_chunks::<2>();
+        for [cond, value] in pairs {
+            let cond = self.convert(cond, true);
+            let value = self.convert(value, true);
             let _ = write!(out, "#{{?{cond},{value},");
-            open += 1;
         }
-        if let [last] = pairs.remainder() {
+        if let [last] = last {
             out.push_str(&self.convert(last, true));
         }
-        out.push_str(&"}".repeat(open));
+        out.push_str(&"}".repeat(pairs.len()));
         out
     }
 
