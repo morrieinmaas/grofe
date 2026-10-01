@@ -9,7 +9,7 @@
 # 2. prefix d inside the popup detaches the nested client: the popup
 #    closes and main stays attached.
 # 3. the plugin's own refusal: launching from a session whose name has
-#    the session prefix makes nothing.
+#    the session prefix makes nothing but its message.
 # 4. prefix A opens the picker, which needs fzf; without it the plugin's
 #    own message shows.
 # 5. a bell in the agent session, which fires the plugin's alert-bell
@@ -37,6 +37,11 @@ screen zz00
 $ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
 $ set -g @claude_session_prefix mai
 keys C-b a
+# The guard's message comes from the plugin's script, which run-shell
+# runs in the background: wait for it before typing, since a key clears a
+# message (tmux and grofe alike), and one arriving after the key would
+# stay on the screen below.
+screen Popup window already open
 keys zz11
 screen zz00zz11
 $ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
