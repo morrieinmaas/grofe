@@ -498,7 +498,7 @@ mod tests {
             &["has-session", "-t", "main"],
             &["display-message", "-p", "#{window_name}"],
             &["capture-pane", "-p"],
-            &[ATTACH_CHECK, "-t", "main"],
+            &[ATTACH_CHECK, "", "-t", "main"],
         ] {
             assert!(read_only(&argv(words)), "{words:?}");
         }

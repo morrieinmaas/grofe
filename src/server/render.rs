@@ -178,7 +178,11 @@ fn cell_style(cell: &SnapCell) -> Style {
 pub fn compose(inputs: &FrameInputs) -> Screen {
     let (cols, rows) = inputs.client;
     let mut screen = Screen::new(cols, rows);
-    let window = compose_window(inputs);
+    let (window, border) = compose_window(inputs);
+    let (ww, wh) = (i32::from(window.cols), i32::from(window.rows));
+    let is_border = |x: i32, y: i32| {
+        (0..ww).contains(&x) && (0..wh).contains(&y) && border[(y * ww + x) as usize]
+    };
     let win_rows = if inputs.status.is_some() {
         rows.saturating_sub(1)
     } else {
@@ -194,8 +198,28 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
         for cx in 0..cols {
             let (wx, wy) = (cx as u32 + vx as u32, cy as u32 + vy as u32);
             let inside = wx < window.cols as u32 && wy < window.rows as u32;
+            let (ex, ey) = (wx as i32, wy as i32);
+            let edge = (ex == ww && ey <= wh) || (ey == wh && ex <= ww);
             let mut cell = if inside {
                 window.cells[wy as usize * window.cols as usize + wx as usize].clone()
+            } else if edge {
+                // tmux 3.7b (recorded) draws the edge of a window smaller
+                // than its client as a border, joined to the pane borders
+                // that meet it: `│` down its right, `─` along its foot,
+                // `┘` at the corner, `┴` or `┤` where a border runs in.
+                let up = if ex == ww {
+                    ey > 0
+                } else {
+                    is_border(ex, ey - 1)
+                };
+                let down = ex == ww && ey < wh;
+                let left = if ey == wh {
+                    ex > 0
+                } else {
+                    is_border(ex - 1, ey)
+                };
+                let right = ey == wh && ex < ww;
+                styled(glyph(up, down, left, right), &inputs.border_style)
             } else {
                 letterbox.clone()
             };
@@ -255,7 +279,8 @@ pub fn fix_wide_pairs(screen: &mut Screen) {
 }
 
 /// The whole window, in window coordinates, sized to `inputs.area`.
-fn compose_window(inputs: &FrameInputs) -> Screen {
+/// The window's cells and which of them are border.
+fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
     let area = inputs.area;
     let mut win = Screen::new(area.cols, area.rows);
     let width = area.cols as usize;
@@ -292,8 +317,25 @@ fn compose_window(inputs: &FrameInputs) -> Screen {
             }
         }
     }
-    draw_borders(&mut win, inputs);
-    win
+    let border = draw_borders(&mut win, inputs);
+    (win, border)
+}
+
+/// A border glyph by which neighbours are border too.
+fn glyph(up: bool, down: bool, left: bool, right: bool) -> char {
+    match (up, down, left, right) {
+        (true, true, true, true) => '┼',
+        (true, true, false, true) => '├',
+        (true, true, true, false) => '┤',
+        (false, true, true, true) => '┬',
+        (true, false, true, true) => '┴',
+        (false, true, false, true) => '┌',
+        (false, true, true, false) => '┐',
+        (true, false, false, true) => '└',
+        (true, false, true, false) => '┘',
+        (_, _, false, false) => '│',
+        _ => '─',
+    }
 }
 
 /// Border cells as box drawing, each glyph picked from which neighbours
@@ -301,7 +343,7 @@ fn compose_window(inputs: &FrameInputs) -> Screen {
 /// `pane-active-border-style`, the rest in `pane-border-style`.
 // ponytail: tmux's two-pane half-colouring (pane-border-indicators) is not
 // drawn: with two panes the whole shared border is active.
-fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
+fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
     let (w, h) = (win.cols as i32, win.rows as i32);
     let mut mask = vec![false; win.cells.len()];
     let mut mark = |x: i32, y: i32| {
@@ -337,19 +379,7 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
             if !at(x, y) {
                 continue;
             }
-            let glyph = match (at(x, y - 1), at(x, y + 1), at(x - 1, y), at(x + 1, y)) {
-                (true, true, true, true) => '┼',
-                (true, true, false, true) => '├',
-                (true, true, true, false) => '┤',
-                (false, true, true, true) => '┬',
-                (true, false, true, true) => '┴',
-                (false, true, false, true) => '┌',
-                (false, true, true, false) => '┐',
-                (true, false, false, true) => '└',
-                (true, false, true, false) => '┘',
-                (_, _, false, false) => '│',
-                _ => '─',
-            };
+            let glyph = glyph(at(x, y - 1), at(x, y + 1), at(x - 1, y), at(x + 1, y));
             let style = if on_ring(x, y) {
                 &inputs.active_border_style
             } else {
@@ -358,6 +388,7 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) {
             win.cells[(y * w + x) as usize] = styled(glyph, style);
         }
     }
+    mask
 }
 
 /// A floating pane to draw over a window (tmux 3.7's `new-pane`, TC.6):

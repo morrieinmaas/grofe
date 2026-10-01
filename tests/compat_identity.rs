@@ -286,12 +286,13 @@ fn wait_file(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-/// Case 6, and the `:` prompt: from inside a pane, attaching to another
-/// session succeeds and attaching to the pane's own session is refused,
-/// with tmux's text for a `tmux` attach and grofe's for a `grofe` one.
-/// Text typed at the nested client's `:` prompt is tmux dialect on this
-/// tmux-identity server, so the front end answers it (FE.1: `setw` is
-/// tmux's, not grofe's).
+/// Case 6, and the `:` prompt: from inside a pane, a `tmux` attach is
+/// refused to any session, with tmux's text, as tmux 3.7b refuses a
+/// client on one of its panes' terminals (recorded, TP.10); a `grofe`
+/// attach is refused only to the pane's own session, with grofe's text,
+/// and attaches to another. Text typed at the nested client's `:` prompt
+/// is tmux dialect on this tmux-identity server, so the front end answers
+/// it (FE.1: `setw` is tmux's, not grofe's).
 #[test]
 fn attach_from_a_pane_refuses_only_its_own_session() {
     let srv = start_as_tmux();
@@ -332,11 +333,19 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
         "open terminal failed: not a terminal\nrc=1\n"
     );
 
+    type_line(
+        &srv,
+        "outer",
+        &format!("{link} attach -t inner 2> {home}/other-t; echo rc=$? >> {home}/other-t"),
+    );
+    let other = wait_file(&srv.home.join("other-t"));
+    assert_eq!(other, format!("{TMUX_NESTED}\nrc=1\n"));
+
     grofe(&srv, &["bind-key", ":", "command-prompt"]).expect("bind :");
     type_line(
         &srv,
         "outer",
-        &format!("{link} attach -t inner; echo rc=$? > {home}/other"),
+        &format!("{grofe_bin} attach -t inner; echo rc=$? > {home}/other"),
     );
     wait_until(
         || {

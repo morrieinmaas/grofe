@@ -693,10 +693,13 @@ fn a_refused_target_is_reported_before_any_probe() {
         "the kitty graphics query was sent"
     );
     assert!(!srv.attach_arrives(Duration::from_millis(200)));
-    assert_eq!(
-        srv.checks(),
-        vec![vec!["__attach-check", "-t", "nope", "--nest"]]
-    );
+    // The check carries the client's terminal first (tmux's nesting rule
+    // reads it), then attach-session's arguments.
+    let checks = srv.checks();
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0][0], "__attach-check");
+    assert!(checks[0][1].starts_with("/dev/"), "{checks:?}");
+    assert_eq!(checks[0][2..], ["-t", "nope", "--nest"]);
     tty.assert_restored();
 }
 

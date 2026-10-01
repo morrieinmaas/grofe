@@ -570,7 +570,11 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
     };
     // The target first (protocol::ATTACH_CHECK): a refusal never probes
     // the terminal.
-    let check: Vec<String> = std::iter::once(ATTACH_CHECK.to_string())
+    let tty = nix::unistd::ttyname(std::io::stdin())
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let check: Vec<String> = [ATTACH_CHECK.to_string(), tty]
+        .into_iter()
         .chain(argv[1..].iter().cloned())
         .collect();
     match connect_attach().and_then(|s| request(s, socket, &check)) {

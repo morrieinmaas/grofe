@@ -398,8 +398,12 @@ true self-nesting is refused unless `--nest` is given (grofe's own long
 flag; `-f` stays tmux's client-flags option, for the tmux front end):
 attaching to the session
 that contains the calling pane (for a popup, the session of the client that
-opened it), which would draw the session inside itself. The refusal uses
-tmux's message for a tmux-dialect request, grofe's otherwise (D12).
+opened it), which would draw the session inside itself. That is grofe's
+own rule. A tmux-dialect attach follows tmux 3.7b's instead (recorded,
+M3.7 TP.10): a client with `$TMUX` set whose terminal is one of the
+server's panes' is refused to any session, with tmux's message, and any
+other client attaches, so a popup's `tmux attach-session -t` to its own
+session shows the session nested in the popup.
 
 **Control mode:** newline-delimited JSON both ways.
 
