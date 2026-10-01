@@ -1,0 +1,15 @@
+# Vendored tmux plugins: <name> <upstream-url> <commit>
+#
+# This file is the provenance record and the input to plugins/vendor.sh.
+# To move a pin: edit the commit on its line, run `plugins/vendor.sh
+# <name>`, and commit the whole resulting diff, including CHECKSUMS.
+tmux-resurrect https://github.com/tmux-plugins/tmux-resurrect.git cff343cf9e81983d3da0c8562b01616f12e8d548
+tmux-continuum https://github.com/tmux-plugins/tmux-continuum.git 0698e8f4b17d6454c71bf5212895ec055c578da0
+tmux-sensible https://github.com/tmux-plugins/tmux-sensible.git 25cb91f42d020f675bb0a2ce3fbd3a5d96119efa
+tmux-yank https://github.com/tmux-plugins/tmux-yank.git acfd36e4fcba99f8310a7dfb432111c242fe7392
+tmux-fzf https://github.com/sainnhe/tmux-fzf.git e5f427e9dcf180ca92e2f8af47ba07f644fd4585
+tmux-sessionx https://github.com/omerxx/tmux-sessionx.git 628575be60646f5712e4c8c2f76683b03b072515
+tmux-which-key https://github.com/alexwforsythe/tmux-which-key.git 85fb9756447b989f3b94e515d1e6ee7fec76cba2
+opensessions https://github.com/Ataraxy-Labs/opensessions.git a383e9fe76f67c29085f87b698bfda2ac9a3e318
+tmux-fzf-url https://github.com/wfxr/tmux-fzf-url.git 7c4838e95fde660b7f2aaf514323ac8498e0d4f4
+tmux-claude-session-manager https://github.com/craftzdog/tmux-claude-session-manager.git e0bcfd189ddd2019a9cda012f2b3446cd83e16a9

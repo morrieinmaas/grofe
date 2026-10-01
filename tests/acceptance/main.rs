@@ -26,4 +26,5 @@ mod tc_12;
 mod tc_6;
 mod tc_7;
 mod tc_9;
+mod tp_12;
 mod tp_2;

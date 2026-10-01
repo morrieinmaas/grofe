@@ -130,5 +130,38 @@ for f in "$fixtures"/conf.d/*.toml; do
   fi
 done
 
+# The canopy store tests/acceptance/tp_12.rs runs resurrect and continuum
+# from: the loader, the save and restore strategies with the libraries they
+# source, and the two vendored plugins' runtime files, byte for byte and
+# with their modes.
+store_files() {
+  (cd "$1" && {
+    printf '%s\n' lib/env.sh lib/plugins.sh lib/adapter.sh lib/pane.sh lib/resume.sh plugins/VERSIONS
+    find plugins/strategies -type f -name '*.sh'
+    find plugins/tmux-resurrect plugins/tmux-continuum -type f \( -name '*.tmux' -o -name 'LICENSE*' \
+      -o -path '*/scripts/*' -o -path '*/save_command_strategies/*' -o -path '*/strategies/*' \)
+  } | LC_ALL=C sort)
+}
+store="$fixtures/store"
+want="$(store_files "$canopy")"
+if [ "$update" -eq 1 ]; then
+  rm -rf "$store"
+  while IFS= read -r f; do
+    mkdir -p "$store/$(dirname "$f")"
+    cp -p "$canopy/$f" "$store/$f"
+  done <<<"$want"
+elif [ ! -d "$store" ] || [ "$(store_files "$store")" != "$want" ]; then
+  fail "tests/fixtures/canopy-port/store holds other files than canopy's (rerun with --update)"
+else
+  while IFS= read -r f; do
+    a=0 b=0
+    [ -x "$canopy/$f" ] && a=1
+    [ -x "$store/$f" ] && b=1
+    if ! cmp -s "$canopy/$f" "$store/$f" || [ "$a" != "$b" ]; then
+      fail "tests/fixtures/canopy-port/store/$f differs from canopy's (rerun with --update)"
+    fi
+  done <<<"$want"
+fi
+
 [ "$status" -eq 0 ] && echo "ok: canopy's grofe fragments and athome's grofe config load, copies current"
 exit "$status"
