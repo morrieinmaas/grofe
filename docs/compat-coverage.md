@@ -221,23 +221,33 @@ server started under grofe's own name. A key that differs fails the script
 unless a row below names it. *Servers* says which grofe server the row is
 for. The classes:
 
-- **deferred**: M5's copy mode and buffers. Never compared, only reported.
-- **oos**: out of scope in the spec (§4.5). Never compared, only reported.
+- **deferred**: M5's copy mode and buffers. Reported, the difference excused.
+- **oos**: out of scope in the spec (§4.5). Reported, the difference excused.
 - **mouse**: a stock tmux mouse binding. grofe leaves it unbound, and its
   built-in mouse model (TC.10, `src/server/mouse.rs`) does the job, or
   nothing does, as the reason says.
 - **native**: grofe binds the key in its own form on purpose.
+- **gap**: a known gap that is neither deferred nor out of scope. Reported,
+  not fixed here.
 
-A **mouse** or **native** row whose key matches tmux anyway fails the
-script, so this table cannot go stale.
+The table cannot go stale. A row fails the script when its key matches tmux
+anyway (whatever its class, so TP.9b sees a deferred row M5 has made
+match), when neither side binds its key, or when neither side has its
+table.
+
+Under the tmux name, grofe shows tmux's own stock binding for every stock
+key grofe cannot run yet (`[ ] = PPage m` and the `#` buffer list), so
+those `list-keys` rows match tmux there and the rows below name only
+`grofe`. Pressing one under the tmux name fails with the front end's
+reason (copy mode and buffers: M5; `m`: out of scope).
 
 | Table | Key | Class | Servers | Reason |
 |---|---|---|---|---|
-| `prefix` | `[` | deferred | both | `copy-mode`: TP.9b, M5 |
-| `prefix` | `]` | deferred | both | `paste-buffer -p`: TP.9b, M5 |
-| `prefix` | `=` | deferred | both | `choose-buffer -Z`: TP.9b, M5 |
-| `prefix` | `PPage` | deferred | both | `copy-mode -u`, tmux's spelling of PageUp: TP.9b, M5 |
-| `prefix` | `m` | oos | both | out of scope: marks unused by the owner's scripts (spec §4.5, marked panes) |
+| `prefix` | `[` | deferred | grofe | `copy-mode`: TP.9b, M5 |
+| `prefix` | `]` | deferred | grofe | `paste-buffer -p`: TP.9b, M5 |
+| `prefix` | `=` | deferred | grofe | `choose-buffer -Z`: TP.9b, M5 |
+| `prefix` | `PPage` | deferred | grofe | `copy-mode -u`, tmux's spelling of PageUp: TP.9b, M5 |
+| `prefix` | `m` | oos | grofe | out of scope: marks unused by the owner's scripts (spec §4.5, marked panes) |
 | `root` | `WheelUpPane` | deferred | both | wheel into copy mode: TP.9b, M5. Until then the built-in model opens the read-only scrollback view |
 | `root` | `MouseDrag1Pane` | deferred | both | drag selection in copy mode: TP.9b, M5 |
 | `root` | `DoubleClick1Pane` | deferred | both | word selection in copy mode: TP.9b, M5 |
@@ -289,10 +299,10 @@ script, so this table cannot go stale.
 | `prefix` | `7` | native | grofe | the same |
 | `prefix` | `8` | native | grofe | the same |
 | `prefix` | `9` | native | grofe | the same |
-| `prefix` | `*` | native | grofe | grofe's own default table leaves `new-pane` unbound; under the tmux name it is tmux's stock binding |
-| `prefix` | `<` | native | grofe | grofe's own default table leaves tmux's window menu unbound |
-| `prefix` | `>` | native | grofe | grofe's own default table leaves tmux's pane menu unbound |
-| `prefix` | `\#` | native | grofe | grofe's own default table leaves `list-buffers` unbound (M5) |
+| `prefix` | `*` | gap | grofe | a gap, not a choice: grofe's own default table leaves out tmux 3.7's stock `* new-pane`, though the verb exists (TC.6, built to fzf's recorded form). Under the tmux name the stock binding is there; what a bare `new-pane` does on grofe is not checked here |
+| `prefix` | `<` | oos | grofe | out of scope: tmux's window menu opens at `-x W -y W`, a mouse position form (spec §4.5, mouse argv forms), so grofe's own default table leaves it unbound |
+| `prefix` | `>` | oos | grofe | out of scope: tmux's pane menu opens at `-x P -y P`, but its items are mouse argv forms (`copy-mode -t=`, `send-keys -X -t =`, `#{mouse_word}`; spec §4.5), so grofe's own default table leaves it unbound |
+| `prefix` | `\#` | deferred | grofe | `list-buffers`: buffers are M5's (TP.9b) |
 
 ## Coverage
 

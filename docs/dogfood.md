@@ -74,9 +74,14 @@ The owner ruled that this check runs as a script, not by hand.
 attached on a pty, with the whole config and every plugin loaded. It does
 this on real tmux 3.7b and on two grofe servers, one under the tmux name and
 one under grofe's own. A key passes when grofe ran what tmux ran: the same
-script or stub, with the same argv, in the same directory, in a popup of the
-same size. Your own tools are stubs that log a line; the plugin scripts run
-unchanged. Tick the last column once you have used the key yourself.
+script or stub, with the same argv and input, in the same directory. Where a
+key opens a window, its size must match too: the popup of `g G P T W`, the
+agent's pane inside the popup of `a` and `A`, and the picker of `s` (fzf-tmux's
+popup) and `u` (fzf's own floating pane), as the real fzf reports it. `K`
+and `?` open nothing here: their tools are stubs, run by `run-shell`. Your own
+tools are stubs that log a line; the plugin scripts run unchanged, and fzf is
+the real one behind a wrapper that logs its argv. Tick the last column once
+you have used the key yourself.
 
 | Key | What it does | Script (grofe under the tmux name, and under its own) | You |
 |---|---|---|---|

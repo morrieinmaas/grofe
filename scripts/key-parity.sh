@@ -26,13 +26,15 @@
 # parity" table names the table and key, for that grofe server, with a
 # class and a reason:
 #
-#   deferred    M5's copy mode and buffers (TP.9b): reported, not compared
-#   oos         out of scope in the spec: reported, not compared
+#   deferred    M5's copy mode and buffers (TP.9b): reported, excused
+#   oos         out of scope in the spec: reported, excused
 #   mouse       a stock mouse binding, left to grofe's built-in mouse model
 #   native      grofe binds the key in its own form, by design
+#   gap         a known gap, neither deferred nor out of scope
 #
-# A mouse or native row for a key that matches anyway fails, so the table
-# cannot go stale.
+# A row of any class fails when its key matches anyway, when neither side
+# binds its key, or when neither side has its table, so the table cannot go
+# stale (TP.9b sees each deferred row M5 makes match).
 #
 # Part 2, the daily bindings: prefix s K ? u g G P T W a A are pressed once
 # each, through a client attached on a pty, and what each one ran (its
@@ -89,8 +91,10 @@ cleanup() {
   for s in "${servers[@]}"; do
     run_in "${s%%|*}" "${s#*|}" kill-server >/dev/null 2>&1 || true
   done
-  # A grofe server names its socket, under $runs, in its argv.
+  # Anything left: a grofe server names its socket under $runs in its argv,
+  # and every server was started from a binary under $tmp.
   pkill -f "$runs/" 2>/dev/null || true
+  pkill -f "$tmp/" 2>/dev/null || true
   if [ -n "$keep" ]; then
     mkdir -p "$keep"
     cp -R "$tmp/out/." "$keep/" 2>/dev/null || true
@@ -123,6 +127,9 @@ render() {
 work="$tmp/work"
 mkdir -p "$work" "$tmp/out"
 real_fzf="$(host_tool fzf || true)"
+real_fzf_tmux="$(host_tool fzf-tmux || true)"
+[ -n "$real_fzf" ] && [ -n "$real_fzf_tmux" ] ||
+  { echo "the daily bindings need fzf and fzf-tmux on PATH" >&2; exit 2; }
 
 # A stub that logs what it was run with: its name, argv, directory, the
 # size of the terminal it runs in and THEME_POPUP, then exits 0. Each of
@@ -203,30 +210,32 @@ EOF
   # gives the popup a moment before the session ends and closes it.
   cat >"$w/bin/claude" <<EOF
 #!/bin/sh
-printf 'claude session=%s cwd=%s\n' "\$(tmux display-message -p '#S')" "\$PWD" >>"$log"
+printf 'claude session=%s cwd=%s tty=%s\n' "\$(tmux display-message -p '#S')" "\$PWD" \
+  "\$(stty size </dev/tty 2>/dev/null)" >>"$log"
 sleep 1
 EOF
   chmod +x "$w/bin/claude"
-  # fzf, and fzf-tmux beside it as fzf ships it: the version is the
-  # host's, so each plugin takes the path it takes on this machine; a pick
-  # logs its argv and its input, and picks nothing.
+  # fzf and fzf-tmux are the host's, so each plugin takes the path it takes
+  # on this machine and its picker opens where it opens there. fzf first
+  # logs its argv, the size of the terminal it runs in and its input; the
+  # picker then logs the size it got, from its start event, and aborts
+  # (FZF_DEFAULT_OPTS, which daily() sets on the server).
   cat >"$w/bin/fzf" <<EOF
 #!/bin/sh
-if [ "\$1" = --version ]; then
-  ${real_fzf:+exec "$real_fzf" --version}
-  echo "0.74.4"; exit 0
-fi
+[ "\$1" = --version ] && exec "$real_fzf" --version
+in=\$(mktemp "$w/tmp/fzf-in.XXXXXX")
+cat >"\$in"
 {
   printf '%s' "\${0##*/}"
   for a in "\$@"; do printf ' [%s]' "\$a"; done
   size=\$(stty size </dev/tty 2>/dev/null) && printf ' tty=%s' "\$size"
   printf '\n'
-  sed 's/^/  < /'
+  sed 's/^/  < /' "\$in"
 } >>"$log"
-exit 130
+exec "$real_fzf" "\$@" <"\$in"
 EOF
   chmod +x "$w/bin/fzf"
-  ln -s fzf "$w/bin/fzf-tmux"
+  ln -s "$real_fzf_tmux" "$w/bin/fzf-tmux"
 }
 
 # run_in <world> <socket> <tmux args>: the world's tmux, from its home,
@@ -343,9 +352,9 @@ dump() {
   done <"$out/tables"
 }
 
-# The reasons table: `| table | key | class | reason |` rows under the
-# "## Key parity" heading of docs/compat-coverage.md, as tab-separated
-# table, key, class and reason.
+# The reasons table: `| table | key | class | servers | reason |` rows
+# under the "## Key parity" heading of docs/compat-coverage.md, as
+# tab-separated table, key, class, servers and reason.
 reasons() {
   awk -F'|' '
     /^## Key parity/ { on = 1; next }
@@ -353,13 +362,13 @@ reasons() {
     on && /^\| `/ {
       for (i = 2; i <= 6; i++) { gsub(/^ +| +$/, "", $i) }
       t = $2; k = $3; gsub(/^`|`$/, "", t); gsub(/^`|`$/, "", k)
-      if ($4 ~ /^(deferred|mouse|oos|native)$/) print t "\t" k "\t" $4 "\t" $5 "\t" $6
+      if ($4 ~ /^(deferred|mouse|oos|native|gap)$/) print t "\t" k "\t" $4 "\t" $5 "\t" $6
     }' "$reasons_doc"
 }
 
 # compare <grofe-world>: per table, every key bound on either side.
 compare() {
-  local g="$1" ref="$tmp/out/tmux" got="$tmp/out/$1" t
+  local g="$1" ref="$tmp/out/tmux" got="$tmp/out/$1" t key class on
   while IFS= read -r t; do
     touch "$ref/$t" "$got/$t"
     awk -F'\t' -v t="$t" -v g="$g" '
@@ -370,16 +379,20 @@ compare() {
         for (k in keys) {
           w = (k in want) ? want[k] : ""; h = (k in have) ? have[k] : ""
           c = (k in class) ? class[k] : ""
-          # deferred and oos rows are reported whatever grofe binds.
-          if (c == "deferred" || c == "oos") { n[c]++; print "EXCUSED\t" k "\t" why[k]; continue }
           if (w == h && c == "") { same++; continue }
+          # A row whose key matches is stale, whatever its class: so a
+          # deferred row M5 has made match fails TP.9b until it goes.
           if (w == h) { print "FAIL\t" k "\tmatches tmux, but the reasons table excuses it (" why[k] ")"; bad++; continue }
           if (c != "") { n[c]++; print "EXCUSED\t" k "\t" why[k]; continue }
           print "FAIL\t" k "\ttmux: " (w == "" ? "(unbound)" : w) " || grofe: " (h == "" ? "(unbound)" : h)
           bad++
         }
-        printf "SUMMARY\t%-14s %-11s %3d match, %d deferred, %d mouse, %d oos, %d native, %d differ\n",
-          t, g, same, n["deferred"], n["mouse"], n["oos"], n["native"], bad
+        # A row for a key neither side binds is stale too.
+        for (k in why) if (!(k in keys)) {
+          print "FAIL\t" k "\tneither side binds it, but the reasons table names it (" why[k] ")"; bad++
+        }
+        printf "SUMMARY\t%-14s %-11s %3d match, %d deferred, %d mouse, %d oos, %d native, %d gap, %d differ\n",
+          t, g, same, n["deferred"], n["mouse"], n["oos"], n["native"], n["gap"], bad
       }' <(reasons) "$ref/$t" "$got/$t" | LC_ALL=C sort >"$tmp/out/$g.$t.result"
     while IFS="$(printf '\t')" read -r kind key rest; do
       case "$kind" in
@@ -389,6 +402,12 @@ compare() {
       esac
     done <"$tmp/out/$g.$t.result"
   done < <(sort -u "$ref/tables" "$got/tables" | grep -vx -e copy-mode -e copy-mode-vi)
+  # And a row for a table neither side has.
+  while IFS="$(printf '\t')" read -r t key class on _; do
+    case "$on" in both | "$g") ;; *) continue ;; esac
+    sort -u "$ref/tables" "$got/tables" | grep -qx -- "$t" ||
+      fail "$g $t $key: neither side has table $t, but the reasons table names it ($class)"
+  done < <(reasons)
 }
 
 # --- part 2: the daily bindings -------------------------------------------
@@ -425,21 +444,32 @@ attach() {
   return 1
 }
 
-# press <world> <socket> <key>: prefix, then the key; then wait for the
-# binding's log line and for any popup it opened to close.
+# press <world> <socket> <key>: prefix, then the key; then wait until the
+# binding is done: its first log line written, then no new line for 1.5 s
+# and only the one client left (an agent's nested client gone, its popup
+# closed). The key's section is the lines up to that point, so nothing a
+# binding logs late can land in the next key's.
 press() {
-  local w="$1" sock="$2" key="$3" log="$tmp/$1/daily.log" before
+  local w="$1" sock="$2" key="$3" log="$tmp/$1/daily.log" before n last=-1 still=0
   before="$(wc -l <"$log")"
   printf '%s%s' "$prefix_byte" "$key" >&9
-  for _ in $(seq 1 40); do
-    [ "$(wc -l <"$log")" -gt "$before" ] && break
+  for _ in $(seq 1 80); do
     sleep 0.25
+    n="$(wc -l <"$log")"
+    [ "$n" -gt "$before" ] || continue
+    if [ "$n" -eq "$last" ] &&
+      [ "$(run_in "$w" "$sock" list-clients -F x 2>/dev/null | wc -l)" -eq 1 ]; then
+      still=$((still + 1))
+    else
+      still=0
+    fi
+    last="$n"
+    [ "$still" -ge 6 ] && break
   done
-  # The stub has logged; let its popup close (and an agent's session end)
-  # before the next key, so the next key reaches the outer client.
-  sleep 2
+  [ "$still" -ge 6 ] || fail "$w prefix $key: never settled"
   printf '== %s\n' "$key" >>"$tmp/out/$w.daily"
-  tail -n +"$((before + 1))" "$log" | normalize "$w" >>"$tmp/out/$w.daily"
+  head -n "$last" "$log" | tail -n +"$((before + 1))" | normalize "$w" >>"$tmp/out/$w.daily"
+  sleep 0.5
 }
 
 daily() {
@@ -453,6 +483,9 @@ daily() {
   n=$(( $(printf '%d' "'${pfx#C-}") & 31 ))
   # shellcheck disable=SC2059  # the format is the octal escape itself
   prefix_byte="$(printf "\\$(printf '%03o' "$n")")"
+  # Each picker reports the size it got and closes at once.
+  run_in "$w" "$sock" set-environment -g FZF_DEFAULT_OPTS \
+    "--bind 'start:execute-silent(echo picker \$FZF_COLUMNS x \$FZF_LINES >>$tmp/$w/daily.log)+abort'"
   : >"$tmp/out/$w.daily"
   attach "$w" "$sock" || return 0
   for key in $daily_keys; do
