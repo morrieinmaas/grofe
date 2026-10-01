@@ -603,9 +603,12 @@ fn binding(state: &mut State, client: ClientId, key: &Key) -> Option<(Vec<Vec<St
         clients::set_key_table(state, client, ROOT_TABLE);
     }
     let tables = &state.registry.key_tables;
+    // ponytail: a root `Any` also takes the presses the built-in model
+    // handles, where tmux's stock MouseDown1Pane and the rest are bound
+    // and win over it; no config the owner runs binds root `Any`.
     let b = tables
-        .get(&table, key)
-        .or_else(|| tables.get(ROOT_TABLE, key))?;
+        .lookup(&table, key)
+        .or_else(|| tables.lookup(ROOT_TABLE, key))?;
     Some((b.cmds.clone(), b.dialect))
 }
 
