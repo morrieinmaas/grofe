@@ -1,0 +1,50 @@
+# TM.2: copy-line and its -and-cancel form (the whole logical line, -N lines,
+# the cursor put back), rectangle-on and rectangle-off, and stop-selection
+# (the selection stays, the cursor no longer extends it).
+$ new-session -d -s main -x 20 -y 10 'printf "first line wraps past twenty\nsecond\nthird line\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X copy-line
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X -N 2 copy-line
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X copy-line -P
+$ send-keys -t main -X copy-line a b
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X rectangle-on
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+$ send-keys -t main -X rectangle-on
+$ display -p -t main '#{rectangle_toggle}'
+$ send-keys -t main -X rectangle-off
+$ display -p -t main '#{rectangle_toggle}'
+$ send-keys -t main -X rectangle-off x
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 2 cursor-right
+$ send-keys -t main -X stop-selection
+$ display -p -t main '#{selection_present} #{selection_active} #{selection_mode} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X -N 3 cursor-right
+$ display -p -t main '#{selection_present} #{selection_active} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X select-line
+$ send-keys -t main -X stop-selection
+$ send-keys -t main -X cursor-down
+$ display -p -t main '#{selection_present} #{selection_mode} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 2 cursor-down
+$ send-keys -t main -X copy-line-and-cancel
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

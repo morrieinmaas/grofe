@@ -76,6 +76,8 @@ pub struct Sel {
     no_reset: bool,
     /// Copies made by the last command, for the server to store.
     pub copied: Vec<Copied>,
+    /// Why the last command's copy failed, for the server to report.
+    pub error: Option<String>,
 }
 
 // ---- Selection state -------------------------------------------------------
@@ -258,10 +260,20 @@ fn rectangle_set(mode: &mut Mode, rect: bool) {
 // ---- Extraction ------------------------------------------------------------
 
 /// tmux's `window_copy_get_selection`: the selected text, `None` when
-/// there is no selection or it is empty.
-pub fn get_selection(mode: &Mode) -> Option<Vec<u8>> {
+/// there is no selection or it is empty, `Err` when it is larger than a
+/// buffer may be ([`buffers::MAX_BUFFER_BYTES`]).
+pub fn get_selection(mode: &Mode) -> Result<Option<Vec<u8>>, String> {
+    extract(mode, buffers::MAX_BUFFER_BYTES)
+}
+
+fn too_large(cap: usize) -> String {
+    format!("selection too large (limit {cap} bytes)")
+}
+
+/// [`get_selection`], stopping once the text passes `cap` bytes.
+fn extract(mode: &Mode, cap: usize) -> Result<Option<Vec<u8>>, String> {
     if !mode.selecting && mode.line_sel == LineSel::None {
-        return None;
+        return Ok(None);
     }
     let (xx, yy) = mode.sel_end;
     let (selx, sely) = mode.sel_start;
@@ -301,15 +313,22 @@ pub fn get_selection(mode: &Mode) -> Option<Vec<u8>> {
         let from = if y == sy { firstsx } else { restsx };
         let to = if y == ey { lastex } else { restex };
         copy_line(mode, &mut buf, y, from, to);
+        // One byte over: the final newline may still go.
+        if buf.len() > cap + 1 {
+            return Err(too_large(cap));
+        }
     }
     if buf.is_empty() {
-        return None;
+        return Ok(None);
     }
     // The final newline goes, unless a vi selection ran past the end.
     if (!vi || lastex <= ey_last) && (!mode.grid.wrapped(ey) || lastex != ey_last) {
         buf.pop();
     }
-    Some(buf)
+    if buf.len() > cap {
+        return Err(too_large(cap));
+    }
+    Ok(Some(buf))
 }
 
 /// tmux's `window_copy_copy_line`: columns `sx..ex` of row `y`, and a
@@ -396,24 +415,23 @@ fn parse<'a>(args: &'a [String], allowed: &str, max: usize) -> Option<(String, &
 
 /// Queues the selection as a copy.
 fn copy_selection(mode: &mut Mode, flags: &str) {
-    if let Some(data) = get_selection(mode) {
-        mode.sel.copied.push(Copied {
-            data,
-            append: false,
-            set_paste: !flags.contains('P'),
-            set_clip: !flags.contains('C'),
-        });
-    }
+    queue(mode, false, !flags.contains('P'), !flags.contains('C'));
 }
 
 fn append_selection(mode: &mut Mode) {
-    if let Some(data) = get_selection(mode) {
-        mode.sel.copied.push(Copied {
+    queue(mode, true, true, true);
+}
+
+fn queue(mode: &mut Mode, append: bool, set_paste: bool, set_clip: bool) {
+    match get_selection(mode) {
+        Ok(Some(data)) => mode.sel.copied.push(Copied {
             data,
-            append: true,
-            set_paste: true,
-            set_clip: true,
-        });
+            append,
+            set_paste,
+            set_clip,
+        }),
+        Ok(None) => {}
+        Err(e) => mode.sel.error = Some(e),
     }
 }
 
@@ -473,9 +491,16 @@ fn select_word(mode: &mut Mode, separators: &str) {
     }
 }
 
-/// tmux's `window_copy_do_copy_end_of_line`, without the pipe.
-fn copy_end_of_line(mode: &mut Mode, np: u32, flags: &str, cancel: bool) -> Action {
+/// tmux's `window_copy_do_copy_end_of_line` (`whole` false) and
+/// `window_copy_do_copy_line` (`whole` true), without the pipe: copies
+/// from the cursor, or the start of its line, to the end of the line `np`
+/// lines down, then puts the cursor back.
+fn copy_lines(mode: &mut Mode, np: u32, flags: &str, cancel: bool, whole: bool) -> Action {
     let (ocx, ocy, ooy) = (mode.cx, mode.cy, mode.oy);
+    if whole {
+        mode.sel.unit = Unit::Char;
+        mode.cursor_start_of_line();
+    }
     start_selection(mode);
     for _ in 1..np {
         mode.cursor_down(false);
@@ -529,11 +554,22 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
             }
             Nothing
         }
-        "rectangle-toggle" => {
+        "rectangle-toggle" | "rectangle-on" | "rectangle-off" => {
             none()?;
             mode.line_sel = LineSel::None;
-            let rect = !mode.rect;
+            let rect = match name {
+                "rectangle-on" => true,
+                "rectangle-off" => false,
+                _ => !mode.rect,
+            };
             rectangle_set(mode, rect);
+            Nothing
+        }
+        "stop-selection" => {
+            none()?;
+            mode.sel.drag = Drag::None;
+            mode.line_sel = LineSel::None;
+            mode.sel.unit = Unit::Char;
             Nothing
         }
         "copy-selection" | "copy-selection-no-clear" | "copy-selection-and-cancel" => {
@@ -551,9 +587,13 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
                 }
             }
         }
-        "copy-end-of-line" | "copy-end-of-line-and-cancel" => {
+        "copy-end-of-line"
+        | "copy-end-of-line-and-cancel"
+        | "copy-line"
+        | "copy-line-and-cancel" => {
             let (flags, _) = parse(args, "CP", 1)?;
-            copy_end_of_line(mode, np, &flags, name.ends_with("-and-cancel"))
+            let cancel = name.ends_with("-and-cancel");
+            copy_lines(mode, np, &flags, cancel, name.starts_with("copy-line"))
         }
         "append-selection" | "append-selection-and-cancel" => {
             none()?;
@@ -570,27 +610,31 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
     Some(action)
 }
 
-/// Stores the copies `pane`'s last command made: a new automatic buffer,
-/// or appended to the newest automatic one, which tmux then stores by
-/// its name (making it a named buffer).
-pub fn store(state: &mut State, copied: Vec<Copied>) {
+/// Stores the copies a command made: a new automatic buffer, or appended
+/// to the newest automatic one, which tmux then stores by its name
+/// (making it a named buffer). `Err` with the first that failed.
+pub fn store(state: &mut State, copied: Vec<Copied>) -> Result<(), String> {
+    let mut result = Ok(());
     for c in copied {
-        if c.append {
-            let top = state
+        let stored = if c.append
+            && let Some((name, mut data)) = state
                 .buffers
                 .top()
-                .map(|b| (b.name.clone(), b.data.clone()));
-            if let Some((name, mut data)) = top {
-                data.extend_from_slice(&c.data);
-                let _ = state.buffers.set(&name, data);
-                continue;
-            }
-        } else if !c.set_paste {
-            continue;
+                .map(|b| (b.name.clone(), b.data.clone()))
+        {
+            data.extend_from_slice(&c.data);
+            state.buffers.set(&name, data)
+        } else if c.set_paste || c.append {
+            let limit = buffers::limit(state);
+            state.buffers.add(c.data, limit)
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            result = stored;
         }
-        let limit = buffers::limit(state);
-        let _ = state.buffers.add(c.data, limit);
     }
+    result
 }
 
 /// The selection's format variables (tmux's `window_copy_formats`);
@@ -681,6 +725,40 @@ mod tests {
         let c = std::mem::take(&mut m.sel.copied);
         assert_eq!(c.len(), 1);
         assert!(!c[0].set_paste);
+    }
+
+    /// A copy stops once it passes the cap and says why; one that fits
+    /// exactly, its final newline dropped, is kept.
+    #[test]
+    fn a_copy_past_the_cap_is_refused() {
+        let mut m = mode(10, &["abcd", "efgh", ""], (0, 0));
+        x(&mut m, &["begin-selection"]);
+        x(&mut m, &["cursor-down"]);
+        x(&mut m, &["end-of-line"]);
+        assert_eq!(extract(&m, 9), Ok(Some(b"abcd\nefgh".to_vec())));
+        assert_eq!(extract(&m, 8), Err(too_large(8)));
+        x(&mut m, &["copy-selection"]);
+        assert_eq!(copied(&mut m), ["abcd\nefgh"]);
+        assert_eq!(m.sel.error, None);
+    }
+
+    #[test]
+    fn copy_line_copies_the_whole_line_and_puts_the_cursor_back() {
+        let mut m = mode(10, &["abcd", "efgh", ""], (2, 0));
+        m.prefix = 2;
+        x(&mut m, &["copy-line"]);
+        assert_eq!(copied(&mut m), ["abcd\nefgh"]);
+        assert_eq!((m.cx, m.cy, m.selecting), (2, 0, false));
+        x(&mut m, &["begin-selection"]);
+        x(&mut m, &["cursor-right"]);
+        x(&mut m, &["stop-selection"]);
+        x(&mut m, &["cursor-right"]);
+        assert_eq!(m.sel_end, (3, 0));
+        x(&mut m, &["rectangle-on"]);
+        x(&mut m, &["rectangle-on"]);
+        assert!(m.rect);
+        x(&mut m, &["rectangle-off"]);
+        assert!(!m.rect);
     }
 
     #[test]

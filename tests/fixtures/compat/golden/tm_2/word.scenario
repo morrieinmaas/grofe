@@ -4,8 +4,8 @@
 # 20-column edge, then with word-separators set to "" (only blanks
 # separate). Last, a line whose wide character does not fit at the edge
 # and wraps whole. Each selection is copied and shown with its exact size.
-$ new-session -d -s main -x 20 -y 10 'printf "see foo/bar-baz.rs  x\n"; printf "123456789012345 wrapping-word end\n"; printf "1234567890123456789\344\270\255x\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 20 -y 10 'printf "see foo/bar-baz.rs  x\n"; printf "123456789012345 wrapping-word end\n"; printf "1234567890123456789\344\270\255x\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 $ copy-mode -t main
 $ send-keys -t main -X history-top
 $ send-keys -t main -X select-word

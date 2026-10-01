@@ -192,21 +192,21 @@ fn oversized_buffers_are_refused() {
     let srv = TestServer::start();
     srv.cmd(&["new-session", "-d", "-s", "main", "cat"])
         .unwrap();
-    let big = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES + 1);
-    // Over the socket: an argv this long is past the OS's exec limit.
+    // Over the socket: an argv this long is past the OS's exec limit. A
+    // buffer is larger than one request may be, so it is reached by
+    // appending thirds.
     let request = |args: &[&str]| {
         let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         srv.request(&argv, CMD_TIMEOUT)
     };
-    let err = request(&["set-buffer", &big]).unwrap_err();
-    assert!(err.contains("buffer too large"), "{err}");
-    let half = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES / 2 + 1);
-    request(&["set-buffer", "-b", "a", &half]).unwrap();
-    let err = request(&["set-buffer", "-a", "-b", "a", &half]).unwrap_err();
+    let third = "x".repeat(grofe::server::buffers::MAX_BUFFER_BYTES / 3 + 1);
+    request(&["set-buffer", "-b", "a", &third]).unwrap();
+    request(&["set-buffer", "-a", "-b", "a", &third]).unwrap();
+    let err = request(&["set-buffer", "-a", "-b", "a", &third]).unwrap_err();
     assert!(err.contains("buffer too large"), "{err}");
     assert_eq!(
         srv.cmd(&["list-buffers", "-F", "#{buffer_name} #{buffer_size}"]),
-        Ok(format!("a {}\n", half.len()))
+        Ok(format!("a {}\n", 2 * third.len()))
     );
     assert!(srv.cmd(&["set", "-g", "buffer-limit", "0"]).is_err());
 }

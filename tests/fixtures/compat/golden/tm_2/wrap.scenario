@@ -4,8 +4,8 @@
 # colours copy as text, tabs come back as tabs (one as wide as a single
 # cell too), and a line selection keeps its newline. After each copy:
 # the buffer, its exact size, then it is deleted.
-$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\n\033[31mred\033[0m and \033[1;42mbold green\033[0m\033[44m   \033[0m   \na\tb\tc\n1234567\tx\nx\t\ty\n\nlast line\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\n\033[31mred\033[0m and \033[1;42mbold green\033[0m\033[44m   \033[0m   \na\tb\tc\n1234567\tx\nx\t\ty\n\nlast line\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 $ copy-mode -t main
 $ send-keys -t main -X history-top
 $ send-keys -t main -X begin-selection

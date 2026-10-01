@@ -3,6 +3,10 @@
 //! golden checks `show-buffer` and the buffer's exact size
 //! (`list-buffers -F '#{buffer_size}'`), so the copied bytes match tmux's
 //! byte for byte, trailing newline included.
+//!
+//! Each pane signals `wait-for ready` once its output is written, through
+//! tmux there and through grofe here (`{grofe}`, the binary under test,
+//! which finds the server through the pane's `$GROFE`).
 
 #[allow(clippy::duplicate_mod)]
 #[path = "../common/mod.rs"]
@@ -101,7 +105,10 @@ fn load(name: &str) -> Vec<Step> {
         if let Some(args) = line.strip_prefix("$ ") {
             let args = split_words(args)
                 .into_iter()
-                .map(|a| a.replace("{fixtures}", &fixtures().display().to_string()))
+                .map(|a| {
+                    a.replace("{fixtures}", &fixtures().display().to_string())
+                        .replace("{grofe}", env!("CARGO_BIN_EXE_grofe"))
+                })
                 .collect();
             steps.push(Step::Run {
                 line: line.to_string(),
@@ -216,8 +223,59 @@ fn append_and_copy_commands_equal_the_golden() {
     replay("append");
 }
 
+/// `copy-line` and its `-and-cancel` form, `rectangle-on`,
+/// `rectangle-off` and `stop-selection`.
+#[test]
+fn copy_line_rectangle_and_stop_equal_the_golden() {
+    replay("commands");
+}
+
 /// The selection rows typed on a pty-attached client.
 #[test]
 fn selection_keys_through_a_client_equal_the_golden() {
     replay("keys");
+}
+
+/// Copying a whole 100 000-line scrollback works: 100 000 lines of 79
+/// characters, then the empty cursor row, which a vi selection ending
+/// past its line's text keeps as a final newline.
+#[test]
+fn a_whole_100k_line_scrollback_copies() {
+    let srv = TestServer::start();
+    srv.cmd(&["set", "-g", "history-limit", "200000"]).unwrap();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "yes 0000000000000000000000000000000000000000000000000000000000000000000000000000000 \
+         | head -n 100000; exec sleep 100000",
+    ])
+    .unwrap();
+    let rows = || {
+        srv.cmd(&["display", "-p", "-t", "main", "#{history_size}"])
+            .unwrap_or_default()
+    };
+    wait_until(
+        || rows().trim() == "99977",
+        std::time::Duration::from_secs(120),
+    )
+    .unwrap_or_else(|_| panic!("history_size {}", rows()));
+    for cmd in [
+        &["copy-mode", "-t", "main"][..],
+        &["send-keys", "-t", "main", "-X", "history-top"],
+        &["send-keys", "-t", "main", "-X", "begin-selection"],
+        &["send-keys", "-t", "main", "-X", "history-bottom"],
+        &["send-keys", "-t", "main", "-X", "copy-selection"],
+    ] {
+        srv.cmd(cmd).unwrap();
+    }
+    assert_eq!(
+        srv.cmd(&["list-buffers", "-F", "#{buffer_name} #{buffer_size}"]),
+        Ok(format!("buffer0 {}\n", 100_000 * 80 + 1))
+    );
 }

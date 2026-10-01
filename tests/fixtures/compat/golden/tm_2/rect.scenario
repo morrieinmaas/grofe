@@ -5,8 +5,8 @@
 # one through its first cell keeps it whole. Then the cursor on the left,
 # a rectangle past the line ends, toggling back to a stream selection, and
 # a stream selection over the wide characters.
-$ new-session -d -s main -x 80 -y 24 'printf "a\344\270\255b\346\226\207c\n\344\270\255a\346\226\207b\360\237\230\200\nabcdefgh\ne\314\201x\344\270\255y\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 80 -y 24 'printf "a\344\270\255b\346\226\207c\n\344\270\255a\346\226\207b\360\237\230\200\nabcdefgh\ne\314\201x\344\270\255y\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 $ copy-mode -t main
 $ send-keys -t main -X history-top
 $ send-keys -t main -X -N 3 cursor-right

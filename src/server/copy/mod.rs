@@ -1840,11 +1840,12 @@ pub fn command_in(state: &mut State, pane: PaneId, args: &[String]) -> Result<()
     let ctx = Ctx { separators: &seps };
     let action = run(mode, args, &ctx);
     let copied = std::mem::take(&mut mode.sel.copied);
+    let error = mode.sel.error.take();
     if action == Action::Cancel {
         state.copy.remove(pane);
     }
-    select::store(state, copied);
-    Ok(())
+    select::store(state, copied)?;
+    error.map_or(Ok(()), Err)
 }
 
 /// Sets the count the next command in `pane`'s mode runs with (`send-keys
@@ -1858,19 +1859,18 @@ pub fn set_prefix(state: &mut State, pane: PaneId, count: u32) -> Result<(), Str
     Ok(())
 }
 
+/// Whether `pane` has been resized since its mode's copy was taken.
+fn resize_pending(state: &State, pane: PaneId) -> bool {
+    let (Some(p), Some(m)) = (state.model.panes.get(&pane), state.copy.get(pane)) else {
+        return false;
+    };
+    m.grid.sy != usize::from(p.rows) || m.grid.sx != usize::from(p.cols)
+}
+
 // ponytail: a pane resized in copy mode gets a fresh copy at its new size
 // (as `refresh-from-pane`) instead of tmux's reflow of the old copy.
 fn resize_to_pane(state: &mut State, pane: PaneId) {
-    let Some(p) = state.model.panes.get(&pane) else {
-        return;
-    };
-    let rows = usize::from(p.rows);
-    let cols = usize::from(p.cols);
-    let stale = state
-        .copy
-        .get(pane)
-        .is_some_and(|m| m.grid.sy != rows || m.grid.sx != cols);
-    if stale {
+    if resize_pending(state, pane) {
         refresh(state, pane);
         if let Some(mode) = state.copy.get_mut(pane) {
             let limit = mode.cursor_limit(mode.py(), true);
@@ -1899,10 +1899,7 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
         _ => {
             // A resize not yet applied clears the selection (tmux's
             // `window_copy_size_changed`).
-            let stale = state.model.panes.get(&pane).is_some_and(|p| {
-                mode.grid.sy != usize::from(p.rows) || mode.grid.sx != usize::from(p.cols)
-            });
-            return select::format_var(mode, name, stale)
+            return select::format_var(mode, name, resize_pending(state, pane))
                 .or_else(|| search::format_var(mode, name));
         }
     })

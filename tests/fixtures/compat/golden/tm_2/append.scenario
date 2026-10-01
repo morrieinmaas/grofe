@@ -5,8 +5,8 @@
 # makes a new automatic one. -and-cancel leaves the mode, -no-clear keeps
 # the selection, -P stores nothing, copy-end-of-line copies from the
 # cursor to the end of its line (-N lines down) and puts the cursor back.
-$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; exec sleep 100000'
-$ run-shell 'sleep 1'
+$ new-session -d -s main -x 80 -y 24 'printf "first line here\nsecond line\nthird\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
 $ copy-mode -t main
 $ send-keys -t main -X append-selection
 $ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
