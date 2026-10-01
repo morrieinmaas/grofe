@@ -66,8 +66,12 @@ pub enum PaneEventKind {
     Output(Vec<u8>),
     Title(String),
     Bell,
-    /// OSC 52 clipboard store, already decoded.
-    Clipboard(String),
+    /// OSC 52 clipboard store from the scanner (TM.5): the selection
+    /// parameter, kept to tmux's characters, and the decoded data.
+    Clipboard {
+        param: String,
+        data: Vec<u8>,
+    },
     /// Emitted from M3 (OSC 7 scanner).
     Cwd(PathBuf),
     /// M3: one framed APC `_G` command from the scanner.
@@ -616,16 +620,21 @@ impl PaneHandle {
         procinfo::foreground_group(self.master.get_ref())
     }
 
-    /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
-    /// else the foreground process's, from the last sample.
+    /// The foreground process's cwd, read now (else the last sample's):
+    /// tmux's `#{pane_current_path}` (`osdep_get_cwd`), never what the
+    /// pane reported, since that text is the pane's own.
     pub fn current_path(&self) -> Option<PathBuf> {
-        lock(&self.reported_cwd)
-            .clone()
+        self.foreground_group()
+            .and_then(procinfo::cwd)
             .or_else(|| lock(&self.sample).path.clone())
     }
 
-    /// The cwd the pane reported (OSC 7): preferred over the sampled one
-    /// from now on.
+    /// The cwd the pane last reported (OSC 7): `#{pane_path}`.
+    pub fn reported_cwd(&self) -> Option<PathBuf> {
+        lock(&self.reported_cwd).clone()
+    }
+
+    /// Records the cwd the pane reported (OSC 7).
     pub fn set_reported_cwd(&self, cwd: PathBuf) {
         *lock(&self.reported_cwd) = Some(cwd);
     }
@@ -1099,16 +1108,17 @@ mod tests {
         assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
     }
 
-    /// A cwd the pane reported (OSC 7, T3.3) wins over the sampled one.
+    /// A cwd the pane reported (OSC 7, T3.3) is kept apart from the
+    /// sampled one, which alone is `#{pane_current_path}`, as in tmux.
     #[tokio::test]
-    async fn a_reported_cwd_is_preferred() {
+    async fn a_reported_cwd_is_kept_apart() {
         let (tx, _rx) = mpsc::channel(8);
         let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
             .expect("spawn");
         let there = PathBuf::from("/nonexistent/grofe-reported");
-        assert_ne!(handle.current_path(), Some(there.clone()));
         handle.set_reported_cwd(there.clone());
-        assert_eq!(handle.current_path(), Some(there));
+        assert_ne!(handle.current_path(), Some(there.clone()));
+        assert_eq!(handle.reported_cwd(), Some(there));
     }
 
     /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's

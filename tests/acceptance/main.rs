@@ -30,6 +30,7 @@ mod tc_9;
 mod tm_1;
 mod tm_2;
 mod tm_3;
+mod tm_5;
 mod tp_12;
 mod tp_2;
 mod tp_7;

@@ -4,7 +4,11 @@
 //!
 //! - OSC 52 clipboard stores (the emulator decodes them into
 //!   `PaneEventKind::Clipboard`), to the session's clients while
-//!   `set-clipboard` is `on` (R14); reads are never forwarded;
+//!   `set-clipboard` is `on` (R14), which also makes each a buffer
+//!   (TM.5); reads are never forwarded or answered, so a pane cannot read
+//!   the clipboard or a buffer;
+//! - every copy-mode copy, as OSC 52 to the clients showing its pane
+//!   while `set-clipboard` is `on` or `external` (TM.5, [`on_copy`]);
 //! - the outer terminal's title (OSC 0), the client's current pane's
 //!   `set-titles-string` expanded, while `set-titles` is on (R15; off,
 //!   tmux's default, sends nothing);
@@ -44,15 +48,20 @@ use crate::server::dispatch::options::{self, FormatCtx};
 use crate::server::model::Model;
 use crate::server::pane::PaneEventKind;
 use crate::server::{State, clients};
-use crate::types::{ClientId, PaneId, SessionId};
+use crate::types::{ClientId, PaneId, SessionId, WindowId};
 
 /// Most bytes of one APC `_G` command kept, from `ESC _ G` on. kitty sends
 /// image data in chunks of 4096 base64 bytes, so a real command is far
 /// smaller.
 const MAX_APC: usize = 4 * 1024 * 1024;
-/// Most payload bytes of one OSC kept. The OSCs the scanner reads (7) are
-/// short; longer ones (a large OSC 52) are the emulator's alone.
+/// Most payload bytes of one OSC kept. The OSCs the scanner reads are
+/// short, but for OSC 52 ([`MAX_OSC52`]).
 const MAX_OSC: usize = 4 * 1024;
+/// Most payload bytes of one OSC 52 kept: tmux's default
+/// `input-buffer-size` (1 MiB), past which tmux drops the sequence whole.
+const MAX_OSC52: usize = 1024 * 1024;
+/// The selection parameter characters tmux's `input_osc_52` keeps.
+const OSC52_PARAMS: &str = "cpqs01234567";
 
 /// What opens the wrapper TC.12 unwraps: `ESC P tmux;`.
 const DCS_TMUX: &[u8] = b"\x1bPtmux;";
@@ -303,7 +312,12 @@ impl Scanner {
                 }
                 _ => {
                     out.push(b);
-                    self.keep(b, MAX_OSC);
+                    let max = if self.buf.starts_with(b"52;") {
+                        MAX_OSC52
+                    } else {
+                        MAX_OSC
+                    };
+                    self.keep(b, max);
                 }
             },
             OscEsc => {
@@ -370,6 +384,8 @@ impl Scanner {
             && let Some(path) = osc7_path(uri)
         {
             found.push(PaneEventKind::Cwd(path));
+        } else if let Some(body) = payload.strip_prefix(b"52;") {
+            found.extend(osc52_store(body));
         } else if relayed(&payload) {
             found.push(PaneEventKind::Osc(payload));
         }
@@ -435,11 +451,38 @@ fn osc7_path(uri: &[u8]) -> Option<PathBuf> {
     if !(host.is_empty() || host.eq_ignore_ascii_case("localhost") || is_this_host(host)) {
         return None;
     }
+    // Only valid UTF-8, as tmux checks, and no control character (C0,
+    // DEL or C1) once decoded, so a reported path cannot carry a newline
+    // or an escape into `#{pane_path}`.
     let path = percent_decode(path);
-    if path.contains(&0) {
+    let text = std::str::from_utf8(&path).ok()?;
+    if text.chars().any(char::is_control) {
         return None;
     }
     Some(PathBuf::from(OsStr::from_bytes(&path)))
+}
+
+/// An OSC 52 store, as tmux 3.7b's `input_osc_52` reads `Pc;Pd`: the
+/// parameter kept to [`OSC52_PARAMS`], the data base64-decoded. A query
+/// (`?`), empty data or data that is not base64 is none.
+fn osc52_store(body: &[u8]) -> Option<PaneEventKind> {
+    let at = body.iter().position(|&b| b == b';')?;
+    let (param, data) = (&body[..at], &body[at + 1..]);
+    if data.is_empty() || data == b"?" {
+        return None;
+    }
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    let param = param
+        .iter()
+        .map(|&b| b as char)
+        .filter(|c| OSC52_PARAMS.contains(*c))
+        .collect();
+    Some(PaneEventKind::Clipboard { param, data })
 }
 
 /// Whether passthrough re-emits this OSC body: a notification (9, 777)
@@ -516,10 +559,16 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             crate::server::alerts::bell(state, window);
             send(state, clients_on(state, session), b"\x07");
         }
-        PaneEventKind::Clipboard(text)
+        // As tmux 3.7b's `input_osc_52` (recorded): only under `on`, a
+        // store makes a buffer and goes, with the pane's own parameter, to
+        // the clients showing its window; `external` and `off` drop it.
+        PaneEventKind::Clipboard { param, data }
             if state.model.options.lookup("set-clipboard", &[]) == Some("on") =>
         {
-            send(state, clients_on(state, session), &osc52(&text));
+            let limit = crate::server::buffers::limit(state);
+            let _ = state.buffers.add(data.clone(), limit);
+            let to = clients_showing(state, window);
+            send_clipboard(state, to, &osc52(&param, &data));
         }
         PaneEventKind::Title(title) => {
             state.passthrough.titles.insert(pane, safe_title(&title));
@@ -722,10 +771,70 @@ pub(crate) fn osc(body: &[u8]) -> Vec<u8> {
     format!("\x1b]{}\x07", clean(body)).into_bytes()
 }
 
-/// OSC 52 storing `text` in the clipboard, as tmux writes it (`Ms`).
-pub(crate) fn osc52(text: &str) -> Vec<u8> {
-    let data = base64::engine::general_purpose::STANDARD.encode(text);
-    format!("\x1b]52;c;{data}\x07").into_bytes()
+/// OSC 52 storing `data` in the clipboard under selection parameter
+/// `param` (tmux's `Ms`). A copy's parameter is empty, as tmux 3.7b's
+/// `window_copy_copy_buffer` sends it (recorded), so the terminal picks.
+pub(crate) fn osc52(param: &str, data: &[u8]) -> Vec<u8> {
+    let data = base64::engine::general_purpose::STANDARD.encode(data);
+    format!("\x1b]52;{param};{data}\x07").into_bytes()
+}
+
+/// The largest copy sent to the clients as OSC 52.
+// ponytail: tmux sends a copy of any size; grofe sends at most 8 MiB,
+// which encodes to 10.7 MiB, inside a client's 16 MiB raw-output cap.
+const MAX_COPY_CLIP: usize = 8 << 20;
+
+/// The clients whose current window is `window`, as tmux's `tty_write`
+/// picks those an OSC 52 goes to.
+fn clients_showing(state: &State, window: WindowId) -> Vec<ClientId> {
+    state
+        .clients
+        .iter()
+        .filter(|(_, c)| {
+            state
+                .model
+                .sessions
+                .get(&c.session)
+                .is_some_and(|s| s.active == window)
+        })
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+/// Queues an OSC 52 for `to`. tmux never drops one; a client whose output
+/// is held past its raw cap does lose it here, so that is logged.
+fn send_clipboard(state: &mut State, to: Vec<ClientId>, bytes: &[u8]) {
+    for id in to {
+        if !clients::try_queue_raw(state, id, bytes) {
+            eprintln!(
+                "grofe: dropped a {}-byte OSC 52 for client {}: its output is held",
+                bytes.len(),
+                id.0
+            );
+        }
+    }
+}
+
+/// A copy-mode command in `pane` made `copied` (TM.5): under
+/// `set-clipboard` `on` or `external`, each that goes to the clipboard (no
+/// `-C`, not empty, at most [`MAX_COPY_CLIP`]) is sent as OSC 52 to the
+/// clients showing the pane's window.
+// ponytail: encoded on the actor, so copies reach the terminal in order;
+// an 8 MiB copy costs milliseconds there, as extracting it already did.
+pub fn on_copy(state: &mut State, pane: PaneId, copied: &[crate::server::copy::select::Copied]) {
+    if state.model.options.lookup("set-clipboard", &[]) == Some("off") {
+        return;
+    }
+    let Some(window) = state.model.panes.get(&pane).map(|p| p.window) else {
+        return;
+    };
+    let to = clients_showing(state, window);
+    for c in copied {
+        if !c.set_clip || c.data.is_empty() || c.data.len() > MAX_COPY_CLIP || to.is_empty() {
+            continue;
+        }
+        send_clipboard(state, to.clone(), &osc52("", &c.data));
+    }
 }
 
 /// OSC 0 setting the outer terminal's title (R15, tmux's own choice:
@@ -779,7 +888,15 @@ mod tests {
             b"a\x1b[1mb\x1b]2;title\x07c\x1b]52;c;aGVsbG8K\x1b\\d\x1b_Xother\x1b\\\x1bPq\x1b\\e";
         let (out, events) = scan_all(&[input]);
         assert_eq!(out, input);
-        assert!(events.is_empty());
+        // Only the OSC 52 store is read (TM.5); it still reaches the
+        // emulator.
+        assert_eq!(
+            events,
+            vec![PaneEventKind::Clipboard {
+                param: "c".to_string(),
+                data: b"hello\n".to_vec(),
+            }]
+        );
     }
 
     /// Case 8: at every split point, one `Graphics` event with the whole
@@ -891,6 +1008,62 @@ mod tests {
         }
     }
 
+    /// A path with a control character once decoded (C0, DEL, C1), or
+    /// not UTF-8, is ignored; braces and other text are kept.
+    #[test]
+    fn osc_7_with_a_control_character_is_ignored() {
+        for input in [
+            &b"\x1b]7;file:///tmp/a%0Ab\x07"[..],
+            b"\x1b]7;file:///tmp/a%1B[31mb\x07",
+            b"\x1b]7;file:///tmp/a%7Fb\x07",
+            b"\x1b]7;file:///tmp/a%C2%9Bb\x07",
+            b"\x1b]7;file:///tmp/a%FFb\x07",
+        ] {
+            let (_, events) = scan_all(&[input]);
+            assert!(events.is_empty(), "{input:?}: {events:?}");
+        }
+        let (_, events) = scan_all(&[b"\x1b]7;file:///tmp/%7Bx%7D%C3%A9\x07"]);
+        assert_eq!(events, vec![PaneEventKind::Cwd(PathBuf::from("/tmp/{x}é"))]);
+    }
+
+    /// OSC 52 stores, as tmux's `input_osc_52` reads them: the parameter
+    /// kept to its characters, the data decoded; a query, empty or bad
+    /// data, or a sequence past 1 MiB is none. Still the emulator's too.
+    #[test]
+    fn osc_52_stores_are_read_as_tmux_reads_them() {
+        let store = |param: &str, data: &[u8]| PaneEventKind::Clipboard {
+            param: param.to_string(),
+            data: data.to_vec(),
+        };
+        for (input, want) in [
+            (&b"\x1b]52;c;aGk=\x07"[..], Some(store("c", b"hi"))),
+            (b"\x1b]52;;aGk=\x1b\\", Some(store("", b"hi"))),
+            (b"\x1b]52;cs;aGk=\x07", Some(store("cs", b"hi"))),
+            (b"\x1b]52;c]7;aGk=\x07", Some(store("c7", b"hi"))),
+            (b"\x1b]52;c;?\x07", None),
+            (b"\x1b]52;c;\x07", None),
+            (b"\x1b]52;c;!!!\x07", None),
+            (b"\x1b]52;aGk=\x07", None),
+        ] {
+            let (out, events) = scan_all(&[input]);
+            assert_eq!(out, input);
+            assert_eq!(events.into_iter().next(), want, "{input:?}");
+        }
+        let mut big = b"\x1b]52;c;".to_vec();
+        big.resize(MAX_OSC52 + 10, b'A');
+        big.push(BEL);
+        assert!(scan_all(&[&big]).1.is_empty());
+        let input: &[u8] = b"x\x1b]52;c;aGk=\x07y";
+        for cut in 0..=input.len() {
+            let (a, b) = input.split_at(cut);
+            assert_eq!(
+                scan_all(&[a, b]).1,
+                vec![store("c", b"hi")],
+                "split at {cut}"
+            );
+        }
+    }
+
     #[test]
     fn osc_7_naming_this_host_is_accepted() {
         let me = hostname();
@@ -919,7 +1092,8 @@ mod tests {
 
     #[test]
     fn relayed_sequences() {
-        assert_eq!(osc52("hello\n"), b"\x1b]52;c;aGVsbG8K\x07");
+        assert_eq!(osc52("c", b"hello\n"), b"\x1b]52;c;aGVsbG8K\x07");
+        assert_eq!(osc52("", b"hello\n"), b"\x1b]52;;aGVsbG8K\x07");
         assert_eq!(osc0("a\x1bb\x07c"), b"\x1b]0;abc\x07");
         assert_eq!(osc(b"9;a\x01b"), b"\x1b]9;ab\x07");
     }

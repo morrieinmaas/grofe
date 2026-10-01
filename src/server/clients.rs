@@ -142,11 +142,14 @@ impl Outbox {
         self.prev.is_none()
     }
 
-    /// Holds `bytes` for ahead of the next frame.
-    pub fn queue_raw(&mut self, bytes: &[u8]) {
-        if self.raw.len() + bytes.len() <= RAW_CAP {
+    /// Holds `bytes` for ahead of the next frame; false if they would pass
+    /// [`RAW_CAP`] and were dropped.
+    pub fn queue_raw(&mut self, bytes: &[u8]) -> bool {
+        let fits = self.raw.len() + bytes.len() <= RAW_CAP;
+        if fits {
             self.raw.extend_from_slice(bytes);
         }
+        fits
     }
 
     /// Sends the queued raw bytes, then the diff that turns the client's
@@ -1147,10 +1150,18 @@ fn sync_mouse_modes(state: &mut State) {
 /// `Output` frame, before the synchronized-output begin), and schedules
 /// that frame.
 pub fn queue_raw(state: &mut State, id: ClientId, bytes: &[u8]) {
-    if let Some(c) = state.clients.get_mut(&id) {
-        c.outbox.queue_raw(bytes);
-    }
+    try_queue_raw(state, id, bytes);
+}
+
+/// [`queue_raw`], false if the client's held raw output was too full to
+/// take `bytes`, which were dropped.
+pub fn try_queue_raw(state: &mut State, id: ClientId, bytes: &[u8]) -> bool {
+    let queued = state
+        .clients
+        .get_mut(&id)
+        .is_some_and(|c| c.outbox.queue_raw(bytes));
     mark_dirty(state, id);
+    queued
 }
 
 /// Client `id` needs a new frame.

@@ -307,16 +307,64 @@ large`, shown on the status line, rather than storing part of it.
 
 ## Copy targets
 
-`copy-pipe`, `copy-pipe-and-cancel` and `copy-pipe-no-clear` store a buffer
-and run their command, or the `copy-command` option when they have none
-(empty by default, which only stores the buffer). The command runs through
-`/bin/sh -c` off the actor, with the server's environment and the selection
-on stdin, so a slow command never delays a key or a frame. yank's `!` and
-`M-y` rows rely on the shell (a pipe, a `;`), and its `Y` and `M-y` rows run
-`tmux paste-buffer -p` from inside the job, which reaches grofe through the
-`tmux` name. With `set-clipboard` `on` or `external` every copy also goes to
-the attached clients as OSC 52; a pane's own OSC 52 makes a buffer only
-under `on`.
+`copy-pipe`, `copy-pipe-no-clear` and `copy-pipe-and-cancel`, and the
+`copy-pipe-end-of-line` and `copy-pipe-line` forms (`D` is the first), copy
+as their `copy-selection`, `copy-end-of-line` or `copy-line` form does, so
+they store a buffer (unless `-P`) and set the clipboard (unless `-C`), and
+also run their command, or the `copy-command` option when they have none
+or an empty one. `copy-command` is empty by default, which only copies.
+yank's `!` and `M-y` rows rely on the shell (a pipe, a `;`), and its `Y`
+and `M-y` rows run `tmux paste-buffer -p` from inside the job, which
+reaches grofe through the `tmux` name. On Linux the copy reaches the
+clipboard tool yank detected (`wl-copy`, `xsel`, `xclip`) and, through
+`set-clipboard`, the terminal as OSC 52.
+
+As tmux 3.7b does (recorded with a private server):
+
+- The command runs through `/bin/sh -c` in a task of its own, so a slow
+  command never delays a key or a frame, and `-and-cancel` leaves the
+  mode at once. It gets the session's environment as `run-shell` does
+  (the global environment, the session's, `TMUX`), no `TMUX_PANE`, the
+  server's working directory, and the selection on stdin, which is then
+  closed. Its stdout and stderr go to `/dev/null`. The selection is never
+  part of the command line.
+- The command argument is a format, expanded against the pane before the
+  copy (`#{selection_present}` still reads 1); `copy-command` is not
+  expanded.
+- With no selection the command still runs, with nothing on stdin, and no
+  buffer is stored.
+- Three positionals (`command`, `prefix` and one more) make the command do
+  nothing.
+
+The clipboard follows `set-clipboard`:
+
+- Under `on` and `external` every copy (all the copy commands, the pipes
+  and `append-selection`) is sent as `ESC ] 52 ; ; <base64> BEL`, with an
+  empty selection parameter as tmux sends it, to every client whose
+  current window holds the pane. A client of another session, or one on
+  another window, gets nothing. Under `off` nothing is sent.
+- A pane's own OSC 52 store makes a new buffer and reaches the clients
+  showing the pane's window, with the pane's own selection parameter (kept
+  to tmux's `cpqs01234567`), only under `on`. Under `external` and `off` it is dropped whole,
+  as tmux's `input_osc_52` does: the plan's case that `external` still
+  forwards it does not match tmux.
+- A pane cannot read the clipboard: an OSC 52 query (`?`) is neither
+  forwarded nor answered. tmux answers one from the newest buffer under
+  its default `get-clipboard buffer`; grofe has no `get-clipboard`.
+
+Where grofe differs:
+
+- **Bounds.** A pane's store is acted on only up to what tmux's default
+  `input-buffer-size` (1 MiB of sequence) holds, as tmux does. A copy is
+  sent as OSC 52 only up to 8 MiB; tmux sends any size. An OSC 52 that
+  does not fit a blocked client's held output (16 MiB) is dropped and
+  logged; tmux never drops one. A pipe command
+  still running after 60 s has its process group killed, so a hung
+  command cannot linger; tmux never kills one. A clipboard tool that
+  stays to serve the selection forks first, so it is not touched.
+- **No `pane-set-clipboard` hook** runs.
+- **The `prefix` argument** is accepted and ignored, as for the copy
+  commands.
 
 ## Mouse
 

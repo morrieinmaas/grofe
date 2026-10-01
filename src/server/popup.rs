@@ -393,10 +393,10 @@ fn on_event(state: &mut State, id: ClientId, generation: u64, kind: PaneEventKin
     // dropped; tmux keeps a popup out of all three too.
     match kind {
         PaneEventKind::Bell => clients::queue_raw(state, id, b"\x07"),
-        PaneEventKind::Clipboard(text)
+        PaneEventKind::Clipboard { param, data }
             if state.model.options.lookup("set-clipboard", &[]) == Some("on") =>
         {
-            clients::queue_raw(state, id, &passthrough::osc52(&text));
+            clients::queue_raw(state, id, &passthrough::osc52(&param, &data));
         }
         PaneEventKind::Osc(body) if !body.starts_with(b"12;") && !body.starts_with(b"112") => {
             clients::queue_raw(state, id, &passthrough::osc(&body));
