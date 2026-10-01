@@ -1,0 +1,30 @@
+# TM.3: a copy with no selection copies the search match at the cursor,
+# or just before it, as tmux's window_copy_get_selection does; with no
+# match there, it copies nothing.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+$ send-keys -t main -X search-again
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+$ send-keys -t main -X -N 5 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+$ send-keys -t main -X cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+$ send-keys -t main -X search-forward 'foo77'
+$ send-keys -t main -X append-selection
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+$ send-keys -t main -X search-forward-text 'tab	here'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X copy-selection-and-cancel
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer

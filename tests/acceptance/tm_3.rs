@@ -403,6 +403,13 @@ fn keys_through_a_client_equal_the_golden() {
     replay("keys");
 }
 
+/// A copy with no selection copies the search match at the cursor
+/// (tmux's `window_copy_get_selection`); with none there, nothing.
+#[test]
+fn a_copy_with_no_selection_copies_the_match() {
+    replay("copy-match");
+}
+
 /// Case 5, where grofe matches glibc: escapes, brackets, classes,
 /// boundaries, intervals, anchors and refused patterns.
 #[test]

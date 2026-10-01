@@ -13,9 +13,8 @@
 //!
 //! As in tmux, a resize clears the selection (`window_copy_size_changed`).
 // ponytail: the `prefix` argument of the copy commands is accepted and
-// ignored (buffers are always named `buffer<N>`), a copy with no
-// selection does not fall back to the search match at the cursor (TM.3's
-// `window_copy_match_at_cursor`), and `set-clipboard` (OSC 52) is TM.5's.
+// ignored (buffers are always named `buffer<N>`), and `set-clipboard`
+// (OSC 52) is TM.5's.
 
 use super::{Action, Ctx, LineSel, Mode, WHITESPACE};
 use crate::server::State;
@@ -257,11 +256,12 @@ fn rectangle_set(mode: &mut Mode, rect: bool) {
 
 // ---- Extraction ------------------------------------------------------------
 
-/// tmux's `window_copy_get_selection`: the selected text, `None` when
-/// there is no selection or it is empty.
+/// tmux's `window_copy_get_selection`: the selected text, or with no
+/// selection the search match at the cursor (TM.3); `None` when there is
+/// neither or it is empty.
 pub fn get_selection(mode: &Mode) -> Option<Vec<u8>> {
     if !mode.selecting && mode.line_sel == LineSel::None {
-        return None;
+        return super::search::match_at_cursor(mode).map(String::into_bytes);
     }
     let (xx, yy) = mode.sel_end;
     let (selx, sely) = mode.sel_start;

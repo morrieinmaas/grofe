@@ -1690,8 +1690,8 @@ impl ViewMarks {
 }
 
 /// tmux's `window_copy_match_at_cursor`: the match the cursor is on or
-/// just after.
-fn match_at_cursor(mode: &Mode) -> Option<String> {
+/// just after, which a copy with no selection copies.
+pub fn match_at_cursor(mode: &Mode) -> Option<String> {
     let vm = view_marks(mode)?;
     let marks = &vm.marks;
     let mut at = cursor_at(mode)?;

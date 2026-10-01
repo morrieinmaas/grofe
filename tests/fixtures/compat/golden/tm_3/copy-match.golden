@@ -1,0 +1,64 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+28,18,24 1 8 fooo2
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+buffer0: fooo2
+? 0
+$ send-keys -t main -X -N 5 cursor-right
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+33,18,24 0  
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+buffer0: fooo2
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+34,18,24 0  
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+buffer0: fooo2
+? 0
+$ send-keys -t main -X search-forward 'foo77'
+? 0
+$ send-keys -t main -X append-selection
+? 0
+$ list-buffers -F '#{buffer_name}: #{buffer_sample}'
+buffer0: fooo2foo77
+? 0
+$ send-keys -t main -X search-forward-text 'tab	here'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+9,21,10 1 1 tab	here
+? 0
+$ send-keys -t main -X copy-selection-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+tab	here
+? 0
