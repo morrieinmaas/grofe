@@ -232,7 +232,7 @@ impl Grid {
                 cells.push(SnapCell { c, ..blank() });
                 tabs.push(false);
                 if c == '\t' {
-                    while cells.len() % 8 != 0 {
+                    while !cells.len().is_multiple_of(8) {
                         cells.push(blank());
                         tabs.push(true);
                     }
@@ -2211,7 +2211,7 @@ mod tests {
     #[test]
     fn the_cursor_word_stops_at_separators() {
         let m = mode(&["foo.bar baz", ""], 0, (5, 0));
-        assert_eq!(m.cursor_word(&ctx().separators), "bar");
+        assert_eq!(m.cursor_word(ctx().separators), "bar");
         assert_eq!(m.cursor_word(""), "foo.bar");
     }
 
