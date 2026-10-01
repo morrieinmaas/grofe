@@ -26,4 +26,4 @@ canopy is Apache License 2.0, copyright 2026 morrieinmaas (see
 tests/fixtures/import-tmux/canopy/SOURCE for its NOTICE attribution).
 
 Each plugin under plugins/ keeps its upstream license file beside it
-(tmux-which-key: MIT).
+(tmux-which-key, tmux-claude-session-manager: MIT).
