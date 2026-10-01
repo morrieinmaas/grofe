@@ -251,6 +251,22 @@ fn case_2_continuum_autosaves_one_save_at_a_time() {
     rig.start("main");
     rig.t(&["set-option", "-g", "@continuum-save-interval", "1"]);
     rig.t(&["set-option", "-g", "status-interval", "1"]);
+    // As shipped, continuum's saves go through canopy's one-at-a-time
+    // wrapper; the probe stands in for it here.
+    // (Set by the load command after the loader, which may still be
+    // running when continuum, the last plugin, has loaded.)
+    let shipped = wait_until(
+        || {
+            rig.t(&["show-options", "-gv", "@resurrect-save-script-path"])
+                .trim_end()
+                .ends_with("/plugins/strategies/canopy_save.sh")
+        },
+        WAIT,
+    );
+    assert!(
+        shipped.is_ok(),
+        "continuum's saves do not go through canopy's wrapper"
+    );
     let probe = rig.path("bin/save-probe").display().to_string();
     rig.t(&["set-option", "-g", "@resurrect-save-script-path", &probe]);
     let mut a = rig.attach("main");
