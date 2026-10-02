@@ -710,7 +710,9 @@ fn verb(template: &str) -> String {
 /// `run-shell` (R23): `/bin/sh -c` in a task of its own, never waited on
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
-/// runs in the session's cwd and its output is dropped. With `-b` (TC.5)
+/// runs in the session's cwd, its output is dropped, and the binding's
+/// later commands and the client's later input wait for it, as tmux's
+/// client queue does (`clients::run_binding`). With `-b` (TC.5)
 /// the reply is empty and immediate, and the output is dropped. The shell
 /// gets the server environment and the session's (`hooks::shell_env`).
 /// A failing command's output and tmux's message go to the CLI's stdout,
@@ -742,9 +744,10 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
             expand_command(state, &at, &c.cmd)
         }
     };
-    // Inside a hook the queue waits for the shell, even from a binding.
-    let waits = !from_binding || hooks::in_hook(state);
-    let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));
+    // Whatever runs it waits for the shell (a CLI request, a hook's queue,
+    // a binding's client); only the CLI and a hook keep its output.
+    let capture = !from_binding || hooks::in_hook(state);
+    let reply = (!c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     let delay = c.delay;
     tokio::spawn(async move {
@@ -754,7 +757,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         }
         let result = match script.is_empty() && delay.is_some() {
             true => Ok(String::new()),
-            false => shell(&script, cwd, env, socket, reply.is_some()).await,
+            false => shell(&script, cwd, env, socket, capture && reply.is_some()).await,
         };
         if let Some(reply) = reply {
             let _ = reply.send(result);

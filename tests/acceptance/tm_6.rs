@@ -591,3 +591,140 @@ fn copy_mode_draws_below_a_status_line_on_top() {
     let first = text.lines().next().unwrap_or_default();
     assert!(first.contains("[main]"), "status row replaced: {first:?}");
 }
+
+// ---- Bindings wait for run-shell (TM.6 follow-up) ----------------------------
+
+/// As tmux 3.7b's client queue (the `tm_6/run-shell` golden): a binding's
+/// `run-shell` without `-b` (or with `-d`) holds its later commands and
+/// the keys typed after it; with `-b` nothing waits.
+#[test]
+fn bindings_hold_for_run_shell_as_the_golden() {
+    replay("run-shell");
+}
+
+fn opt(srv: &TestServer, name: &str) -> String {
+    srv.cmd(&["show-options", "-gv", name])
+        .unwrap_or_default()
+        .trim_end()
+        .to_string()
+}
+
+/// A shell that waits for `flag` to exist.
+fn until(flag: &std::path::Path) -> String {
+    format!("while [ ! -e '{}' ]; do sleep 0.05; done", flag.display())
+}
+
+/// Text typed while a binding's `run-shell` runs reaches the pane only
+/// after it, and an `after-*` hook's `run-shell` holds the binding's next
+/// command and the client's keys the same way, the hook's commands first
+/// (recorded: `HC`). Each shell waits on a file the test creates, so
+/// nothing depends on timing.
+#[test]
+fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (go, go2) = (dir.path().join("go"), dir.path().join("go2"));
+    let srv = start("stty -echo; exec cat");
+    srv.cmd(&["set", "-g", "@log", ""]).expect("set");
+    let f5 = format!(
+        "set -ga @log A ; run-shell \"{}\" ; set -ga @log B",
+        until(&go)
+    );
+    srv.cmd(&["bind-key", "-n", "F5", &f5]).expect("bind F5");
+    let mut a = attach(&srv, 80, 24);
+    a.send("\x1b[15~z\r");
+    wait_until(|| opt(&srv, "@log") == "A", WAIT).expect("the binding started");
+    // Whatever the client sent next is behind the shell: a round trip
+    // through the server shows it has not run.
+    srv.cmd(&["refresh-client"]).ok();
+    assert_eq!(opt(&srv, "@log"), "A");
+    assert!(
+        !srv.capture("main").contains('z'),
+        "{}",
+        srv.capture("main")
+    );
+    fs::write(&go, "").expect("go");
+    wait_until(|| opt(&srv, "@log") == "AB", WAIT).expect("the rest ran");
+    wait_until(|| srv.capture("main").contains('z'), WAIT).expect("then the text");
+
+    srv.cmd(&["set", "-g", "@log", ""]).expect("set");
+    let hook = format!("run-shell \"{}\" ; set -ga @log H", until(&go2));
+    srv.cmd(&["set-hook", "-g", "window-created", &hook])
+        .expect("set-hook");
+    srv.cmd(&["bind-key", "-n", "F6", "new-window -d ; set -ga @log C"])
+        .expect("bind F6");
+    a.send("\x1b[17~w\r");
+    wait_until(|| pane_var(&srv, "main", "#{session_windows}") == "2", WAIT).expect("the window");
+    srv.cmd(&["refresh-client"]).ok();
+    assert_eq!(opt(&srv, "@log"), "");
+    assert!(
+        !srv.capture("main").contains('w'),
+        "{}",
+        srv.capture("main")
+    );
+    fs::write(&go2, "").expect("go2");
+    wait_until(|| opt(&srv, "@log") == "HC", WAIT).expect("hook first, then C");
+    wait_until(|| srv.capture("main").contains('w'), WAIT).expect("then the text");
+}
+
+/// While a binding's `run-shell` holds the client, a prompt (or menu, or
+/// popup) its shell opens still takes the keys, as tmux hands an overlay's
+/// keys over at once (tmux-sessionx's popup relies on it).
+#[test]
+fn a_prompt_a_held_binding_opens_still_takes_the_keys() {
+    let srv = start("stty -echo; exec cat");
+    let f9 = format!(
+        "run-shell \"'{}' command-prompt -p go 'set -g @p %%'\" ; set -g @after yes",
+        env!("CARGO_BIN_EXE_grofe")
+    );
+    srv.cmd(&["bind-key", "-n", "F9", &f9]).expect("bind F9");
+    let mut a = attach(&srv, 80, 24);
+    a.send("\x1b[20~");
+    a.wait_until("the prompt", WAIT, |t| t.contains("go"));
+    a.send("x\r");
+    wait_until(|| opt(&srv, "@p") == "x", WAIT).expect("the prompt got the keys");
+    wait_until(|| opt(&srv, "@after") == "yes", WAIT).expect("then the rest ran");
+}
+
+// ---- The CLI and copy mode's prompts -----------------------------------------
+
+/// `send-keys -l three` into a pane in copy mode types `t`, whose row is
+/// `command-prompt` (jump-to-forward): as tmux 3.7b's (recorded: it waits
+/// too), the request waits for that prompt on the attached client, and
+/// answers once it is answered, cancelled, or the client goes. With no
+/// client it fails at once (`no current client`). The request always
+/// gets its reply.
+#[test]
+fn send_keys_into_copy_mode_answers_once_its_prompt_ends() {
+    let srv = start(HISTORY);
+    srv.cmd(&["copy-mode", "-t", "main"]).expect("copy-mode");
+    let out = srv.run(&["send-keys", "-t", "main", "-l", "t"]);
+    assert_eq!(out.stderr, "no current client\n");
+    assert_eq!(out.status.code(), Some(1));
+
+    let mut a = attach(&srv, 80, 24);
+    let spawn = |args: &[&str]| {
+        let mut c = srv.command();
+        c.args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        c.spawn().expect("spawn")
+    };
+    let mut cli = spawn(&["send-keys", "-t", "main", "-l", "three"]);
+    a.wait_until("the jump prompt", WAIT, |t| t.contains("(jump to forward)"));
+    assert!(
+        matches!(cli.try_wait(), Ok(None)),
+        "answered before the prompt"
+    );
+    a.send("\x1b");
+    let status = common::wait_child(cli, WAIT).expect("the reply after Escape");
+    assert!(status.success());
+
+    let cli = spawn(&["send-keys", "-t", "main", "-l", "t"]);
+    a.wait_until("the prompt again", WAIT, |t| {
+        t.contains("(jump to forward)")
+    });
+    drop(a);
+    let status = common::wait_child(cli, WAIT).expect("the reply once the client went");
+    assert!(status.success());
+}

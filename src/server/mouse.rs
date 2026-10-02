@@ -55,10 +55,9 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{ClientCtx, Dialect};
+use crate::protocol::Dialect;
 use crate::server::clients;
 use crate::server::copy::{self, select};
-use crate::server::dispatch;
 use crate::server::input::{
     Input, InputHook, Key, KeyCode, Mouse, MouseAction, MouseButton, MouseKey, MouseKind,
     MousePlace, ROOT_TABLE, Routed,
@@ -672,9 +671,8 @@ fn in_pane(state: &mut State, client: ClientId, m: &Mouse, mk: MouseKey, target:
             } else {
                 "select-line"
             };
-            // ponytail: `run-shell -d 0.3` does not hold the copy after it,
-            // as no binding's `run-shell` holds the commands after it; the
-            // copy is the same, only the highlight is not shown first.
+            // `run-shell -d 0.3` holds the copy (and the client's input)
+            // while the selection shows, as tmux's queue does.
             run(
                 state,
                 &[
@@ -783,42 +781,25 @@ fn drag_border(state: &mut State, client: ClientId, from: (u16, u16), to: (u16, 
 }
 
 /// Runs mouse-bound `cmds` in `dialect` for the event at `target`, as
-/// [`clients::run_binding`] runs a key's, but with the pointer's pane as
-/// the current pane while it is there, the event as the current mouse
-/// event, and a bare `=` resolved to the pointer's target (M36-R3). The
-/// first error stops the rest and shows on the client's status row.
+/// [`clients::run_binding`] runs a key's (and holds as it does), but with
+/// the pointer's pane as the current pane while it is there, the event as
+/// the current mouse event, and a bare `=` resolved to the pointer's
+/// target (M36-R3). The first error stops the rest and shows on the
+/// client's status row.
 pub fn run_mouse_binding(
     state: &mut State,
     target: &MouseTarget,
     cmds: &[Vec<String>],
     dialect: Dialect,
 ) {
-    let id = target.client;
-    MouseState::with_current(state, Some(target.clone()), |state| {
-        for argv in cmds {
-            let Some(c) = state.clients.get(&id) else {
-                break;
-            };
-            let pane = Some(target.pane)
-                .filter(|p| state.model.panes.contains_key(p))
-                .or_else(|| active_pane(state, id));
-            let ctx = ClientCtx {
-                pane,
-                dialect,
-                ..c.ctx.clone()
-            };
-            let argv = resolve_targets(state, argv);
-            // Bound commands: their aliases expanded at bind time.
-            let result = dispatch::run_bound(state, &ctx, &argv);
-            state.deferred_reply = None;
-            if let Err(e) = result {
-                clients::show_message(state, id, e.trim_end());
-                break;
-            }
-        }
-    });
-    state.events.flush();
-    clients::changed(state);
+    clients::run_commands_for(
+        state,
+        target.client,
+        cmds,
+        dialect,
+        true,
+        Some(target.clone()),
+    );
 }
 
 /// `argv` with each bare `=` target (`-t =`, `-t=`, and the same for `-s`)

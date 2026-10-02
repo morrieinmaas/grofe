@@ -929,6 +929,24 @@ pub fn take_request_wait(state: &mut State) -> Option<oneshot::Receiver<Result<S
     Some(wait)
 }
 
+/// When client `id`'s hook queue waits on a shell (a binding's command
+/// fired an `after-*` hook that runs `run-shell`), a receiver told once
+/// that queue is idle: the binding's later commands and the client's
+/// input wait for it, as tmux runs the hook on the client's own queue.
+pub fn take_client_wait(state: &mut State, id: ClientId) -> Option<oneshot::Receiver<String>> {
+    let hooks = &mut state.hooks;
+    if hooks.running {
+        return None;
+    }
+    let q = hooks
+        .queues
+        .get_mut(&Origin::Client(id))
+        .filter(|q| q.waiting)?;
+    let (tx, rx) = oneshot::channel();
+    q.idle.push(tx);
+    Some(rx)
+}
+
 /// For the reply to the request that just ran (`finish`): when its own
 /// hook queue still waits on a shell (tmux 3.7b holds the CLI until its
 /// `after-*` hooks finish), a receiver that answers, with the rest of

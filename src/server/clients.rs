@@ -2059,12 +2059,16 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
 const HELD_CAP: usize = 1 << 20;
 
 /// One decoded input from client `id`: held behind a running shell
-/// condition, else routed.
+/// condition or binding ([`hold_input`]), else routed. An open prompt,
+/// menu or popup takes it even then, as tmux hands an overlay's and the
+/// prompt's keys over at once rather than queue them (a binding's
+/// `run-shell` that opens a popup, as tmux-sessionx's does, gets its keys).
 fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
+    let overlay = state.prompts.is_open(id) || state.menus.is_open(id) || state.popups.is_open(id);
     let Some(c) = state.clients.get_mut(&id) else {
         return;
     };
-    if c.holds > 0 {
+    if c.holds > 0 && !overlay {
         hold_item(state, id, Held::Input(input));
         return;
     }
@@ -2223,7 +2227,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
-        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true),
+        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true, None),
         Routed::Consumed => {}
     }
 }
@@ -2233,42 +2237,145 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
 /// in `dialect`, the binding's own (spec §4.5), never the attaching
 /// client's: a native binding stays native under `tmux attach`. The first
 /// error stops the rest and shows on the client's status row, as tmux shows
-/// it. Output, and any deferred answer, is dropped. An alias in `cmds`
-/// expands as each runs; a key binding's were expanded when it was bound
-/// ([`Routed::Bound`]).
+/// it. Output is dropped. An alias in `cmds` expands as each runs; a key
+/// binding's were expanded when it was bound ([`Routed::Bound`]).
+///
+/// As tmux 3.7b's per-client command queue (recorded, `tm_6/run-shell`):
+/// a command that answers later (`run-shell` without `-b`, `-d` too, a
+/// blocked `wait-for`, an `if-shell` branch) or an `after-*` hook of it
+/// waiting on its shell holds the rest of the commands, and the client's
+/// later input, until it is done ([`BindingRun`]).
 pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
-    run_commands_for(state, id, cmds, dialect, false);
+    run_commands_for(state, id, cmds, dialect, false, None);
 }
 
-fn run_commands_for(
+/// One binding's commands still to run for a client, in order.
+pub(crate) struct BindingRun {
+    id: ClientId,
+    cmds: VecDeque<Vec<String>>,
+    dialect: Dialect,
+    /// Aliases were expanded when the key was bound.
+    bound: bool,
+    /// The mouse event a mouse key's commands run for (TC.10): its pane is
+    /// the current pane while it is there.
+    mouse: Option<crate::server::mouse::MouseTarget>,
+    /// This run holds the client's input.
+    holding: bool,
+}
+
+/// Starts a [`BindingRun`] (see [`run_binding`]).
+pub(crate) fn run_commands_for(
     state: &mut State,
     id: ClientId,
     cmds: &[Vec<String>],
     dialect: Dialect,
     bound: bool,
+    mouse: Option<crate::server::mouse::MouseTarget>,
 ) {
-    for argv in cmds {
+    let run = BindingRun {
+        id,
+        cmds: cmds.iter().cloned().collect(),
+        dialect,
+        bound,
+        mouse,
+        holding: false,
+    };
+    run_from(state, run);
+}
+
+/// What a held [`BindingRun`] waits for; the error to show, if the held
+/// commands failed.
+type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+
+/// Runs `run`'s next commands until one makes it wait, then resumes it on
+/// the actor once that is done.
+fn run_from(state: &mut State, mut run: BindingRun) {
+    use crate::server::mouse::{self, MouseState};
+    let id = run.id;
+    while let Some(argv) = run.cmds.pop_front() {
         let Some(c) = state.clients.get(&id) else {
+            run.cmds.clear();
             break;
         };
+        let active = active_pane(&state.model, c.session);
+        let pane = run
+            .mouse
+            .as_ref()
+            .map(|t| t.pane)
+            .filter(|p| state.model.panes.contains_key(p))
+            .or(active);
         let ctx = ClientCtx {
-            pane: active_pane(&state.model, c.session),
-            dialect,
+            pane,
+            dialect: run.dialect,
             ..c.ctx.clone()
         };
-        let result = if bound {
-            dispatch::run_bound(state, &ctx, argv)
-        } else {
-            dispatch::run_split(state, &ctx, argv)
+        let bound = run.bound;
+        let one = |state: &mut State| {
+            // A bare `=` is the mouse event's target (M36-R3).
+            let argv = mouse::resolve_targets(state, &argv);
+            if bound {
+                dispatch::run_bound(state, &ctx, &argv)
+            } else {
+                dispatch::run_split(state, &ctx, &argv)
+            }
         };
-        state.deferred_reply = None;
+        let result = match &run.mouse {
+            Some(target) => MouseState::with_current(state, Some(target.clone()), one),
+            None => one(state),
+        };
+        let wait = binding_wait(state, id);
         if let Err(e) = result {
             show_message(state, id, e.trim_end());
-            break;
+            run.cmds.clear();
         }
+        let Some(wait) = wait else {
+            continue;
+        };
+        if !run.holding {
+            hold_input(state, id);
+            run.holding = true;
+        }
+        state.events.flush();
+        changed(state);
+        let jobs = state.jobs.clone();
+        tokio::spawn(async move {
+            let error = wait.await;
+            let job: crate::server::Job = Box::new(move |state: &mut State| {
+                if let Some(e) = error {
+                    show_message(state, run.id, e.trim_end());
+                    run.cmds.clear();
+                }
+                run_from(state, run);
+            });
+            let _ = jobs.send(job).await;
+        });
+        return;
+    }
+    if run.holding {
+        release_input(state, id);
     }
     state.events.flush();
     changed(state);
+}
+
+/// What the command a binding just ran for client `id` left it waiting
+/// for: its deferred answer, else the client's hook queue (see
+/// [`run_binding`]). A failed `run-shell` (an exit status) does not stop
+/// the rest, as in tmux; a held command's own error does.
+fn binding_wait(state: &mut State, id: ClientId) -> Option<BindingWait> {
+    if let Some(rx) = state.deferred_reply.take() {
+        return Some(Box::pin(async move {
+            match rx.await {
+                Ok(Err(f)) if !f.err.is_empty() => Some(f.err),
+                _ => None,
+            }
+        }));
+    }
+    let rx = hooks::take_client_wait(state, id)?;
+    Some(Box::pin(async move {
+        let _ = rx.await;
+        None
+    }))
 }
 
 /// The client a command acts on: the requesting client, else the most

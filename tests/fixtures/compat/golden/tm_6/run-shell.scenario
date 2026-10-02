@@ -1,0 +1,23 @@
+# TM.6 follow-up: in a key binding, run-shell without -b holds the
+# binding's later commands, and the client's later keys (F6 here), until
+# its shell exits; -d only waits, and holds the same way. With -b nothing
+# waits. F5 is ESC [15~, F6 ESC [17~, F7 ESC [18~, F8 ESC [19~.
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+$ set -g @log ''
+$ bind-key -n F5 'set -ga @log A ; run-shell -d 0.8 ; set -ga @log B'
+$ bind-key -n F6 set -ga @log C
+$ bind-key -n F7 "run-shell 'sleep 0.8'; set -ga @log D"
+$ bind-key -n F8 "run-shell -b 'sleep 0.8'; set -ga @log E"
+client 80x25 attach -t main
+keys Escape [15~ Escape [17~
+$ show -gv @log
+$ run-shell 'sleep 1.5'
+$ show -gv @log
+$ set -g @log ''
+keys Escape [18~ Escape [17~
+$ show -gv @log
+$ run-shell 'sleep 1.5'
+$ show -gv @log
+$ set -g @log ''
+keys Escape [19~ Escape [17~
+$ show -gv @log

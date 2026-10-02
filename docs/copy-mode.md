@@ -391,7 +391,11 @@ tmux.
   (tmux-yank's copy).
 - **A double or triple click** is `copy-mode -H` (the indicator hidden),
   `select-word` (`word-separators`) or `select-line`, then
-  `copy-pipe-and-cancel`, both outside the mode and in it.
+  `copy-pipe-and-cancel`, both outside the mode and in it. As in tmux, the
+  `run-shell -d 0.3` between them holds the copy, and the client's later
+  input, while the selection shows: a binding's `run-shell` without `-b`
+  holds the commands after it and the client's keys until it finishes
+  (recorded, `tm_6/run-shell`).
 - **Any `send-keys -X`** a mouse key runs first moves the cursor to the
   pointer, unless the key is the wheel (tmux's `window_copy_move_mouse`).
 - **A click in copy mode** is the mode's `MouseDown1Pane`, `select-pane`
@@ -404,10 +408,6 @@ fallback.
 
 Where grofe differs:
 
-- **`run-shell -d 0.3`** in the double and triple click rows does not hold
-  the copy after it, as no binding's `run-shell` holds the commands after
-  it in grofe. The copy is the same; the selection is just not shown for
-  0.3 s first.
 - **A drag over a pane whose search is still running** does not move its
   selection until the search ends; tmux has no searches in flight.
 - **The tmux front end** still answers `copy-mode -M` with nothing, as
