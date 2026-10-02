@@ -1,0 +1,219 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+keys Escape '[<0;3;1M' Escape '[<0;3;1m' Escape '[<0;3;1M' Escape '[<0;3;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+here
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 4
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;5;1M' Escape '[<0;5;1m' Escape '[<0;5;1M' Escape '[<0;5;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+four
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 4
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;7;1M' Escape '[<0;7;1m' Escape '[<0;7;1M' Escape '[<0;7;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+four
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 4
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;9;1M' Escape '[<0;9;1m' Escape '[<0;9;1M' Escape '[<0;9;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+four
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer3 4
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;11;1M' Escape '[<0;11;1m' Escape '[<0;11;1M' Escape '[<0;11;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+spaces
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer4 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;14;1M' Escape '[<0;14;1m' Escape '[<0;14;1M' Escape '[<0;14;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+spaces
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer5 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;16;1M' Escape '[<0;16;1m' Escape '[<0;16;1M' Escape '[<0;16;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+spaces
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer6 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;18;1M' Escape '[<0;18;1m' Escape '[<0;18;1M' Escape '[<0;18;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+of
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer7 2
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;20;1M' Escape '[<0;20;1m' Escape '[<0;20;1M' Escape '[<0;20;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+indent
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer8 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;22;1M' Escape '[<0;22;1m' Escape '[<0;22;1M' Escape '[<0;22;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+indent
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer9 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;25;1M' Escape '[<0;25;1m' Escape '[<0;25;1M' Escape '[<0;25;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+indent
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer10 6
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;28;1M' Escape '[<0;28;1m' Escape '[<0;28;1M' Escape '[<0;28;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+then
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer11 4
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;41;1M' Escape '[<0;41;1m' Escape '[<0;41;1M' Escape '[<0;41;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+words
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer12 5
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;60;1M' Escape '[<0;60;1m' Escape '[<0;60;1M' Escape '[<0;60;1m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+words
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer13 5
+? 0
+$ delete-buffer
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 10 scroll-up
+? 0
+keys Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+bar
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer14 3
+? 0
+$ delete-buffer
+? 0

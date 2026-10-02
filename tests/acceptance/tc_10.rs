@@ -697,27 +697,9 @@ fn the_new_default_keys_run_their_verbs() {
     );
 }
 
-/// TC.11's note: with the status line on top, the wheel opens the view in
-/// the pane under the pointer and the view is drawn below the status row,
-/// its indicator on the pane's first row.
-#[test]
-fn the_view_draws_below_a_status_line_on_top() {
-    let srv = start("seq 1 200; exec cat");
-    srv.cmd(&["set", "-g", "status-position", "top"])
-        .expect("top");
-    let mut a = attach(&srv, 80, 24);
-    a.wait_until("200 shown", WAIT, |t| {
-        t.lines().any(|l| l.trim_end() == "200")
-    });
-    a.send(sgr(64, 10, 5, false));
-    a.wait_until("the view", WAIT, |t| {
-        let second = t.lines().nth(1).unwrap_or_default();
-        second.trim_end().ends_with(']') && second.contains("[5/")
-    });
-    let text = a.text();
-    let first = text.lines().next().unwrap_or_default();
-    assert!(first.contains("[main]"), "status row replaced: {first:?}");
-}
+// TC.11's `the_view_draws_below_a_status_line_on_top` moved to `tm_6.rs`
+// as `copy_mode_draws_below_a_status_line_on_top`: the wheel enters copy
+// mode now (TM.6 case 1).
 
 /// Case 6: a `MouseDown3Pane` menu with no position opens at the pointer,
 /// where tmux 3.7b's `-x M -y M` puts it (recorded: a click at cell

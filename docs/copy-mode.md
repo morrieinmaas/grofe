@@ -368,20 +368,57 @@ Where grofe differs:
 
 ## Mouse
 
-The wheel in a pane that has not asked for the mouse enters copy mode
-(`copy-mode -e`, so scrolling back to the bottom leaves it) and scrolls five
-lines at a time. A pane in mouse mode, or showing the alternate screen, is
-passed the event instead (`send-keys -M`), as tmux's stock `root` row says. A drag enters copy mode and selects; releasing runs
-`MouseDragEnd1Pane`, yank's copy. A double click selects a word
-(`word-separators`) and a triple click a line, and both copy after 0.3 s, as
-tmux's stock rows do. A click in copy mode moves the cursor. This replaces
-the read-only scrollback view from T3.2 and the shift-drag fallback.
+grofe runs tmux 3.7b's stock mouse rows, checked against TM.6's goldens
+(`tests/fixtures/compat/golden/tm_6/`). The `root` rows are grofe's
+built-in mouse model, which runs their commands for an unbound key; the
+`copy-mode-vi` rows are ordinary bindings. Over a pane in copy mode a
+mouse key is looked up in the mode's table first, then `root`, as in
+tmux.
+
+- **The wheel** over a pane that is in no mode, did not ask for the mouse
+  and is not on the alternate screen is `copy-mode -e`. The first tick only
+  enters the mode at the bottom (`[0/N]`); each later tick is the mode's
+  `WheelUpPane`, `send -X -N 5 scroll-up`, and scrolling down past the
+  bottom leaves. Any other pane is sent the wheel (`send-keys -M`), so
+  Neovim scrolls itself.
+- **A drag** with the left button over such a pane is `copy-mode -M`: it
+  enters the mode and starts a selection where the button went down. In
+  copy mode the mode's `MouseDrag1Pane` row does the same through
+  `begin-selection`, which starts a drag whenever a mouse key runs it.
+  Until the release the pointer moves the selection's end; held on the
+  pane's top or bottom row it scrolls a line every 50 ms. The release is
+  `MouseDragEnd1Pane`, stock `copy-pipe-and-cancel`, or whatever binds it
+  (tmux-yank's copy).
+- **A double or triple click** is `copy-mode -H` (the indicator hidden),
+  `select-word` (`word-separators`) or `select-line`, then
+  `copy-pipe-and-cancel`, both outside the mode and in it.
+- **Any `send-keys -X`** a mouse key runs first moves the cursor to the
+  pointer, unless the key is the wheel (tmux's `window_copy_move_mouse`).
+- **A click in copy mode** is the mode's `MouseDown1Pane`, `select-pane`
+  alone: it focuses the pane and leaves the cursor and the view where they
+  were (recorded). The plan's "a click in copy mode moves the cursor" is not
+  what tmux does.
+
+This replaces the read-only scrollback view from T3.2 and the shift-drag
+fallback.
+
+Where grofe differs:
+
+- **`run-shell -d 0.3`** in the double and triple click rows does not hold
+  the copy after it, as no binding's `run-shell` holds the commands after
+  it in grofe. The copy is the same; the selection is just not shown for
+  0.3 s first.
+- **A drag over a pane whose search is still running** does not move its
+  selection until the search ends; tmux has no searches in flight.
+- **The tmux front end** still answers `copy-mode -M` with nothing, as
+  before TM.6; TM.7 maps the front end's copy-mode rows.
 
 ## Out of scope
 
 - **The emacs table** (`copy-mode`). `mode-keys` stays `vi`. yank also binds
   its keys in `copy-mode`; those rows land in a table grofe never enters.
-- **`copy-mode -M` beyond the root drag row**, and `-d`, `-q`, `-s`, `-S`,
+- **`copy-mode -M` and `-H` beyond the stock mouse rows' meaning**, and
+  `-d`, `-q`, `-s`, `-S`,
   the scrollbar rows of the stock `root` table (grofe draws no pane
   scrollbar) and view mode.
 - **`-X` commands no row or plan task names**, such as the incremental

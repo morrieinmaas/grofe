@@ -1,8 +1,8 @@
-//! T3.2: mouse input and the scrollback view. SGR 1006 reports are typed
-//! into the attach pty as the outer terminal would send them: a click
-//! focuses the pane under the pointer, the wheel scrolls a read-only view of
-//! history in a pane that did not ask for the mouse, and a pane that did
-//! gets the events, encoded as it asked, in its own coordinates.
+//! T3.2: mouse input. SGR 1006 reports are typed into the attach pty as the
+//! outer terminal would send them: a click focuses the pane under the
+//! pointer, and a pane that asked for the mouse gets the events, encoded as
+//! it asked, in its own coordinates. The read-only scrollback view the
+//! wheel opened became copy mode in M5; its tests moved to `tm_6.rs`.
 
 #[allow(clippy::duplicate_mod)]
 #[path = "../common/mod.rs"]
@@ -78,36 +78,9 @@ fn pane_var(srv: &TestServer, target: &str, var: &str) -> String {
         .to_string()
 }
 
-/// Case 1: the wheel in a plain shell opens the view five lines up, and
-/// scrolling back to the bottom closes it; the pane gets nothing.
-#[test]
-fn wheel_in_a_shell_scrolls_history() {
-    let srv = start(HISTORY);
-    let mut a = attach(&srv, 80, 24);
-    a.wait_for("200");
-    // 200 lines and the cursor's empty line on 23 rows: 178 in history.
-    a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
-
-    a.send(sgr(WHEEL_UP, 10, 5, false));
-    a.wait_until("the view at 5", WAIT, |t| {
-        top_line(t).starts_with("174") && indicator(t).as_deref() == Some("[5/178]")
-    });
-    let text = a.text();
-    let top = top_line(&text);
-    assert!(top.trim_end().ends_with("[5/178]"), "{top:?}");
-
-    a.send(sgr(WHEEL_DOWN, 10, 5, false));
-    a.wait_until("the view closed", WAIT, |t| {
-        top_line(t).trim_end() == "179" && indicator(t).is_none()
-    });
-
-    a.send("z\r");
-    a.wait_until("the z line", WAIT, |t| {
-        t.lines().any(|l| l.trim_end() == "z")
-    });
-    let pane = srv.capture("main");
-    assert!(!pane.contains("^["), "the pane got bytes:\n{pane}");
-}
+// Case 1 (the wheel over a shell) moved to `tm_6.rs` as
+// `the_wheel_in_a_shell_shows_the_indicator_and_history`: the wheel enters
+// copy mode now (TM.6 case 1).
 
 /// Case 2: Neovim asked for the mouse, so it gets the wheel and grofe
 /// draws no view.
@@ -194,8 +167,10 @@ fn a_click_focuses_the_pane() {
     .unwrap_or_else(|e| panic!("the click did not focus {right}: {e}"));
 }
 
-/// Case 5: with `mouse off` the wheel does nothing; in the view, `q`
-/// closes it and is eaten, while `x` closes it and reaches the pane.
+/// Case 5: with `mouse off` the wheel does nothing; with it back on, the
+/// wheel enters copy mode, which `q` leaves. (Which keys leave copy mode
+/// is copy-mode-vi's now: moved to `tm_6.rs` as
+/// `keys_in_copy_mode_from_the_wheel_follow_copy_mode_vi`, TM.6 case 1.)
 #[test]
 fn mouse_off_ignores_the_wheel_and_keys_leave_the_view() {
     let srv = start(HISTORY);
@@ -219,29 +194,14 @@ fn mouse_off_ignores_the_wheel_and_keys_leave_the_view() {
     srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse on");
     a.wait_for_output(MOUSE_ON, at);
     a.send(sgr(WHEEL_UP, 10, 5, false));
-    a.wait_until("the view", WAIT, |t| indicator(t).is_some());
+    a.wait_until("copy mode", WAIT, |t| indicator(t).is_some());
     a.send("q");
-    a.wait_until("q closed the view", WAIT, |t| indicator(t).is_none());
-
-    a.send(sgr(WHEEL_UP, 10, 5, false));
-    a.wait_until("the view again", WAIT, |t| indicator(t).is_some());
-    a.send("\x1b");
-    a.wait_until("Escape closed the view", WAIT, |t| indicator(t).is_none());
-
-    a.send(sgr(WHEEL_UP, 10, 5, false));
-    a.wait_until("the view again", WAIT, |t| indicator(t).is_some());
-    a.send("x");
-    a.wait_until("x closed the view", WAIT, |t| indicator(t).is_none());
-    a.send("\r");
-    a.wait_until("the x line", WAIT, |t| {
-        t.lines().any(|l| l.trim_end() == "x")
-    });
+    a.wait_until("q left copy mode", WAIT, |t| indicator(t).is_none());
     let pane = srv.capture("main");
     assert!(
         !pane.lines().any(|l| l.contains('q')),
         "q reached the pane:\n{pane}"
     );
-    assert!(!pane.contains("^["), "Escape reached the pane:\n{pane}");
 }
 
 /// Case 6: a client smaller than the window crops (D6); a click maps
@@ -339,59 +299,7 @@ fn wheel_in_plain_less_does_nothing() {
     assert_eq!(indicator(&text), None, "{text}");
 }
 
-/// A click inside an open view focuses its pane and leaves the view where
-/// it was, as tmux 3.7b's copy mode (recorded: position and mode kept);
-/// the pane gets no bytes.
-#[test]
-fn a_click_inside_the_view_focuses_and_keeps_it() {
-    let (srv, left, right) = side_by_side(HISTORY, "cat");
-    let mut a = attach(&srv, 80, 24);
-    a.wait_until("both panes drawn", WAIT, |t| t.contains('│'));
-    wait_until(|| srv.capture(&left).contains("200"), WAIT).expect("history");
-    a.send(sgr(WHEEL_UP, 5, 5, false));
-    a.wait_until("the view on the left", WAIT, |t| {
-        indicator(t).is_some_and(|i| i.starts_with("[5/"))
-    });
-    // The first tick opens the view without focusing, as tmux.
-    assert_eq!(pane_var(&srv, &right, "#{pane_active}"), "1");
-    let before = indicator(&a.text());
-    let drawn = a.output().len();
-
-    a.send(sgr(0, 5, 5, false));
-    a.send(sgr(0, 5, 5, true));
-    wait_until(
-        || pane_var(&srv, &left, "#{pane_active}") == "1",
-        Duration::from_secs(1),
-    )
-    .unwrap_or_else(|e| panic!("the click did not focus {left}: {e}"));
-    // The focus change redraws the borders: judge that frame, not the old.
-    wait_until(|| a.output().len() > drawn, WAIT).expect("a frame after the click");
-    a.wait_until("the view kept", WAIT, |t| indicator(t) == before);
-    let text = a.text();
-    assert!(text.contains('│'), "{text}");
-    assert!(!srv.capture(&left).contains("^["), "{}", srv.capture(&left));
-}
-
-/// Output arriving while the view is open (history below its limit) does
-/// not move it: the same lines stay on screen and the offset grows.
-#[test]
-fn the_view_stays_on_its_lines_while_output_arrives() {
-    let srv = start(HISTORY);
-    let mut a = attach(&srv, 80, 24);
-    a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
-    a.send(sgr(WHEEL_UP, 10, 5, false));
-    a.wait_until("the view at 5", WAIT, |t| {
-        indicator(t).as_deref() == Some("[5/178]")
-    });
-
-    for word in ["one", "two", "three"] {
-        srv.cmd(&["send-keys", "-t", "main", word, "Enter"])
-            .expect("send-keys");
-    }
-    a.wait_until("the offset following the output", WAIT, |t| {
-        indicator(t).as_deref() == Some("[8/181]")
-    });
-    let text = a.text();
-    assert!(top_line(&text).starts_with("174"), "{text}");
-    assert!(!text.contains("three"), "{text}");
-}
+// `a_click_inside_the_view_focuses_and_keeps_it` and
+// `the_view_stays_on_its_lines_while_output_arrives` moved to `tm_6.rs` as
+// `a_click_in_copy_mode_focuses_and_keeps_it` (TM.6 case 6) and
+// `output_does_not_move_copy_mode` (TM.6 case 1): the view is copy mode now.

@@ -1885,6 +1885,27 @@ fn command_now(state: &mut State, pane: PaneId, args: &[String]) -> Result<(), S
     error.map_or(Ok(()), Err)
 }
 
+/// Runs `f` on `pane`'s mode now, with its `word-separators`, as a mouse
+/// event's own change to it (TM.6): after a pending resize, as a command
+/// would see it. `None` outside the mode or while a search is in flight.
+// ponytail: a mouse change waiting behind a search is dropped rather than
+// queued after it.
+pub fn edit_now<R>(
+    state: &mut State,
+    pane: PaneId,
+    f: impl FnOnce(&mut Mode, &str) -> R,
+) -> Option<R> {
+    if !state.copy.is_active(pane) || search::busy(state, pane) {
+        return None;
+    }
+    let vi = vi_keys(state, pane);
+    let seps = separators(state, pane);
+    resize_to_pane(state, pane);
+    let mode = state.copy.get_mut(pane)?;
+    mode.vi = vi;
+    Some(f(mode, &seps))
+}
+
 /// Sets the count the next command in `pane`'s mode runs with (`send-keys
 /// -N` with no keys); `Err` when the pane is in no mode.
 pub fn set_prefix(state: &mut State, pane: PaneId, count: u32) -> Result<(), String> {

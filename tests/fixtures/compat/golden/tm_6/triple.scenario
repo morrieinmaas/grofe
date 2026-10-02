@@ -1,0 +1,25 @@
+# TM.6 case 5: a triple click selects the whole line and copies it after
+# 0.3 s (the stock root row with select-line); then in copy mode.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+client 80x25 attach -t main
+keys Escape '[<0;16;2M' Escape '[<0;16;2m' Escape '[<0;16;2M' Escape '[<0;16;2m' Escape '[<0;16;2M' Escape '[<0;16;2m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;70;2M' Escape '[<0;70;2m' Escape '[<0;70;2M' Escape '[<0;70;2m' Escape '[<0;70;2M' Escape '[<0;70;2m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ copy-mode -t main
+$ send-keys -t main -X -N 10 scroll-up
+keys Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer

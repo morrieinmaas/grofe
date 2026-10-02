@@ -2822,7 +2822,8 @@ mod tests {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
         assert_eq!(state.registry.input_hooks.len(), 6);
-        assert_eq!(state.registry.overlays.len(), 6);
+        // TM.6 removed the mouse's scrollback view overlay.
+        assert_eq!(state.registry.overlays.len(), 5);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),

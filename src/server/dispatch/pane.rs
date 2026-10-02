@@ -506,6 +506,11 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
                 *arg = prompt::expand_command(state, &at, arg);
             }
         }
+        // A mouse key's command moves the cursor to the pointer first, and
+        // its `begin-selection` starts a drag (TM.6).
+        if state.copy.is_active(pane) && crate::server::mouse::copy_command(state, pane, &args) {
+            return Ok(String::new());
+        }
         copy::command_in(state, pane, &args)?;
         return Ok(String::new());
     }

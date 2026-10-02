@@ -2583,7 +2583,7 @@ impl FormatVars for ServerVars<'_> {
             return Some(v);
         }
         // The mouse event a mouse key's commands run for, and the view (TC.10).
-        if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+        if let Some(v) = crate::server::mouse::format_var(self.state, name) {
             return Some(v);
         }
         // The newest automatic buffer's `#{buffer_*}` (TM.4).
@@ -3547,6 +3547,8 @@ mod tests {
             target: pane.to_string(),
             range: None,
             pane_cell: Some((3, 4)),
+            report: (3, 4),
+            wheel: false,
         };
         crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
             run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])

@@ -1,0 +1,12 @@
+# TM.6 case 6: a click in copy mode. tmux 3.7b's copy-mode-vi
+# MouseDown1Pane is select-pane alone: the cursor stays where it was and
+# no selection starts.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+client 80x25 attach -t main
+$ copy-mode -t main
+$ send-keys -t main -X -N 3 cursor-up
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+keys Escape '[<0;6;10M' Escape '[<0;6;10m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'

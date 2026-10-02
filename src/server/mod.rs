@@ -252,7 +252,7 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
 /// So an open prompt sees keys first and draws over everything; a menu
 /// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
 /// command opens takes the keys and draws on top of it; then a chooser
-/// (TC.9) over its pane; then the mouse and the scrollback view.
+/// (TC.9) over its pane; then the mouse, and copy mode (TM.1).
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
@@ -263,7 +263,6 @@ fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
-    register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
     copy::register(state);
 }
 

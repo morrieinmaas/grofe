@@ -1,7 +1,6 @@
 //! Mouse: bindable mouse keys and grofe's built-in mouse model (TC.10,
-//! spec §4.5 bindings row), the read-only scrollback view and forwarding to
-//! panes that asked for the mouse (T3.2, spec §4.11 "Mouse"; M5 replaces
-//! the view with copy mode).
+//! spec §4.5 bindings row), forwarding to panes that asked for the mouse
+//! (T3.2), and the mouse in copy mode (TM.6, spec §4.11 "Mouse").
 //!
 //! Every report becomes a mouse key, as tmux 3.7b's
 //! `server_client_check_mouse` makes one (recorded on a private server):
@@ -16,7 +15,9 @@
 //!   `Status` in a window, session or user range, `StatusLeft` and
 //!   `StatusRight` in those ranges, `StatusDefault` in none.
 //!
-//! A key bound in the client's table (else `root`) runs with the pointer's
+//! A key bound in the client's table (else `root`; first the copy-mode
+//! table when the pane under the pointer is in copy mode, as tmux's
+//! `server_client_key_callback`) runs with the pointer's
 //! target as its current pane ([`run_mouse_binding`]): the pane under it,
 //! or on the status line the clicked window's active pane. While it runs,
 //! `#{mouse_status_range}` and the other mouse formats ([`format_var`])
@@ -27,72 +28,66 @@
 //!   if that pane asked for the mouse, is forwarded too;
 //! - the wheel goes to a pane that asked for the mouse; on the alternate
 //!   screen without mouse mode it does nothing (recorded: tmux sends such a
-//!   pane nothing, mode 1007 or not); otherwise wheel up opens the view;
-//!   this is tmux's `WheelUpPane` condition,
-//!   `#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}`;
-//! - in the view the wheel scrolls it 5 lines a tick and selects the pane
-//!   (copy mode's `select-pane \; send -X -N 5 scroll-up`), and scrolling
-//!   back to the bottom closes it (`copy-mode -e`);
+//!   pane nothing, mode 1007 or not); otherwise wheel up is `copy-mode -e`,
+//!   tmux's `WheelUpPane` row: its condition is
+//!   `#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}`, and in copy
+//!   mode `copy-mode-vi`'s own `WheelUpPane` scrolls;
+//! - a drag with the left button over a pane that is in no mode and did not
+//!   ask for the mouse is `copy-mode -M`, and a double or triple click there
+//!   is `copy-mode -H`, `select-word` or `select-line`, then
+//!   `copy-pipe-and-cancel` (tmux's `MouseDrag1Pane`, `DoubleClick1Pane`
+//!   and `TripleClick1Pane` rows);
 //! - `MouseDown1Status` switches to the window clicked (`switch-client -t
 //!   =`), and the wheel on the status line goes to the previous or next
 //!   window;
 //! - `MouseDrag1Border` moves the border under the pointer with it until
 //!   the release (`resize-pane -M`);
-//! - `q` and Escape close the view and are eaten; any other key or a paste
-//!   closes it and is then routed as usual (R17);
 //! - every other mouse event reaches a pane that asked for it, filtered by
-//!   the mode it asked for, and nothing else.
+//!   the mode it asked for, and nothing else; a pane in copy mode gets none.
 //!
-//! One divergence, from the task's acceptance case: tmux's first wheel tick
-//! only enters copy mode (`[0/N]`), grofe's already scrolls 5 lines.
+//! In copy mode, as tmux 3.7b's `window_copy_command`: a `send-keys -X`
+//! that a mouse key runs first moves the cursor to the pointer unless the
+//! key is the wheel ([`copy_command`]), and `begin-selection` (or
+//! `copy-mode -M`) starts a drag: until the release the pointer moves the
+//! selection's end, and held on the pane's top or bottom row it scrolls
+//! every 50 ms ([`start_drag`]).
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::vte::ansi::{Color, NamedColor};
-
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::clients;
+use crate::server::copy::{self, select};
 use crate::server::dispatch;
 use crate::server::input::{
-    Input, InputHook, Key, KeyCode, Mods, Mouse, MouseAction, MouseButton, MouseKey, MouseKind,
+    Input, InputHook, Key, KeyCode, Mouse, MouseAction, MouseButton, MouseKey, MouseKind,
     MousePlace, ROOT_TABLE, Routed,
 };
 use crate::server::layout::BorderSegment;
 use crate::server::model::Window;
-use crate::server::pane::{CellFlags, SnapCell};
-use crate::server::render::{Overlay, OverlayCtx, Screen};
+use crate::server::render::OverlayCtx;
 use crate::server::status::RangeKind;
 use crate::server::{Job, State};
 use crate::types::{
     ClientId, Edge, InputModes, MouseEncoding, MouseMode, PaneId, Rect, SessionId, WindowId,
 };
 
-/// Lines per wheel tick in the view (tmux's `-N 5`).
-pub const WHEEL_LINES: usize = 5;
-
 /// How long a click waits for the next one (tmux's `KEYC_CLICK_TIMEOUT`).
 pub const CLICK_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// The panes whose scrollback view is open, by pane; each client's place
-/// in the click and drag sequence; and the mouse event a bound command is
-/// running for.
+/// How often a copy-mode drag held on a pane's top or bottom row scrolls
+/// (tmux's `WINDOW_COPY_DRAG_REPEAT_TIME`).
+pub const DRAG_REPEAT: Duration = Duration::from_millis(50);
+
+/// Each client's place in the click and drag sequence, and the mouse event
+/// a bound command is running for.
 #[derive(Debug, Default)]
 pub struct MouseState {
-    views: BTreeMap<PaneId, View>,
     pointers: BTreeMap<ClientId, Pointer>,
-    /// Numbers each click wait, so a stale timer does nothing.
+    /// Numbers each click wait and drag timer, so a stale one does nothing.
     generation: u64,
     /// Set while a mouse key's commands run ([`run_mouse_binding`]).
     current: Option<MouseTarget>,
-}
-
-/// An open view: `offset` lines up from the live screen, as of when the
-/// pane had `history` lines of scrollback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct View {
-    offset: usize,
-    history: usize,
 }
 
 /// One client's pointer, as tmux keeps it on the client.
@@ -103,8 +98,20 @@ struct Pointer {
     last: Option<(u16, u16)>,
     /// A drag in progress (tmux's `mouse_drag_flag`).
     drag: Option<Drag>,
+    /// A copy-mode drag the pointer moves until the release (tmux's
+    /// `mouse_drag_update`, set by `window_copy_start_drag`).
+    copy_drag: Option<CopyDrag>,
     /// Waiting for another click (tmux's double- and triple-click flags).
     click: Option<Click>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CopyDrag {
+    /// The pane in copy mode the last report moved.
+    pane: PaneId,
+    /// The drag timer's number while the pointer holds the selection on
+    /// the pane's top or bottom row (tmux's `dragtimer`).
+    timer: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -146,44 +153,14 @@ pub struct MouseTarget {
     /// status row's index (recorded on tmux 3.7b: `5,0`, `5,1` with two
     /// rows, top or bottom).
     pub pane_cell: Option<(u16, u16)>,
+    /// The client cell of the report itself (tmux's `m->x`, `m->y`), which
+    /// `cell` is not for a drag's first report (placed where the press was).
+    pub report: (u16, u16),
+    /// The event is the wheel, which moves no copy-mode cursor.
+    pub wheel: bool,
 }
 
 impl MouseState {
-    /// How far `pane`'s view is scrolled back now that it has `history`
-    /// lines, if it is open. Lines added since the last scroll push the
-    /// offset up with them, so the view keeps showing the same lines (tmux
-    /// copy mode works on a copy taken on entry).
-    // ponytail: once history is at its limit, new lines evict old ones
-    // without growing it, and the view drifts with the output.
-    pub fn offset(&self, pane: PaneId, history: usize) -> Option<usize> {
-        let v = self.views.get(&pane)?;
-        let grown = history.saturating_sub(v.history);
-        Some((v.offset + grown).min(history))
-    }
-
-    /// Scrolls `pane`'s view by `lines` (up is positive), opening it if
-    /// needed; at or below the bottom it closes. Whether the view is open
-    /// afterwards.
-    pub fn scroll(&mut self, pane: PaneId, history: usize, lines: isize) -> bool {
-        let now = self.offset(pane, history).unwrap_or(0);
-        let offset = now.saturating_add_signed(lines).min(history);
-        if offset == 0 {
-            self.views.remove(&pane);
-            return false;
-        }
-        self.views.insert(pane, View { offset, history });
-        true
-    }
-
-    /// Closes `pane`'s view; whether one was open.
-    pub fn close(&mut self, pane: PaneId) -> bool {
-        self.views.remove(&pane).is_some()
-    }
-
-    pub fn is_open(&self, pane: PaneId) -> bool {
-        self.views.contains_key(&pane)
-    }
-
     /// The mouse event the running command was bound to, if any.
     pub fn current(&self) -> Option<&MouseTarget> {
         self.current.as_ref()
@@ -203,8 +180,8 @@ impl MouseState {
     }
 }
 
-/// Routes mouse input (mouse keys, the built-in model, forwarding) and the
-/// keys that leave the view.
+/// Routes mouse input (mouse keys, the built-in model, copy-mode drags,
+/// forwarding).
 pub struct MouseHook;
 
 impl InputHook for MouseHook {
@@ -215,30 +192,11 @@ impl InputHook for MouseHook {
         input: &Input,
         _now: Instant,
     ) -> Option<Routed> {
-        let model = &state.model;
-        state.mouse.views.retain(|p, _| model.panes.contains_key(p));
         let clients = &state.clients;
         state.mouse.pointers.retain(|c, _| clients.contains_key(c));
         match input {
             Input::Mouse(m) => on_mouse(state, client, m),
-            Input::Key(key) => {
-                let pane = active_pane(state, client)?;
-                if !state.mouse.close(pane) {
-                    return None;
-                }
-                clients::mark_all_dirty(state);
-                let leaves = key.mods == Mods::default()
-                    && matches!(key.code, KeyCode::Char('q') | KeyCode::Escape);
-                leaves.then_some(Routed::Consumed)
-            }
-            Input::Paste { .. } => {
-                let pane = active_pane(state, client)?;
-                if state.mouse.close(pane) {
-                    clients::mark_all_dirty(state);
-                }
-                None
-            }
-            Input::Focus(_) => None,
+            Input::Key(_) | Input::Paste { .. } | Input::Focus(_) => None,
         }
     }
 }
@@ -372,8 +330,14 @@ fn place(hit: &Hit) -> Option<MousePlace> {
     })
 }
 
-/// The target of an event at client cell `cell` over `hit`.
-fn target(state: &State, client: ClientId, cell: (u16, u16), hit: &Hit) -> Option<MouseTarget> {
+/// The target of report `m`'s key, placed at client cell `cell` over `hit`.
+fn target(
+    state: &State,
+    client: ClientId,
+    m: &Mouse,
+    cell: (u16, u16),
+    hit: &Hit,
+) -> Option<MouseTarget> {
     let session = state.clients.get(&client)?.session;
     let current = state.model.sessions.get(&session)?.active;
     let window_target = |w: WindowId| {
@@ -413,6 +377,14 @@ fn target(state: &State, client: ClientId, cell: (u16, u16), hit: &Hit) -> Optio
         target,
         range,
         pane_cell,
+        report: (m.col, m.row),
+        wheel: matches!(
+            m.kind,
+            MouseKind::WheelUp
+                | MouseKind::WheelDown
+                | MouseKind::WheelLeft
+                | MouseKind::WheelRight
+        ),
     })
 }
 
@@ -445,9 +417,23 @@ fn classify(
         MouseKind::WheelUp => (MouseAction::WheelUp, 0, at),
         MouseKind::WheelDown => (MouseAction::WheelDown, 0, at),
         MouseKind::Up(b) => match p.drag.take() {
-            Some(d) => (MouseAction::DragEnd, d.button, at),
+            Some(d) => {
+                // The drag's own release ends a copy-mode drag first
+                // (tmux's `mouse_drag_release`).
+                p.copy_drag = None;
+                (MouseAction::DragEnd, d.button, at)
+            }
             None => (MouseAction::Up, button_number(b), at),
         },
+        // A copy-mode drag takes every report until the release (tmux's
+        // `KEYC_DRAGGING`).
+        MouseKind::Drag(b) if p.copy_drag.is_some() => {
+            p.drag.get_or_insert(Drag {
+                button: button_number(b),
+                border: false,
+            });
+            return None;
+        }
         MouseKind::Drag(b) => match p.drag {
             Some(Drag { border: true, .. }) => return None,
             Some(d) => (MouseAction::Drag, d.button, at),
@@ -548,14 +534,14 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     client_window(state, client)?;
     let from = state.mouse.pointers.get(&client).and_then(|p| p.last);
     let Some(key) = classify(state, client, m) else {
-        let border = state
-            .mouse
-            .pointers
-            .get(&client)
-            .and_then(|p| p.drag)
-            .is_some_and(|d| d.border);
+        let pointer = state.mouse.pointers.get(&client);
+        let border = pointer.and_then(|p| p.drag).is_some_and(|d| d.border);
         if border && let Some(from) = from {
             drag_border(state, client, from, (m.col, m.row));
+            return Some(Routed::Consumed);
+        }
+        if matches!(m.kind, MouseKind::Drag(_)) && pointer.is_some_and(|p| p.copy_drag.is_some()) {
+            drag_update(state, client, (m.col, m.row));
             return Some(Routed::Consumed);
         }
         return Some(forward(state, client, m));
@@ -576,7 +562,7 @@ fn fire(
     let Some(place) = place(&hit) else {
         return;
     };
-    let Some(target) = target(state, client, at, &hit) else {
+    let Some(target) = target(state, client, m, at, &hit) else {
         return;
     };
     let key = Key::new(
@@ -587,7 +573,7 @@ fn fire(
         }),
         m.mods,
     );
-    if let Some((cmds, dialect)) = binding(state, client, &key) {
+    if let Some((cmds, dialect)) = binding(state, client, &key, &target) {
         run_mouse_binding(state, &target, &cmds, dialect);
         return;
     }
@@ -595,19 +581,34 @@ fn fire(
 }
 
 /// The binding of mouse key `key` in client `client`'s table, else in
-/// `root`, as tmux's key walk finds it. Any table but `root` ends with
-/// the event.
-fn binding(state: &mut State, client: ClientId, key: &Key) -> Option<(Vec<Vec<String>>, Dialect)> {
+/// `root`, as tmux's key walk finds it; from `root`, first in the
+/// copy-mode table when the pane the event is for (`target`'s, else the
+/// active one) is in copy mode. Any table but `root` ends with the event.
+fn binding(
+    state: &mut State,
+    client: ClientId,
+    key: &Key,
+    target: &MouseTarget,
+) -> Option<(Vec<Vec<String>>, Dialect)> {
     let table = state.clients.get(&client)?.keys.table().to_string();
     if table != ROOT_TABLE {
         clients::set_key_table(state, client, ROOT_TABLE);
     }
+    let pane = if target.range.is_none() {
+        Some(target.pane)
+    } else {
+        active_pane(state, client)
+    };
+    let mode_table = pane
+        .filter(|p| table == ROOT_TABLE && state.copy.is_active(*p))
+        .map(|p| copy::key_table(state, p));
     let tables = &state.registry.key_tables;
     // ponytail: a root `Any` also takes the presses the built-in model
     // handles, where tmux's stock MouseDown1Pane and the rest are bound
     // and win over it; no config the owner runs binds root `Any`.
-    let b = tables
-        .lookup(&table, key)
+    let b = mode_table
+        .and_then(|t| tables.get(t, key))
+        .or_else(|| tables.lookup(&table, key))
         .or_else(|| tables.lookup(ROOT_TABLE, key))?;
     Some((b.cmds.clone(), b.dialect))
 }
@@ -636,60 +637,78 @@ fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &M
             let from = target.cell;
             drag_border(state, client, from, (m.col, m.row));
         }
-        (MousePlace::Pane, MouseAction::DoubleClick, _) => {}
-        (MousePlace::Pane, _, _) => {
-            let _ = in_pane(state, client, m, target.pane);
-        }
+        (MousePlace::Pane, _, _) => in_pane(state, client, m, mk, target),
         _ => {}
     }
 }
 
-/// The built-in model for a report in pane `pane` (T3.2): a press focuses
-/// it; the wheel goes to a pane that asked for the mouse, scrolls an open
-/// view, or opens one; anything else the pane asked for is forwarded.
-fn in_pane(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) -> Option<()> {
-    let p = state.model.panes.get(&pane)?;
-    let modes = p.handle.modes();
-    let history = p.handle.history_size();
-    let in_view = state.mouse.is_open(pane);
-    let wants = modes.mouse != MouseMode::Off && !in_view;
-    let focus = vec![vec!["select-pane".into(), "-t".into(), pane.to_string()]];
-    let wheel = match m.kind {
-        MouseKind::WheelUp => Some(WHEEL_LINES as isize),
-        MouseKind::WheelDown => Some(-(WHEEL_LINES as isize)),
-        _ => None,
+/// The built-in model for key `mk` in a pane, as tmux 3.7b's stock `root`
+/// pane rows: each copy-mode row runs only for a pane that is in no mode
+/// and did not ask for the mouse (the wheel also not on the alternate
+/// screen); otherwise, and for every other key, a press focuses the pane
+/// and the report is forwarded (`send-keys -M`).
+fn in_pane(state: &mut State, client: ClientId, m: &Mouse, mk: MouseKey, target: &MouseTarget) {
+    let Some(p) = state.model.panes.get(&target.pane) else {
+        return;
     };
-    if let Some(lines) = wheel
-        && !wants
-    {
-        if in_view {
-            state.mouse.scroll(pane, history, lines);
-            clients::mark_all_dirty(state);
-            clients::run_binding(state, client, &focus, Dialect::Grofe);
-        } else if lines > 0 && !modes.alt_screen && history > 0 {
-            state.mouse.scroll(pane, history, lines);
-            clients::mark_all_dirty(state);
+    let modes = p.handle.modes();
+    let busy = state.copy.is_active(target.pane) || modes.mouse != MouseMode::Off;
+    let run = |state: &mut State, cmds: &[&[&str]]| {
+        let cmds: Vec<Vec<String>> = cmds
+            .iter()
+            .map(|argv| argv.iter().map(|s| s.to_string()).collect())
+            .collect();
+        run_mouse_binding(state, target, &cmds, Dialect::Grofe);
+    };
+    let focus: &[&str] = &["select-pane", "-t", "="];
+    match (mk.action, mk.button) {
+        (MouseAction::WheelUp, _) if !busy && !modes.alt_screen => {
+            run(state, &[&["copy-mode", "-e"]]);
         }
-        return Some(());
+        (MouseAction::Drag, 1) if !busy => run(state, &[&["copy-mode", "-M"]]),
+        (MouseAction::DoubleClick | MouseAction::TripleClick, 1) if !busy => {
+            let select = if mk.action == MouseAction::DoubleClick {
+                "select-word"
+            } else {
+                "select-line"
+            };
+            // ponytail: `run-shell -d 0.3` does not hold the copy after it,
+            // as no binding's `run-shell` holds the commands after it; the
+            // copy is the same, only the highlight is not shown first.
+            run(
+                state,
+                &[
+                    focus,
+                    &["copy-mode", "-H"],
+                    &["send-keys", "-X", select],
+                    &["run-shell", "-d", "0.3"],
+                    &["send-keys", "-X", "copy-pipe-and-cancel"],
+                ],
+            );
+        }
+        // A double click is no report of its own to forward.
+        (MouseAction::DoubleClick, 1) => run(state, &[focus]),
+        (MouseAction::DoubleClick, _) => {}
+        _ => {
+            // As tmux (`select-pane -t = \; send-keys -M`): the pane is
+            // active before its click arrives.
+            if matches!(m.kind, MouseKind::Down(_)) {
+                run(state, &[focus]);
+            }
+            forward(state, client, m);
+        }
     }
-    // As tmux (`select-pane -t = \; send-keys -M`): the pane is active
-    // before its click arrives.
-    if matches!(m.kind, MouseKind::Down(_)) {
-        clients::run_binding(state, client, &focus, Dialect::Grofe);
-    }
-    forward(state, client, m);
-    Some(())
 }
 
 /// Sends report `m` to the pane under it, if that pane asked for this
-/// kind of event and has no view open.
+/// kind of event and is not in copy mode.
 // ponytail: a drag that leaves its pane is dropped rather than following
 // the pane it started in.
 fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
     let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) else {
         return Routed::Consumed;
     };
-    if state.mouse.is_open(pane) {
+    if state.copy.is_active(pane) {
         return Routed::Consumed;
     }
     let Some(p) = state.model.panes.get(&pane) else {
@@ -824,17 +843,12 @@ pub fn resolve_targets(state: &State, argv: &[String]) -> Vec<String> {
     out
 }
 
-/// A format variable the mouse answers: while a mouse key's commands run,
+/// A format variable the mouse answers while a mouse key's commands run:
 /// `mouse_status_range` (tmux's words for the range clicked, empty off the
 /// status line or outside a range), `mouse_pane`, and `mouse_x`/`mouse_y`
-/// ([`MouseTarget::pane_cell`]); and always
-/// `pane_in_mode` for `pane` (1 while its scrollback view is open). `None`
-/// lets the caller's own variables answer.
-pub fn format_var(state: &State, pane: Option<PaneId>, name: &str) -> Option<String> {
-    if name == "pane_in_mode" {
-        let open = pane.is_some_and(|p| state.mouse.is_open(p));
-        return Some(if open { "1" } else { "0" }.to_string());
-    }
+/// ([`MouseTarget::pane_cell`]). `None` lets the caller's own variables
+/// answer.
+pub fn format_var(state: &State, name: &str) -> Option<String> {
     let m = state.mouse.current.as_ref()?;
     match name {
         "mouse_status_range" => Some(match &m.range {
@@ -929,84 +943,157 @@ pub fn encode(m: &Mouse, x: u16, y: u16, modes: &InputModes) -> Option<Vec<u8>> 
     }
 }
 
-/// Draws each visible pane's open view: its history rows over the pane,
-/// and the `[offset/history]` indicator top right in tmux's `mode-style`
-/// (black on yellow). The cursor hides while the client's active pane is
-/// scrolled back.
-// ponytail: tmux shows a copy-mode cursor it can move; the view has none.
-pub struct ScrollbackOverlay;
+// ---- Copy mode (TM.6) -------------------------------------------------------
 
-impl Overlay for ScrollbackOverlay {
-    fn draw(&self, state: &State, client: ClientId, cx: &OverlayCtx, screen: &mut Screen) {
-        if state.mouse.views.is_empty() {
-            return;
-        }
-        let Some(w) = client_window(state, client) else {
-            return;
-        };
-        for (pane, rect) in pane_rects(w) {
-            let Some(p) = state.model.panes.get(&pane) else {
-                continue;
-            };
-            let history = p.handle.history_size();
-            let offset = match state.mouse.offset(pane, history) {
-                Some(n) if n > 0 => n,
-                _ => continue,
-            };
-            let Some(&(_, clip)) = cx.panes.iter().find(|(id, _)| *id == pane) else {
-                continue;
-            };
-            let mut put = |x: u16, y: u16, cell: &SnapCell| {
-                let cx_ = i32::from(rect.x) + i32::from(x) - i32::from(cx.viewport.0);
-                let cy_ = i32::from(rect.y) + i32::from(y) - i32::from(cx.viewport.1)
-                    + i32::from(cx.window_top);
-                let inside = |v: i32, lo: u16, len: u16| {
-                    v >= i32::from(lo) && v < i32::from(lo) + i32::from(len)
-                };
-                if inside(cx_, clip.x, clip.cols) && inside(cy_, clip.y, clip.rows) {
-                    let i = cy_ as usize * usize::from(screen.cols) + cx_ as usize;
-                    if let Some(slot) = screen.cells.get_mut(i) {
-                        *slot = cell.clone();
-                    }
-                }
-            };
-            for (y, row) in p
-                .handle
-                .snapshot_history(offset, rect.rows)
-                .iter()
-                .enumerate()
-            {
-                for (x, cell) in row.iter().take(usize::from(rect.cols)).enumerate() {
-                    put(x as u16, y as u16, cell);
-                }
-            }
-            let label = format!("[{offset}/{history}]");
-            let start = rect.cols.saturating_sub(label.len() as u16);
-            for (i, c) in label.chars().take(usize::from(rect.cols)).enumerate() {
-                put(start + i as u16, 0, &indicator_cell(c));
-            }
-            if pane == w.active {
-                screen.cursor = None;
-            }
-        }
-    }
+/// The pane under client `client`'s cell `cell`, if it is in copy mode,
+/// and the cell inside it (tmux's `cmd_mouse_pane` and `cmd_mouse_at`).
+fn copy_pane_at(
+    state: &State,
+    client: ClientId,
+    cell: (u16, u16),
+) -> Option<(PaneId, usize, usize)> {
+    let Hit::Pane(pane, x, y) = hit(state, client, cell) else {
+        return None;
+    };
+    state
+        .copy
+        .is_active(pane)
+        .then_some((pane, usize::from(x), usize::from(y)))
 }
 
-fn indicator_cell(c: char) -> SnapCell {
-    SnapCell {
-        c,
-        fg: Color::Named(NamedColor::Black),
-        bg: Color::Named(NamedColor::Yellow),
-        flags: CellFlags::empty(),
-        zerowidth: Vec::new(),
-        underline_color: None,
-        hyperlink: None,
+/// The pane the running mouse key is for, if it is over a pane or a
+/// border (tmux's `cmd_mouse_pane`): `copy-mode -M`'s pane.
+pub fn event_pane(state: &State) -> Option<PaneId> {
+    let m = state.mouse.current.as_ref()?;
+    m.range.is_none().then_some(m.pane)
+}
+
+/// What a `send-keys -X` run for a mouse event does first, as tmux's
+/// `window_copy_command`: unless the event is the wheel, the cursor of the
+/// copy mode under the pointer moves to it (`window_copy_move_mouse`);
+/// and `begin-selection` for any mouse event starts a drag instead of a
+/// plain selection ([`start_drag`]). Whether that was the whole command.
+pub fn copy_command(state: &mut State, pane: PaneId, args: &[String]) -> bool {
+    let Some(m) = state.mouse.current.clone() else {
+        return false;
+    };
+    if !m.wheel
+        && let Some((at, x, y)) = copy_pane_at(state, m.client, m.report)
+    {
+        copy::edit_now(state, at, |mode, _| select::move_to(mode, x, y));
+        clients::mark_all_dirty(state);
+    }
+    if args != ["begin-selection"] {
+        return false;
+    }
+    start_drag(state);
+    copy::edit_now(state, pane, |mode, _| mode.prefix = 1);
+    true
+}
+
+/// Starts a copy-mode drag for the running mouse key, as tmux's
+/// `window_copy_start_drag`: in the copy mode under the place the key is
+/// at (a drag's press), the selection starts there (or a word or line
+/// selection the press is inside keeps its first word or line), and until
+/// the release each report moves its end ([`drag_update`]).
+pub fn start_drag(state: &mut State) {
+    let Some(m) = state.mouse.current.clone() else {
+        return;
+    };
+    let Some((pane, x, y)) = copy_pane_at(state, m.client, m.cell) else {
+        return;
+    };
+    let Some(p) = state.mouse.pointers.get_mut(&m.client) else {
+        return;
+    };
+    p.copy_drag = Some(CopyDrag { pane, timer: None });
+    copy::edit_now(state, pane, |mode, _| select::start_drag(mode, x, y));
+    drag_update(state, m.client, m.report);
+}
+
+/// A report during client `client`'s copy-mode drag, at client cell
+/// `cell`, as tmux's `window_copy_drag_update`: the cursor and the
+/// selection's end follow the pointer, and on the pane's top or bottom row
+/// the view scrolls a line, then again every [`DRAG_REPEAT`] while the
+/// cursor stays there.
+fn drag_update(state: &mut State, client: ClientId, cell: (u16, u16)) {
+    let Some(drag) = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.copy_drag.as_mut())
+    else {
+        return;
+    };
+    drag.timer = None;
+    let Some((pane, x, y)) = copy_pane_at(state, client, cell) else {
+        return;
+    };
+    let edge = copy::edit_now(state, pane, |mode, _| select::drag_update(mode, x, y));
+    if let Some(drag) = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.copy_drag.as_mut())
+    {
+        drag.pane = pane;
+    }
+    if edge == Some(true) {
+        start_drag_timer(state, client);
+    }
+    clients::mark_all_dirty(state);
+}
+
+/// Arms client `client`'s drag timer: after [`DRAG_REPEAT`], if the drag
+/// is still on and the timer not replaced, the view scrolls another line.
+fn start_drag_timer(state: &mut State, client: ClientId) {
+    let generation = state.mouse.generation + 1;
+    let Some(drag) = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.copy_drag.as_mut())
+    else {
+        return;
+    };
+    state.mouse.generation = generation;
+    drag.timer = Some(generation);
+    // Without a runtime (unit tests) the timer never fires.
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let jobs = state.jobs.clone();
+    rt.spawn(async move {
+        tokio::time::sleep(DRAG_REPEAT).await;
+        let job: Job = Box::new(move |state: &mut State| drag_tick(state, client, generation));
+        let _ = jobs.send(job).await;
+    });
+}
+
+/// The drag timer (tmux's `window_copy_scroll_timer`): see
+/// [`start_drag_timer`].
+fn drag_tick(state: &mut State, client: ClientId, generation: u64) {
+    let Some(drag) = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.copy_drag.as_mut())
+        .filter(|d| d.timer == Some(generation))
+    else {
+        return;
+    };
+    drag.timer = None;
+    let pane = drag.pane;
+    if copy::edit_now(state, pane, |mode, _| select::drag_scroll(mode)) == Some(true) {
+        start_drag_timer(state, client);
+        clients::mark_all_dirty(state);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::input::Mods;
 
     fn mouse(kind: MouseKind) -> Mouse {
         Mouse {
@@ -1252,6 +1339,32 @@ mod tests {
         );
     }
 
+    /// TM.6: while a copy-mode drag is on, its reports are no keys (tmux's
+    /// `KEYC_DRAGGING`); its release is the drag's end and stops it.
+    #[test]
+    fn a_copy_mode_drag_takes_the_reports_until_its_release() {
+        let mut state = crate::server::test_state();
+        let c = ClientId(1);
+        let key = |state: &mut State, kind, x, y| classify(state, c, &report(kind, x, y));
+        assert!(key(&mut state, MouseKind::Down(LEFT), 3, 3).is_some());
+        assert_eq!(
+            key(&mut state, MouseKind::Drag(LEFT), 4, 3).map(|k| k.0),
+            Some(MouseAction::Drag)
+        );
+        state.mouse.pointers.get_mut(&c).unwrap().copy_drag = Some(CopyDrag {
+            pane: PaneId(0),
+            timer: None,
+        });
+        assert_eq!(key(&mut state, MouseKind::Drag(LEFT), 9, 5), None);
+        assert_eq!(
+            key(&mut state, MouseKind::Up(LEFT), 9, 5).map(|k| k.0),
+            Some(MouseAction::DragEnd)
+        );
+        assert!(state.mouse.pointers[&c].copy_drag.is_none());
+        // With no drag left, a stale timer does nothing.
+        drag_tick(&mut state, c, 7);
+    }
+
     /// The timer turns a second click with no third into `DoubleClick`; a
     /// stale timer, or one after a single click, ends the wait only.
     #[test]
@@ -1282,6 +1395,8 @@ mod tests {
             target: target.to_string(),
             range,
             pane_cell: None,
+            report: (5, 23),
+            wheel: false,
         }
     }
 
@@ -1319,62 +1434,29 @@ mod tests {
     #[test]
     fn mouse_formats_describe_the_running_event() {
         let mut state = crate::server::test_state();
-        assert_eq!(format_var(&state, None, "mouse_status_range"), None);
-        assert_eq!(
-            format_var(&state, Some(PaneId(4)), "pane_in_mode").as_deref(),
-            Some("0")
-        );
-        state.mouse.scroll(PaneId(4), 10, 5);
-        assert_eq!(
-            format_var(&state, Some(PaneId(4)), "pane_in_mode").as_deref(),
-            Some("1")
-        );
+        assert_eq!(format_var(&state, "mouse_status_range"), None);
+        // `pane_in_mode` is copy mode's now (TM.6): the view is gone.
+        assert_eq!(format_var(&state, "pane_in_mode"), None);
         let net = Some(Some(RangeKind::User("net".to_string())));
         state.mouse.current = Some(mouse_target("@3", net));
         assert_eq!(
-            format_var(&state, None, "mouse_status_range").as_deref(),
+            format_var(&state, "mouse_status_range").as_deref(),
             Some("net")
         );
-        assert_eq!(
-            format_var(&state, None, "mouse_pane").as_deref(),
-            Some("%4")
-        );
-        assert_eq!(format_var(&state, None, "mouse_x"), None);
-        assert_eq!(format_var(&state, None, "session_name"), None);
+        assert_eq!(format_var(&state, "mouse_pane").as_deref(), Some("%4"));
+        assert_eq!(format_var(&state, "mouse_x"), None);
+        assert_eq!(format_var(&state, "session_name"), None);
         state.mouse.current = Some(mouse_target("%4", Some(Some(RangeKind::Left))));
         assert_eq!(
-            format_var(&state, None, "mouse_status_range").as_deref(),
+            format_var(&state, "mouse_status_range").as_deref(),
             Some("left")
         );
         state.mouse.current = Some(mouse_target("%4", None));
         assert_eq!(
-            format_var(&state, None, "mouse_status_range").as_deref(),
+            format_var(&state, "mouse_status_range").as_deref(),
             Some("")
         );
         assert_eq!(pointer(&state, ClientId(1)), Some((5, 23)));
         assert_eq!(pointer(&state, ClientId(2)), None);
-    }
-
-    #[test]
-    fn the_view_scrolls_closes_at_the_bottom_and_stays_on_its_lines() {
-        let mut s = MouseState::default();
-        let p = PaneId(1);
-        assert_eq!(s.offset(p, 100), None);
-        assert!(s.scroll(p, 100, 5));
-        assert_eq!(s.offset(p, 100), Some(5));
-        assert!(s.scroll(p, 100, 5));
-        assert_eq!(s.offset(p, 100), Some(10));
-        // Three new lines: the same lines are now 13 up.
-        assert_eq!(s.offset(p, 103), Some(13));
-        assert!(s.scroll(p, 103, -5));
-        assert_eq!(s.offset(p, 103), Some(8));
-        assert!(!s.scroll(p, 103, -10));
-        assert_eq!(s.offset(p, 103), None);
-        // Capped at the history.
-        assert!(s.scroll(p, 7, 5));
-        assert!(s.scroll(p, 7, 5));
-        assert_eq!(s.offset(p, 7), Some(7));
-        assert!(s.close(p));
-        assert!(!s.close(p));
     }
 }

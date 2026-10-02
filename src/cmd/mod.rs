@@ -972,13 +972,18 @@ pub struct PasteBuffer {
     pub target: Target,
 }
 
-/// `copy-mode [-eu] [-t pane]` (M5, TM.1).
+/// `copy-mode [-eHMu] [-t pane]` (M5, TM.1; `-H` and `-M` TM.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyMode {
     /// `-u`: start a page up.
     pub page_up: bool,
     /// `-e`: scrolling back to the bottom leaves the mode.
     pub scroll_exit: bool,
+    /// `-H`: a new mode hides its position indicator.
+    pub hide_position: bool,
+    /// `-M`: in the pane under the running mouse key, starting a drag
+    /// there; nothing outside a mouse key.
+    pub mouse: bool,
     pub target: Target,
 }
 

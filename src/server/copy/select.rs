@@ -197,6 +197,73 @@ fn start_selection(mode: &mut Mode) {
     set_selection(mode, false);
 }
 
+// ---- The mouse (TM.6) --------------------------------------------------------
+
+/// tmux's `window_copy_move_mouse`: the cursor to view cell `(x, y)`.
+pub fn move_to(mode: &mut Mode, x: usize, y: usize) {
+    mode.update_cursor(x, y);
+}
+
+/// tmux's `window_copy_start_drag` at view cell `(x, y)`, without the
+/// first update: a press outside the first word or line of a word or line
+/// selection starts a character selection there; inside it, the cursor
+/// goes to its word's start or its line's, and the selection keeps it.
+pub fn start_drag(mode: &mut Mode, x: usize, y: usize) {
+    if y >= mode.sy() {
+        return;
+    }
+    let yg = mode.grid.hsize + y - mode.oy;
+    if x < mode.sel.selrx || x > mode.sel.endselrx || yg != mode.sel.selry {
+        mode.sel.unit = Unit::Char;
+    }
+    match mode.sel.unit {
+        Unit::Word => {
+            mode.update_cursor(x, y);
+            let seps = mode.sel.separators.clone();
+            let mut r = mode.reader(mode.cx, mode.py());
+            r.cursor_previous_word(&seps, false, true);
+            let top = mode.grid.hsize - mode.oy;
+            mode.update_cursor(r.cx, r.cy.saturating_sub(top));
+        }
+        Unit::Line => mode.update_cursor(0, y),
+        Unit::Char => {
+            mode.update_cursor(x, y);
+            start_selection(mode);
+        }
+    }
+}
+
+/// tmux's `window_copy_drag_update` at view cell `(x, y)`: the cursor and
+/// the selection's moving end go there, and on the view's top or bottom
+/// row the view scrolls a line. Whether it did (the drag timer starts).
+pub fn drag_update(mode: &mut Mode, x: usize, y: usize) -> bool {
+    let (old_cx, old_cy) = (mode.cx, mode.cy);
+    mode.update_cursor(x, y);
+    update_selection(mode);
+    if old_cy != mode.cy || old_cx == mode.cx {
+        return drag_scroll_at(mode, y);
+    }
+    false
+}
+
+/// tmux's `window_copy_scroll_timer`: another line while the cursor is on
+/// the view's top or bottom row. Whether it scrolled.
+pub fn drag_scroll(mode: &mut Mode) -> bool {
+    drag_scroll_at(mode, mode.cy)
+}
+
+fn drag_scroll_at(mode: &mut Mode, y: usize) -> bool {
+    if y == 0 {
+        mode.cursor_up(true);
+        true
+    } else if y + 1 == mode.sy() {
+        mode.cursor_down(true);
+        true
+    } else {
+        false
+    }
+}
+
 /// tmux's `window_copy_other_end`.
 pub fn other_end(mode: &mut Mode) {
     if !mode.selecting && mode.line_sel == LineSel::None {
@@ -786,5 +853,40 @@ mod tests {
         assert_eq!((m.sel_start, m.sel_end), ((0, 0), (3, 0)));
         x(&mut m, &["copy-selection"]);
         assert_eq!(copied(&mut m), ["abcd"]);
+    }
+
+    /// TM.6: a drag selects from the press to the pointer; on the view's
+    /// top row it scrolls; a drag starting inside a selected word keeps
+    /// the word (tmux's `SEL_WORD` drag).
+    #[test]
+    fn a_mouse_drag_selects_and_keeps_a_word() {
+        let rows = ["alpha beta gamma", "second line", "third", ""];
+        let mut m = Mode::new(
+            Grid::from_text(20, 2, &["h1", "h2", rows[0], rows[1], rows[2], rows[3]]),
+            (0, 3),
+            true,
+        );
+        start_drag(&mut m, 2, 0);
+        assert!(!drag_update(&mut m, 4, 1));
+        assert_eq!((m.sel_start, m.sel_end), ((2, 2), (4, 3)));
+        x(&mut m, &["copy-selection"]);
+        assert_eq!(copied(&mut m), ["pha beta gamma\nsecon"]);
+        // The top row scrolls the view a line, as the drag timer does.
+        start_drag(&mut m, 1, 1);
+        assert!(drag_update(&mut m, 0, 0));
+        assert_eq!(m.oy, 1);
+        assert!(drag_scroll(&mut m));
+        assert_eq!(m.oy, 2);
+        assert!(drag_scroll(&mut m), "at the history's top it stays on");
+        x(&mut m, &["clear-selection"]);
+        m.oy = 0;
+        // A word selection, then a drag pressed inside that word.
+        move_to(&mut m, 7, 0);
+        x(&mut m, &["select-word"]);
+        assert_eq!(m.sel.unit, Unit::Word);
+        start_drag(&mut m, 8, 0);
+        drag_update(&mut m, 2, 1);
+        x(&mut m, &["copy-selection"]);
+        assert_eq!(copied(&mut m), ["beta gamma\nsecond"]);
     }
 }

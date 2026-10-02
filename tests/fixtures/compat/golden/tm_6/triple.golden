@@ -1,0 +1,51 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+keys Escape '[<0;16;2M' Escape '[<0;16;2m' Escape '[<0;16;2M' Escape '[<0;16;2m' Escape '[<0;16;2M' Escape '[<0;16;2m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+  two spaces: alpha-beta gamma.delta (epsilon) [zeta] {eta}
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 60
+? 0
+$ delete-buffer
+? 0
+keys Escape '[<0;70;2M' Escape '[<0;70;2m' Escape '[<0;70;2M' Escape '[<0;70;2m' Escape '[<0;70;2M' Escape '[<0;70;2m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+  two spaces: alpha-beta gamma.delta (epsilon) [zeta] {eta}
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 60
+? 0
+$ delete-buffer
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 10 scroll-up
+? 0
+keys Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ show-buffer
+line 471: foo.bar(baz) qux-quux, path/to/file_name.rs:1413 end
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 63
+? 0
+$ delete-buffer
+? 0

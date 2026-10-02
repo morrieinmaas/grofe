@@ -2637,6 +2637,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "copy-mode" => {
             const SHORT: &[(char, FlagKind)] = &[
                 ('e', FlagKind::Bool),
+                ('H', FlagKind::Bool),
+                ('M', FlagKind::Bool),
                 ('u', FlagKind::Bool),
                 ('t', FlagKind::Value),
             ];
@@ -2645,6 +2647,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             Ok(Command::CopyMode(CopyMode {
                 page_up: flags.present.contains(&'u'),
                 scroll_exit: flags.present.contains(&'e'),
+                hide_position: flags.present.contains(&'H'),
+                mouse: flags.present.contains(&'M'),
                 target: target_or_current(&flags.values, 't')?,
             }))
         }

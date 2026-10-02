@@ -649,19 +649,6 @@ impl PaneHandle {
         lock(&self.emu).term.grid().history_size()
     }
 
-    /// `rows` rows of the screen as it was scrolled back `offset` lines
-    /// (0 is the live screen; `offset` is capped at [`Self::history_size`]),
-    /// top row first, under one lock.
-    pub fn snapshot_history(&self, offset: usize, rows: u16) -> Vec<Vec<SnapCell>> {
-        let emu = lock(&self.emu);
-        let grid = emu.term.grid();
-        let offset = offset.min(grid.history_size()) as i32;
-        let rows = i32::from(rows).min(grid.screen_lines() as i32);
-        (0..rows)
-            .map(|r| snap_row(&grid[Line(r - offset)], grid.columns()))
-            .collect()
-    }
-
     /// Every row of the grid, the oldest history row first and then the
     /// screen, each passed to `row`, under one lock: copy mode's copy of
     /// the pane (M5, TM.1). Returns the number of history rows and the
@@ -1018,18 +1005,11 @@ mod tests {
         assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
     }
 
-    fn row_text(row: &[SnapCell]) -> String {
-        row.iter()
-            .map(|c| c.c)
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    }
-
     /// T3.0's pane seams for the scrollback view (T3.2): lines scrolled off
-    /// the top are counted and can be read back at any offset.
+    /// the top are counted. (The view became copy mode in TM.6, which reads
+    /// the history through `copy_grid`; the offset read-back went with it.)
     #[tokio::test]
-    async fn history_can_be_read_back_at_an_offset() {
+    async fn lines_scrolled_off_are_counted() {
         let (tx, mut rx) = mpsc::channel(8);
         let spec = PaneSpawn {
             rows: 10,
@@ -1055,14 +1035,6 @@ mod tests {
         }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
-        let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);
-        assert_eq!(top(0), "22");
-        assert_eq!(top(5), "17");
-        assert_eq!(top(21), "1");
-        assert_eq!(top(1000), "1", "the offset is capped at the history");
-        assert_eq!(handle.snapshot_history(0, 99).len(), 10);
-        let live = handle.snapshot_rows(0..10);
-        assert_eq!(handle.snapshot_history(0, 10), live.rows);
     }
 
     fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {

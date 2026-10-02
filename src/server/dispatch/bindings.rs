@@ -163,7 +163,7 @@ fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, 
 fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> String {
     let model = &state.model;
     let with = |inner: &dyn FormatVars| {
-        let vars = MouseVars { state, pane, inner };
+        let vars = MouseVars { state, inner };
         match hooks::current_formats(state) {
             Some(formats) => cmd::expand(
                 text,
@@ -193,13 +193,12 @@ fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> S
 /// The mouse's variables ([`mouse::format_var`]) over `inner`.
 struct MouseVars<'a> {
     state: &'a State,
-    pane: Option<PaneId>,
     inner: &'a dyn FormatVars,
 }
 
 impl FormatVars for MouseVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
-        mouse::format_var(self.state, self.pane, name).or_else(|| self.inner.get(name))
+        mouse::format_var(self.state, name).or_else(|| self.inner.get(name))
     }
 }
 
