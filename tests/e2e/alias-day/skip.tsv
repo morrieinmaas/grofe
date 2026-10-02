@@ -1,0 +1,42 @@
+# The script table for the alias-day leg: one row per athome script, copied
+# from TE.2b's design (.superpowers/sdd/m35/e2e-athome-amendment.md, section 4,
+# stage 2), plus run_onchange_17-install-grofe, the grofe step the alias-day
+# ref adds. A script in the athome archive with no row here fails stage 2, so
+# a new athome script cannot slip through unreviewed.
+#
+# Columns, tab separated:
+#   script   the file under home/.chezmoiscripts, without .tmpl
+#   action   run      rendered and run, ATHOME_CI unset
+#            ci       rendered and run with ATHOME_CI=1, which it honours
+#            flag     rendered and run with the env in column 3
+#            skip     not run
+#            absent   must not be in the archive; stage 2 fails if it is
+#   how      the env a flag row runs with, or how the row is skipped
+#   why      the reason, printed in the report
+run_before_00-seed-ssh-aliases.sh	run	-	writes ~/.ssh/config host aliases only; no key
+run_once_before_01-install-package-manager.sh	skip	not in the allowlist	no Debian branch; the image is the package layer
+run_onchange_02-install-packages.sh	skip	not in the allowlist	same; GUI casks, fonts, niri, Noctalia, NordVPN, NetBird packages never install
+run_03-setup-project-dirs.sh	run	-	creates ~/personal, ~/sidebiz, seeds .envrc (no secret in it)
+run_onchange_03-setup-zsh.sh	run	-	login shell to zsh; the image lets sudo chsh succeed for the test user
+run_after_05-install-extra-packages.sh	run	-	no-op with extraPackages = ""
+run_after_06-setup-mise.sh	flag	ATHOME_SKIP_MISE=1	owner ruling: mise installs its whole tool set over the anonymous GitHub API and no token enters the container, so the step runs with athome's skip flag; the workflow's tools (fzf, neovim, zoxide) come from the image
+run_once_08-setup-vpn-client.sh	ci	ATHOME_CI=1	NordVPN and NetBird need accounts and a TUN device
+run_once_09-setup-caps-to-ctrl.sh	ci	ATHOME_CI=1	keyboard hardware
+run_once_10-setup-podman.sh	ci	ATHOME_CI=1	nested containers
+run_once_11-setup-niri-noctalia.sh	ci	ATHOME_CI=1	compositor, display manager
+run_onchange_12-rebuild-bat-cache.sh	skip	not in the allowlist	cosmetic; bat not in the image
+run_once_13-seed-uv-pythons.sh	skip	not in the allowlist	network-heavy, unrelated
+run_onchange_after_14-install-tmux-plugins.sh	absent	stage fails if present	TPM is not ported (TP.8); canopy's loader runs the plugins
+run_once_15-setup-wifi-backend.sh	ci	ATHOME_CI=1	NetworkManager hardware
+run_once_16-rbw-reminder.sh	skip	not in the allowlist	Bitwarden; no rbw state exists in the container
+run_once_17-secrets-restore-reminder.sh	skip	not in the allowlist	secrets vault; ~/.secrets must not exist, and the report checks it
+run_onchange_17-install-grofe.sh	flag	ATHOME_GROFE_BIN=/usr/local/lib/grofe/grofe	the grofe install under test, from the image's build of grofe HEAD; nothing is downloaded
+run_onchange_18-install-canopy.sh	run	-	the canopy install under test, offline: the store is a clone of the canopy bundle
+run_onchange_19-setup-nord0-daemon.sh	ci	ATHOME_CI=1	NordVPN
+run_once_after_20-setup-zen.sh	ci	ATHOME_CI=1	GUI browser
+run_once_after_21-aur-malware-scan.sh	skip	not in the Debian allowlist	AUR only
+run_once_after_22-link-agents.sh	run	-	no-op with includeAgents = false
+run_once_after_23-enable-gpaste.sh	ci	ATHOME_CI=1	GNOME clipboard
+run_onchange_after_24-enable-tmux-service.sh	run	-	the login unit (owner ruling: athome's tmux.service); the image has systemd
+run_onchange_after_25-desktop-look.sh	ci	ATHOME_CI=1	GUI theming
+run_once_after_99-cleanup.sh	skip	not in the allowlist	swaps the chezmoi remote to SSH; the archive has no remote
