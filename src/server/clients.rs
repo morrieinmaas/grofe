@@ -112,6 +112,8 @@ pub struct Outbox {
     /// Bytes for ahead of the next frame ([`queue_raw`]); kept across a
     /// dropped frame.
     raw: Vec<u8>,
+    /// Bytes of dropped diffs, ever (`client_discarded`).
+    discarded: u64,
 }
 
 /// Most raw bytes held for a client whose frames are being dropped.
@@ -128,6 +130,7 @@ impl Outbox {
             prev: None,
             blocked: false,
             raw: Vec::new(),
+            discarded: 0,
         };
         (outbox, rx)
     }
@@ -174,6 +177,7 @@ impl Outbox {
                 true
             }
             Err(mpsc::error::TrySendError::Full(mut bytes)) => {
+                self.discarded += (bytes.len() - raw_len) as u64;
                 bytes.truncate(raw_len);
                 self.raw = bytes;
                 self.prev = None;
@@ -1964,6 +1968,9 @@ impl FormatVars for ClientVars<'_> {
             "client_name" => Some(c.name.clone()),
             "client_tty" => Some(c.tty.clone().unwrap_or_default()),
             "client_termname" => Some(c.term.clone()),
+            // tmux: bytes not sent because the client fell behind; here,
+            // the dropped frames' diffs.
+            "client_discarded" => Some(c.outbox.discarded.to_string()),
             "client_key_table" => Some(c.keys.table().to_string()),
             // ponytail: grofe always speaks UTF-8 to the client.
             "client_flags" => Some(if c.focused {
@@ -3041,8 +3048,10 @@ mod tests {
         // The slot is full: the frame is dropped, the raw bytes are not.
         assert!(outbox.offer(screen_with('b'), &caps));
         outbox.queue_raw(b"RAW3");
+        assert_eq!(outbox.discarded, 0);
         assert!(!outbox.offer(screen_with('c'), &caps));
         assert!(outbox.needs_full_redraw());
+        assert!(outbox.discarded > 0, "the dropped diff is counted");
         let _ = rx.try_recv().expect("the 'b' frame");
         assert!(outbox.offer(screen_with('c'), &caps));
         let next = rx.try_recv().expect("redraw");
