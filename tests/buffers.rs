@@ -11,7 +11,7 @@ mod common;
 mod harness;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CMD_TIMEOUT, TestServer, wait_until};
@@ -422,4 +422,126 @@ fn paste_buffer_s_sends_unsanitized_bytes() {
     let want: &[u8] = b"a\x1b[31mb\rc\x01";
     wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
         .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
+}
+
+// ---- A FIFO holds only its own request ---------------------------------------
+
+fn mkfifo(srv: &TestServer) -> PathBuf {
+    let path = srv.home.join("fifo");
+    nix::unistd::mkfifo(
+        &path,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    path
+}
+
+fn open_nonblocking(path: &Path, write: bool) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(!write)
+        .write(write)
+        .custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits())
+        .open(path)
+}
+
+/// `list-sessions` answers at once, from a second CLI.
+fn answers_meanwhile(srv: &TestServer) {
+    let started = Instant::now();
+    assert_eq!(
+        srv.cmd(&["list-sessions", "-F", "#{session_name}"]),
+        Ok("main\n".to_string())
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "list-sessions took {:?}",
+        started.elapsed()
+    );
+}
+
+/// `load-buffer` from a FIFO waits for its writer, as tmux 3.7b's CLI
+/// does, while the server goes on answering everyone else.
+#[test]
+fn load_buffer_from_a_fifo_waits_without_freezing_the_server() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let fifo = mkfifo(&srv);
+    let mut load = srv
+        .command()
+        .args(["load-buffer", "-b", "f", "fifo"])
+        .spawn()
+        .unwrap();
+    // A writer opens without blocking only once the server is reading.
+    let mut writer = None;
+    wait_until(
+        || {
+            writer = open_nonblocking(&fifo, true).ok();
+            writer.is_some()
+        },
+        CMD_TIMEOUT,
+    )
+    .expect("the server opens the FIFO");
+    answers_meanwhile(&srv);
+    assert!(
+        load.try_wait().unwrap().is_none(),
+        "load-buffer still waits"
+    );
+    let mut writer = writer.unwrap();
+    std::io::Write::write_all(&mut writer, b"from the fifo").unwrap();
+    drop(writer);
+    let status = common::wait_child(load, CMD_TIMEOUT).unwrap();
+    assert!(status.success());
+    assert_eq!(
+        srv.cmd(&["show-buffer", "-b", "f"]),
+        Ok("from the fifo".to_string())
+    );
+}
+
+/// `save-buffer` to a FIFO nobody reads fails at once, as tmux 3.7b's
+/// does; to one whose reader is slow, it waits off the actor.
+#[test]
+fn save_buffer_to_a_fifo_fails_with_no_reader_and_never_freezes_the_server() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let fifo = mkfifo(&srv);
+    let data = "x".repeat(1 << 20);
+    let set = ["set-buffer", "-b", "big", &data].map(String::from);
+    srv.request(&set, CMD_TIMEOUT).unwrap();
+    let started = Instant::now();
+    let err = srv.cmd(&["save-buffer", "-b", "big", "fifo"]).unwrap_err();
+    // ENXIO, as tmux 3.7b's non-blocking open fails.
+    assert!(
+        err.starts_with("No such device or address: ") && err.ends_with("/home/fifo\n"),
+        "an open error naming the FIFO: {err:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // More than a pipe holds, so the write waits on the reader.
+    let reader = open_nonblocking(&fifo, false).unwrap();
+    let mut save = srv
+        .command()
+        .args(["save-buffer", "-b", "big", "fifo"])
+        .spawn()
+        .unwrap();
+    let mut first = [0u8; 1];
+    wait_until(
+        || std::io::Read::read(&mut &reader, &mut first).is_ok_and(|n| n == 1),
+        CMD_TIMEOUT,
+    )
+    .expect("the server writes to the FIFO");
+    answers_meanwhile(&srv);
+    assert!(
+        save.try_wait().unwrap().is_none(),
+        "save-buffer still writes"
+    );
+    nix::fcntl::fcntl(
+        &reader,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::empty()),
+    )
+    .unwrap();
+    let mut rest = Vec::new();
+    std::io::Read::read_to_end(&mut &reader, &mut rest).unwrap();
+    assert_eq!(rest.len() + 1, data.len());
+    let status = common::wait_child(save, CMD_TIMEOUT).unwrap();
+    assert!(status.success());
 }
