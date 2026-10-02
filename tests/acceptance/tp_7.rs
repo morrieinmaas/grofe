@@ -24,13 +24,32 @@ fn rig(real: Option<&Path>) -> Rig {
 }
 
 /// Types `item` into the popup once its list shows `shown`, then Enter
-/// once fzf shows the query. (The plugin's `--header` lines reach fzf only
+/// once fzf's top match starts with `item`. fzf draws the query before it
+/// has filtered the list for it, so Enter on the query alone can take the
+/// unfiltered top line. (The plugin's `--header` lines reach fzf only
 /// through an exported `FZF_DEFAULT_OPTS`, so they are not waited on.)
 fn pick(a: &mut Harness, shown: &str, item: &str) {
     a.wait_for(shown);
     a.send(item);
-    a.wait_for(&format!("> {item}"));
+    a.wait_until(&format!("fzf's top match to be {item}"), WAIT, |text| {
+        top_match(text, item).is_some_and(|m| m.starts_with(item))
+    });
     a.send("\r");
+}
+
+/// fzf's top match, with its pointer taken off: in its default layout the
+/// line two above the prompt (`> <query>`, the lowest line showing it),
+/// over the info line.
+fn top_match(text: &str, query: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let prompt = lines
+        .iter()
+        .rposition(|l| l.contains(&format!("> {query}")))?;
+    let row = lines.get(prompt.checked_sub(2)?)?;
+    let row = row.trim_start().trim_start_matches('│').trim_start();
+    let mut chars = row.chars();
+    chars.next()?;
+    Some(chars.as_str().trim_start().to_string())
 }
 
 /// What a case ends with: the structure and the client's session.
