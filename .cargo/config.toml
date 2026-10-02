@@ -1,0 +1,5 @@
+# Each acceptance test starts grofe servers and ptys of its own; one test per
+# core oversubscribes a loaded machine and turns timing waits into flakes.
+# An explicit RUST_TEST_THREADS still wins.
+[env]
+RUST_TEST_THREADS = "6"
