@@ -241,6 +241,10 @@ fn replay_with(name: &str, differs: &[(&str, &str)]) {
                 let a = client.as_mut().expect("keys before a client");
                 a.send(&bytes);
                 let _ = a.text();
+                // The recorder's pause after each step: as in tmux, a key
+                // that arrives before the prompt its binding opens (`2`
+                // then `f` then `e`) is queued as a key, not typed into it.
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 typed = true;
             }
             Step::Styles {

@@ -413,6 +413,31 @@ Where grofe differs:
 - **The tmux front end** still answers `copy-mode -M` with nothing, as
   before TM.6; TM.7 maps the front end's copy-mode rows.
 
+## Bindings wait
+
+As tmux 3.7b's per-client command queue does (recorded,
+`tests/fixtures/compat/golden/tm_6/run-shell` and `waits`), a key, mouse
+or prompt binding waits for its commands that finish later, and holds the
+rest of its commands and all of the client's later input until they do:
+
+- `run-shell` without `-b` (with `-d` too), until its shell exits;
+- `command-prompt`, `confirm-before`, `display-menu`, `display-panes` and
+  `display-popup` without `-b`, until they close. A prompt's or a
+  confirm's command runs before the binding's rest, a menu item's after it;
+- an `after-*` hook of one of its commands, while the hook's own
+  `run-shell` runs.
+
+The prompt, menu or popup that is open still gets its keys. Everything
+else waits, including the prefix and `detach-client`'s key, so a
+`run-shell` that never exits freezes that client's input, as it does in
+tmux. The ways out:
+
+- detach the client from elsewhere: `grofe detach-client -t <client>` from
+  the CLI or another client (`list-clients` names it);
+- kill the shell (`pkill -f '<its command>'`), after which the held keys
+  run in order;
+- from another client, `kill-server` as a last resort.
+
 ## Out of scope
 
 - **The emacs table** (`copy-mode`). `mode-keys` stays `vi`. yank also binds

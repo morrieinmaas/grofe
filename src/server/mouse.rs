@@ -1054,6 +1054,10 @@ fn start_drag_timer(state: &mut State, client: ClientId) {
 /// The drag timer (tmux's `window_copy_scroll_timer`): see
 /// [`start_drag_timer`].
 fn drag_tick(state: &mut State, client: ClientId, generation: u64) {
+    if !state.clients.contains_key(&client) {
+        client_gone(state, client);
+        return;
+    }
     let Some(drag) = state
         .mouse
         .pointers
@@ -1065,9 +1069,24 @@ fn drag_tick(state: &mut State, client: ClientId, generation: u64) {
     };
     drag.timer = None;
     let pane = drag.pane;
-    if copy::edit_now(state, pane, |mode, _| select::drag_scroll(mode)) == Some(true) {
+    let Some((edge, moved)) = copy::edit_now(state, pane, |mode, _| select::drag_scroll(mode))
+    else {
+        return;
+    };
+    if edge {
         start_drag_timer(state, client);
+    }
+    if moved {
         clients::mark_all_dirty(state);
+    }
+}
+
+/// Client `id` is gone: its pointer, and with it any drag and its timer,
+/// goes too (the client's removal calls this).
+pub fn client_gone(state: &mut State, id: ClientId) {
+    state.mouse.pointers.remove(&id);
+    if state.mouse.current.as_ref().is_some_and(|m| m.client == id) {
+        state.mouse.current = None;
     }
 }
 
@@ -1344,6 +1363,32 @@ mod tests {
         assert!(state.mouse.pointers[&c].copy_drag.is_none());
         // With no drag left, a stale timer does nothing.
         drag_tick(&mut state, c, 7);
+    }
+
+    /// A client that goes in the middle of a drag takes its pointer, drag
+    /// and timer with it; its timer firing later does nothing.
+    #[test]
+    fn a_client_gone_mid_drag_leaves_no_drag_behind() {
+        let mut state = crate::server::test_state();
+        let c = ClientId(1);
+        classify(&mut state, c, &report(MouseKind::Down(LEFT), 3, 3));
+        let p = state.mouse.pointers.get_mut(&c).unwrap();
+        p.copy_drag = Some(CopyDrag {
+            pane: PaneId(0),
+            timer: Some(9),
+        });
+        // No such client in `state`: the timer clears what it left.
+        drag_tick(&mut state, c, 9);
+        assert!(!state.mouse.pointers.contains_key(&c));
+        let p = state.mouse.pointers.entry(c).or_default();
+        p.copy_drag = Some(CopyDrag {
+            pane: PaneId(0),
+            timer: Some(10),
+        });
+        client_gone(&mut state, c);
+        assert!(!state.mouse.pointers.contains_key(&c));
+        drag_tick(&mut state, c, 10);
+        assert!(!state.mouse.pointers.contains_key(&c));
     }
 
     /// The timer turns a second click with no third into `DoubleClick`; a

@@ -1,0 +1,88 @@
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+? 0
+$ set -g @log ''
+? 0
+$ bind-key -n F5 "command-prompt -p p 'set -ga @log P%%' ; set -ga @log A"
+? 0
+$ bind-key -n F6 "display-menu -T t one 1 'set -ga @log M' ; set -ga @log B"
+? 0
+$ bind-key -n F7 "display-popup -E 'sleep 0.8' ; set -ga @log C"
+? 0
+$ bind-key -n F8 "confirm-before -p ok 'set -ga @log Y' ; set -ga @log D"
+? 0
+$ bind-key -n F9 "display-panes ; set -ga @log E"
+? 0
+$ bind-key -n F10 "command-prompt -b -p p 'set -ga @log Q%%' ; set -ga @log G"
+? 0
+$ bind-key -n F11 "command-prompt -N -p n 'set -ga @log N%%' ; set -ga @log H"
+? 0
+$ bind-key -n F12 'set -ga @log K'
+? 0
+client 80x25 attach -t main
+keys Escape [15~
+$ show -gv @log
+
+? 0
+keys x Enter
+$ show -gv @log
+PxA
+? 0
+$ set -g @log ''
+? 0
+keys Escape [17~
+$ show -gv @log
+
+? 0
+keys 1
+$ show -gv @log
+BM
+? 0
+$ set -g @log ''
+? 0
+keys Escape [18~
+$ show -gv @log
+
+? 0
+$ run-shell 'sleep 1.5'
+? 0
+$ show -gv @log
+C
+? 0
+$ set -g @log ''
+? 0
+keys Escape [19~
+$ show -gv @log
+
+? 0
+keys y
+$ show -gv @log
+YD
+? 0
+$ set -g @log ''
+? 0
+keys Escape [20~
+$ show -gv @log
+
+? 0
+keys Escape [A
+$ show -gv @log
+E
+? 0
+$ set -g @log ''
+? 0
+keys Escape [21~
+$ show -gv @log
+G
+? 0
+keys x Enter
+$ show -gv @log
+GQx
+? 0
+$ set -g @log ''
+? 0
+keys Escape [23~
+keys 3
+keys Escape [24~
+$ show -gv @log
+N3HK
+? 0

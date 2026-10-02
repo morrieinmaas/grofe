@@ -92,7 +92,7 @@ pub fn display_popup(
     // ponytail: without a command tmux starts its default-shell as a plain
     // shell; grofe starts the user's login shell, as for a pane.
     let spawn = spawn_for(state, session, pane, command_argv(c.command), cwd, env);
-    if popup::open(state, id, frame, spawn)? && ctx.client.is_none() {
+    if popup::open(state, id, frame, spawn)? {
         popup::wait_for_close(state, id);
     }
     Ok(String::new())

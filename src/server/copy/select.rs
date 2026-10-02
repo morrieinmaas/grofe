@@ -241,19 +241,21 @@ pub fn drag_update(mode: &mut Mode, x: usize, y: usize) -> bool {
     mode.update_cursor(x, y);
     update_selection(mode);
     if old_cy != mode.cy || old_cx == mode.cx {
-        return drag_scroll_at(mode, y);
+        return drag_scroll_at(mode, y).0;
     }
     false
 }
 
 /// tmux's `window_copy_scroll_timer`: another line while the cursor is on
-/// the view's top or bottom row. Whether it scrolled.
-pub fn drag_scroll(mode: &mut Mode) -> bool {
+/// the view's top or bottom row. Whether it is there (the timer goes on),
+/// and whether anything moved (at the history's end nothing does).
+pub fn drag_scroll(mode: &mut Mode) -> (bool, bool) {
     drag_scroll_at(mode, mode.cy)
 }
 
-fn drag_scroll_at(mode: &mut Mode, y: usize) -> bool {
-    if y == 0 {
+fn drag_scroll_at(mode: &mut Mode, y: usize) -> (bool, bool) {
+    let before = (mode.cx, mode.cy, mode.oy, mode.sel_start, mode.sel_end);
+    let edge = if y == 0 {
         mode.cursor_up(true);
         true
     } else if y + 1 == mode.sy() {
@@ -261,7 +263,9 @@ fn drag_scroll_at(mode: &mut Mode, y: usize) -> bool {
         true
     } else {
         false
-    }
+    };
+    let moved = before != (mode.cx, mode.cy, mode.oy, mode.sel_start, mode.sel_end);
+    (edge, moved)
 }
 
 /// tmux's `window_copy_other_end`.
@@ -875,9 +879,10 @@ mod tests {
         start_drag(&mut m, 1, 1);
         assert!(drag_update(&mut m, 0, 0));
         assert_eq!(m.oy, 1);
-        assert!(drag_scroll(&mut m));
+        assert_eq!(drag_scroll(&mut m), (true, true));
         assert_eq!(m.oy, 2);
-        assert!(drag_scroll(&mut m), "at the history's top it stays on");
+        // At the history's top the timer goes on, but nothing moves.
+        assert_eq!(drag_scroll(&mut m), (true, false));
         x(&mut m, &["clear-selection"]);
         m.oy = 0;
         // A word selection, then a drag pressed inside that word.

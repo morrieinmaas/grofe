@@ -1054,6 +1054,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::menu::client_gone(state, id);
     crate::server::popup::client_gone(state, id);
     crate::server::tree::client_gone(state, id);
+    crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
     }
@@ -2108,6 +2109,17 @@ pub(crate) fn in_input_order(state: &mut State, id: ClientId, job: crate::server
     } else {
         job(state);
     }
+}
+
+/// Puts `input` back behind client `id`'s hold, if it has one: an overlay
+/// that took a key while the client was held and passes it on. Whether it
+/// was held.
+pub(crate) fn hold_behind(state: &mut State, id: ClientId, input: &Input) -> bool {
+    if !state.clients.get(&id).is_some_and(|c| c.holds > 0) {
+        return false;
+    }
+    hold_item(state, id, Held::Input(input.clone()));
+    true
 }
 
 /// Keeps `item` for held client `id`, unless the hold is full.

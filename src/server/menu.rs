@@ -511,10 +511,11 @@ pub fn open_panes(state: &mut State, id: ClientId) -> bool {
     true
 }
 
-/// A CLI caller (no `ctx.client`) waits for client `id`'s menu to close,
-/// as tmux's `display-menu`, `display-panes` and `confirm-before` do.
-pub fn wait_for_close(state: &mut State, ctx: &ClientCtx, id: ClientId) {
-    if ctx.client.is_none() && state.menus.is_open(id) {
+/// The caller waits for client `id`'s menu to close, as tmux's
+/// `display-menu` and `display-panes` do: a CLI request's reply, and a
+/// binding's later commands and its client's input (`tm_6/waits`).
+pub fn wait_for_close(state: &mut State, id: ClientId) {
+    if state.menus.is_open(id) {
         let reply = dispatch::defer_reply(state);
         state.menus.waiting.insert(id, reply);
     }
@@ -595,8 +596,21 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
         return Routed::Consumed;
     };
     match row.action {
+        // As tmux appends the item's command to the client's queue: behind
+        // the rest of the binding that waits for the menu (recorded: `BM`).
+        // A CLI caller's menu runs it now.
+        // ponytail: tmux 3.7b drops a CLI menu's command while the client
+        // waits on a prompt (recorded); grofe runs it.
         Action::Run(command) => match cmd::split_command_string(&command) {
-            Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, shown.dialect),
+            Ok(cmds) if !cmds.is_empty() && shown.ctx.client.is_none() => {
+                Routed::Command(cmds, shown.dialect)
+            }
+            Ok(cmds) if !cmds.is_empty() => {
+                let dialect = shown.dialect;
+                let run = move |state: &mut State| clients::run_binding(state, id, &cmds, dialect);
+                clients::in_input_order(state, id, Box::new(run));
+                Routed::Consumed
+            }
             Ok(_) => Routed::Consumed,
             Err(e) => {
                 clients::show_message(state, id, &e.to_string());

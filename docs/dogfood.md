@@ -9,11 +9,13 @@ from a list rather than from memory. Add entries at the bottom, newest last.
 - **Terminals:** Ghostty and WezTerm are the first-class outer terminals
   (spec D11). WezTerm speaks kitty keys only with
   `enable_kitty_keyboard = true` in its config.
-- **Copy mode: use shift-drag until M5.** grofe has no copy mode yet. With
-  `mouse` on, the outer terminal hands clicks and drags to grofe; hold Shift
-  while dragging to use the terminal's own selection and copy instead. The
-  wheel opens a read-only scrollback view (`q` or Escape leaves it); it is
-  not tmux's copy mode and cannot select.
+- **Copy mode** is tmux's since M5 (`docs/copy-mode.md`): the wheel enters
+  it, a drag selects and copies, `q` leaves. Shift-drag still uses the
+  outer terminal's own selection.
+- **A hung binding freezes its client.** As in tmux, a binding waits for its
+  `run-shell` (without `-b`), prompt, menu or popup, and so does all of
+  that client's input, prefix and `detach` included. See "Bindings wait" in
+  `docs/copy-mode.md` for the ways out.
 - **Where things are written** (`<state dir>` is `$XDG_STATE_HOME/grofe`,
   else `~/.local/state/grofe`; `<instance>` is the socket's instance name,
   `default` unless you used `-L` or `-S`):

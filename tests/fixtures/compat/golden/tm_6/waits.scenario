@@ -1,0 +1,51 @@
+# TM.6 review: a binding's command-prompt, display-menu, display-popup,
+# confirm-before and display-panes hold its later commands until they
+# close, as tmux 3.7b's client queue does; -b does not. A prompt's or
+# confirm's command runs before the rest (PxA, YD), a menu item's after
+# it (BM). A -N prompt's non-digit key answers it and then goes on behind
+# the binding's rest (N3HK). F5 to F12 are ESC [15~ to ESC [24~.
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+$ set -g @log ''
+$ bind-key -n F5 "command-prompt -p p 'set -ga @log P%%' ; set -ga @log A"
+$ bind-key -n F6 "display-menu -T t one 1 'set -ga @log M' ; set -ga @log B"
+$ bind-key -n F7 "display-popup -E 'sleep 0.8' ; set -ga @log C"
+$ bind-key -n F8 "confirm-before -p ok 'set -ga @log Y' ; set -ga @log D"
+$ bind-key -n F9 "display-panes ; set -ga @log E"
+$ bind-key -n F10 "command-prompt -b -p p 'set -ga @log Q%%' ; set -ga @log G"
+$ bind-key -n F11 "command-prompt -N -p n 'set -ga @log N%%' ; set -ga @log H"
+$ bind-key -n F12 'set -ga @log K'
+client 80x25 attach -t main
+keys Escape [15~
+$ show -gv @log
+keys x Enter
+$ show -gv @log
+$ set -g @log ''
+keys Escape [17~
+$ show -gv @log
+keys 1
+$ show -gv @log
+$ set -g @log ''
+keys Escape [18~
+$ show -gv @log
+$ run-shell 'sleep 1.5'
+$ show -gv @log
+$ set -g @log ''
+keys Escape [19~
+$ show -gv @log
+keys y
+$ show -gv @log
+$ set -g @log ''
+keys Escape [20~
+$ show -gv @log
+keys Escape [A
+$ show -gv @log
+$ set -g @log ''
+keys Escape [21~
+$ show -gv @log
+keys x Enter
+$ show -gv @log
+$ set -g @log ''
+keys Escape [23~
+keys 3
+keys Escape [24~
+$ show -gv @log

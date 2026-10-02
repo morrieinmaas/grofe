@@ -324,8 +324,9 @@ pub fn open(
     Ok(true)
 }
 
-/// A CLI caller (no `ctx.client`) of `display-popup` waits for client
-/// `id`'s popup to close, and gets its command's exit status.
+/// The caller of `display-popup` waits for client `id`'s popup to close:
+/// a CLI request gets its command's exit status, a binding's later
+/// commands and its client's input wait (`tm_6/waits`).
 pub fn wait_for_close(state: &mut State, id: ClientId) {
     if !state.popups.is_open(id) {
         return;

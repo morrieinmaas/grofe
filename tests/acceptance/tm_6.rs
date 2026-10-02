@@ -87,6 +87,8 @@ fn key_bytes(words: &[String]) -> Vec<u8> {
     for word in words {
         match word.as_str() {
             "Escape" => out.push(0x1b),
+            "Enter" => out.push(b'\r'),
+            "Space" => out.push(b' '),
             w => out.extend_from_slice(w.as_bytes()),
         }
     }
@@ -554,6 +556,22 @@ fn keys_in_copy_mode_from_the_wheel_follow_copy_mode_vi() {
     a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
     a.send(sgr(WHEEL_UP, 10, 5, false));
     a.wait_until("copy mode", WAIT, |t| indicator(t).is_some());
+    // Escape is copy-mode-vi's clear-selection now (the view closed on
+    // it): it clears a selection, stays in the mode and never reaches the
+    // pane.
+    a.send(" ");
+    wait_until(
+        || pane_var(&srv, "main", "#{selection_active}") == "1",
+        WAIT,
+    )
+    .expect("Space began a selection");
+    a.send("\x1b");
+    wait_until(
+        || pane_var(&srv, "main", "#{selection_active}") == "0",
+        WAIT,
+    )
+    .expect("Escape cleared it");
+    assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "1");
     a.send("x");
     a.send("q");
     a.wait_until("q left copy mode", WAIT, |t| indicator(t).is_none());
@@ -566,6 +584,7 @@ fn keys_in_copy_mode_from_the_wheel_follow_copy_mode_vi() {
         !pane.lines().any(|l| l.contains('q') || l.contains('x')),
         "a key reached the pane:\n{pane}"
     );
+    assert!(!pane.contains("^["), "Escape reached the pane:\n{pane}");
 }
 
 /// With the status line on top, the wheel enters copy mode in the pane
@@ -683,6 +702,86 @@ fn a_prompt_a_held_binding_opens_still_takes_the_keys() {
     a.send("x\r");
     wait_until(|| opt(&srv, "@p") == "x", WAIT).expect("the prompt got the keys");
     wait_until(|| opt(&srv, "@after") == "yes", WAIT).expect("then the rest ran");
+}
+
+/// As tmux 3.7b's queue (the `tm_6/waits` golden): a binding's
+/// `command-prompt`, `display-menu`, `display-popup`, `confirm-before`
+/// and `display-panes` hold its later commands until they close; a
+/// prompt's command runs before them, a menu item's after.
+#[test]
+fn bindings_wait_for_prompts_menus_and_popups_as_the_golden() {
+    replay("waits");
+}
+
+/// A `-N` prompt answered by a key that is not a digit passes that key on
+/// behind the binding that opened it, as tmux queues it: copy mode's `5`
+/// then `k` moves five lines up.
+#[test]
+fn a_count_prompt_passes_its_key_on_in_order() {
+    let srv = fixture_server();
+    let mut a = attach(&srv, 80, 25);
+    a.wait_for("stray close");
+    srv.cmd(&["copy-mode", "-t", "main"]).expect("copy-mode");
+    let y = |srv: &TestServer| pane_var(srv, "main", "#{copy_cursor_y}");
+    let before: u32 = y(&srv).parse().expect("cursor y");
+    a.send("5k");
+    wait_until(|| y(&srv) == (before - 5).to_string(), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: cursor at {}", y(&srv)));
+}
+
+/// A client that goes in the middle of a drag held on the top row, where
+/// the drag timer scrolls every 50 ms, leaves no timer behind: the view
+/// stops where it was and the server goes on answering.
+#[test]
+fn a_client_gone_mid_drag_stops_its_drag() {
+    let srv = fixture_server();
+    let mut a = attach(&srv, 80, 25);
+    a.wait_for("stray close");
+    a.send(sgr(0, 3, 6, false));
+    a.send(sgr(DRAG, 4, 6, false));
+    a.send(sgr(DRAG, 4, 1, false));
+    let scrolled = || {
+        pane_var(&srv, "main", "#{scroll_position}")
+            .parse::<u32>()
+            .unwrap_or(0)
+    };
+    wait_until(|| scrolled() >= 2, WAIT).expect("the drag timer scrolled");
+    drop(a);
+    wait_until(
+        || srv.cmd(&["list-clients"]).is_ok_and(|l| l.is_empty()),
+        WAIT,
+    )
+    .expect("the client went");
+    // Ten timer periods with no scroll, measured from here.
+    let at = scrolled();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(scrolled(), at, "the drag timer outlived its client");
+    assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "1");
+}
+
+/// A `run-shell` that never exits freezes its client's input, prefix
+/// included, as in tmux; `detach-client` from the CLI still frees it (the
+/// way out `docs/copy-mode.md` names).
+#[test]
+fn a_client_held_by_a_hung_shell_can_be_detached_from_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let never = dir.path().join("never");
+    let srv = start("stty -echo; exec cat");
+    let f5 = format!("run-shell \"{}\"", until(&never));
+    srv.cmd(&["bind-key", "-n", "F5", &f5]).expect("bind F5");
+    let mut a = attach(&srv, 80, 24);
+    a.send("\x1b[15~");
+    a.send("\x02d");
+    srv.cmd(&["refresh-client"]).ok();
+    let name = srv
+        .cmd(&["list-clients", "-F", "#{client_name}"])
+        .expect("list-clients");
+    assert_eq!(name.lines().count(), 1, "prefix d detached a held client");
+    srv.cmd(&["detach-client", "-t", name.trim()])
+        .expect("detach-client");
+    a.wait_exit();
+    // Lets the shell end, so it outlives nothing.
+    fs::write(&never, "").expect("never");
 }
 
 // ---- The CLI and copy mode's prompts -----------------------------------------
