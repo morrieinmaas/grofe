@@ -71,8 +71,8 @@ struct Builtin {
 // option; grofe's server scope is global.
 //
 // M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
-// where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
-// external), `focus-events` on (tmux off), `pane-active-border-style`
+// where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
+// off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
 // synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
@@ -90,7 +90,6 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("history-limit", "2000"),
     ("escape-time", "10"),
     ("mouse", "off"),
-    ("set-clipboard", "external"),
     ("focus-events", "off"),
     ("extended-keys", "off"),
     ("renumber-windows", "off"),
@@ -433,7 +432,7 @@ const BUILTINS: &[Builtin] = &[
         name: "set-clipboard",
         kind: Kind::Choice(&["off", "external", "on"]),
         scope: OptionScope::Global,
-        default: "on",
+        default: "external",
     },
     Builtin {
         name: "focus-events",
@@ -3657,7 +3656,7 @@ mod tests {
             ("base-index", "0", "1"),
             ("pane-base-index", "0", "1"),
             ("mouse", "off", "on"),
-            ("set-clipboard", "external", "on"),
+            ("set-clipboard", "external", "external"),
             ("focus-events", "off", "on"),
             ("escape-time", "10", "25"),
             ("history-limit", "2000", "50000"),
@@ -3851,13 +3850,14 @@ mod tests {
     }
 
     /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
-    /// defaults, and tmux's value checks.
+    /// defaults (`set-clipboard` `external` as tmux's, an M5 ruling), and
+    /// tmux's value checks.
     #[test]
     fn m3_rows_have_grofe_defaults_and_tmux_scopes() {
         let o = Options::new(false);
         for (name, default, scope) in [
             ("mouse", "on", OptionScope::Session),
-            ("set-clipboard", "on", OptionScope::Global),
+            ("set-clipboard", "external", OptionScope::Global),
             ("focus-events", "on", OptionScope::Global),
             ("pane-border-style", "default", OptionScope::Window),
             ("pane-active-border-style", "fg=green", OptionScope::Window),

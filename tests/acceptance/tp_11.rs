@@ -5,8 +5,8 @@
 //!
 //! - Case 1: in copy mode, `V` then `y` pipes the line to the stub
 //!   clipboard command, and the client's outer pty gets the same text as
-//!   OSC 52 (`set-clipboard on`, the default here as in the owner's
-//!   config, which never sets it).
+//!   OSC 52 (`set-clipboard external`, the default as in tmux, which the
+//!   owner's config never changes; a copy goes out under `on` too).
 //! - Case 2: a drag with the mouse ends on `MouseDragEnd1Pane`, which
 //!   pipes the dragged text the same way.
 //! - Case 3: `prefix ]` pastes that copy into a pane that asked for

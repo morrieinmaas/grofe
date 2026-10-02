@@ -71,10 +71,13 @@ fn shell_quote(s: &str) -> String {
 // ---- OSC 52 ----
 
 /// Case 1: a pane's OSC 52 store reaches the outer stream while
-/// `set-clipboard` is `on` (the default, R14), and not while it is `off`.
+/// `set-clipboard` is `on`, and not while it is `off`. The default is
+/// `external`, as tmux's, which ignores a pane's store.
 #[test]
 fn osc52_stores_follow_set_clipboard() {
     let srv = start("while read l; do printf '\\033]52;c;aGVsbG8K\\007'; echo stored; done");
+    srv.cmd(&["set", "-g", "set-clipboard", "on"])
+        .expect("set-clipboard on");
     let mut a = attach(&srv);
     let store: &[u8] = b"\x1b]52;c;aGVsbG8K";
 
@@ -139,6 +142,8 @@ fn neovim_yank_to_plus_reaches_the_outer_terminal() {
         shell_quote(setup),
         shell_quote(&file.display().to_string())
     ));
+    srv.cmd(&["set", "-g", "set-clipboard", "on"])
+        .expect("set-clipboard on");
     let mut a = attach(&srv);
     a.wait_for("hello");
     let mark = a.output().len();
