@@ -65,6 +65,27 @@ use pane::{PaneEvent, PaneEventKind};
 /// these lines to prove one server per socket.
 pub const START_MARKER: &str = "grofe server starting";
 
+/// What a CLI request brings besides its argv (TM.7).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CliIo {
+    /// Its stdin, decoded; `None` when it sent none.
+    pub stdin: Option<Vec<u8>>,
+    pub umask: Option<u32>,
+}
+
+impl CliIo {
+    fn of(req: &Request) -> CliIo {
+        use base64::Engine as _;
+        CliIo {
+            stdin: req
+                .stdin
+                .as_deref()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
+            umask: req.umask,
+        }
+    }
+}
+
 /// A message into the server actor.
 #[derive(Debug)]
 pub enum ServerMsg {
@@ -197,6 +218,9 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
+    /// The running CLI request's stdin and umask, for `load-buffer -` and
+    /// the files `save-buffer` creates (TM.7); `None` outside one.
+    pub(crate) cli_io: Option<CliIo>,
     /// The log lines of the request now running, logged as its commands
     /// fire (`clients::log_fired`).
     pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
@@ -479,6 +503,7 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        cli_io: None,
         command_log: Default::default(),
         exit: false,
         exit_when_empty,
@@ -685,6 +710,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
+            state.cli_io = Some(CliIo::of(&req));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
@@ -697,6 +723,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 _ => Default::default(),
             };
             let result = dispatch::run_parsed(state, &ctx, parsed);
+            state.cli_io = None;
             state.command_log.clear();
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
@@ -1106,6 +1133,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        cli_io: None,
         command_log: Default::default(),
         exit: false,
         exit_when_empty: false,

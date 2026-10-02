@@ -13,13 +13,13 @@ use super::{
     Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer, DetachClient,
     DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane,
     KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys,
-    ListPanes, ListSessions, ListWindows, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient, RegisterSource,
-    Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
-    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
-    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
-    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    ListPanes, ListSessions, ListWindows, LoadBuffer, MenuEntry, MoveWindow, NewPane, NewSession,
+    NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient,
+    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
+    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
+    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -2617,6 +2617,39 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             no_extra_positionals(&flags, "show-buffer", 0)?;
             Ok(Command::ShowBuffer(ShowBuffer {
                 name: flags.values.get(&'b').cloned(),
+            }))
+        }
+        "load-buffer" => {
+            const SHORT: &[(char, FlagKind)] = &[
+                ('b', FlagKind::Value),
+                ('t', FlagKind::Value),
+                ('w', FlagKind::Bool),
+            ];
+            let flags = flags_for(rest, SHORT, "load-buffer")?;
+            no_extra_positionals(&flags, "load-buffer", 1)?;
+            Ok(Command::LoadBuffer(LoadBuffer {
+                name: flags.values.get(&'b').cloned(),
+                client: flags.values.get(&'t').cloned(),
+                clipboard: flags.present.contains(&'w'),
+                path: flags
+                    .positionals
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| ParseError::MissingArgument("load-buffer".to_string()))?,
+            }))
+        }
+        "save-buffer" => {
+            const SHORT: &[(char, FlagKind)] = &[('a', FlagKind::Bool), ('b', FlagKind::Value)];
+            let flags = flags_for(rest, SHORT, "save-buffer")?;
+            no_extra_positionals(&flags, "save-buffer", 1)?;
+            Ok(Command::SaveBuffer(SaveBuffer {
+                append: flags.present.contains(&'a'),
+                name: flags.values.get(&'b').cloned(),
+                path: flags
+                    .positionals
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| ParseError::MissingArgument("save-buffer".to_string()))?,
             }))
         }
         "list-buffers" => {

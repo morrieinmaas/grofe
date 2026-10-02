@@ -1,14 +1,21 @@
-//! The buffer commands (TM.4): `set-buffer`, `show-buffer`,
-//! `list-buffers`, `delete-buffer`, `paste-buffer` and `choose-buffer`,
+//! The buffer commands (TM.4, TM.7): `set-buffer`, `show-buffer`,
+//! `load-buffer`, `save-buffer`, `list-buffers`, `delete-buffer`,
+//! `paste-buffer` and `choose-buffer`,
 //! with tmux 3.7b's flags, output and error text (`cmd-set-buffer.c`,
 //! `cmd-save-buffer.c`, `cmd-list-buffers.c`, `cmd-paste-buffer.c`).
 
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+
 use crate::cmd::{
-    self, ChooseBuffer, DeleteBuffer, ListBuffers, PasteBuffer, Resolve, SetBuffer, ShowBuffer,
+    self, ChooseBuffer, DeleteBuffer, ListBuffers, LoadBuffer, PasteBuffer, Resolve, SaveBuffer,
+    SetBuffer, ShowBuffer,
 };
 use crate::protocol::ClientCtx;
 use crate::server::buffers::{self, BufferVars};
-use crate::server::{State, tree};
+use crate::server::{State, clients, passthrough, tree};
 
 /// `set-buffer`: a new automatic buffer, or with `-b` that named buffer;
 /// `-a` appends to the `-b` buffer; `-n` renames (`-b`'s buffer, else the
@@ -66,6 +73,110 @@ pub fn show_buffer(state: &mut State, _ctx: &ClientCtx, c: ShowBuffer) -> Result
         None => state.buffers.top().ok_or("no buffers")?,
     };
     Ok(String::from_utf8_lossy(&b.data).into_owned())
+}
+
+/// A path a command names, as the CLI meant it: relative to its cwd.
+fn cli_path(ctx: &ClientCtx, path: &str) -> PathBuf {
+    ctx.cwd.join(path)
+}
+
+/// tmux's text for a file it could not read or write: the system's
+/// message, then the path (`No such file or directory: /x/y`).
+fn file_error(e: &io::Error, path: &Path) -> String {
+    let what = match e.raw_os_error() {
+        Some(code) => nix::errno::Errno::from_raw(code).desc().to_string(),
+        None => e.to_string(),
+    };
+    format!("{what}: {}", path.display())
+}
+
+/// `load-buffer`: the file's data (`-`: the CLI's stdin) as a new
+/// automatic buffer, or the `-b` one; empty data makes none, as in tmux.
+/// `-w` also sends it to `-t`'s client, else the current one, if any.
+pub fn load_buffer(state: &mut State, ctx: &ClientCtx, c: LoadBuffer) -> Result<String, String> {
+    let data = if c.path == "-" {
+        // ponytail: a binding has no CLI stdin, so it loads nothing; tmux
+        // reads the server's own.
+        state
+            .cli_io
+            .as_ref()
+            .and_then(|io| io.stdin.clone())
+            .unwrap_or_default()
+    } else {
+        let path = cli_path(ctx, &c.path);
+        let mut data = Vec::new();
+        File::open(&path)
+            .and_then(|f| {
+                f.take(buffers::MAX_BUFFER_BYTES as u64 + 1)
+                    .read_to_end(&mut data)
+            })
+            .map_err(|e| file_error(&e, &path))?;
+        data
+    };
+    if data.is_empty() {
+        return Ok(String::new());
+    }
+    if data.len() > buffers::MAX_BUFFER_BYTES {
+        return Err(format!(
+            "buffer too large: more than {} bytes",
+            buffers::MAX_BUFFER_BYTES
+        ));
+    }
+    if c.clipboard {
+        let to = match c.client.as_deref() {
+            Some(name) => clients::client_by_name(state, name).ok(),
+            None => clients::current_client(state, ctx),
+        };
+        if let Some(id) = to {
+            passthrough::send_selection(state, id, &data);
+        }
+    }
+    let limit = buffers::limit(state);
+    match &c.name {
+        Some(name) => state.buffers.set(name, data),
+        None => state.buffers.add(data, limit),
+    }
+    .map(|()| String::new())
+}
+
+/// `save-buffer`: the `-b` buffer, else the newest automatic one, to the
+/// file (`-`: the CLI's stdout); `-a` appends. A new file is `0644` under
+/// the CLI's umask, as tmux's client creates it; an existing one keeps its
+/// mode.
+// ponytail: `-` prints the data as text, so bytes that are not UTF-8 come
+// out replaced; tmux writes them as they are.
+pub fn save_buffer(state: &mut State, ctx: &ClientCtx, c: SaveBuffer) -> Result<String, String> {
+    let b = match &c.name {
+        Some(name) => state
+            .buffers
+            .get(name)
+            .ok_or_else(|| format!("no buffer {name}"))?,
+        None => state.buffers.top().ok_or("no buffers")?,
+    };
+    if c.path == "-" {
+        return Ok(String::from_utf8_lossy(&b.data).into_owned());
+    }
+    let path = cli_path(ctx, &c.path);
+    let mode = 0o644 & !state.cli_io.as_ref().and_then(|io| io.umask).unwrap_or(0);
+    let new = std::fs::symlink_metadata(&path).is_err();
+    let mut options = OpenOptions::new();
+    options.create(true).mode(mode);
+    if c.append {
+        options.append(true);
+    } else {
+        options.write(true).truncate(true);
+    }
+    options
+        .open(&path)
+        .and_then(|mut f| {
+            // The server's own umask must not narrow the CLI's.
+            if new {
+                f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+            }
+            f.write_all(&b.data)
+        })
+        .map_err(|e| file_error(&e, &path))?;
+    Ok(String::new())
 }
 
 /// `list-buffers`: one line per buffer, newest first, in tmux's template

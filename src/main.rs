@@ -851,6 +851,8 @@ fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Repl
     let req = serde_json::to_string(&Request {
         id: 1,
         argv: argv.to_vec(),
+        stdin: cli_stdin(argv)?,
+        umask: Some(cli_umask()),
     })
     .map_err(|e| e.to_string())?;
     let mut writer = &stream;
@@ -858,6 +860,37 @@ fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Repl
         .write_all(format!("{hello}\n{req}\n").as_bytes())
         .map_err(|e| format!("sending request: {e}"))?;
     read_reply(&stream)
+}
+
+/// Most bytes of stdin a `load-buffer -` sends: its base64 has to fit one
+/// request line ([`grofe::protocol::MAX_MESSAGE_LEN`]).
+// ponytail: below a buffer's 32 MiB; tmux streams the client's stdin.
+const MAX_STDIN: usize = 12 << 20;
+
+/// This CLI's stdin, base64, when `argv` runs `load-buffer -`.
+fn cli_stdin(argv: &[String]) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    if !grofe::compat::loads_stdin(argv, dialect()) {
+        return Ok(None);
+    }
+    let mut data = Vec::new();
+    io::stdin()
+        .lock()
+        .take(MAX_STDIN as u64 + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("reading stdin: {e}"))?;
+    if data.len() > MAX_STDIN {
+        return Err(format!("stdin too large (limit {MAX_STDIN} bytes)"));
+    }
+    Ok(Some(base64::engine::general_purpose::STANDARD.encode(data)))
+}
+
+/// This process's umask (read by setting it and putting it back).
+fn cli_umask() -> u32 {
+    use nix::sys::stat::{Mode, umask};
+    let old = umask(Mode::from_bits_truncate(0o022));
+    umask(old);
+    old.bits() as u32
 }
 
 /// The control hello line for a request to `target`, or why it cannot be

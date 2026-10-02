@@ -258,10 +258,19 @@ pub fn decode_hello(line: &str) -> Result<Hello, ProtocolError> {
 
 /// A control-mode request (spec §4.6): one JSON line, `argv` shaped like
 /// the CLI's own `argv[1..]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,
     pub argv: Vec<String>,
+    /// The CLI's stdin, base64, for a `load-buffer -` in `argv` (TM.7):
+    /// tmux's client reads its stdin for the server. Off the wire when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<String>,
+    /// The CLI's umask, for a file `save-buffer` creates (TM.7): tmux's
+    /// client creates it, under its own umask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umask: Option<u32>,
 }
 
 /// A control-mode reply: a command's result, or a pushed subscription

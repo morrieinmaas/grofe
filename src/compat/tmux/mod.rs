@@ -409,6 +409,7 @@ impl Spec {
     /// it is one of the hidden ones.
     fn lists(&self, flag: char) -> bool {
         self.takes_value(flag)
+            || HIDDEN_BOOL_FLAGS.contains(&(self.name, flag))
             || self.usage.split("[-").skip(1).any(|part| {
                 part.split([']', ' '])
                     .next()
@@ -444,6 +445,10 @@ const HIDDEN: &[&str] = &["server-info (info) [-JT] [-t target-client]"];
 /// Value flags tmux 3.7b accepts but its usage leaves out (recorded:
 /// `select-pane -t x -P` fails `-P expects an argument`).
 const HIDDEN_VALUE_FLAGS: &[(&str, char)] = &[("select-pane", 'P')];
+
+/// Flags with no value tmux 3.7b accepts but its usage leaves out
+/// (recorded: `load-buffer -w path` loads and exits 0).
+const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[("load-buffer", 'w')];
 
 fn parse_spec(line: &'static str, hidden: bool) -> Spec {
     let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
@@ -1205,7 +1210,7 @@ fn start_server(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     Ok(Vec::new())
 }
 
-/// `resize-pane -M` and `copy-mode -M` outside a mouse event: nothing, as
+/// `resize-pane -M` outside a mouse event: nothing, as
 /// tmux 3.7b does (a stock mouse binding's drag is grofe's built-in mouse
 /// model's), noted in `compat-miss.log` as ignored so it is never silent.
 fn mouse_no_op(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
@@ -1242,7 +1247,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 const MARKED: &str = "marked panes (spec 4.5)";
 const LINKED: &str = "a window belongs to one session in grofe (spec 4.5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
-const COPY: &str = "copy mode and buffers land in M5 (M36-R8)";
 
 const fn row(
     tmux_form: &'static str,
@@ -1284,25 +1288,6 @@ const fn unsupported(
         GrofeTarget::Unsupported(reason),
         flags,
         "",
-        "",
-    )
-}
-
-/// A form refused until a later milestone brings it: unlike an
-/// out-of-scope refusal it ranks as any row does, so that milestone's
-/// area row mapping the form takes it over.
-const fn later(
-    tmux_form: &'static str,
-    reason: &'static str,
-    flags: &'static [FlagMark],
-    milestone: &'static str,
-) -> Row {
-    row(
-        tmux_form,
-        MappingKind::Behaviour,
-        GrofeTarget::Unsupported(reason),
-        flags,
-        milestone,
         "",
     )
 }
@@ -1423,18 +1408,11 @@ fn core_rows() -> Vec<Row> {
             "",
             "fe_1/errors",
         ),
-        // tmux 3.7b accepts these with no mouse event and does nothing,
+        // tmux 3.7b accepts this with no mouse event and does nothing,
         // exit 0 (recorded); grofe's built-in mouse model does the drag.
+        // (`copy-mode -M` is TM.7's row, native since TM.6.)
         row(
             "resize-pane -M",
-            Behaviour,
-            Translate(mouse_no_op),
-            SEMANTIC,
-            "M3.6",
-            "fe_4/mouse-forms",
-        ),
-        row(
-            "copy-mode -M",
             Behaviour,
             Translate(mouse_no_op),
             SEMANTIC,
@@ -1446,17 +1424,6 @@ fn core_rows() -> Vec<Row> {
         unsupported("clock-mode", UNUSED, &[]),
         unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
-        // M5's copy mode and buffers (M36-R8).
-        later("send-keys -X", COPY, SEMANTIC, "M5"),
-        later("copy-mode", COPY, &[], "M5"),
-        later("set-buffer", COPY, &[], "M5"),
-        later("paste-buffer", COPY, &[], "M5"),
-        later("choose-buffer", COPY, &[], "M5"),
-        later("list-buffers", COPY, &[], "M5"),
-        later("show-buffer", COPY, &[], "M5"),
-        later("delete-buffer", COPY, &[], "M5"),
-        later("load-buffer", COPY, &[], "M5"),
-        later("save-buffer", COPY, &[], "M5"),
         // Front-end rows.
         row(
             "display-message -F",
@@ -2287,8 +2254,8 @@ mod tests {
         );
         let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
         assert!(err.contains("not supported"), "{err}");
-        let err = one(&["load-buffer", "-"]).unwrap_err().0;
-        assert!(err.starts_with("load-buffer: not supported"), "{err}");
+        let err = one(&["copy-mode", "-q"]).unwrap_err().0;
+        assert!(err.starts_with("copy-mode: not supported"), "{err}");
     }
 
     #[test]

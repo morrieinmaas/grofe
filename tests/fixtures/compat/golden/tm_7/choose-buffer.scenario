@@ -1,0 +1,16 @@
+# TM.7: choose-buffer through the front end, on an attached client:
+# prefix = opens it (choose-buffer -Z), d deletes the current buffer, Enter
+# pastes it into the pane (paste-buffer -p) and closes the chooser.
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+$ setb first
+$ setb second
+$ setb third
+client 80x25 attach -t main
+keys C-b =
+keys d
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+keys Enter
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ display -p -t main '#{pane_in_mode}'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main -S 0 -E 0

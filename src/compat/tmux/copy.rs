@@ -1,10 +1,8 @@
 //! Copy-mode and buffer rows (TM.7): `copy-mode` and its flags,
 //! `send-keys -X` with `-F` and `-N`, `command-prompt -T search`, and the
-//! buffer verbs.
+//! buffer verbs, `load-buffer` and `save-buffer` included.
 //!
-//! Rows only: the schema and the dispatcher are `mod.rs`'s, and the core
-//! rows there still hold M5's old refusals (`later(...)`), which these rows
-//! take over by coming first. Every verb here has a native verb of the same
+//! Rows only: the schema and the dispatcher are `mod.rs`'s. Every verb here has a native verb of the same
 //! name and flag letters (TM.1 to TM.6), so each row passes through, and
 //! the native commands answer as tmux 3.7b does (recorded, `golden/tm_7/`).
 //! TP.11's three rows (`send-keys -X`, `copy-mode`, `paste-buffer`, for
@@ -20,12 +18,14 @@ use super::{FlagMark, GrofeTarget, MappingKind, Row};
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 const SEMANTIC_2: &[FlagMark] = &[FlagMark::Semantic, FlagMark::Semantic];
 
-/// `copy-mode`'s flags with no meaning in grofe (docs/copy-mode.md, Out of
-/// scope): view mode, the scrollbar and the source pane.
-const OUT_OF_SCOPE: &str = "out of scope for copy mode (docs/copy-mode.md): \
-                            no scrollbar, view mode or source pane";
-/// The two buffer verbs M5's plan row leaves out.
-const FILES: &str = "buffers to and from files are not built (docs/copy-mode.md, Out of scope)";
+/// `copy-mode -d` (a page down) and `-q` (cancel the mode, and any other
+/// mode): tmux's stock rows use them only from the scrollbar and the pane
+/// menu, which are out of scope (docs/copy-mode.md), so they stay refused.
+const STOCK_ONLY: &str = "copy-mode -d and -q are used only by tmux's scrollbar and pane menu \
+                          rows, out of scope (docs/copy-mode.md)";
+/// `copy-mode -s` (copy another pane) and `-S` (a scrollbar drag).
+const OUT_OF_SCOPE: &str = "copy-mode -s and -S are out of scope (docs/copy-mode.md): \
+                            no source pane, no scrollbar";
 
 const fn pass(
     tmux_form: &'static str,
@@ -66,8 +66,8 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("copy-mode -e", "copy-mode", SEMANTIC, "tm_7/forms"),
         pass("copy-mode -H", "copy-mode", SEMANTIC, "tm_7/forms"),
         pass("copy-mode -M", "copy-mode", SEMANTIC, "tm_7/forms"),
-        refuse("copy-mode -d", OUT_OF_SCOPE, SEMANTIC),
-        refuse("copy-mode -q", OUT_OF_SCOPE, SEMANTIC),
+        refuse("copy-mode -d", STOCK_ONLY, SEMANTIC),
+        refuse("copy-mode -q", STOCK_ONLY, SEMANTIC),
         refuse("copy-mode -s", OUT_OF_SCOPE, SEMANTIC),
         refuse("copy-mode -S", OUT_OF_SCOPE, SEMANTIC),
         // Copy-mode commands (TM.1 to TM.5): `-F` expands a search's
@@ -88,9 +88,9 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("list-buffers", "list-buffers", &[], "tm_7/buffers"),
         pass("delete-buffer", "delete-buffer", &[], "tm_7/buffers"),
         pass("paste-buffer", "paste-buffer", &[], "tm_7/buffers"),
-        pass("choose-buffer", "choose-buffer", &[], ""),
-        refuse("load-buffer", FILES, &[]),
-        refuse("save-buffer", FILES, &[]),
+        pass("choose-buffer", "choose-buffer", &[], "tm_7/choose-buffer"),
+        pass("load-buffer", "load-buffer", &[], "tm_7/load-save"),
+        pass("save-buffer", "save-buffer", &[], "tm_7/load-save"),
     ]
 }
 
@@ -150,6 +150,8 @@ mod tests {
             &["deleteb", "-b", "a"],
             &["pasteb", "-p", "-r"],
             &["choose-buffer", "-Z"],
+            &["loadb", "-w", "-b", "x", "-t", "c", "-"],
+            &["saveb", "-a", "-b", "x", "out.txt"],
         ] {
             let got = one(words).unwrap_or_else(|e| panic!("{words:?}: {e}"));
             assert_eq!(got.len(), 1, "{words:?}");
@@ -167,8 +169,6 @@ mod tests {
             &["copy-mode", "-S"],
             &["copy-mode", "-s", "%1"],
             &["copy-mode", "-u", "-q"],
-            &["load-buffer", "-"],
-            &["save-buffer", "/dev/null"],
         ] {
             let err = one(words).unwrap_err();
             assert!(err.contains("not supported"), "{words:?}: {err}");

@@ -223,6 +223,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::HasSession(_)
                 | Command::CapturePane(_)
                 | Command::ShowBuffer(_)
+                | Command::SaveBuffer(_)
                 | Command::ListBuffers(_)
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
@@ -365,6 +366,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // M5: buffers (TM.4).
         Command::SetBuffer(c) => buffers::set_buffer(state, ctx, c),
         Command::ShowBuffer(c) => buffers::show_buffer(state, ctx, c),
+        Command::LoadBuffer(c) => buffers::load_buffer(state, ctx, c),
+        Command::SaveBuffer(c) => buffers::save_buffer(state, ctx, c),
         Command::ListBuffers(c) => buffers::list_buffers(state, ctx, c),
         Command::DeleteBuffer(c) => buffers::delete_buffer(state, ctx, c),
         Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),

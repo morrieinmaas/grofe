@@ -943,6 +943,26 @@ pub struct ShowBuffer {
     pub name: Option<String>,
 }
 
+/// `load-buffer [-w] [-b name] [-t target-client] path` (TM.7): `path`
+/// is the CLI's (`-` its stdin); `-w` also sends the data to the target
+/// client's clipboard.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LoadBuffer {
+    pub name: Option<String>,
+    pub client: Option<String>,
+    pub clipboard: bool,
+    pub path: String,
+}
+
+/// `save-buffer [-a] [-b name] path` (TM.7): `path` is the CLI's (`-` its
+/// stdout); `-a` appends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SaveBuffer {
+    pub append: bool,
+    pub name: Option<String>,
+    pub path: String,
+}
+
 /// `list-buffers [-F format]` (TM.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListBuffers {
@@ -1073,6 +1093,8 @@ pub enum Command {
     // M5: buffers (TM.4).
     SetBuffer(SetBuffer),
     ShowBuffer(ShowBuffer),
+    LoadBuffer(LoadBuffer),
+    SaveBuffer(SaveBuffer),
     ListBuffers(ListBuffers),
     DeleteBuffer(DeleteBuffer),
     PasteBuffer(PasteBuffer),

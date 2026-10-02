@@ -777,6 +777,15 @@ fn send_clipboard(state: &mut State, to: Vec<ClientId>, bytes: &[u8]) {
     }
 }
 
+/// `load-buffer -w` (TM.7): `data` to client `id`'s clipboard as OSC 52,
+/// as tmux's `tty_set_selection` sends it, with no `set-clipboard` check;
+/// past [`MAX_COPY_CLIP`] nothing is sent.
+pub fn send_selection(state: &mut State, id: ClientId, data: &[u8]) {
+    if !data.is_empty() && data.len() <= MAX_COPY_CLIP {
+        send_clipboard(state, vec![id], &osc52("", data));
+    }
+}
+
 /// A copy-mode command in `pane` made `copied` (TM.5): under
 /// `set-clipboard` `on` or `external`, each that goes to the clipboard (no
 /// `-C`, not empty, at most [`MAX_COPY_CLIP`]) is sent as OSC 52 to the

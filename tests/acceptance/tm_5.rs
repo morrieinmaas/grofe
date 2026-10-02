@@ -631,3 +631,81 @@ fn an_osc7_path_never_becomes_the_current_path() {
         .unwrap();
     assert!(!shown.trim_end().chars().any(char::is_control), "{shown:?}");
 }
+
+/// TM.7: `load-buffer -w` sends the data to the clipboard of `-t`'s
+/// client as OSC 52, as tmux's `tty_set_selection` does, whatever pane it
+/// shows, and still makes the buffer; another client gets nothing.
+#[test]
+fn load_buffer_w_sends_the_file_to_the_target_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("in.txt");
+    fs::write(&file, "loaded\n").unwrap();
+    let srv = start(TEXT);
+    new_session(&srv, "other", "exec sleep 100000");
+    let mut a = attach(&srv, "main");
+    let mut b = attach(&srv, "other");
+    let names = srv
+        .cmd(&["list-clients", "-F", "#{client_session} #{client_name}"])
+        .expect("list-clients");
+    let other = names
+        .lines()
+        .find_map(|l| l.strip_prefix("other "))
+        .expect("the other session's client")
+        .to_string();
+    srv.cmd(&[
+        "load-buffer",
+        "-w",
+        "-t",
+        &other,
+        &file.display().to_string(),
+    ])
+    .expect("load-buffer -w");
+    b.wait_for_output(&copy_osc52("loaded\n"), 0);
+    sleep(Duration::from_millis(300));
+    assert_eq!(count(a.output(), b"\x1b]52;"), 0);
+    assert_eq!(buffers(&srv), ["loaded\\n"]);
+}
+
+/// TM.7: natively too, `load-buffer -` reads the CLI's stdin and
+/// `save-buffer` creates its file `0644` under the CLI's umask, never
+/// the server's.
+#[test]
+fn load_buffer_reads_the_cli_s_stdin_and_save_buffer_its_umask() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().unwrap();
+    let srv = start(TEXT);
+    let mut cmd = srv.command();
+    cmd.args(["load-buffer", "-b", "in", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null());
+    let mut child = cmd.spawn().expect("spawn load-buffer");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"piped \xff bytes")
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(
+        srv.cmd(&["list-buffers", "-F", "#{buffer_name} #{buffer_size}"])
+            .unwrap(),
+        "in 13\n"
+    );
+    let out = dir.path().join("out.txt");
+    let mut cmd = srv.command();
+    cmd.args(["save-buffer", "-b", "in", &out.display().to_string()]);
+    // SAFETY: umask is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
+            Ok(())
+        });
+    }
+    assert!(common::run_bounded(cmd, CMD_TIMEOUT).status.success());
+    assert_eq!(fs::read(&out).unwrap(), b"piped \xff bytes");
+    let mode = fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}

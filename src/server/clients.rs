@@ -2410,7 +2410,7 @@ pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId>
         .map(|(id, _)| *id)
 }
 
-fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
+pub(crate) fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
     client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
 }
 

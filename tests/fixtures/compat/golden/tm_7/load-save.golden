@@ -1,0 +1,99 @@
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+? 0
+$ run-shell 'printf "file data\n" > "$HOME/in.txt"; mkdir "$HOME/sub"; printf "sub data" > "$HOME/sub/in.txt"; : > "$HOME/empty.txt"'
+? 0
+$ load-buffer in.txt
+? 0
+$ loadb -b sub sub/in.txt
+? 0
+$ list-buffers
+sub: 8 bytes: "sub data"
+buffer0: 10 bytes: "file data\n"
+? 0
+$ load-buffer missing.txt
+! No such file or directory: <TMPDIR>/home/missing.txt
+? 1
+$ load-buffer
+! command load-buffer: too few arguments (need at least 1)
+? 1
+$ load-buffer -w in.txt
+? 0
+$ load-buffer -t nope in.txt
+? 0
+$ load-buffer -w -t nope in.txt
+? 0
+$ load-buffer empty.txt
+? 0
+$ run-shell 'printf "from stdin" | tmux load-buffer -b in -'
+? 0
+$ run-shell 'printf "" | tmux load-buffer -'
+? 0
+$ list-buffers
+in: 10 bytes: "from stdin"
+buffer3: 10 bytes: "file data\n"
+buffer2: 10 bytes: "file data\n"
+buffer1: 10 bytes: "file data\n"
+sub: 8 bytes: "sub data"
+buffer0: 10 bytes: "file data\n"
+? 0
+$ save-buffer out.txt
+? 0
+$ save-buffer -b sub sub/out.txt
+? 0
+$ save-buffer -a -b in sub/out.txt
+? 0
+$ save-buffer -a -b in new.txt
+? 0
+$ run-shell 'printf old > "$HOME/pre.txt"; chmod 640 "$HOME/pre.txt"'
+? 0
+$ save-buffer -b sub pre.txt
+? 0
+$ run-shell 'cd "$HOME"; for f in out.txt sub/out.txt new.txt pre.txt; do ls -l $f | cut -c1-10; cat $f; echo; done'
+-rw-r--r--
+file data
+
+-rw-r--r--
+sub datafrom stdin
+-rw-r--r--
+from stdin
+-rw-r-----
+sub data
+? 0
+$ save-buffer -b in -
+from stdin
+? 0
+$ saveb -
+file data
+? 0
+$ save-buffer -b nope x.txt
+! no buffer nope
+? 1
+$ save-buffer nodir/x.txt
+! No such file or directory: <TMPDIR>/home/nodir/x.txt
+? 1
+$ save-buffer a b
+! command save-buffer: too many arguments (need at most 1)
+? 1
+$ run-shell 'chmod 000 "$HOME/pre.txt"'
+? 0
+$ save-buffer pre.txt
+! Permission denied: <TMPDIR>/home/pre.txt
+? 1
+$ load-buffer pre.txt
+! Permission denied: <TMPDIR>/home/pre.txt
+? 1
+$ delete-buffer -b in
+? 0
+$ delete-buffer -b sub
+? 0
+$ delete-buffer
+? 0
+$ delete-buffer
+? 0
+$ delete-buffer
+? 0
+$ delete-buffer
+? 0
+$ save-buffer out.txt
+! no buffers
+? 1

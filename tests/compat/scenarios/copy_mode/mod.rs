@@ -77,6 +77,12 @@ fn canopy_config() -> String {
     out.join("\n")
 }
 
+/// The `compat-miss.log` lines a scenario must leave: the front end logs
+/// every request it cannot translate, and these are the scenarios' own
+/// usage errors (`load-buffer` with no path, `save-buffer` with two),
+/// which tmux 3.7b refuses with the same text.
+const USAGE_ERRORS: &[(&str, &[&str])] = &[("tm_7/load-save", &["load-buffer", "save-buffer"])];
+
 /// The scenario at `golden/<rel>.scenario` on grofe: its normalized
 /// transcript, or why the run itself failed.
 fn run(rel: &str) -> Result<String, String> {
@@ -86,11 +92,21 @@ fn run(rel: &str) -> Result<String, String> {
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let cli = copy_cli(dir.path());
     let host = (socket_dirs(), canopy_config());
-    let got = exact_pids(replay(&cli, &steps)).normalized(&Normalizer::load());
+    // macOS's temp dirs sit behind the `/private` symlink, so a path the
+    // CLI reports from its own cwd (`load-buffer`'s errors) is the real one.
+    let got = exact_pids(replay(&cli, &steps))
+        .normalized(&Normalizer::load())
+        .replace("/private<TMPDIR>", "<TMPDIR>");
     tripwire(&cli)?;
+    let expected: &[&str] = USAGE_ERRORS
+        .iter()
+        .find(|(r, _)| *r == rel)
+        .map_or(&[], |(_, m)| m);
     let missed = misses(dir.path());
-    if !missed.is_empty() {
-        return Err(format!("{rel}: compat-miss.log is not empty: {missed:#?}"));
+    if missed != expected {
+        return Err(format!(
+            "{rel}: compat-miss.log holds {missed:#?}, not {expected:#?}"
+        ));
     }
     if host != (socket_dirs(), canopy_config()) {
         return Err(format!(
@@ -244,6 +260,19 @@ fn options_match_their_golden() {
 #[test]
 fn pane_path_matches_its_golden() {
     check("tm_7/pane-path");
+}
+
+/// `load-buffer` and `save-buffer`: files relative to the CLI's cwd,
+/// `-` its stdin and stdout, `-a`, `-b`, `-w`, `-t`, modes and errors.
+#[test]
+fn load_and_save_buffer_match_their_golden() {
+    check("tm_7/load-save");
+}
+
+/// `choose-buffer -Z` from prefix `=`: `d` deletes, Enter pastes.
+#[test]
+fn choose_buffer_matches_its_golden() {
+    check("tm_7/choose-buffer");
 }
 
 /// `#{bracket_paste_flag}`, which TP.11 found missing.

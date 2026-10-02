@@ -232,6 +232,7 @@ impl TestServer {
         let req = serde_json::to_string(&Request {
             id: 1,
             argv: argv.to_vec(),
+            ..Default::default()
         })
         .map_err(|e| e.to_string())?;
         writeln!(sub.writer, "{hello}\n{req}").map_err(|e| e.to_string())?;
@@ -255,7 +256,12 @@ impl TestServer {
             writer: stream,
         };
         let hello = encode_hello(&Hello::Control(self.ctx())).map_err(|e| e.to_string())?;
-        let req = serde_json::to_string(&Request { id: 1, argv }).map_err(|e| e.to_string())?;
+        let req = serde_json::to_string(&Request {
+            id: 1,
+            argv,
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())?;
         writeln!(sub.writer, "{hello}\n{req}").map_err(|e| e.to_string())?;
         loop {
             match sub.read_reply(CMD_TIMEOUT)? {
@@ -322,6 +328,7 @@ fn kill_server_over(socket: &Path, ctx: &ClientCtx) -> bool {
     let req = Request {
         id: 1,
         argv: vec!["kill-server".to_string()],
+        ..Default::default()
     };
     let Ok(req) = serde_json::to_string(&req) else {
         return false;

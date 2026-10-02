@@ -89,10 +89,6 @@ const SKIPPED: &[(&str, &str)] = &[
 pub const MISS_ALLOWED: &[(&str, &str)] = &[
     // Copy mode and buffers (M5): TM.7 maps every form but these.
     (
-        "load-buffer",
-        "buffers from files are not built (docs/copy-mode.md, Out of scope)",
-    ),
-    (
         "show-buffer -b",
         "the corpus line's `-b` has no value: tmux's own `-b expects an argument`",
     ),

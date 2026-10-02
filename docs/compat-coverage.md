@@ -197,9 +197,9 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   and `showw` through the front end's alias table (FE.1, M36-R10). The
   copy-mode and buffer verbs beyond the three the M5 row names (`copy-mode`
   and its flags, `send-keys -X`, `delete-buffer`, `list-buffers`,
-  `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all
-  but `load-buffer` and `copy-mode -d -q -s -S`, which it refuses
-  (`docs/copy-mode.md`).
+  `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all,
+  `load-buffer` included, and `save-buffer`, which the corpus does not
+  send, and refuses `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
 - **A hidden flag, not a rejected one:** opensessions' pane flash sends
   `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
   3.7b still takes it (recorded by FE.1): it selects the pane and sets the
@@ -376,7 +376,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `copy-mode -q` | 15 | 15 | cs15 | area:Buffers and copy | yes |  | container:list-keys |
 | `copy-mode -t[=]` | 3 | 3 | cs3 | oos:Mouse argv forms |  |  | container:list-keys |
 | `copy-mode -u` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
-| `delete-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `delete-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
 | `detach-client` | 3 | 3 | cs3 | cmd:M2 | yes |  | container:list-keys |
 | `detach-client -s` | 2 | 0 | sc2 | area:Sessions and clients | yes |  | plugin:tmux-claude-session-manager/scripts/list.sh, plugin:tmux-fzf/scripts/session.sh |
 | `display-menu -O -t[=] -T -x[M] -y[M]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
@@ -475,7 +475,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `next-window` | 5 | 5 | cj1 cs3 sc1 | cmd:M2 | yes |  | container:job, container:list-keys, plugin:tmux-sensible/sensible.tmux |
 | `next-window -a` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `paste-buffer` | 3 | 3 | cs3 | area:Buffers and copy | yes |  | container:list-keys |
-| `paste-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `paste-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
 | `paste-buffer -p` | 3 | 2 | cs2 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-yank/yank.tmux |
 | `previous-window` | 5 | 5 | cj1 cs3 sc1 | cmd:M2 | yes |  | container:job, container:list-keys, plugin:tmux-sensible/sensible.tmux |
 | `previous-window -a` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
@@ -541,7 +541,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `send-keys -t[=] -X` | 3 | 3 | cs3 | oos:Mouse argv forms |  |  | container:list-keys |
 | `send-prefix` | 3 | 3 | cs1 sc1 sf1 | cmd:M2 | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/keys.tsv, container:list-keys (+1) |
 | `set-buffer` | 10 | 9 | cs9 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-yank/scripts/copy_pane_pwd.sh |
-| `set-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `set-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
 | `set-environment -g` | 7 | 0 | cj1 sc2 sf4 | area:Hooks and environment | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, athome:home/dot_config/tmux/tmux.conf.tmpl, container:job (+2) |
 | `set-environment -g -u` | 6 | 0 | cj1 sc5 | area:Hooks and environment | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:opensessions/opensessions.tmux |
 | `set-environment -h` | 1 | 0 | sf1 | area:Hooks and environment | yes |  | plugin:tmux-which-key/plugin/init.tmux |
@@ -561,7 +561,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `set-option -t -u` | 4 | 0 | cj3 sc1 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
 | `set-window-option -g` | 6 | 0 | cj1 sc1 sf4 | area:Options by tmux name | **no** |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/00-core.conf, container:job (+1) |
 | `set-window-option -t` | 4 | 0 | cc1 sc3 | area:Options by tmux name | **no** |  | athome:home/dot_local/bin/executable_cockpit, container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `show-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `show-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
 | `show-environment -g` | 15 | 0 | cj6 cp1 sc8 | area:Hooks and environment | yes |  | container:job, container:pane, plugin:opensessions/apps/tui/scripts/sessionizer.sh (+4) |
 | `show-messages` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
 | `show-messages -J -T` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | athome:home/dot_local/bin/executable_theme, container:pane |

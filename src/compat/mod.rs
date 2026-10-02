@@ -178,6 +178,22 @@ pub fn prompt_dialect(state: &State, opener: Dialect, has_template: bool) -> Dia
     }
 }
 
+/// Whether a request's `argv` runs `load-buffer -` (in either dialect), so
+/// the CLI sends its stdin with it, as tmux's client reads its own stdin
+/// for the server (TM.7).
+pub fn loads_stdin(argv: &[String], dialect: Dialect) -> bool {
+    cmd::parse::split_argv(argv).iter().any(|words| {
+        let Some((verb, rest)) = words.split_first() else {
+            return false;
+        };
+        let verb = match dialect {
+            Dialect::Tmux => tmux::resolve(verb).map(|s| s.name).unwrap_or(""),
+            Dialect::Grofe => verb.as_str(),
+        };
+        verb == "load-buffer" && rest.last().is_some_and(|p| p == "-")
+    })
+}
+
 /// tmux 3.7b's refusal to attach from inside one of its own panes
 /// (recorded: exit 1).
 pub const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";
@@ -385,6 +401,23 @@ fn logged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI sends its stdin only for a `load-buffer -`, by any tmux
+    /// name, anywhere in a `;` chain; natively by its own name only.
+    #[test]
+    fn only_load_buffer_dash_reads_stdin() {
+        let a = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(loads_stdin(&a(&["loadb", "-b", "x", "-"]), Dialect::Tmux));
+        assert!(loads_stdin(
+            &a(&["ls", ";", "load-buffer", "-"]),
+            Dialect::Tmux
+        ));
+        assert!(loads_stdin(&a(&["load-buffer", "-"]), Dialect::Grofe));
+        assert!(!loads_stdin(&a(&["loadb", "-"]), Dialect::Grofe));
+        assert!(!loads_stdin(&a(&["load-buffer", "f.txt"]), Dialect::Tmux));
+        assert!(!loads_stdin(&a(&["save-buffer", "-"]), Dialect::Tmux));
+        assert!(!loads_stdin(&a(&["set-buffer", "-"]), Dialect::Tmux));
+    }
     use crate::cmd::{KillServer, ListSessions};
 
     fn argv(words: &[&str]) -> Vec<String> {

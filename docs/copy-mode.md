@@ -306,6 +306,20 @@ tmux bounds no buffer; grofe holds at most 32 MiB in one buffer and
 A copy past 32 MiB stops extracting there and fails with `selection too
 large`, shown on the status line, rather than storing part of it.
 
+`load-buffer` and `save-buffer` follow tmux 3.7b (recorded,
+`golden/tm_7/load-save`): a path is the CLI's, relative to its cwd, and
+`-` is the CLI's stdin or stdout; `-b` names the buffer, `save-buffer -a`
+appends, and `load-buffer -w` also sends the data to the clipboard of
+`-t`'s client (else the current one) as OSC 52, while a `-t` that names
+no client is ignored. Empty data makes no buffer. A file `save-buffer`
+creates is `0644` under the CLI's umask, as tmux's client creates it, and
+an existing file keeps its mode; errors are tmux's (`No such file or
+directory: <path>`). grofe's server does the reading and writing for the
+CLI, as the same user. Where grofe differs: a `load-buffer -` reads at
+most 12 MiB of stdin, the most one request carries; `save-buffer -`
+prints bytes that are not UTF-8 replaced; and from a binding `-` reads
+nothing, where tmux reads the server's own stdin.
+
 ## Copy targets
 
 `copy-pipe`, `copy-pipe-no-clear` and `copy-pipe-and-cancel`, and the
@@ -443,8 +457,11 @@ Run as `tmux`, grofe reads tmux's copy-mode and buffer forms through the
 rows in `src/compat/tmux/copy.rs` (TM.7): `copy-mode` with `-u`, `-e`, `-H`
 and `-M`, `send-keys -X` with `-F` and `-N`, `command-prompt -T`, and
 `set-buffer`, `show-buffer`, `list-buffers`, `delete-buffer`,
-`paste-buffer` and `choose-buffer`, each passed to the native command of
-the same name. The copy options keep their tmux names (`mode-keys`,
+`paste-buffer`, `choose-buffer`, `load-buffer` and `save-buffer`, each
+passed to the native command of the same name. `copy-mode -d` (a page
+down) and `-q` (leave every mode) are refused: tmux's stock rows use them
+only from the pane scrollbar and the pane menu, which grofe does not
+have. So are `-s` and `-S`. The copy options keep their tmux names (`mode-keys`,
 `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`,
 `buffer-limit`). A `copy-pipe*` string bound with `bind -T copy-mode-vi`
 keeps tmux's dialect and runs through the `send-keys -X` row, so
@@ -473,9 +490,6 @@ scenarios do not depend on.
   `-d`, `-q`, `-s`, `-S`,
   the scrollbar rows of the stock `root` table (grofe draws no pane
   scrollbar) and view mode.
-- **`load-buffer` and `save-buffer`**: M5's plan row names neither, so the
-  front end refuses both (`not supported`), as it does `copy-mode -d`,
-  `-q`, `-s` and `-S`.
 - **`-X` commands no row or plan task names**, such as the incremental
   search commands and `scroll-to-mouse`. TM.2 also routes `copy-line`,
   `rectangle-on`, `rectangle-off` and `stop-selection` as tmux does.

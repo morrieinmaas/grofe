@@ -1,0 +1,28 @@
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+? 0
+$ setb first
+? 0
+$ setb second
+? 0
+$ setb third
+? 0
+client 80x25 attach -t main
+keys C-b =
+keys d
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer1 second
+buffer0 first
+? 0
+keys Enter
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer1 second
+buffer0 first
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main -S 0 -E 0
+second
+? 0
