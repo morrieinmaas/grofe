@@ -214,53 +214,60 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
 
 ## Key parity
 
-`scripts/key-parity.sh` (plan M3.7, TP.9a) loads the owner's whole config
-with every plugin on real tmux 3.7b and on grofe, and compares `list-keys`
-per table, every table but `copy-mode` and `copy-mode-vi` (TP.9b, M5). It
-runs two grofe servers: `grofe-tmux`, grofe answering to the tmux name as
-it will from alias day, and `grofe`, the same native config with the
-server started under grofe's own name. A key that differs fails the script
-unless a row below names it. *Servers* says which grofe server the row is
-for. The classes:
+`scripts/key-parity.sh` (plan M3.7, TP.9a and TP.9b) loads the owner's
+whole config with every plugin on real tmux 3.7b and on grofe, and compares
+`list-keys` per table, every table either side has, `copy-mode` and
+`copy-mode-vi` included; tmux's `copy-mode-vi` must also be TM.0's 95-row
+golden. It runs two grofe servers: `grofe-tmux`, grofe answering to the
+tmux name as it will from alias day, and `grofe`, the same native config
+with the server started under grofe's own name. A key that differs fails
+the script unless a row below names it. *Servers* says which grofe server
+the row is for. A row whose key is `(all)` covers every key of its table
+that has no row of its own. The classes:
 
-- **deferred**: M5's copy mode and buffers. Reported, the difference excused.
 - **oos**: out of scope in the spec (§4.5). Reported, the difference excused.
 - **mouse**: a stock tmux mouse binding. grofe leaves it unbound, and its
-  built-in mouse model (TC.10, `src/server/mouse.rs`) does the job, or
-  nothing does, as the reason says.
+  built-in mouse model (TC.10 and TM.6, `src/server/mouse.rs`) does the
+  job, or nothing does, as the reason says. Where the model does the job,
+  the script's third part clicks, wheels or drags it on an attached client
+  and reads back what tmux did.
 - **native**: grofe binds the key in its own form on purpose.
-- **gap**: a known gap that is neither deferred nor out of scope. Reported,
-  not fixed here.
+- **gap**: a known gap outside grofe. Reported, not fixed here.
+
+No row is deferred: since TP.9b every key is compared, and M5's copy mode,
+buffers and mouse rows are checked like the rest.
 
 The table cannot go stale. A row fails the script when its key matches tmux
-anyway (whatever its class, so TP.9b sees a deferred row M5 has made
-match), when neither side binds its key, or when neither side has its
-table.
+anyway (whatever its class), when neither side binds its key, or when
+neither side has its table; an `(all)` row fails when no key of its table
+differs.
 
 Under the tmux name, grofe shows tmux's own stock binding for every stock
 key (`[ ] = PPage m` and the `#` buffer list included), so those
 `list-keys` rows match tmux there and the rows below name only `grofe`.
-Since TM.7 the copy-mode and buffer keys run under the tmux name too;
-`m` still fails with the front end's reason (out of scope). The deferred
-rows are TP.9b's to settle.
+`m` still fails with the front end's reason when pressed (out of scope).
+
+The third part presses `prefix [`, `PPage`, `=` and `]` and tmux-yank's
+`y` on an attached client, and sends the root mouse rows as SGR reports
+(`WheelUpPane` twice, a drag ending in tmux-yank's `MouseDragEnd1Pane`,
+`DoubleClick1Pane`, `TripleClick1Pane`, `MouseDown2Pane`). After each step
+it reads back the pane's mode and position, the newest buffer, what the
+clipboard stubs received and what was pasted, and each grofe server must
+read back what tmux did.
 
 | Table | Key | Class | Servers | Reason |
 |---|---|---|---|---|
-| `prefix` | `[` | deferred | grofe | `copy-mode`: TP.9b, M5 |
-| `prefix` | `]` | deferred | grofe | `paste-buffer -p`: TP.9b, M5 |
-| `prefix` | `=` | deferred | grofe | `choose-buffer -Z`: TP.9b, M5 |
-| `prefix` | `PPage` | deferred | grofe | `copy-mode -u`, tmux's spelling of PageUp: TP.9b, M5 |
 | `prefix` | `m` | oos | grofe | out of scope: marks unused by the owner's scripts (spec §4.5, marked panes) |
-| `root` | `WheelUpPane` | deferred | both | wheel into copy mode: TP.9b, M5. Until then the built-in model opens the read-only scrollback view |
-| `root` | `MouseDrag1Pane` | deferred | both | drag selection in copy mode: TP.9b, M5 |
-| `root` | `DoubleClick1Pane` | deferred | both | word selection in copy mode: TP.9b, M5 |
-| `root` | `TripleClick1Pane` | deferred | both | line selection in copy mode: TP.9b, M5 |
-| `root` | `MouseDrag1ScrollbarSlider` | deferred | both | a scrollbar drag in copy mode: TP.9b, M5; grofe draws no scrollbar |
+| `root` | `WheelUpPane` | mouse | both | built-in (TM.6): over a pane in no mode, not on the alternate screen and not asking for the mouse, `copy-mode -e`; otherwise the pane gets the wheel. Read back against tmux |
+| `root` | `MouseDrag1Pane` | mouse | both | built-in (TM.6): over such a pane, `copy-mode -M`, a selection from the press; the release runs `copy-mode-vi`'s `MouseDragEnd1Pane` (tmux-yank's copy). Read back against tmux |
+| `root` | `DoubleClick1Pane` | mouse | both | built-in (TM.6): `select-pane`, `copy-mode -H`, `select-word`, `run-shell -d 0.3`, `copy-pipe-and-cancel`. Read back against tmux |
+| `root` | `TripleClick1Pane` | mouse | both | built-in (TM.6): the same with `select-line`. Read back against tmux |
+| `root` | `MouseDrag1ScrollbarSlider` | mouse | both | never fires: grofe draws no pane scrollbar (copy-mode.md, out of scope) |
 | `root` | `MouseDown1Pane` | mouse | both | built-in: a press focuses the pane under the pointer and reaches it if it asked for the mouse |
 | `root` | `MouseDrag1Border` | mouse | both | built-in: the border under the pointer follows the drag until the release |
 | `root` | `WheelUpStatus` | mouse | both | built-in: the previous window |
 | `root` | `WheelDownStatus` | mouse | both | built-in: the next window |
-| `root` | `MouseDown2Pane` | mouse | both | built-in: focus, then the press reaches a pane that asked for the mouse; pasting a buffer is M5's |
+| `root` | `MouseDown2Pane` | mouse | both | built-in: focus, then `paste-buffer -p` over a pane in no mode that did not ask for the mouse; otherwise the press reaches the pane. Read back against tmux |
 | `root` | `MouseDown1Border` | mouse | both | `select-pane -M` clears the mark, which is out of scope (`m`); the built-in drag starts here |
 | `root` | `MouseDown3Pane` | mouse | both | no replacement: tmux's pane menu opens at `-x M -y M`, a mouse argv form (spec §4.5); the press reaches a pane that asked for the mouse |
 | `root` | `M-MouseDown3Pane` | mouse | both | no replacement: the same pane menu, at `-x M -y M` |
@@ -305,7 +312,28 @@ rows are TP.9b's to settle.
 | `prefix` | `*` | gap | grofe | a gap, not a choice: grofe's own default table leaves out tmux 3.7's stock `* new-pane`, though the verb exists (TC.6, built to fzf's recorded form). Under the tmux name the stock binding is there; what a bare `new-pane` does on grofe is not checked here |
 | `prefix` | `<` | oos | grofe | out of scope: tmux's window menu opens at `-x W -y W`, a mouse position form (spec §4.5, mouse argv forms), so grofe's own default table leaves it unbound |
 | `prefix` | `>` | oos | grofe | out of scope: tmux's pane menu opens at `-x P -y P`, but its items are mouse argv forms (`copy-mode -t=`, `send-keys -X -t =`, `#{mouse_word}`; spec §4.5), so grofe's own default table leaves it unbound |
-| `prefix` | `\#` | deferred | grofe | `list-buffers`: buffers are M5's (TP.9b) |
+| `copy-mode` | `(all)` | oos | both | the emacs table: `mode-keys` stays `vi` and grofe ships no emacs table (copy-mode.md, out of scope). tmux-yank's five rows there match |
+| `copy-mode-vi` | `C-h` | gap | both | vim-tmux-navigator's copy-mode-vi rows (`select-pane -L`, and `-D -U -R -l` below): canopy's `40-canopy-nav.toml` still defers them to M5, so grofe keeps the stock row. A canopy change, outside grofe |
+| `copy-mode-vi` | `C-j` | gap | both | the same (`select-pane -D`; grofe keeps the stock `copy-pipe-and-cancel`) |
+| `copy-mode-vi` | `C-k` | gap | both | the same (`select-pane -U`; unbound on grofe) |
+| `copy-mode-vi` | `C-l` | gap | both | the same (`select-pane -R`; unbound on grofe) |
+| `copy-mode-vi` | `C-\\` | gap | both | the same (`select-pane -l`; unbound on grofe) |
+| `copy-mode-vi` | `/` | native | grofe | grofe's own default table writes the prompt's template as a quoted string, not a `{ }` block: the same command. Under the tmux name it is printed as tmux prints it |
+| `copy-mode-vi` | `?` | native | grofe | the same |
+| `copy-mode-vi` | `:` | native | grofe | the same |
+| `copy-mode-vi` | `F` | native | grofe | the same |
+| `copy-mode-vi` | `T` | native | grofe | the same |
+| `copy-mode-vi` | `f` | native | grofe | the same |
+| `copy-mode-vi` | `t` | native | grofe | the same |
+| `copy-mode-vi` | `1` | native | grofe | the same |
+| `copy-mode-vi` | `2` | native | grofe | the same |
+| `copy-mode-vi` | `3` | native | grofe | the same |
+| `copy-mode-vi` | `4` | native | grofe | the same |
+| `copy-mode-vi` | `5` | native | grofe | the same |
+| `copy-mode-vi` | `6` | native | grofe | the same |
+| `copy-mode-vi` | `7` | native | grofe | the same |
+| `copy-mode-vi` | `8` | native | grofe | the same |
+| `copy-mode-vi` | `9` | native | grofe | the same |
 
 ## Coverage
 

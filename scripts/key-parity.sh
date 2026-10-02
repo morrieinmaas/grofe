@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# key-parity.sh: every key binding outside copy mode resolves on grofe as it
-# does on real tmux 3.7b, with the owner's whole config and every plugin
-# loaded (plan M3.7, TP.9a).
+# key-parity.sh: every key binding resolves on grofe as it does on real
+# tmux 3.7b, copy mode included, with the owner's whole config and every
+# plugin loaded (plan M3.7, TP.9a and TP.9b).
 #
 #   scripts/key-parity.sh [--keep <dir>] <canopy-checkout> <athome-checkout>
 #
@@ -10,9 +10,10 @@
 # installed where `canopy install` puts it):
 #
 #   tmux          real tmux 3.7b ($KEY_PARITY_TMUX, an absolute path) on
-#                 -L grofe-tp9a-tmux -f /dev/null, sourcing canopy's
+#                 -L grofe-tp9b-tmux -f /dev/null, sourcing canopy's
 #                 tmux.conf as canopy's installed stub does: its layers,
-#                 athome's user.conf, then the plugin loader.
+#                 athome's user.conf (whose TPM loads vim-tmux-navigator),
+#                 then the plugin loader.
 #   grofe-tmux    grofe answering to the tmux name, reading its native
 #                 config: athome's config.toml, canopy's grofe/conf.d
 #                 fragments, athome's user.toml, whose load-commands run
@@ -21,26 +22,32 @@
 #
 # Part 1, the tables. Each grofe's `list-keys -T <table>` is compared with
 # tmux's, line for line once the world's own paths are replaced, for every
-# table but copy-mode and copy-mode-vi (TP.9b, M5). A key bound on one side
-# only, or to another command, fails, unless docs/compat-coverage.md's "Key
-# parity" table names the table and key, for that grofe server, with a
-# class and a reason:
+# table either side has, and tmux's copy-mode-vi table must be TM.0's
+# golden. A key bound on one side only, or to another command, fails,
+# unless docs/compat-coverage.md's "Key parity" table names the table and
+# key (or `(all)`, every other key of the table), for that grofe server,
+# with a class and a reason:
 #
-#   deferred    M5's copy mode and buffers (TP.9b): reported, excused
 #   oos         out of scope in the spec: reported, excused
 #   mouse       a stock mouse binding, left to grofe's built-in mouse model
 #   native      grofe binds the key in its own form, by design
-#   gap         a known gap, neither deferred nor out of scope
+#   gap         a known gap outside grofe
 #
 # A row of any class fails when its key matches anyway, when neither side
 # binds its key, or when neither side has its table, so the table cannot go
-# stale (TP.9b sees each deferred row M5 makes match).
+# stale; an `(all)` row fails when no key of its table differs.
 #
-# Part 2, the daily bindings: prefix s K ? u g G P T W a A are pressed once
-# each, through a client attached on a pty, and what each one ran (its
-# script's or stub's argv, directory and popup size) must be what it ran on
-# tmux. The owner's own tools (tsess, gh-dash, pet-pick.sh and the rest)
-# are stubs that log a line, as are fzf and the claude command; every
+# Part 2, copy mode, buffers and the mouse, on a client attached on a pty:
+# prefix [ PPage = ] and tmux-yank's y are pressed, and the root wheel,
+# drag, double, triple and middle click rows are sent as SGR reports. After
+# each step the pane's mode and position, the newest buffer, what the
+# clipboard stubs got and what was pasted must read back as on tmux.
+#
+# Part 3, the daily bindings: prefix s K ? u g G P T W a A are pressed once
+# each, on the same client, and what each one ran (its script's or stub's
+# argv, directory and popup size) must be what it ran on tmux. The owner's
+# own tools (tsess, gh-dash, pet-pick.sh and the rest) are stubs that log a
+# line, as are fzf, the claude command and every clipboard command; every
 # plugin script runs unchanged.
 #
 # Every child runs under `env -i` with the world's variables only: none of
@@ -195,7 +202,19 @@ EOF
   done
   # user.conf's TPM lines find a TPM that loads nothing: canopy vendors the
   # plugins, and the clone it would otherwise run must not happen here.
+  # The one plugin athome still loads through TPM is vim-tmux-navigator,
+  # which canopy does not vendor. On tmux this TPM binds its keys as TC.0's
+  # container recorded them (TM.0's golden takes its copy-mode-vi rows from
+  # the same lines); on grofe canopy's 40-canopy-nav.toml stands in for it.
   printf '#!/bin/sh\nexit 0\n' >"$home/.config/tmux/plugins/tpm/tpm"
+  if [ "$1" = tmux ]; then
+    grep -E "^bind-key -T (root|copy-mode-vi) ('C-\\\\'|C-[hjkl]) " \
+      "$repo/tests/compat/corpus/container-stored.argv" >"$w/navigator.argv"
+    cat >"$home/.config/tmux/plugins/tpm/tpm" <<EOF
+#!/bin/sh
+while IFS= read -r line; do eval "tmux \$line"; done <"$w/navigator.argv"
+EOF
+  fi
   chmod +x "$home/.config/tmux/plugins/tpm/tpm"
   # The one athome script that changes a key table as it loads.
   cp "$dots/dot_config/tmux/executable_wk-keys-fix.sh" "$home/.config/tmux/wk-keys-fix.sh"
@@ -215,6 +234,16 @@ printf 'claude session=%s cwd=%s tty=%s\n' "\$(tmux display-message -p '#S')" "\
 sleep 1
 EOF
   chmod +x "$w/bin/claude"
+  # Every clipboard command a plugin or grofe could reach is a stub that
+  # logs what it was given, so nothing reaches the machine's clipboard.
+  for b in pbcopy pbpaste wl-copy wl-paste xclip xsel clip.exe; do
+    cat >"$w/bin/$b" <<EOF
+#!/bin/sh
+{ printf '%s:' "\${0##*/}"; cat; printf '\n'; } >>"$w/clip.log"
+EOF
+    chmod +x "$w/bin/$b"
+  done
+  : >"$w/clip.log"
   # fzf and fzf-tmux are the host's, so each plugin takes the path it takes
   # on this machine and its picker opens where it opens there. fzf first
   # logs its argv, the size of the terminal it runs in and its input; the
@@ -343,7 +372,6 @@ dump() {
   mkdir -p "$out"
   run_in "$w" "$sock" list-keys | awk '{ print ($2 == "-r") ? $4 : $3 }' | sort -u >"$out/tables"
   while IFS= read -r t; do
-    case "$t" in copy-mode | copy-mode-vi) continue ;; esac
     run_in "$w" "$sock" list-keys -T "$t" | normalize "$w" |
       awk '{ k = ($2 == "-r") ? 5 : 4; key = $k
              line = $0; sub("^bind-key +(-r +)?-T +[^ ]+ +[^ ]+ +", "", line)
@@ -362,7 +390,7 @@ reasons() {
     on && /^\| `/ {
       for (i = 2; i <= 6; i++) { gsub(/^ +| +$/, "", $i) }
       t = $2; k = $3; gsub(/^`|`$/, "", t); gsub(/^`|`$/, "", k)
-      if ($4 ~ /^(deferred|mouse|oos|native|gap)$/) print t "\t" k "\t" $4 "\t" $5 "\t" $6
+      if ($4 ~ /^(mouse|oos|native|gap)$/) print t "\t" k "\t" $4 "\t" $5 "\t" $6
     }' "$reasons_doc"
 }
 
@@ -372,7 +400,13 @@ compare() {
   while IFS= read -r t; do
     touch "$ref/$t" "$got/$t"
     awk -F'\t' -v t="$t" -v g="$g" '
-      FILENAME == ARGV[1] { if ($1 == t && ($4 == "both" || $4 == g)) { why[$2] = $3 ": " $5; class[$2] = $3 }; next }
+      FILENAME == ARGV[1] {
+        if ($1 != t || ($4 != "both" && $4 != g)) next
+        # A row for "(all)" excuses every key of the table without a row
+        # of its own; it is stale when no key of the table differs.
+        if ($2 == "(all)") { allwhy = $3 ": " $5; allclass = $3; next }
+        why[$2] = $3 ": " $5; class[$2] = $3; next
+      }
       FILENAME == ARGV[2] { want[$1] = $2; keys[$1] = 1; next }
       { have[$1] = $2; keys[$1] = 1 }
       END {
@@ -380,8 +414,8 @@ compare() {
           w = (k in want) ? want[k] : ""; h = (k in have) ? have[k] : ""
           c = (k in class) ? class[k] : ""
           if (w == h && c == "") { same++; continue }
-          # A row whose key matches is stale, whatever its class: so a
-          # deferred row M5 has made match fails TP.9b until it goes.
+          if (c == "" && allclass != "") { n[allclass]++; alln++; print "EXCUSED\t" k "\t" allwhy; continue }
+          # A row whose key matches is stale, whatever its class.
           if (w == h) { print "FAIL\t" k "\tmatches tmux, but the reasons table excuses it (" why[k] ")"; bad++; continue }
           if (c != "") { n[c]++; print "EXCUSED\t" k "\t" why[k]; continue }
           print "FAIL\t" k "\ttmux: " (w == "" ? "(unbound)" : w) " || grofe: " (h == "" ? "(unbound)" : h)
@@ -391,8 +425,11 @@ compare() {
         for (k in why) if (!(k in keys)) {
           print "FAIL\t" k "\tneither side binds it, but the reasons table names it (" why[k] ")"; bad++
         }
-        printf "SUMMARY\t%-14s %-11s %3d match, %d deferred, %d mouse, %d oos, %d native, %d gap, %d differ\n",
-          t, g, same, n["deferred"], n["mouse"], n["oos"], n["native"], n["gap"], bad
+        if (allclass != "" && alln == 0) {
+          print "FAIL\t(all)\tno key differs, but the reasons table excuses the table (" allwhy ")"; bad++
+        }
+        printf "SUMMARY\t%-14s %-11s %3d match, %d mouse, %d oos, %d native, %d gap, %d differ\n",
+          t, g, same, n["mouse"], n["oos"], n["native"], n["gap"], bad
       }' <(reasons) "$ref/$t" "$got/$t" | LC_ALL=C sort >"$tmp/out/$g.$t.result"
     while IFS="$(printf '\t')" read -r kind key rest; do
       case "$kind" in
@@ -401,7 +438,7 @@ compare() {
         SUMMARY) printf '%s %s\n' "$key" "$rest" >>"$tmp/out/summary" ;;
       esac
     done <"$tmp/out/$g.$t.result"
-  done < <(sort -u "$ref/tables" "$got/tables" | grep -vx -e copy-mode -e copy-mode-vi)
+  done < <(sort -u "$ref/tables" "$got/tables")
   # And a row for a table neither side has.
   while IFS="$(printf '\t')" read -r t key class on _; do
     case "$on" in both | "$g") ;; *) continue ;; esac
@@ -410,7 +447,7 @@ compare() {
   done < <(reasons)
 }
 
-# --- part 2: the daily bindings -------------------------------------------
+# --- the attached client, and part 3: the daily bindings --------------------
 
 daily_keys="s K ? u g G P T W a A"
 
@@ -488,32 +525,144 @@ daily() {
     "--bind 'start:execute-silent(echo picker \$FZF_COLUMNS x \$FZF_LINES >>$tmp/$w/daily.log)+abort'"
   : >"$tmp/out/$w.daily"
   attach "$w" "$sock" || return 0
+  # Copy mode first: a daily binding may leave a picker open on the client.
+  copy_checks "$w" "$sock"
   for key in $daily_keys; do
     press "$w" "$sock" "$key"
   done
   exec 9>&-
 }
 
+# --- part 2: copy mode, buffers and the mouse ---------------------------------
+
+# copy_checks <world> <socket>: on the attached client, in a window of its
+# own, each copy-mode and buffer key of M5 is pressed once (prefix [ PPage
+# = ], tmux-yank's y), and each root mouse row is clicked, wheeled or
+# dragged as an outer terminal reports it (SGR 1006). After each step the
+# pane's mode, position, newest buffer, what the clipboard stubs got and
+# whether a pasted text reached the pane are read back; every grofe server
+# must read back what tmux did.
+copy_checks() {
+  local w="$1" sock="$2" out="$tmp/out/$1.copy" pane row x y left top off pos lines
+  : >"$out"
+  pane="$(run_in "$w" "$sock" new-window -P -F '#{pane_id}' -n cm -c "$work" \
+    "for n in \$(seq 1 60); do printf 'line %02d alpha beta-%02d gamma\\n' \$n \$n; done; exec cat")"
+  for _ in $(seq 1 40); do
+    run_in "$w" "$sock" capture-pane -p -t "$pane" | grep -q '^line 60 ' && break
+    sleep 0.25
+  done
+  # Client cells of line 50's text: the pane's place, below a top status.
+  row="$(run_in "$w" "$sock" capture-pane -p -t "$pane" | grep -n '^line 50 ' | cut -d: -f1)"
+  left="$(run_in "$w" "$sock" display-message -p -t "$pane" '#{pane_left}')"
+  top="$(run_in "$w" "$sock" display-message -p -t "$pane" '#{pane_top}')"
+  pos="$(run_in "$w" "$sock" show-options -gv status-position)"
+  lines="$(run_in "$w" "$sock" show-options -gv status)"
+  case "$lines" in on) lines=1 ;; off) lines=0 ;; esac
+  off=0
+  [ "$pos" = top ] && off="$lines"
+  y=$((off + top + row))
+  x=$((left + 1))
+  printf 'layout row=%s left=%s top=%s status=%s/%s\n' "$row" "$left" "$top" "$pos" "$lines" >>"$out"
+
+  clip_seen=0
+  readout() {
+    local clip
+    clip="$(tail -n +"$((clip_seen + 1))" "$tmp/$w/clip.log")"
+    clip_seen="$(wc -l <"$tmp/$w/clip.log")"
+    {
+      printf '== %s\n' "$1"
+      run_in "$w" "$sock" display-message -p -t "$pane" \
+        'mode=#{pane_in_mode} #{pane_mode} pos=#{scroll_position} zoom=#{window_zoomed_flag}'
+      printf 'buffer=%s\n' "$(run_in "$w" "$sock" show-buffer 2>&1 | head -3)"
+      printf 'clipboard=%s\n' "$clip"
+      printf 'pasted=%s\n' "$(run_in "$w" "$sock" capture-pane -p -t "$pane" |
+        grep -oE 'tp9b-(middle|bracket)' | tr '\n' ' ')"
+    } >>"$out"
+  }
+  # keys <seconds> <bytes>: typed on the client, then a settle.
+  keys() {
+    printf '%b' "$2" >&9
+    sleep "$1"
+  }
+  # sgr <button> <col> <row> [m]: one SGR 1006 report at client cell col,
+  # row of line 50 (1-based), a press or motion, or with m a release.
+  sgr() { printf '\033[<%s;%s;%s%s' "$1" "$(($2 + x))" "$y" "${4:-M}"; }
+
+  readout start
+  keys 1 "${prefix_byte}["
+  readout 'prefix ['
+  keys 1 q
+  keys 1 "$prefix_byte\033[5~"
+  readout 'prefix PPage'
+  keys 1 q
+  # tmux-yank's y, after a selection of line 60's first word.
+  keys 1 "${prefix_byte}["
+  keys 1 'k0 e'
+  keys 1 y
+  readout 'copy-mode-vi y (tmux-yank)'
+  # WheelUpPane: the first tick enters copy mode, the next scrolls.
+  keys 1 "$(sgr 64 10 0)"
+  readout 'WheelUpPane'
+  keys 1 "$(sgr 64 10 0)"
+  readout 'WheelUpPane, again'
+  keys 1 q
+  # MouseDrag1Pane from "alpha" to the end of "beta-50", then the release
+  # (tmux-yank's MouseDragEnd1Pane).
+  keys 0.3 "$(sgr 0 8 0)"
+  keys 0.3 "$(sgr 32 10 0)"
+  keys 0.3 "$(sgr 32 20 0)"
+  keys 1.5 "$(sgr 0 20 0 m)"
+  readout 'MouseDrag1Pane, MouseDragEnd1Pane'
+  # DoubleClick1Pane and TripleClick1Pane on "gamma": two and three
+  # presses within 300 ms, then the copy after run-shell -d 0.3.
+  keys 2 "$(sgr 0 23 0)$(sgr 0 23 0 m)$(sgr 0 23 0)$(sgr 0 23 0 m)"
+  readout 'DoubleClick1Pane'
+  keys 2 "$(sgr 0 9 0)$(sgr 0 9 0 m)$(sgr 0 9 0)$(sgr 0 9 0 m)$(sgr 0 9 0)$(sgr 0 9 0 m)"
+  readout 'TripleClick1Pane'
+  # prefix = opens the buffer chooser zoomed; q closes it.
+  keys 1 "$prefix_byte="
+  readout 'prefix ='
+  keys 1 q
+  readout 'prefix =, q'
+  # MouseDown2Pane pastes the newest buffer; prefix ] does too.
+  run_in "$w" "$sock" set-buffer tp9b-middle
+  keys 1 "$(sgr 1 30 0)$(sgr 1 30 0 m)"
+  readout 'MouseDown2Pane'
+  run_in "$w" "$sock" set-buffer tp9b-bracket
+  keys 1 "$prefix_byte]"
+  readout 'prefix ]'
+  run_in "$w" "$sock" kill-window -t "$pane"
+}
+
 # --- run ---------------------------------------------------------------------
 
 world tmux "$tmux37"
 canopy_layers tmux
-start_tmux tmux grofe-tp9a-tmux
-wait_loaded tmux grofe-tp9a-tmux || true
-dump tmux grofe-tp9a-tmux
+start_tmux tmux grofe-tp9b-tmux
+wait_loaded tmux grofe-tp9b-tmux || true
+dump tmux grofe-tp9b-tmux
+# With every plugin loaded, tmux's copy-mode-vi table is TM.0's golden, row
+# for row, so the per-key comparison below covers exactly its 95 rows.
+golden="$repo/tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.txt"
+run_in tmux grofe-tp9b-tmux list-keys -T copy-mode-vi | normalize tmux >"$tmp/out/tmux.copy-mode-vi.raw"
+diff -u "$golden" "$tmp/out/tmux.copy-mode-vi.raw" >"$tmp/out/golden.diff" ||
+  fail "tmux's copy-mode-vi table is not TM.0's golden:
+$(cat "$tmp/out/golden.diff")"
+printf 'copy-mode-vi   tmux        %3d rows, TM.0 golden %d rows\n' \
+  "$(wc -l <"$tmp/out/tmux.copy-mode-vi.raw")" "$(wc -l <"$golden")" >"$tmp/out/summary"
 
 for g in grofe-tmux grofe; do
   world "$g" "$grofe"
   canopy_layers "$g"
-  start_grofe "$g" "grofe-tp9a-$g"
-  wait_loaded "$g" "grofe-tp9a-$g" || true
-  dump "$g" "grofe-tp9a-$g"
+  start_grofe "$g" "grofe-tp9b-$g"
+  wait_loaded "$g" "grofe-tp9b-$g" || true
+  dump "$g" "grofe-tp9b-$g"
   compare "$g"
 done
 
 : >"$tmp/out/daily.summary"
 for w in tmux grofe-tmux grofe; do
-  sock="grofe-tp9a-$w"
+  sock="grofe-tp9b-$w"
   daily "$w" "$sock"
 done
 for g in grofe-tmux grofe; do
@@ -532,12 +681,33 @@ for g in grofe-tmux grofe; do
   done
 done
 
+: >"$tmp/out/copy.summary"
+for g in grofe-tmux grofe; do
+  while IFS= read -r step; do
+    want="$(awk -v k="$step" '$0 == k { on = 1; next } /^== / { on = 0 } on' "$tmp/out/tmux.copy")"
+    have="$(awk -v k="$step" '$0 == k { on = 1; next } /^== / { on = 0 } on' "$tmp/out/$g.copy")"
+    if [ "$want" != "$have" ]; then
+      fail "copy $g ${step#== }:
+    tmux:
+$(printf '%s\n' "$want" | sed 's/^/      /')
+    grofe:
+$(printf '%s\n' "${have:-(nothing)}" | sed 's/^/      /')"
+    else
+      printf '%s %s: %s\n' "$g" "${step#== }" "$(printf '%s' "$want" | head -1)" >>"$tmp/out/copy.summary"
+    fi
+  done < <(grep '^== ' "$tmp/out/tmux.copy")
+  [ "$(head -1 "$tmp/out/tmux.copy")" = "$(head -1 "$tmp/out/$g.copy")" ] ||
+    fail "copy $g: the pane's layout differs: $(head -1 "$tmp/out/$g.copy")"
+done
+
 echo "== tables"
 cat "$tmp/out/summary"
 echo "== excused"
 cat "$tmp/out/excused" 2>/dev/null || true
 echo "== daily bindings, as on tmux"
 cat "$tmp/out/daily.summary"
+echo "== copy mode, buffers and the mouse, as on tmux"
+cat "$tmp/out/copy.summary"
 if [ "$status" -eq 0 ]; then
   echo "key-parity: ok"
 fi

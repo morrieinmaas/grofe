@@ -102,3 +102,42 @@ you have used the key yourself.
 - grofe: built from TP.9a's branch
 - What the script cannot see: how a popup looks (its border and title) and
   what you do inside it. Those are yours to judge when you tick a row.
+
+### 2026-10-02 Copy mode, buffers and the mouse, checked by script (TP.9b)
+
+The owner ruled that these checks run as a script, not by hand.
+`scripts/key-parity.sh` now compares every key table, `copy-mode-vi`
+included, and tmux's `copy-mode-vi` must be TM.0's 95-row golden. On the
+same attached client as the daily bindings, it then presses the copy-mode
+and buffer keys and sends the mouse as the outer terminal would (SGR
+reports). It runs on real tmux 3.7b and on both grofe servers, one under the
+tmux name and one under grofe's own. A step passes when grofe reads back
+what tmux did: the pane's mode and scroll position, the newest buffer, what
+the clipboard command got and what was pasted into the pane. Every
+clipboard command (`pbcopy`, `wl-copy`, `xclip` and the rest) is a stub
+that logs its input, so the machine's clipboard is never touched. Tick the
+last column once you have done it yourself.
+
+| What | What it does | Script (grofe under the tmux name, and under its own) | You |
+|---|---|---|---|
+| `prefix [` | copy mode at the bottom | [x] same as tmux | [ ] |
+| `prefix PageUp` | copy mode, a page up | [x] same as tmux | [ ] |
+| `Space`, `e`, `y` in copy mode | tmux-yank copies the word to the clipboard and a buffer | [x] same as tmux | [ ] |
+| wheel up, twice | copy mode, then 5 lines up | [x] same as tmux | [ ] |
+| drag, release | selects, and tmux-yank copies on release | [x] same as tmux | [ ] |
+| double click | copies the word to a buffer | [x] same as tmux | [ ] |
+| triple click | copies the line to a buffer | [x] same as tmux | [ ] |
+| `prefix =`, `q` | the buffer chooser (`buffer-mode`), then closed | [x] same as tmux | [ ] |
+| middle click | pastes the newest buffer | [x] same as tmux | [ ] |
+| `prefix ]` | pastes the newest buffer | [x] same as tmux | [ ] |
+
+- grofe: built from TP.9b's branch
+- Fixed on the way, each with a test: a middle click now pastes (it only
+  focused the pane), and `#{pane_in_mode}` and `#{pane_mode}` now see an open
+  chooser (they read 0 and empty).
+- Known gap, not grofe's: in copy mode `C-h C-j C-k C-l C-\` keep tmux's
+  stock meaning (or none), because canopy's navigator port still defers
+  vim-tmux-navigator's copy-mode rows.
+- What the script cannot see: how the selection and the indicator look,
+  and the 0.3 s highlight after a double or triple click. Those are yours
+  to judge when you tick a row.
