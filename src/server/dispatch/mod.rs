@@ -181,6 +181,7 @@ pub(crate) fn run_commands(
                     ctx: ctx.clone(),
                     cmds: rest,
                     keep_going: false,
+                    depth: options::source_depth(),
                 });
             }
             break;

@@ -208,6 +208,29 @@ fn nested_files_stop_at_tmux_s_limit() {
     assert_eq!(opt(&srv, "@ok"), "yes");
 }
 
+/// A `run-shell` hold does not reset the nesting: the lines after it run
+/// at the depth of the file they are in, so a file that runs a shell and
+/// then sources itself still stops at tmux's limit, within the bound.
+#[test]
+fn nesting_survives_a_run_shell_hold() {
+    let srv = server();
+    let home = srv.home.display().to_string();
+    let me = write(
+        &srv,
+        "held-self.conf",
+        &format!("set -ga @n x\nrun-shell true\nsource-file {home}/held-self.conf\n"),
+    );
+    let out = tmux_run(&srv, &["source-file", &me]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(out.stderr.trim_end(), "too many nested files");
+    assert_eq!(opt(&srv, "@n"), "x".repeat(50));
+    assert!(srv.cmd(&["list-sessions"]).is_ok(), "the server is up");
+    // The depth unwound: a later, shallow source still works.
+    let ok = write(&srv, "ok2.conf", "set -g @ok2 yes\n");
+    assert_eq!(tmux(&srv, &["source-file", &ok]), Ok(String::new()));
+    assert_eq!(opt(&srv, "@ok2"), "yes");
+}
+
 /// An error on a line before a `run-shell` hold, and one after it, are
 /// kept: the lines after each still run, and the request fails with both
 /// at the end. When only a line before the hold failed, tmux 3.7b prints

@@ -149,11 +149,13 @@ pub(crate) struct Held {
 
 /// One held command sequence: its context, its commands, and whether an
 /// error in it lets the frames after it run (a sourced file's line, as
-/// tmux runs a file's next line), else stops them.
+/// tmux runs a file's next line), else stops them, and the source-file
+/// depth it was held at, which it runs under again.
 pub(crate) struct HeldFrame {
     pub ctx: ClientCtx,
     pub cmds: Vec<Command>,
     pub keep_going: bool,
+    pub depth: u32,
 }
 
 type Answer = oneshot::Sender<Result<String, Failure>>;
@@ -234,7 +236,10 @@ fn resume(
     // one comes back here rather than holding on its own.
     hooks::enter(state);
     while let Some(frame) = frames.pop_front() {
-        match dispatch::run_commands(state, &frame.ctx, frame.cmds) {
+        let ran = dispatch::options::with_source_depth(frame.depth, || {
+            dispatch::run_commands(state, &frame.ctx, frame.cmds)
+        });
+        match ran {
             Ok(text) => more.push_str(&text),
             Err(e) if frame.keep_going => {
                 more.push_str(&std::mem::take(&mut state.failed_out));
