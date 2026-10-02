@@ -249,7 +249,7 @@ tmux 3.7b's own quirks are kept, because the goldens show them
 
 tmux compiles the pattern with POSIX `regcomp` (extended syntax); the golden
 recorder runs on Debian, so the goldens show glibc's dialect in `C.UTF-8`.
-grofe reads the pattern as glibc does and runs it with the `regex` crate,
+grofe reads the pattern as glibc does and runs it with `regex-automata`,
 taking the longest match at the leftmost position as POSIX does (`d(e|ee)`
 matches all of `dee`). These behave as in tmux, checked by the `tm_3/dialect`,
 `tm_3/differs` and `tm_3/unicode` goldens:
@@ -299,7 +299,9 @@ name, or renaming it, makes it a named buffer, which `buffer-limit` never
 drops and which commands with no `-b` skip. `paste-buffer` sanitizes
 control characters as tmux does (`^X`), unless `-S` is given, so buffer
 data cannot end a `-p` bracketed paste early. A copy (TM.2, TM.5) adds an
-automatic buffer.
+automatic buffer. A buffer name with a control character is refused, as
+in tmux; grofe also refuses the C1 controls (U+0080 to U+009F), which tmux
+accepts, so a name `list-buffers` prints cannot start an escape sequence.
 
 tmux bounds no buffer; grofe holds at most 32 MiB in one buffer and
 128 MiB in all, which a copy of a whole 100 000-line scrollback fits.
@@ -319,6 +321,13 @@ CLI, as the same user. Where grofe differs: a `load-buffer -` reads at
 most 12 MiB of stdin, the most one request carries; `save-buffer -`
 prints bytes that are not UTF-8 replaced; and from a binding `-` reads
 nothing, where tmux reads the server's own stdin.
+
+The file is read or written off the server's main loop, so a path that
+blocks holds only the request that named it. `load-buffer` from a FIFO
+waits for its writer, as tmux's CLI does; `save-buffer` opens without
+blocking, so a FIFO with no reader fails at once (`No such device or
+address`), as tmux's does. grofe gives up on either after 30 s, which tmux
+never does.
 
 ## Copy targets
 

@@ -83,9 +83,11 @@ fn now() -> u64 {
 }
 
 /// tmux 3.7b's check on a name a buffer is given (`-b`, `-n`): no control
-/// character (below 0x20, or DEL); grofe also bounds its length.
+/// character (below 0x20, or DEL). grofe also refuses the C1 controls
+/// (U+0080 to U+009F), which tmux lets through and a terminal can read as
+/// CSI or OSC when `list-buffers` prints the name, and bounds its length.
 fn check_name(name: &str) -> Result<(), String> {
-    if name.bytes().any(|b| b < 0x20 || b == 0x7f) {
+    if name.chars().any(char::is_control) {
         return Err(format!("invalid buffer name: {name}"));
     }
     if name.len() > MAX_NAME_BYTES {
@@ -497,18 +499,20 @@ mod tests {
     }
 
     /// Recorded on tmux 3.7b: a control character (ESC, tab, DEL, LF) in
-    /// a new name is refused, for a write and a rename; UTF-8, C1 and
-    /// spaces are fine.
+    /// a new name is refused, for a write and a rename; UTF-8 and spaces
+    /// are fine. grofe also refuses C1, which tmux accepts.
     #[test]
     fn names_with_control_characters_are_refused() {
         let mut b = Buffers::default();
-        for name in ["a\x1bb", "a\tb", "a\x7fb", "a\nb", "a\x01"] {
+        for name in [
+            "a\x1bb", "a\tb", "a\x7fb", "a\nb", "a\x01", "a\u{9b}b", "\u{80}", "\u{9f}",
+        ] {
             assert_eq!(
                 b.set(name, b"x".to_vec()),
                 Err(format!("invalid buffer name: {name}"))
             );
         }
-        for name in ["a b", "é", "a\u{9b}b"] {
+        for name in ["a b", "é", "a\u{a0}b"] {
             b.set(name, b"x".to_vec()).unwrap();
         }
         assert_eq!(
