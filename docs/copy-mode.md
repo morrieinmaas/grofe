@@ -47,8 +47,9 @@ changes the command string but not the set of keys.
 
 Columns: the key as `list-keys` prints it; tmux's command; the `send-keys -X`
 command grofe implements for it (or none, when the row runs an ordinary
-command); the M5 task that builds it; the parity scenario TM.7 records under
-`tests/compat/scenarios/`. TM.1 builds motions, scrolling, cancel and counts;
+command); the M5 task that builds it; the parity scenario TM.7 recorded,
+`tests/fixtures/compat/golden/tm_7/<id>.scenario` (see "The tmux front
+end" below). TM.1 builds motions, scrolling, cancel and counts;
 TM.2 selection; TM.3 search and jumps; TM.5 copy targets; TM.6 the mouse.
 
 | Key | tmux command | grofe command | Task | Scenario |
@@ -410,8 +411,6 @@ Where grofe differs:
 
 - **A drag over a pane whose search is still running** does not move its
   selection until the search ends; tmux has no searches in flight.
-- **The tmux front end** still answers `copy-mode -M` with nothing, as
-  before TM.6; TM.7 maps the front end's copy-mode rows.
 
 ## Bindings wait
 
@@ -438,6 +437,34 @@ tmux. The ways out:
   run in order;
 - from another client, `kill-server` as a last resort.
 
+## The tmux front end
+
+Run as `tmux`, grofe reads tmux's copy-mode and buffer forms through the
+rows in `src/compat/tmux/copy.rs` (TM.7): `copy-mode` with `-u`, `-e`, `-H`
+and `-M`, `send-keys -X` with `-F` and `-N`, `command-prompt -T`, and
+`set-buffer`, `show-buffer`, `list-buffers`, `delete-buffer`,
+`paste-buffer` and `choose-buffer`, each passed to the native command of
+the same name. The copy options keep their tmux names (`mode-keys`,
+`set-clipboard`, `copy-command`, `word-separators`, `wrap-search`,
+`buffer-limit`). A `copy-pipe*` string bound with `bind -T copy-mode-vi`
+keeps tmux's dialect and runs through the `send-keys -X` row, so
+tmux-yank's rows bind and run unchanged. Under the tmux name, `list-keys
+-T copy-mode-vi` prints the stock rows as tmux does, prompt templates as
+`{ }` lists and mouse keys in tmux's order.
+
+The parity suite (`tests/compat/scenarios/copy_mode/`) holds one scenario
+per keymap row above, in `golden/tm_7/copy_mode/`, plus the front end's
+own forms, buffers, options, `#{pane_path}` and `#{bracket_paste_flag}`
+in `golden/tm_7/`. Each starts from TM.1's fixture with `copy-mode.conf`
+sourced, presses the row's key (with `send-keys`, or typed on an attached
+client for the prompts and the mouse) and reads back the cursor or the
+buffer. The goldens were recorded from tmux 3.7b in TC.0b's container,
+and grofe, reached through the `tmux` symlink, must match each byte for
+byte, with nothing in `compat-miss.log`. On the grofe side `pbcopy` and
+the other clipboard tools are stubs, so the suite never reaches the
+machine's clipboard; the container has none of them, which the
+scenarios do not depend on.
+
 ## Out of scope
 
 - **The emacs table** (`copy-mode`). `mode-keys` stays `vi`. yank also binds
@@ -446,6 +473,9 @@ tmux. The ways out:
   `-d`, `-q`, `-s`, `-S`,
   the scrollbar rows of the stock `root` table (grofe draws no pane
   scrollbar) and view mode.
+- **`load-buffer` and `save-buffer`**: M5's plan row names neither, so the
+  front end refuses both (`not supported`), as it does `copy-mode -d`,
+  `-q`, `-s` and `-S`.
 - **`-X` commands no row or plan task names**, such as the incremental
   search commands and `scroll-to-mouse`. TM.2 also routes `copy-line`,
   `rectangle-on`, `rectangle-off` and `stop-selection` as tmux does.

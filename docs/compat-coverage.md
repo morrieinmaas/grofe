@@ -197,7 +197,9 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   and `showw` through the front end's alias table (FE.1, M36-R10). The
   copy-mode and buffer verbs beyond the three the M5 row names (`copy-mode`
   and its flags, `send-keys -X`, `delete-buffer`, `list-buffers`,
-  `load-buffer`, `show-buffer`) belong to M5 (M36-R8).
+  `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all
+  but `load-buffer` and `copy-mode -d -q -s -S`, which it refuses
+  (`docs/copy-mode.md`).
 - **A hidden flag, not a rejected one:** opensessions' pane flash sends
   `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
   3.7b still takes it (recorded by FE.1): it selects the pane and sets the
@@ -236,10 +238,11 @@ match), when neither side binds its key, or when neither side has its
 table.
 
 Under the tmux name, grofe shows tmux's own stock binding for every stock
-key grofe cannot run yet (`[ ] = PPage m` and the `#` buffer list), so
-those `list-keys` rows match tmux there and the rows below name only
-`grofe`. Pressing one under the tmux name fails with the front end's
-reason (copy mode and buffers: M5; `m`: out of scope).
+key (`[ ] = PPage m` and the `#` buffer list included), so those
+`list-keys` rows match tmux there and the rows below name only `grofe`.
+Since TM.7 the copy-mode and buffer keys run under the tmux name too;
+`m` still fails with the front end's reason (out of scope). The deferred
+rows are TP.9b's to settle.
 
 | Table | Key | Class | Servers | Reason |
 |---|---|---|---|---|

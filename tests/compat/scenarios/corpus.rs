@@ -87,21 +87,15 @@ const SKIPPED: &[(&str, &str)] = &[
 /// stamp dropped), each with the row that marks it: a cosmetic flag the
 /// front end ignores, or a form its row refuses on purpose.
 pub const MISS_ALLOWED: &[(&str, &str)] = &[
-    // Copy mode and paste buffers are M5's (TM.1 to TM.7; M36-R8).
-    ("choose-buffer -Z", M5),
-    ("copy-mode", M5),
-    ("copy-mode -u", M5),
-    ("delete-buffer -b", M5),
-    ("list-buffers", M5),
-    ("load-buffer", M5),
-    ("paste-buffer -b", M5),
-    ("paste-buffer -p", M5),
-    ("send-keys -F -X", M5),
-    ("send-keys -X", M5),
-    ("send-keys -X -N", M5),
-    ("set-buffer", M5),
-    ("set-buffer -b", M5),
-    ("show-buffer -b", M5),
+    // Copy mode and buffers (M5): TM.7 maps every form but these.
+    (
+        "load-buffer",
+        "buffers from files are not built (docs/copy-mode.md, Out of scope)",
+    ),
+    (
+        "show-buffer -b",
+        "the corpus line's `-b` has no value: tmux's own `-b expects an argument`",
+    ),
     // tmux's stock mouse bindings, which grofe's built-in mouse model
     // replaces (spec 4.5 out of scope, "Mouse argv forms"; M36-R7).
     ("display-menu -O -T -t -x -y", MOUSE),
@@ -124,7 +118,6 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
     ),
 ];
 
-const M5: &str = "copy mode and buffers, M5 (M36-R8)";
 const MOUSE: &str = "tmux's stock mouse bindings (spec 4.5 out of scope, M36-R7)";
 const GROUPS: &str = "linked windows and session groups (spec 4.5 out of scope, M36-R9)";
 
