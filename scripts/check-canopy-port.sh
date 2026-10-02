@@ -178,13 +178,14 @@ store_plugin_paths() {
     tmux-fzf) echo main.sh scripts ;;
     tmux-fzf-url) echo fzf-url.sh ;;
     opensessions) echo package.json integrations/tmux-plugin apps/tui/scripts ;;
+    tmux-yank) echo scripts ;;
   esac
 }
 store_files() {
   (cd "$1" && {
     printf '%s\n' lib/env.sh lib/plugins.sh lib/adapter.sh lib/pane.sh lib/resume.sh plugins/VERSIONS
     find plugins/strategies -type f -name '*.sh'
-    for name in tmux-resurrect tmux-continuum tmux-fzf tmux-fzf-url opensessions; do
+    for name in tmux-resurrect tmux-continuum tmux-fzf tmux-fzf-url opensessions tmux-yank; do
       find "plugins/$name" -maxdepth 1 -type f \( -name '*.tmux' -o -name 'LICENSE*' -o -name '*-LICENSE' \)
       for rel in $(store_plugin_paths "$name"); do
         find "plugins/$name/$rel" -type f

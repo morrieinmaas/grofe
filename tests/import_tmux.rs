@@ -262,7 +262,8 @@ fn the_canopy_report_is_only_plugins_and_out_of_scope_items() {
 
 /// The dotfiles fixture's report: plugins and TPM and accounting notes,
 /// plus exactly these, none a gap TP.0 closes (an option grofe does not
-/// have, M5's copy mode twice, a `-q` source-file that matched no file).
+/// have, a `-q` source-file that matched no file). Its two `copy-mode-vi`
+/// rows convert since M5 (TP.11).
 #[test]
 fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
     let f = Fixture::new("dotfiles");

@@ -1,0 +1,6 @@
+--- calls
+pbcopy 
+--- clip
+"alpha line\nbravo"
+--- osc52
+;"alpha line\nbravo" BEL

@@ -7,7 +7,9 @@
 //! take over by coming first. Every verb here has a native verb of the same
 //! name and flag letters (TM.1 to TM.6), so each row passes through, and
 //! the native commands answer as tmux 3.7b does (recorded, `golden/tm_7/`).
-//! A `copy-pipe*` command string inside `bind -T copy-mode-vi` needs no
+//! TP.11's three rows (`send-keys -X`, `copy-mode`, `paste-buffer`, for
+//! tmux-yank) are part of this set. A `copy-pipe*` command string inside
+//! `bind -T copy-mode-vi` needs no
 //! row of its own: the binding keeps its dialect (spec §4.5) and runs
 //! through the `send-keys -X` row each time. The copy options
 //! (`mode-keys`, `set-clipboard`, `copy-command`, `word-separators`,
