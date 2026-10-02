@@ -2157,25 +2157,24 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         return;
     };
     c.holds = c.holds.saturating_sub(1);
-    if c.holds == 0 {
-        c.held_full = false;
+    if c.holds > 0 {
+        return;
     }
+    c.held_full = false;
+    c.held_bytes = 0;
+    let rest = std::mem::take(&mut c.held);
     let now = Instant::now();
-    loop {
-        let Some(c) = state.clients.get_mut(&id) else {
-            return;
-        };
-        if c.holds > 0 {
+    // Each item goes through `deliver` as if it came now: once one starts
+    // another hold, those behind it are held again in order, except that a
+    // prompt, menu or popup it opened takes the input behind it (`2` then
+    // `{` read in one go: copy mode's count prompt gets the `{`).
+    for item in rest {
+        if !state.clients.contains_key(&id) {
             return;
         }
-        let Some(item) = c.held.pop_front() else {
-            c.held_bytes = 0;
-            return;
-        };
-        c.held_bytes = c.held_bytes.saturating_sub(item.size());
         match item {
             Held::Input(input) => deliver(state, id, input, now),
-            Held::Run(job) => job(state),
+            Held::Run(job) => in_input_order(state, id, job),
         }
     }
 }
@@ -2858,6 +2857,40 @@ mod tests {
         assert_eq!(*ran.lock().unwrap(), vec![0], "ran after both keys");
         in_input_order(&mut state, id, job(&ran));
         assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
+    }
+
+    /// TM.1 (`keys_through_a_client`): a held key replayed on release that
+    /// opens a prompt holds the client again, and the keys held behind it
+    /// go to that prompt, as when they arrive after it opened. They were
+    /// left held behind the prompt, which waited for them: copy mode's `2`
+    /// then `{`, read in one go, lost the `{`.
+    #[tokio::test]
+    async fn held_keys_behind_a_replayed_prompt_go_to_it() {
+        let (mut state, id) = state_with_client();
+        crate::server::register_input_hook(&mut state, Arc::new(crate::server::prompt::PromptHook));
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("run")
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]);
+        let session = *state.model.sessions.keys().next().expect("a session");
+        state.clients.get_mut(&id).expect("client").session = session;
+        run(
+            &mut state,
+            &[
+                "bind-key",
+                "-n",
+                "a",
+                "command-prompt -I x { set -g @got '%%' }",
+            ],
+        );
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab\r", Instant::now());
+        assert_eq!(state.clients[&id].held.len(), 3, "all held");
+        release_input(&mut state, id);
+        assert_eq!(state.model.options.lookup("@got", &[]), Some("xb"));
+        assert!(!state.prompts.is_open(id));
     }
 
     /// tmux 3.7b (recorded): a binding keeps the alias expansion made when
