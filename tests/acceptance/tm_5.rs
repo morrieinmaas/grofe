@@ -601,8 +601,7 @@ fn an_expanded_command_cannot_become_a_flag() {
 /// `#{pane_current_path}` is the pane process's own cwd, as tmux 3.7b
 /// reads it, never the text an OSC 7 carried, so a reported path with a
 /// newline and braces cannot reach a `-c '#{pane_current_path}'` or a
-/// shell line. `#{pane_path}` keeps what OSC 7 reported, and a path with a
-/// control character is not taken at all.
+/// shell line. `#{pane_path}` keeps the text OSC 7 sent, never decoded.
 #[test]
 fn an_osc7_path_never_becomes_the_current_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -615,11 +614,17 @@ fn an_osc7_path_never_becomes_the_current_path() {
         srv.cmd(&["send-keys", "-t", "main", uri, "Enter"]).unwrap();
     };
     send("file://localhost/tmp/x{y}");
-    wait_display(&srv, "#{pane_path}", "/tmp/x{y}");
+    wait_display(&srv, "#{pane_path}", "file://localhost/tmp/x{y}");
     send("file://localhost/tmp/a%0A{b};touch%20x");
+    // As tmux 3.7b keeps it: the text, never decoded (TM.7).
+    wait_display(
+        &srv,
+        "#{pane_path}",
+        "file://localhost/tmp/a%0A{b};touch%20x",
+    );
     send("file://localhost/tmp/c%1Bd");
     send("file://localhost/tmp/done");
-    wait_display(&srv, "#{pane_path}", "/tmp/done");
+    wait_display(&srv, "#{pane_path}", "file://localhost/tmp/done");
     wait_display(&srv, "#{pane_current_path}", &real.display().to_string());
     let shown = srv
         .cmd(&["list-panes", "-F", "#{pane_path}|#{pane_current_path}"])

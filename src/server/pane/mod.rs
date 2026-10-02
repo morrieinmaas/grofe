@@ -72,8 +72,9 @@ pub enum PaneEventKind {
         param: String,
         data: Vec<u8>,
     },
-    /// Emitted from M3 (OSC 7 scanner).
-    Cwd(PathBuf),
+    /// What an OSC 7 reported, as `#{pane_path}` shows it (the scanner's
+    /// [`crate::server::passthrough`] `osc7_text`).
+    Path(String),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
@@ -319,8 +320,8 @@ pub struct PaneHandle {
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: Arc<Mutex<ProcSample>>,
-    /// The cwd the pane itself reported (OSC 7, T3.3).
-    reported_cwd: Mutex<Option<PathBuf>>,
+    /// What the pane itself reported with OSC 7 (T3.3), as tmux keeps it.
+    reported_path: Mutex<Option<String>>,
     /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
     tty: Option<PathBuf>,
     tasks: Vec<JoinHandle<()>>,
@@ -403,7 +404,7 @@ impl PaneHandle {
             sample,
             graphics_ok,
             cell_px: Mutex::new(spec.cell_px),
-            reported_cwd: Mutex::new(None),
+            reported_path: Mutex::new(None),
             tty,
             tasks: vec![reader, writer, sampler],
         })
@@ -629,14 +630,14 @@ impl PaneHandle {
             .or_else(|| lock(&self.sample).path.clone())
     }
 
-    /// The cwd the pane last reported (OSC 7): `#{pane_path}`.
-    pub fn reported_cwd(&self) -> Option<PathBuf> {
-        lock(&self.reported_cwd).clone()
+    /// What the pane last reported with OSC 7: `#{pane_path}`.
+    pub fn reported_path(&self) -> Option<String> {
+        lock(&self.reported_path).clone()
     }
 
-    /// Records the cwd the pane reported (OSC 7).
-    pub fn set_reported_cwd(&self, cwd: PathBuf) {
-        *lock(&self.reported_cwd) = Some(cwd);
+    /// Records what the pane reported with OSC 7.
+    pub fn set_reported_path(&self, path: String) {
+        *lock(&self.reported_path) = Some(path);
     }
 
     /// The pty slave's path, as `#{pane_tty}` shows it.
@@ -1080,17 +1081,20 @@ mod tests {
         assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
     }
 
-    /// A cwd the pane reported (OSC 7, T3.3) is kept apart from the
-    /// sampled one, which alone is `#{pane_current_path}`, as in tmux.
+    /// What the pane reported (OSC 7, T3.3) is kept apart from the
+    /// sampled cwd, which alone is `#{pane_current_path}`, as in tmux.
     #[tokio::test]
-    async fn a_reported_cwd_is_kept_apart() {
+    async fn a_reported_path_is_kept_apart() {
         let (tx, _rx) = mpsc::channel(8);
         let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
             .expect("spawn");
-        let there = PathBuf::from("/nonexistent/grofe-reported");
-        handle.set_reported_cwd(there.clone());
-        assert_ne!(handle.current_path(), Some(there.clone()));
-        assert_eq!(handle.reported_cwd(), Some(there));
+        let there = "file:///nonexistent/grofe-reported".to_string();
+        handle.set_reported_path(there.clone());
+        assert_ne!(
+            handle.current_path(),
+            Some(PathBuf::from("/nonexistent/grofe-reported"))
+        );
+        assert_eq!(handle.reported_path(), Some(there));
     }
 
     /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's
