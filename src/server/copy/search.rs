@@ -2342,8 +2342,9 @@ mod tests {
     /// A search over a 100 000-line history (`history-limit 100000`) is one
     /// pass of the prefilter over the copy, not a search per row: each of
     /// these, end to end and wrapping, stays under 250 ms in a release build
-    /// (under 10 ms on the machine this was written on). Timing a debug
-    /// build says little and loads the suite, so this runs with
+    /// (under 10 ms on the machine this was written on), in this thread's
+    /// CPU time, so a loaded machine does not count against it. Timing a
+    /// debug build says little and loads the suite, so this runs with
     /// `cargo test --release -- 100k`.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "timing: run with --release")]
@@ -2357,9 +2358,9 @@ mod tests {
             ("search-backward", "line 5 of", Some("1")),
             ("search-backward", "line [0-9]+5 of", Some("9999")),
         ] {
-            let t = Instant::now();
+            let t = crate::thread_cpu_time();
             x(&mut m, &[cmd, pat]);
-            let took = t.elapsed();
+            let took = crate::thread_cpu_time() - t;
             eprintln!("{cmd} {pat}: {took:?}");
             assert!(took < limit, "{cmd} {pat} took {took:?}");
             if let Some(count) = count {

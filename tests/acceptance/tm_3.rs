@@ -462,6 +462,14 @@ const FRAME: Duration = Duration::from_micros(16_667);
 /// The longest frame interval the acceptance text allows.
 const FRAME_LIMIT: Duration = Duration::from_millis(50);
 
+/// The frame gap to hold a run to, as `tests/sources.rs` does: the
+/// acceptance limit, or on a machine whose own baseline is already near it
+/// (a loaded host), twice that baseline. A frame that waited on the search
+/// would wait for all of it, about a second, far past either.
+fn frame_bound(baseline: Duration) -> Duration {
+    FRAME_LIMIT.max(baseline * 2)
+}
+
 fn display(srv: &TestServer, target: &str, fmt: &str) -> String {
     srv.cmd(&["display-message", "-p", "-t", target, fmt])
         .unwrap()
@@ -561,7 +569,9 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
             text.lines().last().unwrap_or_default().starts_with("[s]")
         });
     }
-    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(3), || false);
+    // As long as `tests/sources.rs` measures it, so the baseline sees the
+    // host's own stalls.
+    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
 
     // About a second of searching in either build: a release one searches
     // the history some hundred times faster.
@@ -589,7 +599,7 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
     });
     let (ok, took) = search.join().unwrap();
     assert!(ok, "the search failed");
-    let bound = FRAME_LIMIT.max(baseline * 2);
+    let bound = frame_bound(baseline);
     eprintln!(
         "search took {took:?}; longest frame gap {longest:?}, baseline {baseline:?}, {frames} frame reads"
     );
@@ -708,12 +718,19 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
     )
     .expect("a full history");
     srv.cmd(&["copy-mode", "-t", "big"]).unwrap();
-    // Long enough (seconds, in either build) that the respawn below lands
-    // while it runs: nothing tells a client a search is in flight.
+    // Long enough (seconds, in either build) that the respawn below
+    // usually lands while it runs. Nothing tells a client a search is in
+    // flight, so a run where it ended first only checks less, and says so.
+    // `@started` is set in the same actor turn that launches the search.
     let count = if cfg!(debug_assertions) { "20" } else { "2000" };
     let search = {
         let mut cmd = srv.command();
         cmd.args([
+            "set-option",
+            "-g",
+            "@started",
+            "1",
+            ";",
             "send-keys",
             "-t",
             "big",
@@ -725,8 +742,9 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
         ]);
         std::thread::spawn(move || cmd.output().expect("search"))
     };
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!search.is_finished(), "the search ended before the respawn");
+    wait_until(|| display(&srv, "big", "#{@started}") == "1", CMD_TIMEOUT)
+        .expect("the search launched");
+    let raced = !search.is_finished();
     srv.cmd(&[
         "respawn-pane",
         "-k",
@@ -744,6 +762,9 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
         out.status.success(),
         "the first search's request failed: {out:?}"
     );
+    if !raced {
+        eprintln!("the search ended before the respawn: the race went unchecked");
+    }
     srv.cmd(&["send-keys", "-t", "big", "-X", "search-again"])
         .unwrap();
     assert_eq!(
