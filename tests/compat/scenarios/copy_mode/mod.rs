@@ -16,8 +16,9 @@
 //! and grofe socket and state directories and `~/.config/canopy` are as
 //! they were.
 
+use std::collections::HashSet;
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use crate::fe_1::grofe_cli;
@@ -28,20 +29,48 @@ use crate::replay::{Cli, parse_scenario, replay};
 use crate::scenarios::{socket_dirs, tripwire};
 use crate::tp::misses;
 
-/// The clipboard tools a copy row runs. On the grofe side each is a stub
-/// earlier on `PATH` that keeps what it read, so no scenario reaches the
-/// machine's real clipboard; the container has none of them.
-const CLIPBOARD_TOOLS: &[&str] = &["pbcopy", "pbpaste", "wl-copy", "xclip", "xsel"];
+/// The clipboard tools a copy row could run. On the grofe side each is a
+/// stub that keeps what it read; the container has none of them.
+const CLIPBOARD_TOOLS: &[&str] = &[
+    "pbcopy", "pbpaste", "wl-copy", "wl-paste", "xclip", "xsel", "clip.exe",
+];
+
+/// Commands never linked into the private tools directory: the clipboard
+/// tools, the other clipboard helpers tmux-yank looks for, and `tmux`.
+const NEVER_LINKED: &[&str] = &["reattach-to-user-namespace", "putclip", "tmux"];
 
 /// grofe as `tmux` ([`grofe_cli`]) with the clipboard tools stubbed and
-/// the attach check FE.4's.
+/// the attach check FE.4's. `PATH` is only `bin` (grofe's `tmux` and the
+/// stubs) and `tools`, links to the system's own commands without any
+/// clipboard tool, as tp_11's rig does, so no scenario can reach the
+/// machine's real clipboard.
 fn copy_cli(dir: &Path) -> Cli {
-    let cli = grofe_cli(dir);
+    let mut cli = grofe_cli(dir);
     let bin = dir.join("bin");
     for tool in CLIPBOARD_TOOLS {
         let path = bin.join(tool);
         fs::write(&path, format!("#!/bin/sh\ncat >> \"$HOME/{tool}.out\"\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let tools = dir.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    let mut seen: HashSet<String> = CLIPBOARD_TOOLS
+        .iter()
+        .chain(NEVER_LINKED)
+        .map(|s| s.to_string())
+        .collect();
+    for sys in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        for e in fs::read_dir(sys).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if seen.insert(name.clone()) {
+                symlink(e.path(), tools.join(&name)).unwrap();
+            }
+        }
+    }
+    for (key, value) in &mut cli.env {
+        if key == "PATH" {
+            *value = format!("{}:{}", bin.display(), tools.display());
+        }
     }
     with_client_ttys(cli, dir)
 }
