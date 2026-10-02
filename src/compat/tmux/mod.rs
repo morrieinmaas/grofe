@@ -2220,7 +2220,12 @@ mod tests {
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));
-        assert_eq!(one_or_none(&["copy-mode", "-M"]), Ok(Vec::new()));
+        // TM.7 maps `copy-mode -M` onto the native flag, which does
+        // nothing outside a mouse key, as in tmux.
+        assert!(matches!(
+            one(&["copy-mode", "-M"]),
+            Ok(Command::CopyMode(cmd::CopyMode { mouse: true, .. }))
+        ));
         assert!(row_for(&args(&["send", "-M"])).is_some_and(Row::refuses));
     }
 
@@ -2282,8 +2287,8 @@ mod tests {
         );
         let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
         assert!(err.contains("not supported"), "{err}");
-        let err = one(&["send-keys", "-X", "cancel"]).unwrap_err().0;
-        assert!(err.contains("M5"), "{err}");
+        let err = one(&["load-buffer", "-"]).unwrap_err().0;
+        assert!(err.starts_with("load-buffer: not supported"), "{err}");
     }
 
     #[test]

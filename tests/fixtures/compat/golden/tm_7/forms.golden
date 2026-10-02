@@ -1,0 +1,79 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ send -t main -X cancel
+! not in a mode
+? 1
+$ send-keys -t main -FX search-backward -- '#{pane_index}'
+! not in a mode
+? 1
+$ send -t main -X -N 3 cursor-up
+! not in a mode
+? 1
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{pane_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 copy-mode 0,23,0
+? 0
+$ send-keys -t main -X -N 3 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,20,0
+? 0
+$ send -t main -N 2 -X cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,0
+? 0
+$ send-keys -t main -FX search-backward -- 'line #{pane_index}'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+0,18,310 1 line 1
+? 0
+$ send -t main -X -N 0 cursor-up
+! repeat count too small
+? 1
+$ send -t main -X frobnicate
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 0,18,310
+? 0
+$ send -t main -X cancel
+? 0
+$ copy-mode -u -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 58,23,22
+? 0
+$ send -t main -X cancel
+? 0
+$ copy-mode -e -t main
+? 0
+$ send -t main -X page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{scroll_position}'
+1 22
+? 0
+$ send -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -M -t main
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ copy-mode -H -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{scroll_position}'
+1 0
+? 0
+$ send -t main -X cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0

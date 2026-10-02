@@ -98,7 +98,7 @@ fn check(name: &str, diverges: &[(&str, &str)]) {
 /// still empty (FE.2's). Every other command reaches grofe as it is.
 // ponytail: harness only, the same shim as FE.3's; drop it once FE.2 fills
 // client_tty.
-fn with_client_ttys(mut cli: Cli, dir: &Path) -> Cli {
+pub fn with_client_ttys(mut cli: Cli, dir: &Path) -> Cli {
     let wrap = dir.join("wrap");
     fs::create_dir_all(&wrap).unwrap();
     let script = wrap.join("tmux");
@@ -303,17 +303,18 @@ fn send_m_fails_with_tmux_s_text_and_a_log_line() {
 }
 
 /// `resize-pane -M` and `copy-mode -M` exit 0 with no output, as in tmux
-/// 3.7b, and each leaves one `compat-miss.log` line: ignored, never
-/// silent (orchestrator ruling on the review).
+/// 3.7b. `resize-pane -M` leaves one `compat-miss.log` line: ignored,
+/// never silent (orchestrator ruling on the review). `copy-mode -M` is
+/// native since TM.6 (TM.7's row), so it logs nothing.
 #[test]
 fn the_mouse_no_ops_exit_0_with_one_log_line_each() {
     let dir = tempfile::tempdir().unwrap();
     let cli = grofe_cli(dir.path());
     let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
     assert!(status.success(), "{err}");
-    for (verb, line) in [
-        ("resize-pane", "resize-pane -M: cosmetic, ignored"),
-        ("copy-mode", "copy-mode -M: cosmetic, ignored"),
+    for (verb, logged) in [
+        ("resize-pane", &["resize-pane -M: cosmetic, ignored"][..]),
+        ("copy-mode", &[]),
     ] {
         let before = miss_log(dir.path()).len();
         let (status, out, err) = cli.run(&words(&[verb, "-M"]));
@@ -321,7 +322,7 @@ fn the_mouse_no_ops_exit_0_with_one_log_line_each() {
             (status.code(), out.as_str(), err.as_str()),
             (Some(0), "", "")
         );
-        assert_eq!(miss_log(dir.path())[before..], [line.to_string()]);
+        assert_eq!(&miss_log(dir.path())[before..], logged);
     }
     let _ = cli.run(&words(&["kill-server"]));
 }
@@ -961,11 +962,11 @@ const ELSEWHERE: &[(&str, &str)] = &[
     ),
     (
         "copy-mode",
-        "M5 (M36-R8), FE.1's refusal; `-M` does nothing, as in tmux",
+        "TM.7's rows (M5): `-u -e -H -M` native, `-M` nothing outside a mouse key",
     ),
     (
         "send-keys",
-        "FE.1's rows: `-M` is tmux's text, `-X` is M5's",
+        "FE.1's rows: `-M` is tmux's text; TM.7's `-X`, `-F -X`, `-N -X`",
     ),
     ("resize-pane", "FE.1's row: `-M` does nothing, as in tmux"),
     (

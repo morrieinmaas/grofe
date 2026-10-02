@@ -1,0 +1,13 @@
+# TM.7 parity, copy-mode-vi `n` (search-again): the last search again. The fixture
+# is TM.1's 500 lines of history in 80x24 with copy-mode.conf sourced;
+# grofe runs it through the tmux symlink, tmux 3.7b in TC.0b's container.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ source-file {fixtures}/copy-mode.conf
+$ copy-mode -t main
+$ send-keys -t main -X search-backward foo
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+$ send-keys -t main n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+$ send-keys -t main n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'

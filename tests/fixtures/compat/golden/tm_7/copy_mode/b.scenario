@@ -1,0 +1,13 @@
+# TM.7 parity, copy-mode-vi `b` (previous-word): back a word at a time. The fixture
+# is TM.1's 500 lines of history in 80x24 with copy-mode.conf sourced;
+# grofe runs it through the tmux symlink, tmux 3.7b in TC.0b's container.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ source-file {fixtures}/copy-mode.conf
+$ copy-mode -t main
+$ send-keys -t main k '$'
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main b
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'

@@ -1,0 +1,29 @@
+# TM.7: the copy options by tmux name, read and set: mode-keys,
+# set-clipboard, copy-command, word-separators, wrap-search and
+# buffer-limit (which drops the oldest automatic buffer).
+$ new-session -d -s main -x 80 -y 24
+$ show -gw mode-keys
+$ showw -gv mode-keys
+$ show -s set-clipboard
+$ show -gv copy-command
+$ show -gv word-separators
+$ show -gw wrap-search
+$ show -s buffer-limit
+$ set -g copy-command 'cat > /dev/null'
+$ show -g copy-command
+$ set -g word-separators ' -'
+$ show -g word-separators
+$ setw -g wrap-search off
+$ show -gw wrap-search
+$ set -g mode-keys emacs
+$ show -gwv mode-keys
+$ setw -g mode-keys vi
+$ set -s set-clipboard external
+$ show -sv set-clipboard
+$ set -s buffer-limit 2
+$ setb a
+$ setb b
+$ setb c
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ set -s buffer-limit 0
+$ show -sv buffer-limit

@@ -1,0 +1,24 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ source-file {fixtures}/copy-mode.conf
+? 0
+$ copy-mode -t main
+? 0
+client 80x25 attach -t main
+keys Escape '[<0;3;4M'
+keys Escape '[<32;5;4M'
+keys Escape '[<32;21;6M'
+keys Escape '[<0;21;6m'
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0 ,,
+? 0
+$ show-buffer
+matched ( open bracket and ] stray close
+words    with    wide    gaps    between    them
+漢字 wide 文字 cells 
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 115
+? 0

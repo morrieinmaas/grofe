@@ -1,0 +1,13 @@
+# TM.7 parity, copy-mode-vi `MouseDrag1Pane` (begin-selection): a drag selects from the press. The fixture
+# is TM.1's 500 lines of history in 80x24 with copy-mode.conf sourced;
+# grofe runs it through the tmux symlink, tmux 3.7b in TC.0b's container.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ source-file {fixtures}/copy-mode.conf
+$ copy-mode -t main
+client 80x25 attach -t main
+keys Escape '[<0;3;4M'
+keys Escape '[<32;5;4M'
+keys Escape '[<32;21;6M'
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{selection_present}'
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'

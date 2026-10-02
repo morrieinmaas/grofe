@@ -1968,13 +1968,45 @@ fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
         KeyCode::Escape => (mods, 0, 27, String::new()),
         // F1 to F12 sit between BSpace and IC.
         KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
-        KeyCode::Mouse(_) => (mods, 2, 0, key.to_string()),
+        KeyCode::Mouse(m) => (mods, 2, mouse_order(m), String::new()),
         code => {
             let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
             let at = if at == 0 { 0 } else { at + 12 };
             (mods, 1, at, String::new())
         }
     }
+}
+
+/// Where tmux 3.7b's key codes put a mouse key: by action (`KEYC_MOUSE_KEY`
+/// order, the wheel down before up, as recorded), then button, then where
+/// the pointer was (pane, the status line's ranges, border, scrollbar,
+/// border controls).
+fn mouse_order(m: crate::server::input::MouseKey) -> u32 {
+    use crate::server::input::{MouseAction as A, MousePlace as P};
+    let action = match m.action {
+        A::Down => 0,
+        A::Up => 1,
+        A::Drag => 2,
+        A::DragEnd => 3,
+        A::WheelDown => 4,
+        A::WheelUp => 5,
+        A::SecondClick => 6,
+        A::DoubleClick => 7,
+        A::TripleClick => 8,
+    };
+    let place = match m.place {
+        P::Pane => 0,
+        P::Status => 1,
+        P::StatusLeft => 2,
+        P::StatusRight => 3,
+        P::StatusDefault => 4,
+        P::Border => 5,
+        P::ScrollbarUp => 6,
+        P::ScrollbarSlider => 7,
+        P::ScrollbarDown => 8,
+        P::Control(n) => 9 + u32::from(n),
+    };
+    action * 10_000 + u32::from(m.button) * 100 + place
 }
 
 /// A binding's commands as tmux 3.7b prints a parsed command list in
@@ -2707,12 +2739,8 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
-            // What the pane reported with OSC 7, decoded.
-            "pane_path" => p
-                .handle
-                .reported_cwd()
-                .map(|c| c.display().to_string())
-                .unwrap_or_default(),
+            // What the pane reported with OSC 7, as tmux shows it.
+            "pane_path" => p.handle.reported_path().unwrap_or_default(),
             "pane_left" => match w.floating(p.id) {
                 Some(f) => f.x.to_string(),
                 None => pane_origin(w, p.id)?.0.to_string(),
@@ -3471,6 +3499,38 @@ mod tests {
     use super::*;
     use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
+
+    /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in
+    /// `tc_0b/display-formats` and `tm_0/list-keys-copy-mode-vi`).
+    #[test]
+    fn mouse_keys_sort_in_tmux_s_order() {
+        use crate::server::input::parse_key;
+        let recorded = [
+            "MouseDown1Pane",
+            "MouseDown1Status",
+            "MouseDown1Border",
+            "MouseDown1ScrollbarUp",
+            "MouseDown1Control8",
+            "MouseDown3Pane",
+            "MouseDown3StatusLeft",
+            "MouseDrag1Pane",
+            "MouseDrag1Border",
+            "MouseDragEnd1Pane",
+            "WheelDownPane",
+            "WheelDownStatus",
+            "WheelUpPane",
+            "DoubleClick1Pane",
+            "TripleClick1Pane",
+            "M-x",
+            "M-MouseDown3Pane",
+            "C-a",
+        ];
+        let mut keys: Vec<Key> = recorded.iter().map(|k| parse_key(k).unwrap()).collect();
+        keys.reverse();
+        keys.sort_by_key(tmux_key_order);
+        let got: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        assert_eq!(got, recorded);
+    }
 
     /// TC.7: `list-keys` for one key, `-1` for the first line, `-N` for
     /// notes in tmux 3.7b's form (recorded: `C-b c       Create a new

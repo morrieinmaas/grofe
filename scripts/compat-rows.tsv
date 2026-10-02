@@ -22,7 +22,6 @@ display-menu -t[=]	oos:Mouse argv forms
 switch-client -t[=]	oos:Mouse argv forms
 send-keys -M	oos:Mouse argv forms
 resize-pane -M	oos:Mouse argv forms
-copy-mode -M	oos:Mouse argv forms
 display-menu -x[M]	oos:Mouse argv forms
 display-menu -y[M]	oos:Mouse argv forms
 display-menu -x[W]	oos:Mouse argv forms

@@ -1,0 +1,37 @@
+# TM.7: the front end's copy-mode rows. send -X, -FX and -N outside the
+# mode give tmux's errors; inside it -N repeats and -F expands a search's
+# string; copy-mode -u starts a page up, -e leaves at the bottom, -H hides
+# the indicator, -M does nothing outside a mouse key, and a second
+# copy-mode keeps the mode.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ send -t main -X cancel
+$ send-keys -t main -FX search-backward -- '#{pane_index}'
+$ send -t main -X -N 3 cursor-up
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{pane_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 3 cursor-up
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send -t main -N 2 -X cursor-up
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -FX search-backward -- 'line #{pane_index}'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+$ send -t main -X -N 0 cursor-up
+$ send -t main -X frobnicate
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send -t main -X cancel
+$ copy-mode -u -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send -t main -X cancel
+$ copy-mode -e -t main
+$ send -t main -X page-up
+$ display -p -t main '#{pane_in_mode} #{scroll_position}'
+$ send -t main -X page-down
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -M -t main
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -H -t main
+$ display -p -t main '#{pane_in_mode} #{scroll_position}'
+$ send -t main -X cancel
+$ display -p -t main '#{pane_in_mode}'

@@ -274,8 +274,6 @@ fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
         .collect();
     let expected = [
         "option grofe does not have: set -ga terminal-overrides",
-        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi v",
-        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi y",
         "skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf",
     ];
     assert_eq!(left.len(), expected.len(), "left: {left:#?}");

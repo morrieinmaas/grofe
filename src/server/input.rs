@@ -1223,6 +1223,18 @@ impl KeyTables {
         for (key, b) in add {
             self.insert(PREFIX_TABLE, key, b);
         }
+        // The stock copy-mode-vi rows run as they are; those whose `{ }`
+        // template `cmds` holds as a string show as tmux prints them.
+        if let Some(t) = self.tables.get_mut(COPY_MODE_VI_TABLE) {
+            for (name, text) in TMUX_COPY_MODE_VI_SHOWN {
+                if let Ok(key) = parse_key(name)
+                    && let Some(b) = t.get_mut(&key)
+                    && b.source == BindingSource::Default
+                {
+                    b.shown = Some(text.to_string());
+                }
+            }
+        }
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
@@ -1759,6 +1771,76 @@ pub const COPY_MODE_VI: &[(&str, &str)] = &[
     (r#"M-x"#, r#"send-keys -X jump-to-mark"#),
     (r#"C-Up"#, r#"send-keys -X scroll-up"#),
     (r#"C-Down"#, r#"send-keys -X scroll-down"#),
+];
+
+/// How tmux 3.7b's `list-keys -T copy-mode-vi` prints the stock rows whose
+/// template is a `{ }` list (the `tm_0/list-keys-copy-mode-vi` golden),
+/// for a server with tmux identity ([`KeyTables::use_tmux_stock`]).
+pub const TMUX_COPY_MODE_VI_SHOWN: &[(&str, &str)] = &[
+    (
+        r#"/"#,
+        r#"command-prompt -T search -p "(search down)" { send-keys -X search-forward -- "%%" }"#,
+    ),
+    (
+        r#"?"#,
+        r#"command-prompt -T search -p "(search up)" { send-keys -X search-backward -- "%%" }"#,
+    ),
+    (
+        r#":"#,
+        r#"command-prompt -p "(goto line)" { send-keys -X goto-line -- "%%" }"#,
+    ),
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p "(jump backward)" { send-keys -X jump-backward -- "%%" }"#,
+    ),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p "(jump to backward)" { send-keys -X jump-to-backward -- "%%" }"#,
+    ),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p "(jump forward)" { send-keys -X jump-forward -- "%%" }"#,
+    ),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p "(jump to forward)" { send-keys -X jump-to-forward -- "%%" }"#,
+    ),
+    (
+        r#"1"#,
+        r#"command-prompt -N -I 1 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"2"#,
+        r#"command-prompt -N -I 2 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"3"#,
+        r#"command-prompt -N -I 3 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"4"#,
+        r#"command-prompt -N -I 4 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"5"#,
+        r#"command-prompt -N -I 5 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"6"#,
+        r#"command-prompt -N -I 6 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"7"#,
+        r#"command-prompt -N -I 7 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"8"#,
+        r#"command-prompt -N -I 8 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"9"#,
+        r#"command-prompt -N -I 9 -p (repeat) { send-keys -N "%%" }"#,
+    ),
 ];
 
 /// tmux 3.7b's stock prefix table (`list-keys -T prefix` on a `-f
@@ -3879,7 +3961,24 @@ mod tests {
             "runtime binding kept"
         );
         assert_eq!(t.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
+        // TM.7: the stock copy-mode-vi templates show as tmux prints them.
+        let slash = t.exact(COPY_MODE_VI_TABLE, &k("/")).expect("stock /");
+        assert_eq!(
+            slash.shown.as_deref(),
+            Some(
+                r#"command-prompt -T search -p "(search down)" { send-keys -X search-forward -- "%%" }"#
+            )
+        );
+        assert_eq!(slash.dialect, Dialect::Grofe);
+        assert_eq!(t.exact(COPY_MODE_VI_TABLE, &k("j")).unwrap().shown, None);
         let reloaded = t.with_config_from(KeyTables::from_config(&[]));
+        assert!(
+            reloaded
+                .exact(COPY_MODE_VI_TABLE, &k("7"))
+                .unwrap()
+                .shown
+                .is_some()
+        );
         assert_eq!(reloaded.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
         assert_eq!(
             reloaded.exact(PREFIX_TABLE, &k("\"")).map(|b| b.dialect),

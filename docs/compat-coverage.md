@@ -364,16 +364,16 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `command-prompt -p` | 3 | 2 | cs2 sc1 | area:Overlays | yes | `-p` | container:list-keys, plugin:tpm/bindings/update_plugins |
 | `command-prompt -p -T` | 3 | 3 | cs3 | area:Overlays | yes | `-p` | container:list-keys |
 | `confirm-before -p` | 2 | 2 | cs2 | area:Bindings | yes |  | container:list-keys |
-| `copy-mode` | 2 | 1 | cs1 sc1 | area:Buffers and copy | **no** |  | container:list-keys, plugin:tmux-fzf/scripts/keybinding.sh, plugin:tmux-yank/scripts/copy_line.sh |
-| `copy-mode -H` | 2 | 2 | cs2 | area:Buffers and copy | **no** | `-H` | container:list-keys |
-| `copy-mode -M` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
-| `copy-mode -S` | 1 | 1 | cs1 | area:Buffers and copy | **no** | `-S` | container:list-keys |
-| `copy-mode -d` | 1 | 1 | cs1 | area:Buffers and copy | **no** | `-d` | container:list-keys |
-| `copy-mode -e` | 1 | 1 | cs1 | area:Buffers and copy | **no** | `-e` | container:list-keys |
-| `copy-mode -q` | 15 | 15 | cs15 | area:Buffers and copy | **no** | `-q` | container:list-keys |
+| `copy-mode` | 2 | 1 | cs1 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-fzf/scripts/keybinding.sh, plugin:tmux-yank/scripts/copy_line.sh |
+| `copy-mode -H` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
+| `copy-mode -M` | 1 | 1 | cs1 | area:Buffers and copy | yes |  | container:list-keys |
+| `copy-mode -S` | 1 | 1 | cs1 | area:Buffers and copy | yes |  | container:list-keys |
+| `copy-mode -d` | 1 | 1 | cs1 | area:Buffers and copy | yes |  | container:list-keys |
+| `copy-mode -e` | 1 | 1 | cs1 | area:Buffers and copy | yes |  | container:list-keys |
+| `copy-mode -q` | 15 | 15 | cs15 | area:Buffers and copy | yes |  | container:list-keys |
 | `copy-mode -t[=]` | 3 | 3 | cs3 | oos:Mouse argv forms |  |  | container:list-keys |
-| `copy-mode -u` | 2 | 2 | cs2 | area:Buffers and copy | **no** | `-u` | container:list-keys |
-| `delete-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | **no** | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `copy-mode -u` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
+| `delete-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
 | `detach-client` | 3 | 3 | cs3 | cmd:M2 | yes |  | container:list-keys |
 | `detach-client -s` | 2 | 0 | sc2 | area:Sessions and clients | yes |  | plugin:tmux-claude-session-manager/scripts/list.sh, plugin:tmux-fzf/scripts/session.sh |
 | `display-menu -O -t[=] -T -x[M] -y[M]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
@@ -418,7 +418,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `last-pane` | 1 | 0 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `last-window` | 1 | 1 | sc1 | cmd:M2 | yes |  | plugin:tmux-sensible/sensible.tmux |
 | `link-window -a -s -t` | 1 | 0 | sc1 | oos:`link-window` |  |  | plugin:tmux-fzf/scripts/window.sh |
-| `list-buffers` | 2 | 1 | cs1 sc1 | area:Buffers and copy | **no** |  | container:list-keys, plugin:tmux-fzf/scripts/clipboard.sh |
+| `list-buffers` | 2 | 1 | cs1 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-fzf/scripts/clipboard.sh |
 | `list-clients` | 3 | 0 | cj1 cp1 sc1 | cmd:M2 | yes |  | canopy:bin/canopy-reboot-check, canopy:plugins/tmux-continuum/scripts/helpers.sh, container:job (+1) |
 | `list-clients -F` | 4 | 0 | cj1 sc3 | area:Sessions and clients | yes |  | container:job, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:tmux-claude-session-manager/scripts/list.sh |
 | `list-clients -F -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs |
@@ -437,7 +437,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `list-windows` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | plugin:tmux-fzf/scripts/pane.sh, plugin:tmux-fzf/scripts/window.sh |
 | `list-windows -F -t` | 10 | 0 | cj1 cp1 sc8 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_cockpit, athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh (+5) |
 | `list-windows -a -F` | 8 | 0 | cc2 cj2 sc4 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/save.sh, container:cli (+4) |
-| `load-buffer` | 1 | 0 | sc1 | area:Buffers and copy | **no** |  | plugin:tmux-fzf-url/fzf-url.sh |
+| `load-buffer` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
 | `move-pane -s` | 1 | 0 | sc1 | area:Windows and panes | **no** |  | plugin:tmux-fzf/scripts/pane.sh |
 | `move-window -a -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
 | `move-window -r` | 2 | 2 | cs2 | area:Windows and panes | yes | `-r` | container:list-keys |
@@ -528,11 +528,11 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `select-pane -t[=]` | 5 | 5 | cs5 | oos:Mouse argv forms |  |  | container:list-keys |
 | `select-window -t` | 17 | 11 | cs11 sc6 | area:Windows and panes | yes |  | athome:home/dot_local/bin/executable_tsess, container:list-keys, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+4) |
 | `send-keys` | 31 | 15 | cj6 cs6 sc19 | cmd:M1 | yes |  | container:job, container:list-keys, plugin:tmux-yank/scripts/copy_line.sh (+2) |
-| `send-keys -F -X` | 2 | 2 | cs2 | area:Buffers and copy | **no** | `-F`, `-X` | container:list-keys |
+| `send-keys -F -X` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
 | `send-keys -M` | 7 | 6 | cs7 | oos:Mouse argv forms |  |  | container:list-keys |
 | `send-keys -N` | 18 | 18 | cs18 | cmd:M1 | yes | `-N` | container:list-keys |
-| `send-keys -N -X` | 5 | 0 | cs4 sc1 | area:Buffers and copy | **no** | `-N`, `-X` | container:list-keys, plugin:tmux-yank/scripts/copy_line.sh |
-| `send-keys -X` | 182 | 164 | cj6 cs158 sc18 | area:Buffers and copy | **no** | `-X` | container:job, container:list-keys, plugin:tmux-fzf/scripts/copy-mode.sh (+2) |
+| `send-keys -N -X` | 5 | 0 | cs4 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-yank/scripts/copy_line.sh |
+| `send-keys -X` | 182 | 164 | cj6 cs158 sc18 | area:Buffers and copy | yes |  | container:job, container:list-keys, plugin:tmux-fzf/scripts/copy-mode.sh (+2) |
 | `send-keys -l` | 6 | 6 | cs6 | cmd:M1 | yes |  | container:list-keys |
 | `send-keys -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh |
 | `send-keys -t[=] -X` | 3 | 3 | cs3 | oos:Mouse argv forms |  |  | container:list-keys |
@@ -558,7 +558,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `set-option -t -u` | 4 | 0 | cj3 sc1 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
 | `set-window-option -g` | 6 | 0 | cj1 sc1 sf4 | area:Options by tmux name | **no** |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/00-core.conf, container:job (+1) |
 | `set-window-option -t` | 4 | 0 | cc1 sc3 | area:Options by tmux name | **no** |  | athome:home/dot_local/bin/executable_cockpit, container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `show-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | **no** | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
+| `show-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes | `-b` | plugin:tmux-fzf/scripts/clipboard.sh |
 | `show-environment -g` | 15 | 0 | cj6 cp1 sc8 | area:Hooks and environment | yes |  | container:job, container:pane, plugin:opensessions/apps/tui/scripts/sessionizer.sh (+4) |
 | `show-messages` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
 | `show-messages -J -T` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | athome:home/dot_local/bin/executable_theme, container:pane |
