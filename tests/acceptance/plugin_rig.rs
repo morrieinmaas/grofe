@@ -375,7 +375,8 @@ impl Rig {
 
     /// Whether plugin `name` has finished loading: continuum's last step is
     /// its status-right autosave; every other plugin binds a key to a
-    /// script of its own last.
+    /// script of its own last, except tmux-yank finding no clipboard
+    /// command, which binds only its error message.
     fn loaded(&self, name: &str) -> bool {
         let mark = format!("/plugins/{name}/");
         if name == "tmux-continuum" {
@@ -383,7 +384,10 @@ impl Rig {
                 .try_t(&["show-options", "-gv", "status-right"])
                 .is_ok_and(|s| s.contains(&mark));
         }
-        self.try_t(&["list-keys"]).is_ok_and(|k| k.contains(&mark))
+        self.try_t(&["list-keys"]).is_ok_and(|k| {
+            k.contains(&mark)
+                || name == "tmux-yank" && k.contains("tmux-yank dependencies not installed")
+        })
     }
 
     /// A client on `session`, attached through a pty.
