@@ -827,3 +827,31 @@ fn send_keys_into_copy_mode_answers_once_its_prompt_ends() {
     let status = common::wait_child(cli, WAIT).expect("the reply once the client went");
     assert!(status.success());
 }
+
+/// tmux 3.7b's stock `MouseDown2Pane` (`select-pane -t = \; if -F
+/// '#{||:#{pane_in_mode},#{mouse_any_flag}}' { send -M } { paste -p }`): a
+/// middle click on a pane that is in no mode and did not ask for the mouse
+/// focuses it and pastes the newest buffer there (TP.9b's key parity read
+/// this back from tmux with the owner's config). With no buffer it pastes
+/// nothing.
+#[test]
+fn a_middle_click_pastes_the_newest_buffer() {
+    let (srv, left, right) = side_by_side(HISTORY, "stty -echo; exec cat -v");
+    let mut a = attach(&srv, 80, 24);
+    a.wait_until("179 on the left", WAIT, |t| {
+        t.lines().any(|l| l.starts_with("179"))
+    });
+    a.send(sgr(0, 10, 5, false));
+    a.send(sgr(0, 10, 5, true));
+    wait_until(|| pane_var(&srv, "main", "#{pane_id}") == left, WAIT)
+        .expect("the click focused the left pane");
+
+    srv.cmd(&["set-buffer", "tp9b-middle\n"])
+        .expect("set-buffer");
+    a.send(sgr(1, 60, 5, false));
+    a.send(sgr(1, 60, 5, true));
+    wait_until(|| srv.capture(&right).contains("tp9b-middle"), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {}", srv.capture(&right)));
+    assert_eq!(pane_var(&srv, "main", "#{pane_id}"), right);
+    assert!(!srv.capture(&left).contains("tp9b-middle"));
+}

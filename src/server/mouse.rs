@@ -36,7 +36,8 @@
 //!   ask for the mouse is `copy-mode -M`, and a double or triple click there
 //!   is `copy-mode -H`, `select-word` or `select-line`, then
 //!   `copy-pipe-and-cancel` (tmux's `MouseDrag1Pane`, `DoubleClick1Pane`
-//!   and `TripleClick1Pane` rows);
+//!   and `TripleClick1Pane` rows), and a middle click there also pastes
+//!   the newest buffer (`paste-buffer -p`, tmux's `MouseDown2Pane`);
 //! - `MouseDown1Status` switches to the window clicked (`switch-client -t
 //!   =`), and the wheel on the status line goes to the previous or next
 //!   window;
@@ -684,6 +685,8 @@ fn in_pane(state: &mut State, client: ClientId, m: &Mouse, mk: MouseKey, target:
                 ],
             );
         }
+        // tmux's `MouseDown2Pane`: focus, then paste the newest buffer.
+        (MouseAction::Down, 2) if !busy => run(state, &[focus, &["paste-buffer", "-p"]]),
         // A double click is no report of its own to forward.
         (MouseAction::DoubleClick, 1) => run(state, &[focus]),
         (MouseAction::DoubleClick, _) => {}

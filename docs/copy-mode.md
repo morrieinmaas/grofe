@@ -411,6 +411,9 @@ tmux.
   input, while the selection shows: a binding's `run-shell` without `-b`
   holds the commands after it and the client's keys until it finishes
   (recorded, `tm_6/run-shell`).
+- **A middle click** over such a pane focuses it and pastes the newest
+  buffer (`paste-buffer -p`), tmux's `MouseDown2Pane` row. A pane in copy
+  mode, or one that asked for the mouse, gets the click instead.
 - **Any `send-keys -X`** a mouse key runs first moves the cursor to the
   pointer, unless the key is the wheel (tmux's `window_copy_move_mouse`).
 - **A click in copy mode** is the mode's `MouseDown1Pane`, `select-pane`
