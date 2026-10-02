@@ -834,6 +834,9 @@ fn send_keys_into_copy_mode_answers_once_its_prompt_ends() {
     a.send("\x1b");
     let status = common::wait_child(cli, WAIT).expect("the reply after Escape");
     assert!(status.success());
+    // The first prompt must be off the screen, or the wait below could match
+    // its stale frame and drop the client before the second prompt opens.
+    a.wait_until("the prompt closed", WAIT, |t| !t.contains("(jump to forward)"));
 
     let cli = spawn(&["send-keys", "-t", "main", "-l", "t"]);
     a.wait_until("the prompt again", WAIT, |t| {
