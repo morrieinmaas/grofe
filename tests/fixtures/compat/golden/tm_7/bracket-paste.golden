@@ -1,0 +1,29 @@
+$ new-session -d -s main -x 80 -y 24 'tmux wait-for a; printf "\033[?2004h"; tmux wait-for -S b; tmux wait-for c; printf "\033[?2004l"; tmux wait-for -S d; exec sleep 100000'
+? 0
+$ display -p -t main '[#{bracket_paste_flag}]'
+[0]
+? 0
+$ wait-for -S a
+? 0
+$ wait-for b
+? 0
+$ display -p -t main '[#{bracket_paste_flag}] [#{?bracket_paste_flag,on,off}]'
+[1] [on]
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '[#{bracket_paste_flag}]'
+[0]
+? 0
+$ send -t main -X cancel
+? 0
+$ display -p -t main '[#{bracket_paste_flag}]'
+[1]
+? 0
+$ wait-for -S c
+? 0
+$ wait-for d
+? 0
+$ display -p -t main '[#{bracket_paste_flag}]'
+[0]
+? 0

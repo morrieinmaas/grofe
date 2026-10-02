@@ -1,0 +1,15 @@
+# TM.7 (found by TP.11): #{bracket_paste_flag} is 1 while the pane has
+# bracketed paste on (mode 2004), and 0 while the pane is in copy mode,
+# as tmux 3.7b reads it from the screen on view.
+$ new-session -d -s main -x 80 -y 24 'tmux wait-for a; printf "\033[?2004h"; tmux wait-for -S b; tmux wait-for c; printf "\033[?2004l"; tmux wait-for -S d; exec sleep 100000'
+$ display -p -t main '[#{bracket_paste_flag}]'
+$ wait-for -S a
+$ wait-for b
+$ display -p -t main '[#{bracket_paste_flag}] [#{?bracket_paste_flag,on,off}]'
+$ copy-mode -t main
+$ display -p -t main '[#{bracket_paste_flag}]'
+$ send -t main -X cancel
+$ display -p -t main '[#{bracket_paste_flag}]'
+$ wait-for -S c
+$ wait-for d
+$ display -p -t main '[#{bracket_paste_flag}]'

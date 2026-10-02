@@ -246,6 +246,12 @@ fn pane_path_matches_its_golden() {
     check("tm_7/pane-path");
 }
 
+/// `#{bracket_paste_flag}`, which TP.11 found missing.
+#[test]
+fn bracket_paste_flag_matches_its_golden() {
+    check("tm_7/bracket-paste");
+}
+
 /// Case 3: one byte changed in one golden fails that scenario and no
 /// other.
 #[test]

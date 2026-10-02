@@ -2797,6 +2797,9 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_default(),
             "alternate_on" => flag(p.handle.modes().alt_screen),
             "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
+            // tmux 3.7b reads it from the screen on view, so copy mode
+            // answers 0 for it (`copy::format_var`).
+            "bracket_paste_flag" => flag(p.handle.modes().bracketed_paste),
             "history_size" => p.handle.history_size().to_string(),
             "history_limit" => m.history_limit(s.id).to_string(),
             // tmux's grid: 40 bytes a line, history and screen.
