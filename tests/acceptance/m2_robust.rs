@@ -53,7 +53,12 @@ impl Control {
         let id = self.next_id;
         self.next_id += 1;
         let argv = argv.iter().map(|a| a.to_string()).collect();
-        let req = serde_json::to_string(&Request { id, argv }).expect("request");
+        let req = serde_json::to_string(&Request {
+            id,
+            argv,
+            ..Default::default()
+        })
+        .expect("request");
         writeln!(self.writer, "{req}").expect("send request");
         let mut line = String::new();
         self.reader.read_line(&mut line).expect("read reply");
@@ -263,7 +268,7 @@ fn read_only_commands_do_not_redraw_clients() {
         &["has-session", "-t", "main"],
         &["display-message", "-p", "-t", "main", "#{window_name}"],
         &["capture-pane", "-p", "-t", "main"],
-        &["__attach-check", "-t", "main"],
+        &["__attach-check", "", "-t", "main"],
     ];
     for argv in reads {
         control

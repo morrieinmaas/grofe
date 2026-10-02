@@ -1,0 +1,78 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+keys Escape '[<0;3;4M'
+keys Escape '[<32;5;4M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 4,3 1 2,503 4,503
+? 0
+keys Escape '[<32;21;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 20,5 1 2,503 20,505
+? 0
+keys Escape '[<0;21;6m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+0  ,  , ,
+? 0
+$ show-buffer
+matched ( open bracket and ] stray close
+words    with    wide    gaps    between    them
+漢字 wide 文字 cells 
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 115
+? 0
+$ delete-buffer
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ copy-mode -t main
+? 0
+keys Escape '[<0;3;8M'
+keys Escape '[<32;4;8M'
+keys Escape '[<32;40;10M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 39,9 1 0,507 39,509
+? 0
+keys Escape '[<0;40;10m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+0  ,  , ,
+? 0
+$ show-buffer
+
+a long wrapped line that runs past the right edge of the eighty column pane and keeps going so that it wraps (twice, pas
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 121
+? 0
+$ delete-buffer
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 30 scroll-up
+? 0
+keys Escape '[<0;30;12M'
+keys Escape '[<32;29;12M'
+keys Escape '[<32;7;9M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 30 6,8 1 29,481 6,478
+? 0
+keys Escape '[<0;7;9m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+0  ,  , ,
+? 0
+$ show-buffer
+56: foo.bar(baz) qux-quux, path/to/file_name.rs:1368 end
+line 457: foo.bar(baz) qux-quux, path/to/file_name.rs:1371 end
+line 458: foo.bar(baz) qux-quux, path/to/file_name.rs:1374 end
+line 459: foo.bar(baz) qux-quu
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 213
+? 0
+$ delete-buffer
+? 0

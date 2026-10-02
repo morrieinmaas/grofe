@@ -90,7 +90,9 @@ fn focus_events_gate_and_mouse_input_go_nowhere() {
         text.lines().any(|l| l.trim_end() == "y")
     });
 
-    a.send("\x1b[<64;10;5M\x1b[<0;3;3M\x1b[<0;3;3mz\r");
+    // The wheel enters copy mode since TM.6 (before, a view any key
+    // closed): `q` leaves it, and the pane still got no report.
+    a.send("\x1b[<64;10;5M\x1b[<0;3;3M\x1b[<0;3;3mqz\r");
     a.wait_until("the z line", Duration::from_secs(10), |text| {
         text.lines().any(|l| l.trim_end() == "z")
     });

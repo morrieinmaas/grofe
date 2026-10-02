@@ -9,16 +9,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AttachSession, BindKey, BreakPane, CapturePane, ChooseClient, ChooseTree, Command,
-    CommandPrompt, Condition, ConfirmBefore, DetachClient, DisplayMenu, DisplayMessage,
-    DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane, KillPane, KillServer,
-    KillSession, KillWindow, LastPane, ListClients, ListKeys, ListPanes, ListSessions, ListWindows,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
-    ParseError, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
-    ResizeWindow, RespawnPane, RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow,
-    SendKeys, SendKeysItem, SendPrefix, SetEnvironment, SetHook, SetOption, ShowEnvironment,
-    ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient,
-    SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
+    Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer, DetachClient,
+    DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane,
+    KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys,
+    ListPanes, ListSessions, ListWindows, LoadBuffer, MenuEntry, MoveWindow, NewPane, NewSession,
+    NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient,
+    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
+    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
+    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -613,6 +614,9 @@ const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
     ('l', FlagKind::Bool),
     ('H', FlagKind::Bool),
     ('t', FlagKind::Value),
+    ('X', FlagKind::Bool),
+    ('N', FlagKind::Value),
+    ('F', FlagKind::Bool),
 ];
 
 fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
@@ -626,6 +630,8 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     )?;
     let literal = flags.present.contains(&'l');
     let hex = flags.present.contains(&'H');
+    // `-X` (M5): the words are a copy-mode command and its arguments.
+    let command = flags.present.contains(&'X');
     if literal && hex {
         return Err(ParseError::Other(
             "send-keys: only one of -l or -H allowed".to_string(),
@@ -633,7 +639,9 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     }
     let mut items = Vec::with_capacity(flags.positionals.len());
     for arg in &flags.positionals {
-        items.push(if hex {
+        items.push(if command {
+            SendKeysItem::Literal(arg.clone())
+        } else if hex {
             let byte = u8::from_str_radix(arg, 16)
                 .map_err(|_| ParseError::Other(format!("invalid hex byte: {arg}")))?;
             SendKeysItem::Hex(byte)
@@ -646,6 +654,9 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::SendKeys(SendKeys {
         target: target_or_current(&flags.values, 't')?,
         items,
+        command,
+        count: flags.values.get(&'N').cloned(),
+        format: flags.present.contains(&'F'),
     }))
 }
 
@@ -1615,6 +1626,45 @@ fn parse_wait_for(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_set_buffer(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('a', FlagKind::Bool),
+        ('b', FlagKind::Value),
+        ('n', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "set-buffer")?;
+    no_extra_positionals(&flags, "set-buffer", 1)?;
+    Ok(Command::SetBuffer(SetBuffer {
+        append: flags.present.contains(&'a'),
+        name: flags.values.get(&'b').cloned(),
+        rename: flags.values.get(&'n').cloned(),
+        data: flags.positionals.first().cloned(),
+    }))
+}
+
+fn parse_paste_buffer(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('d', FlagKind::Bool),
+        ('p', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+        ('S', FlagKind::Bool),
+        ('b', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "paste-buffer")?;
+    no_extra_positionals(&flags, "paste-buffer", 0)?;
+    Ok(Command::PasteBuffer(PasteBuffer {
+        bracket: flags.present.contains(&'p'),
+        name: flags.values.get(&'b').cloned(),
+        delete: flags.present.contains(&'d'),
+        raw: flags.present.contains(&'r'),
+        separator: flags.values.get(&'s').cloned(),
+        unsanitized: flags.present.contains(&'S'),
+        target: target_or_current(&flags.values, 't')?,
+    }))
+}
+
 fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('E', FlagKind::Bool),
@@ -2023,6 +2073,147 @@ fn split_commands(
     Ok(stack.pop().map(|l| l.finish().0).unwrap_or_default())
 }
 
+/// One line of a tmux config file ([`split_config_file`]): the line it
+/// starts on and its commands, which run as one group.
+pub type ConfigLine = (usize, Vec<Vec<String>>);
+
+/// Splits a tmux config file into its lines' commands, as tmux 3.7b's
+/// `source-file` reads one (recorded on a private socket):
+///
+/// - a backslash-newline joins two lines anywhere, in quotes too (an odd
+///   run of backslashes before the newline; `\\` then a newline does not);
+/// - an unquoted newline ends a command and its line, except inside a
+///   `{ }` list, where it separates the list's commands;
+/// - quotes may span lines and keep the newline;
+/// - a `#` that starts a word, outside quotes, is a comment to the end of
+///   the line (`#{...}` too; mid-word, `a#b` is a word);
+/// - each line is then a command string ([`split_command_string`]).
+///
+/// An error names the line it is on. tmux's `%if`/`%hidden` directives
+/// and `NAME=value` lines are not read (spec §4.5 keeps `%if` out of
+/// scope): a `%` line is an error, and an assignment reads as a command.
+pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    let mut start = None;
+    let mut flush = |start: &mut Option<usize>, cur: &mut String| {
+        let text = std::mem::take(cur);
+        let Some(line) = start.take() else {
+            return Ok(());
+        };
+        if let Some(rest) = text.trim_start().strip_prefix('%') {
+            let word = rest.split_whitespace().next().unwrap_or_default();
+            let msg = format!("%{word}: not supported (spec 4.5)");
+            return Err((line, ParseError::Other(msg)));
+        }
+        let cmds = split_command_string(&text).map_err(|e| (line, e))?;
+        if !cmds.is_empty() {
+            lines.push((line, cmds));
+        }
+        Ok(())
+    };
+    let src = join_continuations(text);
+    let mut chars = src.iter().copied().peekable();
+    // Outside quotes: at a word boundary, the open `{ }` lists, and the
+    // open `#{` in the current word.
+    let (mut word_start, mut depth, mut formats) = (true, 0usize, 0usize);
+    while let Some((c, line)) = chars.next() {
+        if start.is_none() && !c.is_whitespace() {
+            start = Some(line);
+        }
+        match c {
+            '\n' if depth > 0 => cur.push_str(" ; "),
+            '\n' => flush(&mut start, &mut cur)?,
+            '#' if word_start => {
+                while chars.next_if(|(c, _)| *c != '\n').is_some() {}
+                if cur.trim().is_empty() {
+                    start = None;
+                }
+                continue;
+            }
+            c if c.is_whitespace() || c == ';' => cur.push(c),
+            '\\' => {
+                cur.push(c);
+                if let Some((n, _)) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            '\'' | '"' => {
+                cur.push(c);
+                while let Some((x, _)) = chars.next() {
+                    cur.push(x);
+                    if x == '\\' && c == '"' {
+                        if let Some((n, _)) = chars.next() {
+                            cur.push(n);
+                        }
+                    } else if x == c {
+                        break;
+                    }
+                }
+            }
+            '{' if word_start => {
+                depth += 1;
+                cur.push(c);
+                continue;
+            }
+            '{' if cur.ends_with('#') => {
+                formats += 1;
+                cur.push(c);
+            }
+            '}' => {
+                if formats > 0 {
+                    formats -= 1;
+                } else {
+                    depth = depth.saturating_sub(1);
+                }
+                cur.push(c);
+            }
+            c => cur.push(c),
+        }
+        word_start = c.is_whitespace() || c == ';';
+        if word_start {
+            formats = 0;
+        }
+    }
+    // An unclosed `{` is an error at the end of the file, as tmux reports
+    // it (recorded: a file of four lines ending in a newline says line 5).
+    let eof = src
+        .last()
+        .map_or(1, |(c, line)| line + usize::from(*c == '\n'));
+    let unclosed = depth > 0;
+    flush(&mut start, &mut cur).map_err(|(line, e)| (if unclosed { eof } else { line }, e))?;
+    Ok(lines)
+}
+
+/// `text`'s characters, each with its line number, with every
+/// backslash-newline taken out (tmux's `yylex_getc`: an odd run of
+/// backslashes before a newline).
+fn join_continuations(text: &str) -> Vec<(char, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    let (mut i, mut line) = (0, 1);
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            let run = chars[i..].iter().take_while(|c| **c == '\\').count();
+            let joins = run % 2 == 1 && chars.get(i + run) == Some(&'\n');
+            let kept = run - usize::from(joins);
+            out.extend(std::iter::repeat_n(('\\', line), kept));
+            i += run;
+            if joins {
+                i += 1;
+                line += 1;
+            }
+            continue;
+        }
+        out.push((chars[i], line));
+        if chars[i] == '\n' {
+            line += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
 /// A parsed `{ }` list as the one argument a command gets: the source text
 /// of its commands joined by ` ; `, which split back to exactly the parsed
 /// words, as tmux runs the parsed list itself. Nested lists stay `{ }`, so
@@ -2420,6 +2611,87 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "set-environment" => parse_set_environment(rest),
         "show-environment" => parse_show_environment(rest),
         "__register-source" => parse_register_source(rest),
+        "set-buffer" => parse_set_buffer(rest),
+        "show-buffer" => {
+            let flags = flags_for(rest, &[('b', FlagKind::Value)], "show-buffer")?;
+            no_extra_positionals(&flags, "show-buffer", 0)?;
+            Ok(Command::ShowBuffer(ShowBuffer {
+                name: flags.values.get(&'b').cloned(),
+            }))
+        }
+        "load-buffer" => {
+            const SHORT: &[(char, FlagKind)] = &[
+                ('b', FlagKind::Value),
+                ('t', FlagKind::Value),
+                ('w', FlagKind::Bool),
+            ];
+            let flags = flags_for(rest, SHORT, "load-buffer")?;
+            no_extra_positionals(&flags, "load-buffer", 1)?;
+            Ok(Command::LoadBuffer(LoadBuffer {
+                name: flags.values.get(&'b').cloned(),
+                client: flags.values.get(&'t').cloned(),
+                clipboard: flags.present.contains(&'w'),
+                path: flags
+                    .positionals
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| ParseError::MissingArgument("load-buffer".to_string()))?,
+            }))
+        }
+        "save-buffer" => {
+            const SHORT: &[(char, FlagKind)] = &[('a', FlagKind::Bool), ('b', FlagKind::Value)];
+            let flags = flags_for(rest, SHORT, "save-buffer")?;
+            no_extra_positionals(&flags, "save-buffer", 1)?;
+            Ok(Command::SaveBuffer(SaveBuffer {
+                append: flags.present.contains(&'a'),
+                name: flags.values.get(&'b').cloned(),
+                path: flags
+                    .positionals
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| ParseError::MissingArgument("save-buffer".to_string()))?,
+            }))
+        }
+        "list-buffers" => {
+            let flags = flags_for(rest, &[('F', FlagKind::Value)], "list-buffers")?;
+            no_extra_positionals(&flags, "list-buffers", 0)?;
+            Ok(Command::ListBuffers(ListBuffers {
+                format: flags.values.get(&'F').cloned(),
+            }))
+        }
+        "delete-buffer" => {
+            let flags = flags_for(rest, &[('b', FlagKind::Value)], "delete-buffer")?;
+            no_extra_positionals(&flags, "delete-buffer", 0)?;
+            Ok(Command::DeleteBuffer(DeleteBuffer {
+                name: flags.values.get(&'b').cloned(),
+            }))
+        }
+        "paste-buffer" => parse_paste_buffer(rest),
+        "copy-mode" => {
+            const SHORT: &[(char, FlagKind)] = &[
+                ('e', FlagKind::Bool),
+                ('H', FlagKind::Bool),
+                ('M', FlagKind::Bool),
+                ('u', FlagKind::Bool),
+                ('t', FlagKind::Value),
+            ];
+            let flags = flags_for(rest, SHORT, "copy-mode")?;
+            no_extra_positionals(&flags, "copy-mode", 0)?;
+            Ok(Command::CopyMode(CopyMode {
+                page_up: flags.present.contains(&'u'),
+                scroll_exit: flags.present.contains(&'e'),
+                hide_position: flags.present.contains(&'H'),
+                mouse: flags.present.contains(&'M'),
+                target: target_or_current(&flags.values, 't')?,
+            }))
+        }
+        "choose-buffer" => {
+            let flags = flags_for(rest, &[('Z', FlagKind::Bool)], "choose-buffer")?;
+            no_extra_positionals(&flags, "choose-buffer", 0)?;
+            Ok(Command::ChooseBuffer(ChooseBuffer {
+                zoom: flags.present.contains(&'Z'),
+            }))
+        }
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }
@@ -3929,5 +4201,96 @@ mod tests {
             }))
         );
         assert!(parse(&argv(&["select-layout"])).is_err());
+    }
+
+    fn lines(text: &str) -> Vec<(usize, Vec<Vec<&'static str>>)> {
+        split_config_file(text)
+            .unwrap_or_else(|e| panic!("{text:?}: {e:?}"))
+            .into_iter()
+            .map(|(line, cmds)| {
+                let cmds = cmds
+                    .into_iter()
+                    .map(|c| c.into_iter().map(|w| &*w.leak()).collect())
+                    .collect();
+                (line, cmds)
+            })
+            .collect()
+    }
+
+    /// tmux 3.7b's `source-file`, recorded: a line per group, comments,
+    /// continuations, quotes across lines and `{ }` lists across lines.
+    #[test]
+    fn a_config_file_splits_as_tmux_reads_it() {
+        assert_eq!(
+            lines("set -g @a 1 ; set -g @b 2\n\n  # note\nset -g @c x # c\n"),
+            [
+                (
+                    1,
+                    vec![vec!["set", "-g", "@a", "1"], vec!["set", "-g", "@b", "2"]]
+                ),
+                (4, vec![vec!["set", "-g", "@c", "x"]]),
+            ]
+        );
+        // `#` starts a comment only at a word's start, `#{` included.
+        assert_eq!(
+            lines("set -g @e a#b\ndisplay -p #{session_name}\n"),
+            [
+                (1, vec![vec!["set", "-g", "@e", "a#b"]]),
+                (2, vec![vec!["display", "-p"]]),
+            ]
+        );
+        // A backslash-newline joins, in quotes too; an even run does not.
+        assert_eq!(
+            lines("set -g @g \"a \\\n b\"\nset -g @h a\\\\\nset -g \\\n @i 2\n"),
+            [
+                (1, vec![vec!["set", "-g", "@g", "a  b"]]),
+                (3, vec![vec!["set", "-g", "@h", "a\\"]]),
+                (4, vec![vec!["set", "-g", "@i", "2"]]),
+            ]
+        );
+        // Quotes keep a newline.
+        assert_eq!(
+            lines("set -g @a \"x\ny\"\nset -g @c 'x\ny'\n"),
+            [
+                (1, vec![vec!["set", "-g", "@a", "x\ny"]]),
+                (3, vec![vec!["set", "-g", "@c", "x\ny"]]),
+            ]
+        );
+        // A list's lines are its commands; the list is one argument.
+        assert_eq!(
+            lines("bind x {\n  display a # one\n  display b\n}\nset -g @k 1\n"),
+            [
+                (1, vec![vec!["bind", "x", "'display' 'a' ; 'display' 'b'"]]),
+                (5, vec![vec!["set", "-g", "@k", "1"]]),
+            ]
+        );
+        // which-key's macro: a quoted value continued over lines, glued to
+        // the word before it.
+        assert_eq!(
+            lines("set -gF command-alias[200] show-wk-menu=\\\n'#{@wk_cmd_show}'\n"),
+            [(
+                1,
+                vec![vec![
+                    "set",
+                    "-gF",
+                    "command-alias[200]",
+                    "show-wk-menu=#{@wk_cmd_show}"
+                ]]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_config_file_error_names_its_line() {
+        let err = split_config_file("set -g @a 1\n\ndisplay }\n").unwrap_err();
+        assert_eq!(err.0, 3);
+        // An unclosed `{` is reported at the end of the file (tmux 3.7b).
+        let err = split_config_file("set -g @u 1\nbind x {\n  display a\n\n").unwrap_err();
+        assert_eq!(err.0, 5);
+        let err = split_config_file("%if 1\nset -g @a 1\n%endif\n").unwrap_err();
+        assert_eq!(
+            err,
+            (1, ParseError::Other("%if: not supported (spec 4.5)".into()))
+        );
     }
 }

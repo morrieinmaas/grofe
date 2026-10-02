@@ -1,0 +1,37 @@
+# TM.3: alternation and back-references. POSIX takes the longest match
+# at the leftmost position, and so does grofe; glibc takes a
+# back-reference, grofe finds nothing. tests/acceptance/tm_3.rs checks
+# grofe's own answer on those lines.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(a|ab)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(a|ab)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(ab|abab)+ '
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(ab|abab)+ '
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'd(e|ee)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'd(e|ee)'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward '(ab)\1'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward '(ab)\1'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'fo(o|oo)[0-9]'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X search-backward 'fo(o|oo)[0-9]'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'

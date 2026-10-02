@@ -369,6 +369,8 @@ fn closing_a_popup_ends_its_process_group_without_zombies() {
 #[test]
 fn a_popup_cannot_write_to_the_terminal() {
     let srv = start();
+    // A popup's OSC 52 is relayed as a pane's is, under `on` only.
+    srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     let mut a = attach(&srv, "main");
     // The reviewer's OSC 9 (a C1 CSI and ST and a CR/LF in the body), an
     // OSC 777 with a C1 CSI, an OSC 52 store and two titles.

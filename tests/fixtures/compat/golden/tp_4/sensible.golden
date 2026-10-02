@@ -1,0 +1,52 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set -s escape-time 500
+? 0
+$ set -g history-limit 2000
+? 0
+$ set -s focus-events off
+? 0
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-sensible "$HOME/sens"'
+? 0
+$ run-shell '"$HOME/sens/sensible.tmux" >/dev/null 2>&1'
+? 0
+$ show -sv escape-time
+0
+? 0
+$ show -gv history-limit
+50000
+? 0
+$ show -gv display-time
+4000
+? 0
+$ show -gv status-interval
+5
+? 0
+$ show -gv default-command
+
+? 0
+$ show -gv default-terminal
+tmux-256color
+? 0
+$ show -sv default-terminal
+tmux-256color
+? 0
+$ show -gv status-keys
+emacs
+? 0
+$ show -sv focus-events
+on
+? 0
+$ show -gwv aggressive-resize
+on
+? 0
+$ show -gv prefix
+C-b
+? 0
+$ run-shell 'tmux list-keys -T prefix | grep -E "^bind-key +(-r +)?-T prefix +(C-a|C-b|C-n|C-p|a|b|R) " | tr -s " "'
+bind-key -T prefix R run-shell " \t\t\ttmux source-file <TMPDIR>/home/.tmux.conf > /dev/null; \t\t\ttmux display-message 'Sourced <TMPDIR>/home/.tmux.conf!'"
+bind-key -T prefix b last-window
+bind-key -T prefix C-b send-prefix
+bind-key -T prefix C-n next-window
+bind-key -T prefix C-p previous-window
+? 0

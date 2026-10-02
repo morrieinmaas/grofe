@@ -1,0 +1,98 @@
+# TM.2: extraction over logical lines. A 250-column line (50 words of 5,
+# so a blank ends each 80-column row) wraps three times; soft-wrapped rows
+# join with nothing between them, trailing blanks go (default or coloured),
+# colours copy as text, tabs come back as tabs (one as wide as a single
+# cell too), and a line selection keeps its newline. After each copy:
+# the buffer, its exact size, then it is deleted.
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\n\033[31mred\033[0m and \033[1;42mbold green\033[0m\033[44m   \033[0m   \na\tb\tc\n1234567\tx\nx\t\ty\n\nlast line\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X end-of-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X -N 40 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X -N 20 cursor-left
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X select-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y} #{selection_mode}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X select-line
+$ send-keys -t main -X -N 4 cursor-down
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 4 cursor-down
+$ send-keys -t main -X start-of-line
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X end-of-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-up
+$ send-keys -t main -X -N 3 cursor-left
+$ send-keys -t main -X other-end
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 5 cursor-down
+$ send-keys -t main -X select-line
+$ send-keys -t main -X -N 2 cursor-down
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 5 cursor-down
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X cursor-down
+$ send-keys -t main -X end-of-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 8 cursor-down
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ show-buffer
+$ delete-buffer
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ show-buffer
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

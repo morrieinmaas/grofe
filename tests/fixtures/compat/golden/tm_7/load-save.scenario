@@ -1,0 +1,41 @@
+# TM.7: load-buffer and save-buffer, as tmux 3.7b runs them from the CLI.
+# Paths are the CLI's, relative to its cwd (the run's home); `-` is the
+# CLI's stdin or stdout (from a run-shell job's tmux); empty data makes no
+# buffer; -w and -t need no client; save-buffer creates a file 0644 under
+# the CLI's umask, keeps an existing file's mode, and -a appends.
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+$ run-shell 'printf "file data\n" > "$HOME/in.txt"; mkdir "$HOME/sub"; printf "sub data" > "$HOME/sub/in.txt"; : > "$HOME/empty.txt"'
+$ load-buffer in.txt
+$ loadb -b sub sub/in.txt
+$ list-buffers
+$ load-buffer missing.txt
+$ load-buffer
+$ load-buffer -w in.txt
+$ load-buffer -t nope in.txt
+$ load-buffer -w -t nope in.txt
+$ load-buffer empty.txt
+$ run-shell 'printf "from stdin" | tmux load-buffer -b in -'
+$ run-shell 'printf "" | tmux load-buffer -'
+$ list-buffers
+$ save-buffer out.txt
+$ save-buffer -b sub sub/out.txt
+$ save-buffer -a -b in sub/out.txt
+$ save-buffer -a -b in new.txt
+$ run-shell 'printf old > "$HOME/pre.txt"; chmod 640 "$HOME/pre.txt"'
+$ save-buffer -b sub pre.txt
+$ run-shell 'cd "$HOME"; for f in out.txt sub/out.txt new.txt pre.txt; do ls -l $f | cut -c1-10; cat $f; echo; done'
+$ save-buffer -b in -
+$ saveb -
+$ save-buffer -b nope x.txt
+$ save-buffer nodir/x.txt
+$ save-buffer a b
+$ run-shell 'chmod 000 "$HOME/pre.txt"'
+$ save-buffer pre.txt
+$ load-buffer pre.txt
+$ delete-buffer -b in
+$ delete-buffer -b sub
+$ delete-buffer
+$ delete-buffer
+$ delete-buffer
+$ delete-buffer
+$ save-buffer out.txt

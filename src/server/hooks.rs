@@ -119,6 +119,21 @@ pub const EVENTS: &[EventSpec] = &[
         fires: "a pane's process exited and remain-on-exit kept the pane",
         tmux: "pane-died",
     },
+    EventSpec {
+        name: "alert-bell",
+        fires: "a bell in a monitored window, when bell-action applies (alerts)",
+        tmux: "alert-bell",
+    },
+    EventSpec {
+        name: "alert-activity",
+        fires: "output in a monitored window, when activity-action applies (alerts)",
+        tmux: "alert-activity",
+    },
+    EventSpec {
+        name: "alert-silence",
+        fires: "no output in a monitored window for monitor-silence seconds (alerts)",
+        tmux: "alert-silence",
+    },
 ];
 
 /// The event named `name`.
@@ -420,6 +435,9 @@ pub struct HookFormats {
     hook_window: Option<WindowId>,
     hook_session_name: Option<String>,
     hook_client: Option<String>,
+    /// Set by the window alerts only, as tmux's `notify_winlink`.
+    hook_session: Option<SessionId>,
+    hook_window_name: Option<String>,
 }
 
 impl Fired {
@@ -494,6 +512,23 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
     notify(state, f);
 }
 
+/// `alert-bell`, `alert-activity` or `alert-silence` in `window`
+/// (`server::alerts`): run in the window, its active pane current.
+pub fn window_alert(state: &mut State, name: &'static str, window: WindowId) {
+    if !wanted(state, name) {
+        return;
+    }
+    let Some(w) = state.model.windows.get(&window) else {
+        return;
+    };
+    let mut f = Fired::new(name, Some(w.active));
+    f.vars.hook_window = Some(window);
+    f.vars.hook_window_name = Some(w.name.clone());
+    f.vars.hook_session = Some(w.session);
+    f.vars.hook_session_name = state.model.sessions.get(&w.session).map(|s| s.name.clone());
+    notify(state, f);
+}
+
 /// A pane's process exited and the model has handled it: `pane-died` if
 /// remain-on-exit kept the pane (its own pane as context), else
 /// `pane-exited` (the current pane as context, the gone one as
@@ -519,6 +554,7 @@ pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
 /// ([`take_reply_hold`]). A nested command's hook is on the request's one
 /// queue, so the reply waits for every hook the request fired.
 pub fn run_pending(state: &mut State) {
+    crate::server::alerts::drain(state);
     for (_, name) in std::mem::take(&mut state.model.closed_sessions) {
         if wanted(state, "session-closed") {
             let mut f = Fired::new("session-closed", None);
@@ -893,6 +929,24 @@ pub fn take_request_wait(state: &mut State) -> Option<oneshot::Receiver<Result<S
     Some(wait)
 }
 
+/// When client `id`'s hook queue waits on a shell (a binding's command
+/// fired an `after-*` hook that runs `run-shell`), a receiver told once
+/// that queue is idle: the binding's later commands and the client's
+/// input wait for it, as tmux runs the hook on the client's own queue.
+pub fn take_client_wait(state: &mut State, id: ClientId) -> Option<oneshot::Receiver<String>> {
+    let hooks = &mut state.hooks;
+    if hooks.running {
+        return None;
+    }
+    let q = hooks
+        .queues
+        .get_mut(&Origin::Client(id))
+        .filter(|q| q.waiting)?;
+    let (tx, rx) = oneshot::channel();
+    q.idle.push(tx);
+    Some(rx)
+}
+
 /// For the reply to the request that just ran (`finish`): when its own
 /// hook queue still waits on a shell (tmux 3.7b holds the CLI until its
 /// `after-*` hooks finish), a receiver that answers, with the rest of
@@ -952,6 +1006,8 @@ impl HookFormats {
             "hook_window" => text(self.hook_window.map(|w| w.to_string())),
             "hook_session_name" => text(self.hook_session_name.clone()),
             "hook_client" => text(self.hook_client.clone()),
+            "hook_session" => text(self.hook_session.map(|s| s.to_string())),
+            "hook_window_name" => text(self.hook_window_name.clone()),
             _ => None,
         }
     }
@@ -1190,7 +1246,7 @@ mod tests {
         tmux.sort();
         tmux.dedup();
         assert_eq!(tmux.len(), EVENTS.len());
-        assert_eq!(EVENTS.len(), 12);
+        assert_eq!(EVENTS.len(), 15);
     }
 
     #[test]

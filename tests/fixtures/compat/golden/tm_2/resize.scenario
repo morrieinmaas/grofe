@@ -1,0 +1,34 @@
+# TM.2: the wrapped line of wrap.scenario through a reflowing resize. tmux
+# 3.7b clears the selection when the pane resizes (window_copy_size_changed),
+# so a copy after the resize copies nothing; selecting the logical line
+# again at 50 columns copies the same text as at 80.
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\nafter\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X end-of-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ resize-window -t main -x 50
+$ display -p -t main '#{pane_width} #{pane_in_mode} #{selection_present}'
+$ send-keys -t main -X copy-selection
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X end-of-line
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 2 cursor-down
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ resize-window -t main -x 80
+$ send-keys -t main -X history-top
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

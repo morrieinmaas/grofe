@@ -1,0 +1,18 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ source-file {fixtures}/copy-mode.conf
+? 0
+$ copy-mode -t main
+? 0
+client 80x25 attach -t main
+keys Escape '[<0;3;4M'
+keys Escape '[<32;5;4M'
+keys Escape '[<32;21;6M'
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{selection_present}'
+1 20,5,0 1
+? 0
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+2,503 20,505
+? 0

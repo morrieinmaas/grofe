@@ -1,0 +1,84 @@
+$ new-session -d -s main -n br -x 80 -y 24 'printf "\033[?2004h"; stty raw -echo; exec cat -v'
+? 0
+$ new-window -d -n plain -t main 'stty raw -echo; exec cat -v'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ set-buffer -b one hello
+? 0
+$ paste-buffer -p -b one -t main:br
+? 0
+$ paste-buffer -p -b one -t main:plain
+? 0
+$ paste-buffer -b one -t main:br
+? 0
+$ if-shell -F 1 'set-buffer -b lines "l1\nl2"'
+? 0
+$ paste-buffer -b lines -t main:plain
+? 0
+$ paste-buffer -r -b lines -t main:plain
+? 0
+$ paste-buffer -s XX -b lines -t main:plain
+? 0
+$ if-shell -F 1 'set-buffer -b esc "a\e[201~b\tc\ad"'
+? 0
+$ paste-buffer -p -d -b esc -t main:br
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:br
+^[[200~hello^[[201~hello^[[200~a^[[201~b	c^Gd^[[201~
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -t main:plain
+hellol1^Ml2l1
+             l2l1XXl2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ list-buffers
+lines: 5 bytes: "l1\nl2"
+one: 5 bytes: "hello"
+? 0

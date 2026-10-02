@@ -1,0 +1,100 @@
+# TM.6 case 4: a double click selects the word under the pointer with the
+# default word-separators and copies it after 0.3 s (the stock root row:
+# copy-mode -H, select-word, run-shell -d 0.3, copy-pipe-and-cancel), on
+# each kind of column of 'line 478: foo.bar(baz) qux-quux, ...'; then in
+# copy mode (copy-mode-vi's DoubleClick1Pane).
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+client 80x25 attach -t main
+keys Escape '[<0;3;1M' Escape '[<0;3;1m' Escape '[<0;3;1M' Escape '[<0;3;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;5;1M' Escape '[<0;5;1m' Escape '[<0;5;1M' Escape '[<0;5;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;7;1M' Escape '[<0;7;1m' Escape '[<0;7;1M' Escape '[<0;7;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;9;1M' Escape '[<0;9;1m' Escape '[<0;9;1M' Escape '[<0;9;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;11;1M' Escape '[<0;11;1m' Escape '[<0;11;1M' Escape '[<0;11;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;14;1M' Escape '[<0;14;1m' Escape '[<0;14;1M' Escape '[<0;14;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;16;1M' Escape '[<0;16;1m' Escape '[<0;16;1M' Escape '[<0;16;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;18;1M' Escape '[<0;18;1m' Escape '[<0;18;1M' Escape '[<0;18;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;20;1M' Escape '[<0;20;1m' Escape '[<0;20;1M' Escape '[<0;20;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;22;1M' Escape '[<0;22;1m' Escape '[<0;22;1M' Escape '[<0;22;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;25;1M' Escape '[<0;25;1m' Escape '[<0;25;1M' Escape '[<0;25;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;28;1M' Escape '[<0;28;1m' Escape '[<0;28;1M' Escape '[<0;28;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;41;1M' Escape '[<0;41;1m' Escape '[<0;41;1M' Escape '[<0;41;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+keys Escape '[<0;60;1M' Escape '[<0;60;1m' Escape '[<0;60;1M' Escape '[<0;60;1m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ copy-mode -t main
+$ send-keys -t main -X -N 10 scroll-up
+keys Escape '[<0;16;4M' Escape '[<0;16;4m' Escape '[<0;16;4M' Escape '[<0;16;4m'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_in_mode}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer

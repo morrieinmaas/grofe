@@ -90,6 +90,28 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status.keys", "status-keys"),
     ("compat-identity", "compat-identity"),
     ("allow-passthrough", "allow-passthrough"),
+    // Window alerts (TP.10), by tmux's names.
+    ("monitor-bell", "monitor-bell"),
+    ("monitor-activity", "monitor-activity"),
+    ("monitor-silence", "monitor-silence"),
+    ("bell-action", "bell-action"),
+    ("activity-action", "activity-action"),
+    ("silence-action", "silence-action"),
+    ("visual-bell", "visual-bell"),
+    ("visual-activity", "visual-activity"),
+    ("visual-silence", "visual-silence"),
+    // Paste buffers (TM.4).
+    ("buffer-limit", "buffer-limit"),
+    // Copy mode (M5 stub).
+    ("word-separators", "word-separators"),
+    ("wrap-search", "wrap-search"),
+    ("copy-command", "copy-command"),
+    ("mode-style", "mode-style"),
+    ("copy-mode.match-style", "copy-mode-match-style"),
+    (
+        "copy-mode.current-match-style",
+        "copy-mode-current-match-style",
+    ),
 ];
 
 /// TOML key to tmux option name for every list option (TC.2b). A TOML
@@ -121,7 +143,8 @@ pub(crate) enum Ty {
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
-        | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes" => Ty::Bool,
+        | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes"
+        | "monitor-bell" | "monitor-activity" | "wrap-search" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
@@ -131,7 +154,9 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "status.left-length"
         | "status.right-length"
         | "status.interval"
-        | "message.display-time-ms" => Ty::Int,
+        | "message.display-time-ms"
+        | "monitor-silence"
+        | "buffer-limit" => Ty::Int,
         _ => Ty::Str,
     }
 }

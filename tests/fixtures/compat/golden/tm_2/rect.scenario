@@ -1,0 +1,80 @@
+# TM.2: rectangles over rows mixing CJK, emoji, a combining mark and ASCII.
+# Columns: a0 中1-2 b3 文4-5 c6 / 中0-1 a2 文3-4 b5 😀6-7 / abcdefgh /
+# é0 x1 中2-3 y4. A rectangle copies the same columns from each row, one
+# line per row; an edge through a wide character's second cell drops it,
+# one through its first cell keeps it whole. Then the cursor on the left,
+# a rectangle past the line ends, toggling back to a stream selection, and
+# a stream selection over the wide characters.
+$ new-session -d -s main -x 80 -y 24 'printf "a\344\270\255b\346\226\207c\n\344\270\255a\346\226\207b\360\237\230\200\nabcdefgh\ne\314\201x\344\270\255y\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 3 cursor-right
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y} [#{copy_cursor_word}]'
+$ send-keys -t main -X rectangle-toggle
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X cursor-right
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 2 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X -N 2 cursor-right
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 6 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 2 cursor-down
+$ send-keys -t main -X -N 5 cursor-left
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 4 cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X -N 6 cursor-right
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 1 cursor-down
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X rectangle-toggle
+$ display -p -t main '#{rectangle_toggle} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X cursor-right
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X -N 2 cursor-right
+$ display -p -t main '#{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 3 cursor-down
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

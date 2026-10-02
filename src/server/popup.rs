@@ -324,8 +324,9 @@ pub fn open(
     Ok(true)
 }
 
-/// A CLI caller (no `ctx.client`) of `display-popup` waits for client
-/// `id`'s popup to close, and gets its command's exit status.
+/// The caller of `display-popup` waits for client `id`'s popup to close:
+/// a CLI request gets its command's exit status, a binding's later
+/// commands and its client's input wait (`tm_6/waits`).
 pub fn wait_for_close(state: &mut State, id: ClientId) {
     if !state.popups.is_open(id) {
         return;
@@ -393,10 +394,10 @@ fn on_event(state: &mut State, id: ClientId, generation: u64, kind: PaneEventKin
     // dropped; tmux keeps a popup out of all three too.
     match kind {
         PaneEventKind::Bell => clients::queue_raw(state, id, b"\x07"),
-        PaneEventKind::Clipboard(text)
+        PaneEventKind::Clipboard { param, data }
             if state.model.options.lookup("set-clipboard", &[]) == Some("on") =>
         {
-            clients::queue_raw(state, id, &passthrough::osc52(&text));
+            clients::queue_raw(state, id, &passthrough::osc52(&param, &data));
         }
         PaneEventKind::Osc(body) if !body.starts_with(b"12;") && !body.starts_with(b"112") => {
             clients::queue_raw(state, id, &passthrough::osc(&body));

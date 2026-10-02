@@ -33,6 +33,7 @@
 //! sends `argv` with the dialect [`cli`] chose.
 
 mod bindings;
+mod copy;
 pub(crate) mod formats;
 mod structure;
 
@@ -272,6 +273,7 @@ pub fn table() -> &'static [Row] {
         let mut rows = structure::rows();
         rows.extend(formats::rows());
         rows.extend(bindings::rows());
+        rows.extend(copy::rows());
         rows.extend(core_rows());
         rows
     })
@@ -407,6 +409,7 @@ impl Spec {
     /// it is one of the hidden ones.
     fn lists(&self, flag: char) -> bool {
         self.takes_value(flag)
+            || HIDDEN_BOOL_FLAGS.contains(&(self.name, flag))
             || self.usage.split("[-").skip(1).any(|part| {
                 part.split([']', ' '])
                     .next()
@@ -442,6 +445,10 @@ const HIDDEN: &[&str] = &["server-info (info) [-JT] [-t target-client]"];
 /// Value flags tmux 3.7b accepts but its usage leaves out (recorded:
 /// `select-pane -t x -P` fails `-P expects an argument`).
 const HIDDEN_VALUE_FLAGS: &[(&str, char)] = &[("select-pane", 'P')];
+
+/// Flags with no value tmux 3.7b accepts but its usage leaves out
+/// (recorded: `load-buffer -w path` loads and exits 0).
+const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[("load-buffer", 'w')];
 
 fn parse_spec(line: &'static str, hidden: bool) -> Spec {
     let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
@@ -889,14 +896,23 @@ fn check_flags(inv: &Invocation<'_>) -> Result<(), TmuxError> {
 /// natively (`invalid option: <name>`). Names grofe stores without acting
 /// on them are the option store's `NO_EFFECT` list.
 pub const OPTION_NAMES: &[(&str, &str)] = &[
+    ("activity-action", "activity-action"),
     ("aggressive-resize", "aggressive-resize"),
     ("allow-passthrough", "allow-passthrough"),
     ("allow-rename", "allow-rename"),
     ("automatic-rename", "automatic-rename"),
     ("automatic-rename-format", "automatic-rename-format"),
     ("base-index", "base-index"),
+    ("bell-action", "bell-action"),
+    ("buffer-limit", "buffer-limit"),
     ("command-alias", "command-alias"),
     ("compat-identity", "compat-identity"),
+    ("copy-command", "copy-command"),
+    (
+        "copy-mode-current-match-style",
+        "copy-mode-current-match-style",
+    ),
+    ("copy-mode-match-style", "copy-mode-match-style"),
     ("default-command", "default-command"),
     ("default-shell", "default-shell"),
     ("default-terminal", "default-terminal"),
@@ -910,6 +926,10 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("main-pane-width", "main-pane-width"),
     ("message-style", "message-style"),
     ("mode-keys", "mode-keys"),
+    ("mode-style", "mode-style"),
+    ("monitor-activity", "monitor-activity"),
+    ("monitor-bell", "monitor-bell"),
+    ("monitor-silence", "monitor-silence"),
     ("mouse", "mouse"),
     ("pane-active-border-style", "pane-active-border-style"),
     ("pane-base-index", "pane-base-index"),
@@ -922,6 +942,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("set-clipboard", "set-clipboard"),
     ("set-titles", "set-titles"),
     ("set-titles-string", "set-titles-string"),
+    ("silence-action", "silence-action"),
     ("status", "status"),
     ("status-format", "status-format"),
     ("status-interval", "status-interval"),
@@ -938,6 +959,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("synchronize-panes", "synchronize-panes"),
     ("terminal-features", "terminal-features"),
     ("update-environment", "update-environment"),
+    ("visual-activity", "visual-activity"),
+    ("visual-bell", "visual-bell"),
+    ("visual-silence", "visual-silence"),
     ("window-size", "window-size"),
     ("window-status-bell-style", "window-status-bell-style"),
     (
@@ -951,6 +975,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("window-status-style", "window-status-style"),
     ("window-style", "window-style"),
     ("window-active-style", "window-active-style"),
+    ("word-separators", "word-separators"),
+    ("wrap-search", "wrap-search"),
 ];
 
 /// The option store's name for tmux option `tmux`.
@@ -1184,7 +1210,7 @@ fn start_server(_inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     Ok(Vec::new())
 }
 
-/// `resize-pane -M` and `copy-mode -M` outside a mouse event: nothing, as
+/// `resize-pane -M` outside a mouse event: nothing, as
 /// tmux 3.7b does (a stock mouse binding's drag is grofe's built-in mouse
 /// model's), noted in `compat-miss.log` as ignored so it is never silent.
 fn mouse_no_op(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
@@ -1221,7 +1247,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 const MARKED: &str = "marked panes (spec 4.5)";
 const LINKED: &str = "a window belongs to one session in grofe (spec 4.5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
-const COPY: &str = "copy mode and buffers land in M5 (M36-R8)";
 
 const fn row(
     tmux_form: &'static str,
@@ -1263,25 +1288,6 @@ const fn unsupported(
         GrofeTarget::Unsupported(reason),
         flags,
         "",
-        "",
-    )
-}
-
-/// A form refused until a later milestone brings it: unlike an
-/// out-of-scope refusal it ranks as any row does, so that milestone's
-/// area row mapping the form takes it over.
-const fn later(
-    tmux_form: &'static str,
-    reason: &'static str,
-    flags: &'static [FlagMark],
-    milestone: &'static str,
-) -> Row {
-    row(
-        tmux_form,
-        MappingKind::Behaviour,
-        GrofeTarget::Unsupported(reason),
-        flags,
-        milestone,
         "",
     )
 }
@@ -1402,18 +1408,11 @@ fn core_rows() -> Vec<Row> {
             "",
             "fe_1/errors",
         ),
-        // tmux 3.7b accepts these with no mouse event and does nothing,
+        // tmux 3.7b accepts this with no mouse event and does nothing,
         // exit 0 (recorded); grofe's built-in mouse model does the drag.
+        // (`copy-mode -M` is TM.7's row, native since TM.6.)
         row(
             "resize-pane -M",
-            Behaviour,
-            Translate(mouse_no_op),
-            SEMANTIC,
-            "M3.6",
-            "fe_4/mouse-forms",
-        ),
-        row(
-            "copy-mode -M",
             Behaviour,
             Translate(mouse_no_op),
             SEMANTIC,
@@ -1425,17 +1424,6 @@ fn core_rows() -> Vec<Row> {
         unsupported("clock-mode", UNUSED, &[]),
         unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
-        // M5's copy mode and buffers (M36-R8).
-        later("send-keys -X", COPY, SEMANTIC, "M5"),
-        later("copy-mode", COPY, &[], "M5"),
-        later("set-buffer", COPY, &[], "M5"),
-        later("paste-buffer", COPY, &[], "M5"),
-        later("choose-buffer", COPY, &[], "M5"),
-        later("list-buffers", COPY, &[], "M5"),
-        later("show-buffer", COPY, &[], "M5"),
-        later("delete-buffer", COPY, &[], "M5"),
-        later("load-buffer", COPY, &[], "M5"),
-        later("save-buffer", COPY, &[], "M5"),
         // Front-end rows.
         row(
             "display-message -F",
@@ -2199,7 +2187,12 @@ mod tests {
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));
-        assert_eq!(one_or_none(&["copy-mode", "-M"]), Ok(Vec::new()));
+        // TM.7 maps `copy-mode -M` onto the native flag, which does
+        // nothing outside a mouse key, as in tmux.
+        assert!(matches!(
+            one(&["copy-mode", "-M"]),
+            Ok(Command::CopyMode(cmd::CopyMode { mouse: true, .. }))
+        ));
         assert!(row_for(&args(&["send", "-M"])).is_some_and(Row::refuses));
     }
 
@@ -2261,8 +2254,8 @@ mod tests {
         );
         let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
         assert!(err.contains("not supported"), "{err}");
-        let err = one(&["send-keys", "-X", "cancel"]).unwrap_err().0;
-        assert!(err.contains("M5"), "{err}");
+        let err = one(&["copy-mode", "-q"]).unwrap_err().0;
+        assert!(err.starts_with("copy-mode: not supported"), "{err}");
     }
 
     #[test]

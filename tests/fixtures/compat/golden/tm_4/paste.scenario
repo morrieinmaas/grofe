@@ -1,0 +1,22 @@
+# TM.4: paste-buffer into cat -v. Window 1's program asked for bracketed
+# paste (mode 2004), window 2's did not: -p adds the markers only in 1.
+# Line feeds become CR, or LF with -r, or -s's separator; control
+# characters in the data arrive as ^X (so an ESC in it cannot end the
+# paste early); -d deletes the buffer after pasting.
+$ new-session -d -s main -n br -x 80 -y 24 'printf "\033[?2004h"; stty raw -echo; exec cat -v'
+$ new-window -d -n plain -t main 'stty raw -echo; exec cat -v'
+$ run-shell 'sleep 1'
+$ set-buffer -b one hello
+$ paste-buffer -p -b one -t main:br
+$ paste-buffer -p -b one -t main:plain
+$ paste-buffer -b one -t main:br
+$ if-shell -F 1 'set-buffer -b lines "l1\nl2"'
+$ paste-buffer -b lines -t main:plain
+$ paste-buffer -r -b lines -t main:plain
+$ paste-buffer -s XX -b lines -t main:plain
+$ if-shell -F 1 'set-buffer -b esc "a\e[201~b\tc\ad"'
+$ paste-buffer -p -d -b esc -t main:br
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:br
+$ capture-pane -p -t main:plain
+$ list-buffers

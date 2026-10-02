@@ -165,6 +165,7 @@ fn a_wrapped_clipboard_store_and_notification_are_reemitted() {
         &wrap(b"\x1b]9;x\xc2\x9c\xc2\x9b6n\x07")[..],
         &wrap(b"\x1b]12;#ff0000\x07")[..],
     ];
+    srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     new_session(&srv, &cat_parts(&srv, &parts));
     let mut a = attach(&srv, &[]);
     a.wait_for("DONE");

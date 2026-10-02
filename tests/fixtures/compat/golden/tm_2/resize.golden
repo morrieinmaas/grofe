@@ -1,0 +1,72 @@
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\nafter\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0,0 8,3
+? 0
+$ resize-window -t main -x 50
+? 0
+$ display -p -t main '#{pane_width} #{pane_in_mode} #{selection_present}'
+50 1 0
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0,0 48,4
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 249
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 2 cursor-down
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 250
+buffer0 249
+? 0
+$ resize-window -t main -x 80
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 250
+buffer1 250
+buffer0 249
+? 0

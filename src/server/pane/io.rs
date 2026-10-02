@@ -315,9 +315,8 @@ impl Reader {
                 Event::Title(title) => self.notify(PaneEventKind::Title(title)),
                 Event::ResetTitle => self.notify(PaneEventKind::Title(String::new())),
                 Event::Bell => bell = true,
-                Event::ClipboardStore(_, text) => {
-                    self.notify(PaneEventKind::Clipboard(text));
-                }
+                // OSC 52 stores come from the scanner, which keeps the
+                // selection parameter as tmux does (TM.5).
                 _ => {}
             }
         }

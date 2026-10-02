@@ -1,0 +1,68 @@
+$ new-session -d -s main -x 80 -y 24
+? 0
+$ show -gw mode-keys
+mode-keys vi
+? 0
+$ showw -gv mode-keys
+vi
+? 0
+$ show -s set-clipboard
+set-clipboard on
+? 0
+$ show -gv copy-command
+
+? 0
+$ show -gv word-separators
+!"#$%&'()*+,-./:;<=>?@[\]^`{|}~
+? 0
+$ show -gw wrap-search
+wrap-search on
+? 0
+$ show -s buffer-limit
+buffer-limit 50
+? 0
+$ set -g copy-command 'cat > /dev/null'
+? 0
+$ show -g copy-command
+copy-command "cat > /dev/null"
+? 0
+$ set -g word-separators ' -'
+? 0
+$ show -g word-separators
+word-separators " -"
+? 0
+$ setw -g wrap-search off
+? 0
+$ show -gw wrap-search
+wrap-search off
+? 0
+$ set -g mode-keys emacs
+? 0
+$ show -gwv mode-keys
+emacs
+? 0
+$ setw -g mode-keys vi
+? 0
+$ set -s set-clipboard external
+? 0
+$ show -sv set-clipboard
+external
+? 0
+$ set -s buffer-limit 2
+? 0
+$ setb a
+? 0
+$ setb b
+? 0
+$ setb c
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer2 c
+buffer1 b
+? 0
+$ set -s buffer-limit 0
+! value is too small: 0
+? 1
+$ show -sv buffer-limit
+2
+? 0

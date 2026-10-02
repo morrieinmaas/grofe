@@ -1,0 +1,242 @@
+$ new-session -d -s main -x 80 -y 24 'printf "w%03d " $(seq 1 50); printf "\n\033[31mred\033[0m and \033[1;42mbold green\033[0m\033[44m   \033[0m   \na\tb\tc\n1234567\tx\nx\t\ty\n\nlast line\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 0,0 8,3 8,3
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{copy_cursor_x},#{copy_cursor_y}'
+1 0 8,3
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 249
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X -N 40 cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X -N 20 cursor-left
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 40,1 20,2 20,2
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer1 61
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y} #{selection_mode}'
+1 0,0 9,3 8,3 line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer2 250
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X -N 4 cursor-down
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 0,0 17,7 16,7
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+red and bold green
+a	b	c
+1234567	x
+x		y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer3 290
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 4 cursor-down
+? 0
+$ send-keys -t main -X start-of-line
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 0,4 17,4 17,4
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+red and bold green
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer4 18
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ send-keys -t main -X -N 3 cursor-left
+? 0
+$ send-keys -t main -X other-end
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 17,4 5,3 17,4
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w050
+red and bold green
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer5 23
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 5 cursor-down
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X -N 2 cursor-down
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+a	b	c
+1234567	x
+x		y
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer6 21
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 5 cursor-down
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 9,5 8,6 8,6
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+	c
+1234567	x
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer7 12
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 8 cursor-down
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer8 1
+? 0
+$ show-buffer
+
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer9 1
+? 0
+$ show-buffer
+
+? 0
+$ delete-buffer
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+w001 w002 w003 w004 w005 w006 w007 w008 w009 w010 w011 w012 w013 w014 w015 w016 w017 w018 w019 w020 w021 w022 w023 w024 w025 w026 w027 w028 w029 w030 w031 w032 w033 w034 w035 w036 w037 w038 w039 w040 w041 w042 w043 w044 w045 w046 w047 w048 w049 w050
+red and bold green
+a	b	c
+1234567	x
+x		y
+
+last line
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer10 315
+? 0

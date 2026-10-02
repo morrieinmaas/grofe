@@ -1,0 +1,57 @@
+# TM.4: buffer-limit (50) drops the oldest automatic buffer when the
+# 51st is added; a named buffer is never dropped.
+$ new-session -d -s main -x 80 -y 24 cat
+$ show-options -gv buffer-limit
+$ set-buffer -b keep k
+$ set-buffer d0
+$ set-buffer d1
+$ set-buffer d2
+$ set-buffer d3
+$ set-buffer d4
+$ set-buffer d5
+$ set-buffer d6
+$ set-buffer d7
+$ set-buffer d8
+$ set-buffer d9
+$ set-buffer d10
+$ set-buffer d11
+$ set-buffer d12
+$ set-buffer d13
+$ set-buffer d14
+$ set-buffer d15
+$ set-buffer d16
+$ set-buffer d17
+$ set-buffer d18
+$ set-buffer d19
+$ set-buffer d20
+$ set-buffer d21
+$ set-buffer d22
+$ set-buffer d23
+$ set-buffer d24
+$ set-buffer d25
+$ set-buffer d26
+$ set-buffer d27
+$ set-buffer d28
+$ set-buffer d29
+$ set-buffer d30
+$ set-buffer d31
+$ set-buffer d32
+$ set-buffer d33
+$ set-buffer d34
+$ set-buffer d35
+$ set-buffer d36
+$ set-buffer d37
+$ set-buffer d38
+$ set-buffer d39
+$ set-buffer d40
+$ set-buffer d41
+$ set-buffer d42
+$ set-buffer d43
+$ set-buffer d44
+$ set-buffer d45
+$ set-buffer d46
+$ set-buffer d47
+$ set-buffer d48
+$ set-buffer d49
+$ set-buffer d50
+$ list-buffers

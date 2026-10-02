@@ -130,5 +130,89 @@ for f in "$fixtures"/conf.d/*.toml; do
   fi
 done
 
+# The vendored plugins the M3.7 compat checks run (tests/compat/tp_*.rs):
+# of each tree, the files its entry point runs, byte for byte and with
+# their modes, and its license. Files plugins/LOCAL names are written by
+# the plugin itself and are left out.
+plugins=(tmux-which-key tmux-claude-session-manager tmux-sensible tmux-sessionx)
+plugin_files() {
+  local local_files
+  local_files="$(awk -v n="$2" 'NF > 0 && substr($1, 1, 1) != "#" && $1 == n { print $2 }' \
+    "$canopy/plugins/LOCAL")"
+  (cd "$1" && find . -type f \( -name '*.tmux' -o -name 'LICENSE*' -o -name config.example.yaml \
+    -o -path './scripts/*' -o -path './plugin/*' \) | sed 's|^\./||' | LC_ALL=C sort) |
+    grep -vxF "${local_files:-/}" || true
+}
+for name in "${plugins[@]}"; do
+  src="$canopy/plugins/$name" dst="$fixtures/plugins/$name"
+  want="$(plugin_files "$src" "$name")"
+  if [ "$update" -eq 1 ]; then
+    rm -rf "$dst"
+    while IFS= read -r f; do
+      mkdir -p "$dst/$(dirname "$f")"
+      cp -p "$src/$f" "$dst/$f"
+    done <<<"$want"
+    continue
+  fi
+  if [ ! -d "$dst" ] || [ "$(plugin_files "$dst" "$name")" != "$want" ]; then
+    fail "tests/fixtures/canopy-port/plugins/$name holds other files than canopy's (rerun with --update)"
+    continue
+  fi
+  while IFS= read -r f; do
+    if ! cmp -s "$src/$f" "$dst/$f" || { [ -x "$src/$f" ] && [ ! -x "$dst/$f" ]; } ||
+      { [ ! -x "$src/$f" ] && [ -x "$dst/$f" ]; }; then
+      fail "tests/fixtures/canopy-port/plugins/$name/$f differs from $src/$f (rerun with --update)"
+    fi
+  done <<<"$want"
+done
+
+# The canopy store the plugin checks (tests/acceptance/plugin_rig.rs) run
+# plugins from: the loader, the save and restore strategies with the
+# libraries they source, and each plugin's runtime files (its entry point,
+# what that runs, its license), byte for byte and with their modes. What
+# plugins/LOCAL names (release binaries, files a plugin writes) is left out.
+store_plugin_paths() {
+  case "$1" in
+    tmux-resurrect) echo scripts save_command_strategies strategies ;;
+    tmux-continuum) echo scripts ;;
+    tmux-fzf) echo main.sh scripts ;;
+    tmux-fzf-url) echo fzf-url.sh ;;
+    opensessions) echo package.json integrations/tmux-plugin apps/tui/scripts ;;
+    tmux-yank) echo scripts ;;
+  esac
+}
+store_files() {
+  (cd "$1" && {
+    printf '%s\n' lib/env.sh lib/plugins.sh lib/adapter.sh lib/pane.sh lib/resume.sh plugins/VERSIONS
+    find plugins/strategies -type f -name '*.sh'
+    for name in tmux-resurrect tmux-continuum tmux-fzf tmux-fzf-url opensessions tmux-yank; do
+      find "plugins/$name" -maxdepth 1 -type f \( -name '*.tmux' -o -name 'LICENSE*' -o -name '*-LICENSE' \)
+      for rel in $(store_plugin_paths "$name"); do
+        find "plugins/$name/$rel" -type f
+      done
+    done
+  } | LC_ALL=C sort)
+}
+store="$fixtures/store"
+want="$(store_files "$canopy")"
+if [ "$update" -eq 1 ]; then
+  rm -rf "$store"
+  while IFS= read -r f; do
+    mkdir -p "$store/$(dirname "$f")"
+    cp -p "$canopy/$f" "$store/$f"
+  done <<<"$want"
+elif [ ! -d "$store" ] || [ "$(store_files "$store")" != "$want" ]; then
+  fail "tests/fixtures/canopy-port/store holds other files than canopy's (rerun with --update)"
+else
+  while IFS= read -r f; do
+    a=0 b=0
+    [ -x "$canopy/$f" ] && a=1
+    [ -x "$store/$f" ] && b=1
+    if ! cmp -s "$canopy/$f" "$store/$f" || [ "$a" != "$b" ]; then
+      fail "tests/fixtures/canopy-port/store/$f differs from canopy's (rerun with --update)"
+    fi
+  done <<<"$want"
+fi
+
 [ "$status" -eq 0 ] && echo "ok: canopy's grofe fragments and athome's grofe config load, copies current"
 exit "$status"

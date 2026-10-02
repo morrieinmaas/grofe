@@ -1,0 +1,59 @@
+# TP.10: tmux-claude-session-manager's own script, unchanged (canopy's
+# vendored copy), loaded as canopy's loader loads it, with the owner's two
+# keys (a, A) set first. Its agent command is a stand-in that prints a
+# marker and waits; its session is claude-<hash of the pane's path>, a
+# name no step prints. The status line is off, so no window name or
+# clock shows. The picker's cache dir is $HOME/tmp.
+#
+# 1. prefix a: the agent session is made and shown in a popup.
+# 2. prefix d inside the popup detaches the nested client: the popup
+#    closes and main stays attached.
+# 3. the plugin's own refusal: launching from a session whose name has
+#    the session prefix makes nothing but its message.
+# 4. prefix A opens the picker, which needs fzf; without it the plugin's
+#    own message shows.
+# 5. a bell in the agent session, which fires the plugin's alert-bell
+#    hook.
+# 6. last, a popup attaching to main from main's own client, as the
+#    plugin's popup command attaches: tmux 3.7b shows main nested in it.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -d -t main:2 -n second cat
+$ set -g status off
+$ run-shell 'mkdir -p "$HOME/tmp" && tmux set-environment -g TMPDIR "$HOME/tmp"'
+$ set -g @claude_launch_key a
+$ set -g @claude_list_key A
+$ set -g @claude_command "sh -c 'echo agent-ready; exec cat'"
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-claude-session-manager "$HOME/csm"'
+$ run-shell '"$HOME/csm/claude_hatch.tmux" >/dev/null 2>&1'
+$ list-keys -T prefix a
+$ show-hooks -g alert-bell
+client 80x24 attach -t main
+keys C-b a
+screen agent-ready
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+keys C-b d
+keys zz00
+screen zz00
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+$ set -g @claude_session_prefix mai
+keys C-b a
+# The guard's message comes from the plugin's script, which run-shell
+# runs in the background: wait for it before typing, since a key clears a
+# message (tmux and grofe alike), and one arriving after the key would
+# stay on the screen below.
+screen Popup window already open
+keys zz11
+screen zz00zz11
+$ list-sessions -F '#{session_attached} #{m:claude-*,#{session_name}}'
+$ set -gu @claude_session_prefix
+keys C-b A
+screen fzf is required
+$ select-window -t main:2
+$ run-shell 'printf "\a" > "$(tmux display -p -t "$(tmux list-sessions -F "##{session_name}" | grep "^claude-")" "##{pane_tty}")"'
+# Waits until window 1 shows the forwarded bell (at most 10 s), rather
+# than for a fixed time.
+$ run-shell 'i=0; until tmux list-windows -t main -F "##{window_index}##{window_flags}" | grep -q "^1!"; do i=$((i+1)); [ "$i" -ge 100 ] && break; sleep 0.1; done'
+$ list-windows -t main -F '#{window_index} #{window_flags}'
+$& display-popup -c {client} -E 'tmux attach-session -t main'
+screen
+$ list-clients -F '#{session_name}'

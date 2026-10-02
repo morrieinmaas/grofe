@@ -1,0 +1,29 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+keys Escape '[<64;11;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 0,23 0 , ,
+? 0
+keys Escape '[<64;11;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 5 2,23 0 , ,
+? 0
+keys Escape '[<64;11;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 10 0,23 0 , ,
+? 0
+keys Escape '[<65;11;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 5 0,23 0 , ,
+? 0
+keys Escape '[<65;11;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+0  ,  , ,
+? 0
+keys Escape '[<65;11;6M'
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0

@@ -1,0 +1,39 @@
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+? 0
+$ set -g @log ''
+? 0
+$ bind-key -n F5 'set -ga @log A ; run-shell -d 0.8 ; set -ga @log B'
+? 0
+$ bind-key -n F6 set -ga @log C
+? 0
+$ bind-key -n F7 "run-shell 'sleep 0.8'; set -ga @log D"
+? 0
+$ bind-key -n F8 "run-shell -b 'sleep 0.8'; set -ga @log E"
+? 0
+client 80x25 attach -t main
+keys Escape [15~ Escape [17~
+$ show -gv @log
+A
+? 0
+$ run-shell 'sleep 1.5'
+? 0
+$ show -gv @log
+ABC
+? 0
+$ set -g @log ''
+? 0
+keys Escape [18~ Escape [17~
+$ show -gv @log
+
+? 0
+$ run-shell 'sleep 1.5'
+? 0
+$ show -gv @log
+DC
+? 0
+$ set -g @log ''
+? 0
+keys Escape [19~ Escape [17~
+$ show -gv @log
+EC
+? 0

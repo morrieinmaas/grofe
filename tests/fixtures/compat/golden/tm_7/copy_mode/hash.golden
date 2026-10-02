@@ -1,0 +1,23 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ source-file {fixtures}/copy-mode.conf
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main k 0 w
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+5,22,0 0 
+? 0
+$ send-keys -t main '#'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+15,13,0 1 line
+? 0
+$ send-keys -t main '#'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_match}'
+15,12,0 1 line
+? 0

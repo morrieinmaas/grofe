@@ -1,0 +1,59 @@
+# TM.1: through an attached client: prefix [ and prefix PPage enter copy
+# mode; a digit opens tmux's (repeat) prompt and the next key runs with
+# that count; : prompts for goto-line; q and C-c leave. A key that opens
+# a prompt is typed on its own, so the prompt is open before the next.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+client 80x25 attach -t main
+$ display -p -t main '#{pane_width}x#{pane_height} #{pane_in_mode}'
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 5
+keys k
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 1
+keys 2
+keys j
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 3
+keys 0
+keys 0
+keys k
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 2
+keys w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 4
+keys l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 3
+keys C-u
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ display -p -t main '#{pane_in_mode}'
+keys q
+$ display -p -t main '#{pane_in_mode}'
+keys C-b [
+keys :
+keys 4
+keys 0
+keys Enter
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 2
+keys BSpace
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 3
+keys }
+keys 2
+keys {
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys C-c
+$ display -p -t main '#{pane_in_mode}'
+keys C-b Escape [5~
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 2
+keys Escape [5~
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys G
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys q
+$ display -p -t main '#{pane_in_mode}'

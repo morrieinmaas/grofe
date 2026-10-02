@@ -1,0 +1,56 @@
+$ new-session -d -s main -x 80 -y 24 'printf "alpha beta\ngamma delta\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+keys C-b [
+$ send-keys -t main -X history-top
+? 0
+keys Space
+keys l l l
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 0,0 3,0 3,0
+? 0
+keys o
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 0,0 3,0 0,0
+? 0
+keys v
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+1 1
+? 0
+keys C-v
+$ display -p -t main '#{rectangle_toggle} #{selection_present}'
+0 1
+? 0
+keys V
+$ display -p -t main '#{selection_present} #{selection_mode} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y}'
+1 line 0,0 10,0 9,0
+? 0
+$ send-keys -t main Escape
+? 0
+$ display -p -t main '#{pane_in_mode} #{selection_present} #{selection_active}'
+1 0 0
+? 0
+keys Space
+keys j
+keys A
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer0 12 a\ngamma delt
+? 0
+keys C-b [
+$ send-keys -t main -X history-top
+? 0
+keys w
+keys Space
+keys e
+keys A
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size} #{buffer_sample}'
+buffer0 16 a\ngamma deltbeta
+? 0

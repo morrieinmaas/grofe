@@ -262,7 +262,8 @@ fn the_canopy_report_is_only_plugins_and_out_of_scope_items() {
 
 /// The dotfiles fixture's report: plugins and TPM and accounting notes,
 /// plus exactly these, none a gap TP.0 closes (an option grofe does not
-/// have, M5's copy mode twice, a `-q` source-file that matched no file).
+/// have, a `-q` source-file that matched no file). Its two `copy-mode-vi`
+/// rows convert since M5 (TP.11).
 #[test]
 fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
     let f = Fixture::new("dotfiles");
@@ -274,8 +275,6 @@ fn the_dotfiles_report_leaves_only_what_grofe_lacks() {
         .collect();
     let expected = [
         "option grofe does not have: set -ga terminal-overrides",
-        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi v",
-        "send-keys: not supported (copy mode and buffers land in M5 (M36-R8)): bind -T copy-mode-vi y",
         "skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf",
     ];
     assert_eq!(left.len(), expected.len(), "left: {left:#?}");

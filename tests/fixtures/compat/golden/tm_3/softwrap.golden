@@ -1,0 +1,83 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'foo77'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,18,10 1 1 foo77
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'o7'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+79,18,10 1 1 o7
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'x+foo7+ ends'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,10 1 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxfoo77 ends
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '77 ends'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,9 1 1 77 ends
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'xfoo'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+76,18,10 1 1 xfoo
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'foo77'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,8,0 1 1 foo77
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '7 e'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+1,9,0 1 1 7 e
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'o+7'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+78,8,0 1 1 oo7
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'x{3}f'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,23,0 0  
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward-text 'foo77'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,8,0 1 1 foo77
+? 0
+$ send-keys -t main -X search-forward-text 'oo77 e'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+78,8,0 1 1 oo77 e
+? 0

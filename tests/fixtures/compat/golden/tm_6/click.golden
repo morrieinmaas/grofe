@@ -1,0 +1,18 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+client 80x25 attach -t main
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X -N 3 cursor-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 2,20 0 , ,
+? 0
+keys Escape '[<0;6;10M' Escape '[<0;6;10m'
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+1 0 2,20 0 , ,
+? 0

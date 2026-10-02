@@ -1,0 +1,226 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'jump line'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,18,21
+? 0
+$ send-keys -t main -X jump-forward ','
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+27,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+27,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,18,21
+? 0
+$ send-keys -t main -X jump-forward 'x'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+42,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+46,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+46,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+42,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+42,18,21
+? 0
+$ send-keys -t main -X jump-backward 'a'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+32,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+32,18,21
+? 0
+$ send-keys -t main -X jump-to-forward ';'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+32,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+23,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-to-backward ','
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+17,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+17,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-forward 'z'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X jump-backward 'q'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X start-of-line
+? 0
+$ send-keys -t main -X -N 2 jump-forward a
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+15,18,21
+? 0
+$ send-keys -t main -X -N 3 jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+26,18,21
+? 0
+$ send-keys -t main -X -N 2 jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20,18,21
+? 0
+$ send-keys -t main -X end-of-line
+? 0
+$ send-keys -t main -X -N 2 jump-to-backward a
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+27,18,21
+? 0
+$ send-keys -t main -X jump-forward ''
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+27,18,21
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+24,18,21
+? 0
+$ send-keys -t main -X search-forward 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxf'
+? 0
+$ send-keys -t main -X start-of-line
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,18,10
+? 0
+$ send-keys -t main -X jump-forward '7'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,19,10
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1,19,10
+? 0
+$ send-keys -t main -X jump-backward 'x'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+76,18,10
+? 0
+$ send-keys -t main -X jump-to-forward 'e'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,10
+? 0
+$ send-keys -t main -X jump-to-backward 'o'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,19,10
+? 0
+$ send-keys -t main -X jump-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10,19,10
+? 0
+$ send-keys -t main -X jump-to-forward 'f'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10,19,10
+? 0
+$ send-keys -t main -X jump-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10,19,10
+? 0
+$ send-keys -t main -X search-forward 'classes'
+? 0
+$ send-keys -t main -X jump-forward '	'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+12,21,10
+? 0
+$ send-keys -t main -X jump-forward 'h'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,21,10
+? 0
+$ send-keys -t main -X jump-to-backward '	'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,21,10
+? 0

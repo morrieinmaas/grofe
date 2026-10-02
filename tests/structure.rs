@@ -660,6 +660,52 @@ fn select_layout_e_spreads_the_panes_out() {
     );
 }
 
+/// TP.12: a layout string of another size, on a window no client shows,
+/// resizes the window to it (tmux 3.7b's `layout_parse` resizes the window
+/// to the layout, and with no client nothing sizes it back). That is how
+/// resurrect's restore, run with no client, brings back the saved sizes.
+#[test]
+fn select_layout_string_sizes_a_window_no_client_shows() {
+    let srv = server();
+    ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            SLEEP,
+        ],
+    );
+    ok(&srv, &["split-window", "-h", "-t", "s", SLEEP]);
+    ok(&srv, &["split-window", "-v", "-t", "%1", SLEEP]);
+    ok(
+        &srv,
+        &[
+            "select-layout",
+            "-t",
+            "s:0",
+            "d6e5,120x40,0,0{60x40,0,0,1,59x40,61,0[59x20,61,0,2,59x19,61,21,3]}",
+        ],
+    );
+    assert_eq!(
+        panes(&srv, "s:0"),
+        ["%0 0,0 60x40", "%1 61,0 59x20", "%2 61,21 59x19 *"]
+    );
+    let size = srv.cmd(&[
+        "display",
+        "-p",
+        "-t",
+        "s:0",
+        "#{window_width}x#{window_height}",
+    ]);
+    assert_eq!(size.unwrap().trim(), "120x40");
+}
+
 /// The acceptance case: `main-vertical` with `main-pane-width 50%` over
 /// four panes gives a half-width main pane (tmux 3.7b: half of the 199
 /// columns left after the border, rounded down).

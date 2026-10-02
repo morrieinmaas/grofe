@@ -1,0 +1,7 @@
+--- listed
+3 https://query.example/c?x=1&y=2
+2 https://secure.example/b
+1 http://plain.example/a
+--- opened
+1
+https://query.example/c?x=1&y=2

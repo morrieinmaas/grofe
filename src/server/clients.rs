@@ -112,6 +112,8 @@ pub struct Outbox {
     /// Bytes for ahead of the next frame ([`queue_raw`]); kept across a
     /// dropped frame.
     raw: Vec<u8>,
+    /// Bytes of dropped diffs, ever (`client_discarded`).
+    discarded: u64,
 }
 
 /// Most raw bytes held for a client whose frames are being dropped.
@@ -128,6 +130,7 @@ impl Outbox {
             prev: None,
             blocked: false,
             raw: Vec::new(),
+            discarded: 0,
         };
         (outbox, rx)
     }
@@ -142,11 +145,14 @@ impl Outbox {
         self.prev.is_none()
     }
 
-    /// Holds `bytes` for ahead of the next frame.
-    pub fn queue_raw(&mut self, bytes: &[u8]) {
-        if self.raw.len() + bytes.len() <= RAW_CAP {
+    /// Holds `bytes` for ahead of the next frame; false if they would pass
+    /// [`RAW_CAP`] and were dropped.
+    pub fn queue_raw(&mut self, bytes: &[u8]) -> bool {
+        let fits = self.raw.len() + bytes.len() <= RAW_CAP;
+        if fits {
             self.raw.extend_from_slice(bytes);
         }
+        fits
     }
 
     /// Sends the queued raw bytes, then the diff that turns the client's
@@ -171,6 +177,7 @@ impl Outbox {
                 true
             }
             Err(mpsc::error::TrySendError::Full(mut bytes)) => {
+                self.discarded += (bytes.len() - raw_len) as u64;
                 bytes.truncate(raw_len);
                 self.raw = bytes;
                 self.prev = None;
@@ -356,7 +363,13 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         Some(raw) => cmd::target::parse_target(raw).map_err(|e| e.to_string())?,
         None => Target::Current,
     };
-    check_target(&state.model, &target, &req.ctx, req.nest)?;
+    check_target(
+        &state.model,
+        &target,
+        &req.ctx,
+        req.nest,
+        req.tty.as_deref(),
+    )?;
     let session = select_target(&mut state.model, &target, &req.ctx)?;
     if req.detach_others {
         detach_session(state, session, None);
@@ -441,11 +454,20 @@ fn usable_tty(tty: &str) -> bool {
 /// Everything attach refuses before it changes anything, in tmux's order:
 /// no sessions, then the target (session, window, pane), then self-nesting
 /// without `--nest`.
+///
+/// Self-nesting is two rules. In the tmux dialect it is tmux 3.7b's
+/// `server_client_check_nested` (recorded): a client with `$TMUX` set
+/// whose terminal `tty` is one of this server's panes' is refused, to any
+/// session; any other client attaches, so a popup's `tmux attach -t` to
+/// the popup's own session shows it nested in the popup (TP.10). grofe's
+/// own rule stays TC.1's: from a pane, its own session is refused and
+/// another is allowed.
 fn check_target(
     model: &Model,
     target: &Target,
     ctx: &ClientCtx,
     nest: bool,
+    tty: Option<&str>,
 ) -> Result<SessionId, String> {
     if model.sessions.is_empty() {
         return Err("no sessions".to_string());
@@ -457,14 +479,24 @@ fn check_target(
     if let Target::Pane(_) = target {
         model.resolve_pane(target, ctx)?;
     }
+    if !nest && ctx.dialect == crate::protocol::Dialect::Tmux {
+        let tmux_set = ctx.env.iter().any(|(k, v)| k == "TMUX" && !v.is_empty());
+        let on_a_pane = tty.filter(|t| !t.is_empty()).is_some_and(|t| {
+            model
+                .panes
+                .values()
+                .any(|p| p.handle.tty_path() == Some(std::path::Path::new(t)))
+        });
+        if tmux_set && on_a_pane {
+            return Err(crate::compat::TMUX_NESTED.to_string());
+        }
+        return Ok(session);
+    }
     if !nest
         && let Some(pane) = ctx.pane
         && let Some(p) = model.panes.get(&pane)
         && model.windows.get(&p.window).map(|w| w.session) == Some(session)
     {
-        if ctx.dialect == crate::protocol::Dialect::Tmux {
-            return Err(crate::compat::TMUX_NESTED.to_string());
-        }
         return Err(format!(
             "refusing to attach session {} from inside itself (use --nest to force)",
             model.sessions[&session].name
@@ -473,10 +505,13 @@ fn check_target(
     Ok(session)
 }
 
-/// The attach check (`protocol::ATTACH_CHECK`): `args` are
-/// `attach-session`'s, checked as the attach hello will be, changing
-/// nothing.
+/// The attach check (`protocol::ATTACH_CHECK`): `args` are the client's
+/// terminal, then `attach-session`'s arguments, checked as the attach
+/// hello will be, changing nothing.
 pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<String, String> {
+    let (tty, args) = args
+        .split_first()
+        .map_or(("", args), |(t, a)| (t.as_str(), a));
     let argv: Vec<String> = std::iter::once("attach-session".to_string())
         .chain(args.iter().cloned())
         .collect();
@@ -484,7 +519,7 @@ pub fn attach_check(state: &State, ctx: &ClientCtx, args: &[String]) -> Result<S
     let parsed = crate::compat::parse_split(ctx, &argv)?;
     match parsed.into_iter().next() {
         Some(cmd::Command::AttachSession(c)) => {
-            check_target(&state.model, &c.target, ctx, c.nest).map(|_| String::new())
+            check_target(&state.model, &c.target, ctx, c.nest, Some(tty)).map(|_| String::new())
         }
         _ => Err("attach-session: unexpected command".to_string()),
     }
@@ -1023,6 +1058,7 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::menu::client_gone(state, id);
     crate::server::popup::client_gone(state, id);
     crate::server::tree::client_gone(state, id);
+    crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
     }
@@ -1084,6 +1120,9 @@ pub fn changed(state: &mut State) {
     }
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
+    // A killed pane's copy mode goes with it (M5).
+    let panes = &state.model.panes;
+    state.copy.retain(|p| panes.contains_key(&p));
     apply_sizes(state);
     graphics::on_clients_changed(state);
     sync_mouse_modes(state);
@@ -1116,10 +1155,18 @@ fn sync_mouse_modes(state: &mut State) {
 /// `Output` frame, before the synchronized-output begin), and schedules
 /// that frame.
 pub fn queue_raw(state: &mut State, id: ClientId, bytes: &[u8]) {
-    if let Some(c) = state.clients.get_mut(&id) {
-        c.outbox.queue_raw(bytes);
-    }
+    try_queue_raw(state, id, bytes);
+}
+
+/// [`queue_raw`], false if the client's held raw output was too full to
+/// take `bytes`, which were dropped.
+pub fn try_queue_raw(state: &mut State, id: ClientId, bytes: &[u8]) -> bool {
+    let queued = state
+        .clients
+        .get_mut(&id)
+        .is_some_and(|c| c.outbox.queue_raw(bytes));
     mark_dirty(state, id);
+    queued
 }
 
 /// Client `id` needs a new frame.
@@ -1147,6 +1194,7 @@ pub fn wake(state: &mut State) {
         .filter(|p| p.handle.take_dirty())
         .map(|p| p.id)
         .collect();
+    crate::server::alerts::output(state, &dirty);
     if dirty.is_empty() || state.clients.is_empty() {
         return;
     }
@@ -1920,6 +1968,9 @@ impl FormatVars for ClientVars<'_> {
             "client_name" => Some(c.name.clone()),
             "client_tty" => Some(c.tty.clone().unwrap_or_default()),
             "client_termname" => Some(c.term.clone()),
+            // tmux: bytes not sent because the client fell behind; here,
+            // the dropped frames' diffs.
+            "client_discarded" => Some(c.outbox.discarded.to_string()),
             "client_key_table" => Some(c.keys.table().to_string()),
             // ponytail: grofe always speaks UTF-8 to the client.
             "client_flags" => Some(if c.focused {
@@ -2016,12 +2067,16 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
 const HELD_CAP: usize = 1 << 20;
 
 /// One decoded input from client `id`: held behind a running shell
-/// condition, else routed.
+/// condition or binding ([`hold_input`]), else routed. An open prompt,
+/// menu or popup takes it even then, as tmux hands an overlay's and the
+/// prompt's keys over at once rather than queue them (a binding's
+/// `run-shell` that opens a popup, as tmux-sessionx's does, gets its keys).
 fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
+    let overlay = state.prompts.is_open(id) || state.menus.is_open(id) || state.popups.is_open(id);
     let Some(c) = state.clients.get_mut(&id) else {
         return;
     };
-    if c.holds > 0 {
+    if c.holds > 0 && !overlay {
         hold_item(state, id, Held::Input(input));
         return;
     }
@@ -2063,6 +2118,17 @@ pub(crate) fn in_input_order(state: &mut State, id: ClientId, job: crate::server
     }
 }
 
+/// Puts `input` back behind client `id`'s hold, if it has one: an overlay
+/// that took a key while the client was held and passes it on. Whether it
+/// was held.
+pub(crate) fn hold_behind(state: &mut State, id: ClientId, input: &Input) -> bool {
+    if !state.clients.get(&id).is_some_and(|c| c.holds > 0) {
+        return false;
+    }
+    hold_item(state, id, Held::Input(input.clone()));
+    true
+}
+
 /// Keeps `item` for held client `id`, unless the hold is full.
 fn hold_item(state: &mut State, id: ClientId, item: Held) {
     let Some(c) = state.clients.get_mut(&id) else {
@@ -2098,25 +2164,24 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
         return;
     };
     c.holds = c.holds.saturating_sub(1);
-    if c.holds == 0 {
-        c.held_full = false;
+    if c.holds > 0 {
+        return;
     }
+    c.held_full = false;
+    c.held_bytes = 0;
+    let rest = std::mem::take(&mut c.held);
     let now = Instant::now();
-    loop {
-        let Some(c) = state.clients.get_mut(&id) else {
-            return;
-        };
-        if c.holds > 0 {
+    // Each item goes through `deliver` as if it came now: once one starts
+    // another hold, those behind it are held again in order, except that a
+    // prompt, menu or popup it opened takes the input behind it (`2` then
+    // `{` read in one go: copy mode's count prompt gets the `{`).
+    for item in rest {
+        if !state.clients.contains_key(&id) {
             return;
         }
-        let Some(item) = c.held.pop_front() else {
-            c.held_bytes = 0;
-            return;
-        };
-        c.held_bytes = c.held_bytes.saturating_sub(item.size());
         match item {
             Held::Input(input) => deliver(state, id, input, now),
-            Held::Run(job) => job(state),
+            Held::Run(job) => in_input_order(state, id, job),
         }
     }
 }
@@ -2180,7 +2245,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
-        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true),
+        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true, None),
         Routed::Consumed => {}
     }
 }
@@ -2190,42 +2255,145 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
 /// in `dialect`, the binding's own (spec §4.5), never the attaching
 /// client's: a native binding stays native under `tmux attach`. The first
 /// error stops the rest and shows on the client's status row, as tmux shows
-/// it. Output, and any deferred answer, is dropped. An alias in `cmds`
-/// expands as each runs; a key binding's were expanded when it was bound
-/// ([`Routed::Bound`]).
+/// it. Output is dropped. An alias in `cmds` expands as each runs; a key
+/// binding's were expanded when it was bound ([`Routed::Bound`]).
+///
+/// As tmux 3.7b's per-client command queue (recorded, `tm_6/run-shell`):
+/// a command that answers later (`run-shell` without `-b`, `-d` too, a
+/// blocked `wait-for`, an `if-shell` branch) or an `after-*` hook of it
+/// waiting on its shell holds the rest of the commands, and the client's
+/// later input, until it is done ([`BindingRun`]).
 pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
-    run_commands_for(state, id, cmds, dialect, false);
+    run_commands_for(state, id, cmds, dialect, false, None);
 }
 
-fn run_commands_for(
+/// One binding's commands still to run for a client, in order.
+pub(crate) struct BindingRun {
+    id: ClientId,
+    cmds: VecDeque<Vec<String>>,
+    dialect: Dialect,
+    /// Aliases were expanded when the key was bound.
+    bound: bool,
+    /// The mouse event a mouse key's commands run for (TC.10): its pane is
+    /// the current pane while it is there.
+    mouse: Option<crate::server::mouse::MouseTarget>,
+    /// This run holds the client's input.
+    holding: bool,
+}
+
+/// Starts a [`BindingRun`] (see [`run_binding`]).
+pub(crate) fn run_commands_for(
     state: &mut State,
     id: ClientId,
     cmds: &[Vec<String>],
     dialect: Dialect,
     bound: bool,
+    mouse: Option<crate::server::mouse::MouseTarget>,
 ) {
-    for argv in cmds {
+    let run = BindingRun {
+        id,
+        cmds: cmds.iter().cloned().collect(),
+        dialect,
+        bound,
+        mouse,
+        holding: false,
+    };
+    run_from(state, run);
+}
+
+/// What a held [`BindingRun`] waits for; the error to show, if the held
+/// commands failed.
+type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+
+/// Runs `run`'s next commands until one makes it wait, then resumes it on
+/// the actor once that is done.
+fn run_from(state: &mut State, mut run: BindingRun) {
+    use crate::server::mouse::{self, MouseState};
+    let id = run.id;
+    while let Some(argv) = run.cmds.pop_front() {
         let Some(c) = state.clients.get(&id) else {
+            run.cmds.clear();
             break;
         };
+        let active = active_pane(&state.model, c.session);
+        let pane = run
+            .mouse
+            .as_ref()
+            .map(|t| t.pane)
+            .filter(|p| state.model.panes.contains_key(p))
+            .or(active);
         let ctx = ClientCtx {
-            pane: active_pane(&state.model, c.session),
-            dialect,
+            pane,
+            dialect: run.dialect,
             ..c.ctx.clone()
         };
-        let result = if bound {
-            dispatch::run_bound(state, &ctx, argv)
-        } else {
-            dispatch::run_split(state, &ctx, argv)
+        let bound = run.bound;
+        let one = |state: &mut State| {
+            // A bare `=` is the mouse event's target (M36-R3).
+            let argv = mouse::resolve_targets(state, &argv);
+            if bound {
+                dispatch::run_bound(state, &ctx, &argv)
+            } else {
+                dispatch::run_split(state, &ctx, &argv)
+            }
         };
-        state.deferred_reply = None;
+        let result = match &run.mouse {
+            Some(target) => MouseState::with_current(state, Some(target.clone()), one),
+            None => one(state),
+        };
+        let wait = binding_wait(state, id);
         if let Err(e) = result {
             show_message(state, id, e.trim_end());
-            break;
+            run.cmds.clear();
         }
+        let Some(wait) = wait else {
+            continue;
+        };
+        if !run.holding {
+            hold_input(state, id);
+            run.holding = true;
+        }
+        state.events.flush();
+        changed(state);
+        let jobs = state.jobs.clone();
+        tokio::spawn(async move {
+            let error = wait.await;
+            let job: crate::server::Job = Box::new(move |state: &mut State| {
+                if let Some(e) = error {
+                    show_message(state, run.id, e.trim_end());
+                    run.cmds.clear();
+                }
+                run_from(state, run);
+            });
+            let _ = jobs.send(job).await;
+        });
+        return;
+    }
+    if run.holding {
+        release_input(state, id);
     }
     state.events.flush();
     changed(state);
+}
+
+/// What the command a binding just ran for client `id` left it waiting
+/// for: its deferred answer, else the client's hook queue (see
+/// [`run_binding`]). A failed `run-shell` (an exit status) does not stop
+/// the rest, as in tmux; a held command's own error does.
+fn binding_wait(state: &mut State, id: ClientId) -> Option<BindingWait> {
+    if let Some(rx) = state.deferred_reply.take() {
+        return Some(Box::pin(async move {
+            match rx.await {
+                Ok(Err(f)) if !f.err.is_empty() => Some(f.err),
+                _ => None,
+            }
+        }));
+    }
+    let rx = hooks::take_client_wait(state, id)?;
+    Some(Box::pin(async move {
+        let _ = rx.await;
+        None
+    }))
 }
 
 /// The client a command acts on: the requesting client, else the most
@@ -2248,7 +2416,7 @@ pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId>
         .map(|(id, _)| *id)
 }
 
-fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
+pub(crate) fn client_by_name(state: &State, name: &str) -> Result<ClientId, String> {
     client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
 }
 
@@ -2278,7 +2446,7 @@ pub fn attach_session(
 ) -> Result<String, String> {
     let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) else {
         // tmux resolves the target before it finds there is no terminal.
-        check_target(&state.model, &c.target, ctx, c.nest)?;
+        check_target(&state.model, &c.target, ctx, c.nest, None)?;
         return Err("open terminal failed: not a terminal".to_string());
     };
     let session = select_target(&mut state.model, &c.target, ctx)?;
@@ -2698,6 +2866,40 @@ mod tests {
         assert_eq!(*ran.lock().unwrap(), vec![0, 0]);
     }
 
+    /// TM.1 (`keys_through_a_client`): a held key replayed on release that
+    /// opens a prompt holds the client again, and the keys held behind it
+    /// go to that prompt, as when they arrive after it opened. They were
+    /// left held behind the prompt, which waited for them: copy mode's `2`
+    /// then `{`, read in one go, lost the `{`.
+    #[tokio::test]
+    async fn held_keys_behind_a_replayed_prompt_go_to_it() {
+        let (mut state, id) = state_with_client();
+        crate::server::register_input_hook(&mut state, Arc::new(crate::server::prompt::PromptHook));
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("run")
+        };
+        run(&mut state, &["new-session", "-d", "-s", "a"]);
+        let session = *state.model.sessions.keys().next().expect("a session");
+        state.clients.get_mut(&id).expect("client").session = session;
+        run(
+            &mut state,
+            &[
+                "bind-key",
+                "-n",
+                "a",
+                "command-prompt -I x { set -g @got '%%' }",
+            ],
+        );
+        hold_input(&mut state, id);
+        input(&mut state, id, b"ab\r", Instant::now());
+        assert_eq!(state.clients[&id].held.len(), 3, "all held");
+        release_input(&mut state, id);
+        assert_eq!(state.model.options.lookup("@got", &[]), Some("xb"));
+        assert!(!state.prompts.is_open(id));
+    }
+
     /// tmux 3.7b (recorded): a binding keeps the alias expansion made when
     /// it was bound, and a key press does not expand it again. With
     /// `a=display-message` and `display-message=set @hit twice`, the key
@@ -2771,14 +2973,15 @@ mod tests {
     }
 
     /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
-    /// popup, chooser, mouse) are registered in priority order, and with
+    /// popup, chooser, mouse) and M5's copy mode are registered in priority order, and with
     /// nothing open every hook passes every kind of input on and every
     /// overlay leaves the screen alone.
     #[test]
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 5);
+        assert_eq!(state.registry.input_hooks.len(), 6);
+        // TM.6 removed the mouse's scrollback view overlay.
         assert_eq!(state.registry.overlays.len(), 5);
         let now = Instant::now();
         let inputs = [
@@ -2845,8 +3048,10 @@ mod tests {
         // The slot is full: the frame is dropped, the raw bytes are not.
         assert!(outbox.offer(screen_with('b'), &caps));
         outbox.queue_raw(b"RAW3");
+        assert_eq!(outbox.discarded, 0);
         assert!(!outbox.offer(screen_with('c'), &caps));
         assert!(outbox.needs_full_redraw());
+        assert!(outbox.discarded > 0, "the dropped diff is counted");
         let _ = rx.try_recv().expect("the 'b' frame");
         assert!(outbox.offer(screen_with('c'), &caps));
         let next = rx.try_recv().expect("redraw");

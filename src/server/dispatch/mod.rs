@@ -10,7 +10,8 @@
 //! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
 //! verbs route to one file per owning task: [`structure`] (TC.8),
 //! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
-//! (TC.10) and [`hooks`] (TC.5). After every command it runs the pending
+//! (TC.10) and [`hooks`] (TC.5); M5's buffer verbs to [`buffers`] (TM.4).
+//! After every command it runs the pending
 //! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
 //! last session is gone the server exits.
 //!
@@ -22,7 +23,9 @@
 //! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
 
 pub mod bindings;
+pub mod buffers;
 pub mod client;
+pub mod copy;
 pub mod hooks;
 pub mod menu;
 pub mod options;
@@ -174,7 +177,12 @@ pub(crate) fn run_commands(
             let rest: Vec<Command> = cmds.collect();
             let held = state.held.get_or_insert_default();
             if !rest.is_empty() {
-                held.frames.push((ctx.clone(), rest));
+                held.frames.push(client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds: rest,
+                    keep_going: false,
+                    depth: options::source_depth(),
+                });
             }
             break;
         }
@@ -215,6 +223,9 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ShowOptions(_)
                 | Command::HasSession(_)
                 | Command::CapturePane(_)
+                | Command::ShowBuffer(_)
+                | Command::SaveBuffer(_)
+                | Command::ListBuffers(_)
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
     })
@@ -263,9 +274,13 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // A status source a `#(cmd)` registered stops once no option
         // reads it any more (FE.3).
-        Command::SetOption(_) => {
-            let out = options::run(state, ctx, cmd);
+        Command::SetOption(c) => {
+            let silence = c.name == "monitor-silence";
+            let out = options::run(state, ctx, Command::SetOption(c));
             server::sources::prune_unreferenced(state);
+            if silence && out.is_ok() {
+                server::alerts::silence_option_set(state);
+            }
             out
         }
         Command::ShowOptions(_)
@@ -349,6 +364,17 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::register(state, c.name.as_deref(), &c.command, None, None);
             Ok(String::new())
         }
+        // M5: buffers (TM.4).
+        Command::SetBuffer(c) => buffers::set_buffer(state, ctx, c),
+        Command::ShowBuffer(c) => buffers::show_buffer(state, ctx, c),
+        Command::LoadBuffer(c) => buffers::load_buffer(state, ctx, c),
+        Command::SaveBuffer(c) => buffers::save_buffer(state, ctx, c),
+        Command::ListBuffers(c) => buffers::list_buffers(state, ctx, c),
+        Command::DeleteBuffer(c) => buffers::delete_buffer(state, ctx, c),
+        Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),
+        Command::ChooseBuffer(c) => buffers::choose_buffer(state, ctx, c),
+        // M5: copy mode (TM.1).
+        Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
     }
 }
 
@@ -494,7 +520,7 @@ mod tests {
             &["has-session", "-t", "main"],
             &["display-message", "-p", "#{window_name}"],
             &["capture-pane", "-p"],
-            &[ATTACH_CHECK, "-t", "main"],
+            &[ATTACH_CHECK, "", "-t", "main"],
         ] {
             assert!(read_only(&argv(words)), "{words:?}");
         }

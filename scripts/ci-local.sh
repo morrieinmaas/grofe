@@ -9,6 +9,13 @@
 # GROFE_COMPAT_REQUIRED=1 a missing checkout fails the run instead of
 # skipping the suite. The macOS leg inherits the three; the Linux leg gets
 # them through act, with both checkouts mounted read-only.
+#
+# The Linux leg also runs the plugin cases that need a private /tmp (the
+# workflow sets GROFE_TEST_PRIVATE_TMP=1 there) with their release
+# binaries, GROFE_TEST_OPENSESSIONS and GROFE_TEST_XRE, which the job
+# provisions for its own platform (scripts/provision-plugin-binaries.sh)
+# from the GROFE_COMPAT_CANOPY checkout mounted below. Host binaries are not
+# passed in: on macOS they are the wrong platform for the container.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

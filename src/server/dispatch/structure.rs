@@ -292,6 +292,8 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             cols,
             rows,
             bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
             last_panes: Vec::new(),
             floating: Vec::new(),
         });

@@ -420,6 +420,28 @@ impl InputHook for PromptHook {
         if let Input::Focus(_) = input {
             return None;
         }
+        // `-N` (M5): as tmux 3.7b's `status_prompt_key`, any key but a
+        // digit answers the prompt and then goes on as a key (copy mode's
+        // counts: `5` then `j`).
+        if let (Read::Line, true, Input::Key(key)) = (prompt.read, prompt.numeric, input) {
+            let digit = key.mods == Default::default()
+                && matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit());
+            if !digit {
+                let prompt = state.prompts.close(client)?;
+                let command = replace_template(&prompt.template, &prompt.line());
+                match cmd::split_command_string(&command) {
+                    Ok(cmds) if !cmds.is_empty() => {
+                        clients::run_binding(state, client, &cmds, prompt.dialect)
+                    }
+                    Ok(_) => {}
+                    Err(e) => clients::show_message(state, client, &e.to_string()),
+                }
+                clients::mark_dirty(state, client);
+                // The key goes on behind whatever holds the client (the
+                // binding that opened the prompt), as tmux queues it.
+                return clients::hold_behind(state, client, input).then_some(Routed::Consumed);
+            }
+        }
         let edit = match (prompt.read, input) {
             (Read::Line, Input::Key(key)) => prompt.key(key, history),
             (Read::Line, Input::Paste { data, .. }) => {
@@ -570,7 +592,7 @@ pub fn command_prompt(
         numeric: c.numeric,
         ..Prompt::new(label, &initial, template)
     };
-    open(state, ctx, id, prompt, !c.background);
+    open(state, id, prompt, !c.background);
     Ok(String::new())
 }
 
@@ -602,7 +624,7 @@ pub fn confirm(
         read: Read::Confirm,
         ..Prompt::new(label, "", command)
     };
-    open(state, ctx, id, prompt, true);
+    open(state, id, prompt, true);
     Ok(String::new())
 }
 
@@ -631,11 +653,13 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
     cmd::expand(&long_aliases(text), &ClientVars::new(model, client, pane))
 }
 
-/// Opens `prompt` on client `id`; a CLI caller waits for it to close when
-/// `wait` is set.
-fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, prompt: Prompt, wait: bool) {
+/// Opens `prompt` on client `id`; with `wait` set its caller waits for it
+/// to close: a CLI request's reply, and a binding's later commands and its
+/// client's input, as tmux 3.7b's command queue waits (recorded,
+/// `tm_6/waits`).
+fn open(state: &mut State, id: ClientId, prompt: Prompt, wait: bool) {
     state.prompts.open.insert(id, prompt);
-    if wait && ctx.client.is_none() {
+    if wait {
         let reply = dispatch::defer_reply(state);
         state.prompts.waiting.insert(id, reply);
     }
@@ -690,7 +714,9 @@ fn verb(template: &str) -> String {
 /// `run-shell` (R23): `/bin/sh -c` in a task of its own, never waited on
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
-/// runs in the session's cwd and its output is dropped. With `-b` (TC.5)
+/// runs in the session's cwd, its output is dropped, and the binding's
+/// later commands and the client's later input wait for it, as tmux's
+/// client queue does (`clients::run_binding`). With `-b` (TC.5)
 /// the reply is empty and immediate, and the output is dropped. The shell
 /// gets the server environment and the session's (`hooks::shell_env`).
 /// A failing command's output and tmux's message go to the CLI's stdout,
@@ -722,9 +748,10 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
             expand_command(state, &at, &c.cmd)
         }
     };
-    // Inside a hook the queue waits for the shell, even from a binding.
-    let waits = !from_binding || hooks::in_hook(state);
-    let reply = (waits && !c.background).then(|| dispatch::defer_reply(state));
+    // Whatever runs it waits for the shell (a CLI request, a hook's queue,
+    // a binding's client); only the CLI and a hook keep its output.
+    let capture = !from_binding || hooks::in_hook(state);
+    let reply = (!c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     let delay = c.delay;
     tokio::spawn(async move {
@@ -734,7 +761,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         }
         let result = match script.is_empty() && delay.is_some() {
             true => Ok(String::new()),
-            false => shell(&script, cwd, env, socket, reply.is_some()).await,
+            false => shell(&script, cwd, env, socket, capture && reply.is_some()).await,
         };
         if let Some(reply) = reply {
             let _ = reply.send(result);

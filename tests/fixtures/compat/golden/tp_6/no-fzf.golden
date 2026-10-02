@@ -1,0 +1,51 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-session -d -s other -n second cat
+? 0
+$ set -g status off
+? 0
+$ set -g @sessionx-bind s
+? 0
+$ set -g @sessionx-zoxide-mode on
+? 0
+$ set -g @sessionx-window-mode on
+? 0
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-sessionx "$HOME/sx"'
+? 0
+$ run-shell '"$HOME/sx/sessionx.tmux" >/dev/null 2>&1'
+? 0
+$ run-shell 'tmux list-keys -T prefix | grep -E "^bind-key +-T prefix +s " | tr -s " "'
+bind-key -T prefix s run-shell <TMPDIR>/home/sx/scripts/sessionx.sh
+? 0
+client 80x24 attach -t main
+keys C-b s
+$ run-shell "sleep 3"
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display -p '#{client_session}'
+main
+? 0

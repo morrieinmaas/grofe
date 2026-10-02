@@ -72,6 +72,7 @@ impl Control {
         serde_json::to_string(&Request {
             id,
             argv: argv.to_vec(),
+            ..Default::default()
         })
         .unwrap()
     }

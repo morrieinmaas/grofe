@@ -1,0 +1,12 @@
+# TM.4: three automatic buffers, listed newest first in tmux's template;
+# show-buffer, a custom -F and delete-buffer's default (the newest).
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-buffer one
+$ set-buffer 'two words'
+$ set-buffer 'with "quotes", a \ and a tab:	end'
+$ list-buffers
+$ show-buffer
+$ show-buffer -b buffer1
+$ list-buffers -F '#{buffer_name}|#{buffer_size}|#{buffer_sample}'
+$ delete-buffer
+$ list-buffers

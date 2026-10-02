@@ -342,11 +342,11 @@ lands in the milestone shown.
 | Listing and inspection | `list-sessions`, `list-windows` (`-a`, `-t`), `list-panes` (`-a`, `-t`), each with `-F` and `-f <filter>`; `display-message -p [-t] <fmt>`, and without `-p` as a status-line message for `display-time`; `show-options` with `-g`, `-v`, `-q` in any combination (`-gqv`) and `-t <session>`; `capture-pane -e -p -J -S -E` | pass-through; default output formats and `show` output rendered exactly | M3.6 (`-F`: M1; `capture-pane -e`: M2) |
 | Options by tmux name | `set` and `show` accept tmux option names through one name table shared with `import-tmux` (`status-left` is `status.left`); `-a` append, `-F` expand, `-u` unset, `-q` quiet, `-o` only if unset; `set -p -t $TMUX_PANE @opt v`. Names in the table that grofe has no use for (`terminal-features`, `extended-keys-format`, `default-terminal`, which the probe and D7 decide) are accepted, stored and shown as "no effect" by `show-config --explain`; a name outside the table is an error, as in M1. Array options (`status-format[N]`, `command-alias[N]`) and append with `-ga`/`-as` extend the option store. The owner's options that could be in doubt: `main-pane-width 50%` has an effect (`main-vertical` uses it); `allow-rename off` is grofe's behaviour already (OSC titles never rename, above), so `on` has no effect; `aggressive-resize` has no effect, since D6 already sizes each window to its latest active client; `status-keys emacs` matches grofe's prompt keys, and `vi` has no effect | name renames; scope flag merges; arrays onto grofe list options | M3.6 |
 | Command sequences | `\;` chains on the CLI and in bindings (canopy-agent's `set ... \; set ...` on every hook, the cockpit binding's five-command sequence) | pass-through | M3 (T3.5); goldens M3.6 |
-| Bindings | `if-shell`, both the `-F` format form and the shell form (run off the actor; `-b` does not wait); `confirm-before -p`; `command-prompt -I -p` for renames; the `command-alias` option; `bind -N` notes as descriptions; custom key tables (`-T <name>`, entered with `switch-client -T`); `-r` repeat; bindable mouse keys (`MouseDown1Pane`, `MouseDown1Status`, `MouseDown3Pane`, `MouseDrag1Border`, `MouseDragEnd1Pane`, `WheelUpPane`, `WheelDownPane`, `DoubleClick1Pane`, `TripleClick1Pane`) acting on the pane or status range under the pointer, and a `display-menu` run from a mouse key opens at the pointer. **grofe's built-in mouse model** (T3.2, TC.10: focus, wheel, border drag, selection) replaces tmux's stock mouse bindings, so their argv forms (`-t =`, `send -M`, `resize-pane -M`, `copy-mode -M -e`, `display-menu -x M -y M`, `-x W -y S`) are not supported; TP.9 lists each stock mouse binding against its built-in replacement | `if-shell` to grofe's conditional; `command-alias` to grofe aliases; mouse argv forms fail as semantic | M3.6 |
+| Bindings | `if-shell`, both the `-F` format form and the shell form (run off the actor; `-b` does not wait); `confirm-before -p`; `command-prompt -I -p` for renames; the `command-alias` option; `bind -N` notes as descriptions; custom key tables (`-T <name>`, entered with `switch-client -T`); `-r` repeat; bindable mouse keys (`MouseDown1Pane`, `MouseDown1Status`, `MouseDown3Pane`, `MouseDrag1Border`, `MouseDragEnd1Pane`, `WheelUpPane`, `WheelDownPane`, `DoubleClick1Pane`, `TripleClick1Pane`) acting on the pane or status range under the pointer, and a `display-menu` run from a mouse key opens at the pointer. **grofe's built-in mouse model** (T3.2, TC.10: focus, wheel, border drag, selection) replaces tmux's stock mouse bindings, so their argv forms (`-t =`, `send -M`, `resize-pane -M`, `display-menu -x M -y M`, `-x W -y S`) are not supported (M5 maps `copy-mode -M -e -H` onto native copy mode, TM.0 decision 3); TP.9 lists each stock mouse binding against its built-in replacement | `if-shell` to grofe's conditional; `command-alias` to grofe aliases; mouse argv forms fail as semantic | M3.6 |
 | tmux default bindings | The stock prefix bindings the owner's server has live: `;` `last-pane`, `C-o`/`M-o` `rotate-window`, `q` `display-panes`, `.` `move-window` prompt, `f` `find-window` prompt, `C-z` `suspend-client`, `D` `choose-client -Z`, `~` `show-messages`, `E` `select-layout -E`, `M-n`/`M-p` `next-window -a`/`previous-window -a`, `/` `command-prompt -k` then `list-keys -1N`, `'` `command-prompt -T window-target`, plus `d w z [ ] x & , $ ! { } : = i n p` from earlier milestones and this table. `m` (`select-pane -m`, marking) is out of scope, below | none: grofe's native default key table | M3.6 (`[`, `]`, `=`: M5) |
 | Overlays | `display-popup` with `-E -w -h -x -y -d -b <border> -T <title> -c <client> [cmd]`, what the installed fzf's `--tmux` sends (`list-commands new-pane` as its probe, `new-pane -P -F -t -c -x -y -X -Y` for a floating pane, `wait-for` and `wait-for -S`), and a nested `tmux attach-session -t <other>` inside it (§4.6); `display-menu -T -x -y` whose items may open further menus; `display-panes` (pick a pane by its number); `command-prompt -k` (read one key) and `-T <type>` (accepted, no completion); `list-keys -1N`; `choose-tree -Z -w` | pass-through; border style and title cosmetic | M3.6 |
-| Hooks and environment | `set-hook -g`, `set-hook -gu`, `show-hooks`, for `after-select-pane`, `after-select-window`, `after-new-window`, `after-kill-pane`, `after-resize-pane`, `after-resize-window`, `client-resized`, `client-session-changed`, `session-created`, `session-closed`, `pane-exited`, `pane-died`; `run-shell -b`; `set-environment` with `-g`, `-u`, `-h` (and `-gu`); `show-environment -g -h` (§4.2) | hook names to grofe event subscriptions; environment flags pass through | M3.6 |
-| Buffers and copy | `set-buffer`, `paste-buffer -p`, `choose-buffer`, `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` in the `copy-mode-vi` table, `command-prompt -T search` | pass-through | M5, with copy mode |
+| Hooks and environment | `set-hook -g`, `set-hook -gu`, `show-hooks`, for `after-select-pane`, `after-select-window`, `after-new-window`, `after-kill-pane`, `after-resize-pane`, `after-resize-window`, `client-resized`, `client-session-changed`, `session-created`, `session-closed`, `pane-exited`, `pane-died`, and since M3.7 tmux's three alert hooks with its window alert options; `run-shell -b`; `set-environment` with `-g`, `-u`, `-h` (and `-gu`); `show-environment -g -h` (§4.2) | hook names to grofe event subscriptions; environment flags pass through | M3.6 |
+| Buffers and copy | `copy-mode -u -e -H -M`, `send-keys -X -F -N`; `set-buffer`, `show-buffer`, `list-buffers`, `delete-buffer`, `paste-buffer -p`, `choose-buffer`; `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear` in the `copy-mode-vi` table, `command-prompt -T search`; `load-buffer -b -t -w` and `save-buffer -a -b`, paths the CLI's and `-` its stdin or stdout. `copy-mode -d -q -s -S` are refused (`docs/copy-mode.md`) | pass-through | M5, with copy mode (TM.7) |
 | Formats | short forms `#S #I #W #h #P`; the inventory's variables (`client_name`, `client_tty`, `client_prefix`, `client_session`, `client_last_session`, `pane_tty`, `pane_title`, `pane_start_command`, `pane_in_mode`, `pane_mode`, `pane_left`, `pane_top`, `alternate_on`, `mouse_any_flag`, `window_layout`, `window_flags`, `window_panes`, `session_windows`, `session_grouped`, `pid`, `socket_path`, `mouse_status_range`, `history_size`, `version`, and grofe's own `grofe_version`); modifiers `#{!=:}`, `#{>:}`, `#{>=:}`, `#{&&:}`, `#{\|\|:}`, `#{m:}` (fnmatch), `#{m/r:}` (regex), `#{t:}`; conditions on bare names (`#{?#W,..}`, `#{?@opt,..}`); `##` and `##{` escaping; `#(cmd)` as a cached source (D8) | short forms and `##` rewritten; `#(cmd)` to a cached source; modifiers native | M3.6 (`copy_cursor_word`: M5) |
 | Status line | `status 2` with `status-format[N]` rows; `status-position top`; `status-justify`; `status-interval`, which also drives sources; `status-left-length`, `status-right-length`; `window-status-format`, `window-status-current-format`, `window-status-separator`; styles `#[range=user\|<name>]..#[norange]` (a click sets `mouse_status_range`) and `#[align=left\|centre\|right]`; a repaint within one frame when an option the status reads changes | tmux option names onto native status options | M3.6 (one row, window formats, strftime: M2) |
 | Terminal passthrough | `DCS tmux;` wrappers, which apps send once `$TMUX` is set, are unwrapped: a wrapped APC `_G` is handled as a placeholder-mode kitty graphics command (§4.9), any other wrapped sequence the bare path acts on is handled exactly as if sent bare, anything else is dropped (§4.9) | none: native pane-output handling, not argv | M3.6 |
@@ -357,12 +357,12 @@ lands in the milestone shown.
 |---|---|
 | `{mouse}`, `{last}`, `{marked}` target tokens, `!`, `+`/`-` offsets, fnmatch target patterns | Not in the owner's scripts. Mouse bindings act on the pane under the pointer without a token; `=name` covers exact matching |
 | `link-window`, `unlink-window`, session groups | A window belongs to one session in grofe. sessionx's unlink flow is replaced in the port; `session_grouped` is always 0 |
-| `source-file` of a `tmux.conf`, `%if`, parsing `list-keys` output in tmux's format | Config is ported once (D1). Only sensible and TPM parse `list-keys`, and both are dropped in the port |
+| `%if`, `%hidden` and `NAME=value` lines in a sourced tmux file; parsing `list-keys` output in tmux's format | Config is ported once (D1); a plugin's own tmux file is read (§5.1), but none the owner runs uses them. Only sensible and TPM parse `list-keys`, and both are dropped in the port |
 | tmux's `-C` and `-CC` control mode | Not shipped in v1; nothing the owner runs uses it; possible M8. grofe's own control mode (§4.6) is always grofe dialect |
 | Marked panes: `select-pane -m`/`-M`, the stock `m` binding | The mark only feeds `{marked}` targets and `-s` defaults, which the owner's scripts never use; `m` stays unbound and TP.9 lists it |
-| Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `copy-mode -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
+| Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
 | `pipe-pane`, `lock-server`, `clock-mode`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
-| Format modifiers `#{s/../../:}`, `#{=N:}`, `#{l:}`, `#{E:}`, `#{T:}`, `#{q:}` and the loops `#{S:}`, `#{W:}`, `#{P:}` | Not in the owner's formats; each is added when a ported script needs it |
+| Format modifiers `#{s/../../:}`, `#{=N:}`, `#{l:}`, `#{E:}`, `#{T:}` and the loops `#{S:}`, `#{W:}`, `#{P:}` | Not in the owner's formats; each is added when a ported script needs it (`#{q:}` was, for claude-session-manager, in M3.7) |
 | Sockets under tmux's own directory, or scripts that build `/tmp/tmux-$UID/...` by hand | grofe keeps its socket directory (§4.1, D12); the owner's scripts use `$TMUX` or `#{socket_path}` |
 
 **Window names:** `automatic-rename` is on by default and names a window
@@ -398,8 +398,12 @@ true self-nesting is refused unless `--nest` is given (grofe's own long
 flag; `-f` stays tmux's client-flags option, for the tmux front end):
 attaching to the session
 that contains the calling pane (for a popup, the session of the client that
-opened it), which would draw the session inside itself. The refusal uses
-tmux's message for a tmux-dialect request, grofe's otherwise (D12).
+opened it), which would draw the session inside itself. That is grofe's
+own rule. A tmux-dialect attach follows tmux 3.7b's instead (recorded,
+M3.7 TP.10): a client with `$TMUX` set whose terminal is one of the
+server's panes' is refused to any session, with tmux's message, and any
+other client attaches, so a popup's `tmux attach-session -t` to its own
+session shows the session nested in the popup.
 
 **Control mode:** newline-delimited JSON both ways.
 
@@ -481,10 +485,17 @@ in §4.5; that is a command surface, not the plugin API (D9).
   sample includes the foreground process's full argv, exposed as
   `pane_current_argv`. Nothing downstream trusts the process name: a Claude
   Code pane reported its comm as `2.1.245` (canopy c15f63e), and hand-started
-  agent panes are identified from argv (canopy 5aaac53). In M1
-  cwd comes only from sampling: `vte` 0.15 does not parse OSC 7. From M3
-  grofe's own OSC byte scanner (T3.3, §4.9) reads OSC 7, which is then the
-  preferred cwd source when a shell emits it, and emits `PaneEvent::Cwd`.
+  agent panes are identified from argv (canopy 5aaac53). The cwd,
+  `#{pane_current_path}`, comes only from the foreground process, as tmux
+  3.7b's does (`osdep_get_cwd`): it is read when a format asks for it, and
+  the sample is the fallback. What a pane reports with OSC 7 is never its
+  cwd. From M3 grofe's own OSC byte scanner (T3.3, §4.9; `vte` 0.15 does
+  not parse OSC 7) reads it and emits `PaneEvent::Path`, which only sets
+  `#{pane_path}` to the text as sent, as tmux shows it (TM.5, TM.7): never
+  decoded, C0 bytes dropped, a backslash doubled, and text that is not
+  UTF-8 or holds a DEL ignored. Unlike tmux, which keeps it, a report
+  holding a C1 control character (U+0080 to U+009F) is ignored whole, so
+  a pane cannot put a CSI into a format.
   The same scanner also frames kitty graphics commands (APC `_G`, §4.9),
   which `vte` 0.15 drops.
 
@@ -561,12 +572,13 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
 - Multi-row status (`status 2` with `status-format[N]`; canopy uses two rows at
   the top) and `status-position top`.
 
-### 4.11 Copy mode and buffers [planned, M5]
+### 4.11 Copy mode and buffers
 
-The owner's `copy-mode-vi` table is the scope: 93 bindings, tmux 3.7b's stock
-table plus the ones canopy and tmux-yank add. A binding outside it needs a
-dogfooding reason. The plan's scope doc (TM.0) lists each binding with the
-test that pins it against a golden recorded from tmux 3.7b.
+The owner's `copy-mode-vi` table is the scope: 95 bindings, tmux 3.7b's 88
+stock rows plus 7 that canopy's navigator and tmux-yank add (they also
+replace 3 stock rows). A binding outside it needs a dogfooding reason. The
+scope doc (`docs/copy-mode.md`, from TM.0) lists each binding with the test
+that pins it against a golden recorded from tmux 3.7b.
 
 - **Per pane.** Copy mode is a pane mode, entered with `copy-mode` (`-u` a page
   up, `-e` leave at the bottom), `prefix [`, `prefix PageUp` or the wheel. The
@@ -581,15 +593,18 @@ test that pins it against a golden recorded from tmux 3.7b.
 - **Search** is by regular expression (`search-forward`, `search-backward`),
   with plain `-text` variants, `n` and `N`, `#` and `*` on
   `#{copy_cursor_word}`, `wrap-search` and match styles; the prompt is
-  `command-prompt -T search`. The dialect is the `regex` crate's; the scope doc
-  lists where it differs from tmux's. A search never runs on the actor.
+  `command-prompt -T search`. Patterns are read as tmux's POSIX extended
+  syntax (glibc's) and run with `regex-automata`, taking the leftmost-longest
+  match as POSIX does; the scope doc lists where it still differs from tmux.
+  A search never runs on the actor.
 - **Buffers.** Named and automatic buffers under `buffer-limit`; `paste-buffer
   -p` adds bracketed-paste markers only for a pane that asked for them.
 - **Copy targets.** `copy-pipe`, `copy-pipe-and-cancel` and
   `copy-pipe-no-clear` run their command (or `copy-command`) off the actor with
   the server environment and the selection on stdin, and each also stores a
-  buffer. With `set-clipboard on` a copy also goes to attached clients as OSC 52
-  (§4.9).
+  buffer. Under `set-clipboard on` or `external` (the default, as in tmux) a
+  copy also goes to attached clients as OSC 52 (§4.9). A pane's own OSC 52
+  becomes a buffer and reaches the clients only under `on`.
 - **Mouse.** The wheel in a pane without mouse mode enters copy mode, replacing
   M3's read-only scrollback view; a drag selects; `MouseDragEnd1Pane` runs its
   binding; a double and a triple click select a word and a line, as the owner's
@@ -616,7 +631,10 @@ every generated fragment, so the user's own settings always win over a tool's.
 
 `source-file <path>` loads another TOML file at the current layer. A relative
 path resolves against the directory of the file that includes it, never the
-server's cwd or environment. `reload` (bound to `prefix r`) re-reads layers 1
+server's cwd or environment. At runtime, `source-file` of a file not named
+`*.toml` (or `*.lua`) reads it as a tmux config through the tmux front end,
+as tmux does, in either dialect: tmux plugins source their own `*.tmux`
+files (M3.7). `reload` (bound to `prefix r`) re-reads layers 1
 to 4 and applies the diff (§5.4).
 
 ### 5.2 Schema
@@ -672,8 +690,8 @@ time. Validation rejects a key bound twice in one table and a `name` used twice.
 ### 5.3 Saner defaults than tmux
 
 `base-index = 1`, `pane-base-index = 1`, `escape-time-ms = 25`, `mouse = true`,
-`history-limit = 50000`, focus events on, true colour on, extended keys on, OSC
-52 clipboard on, `renumber-windows = true`, `automatic-rename = true` (§4.5),
+`history-limit = 50000`, focus events on, true colour on, extended keys on,
+`renumber-windows = true`, `automatic-rename = true` (§4.5),
 `restore-on-start = true` (§6), `mode-keys = "vi"` (M5), new panes and windows
 inherit the active pane's cwd, and the status line never forks on redraw (D8).
 
@@ -743,7 +761,7 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   where `<instance>` is the socket's name plus a hash of its path, as for the
   log (§4.1), so every socket has its own. The file has a `version` field. It
   is written on change: a structural change (sessions, windows, panes, names,
-  layout), a cwd change (the sampling timer; OSC 7 from M3), a resume set or
+  layout), a cwd change (the sampling timer), a resume set or
   cleared, and a `--persist` option set or unset. Writes are debounced ~1 s and
   skipped when the content is unchanged, and they are atomic (a temp file in
   the same directory, fsync, rename; mode `0600`). Snapshots are server-driven
@@ -943,7 +961,7 @@ confirms them in practice before anything is built on top.
 | Need | Pick | Why | Runner-up |
 |---|---|---|---|
 | pty | `nix` 0.31 (`openpty`, `TIOCSWINSZ`, `tcgetpgrp`) + `std::process::Command` with `pre_exec` + `tokio::io::unix::AsyncFd` | Full control, async reads with no thread per pane; Zellij's approach (`os_input_output_unix.rs`) | `portable-pty` 0.9.0: complete API but blocking readers, no tokio integration, last release 2025-02 |
-| foreground cwd | Linux `/proc/<pgrp>/cwd`; macOS `libproc` 0.14; OSC 7 preferred | No crate covers both; small per-OS function | none |
+| foreground cwd | Linux `/proc/<pgrp>/cwd`; macOS `libproc` 0.14; never OSC 7 (§4.8) | No crate covers both; small per-OS function | none |
 | emulation | `alacritty_terminal` 0.26.0 (Apache-2.0, active) | Alt screen, bracketed paste and mouse modes, reflowing resize, damage tracking, OSC 52 and PtyWrite via `EventListener`, serde; published for external use (Zed depends on it) | `vt100` 0.16.2: built-in state diffing, but no reflow and dormant since 2025-07 |
 | watch list | `libghostty-vt` 0.2.1 | Best-in-class emulation, but API declared unstable and the build needs Zig | revisit at M6 |
 | client tty | `crossterm` 0.29 | Raw mode, SIGWINCH, size; Zellij's client uses it | `rustix` termios |

@@ -10,7 +10,10 @@
 //! control-mode requests into [`ServerMsg::Control`] and write the reply
 //! back. Commands run through the single [`dispatch`] seam.
 
+pub mod alerts;
+pub mod buffers;
 pub mod clients;
+pub mod copy;
 pub mod dispatch;
 pub mod events;
 pub mod graphics;
@@ -61,6 +64,27 @@ use pane::{PaneEvent, PaneEventKind};
 /// `grofe server starting: pid <pid>, socket <path>`. The test harness counts
 /// these lines to prove one server per socket.
 pub const START_MARKER: &str = "grofe server starting";
+
+/// What a CLI request brings besides its argv (TM.7).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CliIo {
+    /// Its stdin, decoded; `None` when it sent none.
+    pub stdin: Option<Vec<u8>>,
+    pub umask: Option<u32>,
+}
+
+impl CliIo {
+    fn of(req: &Request) -> CliIo {
+        use base64::Engine as _;
+        CliIo {
+            stdin: req
+                .stdin
+                .as_deref()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
+            umask: req.umask,
+        }
+    }
+}
 
 /// A message into the server actor.
 #[derive(Debug)]
@@ -175,6 +199,12 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
+    /// The paste buffers (TM.4).
+    pub buffers: buffers::Buffers,
+    /// The panes in copy mode (TM.1).
+    pub copy: copy::Copies,
+    /// Each window's silence wait (`alerts`).
+    pub alerts: alerts::Alerts,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
@@ -188,6 +218,9 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
+    /// The running CLI request's stdin and umask, for `load-buffer -` and
+    /// the files `save-buffer` creates (TM.7); `None` outside one.
+    pub(crate) cli_io: Option<CliIo>,
     /// The log lines of the request now running, logged as its commands
     /// fire (`clients::log_fired`).
     pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
@@ -243,7 +276,7 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
 /// So an open prompt sees keys first and draws over everything; a menu
 /// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
 /// command opens takes the keys and draws on top of it; then a chooser
-/// (TC.9) over its pane; then the mouse and the scrollback view.
+/// (TC.9) over its pane; then the mouse, and copy mode (TM.1).
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
@@ -254,7 +287,7 @@ fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
-    register_overlay(state, Arc::new(mouse::ScrollbackOverlay));
+    copy::register(state);
 }
 
 /// Set to `1` to make the server panic on its first command: the test
@@ -292,8 +325,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
         kind @ (PaneEventKind::Title(_)
         | PaneEventKind::Bell
-        | PaneEventKind::Clipboard(_)
-        | PaneEventKind::Cwd(_)
+        | PaneEventKind::Clipboard { .. }
+        | PaneEventKind::Path(_)
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
@@ -463,10 +496,14 @@ async fn serve(
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        buffers: buffers::Buffers::default(),
+        copy: copy::Copies::default(),
+        alerts: alerts::Alerts::default(),
         jobs: jobs_tx,
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        cli_io: None,
         command_log: Default::default(),
         exit: false,
         exit_when_empty,
@@ -673,6 +710,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
+            state.cli_io = Some(CliIo::of(&req));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
@@ -685,6 +723,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 _ => Default::default(),
             };
             let result = dispatch::run_parsed(state, &ctx, parsed);
+            state.cli_io = None;
             state.command_log.clear();
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
@@ -1087,10 +1126,14 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        buffers: buffers::Buffers::default(),
+        copy: copy::Copies::default(),
+        alerts: alerts::Alerts::default(),
         jobs,
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        cli_io: None,
         command_log: Default::default(),
         exit: false,
         exit_when_empty: false,

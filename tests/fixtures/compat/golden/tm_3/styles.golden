@@ -1,0 +1,61 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+client 80x25 attach -t main
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,24 1 8 foo1
+? 0
+styles 1-23 [24/36]
+~ 18 0-3 fg=black bg=magenta
+~ 18 28-32 fg=black bg=cyan
+~ 18 39-41 fg=black bg=cyan
+~ 19 33-35 fg=black bg=cyan
+~ 19 51-54 fg=black bg=cyan
+~ 19 56-59 fg=black bg=cyan
+$ send-keys -t main -X search-again
+? 0
+styles 18-19 [24/36]
+~ 18 0-3 fg=black bg=cyan
+~ 18 28-32 fg=black bg=magenta
+~ 18 39-41 fg=black bg=cyan
+~ 19 33-35 fg=black bg=cyan
+~ 19 51-54 fg=black bg=cyan
+~ 19 56-59 fg=black bg=cyan
+$ set -g copy-mode-match-style 'fg=red,bold'
+? 0
+$ set -g copy-mode-current-match-style 'bg=blue,underscore'
+? 0
+$ send-keys -t main -X search-again
+? 0
+styles 18-19 [24/36]
+~ 18 0-3 fg=red bg=default bold
+~ 18 28-32 fg=red bg=default bold
+~ 18 39-41 fg=default bg=blue underline
+~ 19 33-35 fg=red bg=default bold
+~ 19 51-54 fg=red bg=default bold
+~ 19 56-59 fg=red bg=default bold
+$ send-keys -t main -X -N 3 cursor-down
+? 0
+styles 18-22 [24/36]
+~ 18 0-3 fg=red bg=default bold
+~ 18 28-32 fg=red bg=default bold
+~ 18 39-41 fg=red bg=default bold
+~ 19 33-35 fg=red bg=default bold
+~ 19 51-54 fg=red bg=default bold
+~ 19 56-59 fg=red bg=default bold
+$ send-keys -t main -X back-to-indentation
+? 0
+styles 18-22 [24/36]
+$ send-keys -t main -X search-forward-text 'a.b'
+? 0
+styles 1-23 a.b
+~ 20 6-8 fg=default bg=blue underline
+~ 20 14-16 fg=red bg=default bold
+~ 20 22-24 fg=red bg=default bold

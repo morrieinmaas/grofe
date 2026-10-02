@@ -1,0 +1,336 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,22,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,21,0
+? 0
+$ send-keys -t main Up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,20,0
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,21,0
+? 0
+$ send-keys -t main Down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,22,0
+? 0
+$ send-keys -t main -N 5 -X cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,17,0
+? 0
+$ send-keys -t main -X -N 30 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,13
+? 0
+$ send-keys -t main C-y
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,14
+? 0
+$ send-keys -t main K
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,15
+? 0
+$ send-keys -t main C-Up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,16
+? 0
+$ send-keys -t main C-e
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,15
+? 0
+$ send-keys -t main J
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,14
+? 0
+$ send-keys -t main C-Down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,13
+? 0
+$ send-keys -t main H
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,13
+? 0
+$ send-keys -t main M
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,11,13
+? 0
+$ send-keys -t main L
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,13
+? 0
+$ send-keys -t main -X -N 20 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,3,13
+? 0
+$ send-keys -t main z
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,11,21
+? 0
+$ send-keys -t main -X -N 15 cursor-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,18
+? 0
+$ send-keys -t main z
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,11,6
+? 0
+$ send-keys -t main g
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,500
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,500
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,500
+? 0
+$ send-keys -t main C-y
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,500
+? 0
+$ send-keys -t main G
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main C-e
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main C-u
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,12
+? 0
+$ send-keys -t main C-u
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,24
+? 0
+$ send-keys -t main C-d
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,12
+? 0
+$ send-keys -t main C-b
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,34
+? 0
+$ send-keys -t main PPage
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,56
+? 0
+$ send-keys -t main C-f
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,34
+? 0
+$ send-keys -t main NPage
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,12
+? 0
+$ send-keys -t main NPage
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main NPage
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main P
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main -X -N 3 page-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,66
+? 0
+$ send-keys -t main -X -N 2 halfpage-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,42
+? 0
+$ send-keys -t main -X -N 600 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,500
+? 0
+$ send-keys -t main -X -N 700 cursor-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main -X -N 1000 scroll-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,500
+? 0
+$ send-keys -t main -X -N 1000 page-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,500
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,23,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,22,0
+? 0
+$ send-keys -t main $
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+16,22,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,21,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,20,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,17,0
+? 0
+$ send-keys -t main k
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,16,0
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,17,0
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,18,0
+? 0
+$ send-keys -t main j
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,0
+? 0
+$ send-keys -t main -X -N 3 scroll-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,3
+? 0
+$ send-keys -t main -X -N 3 scroll-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+2,19,0
+? 0
+$ send-keys -t main -X -N 12 cursor-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,7,0
+? 0
+$ send-keys -t main -X -N 6 cursor-right
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5,8,0
+? 0
+$ send-keys -t main -X -N 2 scroll-up
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5,8,2
+? 0
+$ send-keys -t main -X -N 4 cursor-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+4,12,2
+? 0
+$ send-keys -t main H
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,2
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+3,0,2
+? 0
+$ send-keys -t main C-b
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+3,0,24
+? 0
+$ send-keys -t main C-f
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+3,0,2
+? 0
+$ send-keys -t main M
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,11,2
+? 0

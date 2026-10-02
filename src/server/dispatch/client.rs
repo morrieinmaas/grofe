@@ -133,10 +133,29 @@ pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<Strin
 /// what it waits for (a blocked `wait-for`; `None`: a hook's shell).
 #[derive(Default)]
 pub(crate) struct Held {
-    pub frames: Vec<(ClientCtx, Vec<Command>)>,
+    pub frames: Vec<HeldFrame>,
     pub wait: Option<oneshot::Receiver<Result<String, Failure>>>,
     /// The wait is a `run-shell`'s: its status is the request's so far.
     pub shell: bool,
+    /// Errors the request already had (a sourced file's earlier lines):
+    /// it fails with them at the end, after everything it printed.
+    pub errors: Vec<String>,
+    /// How many of `errors` a later `run-shell` that succeeded made
+    /// harmless to the exit status: in the tmux dialect, as tmux 3.7b, the
+    /// last `run-shell`'s status is the request's (recorded: an error on a
+    /// line before it prints and exits 0). A native request's, none.
+    pub cleared: usize,
+}
+
+/// One held command sequence: its context, its commands, and whether an
+/// error in it lets the frames after it run (a sourced file's line, as
+/// tmux runs a file's next line), else stops them, and the source-file
+/// depth it was held at, which it runs under again.
+pub(crate) struct HeldFrame {
+    pub ctx: ClientCtx,
+    pub cmds: Vec<Command>,
+    pub keep_going: bool,
+    pub depth: u32,
 }
 
 type Answer = oneshot::Sender<Result<String, Failure>>;
@@ -162,7 +181,9 @@ pub(crate) fn hold_rest(
             let _ = ready.send(Ok(String::new()));
             wait
         });
-    let (frames, shell) = (held.frames, held.shell);
+    let (frames, shell, errors, cleared) = (held.frames, held.shell, held.errors, held.cleared);
+    // A native request keeps its failure, even on a tmux-identity server.
+    let tmux = ctx.dialect == crate::protocol::Dialect::Tmux;
     let mut tx = tx.unwrap_or_else(|| dispatch::defer_reply(state));
     let jobs = state.jobs.clone();
     let ctx = ctx.clone();
@@ -178,6 +199,10 @@ pub(crate) fn hold_rest(
         };
         // A failed command (`run-shell` exiting non-zero) does not stop
         // the rest, as in tmux 3.7b (recorded); the request fails at the end.
+        let cleared = match woken {
+            Ok(Ok(_)) if shell && tmux => errors.len(),
+            _ => cleared,
+        };
         let (out, failed) = match woken {
             // The last `run-shell`'s status is the request's (tmux 3.7b).
             Ok(Ok(text)) => (out + &text, failed.filter(|_| !shell)),
@@ -185,8 +210,9 @@ pub(crate) fn hold_rest(
             // The server is going away; the dropped answer says so.
             Err(_) => return,
         };
-        let job: Job =
-            Box::new(move |state: &mut State| resume(state, &ctx, frames, out, failed, tx));
+        let job: Job = Box::new(move |state: &mut State| {
+            resume(state, &ctx, frames, (errors, cleared), out, failed, tx);
+        });
         let _ = jobs.send(job).await;
     });
 }
@@ -197,7 +223,8 @@ pub(crate) fn hold_rest(
 fn resume(
     state: &mut State,
     ctx: &ClientCtx,
-    frames: Vec<(ClientCtx, Vec<Command>)>,
+    frames: Vec<HeldFrame>,
+    (mut errors, cleared): (Vec<String>, usize),
     out: String,
     failed: Option<Failure>,
     tx: Answer,
@@ -208,9 +235,16 @@ fn resume(
     // The sequences run as the request's own nested commands: a wait in
     // one comes back here rather than holding on its own.
     hooks::enter(state);
-    while let Some((fctx, cmds)) = frames.pop_front() {
-        match dispatch::run_commands(state, &fctx, cmds) {
+    while let Some(frame) = frames.pop_front() {
+        let ran = dispatch::options::with_source_depth(frame.depth, || {
+            dispatch::run_commands(state, &frame.ctx, frame.cmds)
+        });
+        match ran {
             Ok(text) => more.push_str(&text),
+            Err(e) if frame.keep_going => {
+                more.push_str(&std::mem::take(&mut state.failed_out));
+                errors.push(e);
+            }
             Err(e) => {
                 // What the failing sequence printed first still prints.
                 more.push_str(&std::mem::take(&mut state.failed_out));
@@ -231,7 +265,10 @@ fn resume(
     }
     hooks::leave(state);
     let held = state.held.take().filter(|_| result.is_ok());
-    if let Some(held) = held {
+    if let Some(mut held) = held {
+        errors.append(&mut held.errors);
+        held.errors = errors;
+        held.cleared = cleared;
         hold_rest(state, ctx, held, out + &more, failed, Some(tx));
         hooks::run_pending(state);
         state.events.flush();
@@ -239,10 +276,18 @@ fn resume(
         return;
     }
     hooks::run_pending(state);
-    // A failure keeps what was printed before it, as tmux prints it.
+    // A failure keeps what was printed before it, as tmux prints it. The
+    // errors held so far come first.
+    // Errors a later `run-shell` cleared still print, but the request
+    // exits 0 (tmux 3.7b).
     let result = match result {
-        Ok(()) => Ok(more),
-        Err(e) => Err((e, more)),
+        Ok(()) if errors.is_empty() => Ok(more),
+        Ok(()) if errors.len() == cleared => Err((errors.join("\n"), more, Some(0))),
+        Ok(()) => Err((errors.join("\n"), more, None)),
+        Err(e) => {
+            errors.push(e);
+            Err((errors.join("\n"), more, None))
+        }
     };
     let later = state.deferred_reply.take().filter(|_| result.is_ok());
     let hold = hooks::take_reply_hold(state);
@@ -257,10 +302,10 @@ fn resume(
     if later.is_none() && hold.is_none() {
         let _ = tx.send(match result {
             Ok(more) => answer(out + &more),
-            Err((err, more)) => Err(Failure {
+            Err((err, more, status)) => Err(Failure {
                 err,
                 out: out + &more,
-                status: None,
+                status,
             }),
         });
         return;
@@ -286,10 +331,10 @@ fn resume(
                     out: out + &more + &f.out + &hooked,
                     ..f
                 }),
-                (Err((err, more)), _) => Err(Failure {
+                (Err((err, more, status)), _) => Err(Failure {
                     err,
                     out: out + &more,
-                    status: None,
+                    status,
                 }),
             })
         };

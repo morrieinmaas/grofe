@@ -1,0 +1,29 @@
+--- before
+main windows=2
+two windows=2
+main:0 editor active=0 aafd,120x40,0,0,0
+main:1 logs active=1 d6e5,120x40,0,0{60x40,0,0,1,59x40,61,0[59x20,61,0,2,59x19,61,21,3]}
+two:0 first active=0 ab01,120x40,0,0,4
+two:1 second active=1 ab02,120x40,0,0,5
+main:0.0 active=1 <root>/home/w1
+main:1.0 active=1 <root>/home/w2
+main:1.1 active=0 <root>/home/w1
+main:1.2 active=0 <root>/home
+two:0.0 active=1 <root>/home/w2
+two:1.0 active=1 <root>/home/w2
+--- after
+main windows=2
+scratch windows=1
+two windows=2
+main:0 editor active=0 aafe,120x40,0,0,1
+main:1 logs active=1 17e7,120x40,0,0{60x40,0,0,2,59x40,61,0[59x20,61,0,3,59x19,61,21,4]}
+scratch:0 <shell> active=1 aafd,120x40,0,0,0
+two:0 first active=0 ab02,120x40,0,0,5
+two:1 second active=1 ab03,120x40,0,0,6
+main:0.0 active=1 <root>/home/w1
+main:1.0 active=1 <root>/home/w2
+main:1.1 active=0 <root>/home/w1
+main:1.2 active=0 <root>/home
+scratch:0.0 active=1 <root>/home
+two:0.0 active=1 <root>/home/w2
+two:1.0 active=1 <root>/home/w2

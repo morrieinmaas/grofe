@@ -1,0 +1,19 @@
+# TP.6: tmux-sessionx's own script, unchanged (canopy's vendored copy),
+# loaded as canopy's loader loads it with the owner's options set first
+# (@sessionx-bind s, zoxide and window modes on). This container has no
+# fzf, so prefix s runs the plugin's no-fzf path; what it shows is the
+# plugin's own text, not tmux's or grofe's. The status line is off.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-session -d -s other -n second cat
+$ set -g status off
+$ set -g @sessionx-bind s
+$ set -g @sessionx-zoxide-mode on
+$ set -g @sessionx-window-mode on
+$ run-shell 'cp -R {fixtures}/../canopy-port/plugins/tmux-sessionx "$HOME/sx"'
+$ run-shell '"$HOME/sx/sessionx.tmux" >/dev/null 2>&1'
+$ run-shell 'tmux list-keys -T prefix | grep -E "^bind-key +-T prefix +s " | tr -s " "'
+client 80x24 attach -t main
+keys C-b s
+$ run-shell "sleep 3"
+screen
+$ display -p '#{client_session}'

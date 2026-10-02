@@ -1,0 +1,28 @@
+# TM.7: the buffer verbs through the front end, with tmux's default output
+# and errors: set, append, rename, show, list (default and -F), delete,
+# paste with -s and -r, and the empty list.
+$ new-session -d -s main -x 80 -y 24 'exec sleep 100000'
+$ show-buffer
+$ list-buffers
+$ set-buffer hello
+$ setb -b named 'two words'
+$ set-buffer -a -b named ' more'
+$ setb 'tab	here'
+$ list-buffers
+$ lsb -F '#{buffer_name}|#{buffer_size}|#{buffer_sample}'
+$ show-buffer
+$ showb -b named
+$ show-buffer -b missing
+$ set-buffer -b named -n renamed
+$ list-buffers -F '#{buffer_name}'
+$ delete-buffer -b renamed
+$ deleteb -b renamed
+$ paste-buffer -t main -s '|'
+$ pasteb -t main -b buffer0
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main -S 0 -E 2
+$ delete-buffer
+$ delete-buffer
+$ delete-buffer
+$ list-buffers
+$ paste-buffer -t main

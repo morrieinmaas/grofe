@@ -273,11 +273,18 @@ fn placeholder_images_reach_kitty_clients() {
 fn a_stalled_client_gets_each_image_once() {
     let srv = TestServer::start();
     let go = srv.home.join("go");
+    let stop = srv.home.join("stop");
+    // Bursts of 10 lines, one frame each, until `stop` exists. Line i is i
+    // written 23 times, so no two lines share their cells and each frame
+    // rewrites the screen. A pause per burst, not per line: each `sleep` is
+    // a fork, about 20 ms on macOS.
     let script = format!(
-        "cat {}; {}; i=0; while [ $i -lt 300 ]; do printf '%070d\\n' $i; i=$((i+1)); \
-         sleep 0.01; done; echo END; exec sleep 600",
+        "cat {}; {}; i=0; while [ ! -e {} ]; do printf '%s\\n' {}; i=$((i+1)); \
+         [ $((i % 10)) -eq 0 ] && sleep 0.03; done; echo END; exec sleep 600",
         shell_quote(&fixture("icat-placeholder-2x2.bin").to_string_lossy()),
         wait_flag(&go),
+        shell_quote(&stop.to_string_lossy()),
+        "$i".repeat(23),
     );
     new_session(&srv, &script);
     let mut a = attach(&srv, KITTY);
@@ -296,7 +303,20 @@ fn a_stalled_client_gets_each_image_once() {
     assert_eq!(pids.len(), 1, "the attach client: {pids:?}");
     let stopped = Stopped::new(nix::unistd::Pid::from_raw(pids[0]));
     touch(&go);
-    // The pane prints all its lines while the client cannot read.
+    // The client stays stopped until the server has dropped a frame for
+    // it. How many frames that takes is the socket's buffering, which is
+    // 16 KiB on macOS and some 200 KiB on Linux, so no fixed line count
+    // stalls it on both.
+    let discarded = || {
+        srv.cmd(&["list-clients", "-F", "#{client_discarded}"])
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    if let Err(e) = common::wait_until(|| discarded() > 0, WAIT) {
+        panic!("{e}: no frame was dropped for the stopped client");
+    }
+    touch(&stop);
     if let Err(e) = common::wait_until(|| srv.capture("main").contains("END"), WAIT) {
         panic!("{e}: the pane never finished:\n{}", srv.capture("main"));
     }

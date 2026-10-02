@@ -77,11 +77,12 @@ ordinary programs in whatever language you like.
 > tools and scripts it was tested against send, but some things are not there
 > yet or never will be:
 >
-> - **Plugins.** TPM and its plugins do not run yet. A loader for them is
->   milestone M3.7.
+> - **Plugins.** TPM itself does not run. The plugins you load with it run
+>   unchanged through canopy's plugin loader, which vendors each one and
+>   starts it with `run-shell`, as TPM does.
 > - **Copy mode and paste buffers** (`copy-mode`, `send-keys -X`, the
->   `*-buffer` commands) come with milestone M5. Until then those keys do
->   nothing useful.
+>   `*-buffer` commands) work, with tmux 3.7b's `copy-mode-vi` table. Only
+>   the vi keys are there; `mode-keys emacs` has no table.
 > - **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
 >   config with `grofe import-tmux` first.
 > - **Out of scope:** tmux's control mode (`-C` and `-CC`) and session groups
@@ -250,10 +251,10 @@ so if it crashes your panes don't notice.
 
 Sessions, windows and panes, the status line with cached `#()` sources, the
 mouse, the command prompt, popups and menus, hooks, clipboard and title
-passthrough, the config described above, `import-tmux` and the tmux
-compatibility layer work today. Running TPM plugins (M3.7), copy mode (M5),
-restoring sessions after a reboot (M4) and grofe's own plugin API (M6) are
-still to come. The
+passthrough, copy mode and paste buffers, the config described above,
+`import-tmux` and the tmux compatibility layer work today, and TPM plugins
+run through canopy's loader. Restoring sessions after a reboot (M4) and
+grofe's own plugin API (M6) are still to come. The
 [roadmap](docs/plans/2026-09-23-milestones.md) has the details and the
 [design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.

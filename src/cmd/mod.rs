@@ -14,7 +14,7 @@ pub mod target;
 
 pub use format::{FormatVars, expand};
 pub use keys::{is_key_name, key_bytes};
-pub use parse::{parse, parse_sequence, split_command_string};
+pub use parse::{parse, parse_sequence, split_command_string, split_config_file};
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
 use crate::types::{CaptureOpts, Dir, Edge, SplitSize};
@@ -251,6 +251,13 @@ pub enum SendKeysItem {
 pub struct SendKeys {
     pub target: Target,
     pub items: Vec<SendKeysItem>,
+    /// `-X` (M5): the items are a copy-mode command and its arguments,
+    /// run by the target pane's mode.
+    pub command: bool,
+    /// `-N` (M5): the repeat count, a format expanded when it runs.
+    pub count: Option<String>,
+    /// `-F` (M5): the mode command expands its arguments as formats.
+    pub format: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -917,6 +924,95 @@ pub struct RegisterSource {
     pub command: String,
 }
 
+/// `set-buffer [-a] [-b name] [-n new-name] [data]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SetBuffer {
+    /// `-a`: append to the `-b` buffer (no `-b` makes a new buffer, as
+    /// tmux 3.7b does).
+    pub append: bool,
+    /// `-b`: the buffer; none is a new automatic one.
+    pub name: Option<String>,
+    /// `-n`: rename the buffer (the data, if any, is ignored).
+    pub rename: Option<String>,
+    pub data: Option<String>,
+}
+
+/// `show-buffer [-b name]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShowBuffer {
+    pub name: Option<String>,
+}
+
+/// `load-buffer [-w] [-b name] [-t target-client] path` (TM.7): `path`
+/// is the CLI's (`-` its stdin); `-w` also sends the data to the target
+/// client's clipboard.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LoadBuffer {
+    pub name: Option<String>,
+    pub client: Option<String>,
+    pub clipboard: bool,
+    pub path: String,
+}
+
+/// `save-buffer [-a] [-b name] path` (TM.7): `path` is the CLI's (`-` its
+/// stdout); `-a` appends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SaveBuffer {
+    pub append: bool,
+    pub name: Option<String>,
+    pub path: String,
+}
+
+/// `list-buffers [-F format]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ListBuffers {
+    pub format: Option<String>,
+}
+
+/// `delete-buffer [-b name]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DeleteBuffer {
+    pub name: Option<String>,
+}
+
+/// `paste-buffer [-dpr] [-b name] [-s separator] [-t pane]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteBuffer {
+    /// `-p`: bracketed-paste markers, for a pane that asked for them.
+    pub bracket: bool,
+    pub name: Option<String>,
+    /// `-d`: delete the buffer after pasting.
+    pub delete: bool,
+    /// `-r`: line feeds stay line feeds (a separator of LF).
+    pub raw: bool,
+    /// `-s`: what each line feed becomes (default CR).
+    pub separator: Option<String>,
+    /// `-S`: send control characters as they are, unsanitized.
+    pub unsanitized: bool,
+    pub target: Target,
+}
+
+/// `copy-mode [-eHMu] [-t pane]` (M5, TM.1; `-H` and `-M` TM.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyMode {
+    /// `-u`: start a page up.
+    pub page_up: bool,
+    /// `-e`: scrolling back to the bottom leaves the mode.
+    pub scroll_exit: bool,
+    /// `-H`: a new mode hides its position indicator.
+    pub hide_position: bool,
+    /// `-M`: in the pane under the running mouse key, starting a drag
+    /// there; nothing outside a mouse key.
+    pub mouse: bool,
+    pub target: Target,
+}
+
+/// `choose-buffer [-Z]` (TM.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChooseBuffer {
+    pub zoom: bool,
+}
+
 /// One parsed command (spec §4.5, M1 and M2 sets).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -994,4 +1090,15 @@ pub enum Command {
     SetEnvironment(SetEnvironment),
     ShowEnvironment(ShowEnvironment),
     RegisterSource(RegisterSource),
+    // M5: buffers (TM.4).
+    SetBuffer(SetBuffer),
+    ShowBuffer(ShowBuffer),
+    LoadBuffer(LoadBuffer),
+    SaveBuffer(SaveBuffer),
+    ListBuffers(ListBuffers),
+    DeleteBuffer(DeleteBuffer),
+    PasteBuffer(PasteBuffer),
+    ChooseBuffer(ChooseBuffer),
+    // M5: copy mode (TM.1).
+    CopyMode(CopyMode),
 }

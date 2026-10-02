@@ -1,0 +1,26 @@
+# TM.4: set-buffer -a appends to the -b buffer with no separator, and
+# without -b makes a new buffer; a write or a rename by name makes the
+# buffer a named one (show-buffer then skips it); -n ignores data; errors.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-buffer -b named hello
+$ set-buffer -a -b named ' world'
+$ show-buffer -b named
+$ set-buffer first
+$ set-buffer -a second
+$ set-buffer -a -b buffer0 X
+$ list-buffers
+$ show-buffer
+$ set-buffer -a -b fresh new
+$ set-buffer -b named -n renamed
+$ set-buffer -b renamed -n other ignored
+$ list-buffers
+$ show-buffer -b nope
+$ delete-buffer -b nope
+$ set-buffer
+$ set-buffer -b nob -n x
+$ set-buffer ''
+$ delete-buffer -b buffer1
+$ show-buffer
+$ delete-buffer
+$ paste-buffer -b nope
+$ list-buffers

@@ -1079,3 +1079,61 @@ fn the_cli_exits_with_the_last_run_shells_status() {
     assert_eq!(code, Some(0), "{out}");
     assert!(out.starts_with("a\n") && out.ends_with("b\nc\n"), "{out:?}");
 }
+
+/// TP.9's follow-up: which of `pane-died` and `pane-exited` an exit fires,
+/// per `remain-on-exit` value and scope, as tmux 3.7b fires them
+/// (recorded on a private socket): exactly one per exit, never both;
+/// `pane-died` when the pane is kept, in its own context; a kill fires
+/// neither; a respawned pane that exits again fires `pane-died` again.
+#[test]
+fn pane_died_or_pane_exited_per_remain_on_exit_as_tmux() {
+    let (srv, log) = start();
+    bind_line(&srv, "pane-died", LINE, &log);
+    bind_line(&srv, "pane-exited", LINE, &log);
+    let mut seen = 0;
+    let mut exit = |setup: &[&[&str]], cmd: &str, want: usize| {
+        for args in setup {
+            ok(&srv, args);
+        }
+        let pane = ok(
+            &srv,
+            &[
+                "split-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                "a",
+                cmd,
+            ],
+        );
+        (pane.trim().to_string(), new_lines(&log, &mut seen, want))
+    };
+    let (p, got) = exit(&[&["set", "-g", "remain-on-exit", "failed"]], "exit 3", 1);
+    assert_eq!(got, [format!("pane-died p={p} s=a hp={p} hs= hw=@0")]);
+    let (p, got) = exit(&[], "exit 0", 1);
+    assert_eq!(got.len(), 1);
+    assert!(
+        got[0].starts_with(&format!("pane-exited p=%0 s=a hp={p} ")),
+        "{got:?}"
+    );
+    let (p, got) = exit(
+        &[
+            &["set", "-gu", "remain-on-exit"],
+            &["set", "-w", "-t", "a", "remain-on-exit", "on"],
+        ],
+        "exit 0",
+        1,
+    );
+    assert_eq!(got, [format!("pane-died p={p} s=a hp={p} hs= hw=@0")]);
+    // The kept pane: a kill fires neither; a respawn that exits again
+    // fires pane-died again.
+    ok(&srv, &["respawn-pane", "-t", &p, "exit 0"]);
+    assert_eq!(
+        new_lines(&log, &mut seen, 1),
+        [format!("pane-died p={p} s=a hp={p} hs= hw=@0")]
+    );
+    ok(&srv, &["kill-pane", "-t", &p]);
+    assert!(new_lines(&log, &mut seen, 0).is_empty());
+}

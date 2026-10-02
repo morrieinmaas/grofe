@@ -1,0 +1,23 @@
+# TM.3: how matches look, through an attached client: every match in
+# copy-mode-match-style, the one under the cursor in
+# copy-mode-current-match-style, then both options changed.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+client 80x25 attach -t main
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+styles 1-23 [24/36]
+$ send-keys -t main -X search-again
+styles 18-19 [24/36]
+$ set -g copy-mode-match-style 'fg=red,bold'
+$ set -g copy-mode-current-match-style 'bg=blue,underscore'
+$ send-keys -t main -X search-again
+styles 18-19 [24/36]
+$ send-keys -t main -X -N 3 cursor-down
+styles 18-22 [24/36]
+$ send-keys -t main -X back-to-indentation
+styles 18-22 [24/36]
+$ send-keys -t main -X search-forward-text 'a.b'
+styles 1-23 a.b

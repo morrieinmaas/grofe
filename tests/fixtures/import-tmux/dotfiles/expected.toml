@@ -81,3 +81,9 @@ J = { cmd = "resize-pane -D 3", repeat = true }
 M-Left = "select-pane -L"
 # ~/.tmux.conf:21
 M-Right = "select-pane -R"
+
+[keys.copy-mode-vi]
+# ~/.tmux.conf:24
+v = "send-keys -X begin-selection"
+# ~/.tmux.conf:25
+y = 'send-keys -X copy-pipe-and-cancel "pbcopy"'

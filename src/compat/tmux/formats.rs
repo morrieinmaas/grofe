@@ -83,6 +83,7 @@ const SHORT_FORMS: &[(char, &str)] = &[
 /// The modifier prefixes grofe's expander knows (TC.3), longest first.
 const NATIVE_MODIFIERS: &[&str] = &[
     "?", "==:", "!=:", ">=:", ">:", "<=:", "<:", "&&:", "||:", "!!:", "!:", "m:", "m/", "b:", "t:",
+    "q:",
 ];
 
 /// `fmt`, a tmux format, in grofe's format language, with the status
@@ -905,7 +906,7 @@ mod tests {
     /// chain of conditions is not nesting at all in tmux.
     #[test]
     fn deep_and_long_formats_are_bounded() {
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         let n = 100_000;
         let deep = format!("{}x{}", "#{!:".repeat(n), "}".repeat(n));
         assert_eq!(crate::cmd::expand(&native(&deep), &NoVars), "0");
@@ -913,7 +914,7 @@ mod tests {
         assert_eq!(crate::cmd::expand(&native(&unclosed), &NoVars), "a");
         let chain = format!("#{{?0,x{},last}}", ",0,a".repeat(n));
         assert_eq!(crate::cmd::expand(&native(&chain), &NoVars), "last");
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(900), "{took:?}");
     }
 
@@ -1044,7 +1045,7 @@ mod tests {
     }
 
     #[test]
-    fn the_twelve_hooks_map_onto_grofe_events() {
+    fn the_fifteen_hooks_map_onto_grofe_events() {
         for tmux in [
             "after-select-pane",
             "after-select-window",
@@ -1058,13 +1059,16 @@ mod tests {
             "session-closed",
             "pane-exited",
             "pane-died",
+            "alert-bell",
+            "alert-activity",
+            "alert-silence",
         ] {
             let event = hook_event(tmux).unwrap();
             assert!(crate::server::hooks::event(event).is_some(), "{tmux}");
         }
         assert_eq!(hook_event("nope").unwrap_err().0, "invalid option: nope");
         assert!(
-            hook_event("alert-bell")
+            hook_event("client-focus-in")
                 .unwrap_err()
                 .0
                 .contains("not supported")

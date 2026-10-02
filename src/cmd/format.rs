@@ -159,7 +159,7 @@ impl<'a> Expander<'a> {
     /// Expands the body of one `#{...}`: `?cond,then,else`, a comparison
     /// from [`COMPARISONS`], `&&:`/`||:` over any number of operands, a
     /// match (`m:`, `m/r:`, `m/i:`, `m/ri:`), `!:text`, `!!:text`,
-    /// `b:var`, `t:var`, or a bare variable name.
+    /// `b:var`, `t:var`, `q:var`, or a bare variable name.
     fn expand_body(&self, body: &str) -> String {
         if let Some(rest) = body.strip_prefix('?') {
             return self.expand_ternary(rest, body);
@@ -209,7 +209,29 @@ impl<'a> Expander<'a> {
         if let Some(rest) = body.strip_prefix("t:") {
             return self.expand_time(rest);
         }
+        if let Some(rest) = body.strip_prefix("q:") {
+            return self.expand_quoted(rest);
+        }
         self.resolve(body)
+    }
+
+    /// `#{q:var}`: the variable's value with a backslash before each
+    /// character a shell treats specially (tmux 3.7b's
+    /// `format_quote_shell`, recorded). As with `b:`, a nested argument
+    /// is expanded and returned unquoted.
+    fn expand_quoted(&self, arg: &str) -> String {
+        if arg.contains("#{") {
+            return self.expand(arg);
+        }
+        let value = self.vars.get(arg).unwrap_or_default();
+        let mut out = String::with_capacity(value.len());
+        for c in value.chars() {
+            if "|&;<>()$`\\\"'*?[# =%".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
     }
 
     /// A body's operands, split at every comma outside a nested `#{...}`.
@@ -742,6 +764,20 @@ mod tests {
         );
     }
 
+    /// tmux 3.7b, recorded: `q:` backslashes ` |&;<>()$`\"'*?[#=%` and
+    /// leaves the rest (newlines too); a nested argument is not quoted.
+    #[test]
+    fn quote_modifier_escapes_what_a_shell_reads() {
+        let x = r#"a b'c"d$e`f\g|h&i;j<k>l(m)n*o?p[q]r#s=t%u~v!w{x}y,z:A^B@C+D-E/F.G_H"#;
+        let want = r#"a\ b\'c\"d\$e\`f\\g\|h\&i\;j\<k\>l\(m\)n\*o\?p\[q]r\#s\=t\%u~v!w{x}y,z:A^B@C+D-E/F.G_H"#;
+        let v = vars(&[("@x", x), ("@nl", "a\nb\tc"), ("window_id", "@0")]);
+        assert_eq!(expand("#{q:@x}", &v), want);
+        assert_eq!(expand("#{q:#{@x}}", &v), x);
+        assert_eq!(expand("pre#{q:window_id}post", &v), "pre@0post");
+        assert_eq!(expand("#{q:@nl}", &v), "a\nb\tc");
+        assert_eq!(expand("[#{q:@none}]", &v), "[]");
+    }
+
     #[test]
     fn basename_modifier_of_a_literal_path_is_empty() {
         // Matches tmux 3.7b: `/a/b/c` here is a variable *name* to look
@@ -870,10 +906,10 @@ mod tests {
     fn fnmatch_does_not_backtrack_exponentially() {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*b";
         let s = "a".repeat(30);
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()));
         assert!(fnmatch(pattern.as_bytes(), format!("{s}b").as_bytes()));
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(50), "{took:?}");
     }
 
@@ -969,11 +1005,11 @@ mod tests {
         let open = "#{!:".repeat(n);
         let closed = format!("{open}x{}", "}".repeat(n));
         let flat_open = "#{".repeat(n);
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert_eq!(expand(&closed, &vars(&[])), "0");
         assert_eq!(expand(&open, &vars(&[])), open);
         assert_eq!(expand(&flat_open, &vars(&[])), flat_open);
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 
@@ -984,13 +1020,13 @@ mod tests {
     fn a_long_chain_of_conditions_is_not_nesting() {
         let arms = 20_000;
         let chain = |last: &str| format!("{}{last}{}", "#{?0,x,".repeat(arms), "}".repeat(arms));
-        let start = std::time::Instant::now();
+        let start = crate::thread_cpu_time();
         assert_eq!(expand(&chain("last"), &vars(&[])), "last");
         assert_eq!(
             expand(&chain("#{?on,hit,miss}"), &vars(&[("on", "1")])),
             "hit"
         );
-        let took = start.elapsed();
+        let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 

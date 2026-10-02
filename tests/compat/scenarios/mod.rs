@@ -42,6 +42,7 @@
 //! off the word `golden`, the recorder's user name, which normalization
 //! would replace.
 
+mod copy_mode;
 mod corpus;
 mod live;
 
@@ -444,7 +445,7 @@ fn smoke(cli: &Cli) -> Result<(), String> {
 /// Every name and inode in the user's real tmux and grofe socket and state
 /// directories, TC.0b's check: `grofe-*` entries are other agents' private
 /// scratch sockets and are left out.
-fn socket_dirs() -> String {
+pub fn socket_dirs() -> String {
     let env = Env::from_process();
     let uid = nix::unistd::getuid().as_raw();
     let tmux_tmpdir = std::env::var("TMUX_TMPDIR").unwrap_or_else(|_| "/tmp".into());

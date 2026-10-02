@@ -1,0 +1,4 @@
+main windows=1
+main:0 <shell> active=1 aafe,120x40,0,0,1
+main:0.0 active=1 <root>/home
+client session=main

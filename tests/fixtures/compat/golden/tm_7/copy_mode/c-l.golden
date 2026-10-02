@@ -1,0 +1,26 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ source-file {fixtures}/copy-mode.conf
+? 0
+$ split-window -h -t main 'exec sleep 100000'
+? 0
+$ split-window -v -t main 'exec sleep 100000'
+? 0
+$ select-pane -t main:1.1
+? 0
+$ copy-mode -t main:1.1
+? 0
+$ list-panes -t main -F '#{pane_index} #{pane_active} #{pane_in_mode}'
+1 1 1
+2 0 0
+3 0 0
+? 0
+$ send-keys -t main C-l
+? 0
+$ list-panes -t main -F '#{pane_index} #{pane_active} #{pane_in_mode}'
+1 0 1
+2 0 0
+3 1 0
+? 0

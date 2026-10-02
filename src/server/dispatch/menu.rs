@@ -59,7 +59,7 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         y,
     };
     if menu::open(state, ctx, id, menu) {
-        menu::wait_for_close(state, ctx, id);
+        menu::wait_for_close(state, id);
     }
     Ok(String::new())
 }
@@ -121,7 +121,7 @@ pub fn display_panes(
 ) -> Result<String, String> {
     let id = clients::current_client(state, ctx).ok_or("no current client")?;
     if menu::open_panes(state, id) {
-        menu::wait_for_close(state, ctx, id);
+        menu::wait_for_close(state, id);
     }
     Ok(String::new())
 }

@@ -1,0 +1,67 @@
+# TM.3: through an attached client: / and ? open the search prompt
+# (command-prompt -T search) and Enter searches; n and N repeat; # and *
+# search for the word under the cursor; f F t T read one key
+# (command-prompt -1), then ; and , repeat. A key that opens a prompt is
+# typed on its own, so the prompt is open before the next.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/golden/tm_3/search.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+client 80x25 attach -t main
+keys C-b [
+keys g
+keys /
+keys f o + [ 0 - 9 ]
+keys Enter
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys N
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys ?
+keys f i l l e r Space 3
+keys Enter
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys N
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys w
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys *
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys *
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys #
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys #
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys n
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+keys 0
+keys f
+keys o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys ;
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys ,
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys F
+keys f
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys t
+keys h
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys ;
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys T
+keys l
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys ,
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys 2
+keys f
+keys e
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+keys q
+$ display -p -t main '#{pane_in_mode}'

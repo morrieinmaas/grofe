@@ -1,0 +1,43 @@
+# TM.6 case 3: a drag from client cell (2,3) to (20,5) and its release.
+# Outside copy mode the stock root row is copy-mode -M, which enters the
+# mode and starts the selection where the button went down; the release is
+# copy-mode-vi's MouseDragEnd1Pane (copy-pipe-and-cancel). Then the same
+# inside copy mode (begin-selection with a mouse event), and backwards
+# from a view scrolled up 30 lines. Each drag waits out the last press's
+# click timer, so its press is no second click.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+client 80x25 attach -t main
+keys Escape '[<0;3;4M'
+keys Escape '[<32;5;4M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+keys Escape '[<32;21;6M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+keys Escape '[<0;21;6m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ run-shell 'sleep 0.5'
+$ copy-mode -t main
+keys Escape '[<0;3;8M'
+keys Escape '[<32;4;8M'
+keys Escape '[<32;40;10M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+keys Escape '[<0;40;10m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer
+$ run-shell 'sleep 0.5'
+$ copy-mode -t main
+$ send-keys -t main -X -N 30 scroll-up
+keys Escape '[<0;30;12M'
+keys Escape '[<32;29;12M'
+keys Escape '[<32;7;9M'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+keys Escape '[<0;7;9m'
+$ display -p -t main '#{pane_in_mode} #{scroll_position} #{copy_cursor_x},#{copy_cursor_y} #{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y}'
+$ show-buffer
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ delete-buffer

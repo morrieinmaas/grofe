@@ -95,6 +95,8 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         cols: size.0,
         rows: size.1,
         bell_flag: false,
+        activity_flag: false,
+        silence_flag: false,
         last_panes: Vec::new(),
         floating: Vec::new(),
     });
@@ -183,8 +185,8 @@ pub enum Step {
 
 /// `next-window` / `previous-window`: the target session's next or
 /// previous window by index, wrapping around as tmux does. With `-a`, the
-/// next or previous one with an alert, which in grofe is a bell
-/// (`window_bell_flag`, R13); none is an error, as in tmux 3.7b.
+/// next or previous one with an alert (a bell, activity or silence flag,
+/// `server::alerts`); none is an error, as in tmux 3.7b.
 pub fn step_window(
     state: &mut State,
     ctx: &ClientCtx,
@@ -210,7 +212,12 @@ pub fn step_window(
         Step::Next => (pos + k) % n,
         Step::Previous => (pos + n - k % n) % n,
     };
-    let alerted = |id: &WindowId| model.windows.get(id).is_some_and(|w| w.bell_flag);
+    let alerted = |id: &WindowId| {
+        model
+            .windows
+            .get(id)
+            .is_some_and(|w| w.bell_flag || w.activity_flag || w.silence_flag)
+    };
     let window = if c.alert {
         (1..n)
             .map(|k| s.windows[at(k)])
@@ -366,12 +373,20 @@ pub fn select_layout(
     w.zoomed = false;
     let Some(preset) = Preset::from_name(&c.name, width, height) else {
         // Not a preset: a tmux layout string (spec §4.3), which puts every
-        // pane, floating ones too, into its cells, as tmux 3.7b does.
+        // pane, floating ones too, into its cells, as tmux 3.7b does. tmux
+        // also resizes the window to the layout's size; a client showing
+        // the session sizes it back, and with none it keeps that size.
+        let session = model.windows[&window].session;
+        let shown = state.clients.values().any(|cl| cl.session == session);
+        let model = &mut state.model;
         let applied = model.windows.get_mut(&window).map(|w| {
             let panes = w.pane_ids();
             let applied = w.layout.apply_tmux_layout(&c.name, &panes);
             if applied.is_ok() {
                 w.floating.clear();
+                if !shown && let Some((cols, rows)) = w.layout.exact_size() {
+                    (w.cols, w.rows) = crate::types::cap_size(cols, rows);
+                }
             }
             applied
         });

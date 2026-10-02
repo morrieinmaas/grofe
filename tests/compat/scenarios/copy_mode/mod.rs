@@ -1,0 +1,392 @@
+//! TM.7: copy mode's parity suite (plan M5). One scenario per row of
+//! `docs/copy-mode.md`'s keymap (TM.0's 95 bindings), each in
+//! `golden/tm_7/copy_mode/`, plus the front end's own rows in
+//! `golden/tm_7/` (`forms`, `buffers`, `options`, `pane-path`). Each was
+//! recorded from tmux 3.7b in TC.0b's container and is replayed here on
+//! grofe through the `tmux` symlink, byte for byte after normalization.
+//!
+//! Every scenario starts from the same fixture (TM.1's 500 lines of
+//! history in 80x24) with `copy-mode.conf` sourced, so tmux-yank's and the
+//! navigator's rows are the ones under test, sends the row's key (with
+//! `send-keys` to the pane, or typed on an attached client for the
+//! prompts and the mouse) and reads back the cursor or the buffer.
+//!
+//! Each run also checks that the server left nothing in
+//! `compat-miss.log`, that no real tmux ran, and that the user's real tmux
+//! and grofe socket and state directories and `~/.config/canopy` are as
+//! they were.
+
+use std::collections::HashSet;
+use std::fs;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+
+use crate::fe_1::grofe_cli;
+use crate::fe_3::exact_pids;
+use crate::fe_4::with_client_ttys;
+use crate::normalize::{Normalizer, fixtures_dir};
+use crate::replay::{Cli, Step, parse_scenario, replay};
+use crate::scenarios::{socket_dirs, tripwire};
+use crate::tp::misses;
+
+/// The clipboard tools a copy row could run. On the grofe side each is a
+/// stub that keeps what it read; the container has none of them.
+const CLIPBOARD_TOOLS: &[&str] = &[
+    "pbcopy", "pbpaste", "wl-copy", "wl-paste", "xclip", "xsel", "clip.exe",
+];
+
+/// Commands never linked into the private tools directory: the clipboard
+/// tools, the other clipboard helpers tmux-yank looks for, and `tmux`.
+const NEVER_LINKED: &[&str] = &["reattach-to-user-namespace", "putclip", "tmux"];
+
+/// grofe as `tmux` ([`grofe_cli`]) with the clipboard tools stubbed and
+/// the attach check FE.4's. `PATH` is only `bin` (grofe's `tmux` and the
+/// stubs) and `tools`, links to the system's own commands without any
+/// clipboard tool, as tp_11's rig does, so no scenario can reach the
+/// machine's real clipboard.
+fn copy_cli(dir: &Path) -> Cli {
+    let mut cli = grofe_cli(dir);
+    let bin = dir.join("bin");
+    for tool in CLIPBOARD_TOOLS {
+        let path = bin.join(tool);
+        fs::write(&path, format!("#!/bin/sh\ncat >> \"$HOME/{tool}.out\"\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let tools = dir.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    let mut seen: HashSet<String> = CLIPBOARD_TOOLS
+        .iter()
+        .chain(NEVER_LINKED)
+        .map(|s| s.to_string())
+        .collect();
+    for sys in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        for e in fs::read_dir(sys).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if seen.insert(name.clone()) {
+                symlink(e.path(), tools.join(&name)).unwrap();
+            }
+        }
+    }
+    for (key, value) in &mut cli.env {
+        if key == "PATH" {
+            *value = format!("{}:{}", bin.display(), tools.display());
+        }
+    }
+    with_client_ttys(cli, dir)
+}
+
+/// The names, sizes and times under `~/.config/canopy`, which no scenario
+/// may change.
+fn canopy_config() -> String {
+    let Some(home) = std::env::var_os("HOME") else {
+        return String::new();
+    };
+    let mut out = Vec::new();
+    let mut dirs = vec![PathBuf::from(home).join(".config/canopy")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(meta) = fs::symlink_metadata(&path) {
+                if meta.is_dir() {
+                    dirs.push(path.clone());
+                }
+                out.push(format!(
+                    "{} {} {}",
+                    path.display(),
+                    meta.len(),
+                    meta.mtime()
+                ));
+            }
+        }
+    }
+    out.sort();
+    out.join("\n")
+}
+
+/// The `compat-miss.log` lines a scenario must leave: the front end logs
+/// every request it cannot translate, and these are the scenarios' own
+/// usage errors (`load-buffer` with no path, `save-buffer` with two),
+/// which tmux 3.7b refuses with the same text.
+const USAGE_ERRORS: &[(&str, &[&str])] = &[("tm_7/load-save", &["load-buffer", "save-buffer"])];
+
+/// The steps a scenario skips when the tests run as root (as in act's
+/// container), and their golden entries with them: root reads and writes a
+/// mode-000 file, so tmux's "Permission denied" cannot happen. The
+/// recorder never runs as root.
+const ROOT_SKIPS: &[(&str, &[&str])] = &[(
+    "tm_7/load-save",
+    &["$ save-buffer pre.txt", "$ load-buffer pre.txt"],
+)];
+
+/// The steps of `rel` this run skips: [`ROOT_SKIPS`]' under root, else none.
+fn skipped(rel: &str) -> &'static [&'static str] {
+    if !nix::unistd::geteuid().is_root() {
+        return &[];
+    }
+    ROOT_SKIPS
+        .iter()
+        .find(|(r, _)| *r == rel)
+        .map_or(&[], |(_, lines)| lines)
+}
+
+/// `golden` without the entries of the steps in `skip`: each one's `$`
+/// line and its output, up to the next step.
+fn without_steps(golden: &str, skip: &[&str]) -> String {
+    let mut out = String::new();
+    let mut dropping = false;
+    for line in golden.split_inclusive('\n') {
+        if line.starts_with("$ ") || line.starts_with("$& ") {
+            dropping = skip.contains(&line.trim_end_matches('\n'));
+        }
+        if !dropping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// The scenario at `golden/<rel>.scenario` on grofe: its normalized
+/// transcript, or why the run itself failed.
+fn run(rel: &str) -> Result<String, String> {
+    let scenario = fixtures_dir().join(format!("golden/{rel}.scenario"));
+    let text = fs::read_to_string(&scenario).map_err(|e| format!("{rel}: {e}"))?;
+    let mut steps = parse_scenario(&text).map_err(|e| format!("{rel}: {e}"))?;
+    let skip = skipped(rel);
+    steps.retain(|step| match step {
+        Step::Tmux { line, .. } if skip.contains(&line.as_str()) => {
+            eprintln!("SKIPPING (not run) under root, which no permission stops: {rel}: {line}");
+            false
+        }
+        _ => true,
+    });
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let cli = copy_cli(dir.path());
+    let host = (socket_dirs(), canopy_config());
+    // macOS's temp dirs sit behind the `/private` symlink, so a path the
+    // CLI reports from its own cwd (`load-buffer`'s errors) is the real one.
+    let got = exact_pids(replay(&cli, &steps))
+        .normalized(&Normalizer::load())
+        .replace("/private<TMPDIR>", "<TMPDIR>");
+    tripwire(&cli)?;
+    let expected: &[&str] = USAGE_ERRORS
+        .iter()
+        .find(|(r, _)| *r == rel)
+        .map_or(&[], |(_, m)| m);
+    let missed = misses(dir.path());
+    if missed != expected {
+        return Err(format!(
+            "{rel}: compat-miss.log holds {missed:#?}, not {expected:#?}"
+        ));
+    }
+    if host != (socket_dirs(), canopy_config()) {
+        return Err(format!(
+            "{rel}: the real tmux or grofe directories or ~/.config/canopy changed"
+        ));
+    }
+    Ok(got)
+}
+
+/// `got` against the golden text `want`, with the first differing line.
+fn compare(rel: &str, want: &str, got: &str) -> Result<(), String> {
+    if want == got {
+        return Ok(());
+    }
+    let at = want
+        .lines()
+        .zip(got.lines())
+        .position(|(w, g)| w != g)
+        .unwrap_or_else(|| want.lines().count().min(got.lines().count()));
+    Err(format!(
+        "{rel} differs from its golden at line {}:\n--- tmux 3.7b\n{want}+++ grofe\n{got}",
+        at + 1
+    ))
+}
+
+/// The golden of `rel`, less the entries of the steps this run skips.
+fn golden(rel: &str) -> String {
+    let text = fs::read_to_string(fixtures_dir().join(format!("golden/{rel}.golden")))
+        .unwrap_or_else(|e| panic!("{rel}: no golden ({e}); record it"));
+    without_steps(&text, skipped(rel))
+}
+
+/// Replays `golden/<rel>.scenario` on grofe and compares with its golden.
+fn check(rel: &str) {
+    let got = run(rel).unwrap_or_else(|e| panic!("{e}"));
+    if let Err(e) = compare(rel, &golden(rel), &got) {
+        panic!("{e}");
+    }
+}
+
+macro_rules! rows {
+    ($($name:ident => $file:literal),* $(,)?) => {
+        /// Every keymap row's scenario, by file name.
+        const ROWS: &[&str] = &[$($file),*];
+        $(
+            #[test]
+            fn $name() {
+                check(concat!("tm_7/copy_mode/", $file));
+            }
+        )*
+    };
+}
+
+rows! {
+    enter => "enter", escape => "escape", space => "space", bang => "bang",
+    hash => "hash", dollar => "dollar", percent => "percent", star => "star",
+    comma => "comma", slash => "slash", digit_0 => "digit-0",
+    digit_1 => "digit-1", digit_2 => "digit-2", digit_3 => "digit-3",
+    digit_4 => "digit-4", digit_5 => "digit-5", digit_6 => "digit-6",
+    digit_7 => "digit-7", digit_8 => "digit-8", digit_9 => "digit-9",
+    colon => "colon", semicolon => "semicolon", question => "question",
+    upper_a => "upper-a", upper_b => "upper-b", upper_d => "upper-d",
+    upper_e => "upper-e", upper_f => "upper-f", upper_g => "upper-g",
+    upper_h => "upper-h", upper_j => "upper-j", upper_k => "upper-k",
+    upper_l => "upper-l", upper_m => "upper-m", upper_n => "upper-n",
+    upper_p => "upper-p", upper_t => "upper-t", upper_v => "upper-v",
+    upper_w => "upper-w", upper_x => "upper-x", upper_y => "upper-y",
+    caret => "caret", b => "b", e => "e", f => "f", g => "g", h => "h",
+    j => "j", k => "k", l => "l", n => "n", o => "o", q => "q", r => "r",
+    t => "t", v => "v", w => "w", y => "y", z => "z", lbrace => "lbrace",
+    rbrace => "rbrace", bspace => "bspace", home => "home", end => "end",
+    npage => "npage", ppage => "ppage", up => "up", down => "down",
+    left => "left", right => "right", mousedown1pane => "mousedown1pane",
+    mousedrag1pane => "mousedrag1pane",
+    mousedragend1pane => "mousedragend1pane",
+    wheeldownpane => "wheeldownpane", wheeluppane => "wheeluppane",
+    doubleclick1pane => "doubleclick1pane",
+    tripleclick1pane => "tripleclick1pane", m_x => "m-x", m_y => "m-y",
+    c_lbracket => "c-lbracket", c_backslash => "c-backslash", c_b => "c-b",
+    c_c => "c-c", c_d => "c-d", c_e => "c-e", c_f => "c-f", c_h => "c-h",
+    c_j => "c-j", c_k => "c-k", c_l => "c-l", c_u => "c-u", c_v => "c-v",
+    c_y => "c-y", c_up => "c-up", c_down => "c-down",
+}
+
+/// The keymap's scenario ids, in `docs/copy-mode.md`'s order.
+fn keymap_ids() -> Vec<String> {
+    let doc = fs::read_to_string(fixtures_dir().join("../../../docs/copy-mode.md")).unwrap();
+    doc.lines()
+        .filter(|l| l.starts_with("| `"))
+        .filter_map(|l| l.rsplit('|').nth(1))
+        .filter_map(|cell| cell.trim().strip_prefix("`copy_mode/"))
+        .map(|id| id.trim_end_matches('`').to_string())
+        .collect()
+}
+
+/// Every keymap row has its scenario, golden and test, and nothing else is
+/// in `copy_mode/`: the 95 rows of TM.0's golden.
+#[test]
+fn every_keymap_row_has_one_scenario() {
+    let mut ids = keymap_ids();
+    assert_eq!(ids.len(), 95, "{ids:?}");
+    ids.sort();
+    let mut rows: Vec<String> = ROWS.iter().map(|r| r.to_string()).collect();
+    rows.sort();
+    assert_eq!(ids, rows, "the tests and the keymap disagree");
+    let dir = fixtures_dir().join("golden/tm_7/copy_mode");
+    let mut files: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".scenario").map(str::to_string)
+        })
+        .collect();
+    files.sort();
+    assert_eq!(files, rows, "scenario files and the keymap disagree");
+    for id in &rows {
+        assert!(
+            dir.join(format!("{id}.golden")).exists(),
+            "{id} has no golden; record it"
+        );
+    }
+}
+
+/// Case 2: the live `copy-mode-vi` table, with copy-mode.conf loaded
+/// through the `tmux` symlink, is TM.0's golden exactly.
+#[test]
+fn list_keys_copy_mode_vi_equals_tm_0_s_golden() {
+    check("tm_0/list-keys-copy-mode-vi");
+}
+
+/// The front end's own rows: `copy-mode`'s flags and `send -X`, `-FX`
+/// and `-N` with tmux's errors outside the mode.
+#[test]
+fn forms_match_their_golden() {
+    check("tm_7/forms");
+}
+
+/// The buffer verbs and their default output, through the front end.
+#[test]
+fn buffers_match_their_golden() {
+    check("tm_7/buffers");
+}
+
+/// The copy options by tmux name: `mode-keys`, `set-clipboard`,
+/// `copy-command`, `word-separators`, `wrap-search`, `buffer-limit`.
+#[test]
+fn options_match_their_golden() {
+    check("tm_7/options");
+}
+
+/// `#{pane_path}` is the text an OSC 7 sent, as tmux shows it.
+#[test]
+fn pane_path_matches_its_golden() {
+    check("tm_7/pane-path");
+}
+
+/// `load-buffer` and `save-buffer`: files relative to the CLI's cwd,
+/// `-` its stdin and stdout, `-a`, `-b`, `-w`, `-t`, modes and errors.
+/// Under root the two "Permission denied" steps are skipped, saying so
+/// ([`ROOT_SKIPS`]); every other step is still compared.
+#[test]
+fn load_and_save_buffer_match_their_golden() {
+    check("tm_7/load-save");
+}
+
+/// `choose-buffer -Z` from prefix `=`: `d` deletes, Enter pastes.
+#[test]
+fn choose_buffer_matches_its_golden() {
+    check("tm_7/choose-buffer");
+}
+
+/// `#{bracket_paste_flag}`, which TP.11 found missing.
+#[test]
+fn bracket_paste_flag_matches_its_golden() {
+    check("tm_7/bracket-paste");
+}
+
+/// Case 3: one byte changed in one golden fails that scenario and no
+/// other.
+#[test]
+fn an_edited_golden_fails_only_its_scenario() {
+    let names = [
+        "tm_7/copy_mode/g",
+        "tm_7/copy_mode/q",
+        "tm_7/copy_mode/dollar",
+    ];
+    let edited = names[1];
+    let mut failed = Vec::new();
+    for rel in names {
+        let mut want = golden(rel);
+        if rel == edited {
+            let at = want.rfind("? 0").expect("an exit status");
+            want.replace_range(at..at + 3, "? 1");
+        }
+        let got = run(rel).unwrap_or_else(|e| panic!("{e}"));
+        if compare(rel, &want, &got).is_err() {
+            failed.push(rel);
+        }
+    }
+    assert_eq!(failed, [edited]);
+}
+
+/// [`without_steps`] drops a skipped step's whole entry and nothing else.
+#[test]
+fn a_skipped_step_leaves_the_golden_with_its_entry() {
+    let golden = "$ a\n? 0\n$ b\n! no\n? 1\n$ c\nout\n? 0\n";
+    assert_eq!(without_steps(golden, &["$ b"]), "$ a\n? 0\n$ c\nout\n? 0\n");
+    assert_eq!(without_steps(golden, &[]), golden);
+}

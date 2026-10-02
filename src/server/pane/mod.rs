@@ -66,10 +66,15 @@ pub enum PaneEventKind {
     Output(Vec<u8>),
     Title(String),
     Bell,
-    /// OSC 52 clipboard store, already decoded.
-    Clipboard(String),
-    /// Emitted from M3 (OSC 7 scanner).
-    Cwd(PathBuf),
+    /// OSC 52 clipboard store from the scanner (TM.5): the selection
+    /// parameter, kept to tmux's characters, and the decoded data.
+    Clipboard {
+        param: String,
+        data: Vec<u8>,
+    },
+    /// What an OSC 7 reported, as `#{pane_path}` shows it (the scanner's
+    /// [`crate::server::passthrough`] `osc7_text`).
+    Path(String),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
@@ -315,8 +320,8 @@ pub struct PaneHandle {
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: Arc<Mutex<ProcSample>>,
-    /// The cwd the pane itself reported (OSC 7, T3.3).
-    reported_cwd: Mutex<Option<PathBuf>>,
+    /// What the pane itself reported with OSC 7 (T3.3), as tmux keeps it.
+    reported_path: Mutex<Option<String>>,
     /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
     tty: Option<PathBuf>,
     tasks: Vec<JoinHandle<()>>,
@@ -399,7 +404,7 @@ impl PaneHandle {
             sample,
             graphics_ok,
             cell_px: Mutex::new(spec.cell_px),
-            reported_cwd: Mutex::new(None),
+            reported_path: Mutex::new(None),
             tty,
             tasks: vec![reader, writer, sampler],
         })
@@ -616,18 +621,23 @@ impl PaneHandle {
         procinfo::foreground_group(self.master.get_ref())
     }
 
-    /// The pane's cwd: the one it reported ([`Self::set_reported_cwd`]),
-    /// else the foreground process's, from the last sample.
+    /// The foreground process's cwd, read now (else the last sample's):
+    /// tmux's `#{pane_current_path}` (`osdep_get_cwd`), never what the
+    /// pane reported, since that text is the pane's own.
     pub fn current_path(&self) -> Option<PathBuf> {
-        lock(&self.reported_cwd)
-            .clone()
+        self.foreground_group()
+            .and_then(procinfo::cwd)
             .or_else(|| lock(&self.sample).path.clone())
     }
 
-    /// The cwd the pane reported (OSC 7): preferred over the sampled one
-    /// from now on.
-    pub fn set_reported_cwd(&self, cwd: PathBuf) {
-        *lock(&self.reported_cwd) = Some(cwd);
+    /// What the pane last reported with OSC 7: `#{pane_path}`.
+    pub fn reported_path(&self) -> Option<String> {
+        lock(&self.reported_path).clone()
+    }
+
+    /// Records what the pane reported with OSC 7.
+    pub fn set_reported_path(&self, path: String) {
+        *lock(&self.reported_path) = Some(path);
     }
 
     /// The pty slave's path, as `#{pane_tty}` shows it.
@@ -640,17 +650,41 @@ impl PaneHandle {
         lock(&self.emu).term.grid().history_size()
     }
 
-    /// `rows` rows of the screen as it was scrolled back `offset` lines
-    /// (0 is the live screen; `offset` is capped at [`Self::history_size`]),
-    /// top row first, under one lock.
-    pub fn snapshot_history(&self, offset: usize, rows: u16) -> Vec<Vec<SnapCell>> {
+    /// Every row of the grid, the oldest history row first and then the
+    /// screen, each passed to `row`, under one lock: copy mode's copy of
+    /// the pane (M5, TM.1). Returns the number of history rows and the
+    /// cursor.
+    /// With each row goes which of its cells an intact tab covers (the
+    /// blanks it moved over to its stop, as [`Self::capture_lines`] reads
+    /// a tab), which copy mode treats as tmux treats a tab's padding.
+    /// Both are buffers reused for the next row.
+    pub fn copy_grid(&self, mut row: impl FnMut(&mut [SnapCell], &[bool])) -> (usize, CursorState) {
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
-        let offset = offset.min(grid.history_size()) as i32;
-        let rows = i32::from(rows).min(grid.screen_lines() as i32);
-        (0..rows)
-            .map(|r| snap_row(&grid[Line(r - offset)], grid.columns()))
-            .collect()
+        let history = grid.history_size();
+        let cols = grid.columns();
+        let mut cells = Vec::with_capacity(cols);
+        let mut covered = vec![false; cols];
+        for r in -(history as i32)..grid.screen_lines() as i32 {
+            let line = &grid[Line(r)];
+            covered.fill(false);
+            for col in 0..cols {
+                if line[Column(col)].c != '\t' || covered[col] {
+                    continue;
+                }
+                let stop = ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
+                let intact = (col + 1..stop).all(|c| {
+                    let cell = &line[Column(c)];
+                    cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
+                });
+                if intact {
+                    covered[col + 1..stop].fill(true);
+                }
+            }
+            snap_row_into(&mut cells, line, cols);
+            row(&mut cells, &covered);
+        }
+        (history, cursor_state(&emu.term))
     }
 
     pub fn modes(&self) -> InputModes {
@@ -713,20 +747,30 @@ fn snap_row(
     row: &alacritty_terminal::grid::Row<term::cell::Cell>,
     columns: usize,
 ) -> Vec<SnapCell> {
-    (0..columns)
-        .map(|c| {
-            let cell = &row[Column(c)];
-            SnapCell {
-                c: cell.c,
-                fg: cell.fg,
-                bg: cell.bg,
-                flags: cell.flags.difference(written::WRITTEN),
-                zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
-                underline_color: cell.underline_color(),
-                hyperlink: cell.hyperlink(),
-            }
-        })
-        .collect()
+    let mut cells = Vec::with_capacity(columns);
+    snap_row_into(&mut cells, row, columns);
+    cells
+}
+
+/// [`snap_row`] into `cells`, replacing what it held.
+fn snap_row_into(
+    cells: &mut Vec<SnapCell>,
+    row: &alacritty_terminal::grid::Row<term::cell::Cell>,
+    columns: usize,
+) {
+    cells.clear();
+    cells.extend((0..columns).map(|c| {
+        let cell = &row[Column(c)];
+        SnapCell {
+            c: cell.c,
+            fg: cell.fg,
+            bg: cell.bg,
+            flags: cell.flags.difference(written::WRITTEN),
+            zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+            underline_color: cell.underline_color(),
+            hyperlink: cell.hyperlink(),
+        }
+    }));
 }
 
 fn cursor_state(term: &Term<Listener>) -> CursorState {
@@ -962,18 +1006,11 @@ mod tests {
         assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
     }
 
-    fn row_text(row: &[SnapCell]) -> String {
-        row.iter()
-            .map(|c| c.c)
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    }
-
     /// T3.0's pane seams for the scrollback view (T3.2): lines scrolled off
-    /// the top are counted and can be read back at any offset.
+    /// the top are counted. (The view became copy mode in TM.6, which reads
+    /// the history through `copy_grid`; the offset read-back went with it.)
     #[tokio::test]
-    async fn history_can_be_read_back_at_an_offset() {
+    async fn lines_scrolled_off_are_counted() {
         let (tx, mut rx) = mpsc::channel(8);
         let spec = PaneSpawn {
             rows: 10,
@@ -999,14 +1036,6 @@ mod tests {
         }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
-        let top = |offset: usize| row_text(&handle.snapshot_history(offset, 10)[0]);
-        assert_eq!(top(0), "22");
-        assert_eq!(top(5), "17");
-        assert_eq!(top(21), "1");
-        assert_eq!(top(1000), "1", "the offset is capped at the history");
-        assert_eq!(handle.snapshot_history(0, 99).len(), 10);
-        let live = handle.snapshot_rows(0..10);
-        assert_eq!(handle.snapshot_history(0, 10), live.rows);
     }
 
     fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {
@@ -1052,16 +1081,20 @@ mod tests {
         assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
     }
 
-    /// A cwd the pane reported (OSC 7, T3.3) wins over the sampled one.
+    /// What the pane reported (OSC 7, T3.3) is kept apart from the
+    /// sampled cwd, which alone is `#{pane_current_path}`, as in tmux.
     #[tokio::test]
-    async fn a_reported_cwd_is_preferred() {
+    async fn a_reported_path_is_kept_apart() {
         let (tx, _rx) = mpsc::channel(8);
         let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
             .expect("spawn");
-        let there = PathBuf::from("/nonexistent/grofe-reported");
-        assert_ne!(handle.current_path(), Some(there.clone()));
-        handle.set_reported_cwd(there.clone());
-        assert_eq!(handle.current_path(), Some(there));
+        let there = "file:///nonexistent/grofe-reported".to_string();
+        handle.set_reported_path(there.clone());
+        assert_ne!(
+            handle.current_path(),
+            Some(PathBuf::from("/nonexistent/grofe-reported"))
+        );
+        assert_eq!(handle.reported_path(), Some(there));
     }
 
     /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's

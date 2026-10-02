@@ -71,8 +71,8 @@ struct Builtin {
 // option; grofe's server scope is global.
 //
 // M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
-// where grofe differs: `mouse` on (tmux off), `set-clipboard` on (tmux
-// external), `focus-events` on (tmux off), `pane-active-border-style`
+// where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
+// off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
 // synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
@@ -90,7 +90,6 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("history-limit", "2000"),
     ("escape-time", "10"),
     ("mouse", "off"),
-    ("set-clipboard", "external"),
     ("focus-events", "off"),
     ("extended-keys", "off"),
     ("renumber-windows", "off"),
@@ -99,6 +98,12 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
         "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
     ),
 ];
+
+/// `bell-action`, `activity-action` and `silence-action`'s choices.
+const ALERT_ACTIONS: &[&str] = &["none", "any", "current", "other"];
+
+/// The `visual-*` options' choices.
+const VISUAL: &[&str] = &["off", "on", "both"];
 
 const BUILTINS: &[Builtin] = &[
     Builtin {
@@ -116,6 +121,54 @@ const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Session,
         default: "50000",
+    },
+    // TM.4: tmux's server option, at grofe's global scope (as
+    // `escape-time`); at least 1.
+    Builtin {
+        name: "buffer-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "50",
+    },
+    // M5 stub: copy mode's options, with tmux 3.7b's scopes and defaults
+    // (`copy-command` is a server option there, global here).
+    Builtin {
+        name: "word-separators",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
+    },
+    Builtin {
+        name: "wrap-search",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "copy-command",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "",
+    },
+    Builtin {
+        name: "mode-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "noattr,bg=yellow,fg=black",
+    },
+    Builtin {
+        name: "copy-mode-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=cyan,fg=black",
+    },
+    Builtin {
+        name: "copy-mode-current-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=magenta,fg=black",
     },
     Builtin {
         name: "pane-base-index",
@@ -244,6 +297,63 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "reverse",
     },
+    // Window alerts (`server::alerts`, TP.10), with tmux's defaults.
+    Builtin {
+        name: "monitor-bell",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "monitor-activity",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "monitor-silence",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Window,
+        default: "0",
+    },
+    Builtin {
+        name: "bell-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "any",
+    },
+    Builtin {
+        name: "activity-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+    },
+    Builtin {
+        name: "silence-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+    },
+    Builtin {
+        name: "visual-bell",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "visual-activity",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "visual-silence",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+    },
     Builtin {
         name: "message-style",
         kind: Kind::String,
@@ -322,7 +432,7 @@ const BUILTINS: &[Builtin] = &[
         name: "set-clipboard",
         kind: Kind::Choice(&["off", "external", "on"]),
         scope: OptionScope::Global,
-        default: "on",
+        default: "external",
     },
     Builtin {
         name: "focus-events",
@@ -403,8 +513,8 @@ const BUILTINS: &[Builtin] = &[
     // `default-shell` is read when a pane starts (`Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
-    // `mode-keys` waits for M5's copy mode, and `pane-border-format` for
-    // pane border titles.
+    // `pane-border-format` waits for pane border titles; copy mode reads
+    // `mode-keys` (M5).
     Builtin {
         name: "aggressive-resize",
         kind: Kind::Bool,
@@ -839,7 +949,7 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
                 IntErrorKind::NegOverflow => too_small(),
                 _ => format!("value is invalid: {value}"),
             })?;
-            if n < 0 {
+            if n < i64::from(name == "buffer-limit") {
                 Err(too_small())
             } else if n > max {
                 Err(too_large())
@@ -1359,8 +1469,18 @@ pub(crate) fn quote(value: &str) -> String {
         return format!("\\{c}");
     }
     let mut escaped = String::new();
-    for c in value.chars() {
+    let mut it = value.chars().peekable();
+    while let Some(c) = it.next() {
         match c {
+            // As tmux's `utf8_stravis`: `$` only before a name (M5: the
+            // `word-separators` default holds `$%`).
+            '$' if quotes == Some('"')
+                && !it
+                    .peek()
+                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{') =>
+            {
+                escaped.push('$');
+            }
             '\\' => escaped.push_str("\\\\"),
             '\n' => escaped.push_str("\\n"),
             '\t' => escaped.push_str("\\t"),
@@ -1847,13 +1967,45 @@ fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
         KeyCode::Escape => (mods, 0, 27, String::new()),
         // F1 to F12 sit between BSpace and IC.
         KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
-        KeyCode::Mouse(_) => (mods, 2, 0, key.to_string()),
+        KeyCode::Mouse(m) => (mods, 2, mouse_order(m), String::new()),
         code => {
             let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
             let at = if at == 0 { 0 } else { at + 12 };
             (mods, 1, at, String::new())
         }
     }
+}
+
+/// Where tmux 3.7b's key codes put a mouse key: by action (`KEYC_MOUSE_KEY`
+/// order, the wheel down before up, as recorded), then button, then where
+/// the pointer was (pane, the status line's ranges, border, scrollbar,
+/// border controls).
+fn mouse_order(m: crate::server::input::MouseKey) -> u32 {
+    use crate::server::input::{MouseAction as A, MousePlace as P};
+    let action = match m.action {
+        A::Down => 0,
+        A::Up => 1,
+        A::Drag => 2,
+        A::DragEnd => 3,
+        A::WheelDown => 4,
+        A::WheelUp => 5,
+        A::SecondClick => 6,
+        A::DoubleClick => 7,
+        A::TripleClick => 8,
+    };
+    let place = match m.place {
+        P::Pane => 0,
+        P::Status => 1,
+        P::StatusLeft => 2,
+        P::StatusRight => 3,
+        P::StatusDefault => 4,
+        P::Border => 5,
+        P::ScrollbarUp => 6,
+        P::ScrollbarSlider => 7,
+        P::ScrollbarDown => 8,
+        P::Control(n) => 9 + u32::from(n),
+    };
+    action * 10_000 + u32::from(m.button) * 100 + place
 }
 
 /// A binding's commands as tmux 3.7b prints a parsed command list in
@@ -1969,11 +2121,23 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     line
 }
 
-/// `source-file [-q] path`: loads one TOML file (and its includes) at
-/// runtime (spec §5.1). A relative path is the requester's cwd's, as in
-/// tmux; the file's own includes resolve against it. Its values and
-/// bindings count as runtime (R10): `reload` keeps them. All errors or
-/// nothing, as `reload`; `-q` hides only a missing file.
+/// `source-file [-q] path`: loads one file at runtime, read by its name.
+/// A relative path is the requester's cwd's, as in tmux; `-q` hides only a
+/// missing file.
+///
+/// - `*.toml` is grofe's config (spec §5.1), with its includes resolved
+///   against it. Its values and bindings count as runtime (R10): `reload`
+///   keeps them. All errors or nothing, as `reload`.
+/// - `*.lua` is M6's.
+/// - Any other file is a tmux config when the request is tmux's (its
+///   dialect, or a tmux-identity server): tmux's plugins source their own
+///   `*.tmux` and `*.conf` files through `tmux` ([`source_tmux_file`]). A
+///   native request on a grofe server reads it as TOML, as before.
+///
+/// Files sourced from files nest at most [`MAX_SOURCE_DEPTH`] deep, as in
+/// tmux 3.7b; a deeper one is `too many nested files`. A TOML file cannot
+/// run `source-file` (its includes are `config::load_one`'s, which refuse
+/// a cycle), so only a tmux file nests this way.
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
     let path = ctx.cwd.join(&c.path);
     if !path.exists() {
@@ -1985,6 +2149,15 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     // ponytail: Lua config is layer 5, T6.4's (M6).
     if path.extension().is_some_and(|e| e == "lua") {
         return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
+    }
+    let tmux =
+        ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
+    if tmux && path.extension().is_none_or(|e| e != "toml") {
+        let depth = source_depth();
+        if depth >= MAX_SOURCE_DEPTH {
+            return Err("too many nested files".to_string());
+        }
+        return with_source_depth(depth + 1, || source_tmux_file(state, ctx, &path));
     }
     let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
@@ -2010,6 +2183,89 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         tables.insert(&k.table, k.key, b);
     }
     Ok(String::new())
+}
+
+/// How deep `source-file` of a tmux file nests, as tmux 3.7b's (recorded:
+/// a file that sources itself loads 50 times, then the 51st is `too many
+/// nested files`, exit 1, the server up).
+const MAX_SOURCE_DEPTH: u32 = 50;
+
+thread_local! {
+    /// The tmux files being sourced now, one inside another (the actor's
+    /// stack). A held file's later lines run outside it, so a
+    /// [`super::client::HeldFrame`] carries the depth it was held at and
+    /// runs under it again ([`with_source_depth`]).
+    static SOURCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// How many tmux files are being sourced, one inside another, right now.
+pub(crate) fn source_depth() -> u32 {
+    SOURCE_DEPTH.get()
+}
+
+/// Runs `f` at source-file depth `depth`, then puts the old depth back.
+pub(crate) fn with_source_depth<T>(depth: u32, f: impl FnOnce() -> T) -> T {
+    let old = SOURCE_DEPTH.replace(depth);
+    let out = f();
+    SOURCE_DEPTH.set(old);
+    out
+}
+
+/// A tmux config file, read as tmux 3.7b's `source-file` reads one
+/// (recorded): split into lines ([`cmd::split_config_file`]) and every
+/// command parsed through the tmux front end before any runs, so an error
+/// anywhere (a syntax error, an unknown command or flag) runs nothing and
+/// is `<path>:<line>: <error>`. Then each line's commands run as one
+/// group: an error stops the rest of its line, the next line still runs,
+/// and the request fails at the end with every error, after what the
+/// commands printed. A command that holds the request (`run-shell`
+/// without `-b`, `wait-for`) holds the lines after it too, as tmux's queue
+/// waits; those lines still run on after an error, and the errors from
+/// before the hold and after it fail the request at the end.
+fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
+    let ctx = ClientCtx {
+        dialect: Dialect::Tmux,
+        ..ctx.clone()
+    };
+    let mut groups = Vec::new();
+    for (line, cmds) in crate::cmd::split_config_file(&text).map_err(|(l, e)| at(l, &e))? {
+        let mut group = Vec::new();
+        for argv in cmds {
+            group.extend(super::parse_split(state, &ctx, &argv).map_err(|e| at(line, &e))?);
+        }
+        groups.push(group);
+    }
+    let mut out = String::new();
+    let mut errors = Vec::new();
+    let mut groups = groups.into_iter();
+    while let Some(group) = groups.next() {
+        match super::run_commands(state, &ctx, group) {
+            Ok(text) => out.push_str(&text),
+            Err(e) => {
+                out.push_str(&std::mem::take(&mut state.failed_out));
+                errors.push(e);
+            }
+        }
+        if state.held.is_some() {
+            let held = state.held.get_or_insert_default();
+            held.errors.append(&mut errors);
+            held.frames
+                .extend(groups.by_ref().map(|cmds| super::client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds,
+                    keep_going: true,
+                    depth: source_depth(),
+                }));
+            return Ok(out);
+        }
+    }
+    if errors.is_empty() {
+        return Ok(out);
+    }
+    state.failed_out = out;
+    Err(errors.join("\n"))
 }
 
 /// A `name` is unique across the live tables too (R6): `load_one` checks
@@ -2367,8 +2623,29 @@ impl<'a> ServerVars<'a> {
 
 impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        // Copy mode's variables while the pane is in it (TM.1).
+        if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
+        // A chooser open over the pane is a mode too (TP.9b).
+        if let Some(v) = crate::server::tree::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
+        // tmux 3.7b reads it from the screen on view, so a pane in any mode
+        // (whatever answers `pane_in_mode`) is 0 (TM.7).
+        if name == "bracket_paste_flag"
+            && (crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
+                == Some("1")
+                || crate::server::tree::format_var(self.state, self.pane, "pane_in_mode").is_some())
+        {
+            return Some("0".to_string());
+        }
         // The mouse event a mouse key's commands run for, and the view (TC.10).
-        if let Some(v) = crate::server::mouse::format_var(self.state, Some(self.pane), name) {
+        if let Some(v) = crate::server::mouse::format_var(self.state, name) {
+            return Some(v);
+        }
+        // The newest automatic buffer's `#{buffer_*}` (TM.4).
+        if let Some(v) = crate::server::buffers::format_var(self.state, name) {
             return Some(v);
         }
         // Inside a hook, its `#{hook*}` variables (TC.5).
@@ -2424,6 +2701,10 @@ impl FormatVars for FormatCtx<'_> {
             }
             "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
             "pid" => return Some(std::process::id().to_string()),
+            "start_time" => {
+                let since = m.started?.duration_since(std::time::UNIX_EPOCH).ok()?;
+                return Some(since.as_secs().to_string());
+            }
             // Session groups are out of scope (spec §4.5).
             "session_grouped" => return Some("0".to_string()),
             // ponytail: stubs until the features exist: copy mode (M5),
@@ -2449,6 +2730,8 @@ impl FormatVars for FormatCtx<'_> {
             "window_zoomed_flag" => flag(w.zoomed),
             "window_width" => w.cols.to_string(),
             "window_bell_flag" => flag(w.bell_flag),
+            "window_activity_flag" => flag(w.activity_flag),
+            "window_silence_flag" => flag(w.silence_flag),
             "window_height" => w.rows.to_string(),
             "window_panes" => w.pane_ids().len().to_string(),
             "pane_floating_flag" => flag(w.floating(p.id).is_some()),
@@ -2482,6 +2765,8 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_else(|| p.cwd.clone())
                 .display()
                 .to_string(),
+            // What the pane reported with OSC 7, as tmux shows it.
+            "pane_path" => p.handle.reported_path().unwrap_or_default(),
             "pane_left" => match w.floating(p.id) {
                 Some(f) => f.x.to_string(),
                 None => pane_origin(w, p.id)?.0.to_string(),
@@ -2538,6 +2823,8 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_default(),
             "alternate_on" => flag(p.handle.modes().alt_screen),
             "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
+            // 0 in a mode: `ServerVars::get`.
+            "bracket_paste_flag" => flag(p.handle.modes().bracketed_paste),
             "history_size" => p.handle.history_size().to_string(),
             "history_limit" => m.history_limit(s.id).to_string(),
             // tmux's grid: 40 bytes a line, history and screen.
@@ -2571,19 +2858,22 @@ fn window_layout(w: &crate::server::model::Window) -> String {
     tmux_layout(&w.layout.export(w.area()), &floating, !w.zoomed)
 }
 
-/// tmux's `window_flags`: `!` bell, `*` current, `-` last, `Z` zoomed, in
-/// tmux's order. grofe tracks no activity, silence or marked pane, so
-/// `#`, `~` and `M` never show.
+/// tmux's `window_flags`: `#` activity (written `##`, as tmux escapes it
+/// there), `!` bell, `~` silence, `*` current, `-` last, `Z` zoomed, in
+/// tmux's order. grofe has no marked pane, so `M` never shows.
 fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Window) -> String {
-    [
+    let activity = if w.activity_flag { "##" } else { "" };
+    let rest: String = [
         (w.bell_flag, '!'),
+        (w.silence_flag, '~'),
         (s.active == w.id, '*'),
         (s.last_windows.last() == Some(&w.id), '-'),
         (w.zoomed, 'Z'),
     ]
     .into_iter()
     .filter_map(|(on, c)| on.then_some(c))
-    .collect()
+    .collect();
+    format!("{activity}{rest}")
 }
 
 /// One word of `pane_start_command`, quoted as tmux's `args_escape`
@@ -2774,7 +3064,6 @@ const NO_EFFECT: &[&str] = &[
     "default-terminal",
     "extended-keys",
     "extended-keys-format",
-    "mode-keys",
     "pane-border-format",
     "status-keys",
     "synchronize-panes",
@@ -3239,6 +3528,38 @@ mod tests {
     use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
 
+    /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in
+    /// `tc_0b/display-formats` and `tm_0/list-keys-copy-mode-vi`).
+    #[test]
+    fn mouse_keys_sort_in_tmux_s_order() {
+        use crate::server::input::parse_key;
+        let recorded = [
+            "MouseDown1Pane",
+            "MouseDown1Status",
+            "MouseDown1Border",
+            "MouseDown1ScrollbarUp",
+            "MouseDown1Control8",
+            "MouseDown3Pane",
+            "MouseDown3StatusLeft",
+            "MouseDrag1Pane",
+            "MouseDrag1Border",
+            "MouseDragEnd1Pane",
+            "WheelDownPane",
+            "WheelDownStatus",
+            "WheelUpPane",
+            "DoubleClick1Pane",
+            "TripleClick1Pane",
+            "M-x",
+            "M-MouseDown3Pane",
+            "C-a",
+        ];
+        let mut keys: Vec<Key> = recorded.iter().map(|k| parse_key(k).unwrap()).collect();
+        keys.reverse();
+        keys.sort_by_key(tmux_key_order);
+        let got: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        assert_eq!(got, recorded);
+    }
+
     /// TC.7: `list-keys` for one key, `-1` for the first line, `-N` for
     /// notes in tmux 3.7b's form (recorded: `C-b c       Create a new
     /// window`, keys padded to the widest; without `-T` the prefix table,
@@ -3314,6 +3635,8 @@ mod tests {
             target: pane.to_string(),
             range: None,
             pane_cell: Some((3, 4)),
+            report: (3, 4),
+            wheel: false,
         };
         crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
             run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])
@@ -3333,7 +3656,7 @@ mod tests {
             ("base-index", "0", "1"),
             ("pane-base-index", "0", "1"),
             ("mouse", "off", "on"),
-            ("set-clipboard", "external", "on"),
+            ("set-clipboard", "external", "external"),
             ("focus-events", "off", "on"),
             ("escape-time", "10", "25"),
             ("history-limit", "2000", "50000"),
@@ -3403,6 +3726,21 @@ mod tests {
         assert_eq!(b.dialect, Dialect::Tmux);
         let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
         assert_eq!(err, "unknown command: ls");
+    }
+
+    /// TP.12: `#{start_time}` is when the server started, in Unix seconds,
+    /// without a pane: continuum reads it to tell a fresh server (restore
+    /// once) from one that has been running.
+    #[test]
+    fn start_time_is_the_server_start() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let model = Model::new(false);
+        let got = FormatCtx::new(&model, PaneId(99)).get("start_time");
+        let secs: u64 = got.expect("start_time set").parse().expect("a number");
+        assert!(secs >= before && secs <= before + 5, "{secs} vs {before}");
     }
 
     /// TC.3: `#{version}` follows the model's identity (TC.1 sets it);
@@ -3512,13 +3850,14 @@ mod tests {
     }
 
     /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
-    /// defaults, and tmux's value checks.
+    /// defaults (`set-clipboard` `external` as tmux's, an M5 ruling), and
+    /// tmux's value checks.
     #[test]
     fn m3_rows_have_grofe_defaults_and_tmux_scopes() {
         let o = Options::new(false);
         for (name, default, scope) in [
             ("mouse", "on", OptionScope::Session),
-            ("set-clipboard", "on", OptionScope::Global),
+            ("set-clipboard", "external", OptionScope::Global),
             ("focus-events", "on", OptionScope::Global),
             ("pane-border-style", "default", OptionScope::Window),
             ("pane-active-border-style", "fg=green", OptionScope::Window),

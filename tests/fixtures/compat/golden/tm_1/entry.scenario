@@ -1,0 +1,50 @@
+# TM.1: entering and leaving copy mode over tests/fixtures/copy/fixture.txt
+# (500 lines of history in an 80x24 pane). copy-mode starts at the pane's
+# cursor; -u a page up; a second copy-mode keeps the view and -u pages
+# again; send -X and -N outside a mode, and their errors; -e leaves at
+# the bottom.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; exec sleep 100000'
+$ run-shell 'sleep 1'
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{pane_in_mode}[#{pane_mode}]'
+$ send-keys -t main -X cursor-up
+$ send-keys -t main -N 3 -X cursor-up
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode}[#{pane_mode}] #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 4 cursor-up
+$ copy-mode -t main
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ copy-mode -u -t main
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X
+$ send-keys -t main -X no-such-command
+$ send-keys -t main -X goto-line
+$ send-keys -t main -N abc -X cursor-up
+$ send-keys -t main -N 0 -X cursor-up
+$ send-keys -t main -N 99999999999 -X cursor-up
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -N 2
+$ send-keys -t main -X cursor-up
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ display -p -t main '#{pane_in_mode}[#{pane_mode}] [#{copy_cursor_x}] [#{scroll_position}]'
+$ copy-mode -u -t main
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main q
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -e -u -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 3 scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X page-down
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -e -t main
+$ send-keys -t main -X scroll-down
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -e -u -t main
+$ send-keys -t main C-d
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main C-d
+$ display -p -t main '#{pane_in_mode}'
+$ copy-mode -t main
+$ send-keys -t main C-c
+$ display -p -t main '#{pane_in_mode}'

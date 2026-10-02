@@ -69,6 +69,9 @@ pub enum KeyCode {
     Delete,
     /// `F(1)` is F1.
     F(u8),
+    /// tmux's `Any`: bound in a table, it takes every key that table
+    /// does not bind (see [`KeyTables::lookup`]); never typed or sent.
+    Any,
     /// A bindable mouse key (`MouseDown1Pane`, TC.10); never sent to a
     /// pane as a key.
     Mouse(MouseKey),
@@ -364,6 +367,7 @@ const NAMES: &[(&str, KeyCode)] = &[
     ("Insert", KeyCode::Insert),
     ("DC", KeyCode::Delete),
     ("Delete", KeyCode::Delete),
+    ("Any", KeyCode::Any),
 ];
 
 /// Parse a tmux key name (`C-b`, `M-Up`, `^a`, `PPage`, `%`), as tmux 3.7b
@@ -1219,6 +1223,18 @@ impl KeyTables {
         for (key, b) in add {
             self.insert(PREFIX_TABLE, key, b);
         }
+        // The stock copy-mode-vi rows run as they are; those whose `{ }`
+        // template `cmds` holds as a string show as tmux prints them.
+        if let Some(t) = self.tables.get_mut(COPY_MODE_VI_TABLE) {
+            for (name, text) in TMUX_COPY_MODE_VI_SHOWN {
+                if let Ok(key) = parse_key(name)
+                    && let Some(b) = t.get_mut(&key)
+                    && b.source == BindingSource::Default
+                {
+                    b.shown = Some(text.to_string());
+                }
+            }
+        }
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
@@ -1243,6 +1259,15 @@ impl KeyTables {
                 .map(|(_, b)| b)
         })
     }
+
+    /// What a key pressed in `table` runs, as tmux 3.7b's key walk finds
+    /// it: [`KeyTables::get`], else the table's `Any` binding (recorded:
+    /// `Any` takes keys and mouse events alike, the prefix key still wins,
+    /// and an exact binding wins over it).
+    pub fn lookup(&self, table: &str, key: &Key) -> Option<&Binding> {
+        self.get(table, key)
+            .or_else(|| self.exact(table, &Key::new(KeyCode::Any, Mods::default())))
+    }
 }
 
 /// The default key table (spec §5.3, the "tmux default bindings" row, D10):
@@ -1253,7 +1278,7 @@ impl KeyTables {
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
 /// `o` (needs `+`/`-` target offsets, FE.1's), `m`/`M` (marking), `C` and
 /// `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus),
-/// `*` (`new-pane`), and copy mode and buffers (`[ ] = # - PPage`, M5).
+/// `*` (`new-pane`). Copy mode (M5) binds `[`, `PPage` and the `copy-mode-vi` table.
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
@@ -1498,6 +1523,26 @@ pub fn default_bindings() -> KeyTables {
         false,
         "Choose a session from a list",
     );
+    // TM.4: the buffer keys.
+    bind(
+        "]",
+        &["paste-buffer", "-p"],
+        false,
+        "Paste the most recent paste buffer",
+    );
+    bind("#", &["list-buffers"], false, "List all paste buffers");
+    bind(
+        "=",
+        &["choose-buffer", "-Z"],
+        false,
+        "Choose a paste buffer from a list",
+    );
+    bind(
+        "-",
+        &["delete-buffer"],
+        false,
+        "Delete the most recent paste buffer",
+    );
     for (key, flag, note) in [
         ("S-Up", "-U", "Move the visible part of the window up"),
         ("S-Down", "-D", "Move the visible part of the window down"),
@@ -1528,6 +1573,23 @@ pub fn default_bindings() -> KeyTables {
             &format!("{verb} the {layout} layout"),
         );
     }
+    // M5 stub: copy mode's keys (TM.1 builds the mode).
+    bind("[", &["copy-mode"], false, "Enter copy mode");
+    bind(
+        "PPage",
+        &["copy-mode", "-u"],
+        false,
+        "Enter copy mode and scroll up",
+    );
+    for (key, text) in COPY_MODE_VI {
+        if let (Ok(key), Ok(cmds)) = (parse_key(key), crate::cmd::split_command_string(text)) {
+            t.insert(
+                COPY_MODE_VI_TABLE,
+                key,
+                Binding::new(cmds, false, BindingSource::Default),
+            );
+        }
+    }
     // FE.1: stock `o`. Its `:.+` offset has no native spelling, so the
     // binding is tmux dialect, run through the front end (recorded on tmux
     // 3.7b: `select-pane -t :.+`, "Select the next pane").
@@ -1540,6 +1602,246 @@ pub fn default_bindings() -> KeyTables {
     }
     t
 }
+
+/// The copy-mode key table with `mode-keys vi`.
+pub const COPY_MODE_VI_TABLE: &str = "copy-mode-vi";
+
+/// tmux 3.7b's 88 stock `copy-mode-vi` bindings (`key-bindings.c`), in
+/// native spelling: the key, then its commands as a command string. The
+/// rows yank and the navigator add come from those plugins (TM.0's
+/// decision 5).
+pub const COPY_MODE_VI: &[(&str, &str)] = &[
+    (
+        r#"#"#,
+        r#"send-keys -F -X search-backward -- '#{copy_cursor_word}'"#,
+    ),
+    (
+        r#"*"#,
+        r#"send-keys -F -X search-forward -- '#{copy_cursor_word}'"#,
+    ),
+    (r#"C-c"#, r#"send-keys -X cancel"#),
+    (r#"C-d"#, r#"send-keys -X halfpage-down"#),
+    (r#"C-e"#, r#"send-keys -X scroll-down"#),
+    (r#"C-b"#, r#"send-keys -X page-up"#),
+    (r#"C-f"#, r#"send-keys -X page-down"#),
+    (r#"C-h"#, r#"send-keys -X cursor-left"#),
+    (r#"C-j"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"Enter"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"C-u"#, r#"send-keys -X halfpage-up"#),
+    (r#"C-v"#, r#"send-keys -X rectangle-toggle"#),
+    (r#"C-y"#, r#"send-keys -X scroll-up"#),
+    (r#"Escape"#, r#"send-keys -X clear-selection"#),
+    (r#"C-["#, r#"send-keys -X clear-selection"#),
+    (r#"Space"#, r#"send-keys -X begin-selection"#),
+    (r#"$"#, r#"send-keys -X end-of-line"#),
+    (r#","#, r#"send-keys -X jump-reverse"#),
+    (
+        r#"/"#,
+        r#"command-prompt -T search -p '(search down)' { send-keys -X search-forward -- '%%' }"#,
+    ),
+    (r#"0"#, r#"send-keys -X start-of-line"#),
+    (
+        r#"1"#,
+        r#"command-prompt -N -p '(repeat)' -I 1 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"2"#,
+        r#"command-prompt -N -p '(repeat)' -I 2 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"3"#,
+        r#"command-prompt -N -p '(repeat)' -I 3 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"4"#,
+        r#"command-prompt -N -p '(repeat)' -I 4 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"5"#,
+        r#"command-prompt -N -p '(repeat)' -I 5 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"6"#,
+        r#"command-prompt -N -p '(repeat)' -I 6 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"7"#,
+        r#"command-prompt -N -p '(repeat)' -I 7 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"8"#,
+        r#"command-prompt -N -p '(repeat)' -I 8 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"9"#,
+        r#"command-prompt -N -p '(repeat)' -I 9 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#":"#,
+        r#"command-prompt -p '(goto line)' { send-keys -X goto-line -- '%%' }"#,
+    ),
+    (r#";"#, r#"send-keys -X jump-again"#),
+    (
+        r#"?"#,
+        r#"command-prompt -T search -p '(search up)' { send-keys -X search-backward -- '%%' }"#,
+    ),
+    (r#"A"#, r#"send-keys -X append-selection-and-cancel"#),
+    (r#"B"#, r#"send-keys -X previous-space"#),
+    (r#"D"#, r#"send-keys -X copy-pipe-end-of-line-and-cancel"#),
+    (r#"E"#, r#"send-keys -X next-space-end"#),
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p '(jump backward)' { send-keys -X jump-backward -- '%%' }"#,
+    ),
+    (r#"G"#, r#"send-keys -X history-bottom"#),
+    (r#"H"#, r#"send-keys -X top-line"#),
+    (r#"J"#, r#"send-keys -X scroll-down"#),
+    (r#"K"#, r#"send-keys -X scroll-up"#),
+    (r#"L"#, r#"send-keys -X bottom-line"#),
+    (r#"M"#, r#"send-keys -X middle-line"#),
+    (r#"N"#, r#"send-keys -X search-reverse"#),
+    (r#"P"#, r#"send-keys -X toggle-position"#),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p '(jump to backward)' { send-keys -X jump-to-backward -- '%%' }"#,
+    ),
+    (r#"V"#, r#"send-keys -X select-line"#),
+    (r#"W"#, r#"send-keys -X next-space"#),
+    (r#"X"#, r#"send-keys -X set-mark"#),
+    (r#"^"#, r#"send-keys -X back-to-indentation"#),
+    (r#"b"#, r#"send-keys -X previous-word"#),
+    (r#"e"#, r#"send-keys -X next-word-end"#),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p '(jump forward)' { send-keys -X jump-forward -- '%%' }"#,
+    ),
+    (r#"g"#, r#"send-keys -X history-top"#),
+    (r#"h"#, r#"send-keys -X cursor-left"#),
+    (r#"j"#, r#"send-keys -X cursor-down"#),
+    (r#"k"#, r#"send-keys -X cursor-up"#),
+    (r#"z"#, r#"send-keys -X scroll-middle"#),
+    (r#"l"#, r#"send-keys -X cursor-right"#),
+    (r#"n"#, r#"send-keys -X search-again"#),
+    (r#"o"#, r#"send-keys -X other-end"#),
+    (r#"q"#, r#"send-keys -X cancel"#),
+    (r#"r"#, r#"send-keys -X refresh-from-pane"#),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p '(jump to forward)' { send-keys -X jump-to-forward -- '%%' }"#,
+    ),
+    (r#"v"#, r#"send-keys -X rectangle-toggle"#),
+    (r#"w"#, r#"send-keys -X next-word"#),
+    (r#"{"#, r#"send-keys -X previous-paragraph"#),
+    (r#"}"#, r#"send-keys -X next-paragraph"#),
+    (r#"%"#, r#"send-keys -X next-matching-bracket"#),
+    (r#"Home"#, r#"send-keys -X start-of-line"#),
+    (r#"End"#, r#"send-keys -X end-of-line"#),
+    (r#"MouseDown1Pane"#, r#"select-pane"#),
+    (
+        r#"MouseDrag1Pane"#,
+        r#"select-pane; send-keys -X begin-selection"#,
+    ),
+    (
+        r#"MouseDragEnd1Pane"#,
+        r#"send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"WheelUpPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-up"#,
+    ),
+    (
+        r#"WheelDownPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-down"#,
+    ),
+    (
+        r#"DoubleClick1Pane"#,
+        r#"select-pane; send-keys -X select-word; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"TripleClick1Pane"#,
+        r#"select-pane; send-keys -X select-line; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (r#"BSpace"#, r#"send-keys -X cursor-left"#),
+    (r#"NPage"#, r#"send-keys -X page-down"#),
+    (r#"PPage"#, r#"send-keys -X page-up"#),
+    (r#"Up"#, r#"send-keys -X cursor-up"#),
+    (r#"Down"#, r#"send-keys -X cursor-down"#),
+    (r#"Left"#, r#"send-keys -X cursor-left"#),
+    (r#"Right"#, r#"send-keys -X cursor-right"#),
+    (r#"M-x"#, r#"send-keys -X jump-to-mark"#),
+    (r#"C-Up"#, r#"send-keys -X scroll-up"#),
+    (r#"C-Down"#, r#"send-keys -X scroll-down"#),
+];
+
+/// How tmux 3.7b's `list-keys -T copy-mode-vi` prints the stock rows whose
+/// template is a `{ }` list (the `tm_0/list-keys-copy-mode-vi` golden),
+/// for a server with tmux identity ([`KeyTables::use_tmux_stock`]).
+pub const TMUX_COPY_MODE_VI_SHOWN: &[(&str, &str)] = &[
+    (
+        r#"/"#,
+        r#"command-prompt -T search -p "(search down)" { send-keys -X search-forward -- "%%" }"#,
+    ),
+    (
+        r#"?"#,
+        r#"command-prompt -T search -p "(search up)" { send-keys -X search-backward -- "%%" }"#,
+    ),
+    (
+        r#":"#,
+        r#"command-prompt -p "(goto line)" { send-keys -X goto-line -- "%%" }"#,
+    ),
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p "(jump backward)" { send-keys -X jump-backward -- "%%" }"#,
+    ),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p "(jump to backward)" { send-keys -X jump-to-backward -- "%%" }"#,
+    ),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p "(jump forward)" { send-keys -X jump-forward -- "%%" }"#,
+    ),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p "(jump to forward)" { send-keys -X jump-to-forward -- "%%" }"#,
+    ),
+    (
+        r#"1"#,
+        r#"command-prompt -N -I 1 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"2"#,
+        r#"command-prompt -N -I 2 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"3"#,
+        r#"command-prompt -N -I 3 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"4"#,
+        r#"command-prompt -N -I 4 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"5"#,
+        r#"command-prompt -N -I 5 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"6"#,
+        r#"command-prompt -N -I 6 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"7"#,
+        r#"command-prompt -N -I 7 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"8"#,
+        r#"command-prompt -N -I 8 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"9"#,
+        r#"command-prompt -N -I 9 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+];
 
 /// tmux 3.7b's stock prefix table (`list-keys -T prefix` on a `-f
 /// /dev/null` server, the `fe_4/list-keys` golden; notes from its
@@ -2139,7 +2441,7 @@ impl KeyState {
                 self.set_table(PREFIX_TABLE);
                 return Routed::Consumed;
             }
-            if let Some(b) = tables.get(&self.table, &key) {
+            if let Some(b) = tables.lookup(&self.table, &key) {
                 if repeating && !b.repeat {
                     // A non-repeating key ends the repeat and is tried
                     // again from root, as if typed fresh.
@@ -3071,6 +3373,45 @@ mod tests {
         assert_eq!(c.send(b"%", t), vec![pane(b"%")]);
     }
 
+    /// tmux 3.7b, recorded through an attached client: a table's `Any`
+    /// takes every key it does not bind, ahead of the retry in root; the
+    /// prefix key still wins; root's `Any` takes what root leaves, an
+    /// unbound key after the prefix included.
+    #[test]
+    fn any_takes_every_key_its_table_leaves_unbound() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.tables.bind("kp", k("Any"), argv(&["any-kp"]), false);
+        c.tables
+            .bind(ROOT_TABLE, k("C-h"), argv(&["root-ch"]), false);
+        c.tables
+            .bind(ROOT_TABLE, k("C-q"), argv(&["root-cq"]), false);
+        c.tables.bind("kp", k("C-q"), argv(&["kp-cq"]), false);
+        for (key, want) in [
+            (&b"\x08"[..], "any-kp"),
+            (b"q", "any-kp"),
+            (b"\x11", "kp-cq"),
+        ] {
+            c.state.set_table("kp");
+            assert_eq!(c.send(key, t), vec![cmd(&[want])], "{key:?}");
+            assert_eq!(c.state.table(), ROOT_TABLE);
+        }
+        c.state.set_table("kp");
+        assert_eq!(c.send(b"\x02", t), vec![Routed::Consumed]);
+        assert_eq!(c.state.table(), PREFIX_TABLE);
+        assert_eq!(k("Any").to_string(), "Any");
+
+        c.state.set_table(ROOT_TABLE);
+        c.tables
+            .bind(ROOT_TABLE, k("Any"), argv(&["any-root"]), false);
+        assert_eq!(c.send(b"z", t), vec![cmd(&["any-root"])]);
+        assert_eq!(c.send(b"\x08", t), vec![cmd(&["root-ch"])]);
+        assert_eq!(
+            c.send(b"\x02Q", t),
+            vec![Routed::Consumed, cmd(&["any-root"])]
+        );
+    }
+
     #[test]
     fn prefix_and_key_in_one_read_route_the_same() {
         let t = Instant::now();
@@ -3620,7 +3961,24 @@ mod tests {
             "runtime binding kept"
         );
         assert_eq!(t.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
+        // TM.7: the stock copy-mode-vi templates show as tmux prints them.
+        let slash = t.exact(COPY_MODE_VI_TABLE, &k("/")).expect("stock /");
+        assert_eq!(
+            slash.shown.as_deref(),
+            Some(
+                r#"command-prompt -T search -p "(search down)" { send-keys -X search-forward -- "%%" }"#
+            )
+        );
+        assert_eq!(slash.dialect, Dialect::Grofe);
+        assert_eq!(t.exact(COPY_MODE_VI_TABLE, &k("j")).unwrap().shown, None);
         let reloaded = t.with_config_from(KeyTables::from_config(&[]));
+        assert!(
+            reloaded
+                .exact(COPY_MODE_VI_TABLE, &k("7"))
+                .unwrap()
+                .shown
+                .is_some()
+        );
         assert_eq!(reloaded.keys(PREFIX_TABLE).len(), TMUX_STOCK.len() + 1);
         assert_eq!(
             reloaded.exact(PREFIX_TABLE, &k("\"")).map(|b| b.dialect),
@@ -3689,8 +4047,8 @@ mod tests {
         }
         // Nothing in root: every key there goes to the pane.
         assert!(t.get(ROOT_TABLE, &k("q")).is_none());
-        // Stock keys grofe leaves unbound (out of scope, or M5's).
-        for name in ["m", "M", "t", "C", "<", ">", "*", "[", "]", "="] {
+        // Stock keys grofe leaves unbound (out of scope).
+        for name in ["m", "M", "t", "C", "<", ">", "*"] {
             assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
         }
     }

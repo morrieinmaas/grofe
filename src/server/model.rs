@@ -79,6 +79,10 @@ pub struct Window {
     /// tmux's `window_bell_flag` (R13): set by a bell (T3.3), cleared when
     /// the window becomes its session's current window.
     pub bell_flag: bool,
+    /// tmux's `window_activity_flag` and `window_silence_flag`
+    /// (`server::alerts`), cleared as the bell flag is.
+    pub activity_flag: bool,
+    pub silence_flag: bool,
     /// The panes that were active before `active`, most recent last
     /// (tmux's `last_panes`, for `last-pane`), kept by
     /// [`Window::set_active`] and [`Window::lose_pane`].
@@ -225,6 +229,13 @@ pub struct Model {
     /// Sessions removed since `hooks::run_pending` last took them, as
     /// `(id, name)`, for the `session-closed` hook (TC.5).
     pub closed_sessions: Vec<(SessionId, String)>,
+    /// When the server started (`start_time`); `None` only for a model
+    /// built with `Model::default()`.
+    pub started: Option<std::time::SystemTime>,
+    /// Windows that became their session's current one since
+    /// `server::alerts::drain` last took them: tmux counts that as
+    /// activity in the window (`session_set_current`).
+    pub selected: Vec<WindowId>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -235,6 +246,7 @@ impl Model {
     pub fn new(remain_on_exit: bool) -> Model {
         Model {
             options: Options::new(remain_on_exit),
+            started: Some(std::time::SystemTime::now()),
             ..Model::default()
         }
     }
@@ -277,7 +289,7 @@ impl Model {
 
     /// Makes `window` its session's active window; the one it replaces
     /// goes on top of the session's last-window stack, as in tmux. A window
-    /// that becomes current loses its bell flag (tmux's
+    /// that becomes current loses its alert flags (tmux's
     /// `winlink_clear_flags`); reselecting the current one changes nothing.
     pub fn select_window(&mut self, window: WindowId) {
         let Some(session) = self.windows.get(&window).map(|w| w.session) else {
@@ -291,7 +303,10 @@ impl Model {
             s.active = window;
             if let Some(w) = self.windows.get_mut(&window) {
                 w.bell_flag = false;
+                w.activity_flag = false;
+                w.silence_flag = false;
             }
+            self.selected.push(window);
         }
     }
 
@@ -1008,6 +1023,8 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
             last_panes: Vec::new(),
             floating: Vec::new(),
         });
@@ -1022,6 +1039,8 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
             last_panes: Vec::new(),
             floating: Vec::new(),
         });
@@ -1070,6 +1089,8 @@ mod tests {
             cols: 80,
             rows: 24,
             bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
             last_panes: Vec::new(),
             floating: Vec::new(),
         };
@@ -1114,6 +1135,8 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 bell_flag: true,
+                activity_flag: false,
+                silence_flag: false,
                 last_panes: Vec::new(),
                 floating: Vec::new(),
             });

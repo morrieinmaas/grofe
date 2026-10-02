@@ -747,3 +747,28 @@ fn new_session_a_d_attaches_from_a_terminal() {
     wait_last_row_starts(&mut a, "[main]");
     assert_eq!(lines(&srv, &["list-sessions"]).len(), 1);
 }
+
+/// As in tmux 3.7b, an open chooser puts its pane in a mode: while it is
+/// open `#{pane_in_mode}` is 1 and `#{pane_mode}` names it (`tree-mode`,
+/// `client-mode`, `buffer-mode`, from `window-tree.c`, `window-client.c`
+/// and `window-buffer.c`; TP.9b's key parity read `buffer-mode` back from
+/// tmux after the stock `prefix =`). Closed, both are back to 0 and empty.
+#[test]
+fn an_open_chooser_puts_its_pane_in_a_mode() {
+    let srv = start();
+    let mut a = attach(&srv, "main");
+    srv.cmd(&["set-buffer", "one"]).expect("set-buffer");
+    let mode = || display(&srv, "main", "#{pane_in_mode} #{pane_mode}");
+    for (verb, name, shown) in [
+        ("choose-tree", "tree-mode", "(sort: index)"),
+        ("choose-client", "client-mode", "(sort: name)"),
+        ("choose-buffer", "buffer-mode", "(sort: creation)"),
+    ] {
+        srv.cmd(&[verb]).expect(verb);
+        a.wait_for(shown);
+        assert_eq!(mode(), format!("1 {name}"), "{verb}");
+        a.send("q");
+        a.wait_until("the chooser to close", WAIT, |t| !t.contains("(sort: "));
+        assert_eq!(mode(), "0", "{verb}, closed");
+    }
+}

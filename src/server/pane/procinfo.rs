@@ -79,6 +79,12 @@ pub fn leader(pgrp: i32) -> ProcSample {
     leader
 }
 
+/// The cwd of group `pgrp`'s leader, read now with one syscall (or one
+/// `readlink`), never a fork: tmux's `osdep_get_cwd`.
+pub fn cwd(pgrp: i32) -> Option<PathBuf> {
+    os::cwd(pgrp)
+}
+
 /// The argv of every live member of group `pgrp`, the leader first, then
 /// by pid, read now.
 pub fn members(pgrp: i32) -> Vec<Vec<String>> {

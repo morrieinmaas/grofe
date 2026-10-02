@@ -1,0 +1,440 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/unicode.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\w+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 2 café
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\w+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+11,1,0 1 2 Ünïcödé
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:alpha:]]+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 2 café
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:alpha:]]+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+11,1,0 1 2 Ünïcödé
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:upper:]][[:lower:]]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,0,0 1 21 ascii
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:upper:]][[:lower:]]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+12,4,0 1 21 done
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:lower:]]+ß'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+19,1,0 1 1 Straß
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:lower:]]+ß'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+19,1,0 1 1 Straß
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:digit:]]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+15,3,0 1 1 123
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:digit:]]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+15,3,0 1 1 123
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:alnum:]]{3} and'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+10,2,0 1 2 ΑΒΓ and
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:alnum:]]{3} and'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 2 ١٢٣ and
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:punct:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+27,1,0 1 3 _
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:punct:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+30,3,0 1 3 ¶
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\W+[[:alpha:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,0,0 1 17  a
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\W+[[:alpha:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+9,4,0 1 17  é done                                                                
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\s\S\S\S\s'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+25,1,0 1 7  x_y 
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\s\S\S\S\s'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+25,3,0 1 7  and 
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'caf.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 1 café
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'caf.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 1 café
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\bcaf'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 1 caf
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\bcaf'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 1 caf
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'ünï.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+11,1,0 1 1 Ünïc
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'ünï.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+11,1,0 1 1 Ünïc
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'ÜNÏ.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,0,0 0  
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'ÜNÏ.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,23,0 0  
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'αβ.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,2,0 1 2 αβγ
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'αβ.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+10,2,0 1 2 ΑΒΓ
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[α-γ]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,0,0 0  
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[α-γ]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,23,0 0  
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[^a-z ]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+2,1,0 1 15 ï
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[^a-z ]+'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+30,3,0 1 15 ¶
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '日.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+23,2,0 1 1 日本
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '日.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+23,2,0 1 1 日本
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '本\w'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,2,0 1 1 本語
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '本\w'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,2,0 1 1 本語
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '.語'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,2,0 1 1 本語
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '.語'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,2,0 1 1 本語
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'e.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+15,0,0 1 9 e 
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'e.'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+15,4,0 1 9 e 
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:space:]]+and'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+13,2,0 1 3  and
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:space:]]+and'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+25,3,0 1 3  and
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'Stra(ß|ss)e'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+19,1,0 1 1 Straße
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'Stra(ß|ss)e'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+19,1,0 1 1 Straße
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'x_y\>'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+26,1,0 1 1 x_y
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'x_y\>'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+26,1,0 1 1 x_y
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:graph:]]+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+6,1,0 1 2 café
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:graph:]]+é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+11,1,0 1 2 Ünïcödé
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:print:]]{4}é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,1,0 1 2  café
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:print:]]{4}é'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+13,1,0 1 2 ïcödé
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:alpha:]]٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:alpha:]]٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '[[:alnum:]]٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '[[:alnum:]]٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\W日'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+22,2,0 1 1  日
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\W日'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+22,2,0 1 1  日
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\W[[:alpha:]]本'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+22,2,0 1 1  日本
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\W[[:alpha:]]本'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+22,2,0 1 1  日本
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward '\w٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward '\w٢'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+7,3,0 1 1 ١٢
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward ' [[:alpha:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,0,0 1 17  a
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward ' [[:alpha:]]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+9,4,0 1 17  é done                                                                
+? 0

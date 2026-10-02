@@ -1,0 +1,183 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/<USER>/tm_3/search.txt; exec sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,23,0 0 0 
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,24 1 8 foo1
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+28,18,24 1 8 fooo2
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+39,18,24 1 8 fo3
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+33,19,24 1 8 fo9
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+51,19,24 1 8 FOO4
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,19,24 1 8 Foo5
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,18,10 1 8 foo7
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ set -g wrap-search off
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ set -g wrap-search on
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,24 1 8 foo1
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+28,18,24 1 8 fooo2
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,24 1 8 foo1
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,8,0 1 8 foo7
+? 0
+$ set -g wrap-search off
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,18,23 1 8 Foo5
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+51,18,23 1 8 FOO4
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X search-backward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ send-keys -t main -X search-backward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,8,0 1 8 foo7
+? 0
+$ send-keys -t main -X search-backward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,18,23 1 8 Foo5
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+51,18,23 1 8 FOO4
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,18,23 1 8 Foo5
+? 0
+$ send-keys -t main -X -N 3 search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+39,17,23 1 8 fo3
+? 0
+$ send-keys -t main -X search-forward 'Fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,18,23 1 1 Foo5
+? 0
+$ send-keys -t main -X search-forward 'nomatch[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+56,18,23 0  
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+24,19,23 0  
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,18,10 1 8 foo7
+? 0
+$ send-keys -t main -X back-to-indentation
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,10 0  
+? 0
+$ send-keys -t main -X search-forward '(unclosed'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+0,18,10 0  
+? 0
+$ send-keys -t main -X search-forward 'fo+[0-9]'
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+77,18,10 1 8 foo7
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X search-again
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0
+$ send-keys -t main -X search-reverse
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
+5,22,0 1 8 foo8
+? 0

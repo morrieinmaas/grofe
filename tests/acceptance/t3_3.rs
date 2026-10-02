@@ -71,10 +71,13 @@ fn shell_quote(s: &str) -> String {
 // ---- OSC 52 ----
 
 /// Case 1: a pane's OSC 52 store reaches the outer stream while
-/// `set-clipboard` is `on` (the default, R14), and not while it is `off`.
+/// `set-clipboard` is `on`, and not while it is `off`. The default is
+/// `external`, as tmux's, which ignores a pane's store.
 #[test]
 fn osc52_stores_follow_set_clipboard() {
     let srv = start("while read l; do printf '\\033]52;c;aGVsbG8K\\007'; echo stored; done");
+    srv.cmd(&["set", "-g", "set-clipboard", "on"])
+        .expect("set-clipboard on");
     let mut a = attach(&srv);
     let store: &[u8] = b"\x1b]52;c;aGVsbG8K";
 
@@ -139,6 +142,8 @@ fn neovim_yank_to_plus_reaches_the_outer_terminal() {
         shell_quote(setup),
         shell_quote(&file.display().to_string())
     ));
+    srv.cmd(&["set", "-g", "set-clipboard", "on"])
+        .expect("set-clipboard on");
     let mut a = attach(&srv);
     a.wait_for("hello");
     let mark = a.output().len();
@@ -329,10 +334,12 @@ fn file_uri(path: &Path) -> String {
     )
 }
 
-/// Case 6: OSC 7 sets `pane_current_path`, over the sampled cwd of the
-/// shell (which stays in `A`), whole and split across two writes.
+/// Case 6: OSC 7 sets `pane_path` to the URI it sent, whole and split
+/// across two writes.
+/// `pane_current_path` stays the shell's own cwd (`A`), as tmux 3.7b reads
+/// it from the process, never from what the pane wrote (TM.5 review).
 #[test]
-fn osc7_sets_the_pane_current_path() {
+fn osc7_sets_the_pane_path() {
     let a_dir = tempfile::tempdir().expect("tempdir");
     let root = tempfile::tempdir().expect("tempdir");
     let b1 = root.path().join("b one");
@@ -362,11 +369,14 @@ fn osc7_sets_the_pane_current_path() {
     for (target, want) in [("main:1", &b1), ("main:2", &b2)] {
         srv.cmd(&["send-keys", "-t", target, "Enter"])
             .expect("send-keys");
+        // tmux 3.7b shows the URI as sent (recorded, TM.7).
+        wait_display(&srv, target, "#{pane_path}", &file_uri(want));
+        let real = a_dir.path().canonicalize().expect("canonicalize");
         wait_display(
             &srv,
             target,
             "#{pane_current_path}",
-            &want.display().to_string(),
+            &real.display().to_string(),
         );
     }
 }

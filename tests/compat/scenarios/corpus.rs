@@ -12,8 +12,8 @@
 //! it. A CLI line is sent as its argv, without the corpus's own `-L`, `-S`
 //! or `-f` (they name other servers); a config line (`static-conf`,
 //! `container-stored`) is split as the config language splits it and each
-//! command is sent as one request, `\;` kept literal, since grofe's
-//! `source-file` reads grofe's TOML and not a tmux config. A request still
+//! command is sent as one request, `\;` kept literal, so each line's reply
+//! is read on its own (a sourced file answers once for all). A request still
 //! running after [`BLOCK`] was accepted and is waiting (a popup, a menu,
 //! `wait-for`, an attach), and is killed.
 
@@ -87,21 +87,11 @@ const SKIPPED: &[(&str, &str)] = &[
 /// stamp dropped), each with the row that marks it: a cosmetic flag the
 /// front end ignores, or a form its row refuses on purpose.
 pub const MISS_ALLOWED: &[(&str, &str)] = &[
-    // Copy mode and paste buffers are M5's (TM.1 to TM.7; M36-R8).
-    ("choose-buffer -Z", M5),
-    ("copy-mode", M5),
-    ("copy-mode -u", M5),
-    ("delete-buffer -b", M5),
-    ("list-buffers", M5),
-    ("load-buffer", M5),
-    ("paste-buffer -b", M5),
-    ("paste-buffer -p", M5),
-    ("send-keys -F -X", M5),
-    ("send-keys -X", M5),
-    ("send-keys -X -N", M5),
-    ("set-buffer", M5),
-    ("set-buffer -b", M5),
-    ("show-buffer -b", M5),
+    // Copy mode and buffers (M5): TM.7 maps every form but these.
+    (
+        "show-buffer -b",
+        "the corpus line's `-b` has no value: tmux's own `-b expects an argument`",
+    ),
     // tmux's stock mouse bindings, which grofe's built-in mouse model
     // replaces (spec 4.5 out of scope, "Mouse argv forms"; M36-R7).
     ("display-menu -O -T -t -x -y", MOUSE),
@@ -124,7 +114,6 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
     ),
 ];
 
-const M5: &str = "copy mode and buffers, M5 (M36-R8)";
 const MOUSE: &str = "tmux's stock mouse bindings (spec 4.5 out of scope, M36-R7)";
 const GROUPS: &str = "linked windows and session groups (spec 4.5 out of scope, M36-R9)";
 

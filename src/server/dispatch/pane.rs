@@ -13,7 +13,7 @@ use crate::server::input::{self, parse_prefix};
 use crate::server::layout::{Insert, LayoutError};
 use crate::server::model::Model;
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients, graphics};
+use crate::server::{State, clients, copy, graphics, prompt};
 use crate::types::{Dir, Edge, PaneId, Rect, SplitSize, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
@@ -419,6 +419,9 @@ pub(crate) fn respawn(
     command: Option<Vec<String>>,
     cwd: Option<PathBuf>,
 ) -> Result<(), String> {
+    // As tmux's `window_pane_reset_mode_all`: a respawned pane leaves its
+    // modes, and its copy is freed (M5).
+    state.copy.remove(pane);
     let model = &state.model;
     let p = model
         .panes
@@ -463,8 +466,93 @@ pub(crate) fn respawn(
 /// `send-keys`: key names encoded for the pane's current input modes,
 /// literals as UTF-8, `-H` as raw bytes, all queued in one write.
 fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, String> {
+    let pane = state.model.resolve_pane(&c.target, ctx)?;
+    // M5 (TM.1): `-N`, `-X` and keys for a pane in copy mode, as tmux
+    // 3.7b's `cmd_send_keys_exec`.
+    let in_mode = state.copy.is_active(pane);
+    let mut repeat = 1;
+    if let Some(count) = &c.count {
+        let at = ClientCtx {
+            pane: Some(pane),
+            ..ctx.clone()
+        };
+        let text = prompt::expand_command(state, &at, count);
+        let n = copy::strtonum(&text, 1, i64::from(u32::MAX))
+            .map_err(|why| format!("repeat count {why}"))?;
+        repeat = n as u32;
+        if in_mode && (c.command || c.items.is_empty()) {
+            copy::set_prefix(state, pane, repeat)?;
+        }
+    }
+    if c.command {
+        let mut args: Vec<String> = c.items.into_iter().map(item_text).collect();
+        // `-F`: a search's string is a format, expanded against the pane
+        // (the stock `#` and `*` rows search for `#{copy_cursor_word}`).
+        // As tmux 3.7b (recorded), no other command's arguments expand.
+        let searches = args
+            .first()
+            .is_some_and(|name| copy::FORMAT_COMMANDS.contains(&name.as_str()));
+        if c.format && searches && state.copy.is_active(pane) {
+            let at = ClientCtx {
+                pane: Some(pane),
+                ..ctx.clone()
+            };
+            let first = if args.get(1).is_some_and(|a| a == "--") {
+                2
+            } else {
+                1
+            };
+            if let Some(arg) = args.get_mut(first) {
+                *arg = prompt::expand_command(state, &at, arg);
+            }
+        }
+        // A mouse key's command moves the cursor to the pointer first, and
+        // its `begin-selection` starts a drag (TM.6).
+        if state.copy.is_active(pane) && crate::server::mouse::copy_command(state, pane, &args) {
+            return Ok(String::new());
+        }
+        copy::command_in(state, pane, &args)?;
+        return Ok(String::new());
+    }
+    if c.items.is_empty() {
+        return Ok(String::new());
+    }
+    if in_mode {
+        // Each key runs its binding in the mode's table; others are dropped.
+        let at = ClientCtx {
+            pane: Some(pane),
+            ..ctx.clone()
+        };
+        // ponytail: tmux 3.7b runs every repeat and stops answering for a
+        // huge count (recorded: `-N 4294967295` hangs it); grofe runs at
+        // most `copy::MAX_REPEAT`.
+        // A repeat of only motions that moved nothing would move nothing
+        // again: the rest are skipped, to the end state tmux reaches by
+        // running them all, at a cost that follows the effect.
+        for _ in 0..repeat.min(copy::MAX_REPEAT) {
+            let before = copy::position(state, pane);
+            let mut motions = true;
+            for item in &c.items {
+                for key in mode_keys(item) {
+                    if let Some((cmds, dialect)) = copy::binding_for(state, pane, &key) {
+                        motions &= cmds.iter().all(|argv| copy::is_motion(argv));
+                        let at = ClientCtx {
+                            dialect,
+                            ..at.clone()
+                        };
+                        for argv in &cmds {
+                            crate::server::dispatch::run_bound(state, &at, argv)?;
+                        }
+                    }
+                }
+            }
+            if motions && before.is_some() && copy::position(state, pane) == before {
+                break;
+            }
+        }
+        return Ok(String::new());
+    }
     let model = &state.model;
-    let pane = model.resolve_pane(&c.target, ctx)?;
     let handle = &model.panes[&pane].handle;
     let modes = handle.modes();
     let mut bytes = Vec::new();
@@ -481,10 +569,56 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     if bytes.is_empty() {
         return Ok(String::new());
     }
-    handle
-        .enqueue_input(bytes)
-        .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+    // The repeats go in bounded chunks, at most `copy::MAX_REPEAT` of them,
+    // so a huge `-N` neither builds every repeat first nor holds the actor
+    // while a fast reader drains billions of them.
+    // ponytail: tmux 3.7b runs every repeat and stops answering; grofe caps.
+    let per_chunk = (SEND_CHUNK / bytes.len()).max(1);
+    let mut left = u64::from(repeat.min(copy::MAX_REPEAT));
+    while left > 0 {
+        let n = left.min(per_chunk as u64);
+        let chunk = bytes.repeat(n as usize);
+        handle
+            .enqueue_input(chunk)
+            .map_err(|e| format!("send-keys: {pane}: {e}"))?;
+        left -= n;
+    }
     Ok(String::new())
+}
+
+/// Most bytes `send-keys` queues at once.
+const SEND_CHUNK: usize = 64 * 1024;
+
+/// A `send-keys -X` word as given.
+fn item_text(item: SendKeysItem) -> String {
+    match item {
+        SendKeysItem::Key(s) | SendKeysItem::Literal(s) => s,
+        SendKeysItem::Hex(b) => format!("{b:02x}"),
+    }
+}
+
+/// The keys `item` is for a pane in a mode: a key name is one key, text
+/// one key per character, as tmux's `cmd_send_keys_inject_string`.
+fn mode_keys(item: &SendKeysItem) -> Vec<input::Key> {
+    let chars = |s: &str| {
+        s.chars()
+            .map(|c| input::Key::new(input::KeyCode::Char(c), input::Mods::default()))
+            .collect()
+    };
+    match item {
+        SendKeysItem::Key(name) => match input::parse_key(name) {
+            Ok(key) => vec![key],
+            Err(_) => chars(name),
+        },
+        SendKeysItem::Literal(text) => match input::parse_key(text) {
+            Ok(key) if text.chars().count() > 1 => vec![key],
+            _ => chars(text),
+        },
+        SendKeysItem::Hex(b) => vec![input::Key::new(
+            input::KeyCode::Char(char::from(*b)),
+            input::Mods::default(),
+        )],
+    }
 }
 
 /// `send-prefix`: the target pane's session `prefix` key, typed into the

@@ -298,24 +298,21 @@ fn case_4_canopy_reload_runs_reload_not_source_file() {
     }
 }
 
+/// save-now runs canopy's one-at-a-time save wrapper (TP.12), restore-now
+/// resurrect's own restore script.
 #[test]
 fn case_5_save_now_and_restore_now_run_the_vendored_resurrect_scripts() {
-    let script = |s: &str| format!("/plugins/tmux-resurrect/scripts/{s}.sh");
+    let save = "/plugins/strategies/canopy_save.sh";
+    let restore = "/plugins/tmux-resurrect/scripts/restore.sh";
     for tree in [fragments(), whole_tree()] {
         let got = load(&tree);
         let got = by_key(&got);
-        for (key, name, s) in [
-            ("M-s", "save-now", "save"),
-            ("M-r", "restore-now", "restore"),
-        ] {
+        for (key, name, s) in [("M-s", "save-now", save), ("M-r", "restore-now", restore)] {
             let b = got
                 .get(&("prefix".to_string(), key.to_string()))
                 .unwrap_or_else(|| panic!("{key} is not bound"));
             assert_eq!(b.name.as_deref(), Some(name));
-            assert_eq!(
-                b.command,
-                format!("run-shell \"$CANOPY_STORE{}\"", script(s))
-            );
+            assert_eq!(b.command, format!("run-shell \"$CANOPY_STORE{s}\""));
         }
     }
     // With the whole tree, `$CANOPY_STORE` is config.toml's canopy store.
@@ -326,7 +323,7 @@ fn case_5_save_now_and_restore_now_run_the_vendored_resurrect_scripts() {
         b.cmds,
         [[
             "run-shell".to_string(),
-            format!("{home}/.local/share/canopy{}", script("save"))
+            format!("{home}/.local/share/canopy{save}")
         ]]
     );
 }
