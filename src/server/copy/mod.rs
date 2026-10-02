@@ -2021,8 +2021,6 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
     Some(match name {
         "pane_in_mode" => "1".to_string(),
         "pane_mode" => MODE_NAME.to_string(),
-        // The mode's own screen has no bracketed paste (recorded).
-        "bracket_paste_flag" => "0".to_string(),
         "copy_cursor_x" => mode.cx.to_string(),
         "copy_cursor_y" => mode.cy.to_string(),
         "scroll_position" => mode.oy.to_string(),

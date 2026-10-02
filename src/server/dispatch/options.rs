@@ -2614,6 +2614,14 @@ impl FormatVars for ServerVars<'_> {
         if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
             return Some(v);
         }
+        // tmux 3.7b reads it from the screen on view, so a pane in any mode
+        // (whatever answers `pane_in_mode`) is 0 (TM.7).
+        if name == "bracket_paste_flag"
+            && crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
+                == Some("1")
+        {
+            return Some("0".to_string());
+        }
         // The mouse event a mouse key's commands run for, and the view (TC.10).
         if let Some(v) = crate::server::mouse::format_var(self.state, name) {
             return Some(v);
@@ -2797,8 +2805,7 @@ impl FormatVars for FormatCtx<'_> {
                 .unwrap_or_default(),
             "alternate_on" => flag(p.handle.modes().alt_screen),
             "mouse_any_flag" => flag(p.handle.modes().mouse != MouseMode::Off),
-            // tmux 3.7b reads it from the screen on view, so copy mode
-            // answers 0 for it (`copy::format_var`).
+            // 0 in a mode: `ServerVars::get`.
             "bracket_paste_flag" => flag(p.handle.modes().bracketed_paste),
             "history_size" => p.handle.history_size().to_string(),
             "history_limit" => m.history_limit(s.id).to_string(),
