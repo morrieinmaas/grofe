@@ -79,6 +79,25 @@ impl Trees {
     }
 }
 
+/// `pane_in_mode` and `pane_mode` for a pane a chooser is open over, as
+/// tmux's mode names it (`window-tree.c`, `window-client.c`,
+/// `window-buffer.c`). `None` for any other pane or variable.
+pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
+    let tree = state.trees.open.values().find(|t| t.pane == pane)?;
+    match name {
+        "pane_in_mode" => Some("1".to_string()),
+        "pane_mode" => Some(
+            match tree.kind {
+                Kind::Tree { .. } => "tree-mode",
+                Kind::Clients => "client-mode",
+                Kind::Buffers => "buffer-mode",
+            }
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// What a line stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Tag {

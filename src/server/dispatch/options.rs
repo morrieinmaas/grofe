@@ -2614,11 +2614,16 @@ impl FormatVars for ServerVars<'_> {
         if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
             return Some(v);
         }
+        // A chooser open over the pane is a mode too (TP.9b).
+        if let Some(v) = crate::server::tree::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
         // tmux 3.7b reads it from the screen on view, so a pane in any mode
         // (whatever answers `pane_in_mode`) is 0 (TM.7).
         if name == "bracket_paste_flag"
-            && crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
+            && (crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
                 == Some("1")
+                || crate::server::tree::format_var(self.state, self.pane, "pane_in_mode").is_some())
         {
             return Some("0".to_string());
         }
