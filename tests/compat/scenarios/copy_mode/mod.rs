@@ -25,7 +25,7 @@ use crate::fe_1::grofe_cli;
 use crate::fe_3::exact_pids;
 use crate::fe_4::with_client_ttys;
 use crate::normalize::{Normalizer, fixtures_dir};
-use crate::replay::{Cli, parse_scenario, replay};
+use crate::replay::{Cli, Step, parse_scenario, replay};
 use crate::scenarios::{socket_dirs, tripwire};
 use crate::tp::misses;
 
@@ -112,12 +112,56 @@ fn canopy_config() -> String {
 /// which tmux 3.7b refuses with the same text.
 const USAGE_ERRORS: &[(&str, &[&str])] = &[("tm_7/load-save", &["load-buffer", "save-buffer"])];
 
+/// The steps a scenario skips when the tests run as root (as in act's
+/// container), and their golden entries with them: root reads and writes a
+/// mode-000 file, so tmux's "Permission denied" cannot happen. The
+/// recorder never runs as root.
+const ROOT_SKIPS: &[(&str, &[&str])] = &[(
+    "tm_7/load-save",
+    &["$ save-buffer pre.txt", "$ load-buffer pre.txt"],
+)];
+
+/// The steps of `rel` this run skips: [`ROOT_SKIPS`]' under root, else none.
+fn skipped(rel: &str) -> &'static [&'static str] {
+    if !nix::unistd::geteuid().is_root() {
+        return &[];
+    }
+    ROOT_SKIPS
+        .iter()
+        .find(|(r, _)| *r == rel)
+        .map_or(&[], |(_, lines)| lines)
+}
+
+/// `golden` without the entries of the steps in `skip`: each one's `$`
+/// line and its output, up to the next step.
+fn without_steps(golden: &str, skip: &[&str]) -> String {
+    let mut out = String::new();
+    let mut dropping = false;
+    for line in golden.split_inclusive('\n') {
+        if line.starts_with("$ ") || line.starts_with("$& ") {
+            dropping = skip.contains(&line.trim_end_matches('\n'));
+        }
+        if !dropping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// The scenario at `golden/<rel>.scenario` on grofe: its normalized
 /// transcript, or why the run itself failed.
 fn run(rel: &str) -> Result<String, String> {
     let scenario = fixtures_dir().join(format!("golden/{rel}.scenario"));
     let text = fs::read_to_string(&scenario).map_err(|e| format!("{rel}: {e}"))?;
-    let steps = parse_scenario(&text).map_err(|e| format!("{rel}: {e}"))?;
+    let mut steps = parse_scenario(&text).map_err(|e| format!("{rel}: {e}"))?;
+    let skip = skipped(rel);
+    steps.retain(|step| match step {
+        Step::Tmux { line, .. } if skip.contains(&line.as_str()) => {
+            eprintln!("SKIPPING (not run) under root, which no permission stops: {rel}: {line}");
+            false
+        }
+        _ => true,
+    });
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let cli = copy_cli(dir.path());
     let host = (socket_dirs(), canopy_config());
@@ -161,9 +205,11 @@ fn compare(rel: &str, want: &str, got: &str) -> Result<(), String> {
     ))
 }
 
+/// The golden of `rel`, less the entries of the steps this run skips.
 fn golden(rel: &str) -> String {
-    fs::read_to_string(fixtures_dir().join(format!("golden/{rel}.golden")))
-        .unwrap_or_else(|e| panic!("{rel}: no golden ({e}); record it"))
+    let text = fs::read_to_string(fixtures_dir().join(format!("golden/{rel}.golden")))
+        .unwrap_or_else(|e| panic!("{rel}: no golden ({e}); record it"));
+    without_steps(&text, skipped(rel))
 }
 
 /// Replays `golden/<rel>.scenario` on grofe and compares with its golden.
@@ -293,6 +339,8 @@ fn pane_path_matches_its_golden() {
 
 /// `load-buffer` and `save-buffer`: files relative to the CLI's cwd,
 /// `-` its stdin and stdout, `-a`, `-b`, `-w`, `-t`, modes and errors.
+/// Under root the two "Permission denied" steps are skipped, saying so
+/// ([`ROOT_SKIPS`]); every other step is still compared.
 #[test]
 fn load_and_save_buffer_match_their_golden() {
     check("tm_7/load-save");
@@ -333,4 +381,12 @@ fn an_edited_golden_fails_only_its_scenario() {
         }
     }
     assert_eq!(failed, [edited]);
+}
+
+/// [`without_steps`] drops a skipped step's whole entry and nothing else.
+#[test]
+fn a_skipped_step_leaves_the_golden_with_its_entry() {
+    let golden = "$ a\n? 0\n$ b\n! no\n? 1\n$ c\nout\n? 0\n";
+    assert_eq!(without_steps(golden, &["$ b"]), "$ a\n? 0\n$ c\nout\n? 0\n");
+    assert_eq!(without_steps(golden, &[]), golden);
 }
