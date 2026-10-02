@@ -342,6 +342,22 @@ fn the_wheel_in_a_shell_shows_the_indicator_and_history() {
     assert!(!pane.contains("^["), "the pane got bytes:\n{pane}");
 }
 
+/// The wheel over an open chooser does not enter copy mode: the chooser
+/// already puts the pane in a mode, which tmux's stock `WheelUpPane` row
+/// tests (`#{pane_in_mode}`). Closed, the pane is in no mode.
+#[test]
+fn the_wheel_over_an_open_chooser_does_not_enter_copy_mode() {
+    let srv = start(HISTORY);
+    let mut a = attach(&srv, 80, 24);
+    a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
+    srv.cmd(&["choose-tree"]).expect("choose-tree");
+    a.wait_for("(sort: index)");
+    a.send(sgr(WHEEL_UP, 10, 5, false));
+    a.send("q");
+    a.wait_until("the chooser to close", WAIT, |t| !t.contains("(sort: "));
+    assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "0");
+}
+
 /// Case 2: Neovim asked for the mouse, so it gets the wheel and the pane
 /// does not enter copy mode.
 #[test]

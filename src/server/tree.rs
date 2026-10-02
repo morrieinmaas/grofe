@@ -79,6 +79,11 @@ impl Trees {
     }
 }
 
+/// Whether a chooser is open over the pane, which puts it in a mode.
+pub fn is_over(state: &State, pane: PaneId) -> bool {
+    state.trees.open.values().any(|t| t.pane == pane)
+}
+
 /// `pane_in_mode` and `pane_mode` for a pane a chooser is open over, as
 /// tmux's mode names it (`window-tree.c`, `window-client.c`,
 /// `window-buffer.c`). `None` for any other pane or variable.

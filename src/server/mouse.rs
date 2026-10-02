@@ -652,7 +652,10 @@ fn in_pane(state: &mut State, client: ClientId, m: &Mouse, mk: MouseKey, target:
         return;
     };
     let modes = p.handle.modes();
-    let busy = state.copy.is_active(target.pane) || modes.mouse != MouseMode::Off;
+    // Any mode counts, as tmux's `#{pane_in_mode}`: copy mode or a chooser.
+    let busy = state.copy.is_active(target.pane)
+        || crate::server::tree::is_over(state, target.pane)
+        || modes.mouse != MouseMode::Off;
     let run = |state: &mut State, cmds: &[&[&str]]| {
         let cmds: Vec<Vec<String>> = cmds
             .iter()
