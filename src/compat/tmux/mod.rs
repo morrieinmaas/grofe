@@ -2282,7 +2282,7 @@ mod tests {
         );
         let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
         assert!(err.contains("not supported"), "{err}");
-        let err = one(&["send-keys", "-X", "cancel"]).unwrap_err().0;
+        let err = one(&["show-buffer"]).unwrap_err().0;
         assert!(err.contains("M5"), "{err}");
     }
 
