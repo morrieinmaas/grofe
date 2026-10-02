@@ -1,7 +1,9 @@
 # TM.7: #{pane_path} is the text an OSC 7 sent, as tmux 3.7b shows it:
 # any host or URI, never decoded, a backslash doubled, C0 bytes dropped,
-# a DEL ignoring the whole report, an empty one clearing it.
-$ new-session -d -s main -x 80 -y 24 'for u in 1 2 3 4 5 6 7; do tmux wait-for go$u; case $u in 1) printf "\033]7;file://localhost/tmp/a%%20b\007";; 2) printf "\033]7;file://elsewhere/tmp/x%%0Ay\007";; 3) printf "\033]7;not-a-uri\007";; 4) printf "\033]7;file:///tmp/back\\\\slash\007";; 5) printf "\033]7;file:///tmp/c\td\nf\007";; 6) printf "\033]7;file:///tmp/a\177b\007";; 7) printf "\033]7;\007";; esac; tmux wait-for -S done$u; done; exec sleep 100000'
+# a DEL ignoring the whole report, an empty one clearing it. The hosts
+# have an underscore, which no machine name has, so the normalizer never
+# takes one for this machine's (a container's is often `localhost`).
+$ new-session -d -s main -x 80 -y 24 'for u in 1 2 3 4 5 6 7; do tmux wait-for go$u; case $u in 1) printf "\033]7;file://osc7_host/tmp/a%%20b\007";; 2) printf "\033]7;file://osc7_elsewhere/tmp/x%%0Ay\007";; 3) printf "\033]7;not-a-uri\007";; 4) printf "\033]7;file:///tmp/back\\\\slash\007";; 5) printf "\033]7;file:///tmp/c\td\nf\007";; 6) printf "\033]7;file:///tmp/a\177b\007";; 7) printf "\033]7;\007";; esac; tmux wait-for -S done$u; done; exec sleep 100000'
 $ display -p -t main '[#{pane_path}]'
 $ wait-for -S go1
 $ wait-for done1
