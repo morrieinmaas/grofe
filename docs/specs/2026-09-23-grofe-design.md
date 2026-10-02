@@ -572,12 +572,13 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
 - Multi-row status (`status 2` with `status-format[N]`; canopy uses two rows at
   the top) and `status-position top`.
 
-### 4.11 Copy mode and buffers [planned, M5]
+### 4.11 Copy mode and buffers
 
-The owner's `copy-mode-vi` table is the scope: 93 bindings, tmux 3.7b's stock
-table plus the ones canopy and tmux-yank add. A binding outside it needs a
-dogfooding reason. The plan's scope doc (TM.0) lists each binding with the
-test that pins it against a golden recorded from tmux 3.7b.
+The owner's `copy-mode-vi` table is the scope: 95 bindings, tmux 3.7b's 88
+stock rows plus 7 that canopy's navigator and tmux-yank add (they also
+replace 3 stock rows). A binding outside it needs a dogfooding reason. The
+scope doc (`docs/copy-mode.md`, from TM.0) lists each binding with the test
+that pins it against a golden recorded from tmux 3.7b.
 
 - **Per pane.** Copy mode is a pane mode, entered with `copy-mode` (`-u` a page
   up, `-e` leave at the bottom), `prefix [`, `prefix PageUp` or the wheel. The
@@ -592,15 +593,18 @@ test that pins it against a golden recorded from tmux 3.7b.
 - **Search** is by regular expression (`search-forward`, `search-backward`),
   with plain `-text` variants, `n` and `N`, `#` and `*` on
   `#{copy_cursor_word}`, `wrap-search` and match styles; the prompt is
-  `command-prompt -T search`. The dialect is the `regex` crate's; the scope doc
-  lists where it differs from tmux's. A search never runs on the actor.
+  `command-prompt -T search`. Patterns are read as tmux's POSIX extended
+  syntax (glibc's) and run with `regex-automata`, taking the leftmost-longest
+  match as POSIX does; the scope doc lists where it still differs from tmux.
+  A search never runs on the actor.
 - **Buffers.** Named and automatic buffers under `buffer-limit`; `paste-buffer
   -p` adds bracketed-paste markers only for a pane that asked for them.
 - **Copy targets.** `copy-pipe`, `copy-pipe-and-cancel` and
   `copy-pipe-no-clear` run their command (or `copy-command`) off the actor with
   the server environment and the selection on stdin, and each also stores a
-  buffer. With `set-clipboard on` a copy also goes to attached clients as OSC 52
-  (§4.9).
+  buffer. Under `set-clipboard on` or `external` (the default, as in tmux) a
+  copy also goes to attached clients as OSC 52 (§4.9). A pane's own OSC 52
+  becomes a buffer and reaches the clients only under `on`.
 - **Mouse.** The wheel in a pane without mouse mode enters copy mode, replacing
   M3's read-only scrollback view; a drag selects; `MouseDragEnd1Pane` runs its
   binding; a double and a triple click select a word and a line, as the owner's
@@ -686,8 +690,8 @@ time. Validation rejects a key bound twice in one table and a `name` used twice.
 ### 5.3 Saner defaults than tmux
 
 `base-index = 1`, `pane-base-index = 1`, `escape-time-ms = 25`, `mouse = true`,
-`history-limit = 50000`, focus events on, true colour on, extended keys on, OSC
-52 clipboard on, `renumber-windows = true`, `automatic-rename = true` (§4.5),
+`history-limit = 50000`, focus events on, true colour on, extended keys on,
+`renumber-windows = true`, `automatic-rename = true` (§4.5),
 `restore-on-start = true` (§6), `mode-keys = "vi"` (M5), new panes and windows
 inherit the active pane's cwd, and the status line never forks on redraw (D8).
 

@@ -351,7 +351,17 @@ As tmux 3.7b does (recorded with a private server):
 - Three positionals (`command`, `prefix` and one more) make the command do
   nothing.
 
-The clipboard follows `set-clipboard`:
+**Quote pane formats in a pipe command.** The command is a format and the
+result goes to a shell, so a format a pane controls reaches that shell as
+it is, in grofe as in tmux. A program in the pane sets `#{pane_title}`
+(OSC 2) and can put `;`, `$(...)` or a quote in it; `#{pane_path}` comes
+from OSC 7 the same way. Wrap such a format in `#{q:...}`, which escapes
+it for the shell, for example
+`copy-pipe "cat > /tmp/#{q:pane_title}.txt"`, or leave it out of the
+command.
+
+The clipboard follows `set-clipboard`, which is `external` by default, as
+in tmux 3.7b:
 
 - Under `on` and `external` every copy (all the copy commands, the pipes
   and `append-selection`) is sent as `ESC ] 52 ; ; <base64> BEL`, with an
@@ -360,9 +370,10 @@ The clipboard follows `set-clipboard`:
   another window, gets nothing. Under `off` nothing is sent.
 - A pane's own OSC 52 store makes a new buffer and reaches the clients
   showing the pane's window, with the pane's own selection parameter (kept
-  to tmux's `cpqs01234567`), only under `on`. Under `external` and `off` it is dropped whole,
-  as tmux's `input_osc_52` does: the plan's case that `external` still
-  forwards it does not match tmux.
+  to tmux's `cpqs01234567`), only under `on`. Under `external` (the
+  default) and `off` it is dropped whole, as tmux's `input_osc_52` does,
+  so a program in a pane cannot replace the newest buffer or the
+  terminal's clipboard unless you `set -s set-clipboard on`.
 - A pane cannot read the clipboard: an OSC 52 query (`?`) is neither
   forwarded nor answered. tmux answers one from the newest buffer under
   its default `get-clipboard buffer`; grofe has no `get-clipboard`.
