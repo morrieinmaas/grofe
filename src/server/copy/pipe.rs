@@ -330,11 +330,13 @@ mod tests {
 
     /// The shell exits at once, but what it left running holds stdin open
     /// without reading it, so the write never ends: the group is still
-    /// killed at the timeout. The shell is not reaped until the write is
+    /// killed at the timeout. (Through fd 3: dash gives a background job
+    /// `/dev/null` for stdin first, so its `<&0` would be that.) The shell is not reaped until the write is
     /// done, so its group id cannot have been reused.
     #[tokio::test]
     async fn a_command_the_shell_left_holding_stdin_is_killed() {
-        let status = killed_at_the_timeout("sleep 1000 <&0 & echo $! > <pid>; exit 0").await;
+        let status =
+            killed_at_the_timeout("exec 3<&0; sleep 1000 <&3 & echo $! > <pid>; exit 0").await;
         assert!(
             status.is_some_and(|s| s.success()),
             "the shell's own exit: {status:?}"
