@@ -277,29 +277,67 @@ mod tests {
         assert_eq!(std::fs::read(&out).unwrap(), b"$(x) `y`\n");
     }
 
-    /// A command that never exits, and one it left running, are killed
-    /// at the timeout and the shell reaped; a command that reads nothing
-    /// does not hold up the write.
-    #[tokio::test]
-    async fn a_hung_command_is_killed_at_the_timeout() {
+    /// Whether `pid` is gone: no such process, or a zombie. A process
+    /// killed with its shell is reparented to pid 1, which in a container
+    /// (act's `tail -f /dev/null`) never reaps it, and a zombie still
+    /// answers `kill(pid, 0)`.
+    fn gone(pid: i32) -> bool {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps");
+        let stat = String::from_utf8_lossy(&out.stdout);
+        stat.trim().is_empty() || stat.trim_start().starts_with('Z')
+    }
+
+    /// Runs `command` (which writes a background process's pid to the
+    /// file `<pid>` names) with 1 MiB on stdin and a 500 ms timeout, and
+    /// asserts it is stopped at the timeout and that background process
+    /// killed with it. Returns the shell's exit status.
+    async fn killed_at_the_timeout(command: &str) -> Option<ExitStatus> {
         let dir = tempfile::tempdir().unwrap();
         let pid = dir.path().join("pid");
-        let command = format!("sleep 1000 & echo $! > '{}'; wait", pid.display());
+        let command = command.replace("<pid>", &format!("'{}'", pid.display()));
         let started = Instant::now();
         let data = vec![b'x'; 1 << 20];
         let status = run(&command, vec![], data, Duration::from_millis(500)).await;
         assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(status.is_some_and(|s| !s.success()));
         let pid: i32 = std::fs::read_to_string(&pid)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
-        let gone = || nix::sys::signal::kill(Pid::from_raw(pid), None).is_err();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !gone() && Instant::now() < deadline {
+        while !gone(pid) && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(gone(), "the background sleep survived");
+        let survived = !gone(pid);
+        if survived {
+            let _ = nix::sys::signal::kill(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+        assert!(!survived, "the background sleep survived: {command}");
+        status
+    }
+
+    /// A command that never exits, and one it left running, are killed
+    /// at the timeout and the shell reaped; a command that reads nothing
+    /// does not hold up the write.
+    #[tokio::test]
+    async fn a_hung_command_is_killed_at_the_timeout() {
+        let status = killed_at_the_timeout("sleep 1000 & echo $! > <pid>; wait").await;
+        assert!(status.is_some_and(|s| !s.success()), "{status:?}");
+    }
+
+    /// The shell exits at once, but what it left running holds stdin open
+    /// without reading it, so the write never ends: the group is still
+    /// killed at the timeout. The shell is not reaped until the write is
+    /// done, so its group id cannot have been reused.
+    #[tokio::test]
+    async fn a_command_the_shell_left_holding_stdin_is_killed() {
+        let status = killed_at_the_timeout("sleep 1000 <&0 & echo $! > <pid>; exit 0").await;
+        assert!(
+            status.is_some_and(|s| s.success()),
+            "the shell's own exit: {status:?}"
+        );
     }
 }
