@@ -662,10 +662,12 @@ fn term_rerun_title_is_relayed() {
     a.wait_for_output(b"\x1b]0;\x07", at);
 }
 
-/// `Ms` (`\E]52;%p1%s;%p2%s\007`): a clipboard store reaches the client.
+/// `Ms` (`\E]52;%p1%s;%p2%s\007`): a clipboard store reaches the client
+/// under `set-clipboard on` (the default, `external`, ignores a pane's).
 #[test]
 fn term_rerun_osc52_store_is_forwarded() {
     let srv = start("read l; printf '\\033]52;c;dDM2\\007'; exec cat");
+    srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     let mut a = attach(&srv, RICH);
     a.send("\r");
     a.wait_for_output(b"\x1b]52;c;dDM2", 0);
