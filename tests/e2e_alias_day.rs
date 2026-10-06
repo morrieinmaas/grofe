@@ -696,12 +696,13 @@ fn w10(c: &mut Ctx) -> Step {
     notes.push("a launched claude (a stub) in its popup");
 
     c.prefix("A");
-    sleep(Duration::from_secs(2));
     c.wait_screen("the claude session picker", 20, |s| {
-        s.to_lowercase().contains("claude")
+        s.contains(" Sessions ") && s.contains("Claude agents")
     })?;
     c.send("\x1b");
-    sleep(Duration::from_secs(1));
+    c.wait_screen("the claude picker to close", 15, |s| {
+        !s.contains(" Sessions ")
+    })?;
     c.no_error_line()?;
     notes.push("A opened the claude picker");
     Ok(notes.join("; "))

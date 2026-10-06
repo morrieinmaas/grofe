@@ -97,7 +97,9 @@ RUN for tool in wl-copy wl-paste xclip xsel; do \
     chmod 755 "/usr/local/bin/$tool"; \
   done \
   && printf '%s\n' '#!/bin/sh' \
-    '# alias-day stub: the real claude needs an account.' \
+    '# alias-day stub: the real claude needs an account. `claude agents' \
+    '# --json` lists no agents, as a machine with none running would.' \
+    'case "$*" in "agents --json") echo "[]"; exit 0 ;; esac' \
     'printf "claude stub: %s\n" "$*"' \
     'read -r _' >/usr/local/bin/claude \
   && chmod 755 /usr/local/bin/claude
