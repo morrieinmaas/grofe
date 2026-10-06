@@ -90,9 +90,10 @@ stage_apply() {
   bash "$E2E/alias-day/seed.sh" "$SRC" >"$HOME/.config/chezmoi/chezmoi.toml" || return 1
 
   # 2. canopy's store, a clone of the bundle, so run_onchange_18 takes its
-  # update path offline.
+  # update path offline. The bundle carries one branch and no HEAD, so the
+  # clone names it; script 18 then detaches at the pinned commit.
   mkdir -p "$(dirname "$STORE")"
-  git clone --quiet "$E2E/inputs/canopy.bundle" "$STORE" || return 1
+  git -c init.defaultBranch=alias-day clone --quiet --branch alias-day "$E2E/inputs/canopy.bundle" "$STORE" || return 1
 
   # 3. The baseline apply, bootstrap's own call. stdin is /dev/null, so a
   # prompt is an error, never a hang.
@@ -176,6 +177,8 @@ stage_apply() {
   zsh -lic 'exit' </dev/null >"$OUT/zsh-first-run.log" 2>&1 || true
 
   echo "stage 2: $fails failure(s)"
+  awk -F'\t' '$2 == "ran" && $4 != 0 { print "  script " $1 " exited " $4 }' "$OUT/scripts.tsv"
+  awk -F'\t' '$2 == "fail" { print "  check failed: " $1 }' "$OUT/checks.tsv"
   [ "$fails" -eq 0 ]
 }
 
