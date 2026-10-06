@@ -657,14 +657,16 @@ fn w10(c: &mut Ctx) -> Step {
     c.no_error_line()?;
     notes.push("Space which-key listed its groups");
 
+    // The popup can cover the pane the URL was echoed in, so the list is
+    // known by fzf's pointer on the URL's row, not by a second copy.
+    let listed = |s: &str| {
+        s.lines()
+            .any(|l| l.contains('▌') && l.contains("https://example.com/alias-day"))
+    };
     c.prefix("u");
-    c.wait_screen("fzf-url's list", 20, |s| {
-        s.matches("https://example.com/alias-day").count() >= 2
-    })?;
+    c.wait_screen("fzf-url's list", 20, listed)?;
     c.send("\x1b");
-    c.wait_screen("fzf-url to close", 15, |s| {
-        s.matches("https://example.com/alias-day").count() == 1
-    })?;
+    c.wait_screen("fzf-url to close", 15, |s| !listed(s))?;
     c.no_error_line()?;
     notes.push("u fzf-url listed the URL");
 
@@ -729,13 +731,36 @@ fn w11(c: &mut Ctx) -> Step {
     c.wait_screen("nvim's two splits", 60, |s| {
         s.contains("ad-left.txt") && s.contains("ad-right.txt")
     })?;
-    sleep(Duration::from_secs(3));
+    let result = nvim_navigation(c, &left, &right);
+    if result.is_err() {
+        c.send("\x1b");
+        sleep(Duration::from_millis(300));
+        c.send(":qa!\r");
+        sleep(Duration::from_secs(1));
+    }
+    result
+}
+
+fn nvim_navigation(c: &mut Ctx, left: &Geom, right: &Geom) -> Step {
+    // Escape and the colon go separately: within escape-time they would be
+    // read as M-:.
+    let ask = |c: &mut Ctx| {
+        c.send("\x1b");
+        sleep(Duration::from_millis(300));
+        c.send(":echo 'ADWIN'.winnr()\r");
+    };
     let win = |c: &mut Ctx, want: u32| -> Result<(), String> {
-        c.send("\x1b:echo 'ADWIN'.winnr()\r");
+        ask(c);
         let w = format!("ADWIN{want}");
         c.wait_screen(&format!("nvim window {want}"), 10, |s| s.contains(&w))
     };
-    win(c, 1)?;
+    // The first nvim on this machine installs its plugins; it answers once
+    // that settles.
+    c.wait("nvim to answer a command", 120, |c| {
+        ask(c);
+        sleep(Duration::from_secs(1));
+        c.h.text().contains("ADWIN1").then_some(())
+    })?;
     c.send("\x0c");
     sleep(Duration::from_millis(500));
     win(c, 2)?;
