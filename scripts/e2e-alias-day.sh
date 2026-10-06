@@ -47,9 +47,10 @@ cleanup() {
   podman rm -f "$name" >/dev/null 2>&1 || true
   if [ "$keep_image" -eq 0 ]; then
     podman rmi -f "$image" >/dev/null 2>&1 || true
-    # The build stage and every layer this run made carry the run's label, so
-    # an image some other process built meanwhile is never touched.
-    podman images -a -q --no-trunc --filter "label=grofe.e2e.run=$run_id" | sort -u |
+    # The build stage and every layer this build made or reused, as the
+    # build log names them, so an image some other process built meanwhile
+    # is never touched. The bases, pulled by digest, are shared and stay.
+    grep -oE '^(--> |Using cache )[0-9a-f]{12,}' "$out/build.log" 2>/dev/null | awk '{ print $NF }' | sort -u |
       xargs -r podman rmi -f >/dev/null 2>&1 || true
   fi
   rm -rf "$work"
@@ -167,7 +168,7 @@ stage3=fail
 image_id="(not built)"
 if [ "$gate" = pass ]; then
   log "building the image"
-  if timeout 3000 podman build --quiet --label "grofe.e2e.run=$run_id" -f "$ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$image" "$ctx" \
+  if timeout 3000 podman build -f "$ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$image" "$ctx" \
     >"$out/build.log" 2>&1; then
     image_id="$(podman image inspect --format '{{.Id}}' "$image")"
     log "image $image_id; starting the container"

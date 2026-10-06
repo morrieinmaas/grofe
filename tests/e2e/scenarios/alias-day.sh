@@ -135,6 +135,11 @@ stage_apply() {
     [ "$rc" -eq 0 ] || fails=$((fails + 1))
   done < <(script_order)
 
+  # Prewarm what a first interactive shell fetches (zinit and its plugins),
+  # so the login-zsh checks and stage 3 start from a machine that has been
+  # used once, and zinit's install output is not mistaken for theirs.
+  zsh -lic 'exit' </dev/null >"$OUT/zsh-first-run.log" 2>&1 || true
+
   # 5. The stage 2 checks.
   local home_bin="$HOME/.local/lib/grofe"
   check "the dummy handle is in the rendered chezmoi.toml" \
@@ -147,21 +152,21 @@ stage_apply() {
   check "canopy's store is detached at CANOPY_SHA" \
     bash -c "test \"\$(git -C '$STORE' rev-parse HEAD)\" = '$CANOPY_SHA' && ! git -C '$STORE' symbolic-ref -q HEAD"
   check "in a login zsh, tmux is a symlink to the grofe binary" \
-    bash -c "p=\"\$(zsh -lic 'print -r -- TMUXPATH=\$(command -v tmux)' </dev/null 2>/dev/null | sed -n 's/^TMUXPATH=//p' | tail -n 1)\";
+    bash -c "p=\"\$(zsh -lic 'print -r -- TMUXPATH=\$(command -v tmux)' </dev/null 2>/dev/null | sed -n 's/.*TMUXPATH=//p' | tail -n 1)\";
       echo \"tmux: \$p\"; test -L \"\$p\" && test \"\$(readlink -f \"\$p\")\" = '$home_bin/grofe' &&
       cmp -s '$home_bin/grofe' '$GROFE_IMAGE_BIN'"
   check "in a login zsh, tmux -V prints the compat level (tmux 3.7b)" \
     bash -c "v=\"\$(zsh -lic 'tmux -V' </dev/null 2>/dev/null | tail -n 1)\"; echo \"\$v\"; test \"\$v\" = 'tmux 3.7b'"
   check "/usr/local/bin/tmux is real tmux 3.7b, and not first on PATH" \
     bash -c "test \"\$(/usr/local/bin/tmux -V)\" = 'tmux 3.7b' &&
-      p=\"\$(zsh -lic 'print -r -- TMUXPATH=\$(command -v tmux)' </dev/null 2>/dev/null | sed -n 's/^TMUXPATH=//p' | tail -n 1)\" &&
+      p=\"\$(zsh -lic 'print -r -- TMUXPATH=\$(command -v tmux)' </dev/null 2>/dev/null | sed -n 's/.*TMUXPATH=//p' | tail -n 1)\" &&
       test \"\$p\" != /usr/local/bin/tmux"
   check "no ~/.secrets, ~/.local/share/rbw or ~/.config/rbw" \
     bash -c 'test ! -e ~/.secrets -a ! -e ~/.local/share/rbw -a ! -e ~/.config/rbw'
   check "grofe show-config loads the installed tree with no errors" \
     bash -c "'$home_bin/bin/grofe' show-config >'$OUT/show-config.txt' 2>'$OUT/show-config.err' && test ! -s '$OUT/show-config.err'"
   check "no credential in the environment (GITHUB_TOKEN, GH_TOKEN, BW_*, RBW_*)" \
-    bash -c "! env | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_[A-Z_]*|RBW_[A-Z_]*)=' && ! tr '\\0' '\\n' </proc/1/environ | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_|RBW_)'"
+    bash -c "! env | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_[A-Z_]*|RBW_[A-Z_]*)=' && ! sudo cat /proc/1/environ | tr '\\0' '\\n' | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_|RBW_)'"
 
   # The login: athome's tmux.service, which script 24 enabled. Its
   # graphical-session.target never comes up in a headless container, so the
@@ -172,9 +177,6 @@ stage_apply() {
       v=\"\$(PATH='$home_bin/bin':\$PATH tmux display -p '#{grofe_version}')\" && echo \"grofe_version=\$v\" && test -n \"\$v\""
   systemctl --user status tmux.service --no-pager >"$OUT/tmux.service.status" 2>&1 || true
 
-  # Prewarm what a first interactive shell would fetch (zinit's plugins), so
-  # stage 3 starts from a machine that has been used once.
-  zsh -lic 'exit' </dev/null >"$OUT/zsh-first-run.log" 2>&1 || true
 
   echo "stage 2: $fails failure(s)"
   awk -F'\t' '$2 == "ran" && $4 != 0 { print "  script " $1 " exited " $4 }' "$OUT/scripts.tsv"

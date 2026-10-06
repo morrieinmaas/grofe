@@ -172,6 +172,7 @@ impl Ctx {
             Ok(note) => ("pass", note),
             Err(e) => {
                 self.failed.push(format!("{id}: {e}"));
+                self.recover();
                 ("fail", e)
             }
         };
@@ -180,6 +181,21 @@ impl Ctx {
         self.rows
             .push(format!("{id}\t{name}\t{verdict}\t{snap}\t{note}"));
         let _ = fs::write(self.out.join("steps.tsv"), self.rows.join("\n") + "\n");
+    }
+}
+
+impl Ctx {
+    /// After a failed step: close whatever it left open (a popup, a menu,
+    /// copy mode, a half-typed line), so the next step starts at a prompt.
+    fn recover(&mut self) {
+        for keys in ["\x1b", "\x1b", "\x03"] {
+            self.send(keys);
+            sleep(Duration::from_millis(300));
+        }
+        if self.pane("#{pane_in_mode}").ok().as_deref() == Some("1") {
+            let _ = self.tmux(&["send-keys", "-X", "cancel"]);
+        }
+        let _ = self.shell("true");
     }
 }
 
@@ -577,7 +593,9 @@ fn w8(c: &mut Ctx) -> Step {
             .then_some(())
     });
     nested(c, &["kill-server"])?;
-    c.wait_screen("the nested tmux to exit", 15, |s| s.contains("[exited]"))?;
+    // tmux prints "[exited]" when its last session ends and "[server
+    // exited]" after kill-server; either way the shell has the pane back.
+    c.wait_screen("the nested tmux to exit", 15, |s| s.contains("exited]"))?;
     res?;
     Ok("prefix C-s reached the nested real tmux as its prefix; its c made window 2".to_string())
 }
@@ -594,12 +612,13 @@ fn w9(c: &mut Ctx) -> Step {
     notes.push("K tsess opened and closed");
 
     c.prefix("?");
-    c.wait_screen("the keys popup", 20, |s| {
-        s.contains("keys>") && s.contains("split-window")
-    })?;
-    let shown = c.h.text();
-    ensure(shown.contains("[prefix]"), || {
-        "the keys popup shows no [prefix] rows".to_string()
+    c.wait_screen("the keys popup", 20, |s| s.contains("keys>"))?;
+    // The list opens on the first table by name (copy-mode); a search
+    // brings up the prefix table's splits.
+    c.send("split-window");
+    c.wait_screen("the prefix table's split bindings", 10, |s| {
+        s.lines()
+            .any(|l| l.contains("[prefix]") && l.contains("split-window"))
     })?;
     c.close_with_escape("keys>")?;
     c.no_error_line()?;
@@ -837,7 +856,9 @@ fn w16(c: &mut Ctx) -> Step {
     c.wait("copy mode to end", 5, |c| {
         (c.pane("#{pane_in_mode}").ok()? == "0").then_some(())
     })?;
-    let osc = format!("\x1b]52;c;{}", base64(b"w001"));
+    // Real tmux 3.7b sends an empty selection parameter (`52;;`), which
+    // the outer terminal reads as its clipboard; grofe matches it.
+    let osc = format!("\x1b]52;;{}", base64(b"w001"));
     let found = c.wait("OSC 52 with the selection on the outer pty", 10, |c| {
         let out = c.h.output();
         let seen = String::from_utf8_lossy(&out[from.min(out.len())..]).to_string();
