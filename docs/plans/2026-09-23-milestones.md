@@ -21,11 +21,11 @@ parallel worktrees without conflicts.
 | **M3.7** | Run the owner's remaining TPM plugins unchanged through a small loader (spec D1, §7.1); one compat check per plugin. | TP.9a and the compat suite green; **[owner]** each daily binding used once; closes with M5 (TP.11 yank, TP.9b). | ~4 days, before M5 (not beside M4). |
 | **M4** | Native persistence and pane identity (spec §6): snapshot, restore, resume, `reboot-check` | Kill the server, restore: every `uid` unchanged, every pane with `resume` runs it; the container reboot scenario (T4.6) green; **[owner]** the same across a real reboot on each OS | ~3 weeks, after the alias-day container test |
 | **M5** | Copy mode, buffers, `copy-pipe*`, OSC 52 (popups and menus moved to M3.6) | Scope doc approved first (written at the start of M5); the 93 `copy-mode-vi` bindings match tmux 3.7b's goldens (TM.7); then the yank compat check (TP.11) and TP.9b's parity rows. **No-difference parity**, **[owner]** confirmed | ~5.5 weeks |
-| **M6** | Events and plugin API, Lua | Spec §7's plugin part rewritten from the dogfood log (T6.0, during M5); event catalog and protocol v1 frozen with fixtures; supervised plugins; sandboxed Lua with format functions; one out-of-process and one Lua plugin in-tree | ~2.5 weeks |
-| **M7** | agents plugin; canopy on grofe (spec §7, §7.1) | canopy's four adapters report through grofe; rollups and attention render with formats only; after a container reboot each fake agent is back in its own conversation (T7.8); **[owner]** a real reboot returns every Claude Code pane to its conversation | ~3.5 weeks (T7.1 and T7.5 during M6) |
+| **M6** | Events and plugin API, without Lua (Lua dropped by the 2026-09-29 ruling) | Spec §7's plugin part rewritten from the dogfood log (T6.0, during M5); event catalog and protocol v1 frozen with fixtures; supervised plugins; one out-of-process plugin in-tree | ~2 weeks |
+| **M7** | **Dropped** (owner ruling 2026-10-06; see [M7](#m7-dropped)). Agent features come from tmux plugins run unchanged through canopy's loader. | nothing; no task remains | none |
 | **Alias-day container test** | TA.1, the owner's setup (athome + canopy + grofe as `tmux`) end-to-end in a container, scoped to M3.6+M3.7+M5. | report PASS; **[owner]** reviews it. | ~3 days |
 | **E2E** | Release gate: every suite from a clean clone, in containers; rollback drill | `scripts/release-gate.sh` green; **[owner]** alias day for good, then a week with no open `compat` or `copy` entry: **fully done** | ~1 week + the owner's week |
-| **M8** | Compatibility extras (optional) | Decided after M7: tmux `-CC` subset | unscheduled |
+| **M8** | Compatibility extras (optional) | Decided after the release gate: tmux `-CC` subset | unscheduled |
 
 **Critical path to dogfood start:** T0.3 → T1.1b → T1.5a → T1.5b → T2.5a → T2.5b →
 T3.5 → T3.6. Each step includes a review cycle, and M0/M2 have owner gates.
@@ -34,7 +34,8 @@ counting the dogfood week itself. M3.5 adds about 3 days after dogfood start and
 runs alongside the dogfood week; it does not move dogfood start.
 
 **Recommended order after M3.5:** M3.6, then M3.7, then M5 (which closes
-M3.7), then the alias-day container test, then M4 and the rest.
+M3.7), then the alias-day container test, then M4, then M6 without Lua,
+then the release gate. M7 is dropped (owner ruling 2026-10-06).
 
 - **M3.6 first.** Unchanged reasoning: the owner can only do real work in
   grofe once their scripts and tools behave the same under the `tmux`
@@ -46,16 +47,21 @@ M3.7), then the alias-day container test, then M4 and the rest.
   parity). This is alias-day's full scope: M3.6 + M3.7 + M5.
 - **The container test fourth, before M4 starts.** The owner
   wants to see the whole stack (athome, canopy, grofe as `tmux`) work in
-  a disposable container before any real machine's persistence or agent
-  plugin exists to lose anything. M4 (persistence), M6 (events and
-  plugins, without Lua) and M7 (agents) all wait on this gate.
+  a disposable container before any real machine's persistence exists to
+  lose anything. M4 (persistence) and M6 (events and plugins, without Lua)
+  both wait on this gate.
 - **Rejected alternative (superseded):** the original plan ran M4 beside
   M3.7, reasoning that persistence was the core wedge and M3.7's tasks
   were file-disjoint from M4's. The 2026-09-29 ruling overrides this: the
   owner would rather see the container proof first than get persistence
   six weeks earlier.
-- **Then M6, M7 and the release gate, in that order,** as before. M7's
-  agents plugin is M6's first real user, so M6 cannot follow it.
+- **Then M4, M6 without Lua and the release gate, in that order.** M7 is
+  dropped by the owner's ruling of 2026-10-06. The agent features it
+  planned inside grofe (state rollups, attention, resume and adopt) are left
+  to existing tmux plugins run unchanged through canopy's loader, such as
+  tmux-claude-session-manager and opensessions, and to canopy's own adapters
+  and strategies. A gap such a plugin finds in grofe shows up in
+  `compat-miss.log` and is fixed as a compat bug.
 
 **Critical path to alias day:** the dogfood-start path above, then (with TC.0
 and TC.0b already done during M1 to M3) the M3.6 stub edit → TC.2 → TC.2b →
@@ -74,29 +80,30 @@ saves nothing in one lane).
 **Critical path from alias day to fully done:** TA.1 (about 3 days, gated on
 the owner's review) → M4 (stub edit → T4.3 → T4.4 → T4.6, 11 days) → M6
 without Lua (stub edit → T6.1 → T6.2/T6.3 → T6.6, about 8 days; T6.0 during
-M4) → M7 (T7.2 → T7.4 → T7.7 → T7.8, 14 days; T7.1 and T7.5 during M6) →
-TE.2b → TE.3 (per the m35 amendment), with M5's 21 days and M3.7's task-days
-now landing *before* alias day instead of after it. The one-lane sums for M4,
-M6 and M7 are otherwise unchanged by this amendment (M6's already-updated sum
-is in §4 above); M3.7's one-lane sum (new, since the section never had one
+M4) → TE.2b → TE.3 (per the m35 amendment), with M5's 21 days and M3.7's
+task-days now landing *before* alias day instead of after it. M7's 14 days
+leave the path with M7 itself (owner ruling 2026-10-06). The one-lane sum for
+M4 is unchanged (M6's updated sum is in its own section); M3.7's one-lane sum (new, since the section never had one
 before) is: TP.3 3, TP.4 1, TP.5 1, TP.6 2, TP.7 2, TP.8 1, TP.9 2, TP.10 1,
 TP.9a 2 (before M5) + TP.11 1, TP.9b 1 (in M5) = **17 task-days**, well under
 the original's "~1.5 weeks" estimate for the ported version, consistent with
 "run unchanged" being cheaper than "port."
 **Estimate, honestly, with the same three lanes:** M4 ends about week 17.5
 (M3.7's parallel tasks end inside it, about week 16), M5 about week 23, M6
-about week 25.5, M7 about week 29, the release gate about week 30, and
-**fully done**, after the owner's alias day for good and a week of work, about
-**week 31**. The milestone-level plan had M4 at 1 week and M5 at 2; the task
-breakdown found the rest: M4's restore engine, resume binding and container
-reboot harness, and M5's 93 parity scenarios and the mouse model's move into
-copy mode. With one lane, M4 to the release gate is about 103 task-days (M4
-20, M5 29 with TP.11 and TP.9b, M6 20, M7 26, E2E 8), roughly 27 weeks with the
-buffer, so fully done moves from the one-lane alias day at
-about week 26, plus M3.7's 1.5 weeks, to about week 55.
+about week 25.5, the release gate about week 26.5, and **fully done**, after
+the owner's alias day for good and a week of work, about **week 27.5**. These
+week numbers predate the 2026-09-29 reorder and only drop M7's weeks; the
+orchestrator re-derives them at M4's stub edit. The milestone-level plan had
+M4 at 1 week and M5 at 2; the task breakdown found the rest: M4's restore
+engine, resume binding and container reboot harness, and M5's 93 parity
+scenarios and the mouse model's move into copy mode. With one lane, M4 to the
+release gate is about 70 task-days (M4 20, M5 29 with TP.11 and TP.9b, M6 13
+without Lua, E2E 8; M7's 26 dropped), roughly 18 weeks with the buffer, so
+fully done moves from the one-lane alias day at about week 26, plus M3.7's
+1.5 weeks, to about week 46.
 
-M0 to M7 and the release gate are planned to task level; M8 stays at milestone
-level and is decided after M7. Rows from M4 on name files M1 built or that
+M0 to M6 and the release gate are planned to task level (M7 is dropped); M8
+stays at milestone level and is decided after the release gate. Rows from M4 on name files M1 built or that
 their milestone's stub edit creates; when dogfooding reshapes one, it changes
 through rule 9.
 
@@ -204,7 +211,6 @@ src/
       bindings.rs    # M3.6: if-shell, command-alias, popup and menu flags, list-keys (FE.4)
       structure.rs   # M3.6: structure and client verbs, layout codec, list-* output (FE.2)
       copy.rs        # M5: copy-mode and buffer rows (TM.7)
-  agents/            # M7: mod.rs, manifest.rs (T7.1), state.rs (T7.2), identity.rs (T7.3), adopt.rs (T7.4)
   config/
     mod.rs           # M3
     provenance.rs
@@ -217,10 +223,9 @@ tests/
   compat_frontend*.rs # M3.6: front-end row goldens (FE.*)
   fixtures/          # probe replies (T2.1), tmux.conf inputs and golden TOML (TI.1),
                      # compat corpus and tmux 3.7b goldens (TC.0, TC.13), canopy's
-                     # fake-agent (M4), protocol v1 messages (T6.2), adapter manifests (T7.1)
-  e2e/               # M4+: Containerfiles and scenarios run by scripts/e2e.sh (T4.6, T7.8, TE.*)
+                     # fake-agent (M4), protocol v1 messages (T6.2)
+  e2e/               # M4+: Containerfiles and scenarios run by scripts/e2e.sh (TA.1, T4.6, TE.*)
 plugins/event-log/   # M6: in-tree sh plugin (T6.6)
-examples/lua/        # M6: in-tree Lua plugin (T6.6)
 scripts/             # ci-local.sh; e2e.sh (T4.6); check-copy-scope.sh (TM.0); release-gate.sh (TE.3);
                      # compat recorders (TC.0, TC.0b)
 docs/                # copy-mode.md (TM.0), protocol-v1.md (T6.2)
@@ -873,13 +878,15 @@ M3.7 closes here.
 
 Owner ruling 2026-09-29: after M3.6, M3.7 and M5 close (alias-day scope),
 the owner's actual setup (athome, canopy and grofe as `tmux`) runs
-end-to-end in a disposable container before anything moves further. M4, M6
-(without Lua) and M7 start only once this test is green; the owner does not
+end-to-end in a disposable container before anything moves further. M4 and
+M6 (without Lua) start only once this test is green; the owner does not
 switch a real machine before seeing its results. This is deliberately
 **narrower** than the release gate's `TE.2b` (`.superpowers/sdd/m35/e2e-athome-amendment.md`),
-which runs the same shape of test again, later, with M4's persistence and
-M7's agents plugin added on top: no container restart here (M4 doesn't
-exist yet) and no agents-plugin rollup step (M7 doesn't exist yet). TA.1
+which runs the same shape of test again, later, with M4's persistence added
+on top: no container restart here (M4 doesn't exist yet). TE.2b's
+agents-plugin rollup step (W13) is gone for good with M7 (owner ruling
+2026-10-06); TA.1, which runs canopy on grofe in a container, is what
+remains of M7's T7.8. TA.1
 builds its own minimal container-running harness, since T4.6's shared
 `scripts/e2e.sh` is an M4 deliverable that hasn't landed; **when M4's T4.6
 lands, it generalizes TA.1's `Containerfile.alias-day` and `alias-day.sh`
@@ -1032,12 +1039,10 @@ the owner's machine drop resurrect and continuum.
 ## M6: events and plugins
 
 Spec D9 and §7. Goal: a frozen control protocol and event catalog, supervised
-out-of-process plugins, and sandboxed Lua, shaped by what M3.6 and M3.7 turned
-out to need rather than by the candidate list in spec §4.6. The known
-consumers today: TC.5's event hooks and the twelve tmux hook names behind them
-(FE.3), which opensessions (TP.9) uses; the agents plugin (M7), which needs
-option changes on pane options, pane focus, pane creation and exit, session
-and window closing, `restore-done` and `resume-changed`; and nothing in the
+out-of-process plugins (Lua dropped, 2026-09-29), shaped by what M3.6 and
+M3.7 turned out to need rather than by the candidate list in spec §4.6. The
+known consumers today: TC.5's event hooks and the twelve tmux hook names
+behind them (FE.3), which opensessions (TP.9) uses; and nothing in the
 status line, which stays formats over options (D8). An event with no consumer
 does not enter v1.
 
@@ -1050,7 +1055,7 @@ routed to stubs; a `control` arm stub in `src/main.rs`.
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and M7's needs (spec §7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, the agents plugin, or a test) and no event is listed without one; every M7 need in spec §7 maps to a catalog event or a command; **[owner]** approves the rewrite |
+| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and the plugins canopy's loader runs (M3.7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, an in-tree plugin, or a test) and no event is listed without one; **[owner]** approves the rewrite |
 
 **Wave A (after the stub edit; parallel; merge order T6.1).**
 
@@ -1084,74 +1089,38 @@ approval, so nothing else here needs the owner.
 
 ---
 
-## M7: agents plugin and canopy on grofe
+## M7: dropped
 
-Spec §7, §7.1. Goal: canopy's agent layer runs on grofe with nothing
-polled and nothing forked per report, and a reboot returns every agent pane
-to its own conversation. canopy's `docs/adapters/contract.md` is the
-authority on adapter manifests; grofe reads the same files. The agents plugin
-ships in the grofe binary: `grofe __agents` is the supervised daemon (M6),
-configured by canopy's fragment, and `grofe agents <adopt|next>` is a CLI arm,
-a control client that needs no daemon. Tasks that own canopy files run in
-canopy with its bats and have a grofe-side check.
+**Owner ruling 2026-10-06: M7 is dropped from grofe.** It planned an agents
+plugin inside the grofe binary (`grofe __agents`, `grofe agents adopt|next`),
+with state rollups, attention, identity and resume for coding agents, and
+four canopy adapters reporting through it (T7.1 to T7.8).
 
-**Stub edit, landed when T7.1 starts** (T7.1 and T7.5 may start during M6,
-so this edit may precede M6's exit gate; Wave B waits for that gate), by the
-orchestrator on `main`: `src/agents/{mod,manifest,state,identity,adopt}.rs`
-with the `mod agents` line; in `agents/mod.rs`, the daemon loop's named hooks
-`identity::on_start(&mut Ctx)` and `identity::on_event(&mut Ctx, &Event)`,
-no-ops in `identity.rs`, so T7.2 owns `mod.rs` and T7.3 owns only
-`identity.rs`; the `__agents` and `agents` arms stubbed in `src/main.rs`; the
-`[agents]` schema in `src/config/`: `adapter-dirs` (list, first wins),
-`option-prefix` (default `@agent_`), `enabled`.
+Why: M3.7 showed that the owner's tmux plugins run unchanged on grofe through
+canopy's loader. Agent awareness already exists there, in plugins such as
+tmux-claude-session-manager and opensessions, and in canopy's own adapters
+and strategies. Building a second copy inside grofe would duplicate them, so
+grofe stays a multiplexer that those plugins can drive.
 
-**Wave A (parallel; may start during M6).**
+What happens to its pieces:
 
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **T7.1** Manifest reader | canopy's contract exactly: `key=value` lines, comments and blank lines, all six keys required, and exactly the rejections canopy's `lib/adapter.sh` makes (unknown or duplicate key, a malformed line, `id` differing from the directory, an empty `command`, `can_pin_at_launch` neither `yes` nor `no`, a `resume_template` without `{id}`, a non-empty `detect_draft` without `{pane}`, and `launch_template` without `{id}` only when `can_pin_at_launch` is `yes`, nothing checked when it is `no`), full validation on every read; `adapter-dirs` precedence with a shadowed id listed once; ids validated against `[A-Za-z0-9._:-]` on entry and again on use; literal substitution, then split on spaces into an argv, rejecting a template with shell quoting or metacharacters (spec §7); `detect_draft` run through `/bin/sh -c` with stdin from `/dev/null` | `src/agents/manifest.rs`, `tests/agents_manifest.rs`, `tests/fixtures/agents/manifests/` | stub edit | Over a corpus of valid and invalid manifests (every rejection, plus canopy's shipped `claude-code` and fake-agent manifests), each verdict equals the one canopy's `lib/adapter.sh` gives on the same file: live when `GROFE_COMPAT_CANOPY` is set, and against a checked-in golden of canopy's verdicts otherwise; a config-dir adapter shadows the store's and is listed once; id `a b` is refused and `abc-1.2:x_y` accepted |
-| **T7.5** The four adapters (canopy) | canopy ships `adapters/{opencode,pi,codex}/` beside `claude-code`, each with a manifest per the contract and, where the agent reports, its reporter and installer per canopy §6.5's mappings (opencode TS plugin, pi TS extension, codex `notify` and hooks through an sh bridge); each adapter's tier recorded in canopy's docs, and an agent that cannot resume by id gets no adapter and says so (tier 3); adapters call `canopy agent report` and hold nothing grofe-specific | canopy `adapters/{opencode,pi,codex}/`, canopy's manifest and agent-report bats with hook-payload fixtures copied from each agent's own hook or event documentation (the source URL and version at the top of each fixture file), canopy design §6.5's table; canopy's `docs/adapters/contract.md`, so `command` is the program name read off the pane's argv (interpreters and `VAR=value` skipped), not the process name | none in grofe | canopy's bats: every manifest validates, and each reporter fed its payload fixtures produces §6.5's states; T7.1's corpus includes all four manifests and accepts them; **[owner]** runs each real agent once in a grofe pane and sees its state and resume set (substitute: the payload fixtures) |
+- Agent state, rollups, attention, resume and adopt are left to tmux plugins
+  run through canopy's loader. A new agent plugin goes in with canopy's
+  `plugins/vendor.sh <name>`, like the ones M3.7 checked.
+- A grofe gap such a plugin hits shows up in `compat-miss.log` and is fixed
+  as a compat bug, the same way M3.7's were.
+- T7.8's useful part, canopy on grofe in a container, is covered by TA.1
+  (the alias-day container test) and later by TE.2b.
+- No grofe code, schema (`[agents]`) or `src/agents/` module is built.
 
-**Wave B (after M6's exit gate and T7.1; T7.3 also after T7.5; parallel;
-merge order T7.2, T7.3).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **T7.2** State, rollups, attention | `grofe __agents` subscribes to option changes on `<prefix>state`, `<prefix>source` and `<prefix>session`, and to `pane-focus`, `pane-created`, `pane-exited`, window and session closing and `restore-done`; states outside the five (and `restored`) are logged as adapter bugs and left out of rollups; rollups as window and session `<prefix>rollup` in spec §7's urgency order, written only on change and cleared when no agent pane remains; attention: entering `blocked` or `completed` sets `<prefix>unseen` (the transition time) unless an attached client is looking at the pane, and `pane-focus` clears it; after a restore, panes with a persisted `<prefix>source` and no report yet get `<prefix>state restored`; on connect it recomputes everything from one `list-panes -a -F`; it forks nothing; `grofe agents next` selects the pane with the oldest unseen time, switching the client's session and window | `src/agents/{mod,state}.rs`, the `__agents` and `agents next` arms in `src/main.rs`, `tests/agents_state.rs` | T7.1 | With the plugin at prefix `@canopy_agent_` and states set through the `tmux` symlink as canopy's report does (`set -p ... \; set -p ...`): a table of about 15 report sequences gives the expected window and session rollups; a repeated `working` writes nothing (the `option-changed` count is unchanged); `blocked` on an unfocused pane sets unseen and on the focused pane does not; `select-pane` to it clears it; `agents next` lands on the oldest unseen pane; after a restore (T4.4's harness) persisted panes read `restored` until their first report; an invalid state logs once and leaves rollups unchanged; the daemon's child count stays 0 over 1000 reports; SIGKILLed, it is restarted (T6.3) and its first recompute matches the rollups before |
-| **T7.3** Identity and resume | Spec §7, wired into the daemon through the stub's `identity::on_start` and `on_event` hooks: the plugin calls `pane-set-resume` for the adapter whenever a pane's `<prefix>session` changes (a `/clear`-style new id with an unchanged state included) and `<prefix>source` names an installed adapter, using its `resume_template`; for panes that never report, identity from `pane_current_argv` (never the command name) on `pane-created`, `restore-done` and plugin start: interpreters (`sh`, `bash`, `zsh`, `env`), options and `VAR=value` skipped, the program matched against each adapter's `command`, the id read back through `resume_template` first and `launch_template` second (canopy 5aaac53, §6.6); it sets `<prefix>source` and `<prefix>session` with `--persist`, never `<prefix>state`; an agent pane with no id gets `pane-set-resume --expect "no session id reported"` | `src/agents/identity.rs`, `tests/agents_identity.rs`, `tests/fixtures/agents/fake-agent-adapter/` (canopy's, vendored), `examples/comm_agent.rs` (a compiled fake agent, so its comm really differs from its argv) | T7.1, T7.5, T4.2 | With canopy's fake-agent adapter: a pane running `fake-agent --session-id a` that never reports has `#{pane_resume}` equal to `<abs>/fake-agent --resume a` within 1 s of plugin start; reports of session `b` and then `c` with the same state leave `--resume c`; `env FOO=1 fake-agent --session-id d` and `sh -c 'exec fake-agent --session-id e'` are recognised, and so is `comm_agent` copied to a file named `2.1.245` and started as `exec -a fake-agent ./2.1.245 --session-id f` (comm `2.1.245`, argv `fake-agent`, as Claude Code looks); each of the four adapters' launch argv (T7.5's manifests, from fixtures) is recognised; a server started under `env -i PATH=/usr/bin:/bin`, with the fake agent installed only on the pane's `PATH`, still records an absolute resume (the plugin's call has no pane context, spec §6); `fake-agent --anonymous` gets the expectation and `reboot-check` exits 1 naming it, and closing it brings exit 0; a reported id with a space is refused with a log line and sets no resume; after `kill_hard()` and `restart()` every pane with an id resumes its own conversation (transcripts), `source` and `session` are back, `state` is not |
-
-**Wave C (T7.4 and T7.6 after Wave B, parallel; T7.7 after T7.4; merge order
-T7.4, T7.6, T7.7).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **T7.4** Adopt | Spec §7.1: `grofe agents adopt [--yes] [-t target]`; for each pane whose foreground argv is an adapter's command with an id recoverable from its report or argv, and whose resume is not already that adapter's resume for that id: a dry run (the default) prints `would adopt <pane> <adapter> <id>`, and `--yes` calls `pane-set-resume`; nothing is respawned, so `detect_draft` is not needed and the output says so; it never invents an id (a pane without one is named and left alone), validates ids on use, and a pane already carrying its resume counts as adopted; exit 0, or 1 when any agent pane was left alone | `src/agents/adopt.rs`, the `agents adopt` arm in `src/main.rs`, `tests/agents_adopt.rs` | T7.2, T7.3 | The dry run changes nothing (`#{pane_resume}` and `state.json` unchanged); `--yes` sets each resume, and a second `--yes` reports every pane adopted and emits no `resume-changed`; an anonymous pane is named, skipped, and gives exit 1; a pane whose `source` names a missing adapter is named with that reason; no `pane_pid` changes; after adopting, `reboot-check` exits 0 for those panes |
-| **T7.6** canopy's agents fragment (canopy) | TP.1's generator gets a `40-agents` template: `[plugins.agents]` running `grofe __agents`, `[agents]` with `adapter-dirs` (`$CANOPY_CONFIG/adapters`, then `$CANOPY_STORE/adapters`) and `option-prefix = "@canopy_agent_"`; pane borders from the pane state, window status from the window rollup, status-right from the session rollup, an unseen marker, all pure formats with no `#()` (canopy §6.3); a binding for `grofe agents next` and canopy's `agent next` calling it on the grofe backend | canopy's `40-agents` template and its bats; `tests/acceptance/t7_6.rs` in grofe | T7.2 | `grofe show-config --file` on the generated tree loads with no errors; with states set by `canopy agent report` through the `tmux` symlink, the reconstructed border and status show each of the six states (screen goldens); redraws at 60 Hz spawn no process beyond the named sources (counted, TC.4's method); `canopy restore --all` removes the fragment |
-| **T7.7** Autostart, doctor and wrappers (canopy) | canopy installs a login unit through its transaction (owned before written, restored by `canopy restore`): a systemd user unit on Linux and a launchd agent on macOS, each running `tmux start-server --restore` through the `tmux` symlink (tmux identity, D12) with the login `PATH`; `canopy doctor` on grofe checks `restore-on-start` or the unit, a writable state dir, `grofe reboot-check` not exiting 2, a fresh snapshot (no pane `not saved yet` two seconds after the last change), and prints the tier matrix; `canopy reboot-check` on grofe prints `grofe reboot-check` and exits with its status; `canopy adopt` runs `grofe agents adopt` with the same flags; the grofe backend carries no resurrect or continuum path | canopy's grofe-backend `bin/` wrappers, the unit templates, the doctor checks, and their bats | T7.4, T4.5 | canopy's bats run with a temp `HOME` and stub `systemctl` and `launchctl` first on `PATH` that record their calls, so no unit is ever installed or loaded on the host; against a scripted grofe server on a private `-S`: doctor passes with the unit and fails naming each missing piece, including a stale snapshot (a pane added while the state dir is read-only); `canopy reboot-check` exits as `grofe reboot-check` does in the three cases; `canopy adopt`'s dry-run output equals grofe's; with `restore-on-start` off, the installed unit keeps `grofe reboot-check` from exiting 2; `canopy restore --all` removes the unit and returns the home byte-identical |
-
-**Wave D (after the orchestrator bumps canopy's pinned SHA, the one TC.13
-and every container use, to include T7.5, T7.6 and T7.7).**
-
-| Task | Scope | Owns | Depends | Accept |
-|---|---|---|---|---|
-| **T7.8** Container: canopy on grofe | `tests/e2e/Containerfile.systemd` (Debian with systemd as PID 1, `--systemd=always`, a test user with lingering) and `tests/e2e/scenarios/canopy.sh`, run through T4.6's `scripts/e2e.sh`: canopy copied in with `git archive` at the pinned SHA, never a working tree or the owner's install; grofe installed, the `tmux` symlink first on the user's `PATH`; `canopy install` with the grofe backend and the login unit enabled; canopy's fake-agent adapter installed from `test/fixtures/fake-agent-adapter`. Phase 1: four agent panes over two sessions: two pinned at launch, one started anonymously that later reports an id through `canopy agent report --session-id` (the tier 2 path), one anonymous that never reports; states driven by `canopy agent report` from inside each pane, as adapter hooks do. `podman restart`: systemd boots and the unit starts grofe with restore. Phase 2 checks | `tests/e2e/Containerfile.systemd` (except its tmux lines, TE.3's), `tests/e2e/scenarios/canopy.sh`, the `--systemd=always` run line for that image in `scripts/e2e.sh` | T7.6, T7.7, T4.6 | Phase 1: rollups and unseen follow the reports; `canopy reboot-check` names the never-reporting pane and exits 1. Phase 2: each fake agent's transcript is `launch <id>` then `resume <id>`, in the window that held it (canopy scenario 7), the tier 2 pane included; the never-reporting pane is a shell in its directory and costs no other pane (scenario 8); every `uid` equals phase 1's; states read `restored` until the next report; `canopy doctor` passes. A mutation run (phase 1 edits one resume in `state.json`) fails on that pane only; the host-state check passes |
-
-**Critical path inside M7** (review cycles included): T7.1 (2 d) and T7.5
-(4 d) during M6; then stub edit → T7.2 (4 d) → T7.4 (3 d) → T7.7 (3 d) → T7.8
-(4 d), about 14 working days. T7.3 (3 d) runs beside T7.2, T7.6 (3 d) beside
-T7.4. **One-lane sum:** T7.1 2, T7.2 4, T7.3 3, T7.4 3, T7.5 4, T7.6 3, T7.7 3,
-T7.8 4: 26 task-days.
-
-**Exit gate:** reviewer runs `scripts/ci-local.sh` with the `e2e` leg (T4.6
-and T7.8 scenarios); **[owner]** on each machine, a real reboot returns every
-Claude Code pane to its own conversation and `canopy reboot-check` said so
-beforehand, logged in `docs/dogfood.md` (substitute: T7.8 green).
+The remaining order after alias day is M4, then M6 without Lua, then the
+release gate.
 
 ---
 
 ## E2E and release
 
-The gate between M7 and "fully done": every suite runs from a clean clone, in
+The gate between M6 and "fully done": every suite runs from a clean clone, in
 containers where the owner's machines are Linux and natively (private
 sockets) on macOS, then the owner switches for good. TE.1 and TE.2 may start
 as soon as their suites exist (T4.6 and TM.7); TE.3 runs last.
@@ -1160,9 +1129,9 @@ as soon as their suites exist (T4.6 and TM.7); TE.3 runs last.
 |---|---|---|---|---|
 | **TE.1** Acceptance in containers | `tests/e2e/scenarios/acceptance.sh`: the spec §8 acceptance suite (`cargo test` acceptance targets and bats) inside the Debian image (required) and the Arch image (optional, `E2E_ARCH=1`, never gating), with neovim, fzf, less, htop, git, kitten where packaged, and tmux 3.7b built at a pinned tag for the nested-tmux item; the macOS leg stays `scripts/ci-local.sh macos` | `tests/e2e/scenarios/acceptance.sh`, the tool lines in `tests/e2e/Containerfile.{debian,arch}` | T4.6 | Green on the Debian image, and on Arch when run; the images' `tmux -V` prints `tmux 3.7b` (the scenario checks); a tool missing from an image fails the scenario naming it rather than skipping |
 | **TE.2** Compat in containers | `tests/e2e/scenarios/compat.sh`: TC.13's suite and TM.7's copy-mode parity inside the Debian image, with canopy and athome copied in at their pinned SHAs; the goldens' re-record path (TC.0b) also runs in the image | `tests/e2e/scenarios/compat.sh` | TE.1, TM.7 | Both suites green; re-recording in the image gives byte-identical goldens; `compat-miss.log` empty |
-| **TE.3** Release gate | `scripts/release-gate.sh`: `ci-local.sh macos` and `linux`, then the `e2e` scenarios `acceptance` (TE.1), `compat` (TE.2), `reboot` (T4.6) and `canopy` (T7.8), then `tests/e2e/scenarios/rollback.sh`, which needs real tmux 3.7b in the systemd image: with canopy on grofe installed in the systemd image, remove the `tmux` symlink and switch canopy back to its tmux backend; real tmux and canopy work as before and `canopy restore --all` returns the home byte-identical; README's "alias day" section with the owner's steps below, run by `tests/e2e/scenarios/readme.sh` | `scripts/release-gate.sh`, `tests/e2e/scenarios/{rollback,readme}.sh`, the tmux 3.7b build lines in `tests/e2e/Containerfile.systemd`, README's alias-day section | TE.1, TE.2, T7.8 | Exits 0 only when every required leg is green, and prints one line per leg; forcing one leg red (`GROFE_GATE_FAIL=<leg>`) makes it exit nonzero naming that leg; `readme.sh` runs the README's alias-day steps in a clean systemd container and passes |
+| **TE.3** Release gate | `scripts/release-gate.sh`: `ci-local.sh macos` and `linux`, then the `e2e` scenarios `acceptance` (TE.1), `compat` (TE.2), `reboot` (T4.6) and `alias-day` (TA.1, standing in for the dropped T7.8), then `tests/e2e/scenarios/rollback.sh`, which needs real tmux 3.7b in the systemd image: with canopy on grofe installed in the systemd image, remove the `tmux` symlink and switch canopy back to its tmux backend; real tmux and canopy work as before and `canopy restore --all` returns the home byte-identical; README's "alias day" section with the owner's steps below, run by `tests/e2e/scenarios/readme.sh` | `scripts/release-gate.sh`, `tests/e2e/scenarios/{rollback,readme}.sh`, the tmux 3.7b build lines in `tests/e2e/Containerfile.systemd`, README's alias-day section | TE.1, TE.2, TA.1 | Exits 0 only when every required leg is green, and prints one line per leg; forcing one leg red (`GROFE_GATE_FAIL=<leg>`) makes it exit nonzero naming that leg; `readme.sh` runs the README's alias-day steps in a clean systemd container and passes |
 
-**Critical path:** TE.3 (3 d) after M7; TE.1 (3 d) and TE.2 (2 d) run
+**Critical path:** TE.3 (3 d) after M6; TE.1 (3 d) and TE.2 (2 d) run
 earlier. **One-lane sum:** TE.1 3, TE.2 2, TE.3 3: 8 task-days.
 
 **Alias day, for good.** M3.6's alias day was a trial with real tmux as the
@@ -1174,13 +1143,13 @@ TE.3's legs.
    the way its `AGENTS.md` says: `chezmoi diff`, capture anything precious,
    then apply. The change puts the `tmux` symlink first on `PATH`, installs
    grofe's config, and switches canopy to its grofe backend. (Substitute:
-   T7.8's install and TE.3's README run.)
-2. `canopy install` with the grofe backend installs the login unit; `canopy
-   doctor` passes; `grofe reboot-check` exits 0. (Substitute: T7.7 and T7.8's
-   phase 1.)
+   TA.1's install and TE.3's README run.)
+2. athome's login unit starts grofe as `tmux` at login; `canopy
+   doctor` passes; `grofe reboot-check` exits 0. (Substitute: TA.1's stage 2
+   checks.)
 3. Reboot for real, on each machine: every session is back with its `uid`s,
    and every Claude Code pane is back in its own conversation. (Substitute:
-   T4.6 and T7.8.)
+   T4.6 and TA.1.)
 4. A week of normal work under the alias. Each difference goes in
    `docs/dogfood.md` tagged `compat` or `copy`, becomes a scenario, then gets
    fixed; `compat-miss.log` is read each day. (Substitute: TC.13, TM.7, TP.9a and TP.9b.)
@@ -1190,12 +1159,12 @@ TE.3's legs.
    symlink goes), `canopy install` with the tmux backend; grofe's state stays in
    its own directory and touches nothing of tmux's.
 
-**Fully done** means M7's exit gate, TE.3 green, and step 4's week ending
+**Fully done** means M6's exit gate, TE.3 green, and step 4's week ending
 with no open `compat` or `copy` entry.
 
 ---
 
 ## M8 (milestone level)
 
-**M8 Compatibility extras.** Decide after M7 whether a tmux `-CC` subset earns
+**M8 Compatibility extras.** Decide after the release gate whether a tmux `-CC` subset earns
 its keep. (`import-tmux` moved to M3.5.)
