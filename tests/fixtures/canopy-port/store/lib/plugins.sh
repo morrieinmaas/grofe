@@ -201,8 +201,18 @@ canopy_plugin_artifacts() {
 # canopy_artifact_row_ok accepts and its file is in place with the
 # recorded sha256. A plugin for which this fails is one that would fetch
 # what is missing from the network, so the loader does not run it.
+#
+# Returns 2 when <name> has rows for other platforms and none for this one:
+# nothing can be provided here, and the plugin would download its own.
 canopy_plugin_artifacts_ok() {
-  local verdict name url sum member dest want path
+  local verdict name url sum member dest want path file
+  file="$(canopy_artifacts_file)"
+  if [ -f "$file" ] && awk -v n="$1" -v p="$(canopy_platform || true)" '
+    NF >= 7 && substr($1, 1, 1) != "#" && $1 == n && $2 != "any" { other = 1; if ($2 == p) here = 1 }
+    END { exit !(other && !here) }
+  ' "$file"; then
+    return 2
+  fi
   canopy_plugin_artifacts | while read -r verdict name url sum member dest want; do
     [ "$name" = "$1" ] || continue
     [ "$verdict" = ok ] || exit 1
@@ -343,7 +353,7 @@ canopy_shell_quote() {
 # plugin reach the network. A plugin whose entry point fails is logged too, and
 # does not stop the plugins after it.
 canopy_load_plugin() {
-  local name glob dir entry found shebang
+  local name glob dir entry found shebang artifacts
   name="$1"
   glob="${2:-*.tmux}"
   dir="$CANOPY_STORE/plugins/$name"
@@ -358,7 +368,12 @@ canopy_load_plugin() {
     fi
     [ -f "$entry" ] && [ -x "$entry" ] || continue
     found=1
-    if ! canopy_plugin_artifacts_ok "$name"; then
+    artifacts=0
+    canopy_plugin_artifacts_ok "$name" || artifacts=$?
+    if [ "$artifacts" -eq 2 ]; then
+      canopy_plugin_note "$name" "dormant, plugins/ARTIFACTS has no release binaries for this platform"
+      return 0
+    elif [ "$artifacts" -ne 0 ]; then
       canopy_plugin_note "$name" "dormant, a release binary from plugins/ARTIFACTS is missing or fails its sha256 (canopy install provides it)"
       return 0
     fi

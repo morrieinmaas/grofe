@@ -33,8 +33,11 @@ requires = "grofe >= 0.1"
 #
 # The plugin's other options (@vim_navigator_mapping_*, @vim_navigator_pattern
 # and @vim_navigator_check) choose the keys and the check when it loads. They
-# are not read here: the keys and the pattern are the plugin's defaults. Its
-# copy-mode-vi bindings wait for grofe's copy mode (M5).
+# are not read here: the keys and the pattern are the plugin's defaults.
+#
+# In copy mode the same five keys move focus as the plugin binds them on
+# tmux (copy-mode-vi's C-h is `select-pane -L`, and so on), with the same
+# zoom check as above.
 
 [keys.root]
 C-h = { cmd = "if-shell -F '#{m/ri:(?m)^([^ ]+/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?( |$),#{pane_foreground_argv}}' 'send-keys C-h' \"if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -L'\"", desc = "Focus the pane or Neovim window to the left", group = "pane", name = "nav-left" }
@@ -47,3 +50,11 @@ C-l = { cmd = "if-shell -F '#{m/ri:(?m)^([^ ]+/)?g?[.]?(view|l?n?vim?x?|fzf)(dif
 # the prefix.
 [keys.prefix]
 C-l = { cmd = "send-keys C-l", desc = "Clear the screen, which C-l alone no longer does", group = "pane", name = "nav-clear-screen" }
+
+# The plugin's copy-mode-vi rows.
+[keys.copy-mode-vi]
+C-h = { cmd = "if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -L'", desc = "Focus the pane to the left", group = "pane", name = "nav-copy-left" }
+C-j = { cmd = "if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -D'", desc = "Focus the pane below", group = "pane", name = "nav-copy-down" }
+C-k = { cmd = "if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -U'", desc = "Focus the pane above", group = "pane", name = "nav-copy-up" }
+C-l = { cmd = "if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -R'", desc = "Focus the pane to the right", group = "pane", name = "nav-copy-right" }
+"C-\\" = { cmd = "if-shell -F '#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}' '' 'select-pane -l'", desc = "Focus the last pane", group = "pane", name = "nav-copy-last" }

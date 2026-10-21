@@ -13,7 +13,7 @@
 # user.toml) is already loaded from XDG_CONFIG_HOME. main-pane-width is the
 # one line of athome's user.conf the scenarios' layouts read.
 $ new-session -d -s main -n main -x 200 -y 50 cat
-$ display-message -p "pins: canopy f54cd1cf4084 athome 8bd91688ca54"
+$ display-message -p "pins: canopy 4faa58fff9d8 athome df412f5987af"
 $ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
 $ source-file {fixtures}/../../compat/scenarios/trees/canopy/tmux/tmux.conf
 $ setw -g main-pane-width 50%
