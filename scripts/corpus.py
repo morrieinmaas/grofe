@@ -1920,12 +1920,15 @@ def cmd_coverage(args):
 
 
 # The users the repo's own Containerfiles create (containers/compat:
-# Containerfile makes `rec`, golden.Containerfile makes `golden`). Their homes
+# Containerfile makes `rec`, golden.Containerfile makes `golden`,
+# tests/e2e/Containerfile.alias-day makes `test`). Their homes
 # exist only inside those images, so naming them is not a machine specific.
-# Any other /home/<name>, and every /Users/<name>, is flagged.
-CONTAINER_USERS = ("rec", "golden")
+# Any other /home/<name>, and every /Users/<name>, is flagged. A name
+# never starts with a dot, so a `home/` directory in a path (athome's
+# source tree: `athome/home/.chezmoiscripts`) is not one.
+CONTAINER_USERS = ("rec", "golden", "test")
 CONTAINER_HOME_RE = re.compile(
-    r"/Users/[A-Za-z0-9_.-]+|/home/(?!(?:" + "|".join(CONTAINER_USERS) + r")(?![A-Za-z0-9_.-]))[A-Za-z0-9_.-]+"
+    r"/Users/[A-Za-z0-9_.-]+|/home/(?!(?:" + "|".join(CONTAINER_USERS) + r")(?![A-Za-z0-9_.-]))[A-Za-z0-9_-][A-Za-z0-9_.-]*"
 )
 
 
