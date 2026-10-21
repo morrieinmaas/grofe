@@ -39,4 +39,5 @@ run_once_after_22-link-agents.sh	run	-	no-op with includeAgents = false
 run_once_after_23-enable-gpaste.sh	ci	ATHOME_CI=1	GNOME clipboard
 run_onchange_after_24-enable-tmux-service.sh	run	-	the login unit (owner ruling: athome's tmux.service); the image has systemd
 run_onchange_after_25-desktop-look.sh	ci	ATHOME_CI=1	GUI theming
+run_once_after_26-fix-nanobrew-git-execpath.sh	run	-	no-op off macOS (it exits unless uname is Darwin)
 run_once_after_99-cleanup.sh	skip	not in the allowlist	swaps the chezmoi remote to SSH; the archive has no remote
