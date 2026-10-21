@@ -747,9 +747,7 @@ fn w11(c: &mut Ctx) -> Step {
     })();
     if result.is_err() {
         let _ = c.tmux(&["select-pane", "-t", &right.id]);
-        c.send("\x1b");
-        sleep(Duration::from_millis(300));
-        c.send(":qa!\r");
+        nvim_cmd(c, "qa!");
         let _ = c.wait("nvim to quit after the failure", 10, |c| {
             (c.pane("#{pane_current_command}").ok()? != "nvim").then_some(())
         });
@@ -757,14 +755,18 @@ fn w11(c: &mut Ctx) -> Step {
     result
 }
 
+/// Runs an Ex command in nvim, from any mode. athome's keymaps.lua swaps
+/// `;` and `:` in normal mode, so `;` opens the command line. Escape goes
+/// first and on its own: within escape-time it and the `;` would be read
+/// as M-;.
+fn nvim_cmd(c: &mut Ctx, cmd: &str) {
+    c.send("\x1b");
+    sleep(Duration::from_millis(300));
+    c.send(&format!(";{cmd}\r"));
+}
+
 fn nvim_navigation(c: &mut Ctx, left: &Geom, right: &Geom) -> Step {
-    // Escape and the colon go separately: within escape-time they would be
-    // read as M-:.
-    let ask = |c: &mut Ctx| {
-        c.send("\x1b");
-        sleep(Duration::from_millis(300));
-        c.send(":echo 'ADWIN'.winnr()\r");
-    };
+    let ask = |c: &mut Ctx| nvim_cmd(c, "echo 'ADWIN'.winnr()");
     let win = |c: &mut Ctx, want: u32| -> Result<(), String> {
         ask(c);
         let w = format!("ADWIN{want}");
@@ -798,7 +800,7 @@ fn nvim_navigation(c: &mut Ctx, left: &Geom, right: &Geom) -> Step {
     c.wait("the nvim pane", 5, |c| {
         (c.active().ok()?.id == right.id).then_some(())
     })?;
-    c.send("\x1b:qa!\r");
+    nvim_cmd(c, "qa!");
     c.wait("nvim to quit", 15, |c| {
         (c.pane("#{pane_current_command}").ok()? != "nvim").then_some(())
     })?;
