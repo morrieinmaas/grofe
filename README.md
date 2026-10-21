@@ -23,10 +23,10 @@ a conversation. Every other pane comes back as a shell in its directory. No
 resurrect, no continuum, no list of process names to whitelist. Before you
 reboot, `grofe reboot-check` tells you exactly what will come back.
 
-**Good at running agents.** If you keep several coding agents busy at once,
-grofe shows which ones are working, which are waiting for you, and which have
-finished, and takes you straight to the one that needs attention. After a
-reboot, each agent comes back to its own conversation, not a fresh one.
+**Works with the agent tools you already use.** grofe does not build its own
+agent dashboard. The tmux plugins that track coding agents, such as
+tmux-claude-session-manager and opensessions, run on grofe unchanged, and a
+pane told how to resume its agent comes back to the same conversation.
 
 **A config you can actually debug.** Configuration is TOML with a schema. A
 typo is an error that names the file, the line and the setting you probably
@@ -79,7 +79,9 @@ ordinary programs in whatever language you like.
 >
 > - **Plugins.** TPM itself does not run. The plugins you load with it run
 >   unchanged through canopy's plugin loader, which vendors each one and
->   starts it with `run-shell`, as TPM does.
+>   starts it with `run-shell`, as TPM does. A plugin's own `*.tmux` and
+>   `*.conf` files are read as tmux config only when the request comes
+>   through the `tmux` name or the server has tmux identity.
 > - **Copy mode and paste buffers** (`copy-mode`, `send-keys -X`, the
 >   `*-buffer` commands) work, with tmux 3.7b's `copy-mode-vi` table. Only
 >   the vi keys are there; `mode-keys emacs` has no table.
@@ -97,8 +99,9 @@ grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 ```
 
 Options, key bindings, hooks and status formats come across, including `#()`
-segments, which become cached status sources; anything that cannot (plugins
-above all) is listed with the reason, so you know exactly what is left to do.
+segments, which become cached status sources; anything that cannot (plugin
+lines above all, which canopy's loader takes over) is listed with the reason,
+so you know exactly what is left to do.
 Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
 you try it.
 
@@ -233,8 +236,9 @@ grofe kill-server
 ## What it isn't
 
 grofe is not a general reimplementation of tmux. It answers to the name `tmux`
-for everyday scripts and tools, but it does not read `tmux.conf` or run tmux
-plugins: your setup moves over once, to grofe's own config. It also does not
+for everyday scripts and tools, but it does not read `tmux.conf` as its
+config: your setup moves over once, to grofe's own config, and your tmux
+plugins run unchanged through canopy's loader rather than TPM. It also does not
 run on Windows. It is also not trying to be Zellij: no modal
 interface, no WebAssembly plugins, just tmux's way of working with the rough
 edges taken off.
@@ -252,9 +256,10 @@ so if it crashes your panes don't notice.
 Sessions, windows and panes, the status line with cached `#()` sources, the
 mouse, the command prompt, popups and menus, hooks, clipboard and title
 passthrough, copy mode and paste buffers, the config described above,
-`import-tmux` and the tmux compatibility layer work today, and TPM plugins
-run through canopy's loader. Restoring sessions after a reboot (M4) and
-grofe's own plugin API (M6) are still to come. The
+`import-tmux` and the tmux compatibility layer work today, and tmux plugins
+run unchanged through canopy's loader. Restoring sessions after a reboot (M4)
+and grofe's own plugin API (M6) are still to come. Agent features stay with
+tmux plugins and canopy rather than grofe. The
 [roadmap](docs/plans/2026-09-23-milestones.md) has the details and the
 [design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.
