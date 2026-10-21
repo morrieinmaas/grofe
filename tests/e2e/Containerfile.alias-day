@@ -1,0 +1,134 @@
+# The alias-day container (plan TA.1): the owner's setup, athome with canopy
+# and grofe as `tmux`, in a disposable Debian box with systemd as PID 1 and a
+# test user with lingering. Built and run only by scripts/e2e-alias-day.sh,
+# from a context holding nothing but `git archive` exports and a canopy
+# bundle, each scanned by gitleaks first:
+#
+#   grofe/                   grofe at HEAD, built in the first stage
+#   inputs/athome.tar        athome at the alias-day ref
+#   inputs/canopy.bundle     canopy at the pinned commit
+#
+# The image is the package layer athome's scripts would install on Arch or
+# Fedora (athome has no Debian branch): zsh, git, fzf, neovim, zoxide,
+# tree-sitter (athome's packages.yaml ships it native; nvim-treesitter
+# builds its parsers with it), chezmoi, and real tmux 3.7b as
+# /usr/local/bin/tmux, the place a distro package would put it. The clipboard commands are stubs, and `claude` is a
+# stub: nothing reaches a real clipboard or an account. Every download is
+# pinned by version and sha256, and both bases by digest.
+FROM docker.io/library/rust:1.98-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS build
+
+ENV CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never
+WORKDIR /src
+COPY grofe/ /src/
+RUN cargo build --release --locked --bin grofe \
+  && cargo test --release --locked --test e2e_alias_day --no-run 2>&1 | tee /tmp/test-build.log \
+  && mkdir -p /out \
+  && cp target/release/grofe /out/grofe \
+  && test_bin="$(sed -n 's/.*Executable .*(\(target\/release\/deps\/e2e_alias_day-[0-9a-f]*\)).*/\1/p' /tmp/test-build.log)" \
+  && test -x "$test_bin" \
+  && cp "$test_bin" /out/e2e_alias_day
+
+FROM docker.io/library/debian:stable-slim@sha256:5bc3287b25407c965a30f38e32603dc253a3869e1b12a21ac09bfc27fd8b13ce
+
+ARG TMUX_VERSION=3.7b
+ARG TMUX_SHA256=87f2e99e3b685973f2ca002ffd6ed7e51a5744f7009daae5a15670b6d532db96
+ARG FZF_VERSION=0.74.4
+ARG FZF_TMUX_SHA256=ea14943d739fc81952d5071a642591df25ed8dac166040a6d6036b3be197cecd
+ARG CHEZMOI_VERSION=2.73.0
+ARG NVIM_VERSION=0.12.5
+ARG TREE_SITTER_VERSION=0.26.13
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash bison bsdextrautils build-essential ca-certificates curl dbus dbus-user-session gawk \
+    git iproute2 jq less libevent-dev libncurses-dev libpam-systemd ncurses-term \
+    pkg-config procps sudo systemd systemd-sysv zoxide zsh \
+  && rm -rf /var/lib/apt/lists/*
+
+# Real tmux 3.7b, for the nested-tmux step, and to prove it is not the `tmux`
+# a login shell finds.
+RUN curl -fsSL -o /tmp/tmux.tar.gz \
+    "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
+  && echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c - \
+  && tar -C /tmp -xzf /tmp/tmux.tar.gz \
+  && cd "/tmp/tmux-${TMUX_VERSION}" \
+  && ./configure --prefix=/usr/local >/dev/null \
+  && make -j4 >/dev/null \
+  && make install >/dev/null \
+  && cd / && rm -rf /tmp/tmux* \
+  && test "$(/usr/local/bin/tmux -V)" = "tmux ${TMUX_VERSION}"
+
+RUN set -e; \
+  case "$(uname -m)" in \
+    aarch64|arm64) arch=arm64 nvim_arch=arm64 \
+      fzf_sha=5d673b849f494f0d64ec471d8640b153ca8849e3846a31da17abdcfce8df6b46 \
+      chezmoi_sha=abcb840401d3c1f2356e0f53f5d52aa10d10f572654d9626db9ad0ca4dc03355 \
+      nvim_sha=1aa5ca085249580ae0f91eb14f27ec0919773ff2d99a163d03f3d6c21ac29725 \
+      ts_arch=arm64 ts_sha=088c5ebf4b4b558c8abfd167c9c4f9669c2f9070da3edd9c0157dc051d77ac5d ;; \
+    x86_64|amd64) arch=amd64 nvim_arch=x86_64 \
+      fzf_sha=05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504 \
+      chezmoi_sha=b597729b687af4488a848240134cb633de8ca0f04e0d26d48f400ee2ac338ffa \
+      nvim_sha=bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875 \
+      ts_arch=x64 ts_sha=c9c8bef027658d60249ca4fc0663578ceb2e2029346bb8702e091e20d7716475 ;; \
+    *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;; \
+  esac; \
+  fetch() { curl -fsSL -o "$1" "$2" && echo "$3  $1" | sha256sum -c - >/dev/null; }; \
+  fetch /tmp/fzf.tar.gz "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_${arch}.tar.gz" "$fzf_sha"; \
+  tar -xzf /tmp/fzf.tar.gz -C /usr/local/bin fzf; \
+  fetch /usr/local/bin/fzf-tmux "https://raw.githubusercontent.com/junegunn/fzf/v${FZF_VERSION}/bin/fzf-tmux" "${FZF_TMUX_SHA256}"; \
+  chmod 755 /usr/local/bin/fzf-tmux; \
+  fetch /tmp/chezmoi.tar.gz "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/chezmoi_${CHEZMOI_VERSION}_linux_${arch}.tar.gz" "$chezmoi_sha"; \
+  tar -xzf /tmp/chezmoi.tar.gz -C /usr/local/bin chezmoi; \
+  fetch /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-${nvim_arch}.tar.gz" "$nvim_sha"; \
+  mkdir -p /opt/nvim && tar -xzf /tmp/nvim.tar.gz -C /opt/nvim --strip-components=1; \
+  ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim; \
+  fetch /tmp/tree-sitter.gz "https://github.com/tree-sitter/tree-sitter/releases/download/v${TREE_SITTER_VERSION}/tree-sitter-linux-${ts_arch}.gz" "$ts_sha"; \
+  gunzip -c /tmp/tree-sitter.gz >/usr/local/bin/tree-sitter && chmod 755 /usr/local/bin/tree-sitter; \
+  rm -f /tmp/*.tar.gz /tmp/tree-sitter.gz; \
+  fzf --version | grep -q "^${FZF_VERSION} "; \
+  chezmoi --version | grep -q "v${CHEZMOI_VERSION}"; \
+  nvim --version | head -n 1 | grep -q "v${NVIM_VERSION}"; \
+  tree-sitter --version | grep -q "^tree-sitter ${TREE_SITTER_VERSION}"
+
+# Stub clipboard commands: each appends what it is given to ~/.clip/<name>.log
+# and prints that file back when asked to paste. Nothing leaves the box.
+RUN for tool in wl-copy wl-paste xclip xsel; do \
+    printf '%s\n' '#!/bin/sh' \
+      '# alias-day stub: no real clipboard in this container.' \
+      'log="$HOME/.clip/$(basename "$0").log"' \
+      'mkdir -p "$HOME/.clip"' \
+      'case "$(basename "$0") $*" in' \
+      '  wl-paste*|*" -o"*|*--output*) cat "$log" 2>/dev/null; exit 0 ;;' \
+      'esac' \
+      'cat >>"$log"' >"/usr/local/bin/$tool"; \
+    chmod 755 "/usr/local/bin/$tool"; \
+  done \
+  && printf '%s\n' '#!/bin/sh' \
+    '# alias-day stub: the real claude needs an account. `claude agents' \
+    '# --json` lists no agents, as a machine with none running would.' \
+    'case "$*" in "agents --json") echo "[]"; exit 0 ;; esac' \
+    'printf "claude stub: %s\n" "$*"' \
+    'read -r _' >/usr/local/bin/claude \
+  && chmod 755 /usr/local/bin/claude
+
+# The test user: passwordless sudo (athome's zsh step runs sudo chsh), and
+# lingering, so its systemd user manager (and with it tmux.service) runs
+# without a login.
+RUN useradd -m -u 1000 -s /bin/bash test \
+  && printf 'test ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/test \
+  && chmod 440 /etc/sudoers.d/test \
+  && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/test \
+  && printf 'LANG=C.UTF-8\n' >/etc/locale.conf \
+  && systemctl mask getty@tty1.service console-getty.service
+
+COPY --from=build /out/grofe /usr/local/lib/grofe/grofe
+COPY --from=build /out/e2e_alias_day /usr/local/lib/grofe-e2e/e2e_alias_day
+COPY grofe/tests/e2e/alias-day/ /opt/e2e/alias-day/
+COPY grofe/tests/e2e/scenarios/alias-day.sh /opt/e2e/alias-day.sh
+COPY grofe/tests/fixtures/compat/golden/tm_2/wrap.golden /opt/e2e/golden/tm_2/wrap.golden
+COPY inputs/ /opt/e2e/inputs/
+RUN chmod -R a+rX /opt/e2e
+
+ENV LANG=C.UTF-8
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

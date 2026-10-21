@@ -3,4 +3,4 @@
 # checks both checkouts' HEAD). Both are local branches, not pushed yet:
 # canopy `m37-gate`, athome `grofe-config`.
 canopy 4faa58fff9d83b23b8e90faedb1d67ab3f6a9536
-athome df412f5987af8a8f9c0fd6213bc5f5342b37a831
+athome 1a6648277c294170a4059b51de8f714e7e7c3bec

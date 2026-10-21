@@ -1,0 +1,71 @@
+# grofe alias-day test: your setup in a container
+
+Run @@RUN_ID@@, @@DATE@@. Verdict: **@@VERDICT@@**
+
+TA.1 is TE.2b's stages 1 to 3, narrowed: no container restart (stage 4 needs
+M4), no agents step (W13: M7 is dropped), no rollback leg (TE.3). W15 and W16 add
+copy mode and tmux-yank.
+
+## What ran
+| Input | Ref | SHA |
+|---|---|---|
+| grofe | HEAD | @@GROFE_SHA@@ |
+| athome (alias day) | @@ATHOME_REF@@ | @@ATHOME_SHA@@ |
+| canopy | @@CANOPY_TAG@@ | @@CANOPY_SHA@@ |
+| image | tests/e2e/Containerfile.alias-day | @@IMAGE_ID@@ |
+| chezmoi | pinned | @@CHEZMOI_VERSION@@ |
+| real tmux | /usr/local/bin/tmux | @@REAL_TMUX@@ |
+
+athome's grofe pin (run_onchange_17): @@ATHOME_GROFE_PIN@@. The container ran
+the grofe built from HEAD, through `ATHOME_GROFE_BIN`.
+
+Secrets gate: @@SECRETS_GATE@@, gitleaks: @@GITLEAKS@@. Credentials in container env: @@CREDENTIALS@@.
+
+@@BLOCK:stage1@@
+
+## Stage 2: athome apply
+@@INIT_LINE@@
+
+| Script | Ran or skipped | How | Exit | Note |
+|---|---|---|---|---|
+@@BLOCK:scripts@@
+
+Checks:
+
+@@BLOCK:checks@@
+
+## Stage 3: your workflow
+| # | Step | Result | Snapshot | Note |
+|---|---|---|---|---|
+@@BLOCK:steps@@
+
+Excluded:
+
+- W13 (agents rollups): M7 is dropped (owner ruling, 2026-10-06); agent awareness is left to tmux plugins run through canopy's loader, which W10 covers (opensessions, the claude popup and picker).
+- `prefix g` and `prefix G` (gh-dash, enhance-pr): need a GitHub login.
+- `prefix M` (slk): needs a Slack token.
+- `prefix N` (matterhorn): needs a Mattermost server.
+- `prefix W` (network popup): needs NetworkManager.
+- `prefix P` (pet): needs its snippet store, which the container has none of.
+- `prefix B` (cockpit): runs smug, a mise tool, and the mise step is skipped.
+
+## Stage 4: after the container restart
+Not run in TA.1: persistence is M4's, and TE.2b runs it.
+
+## compat-miss.log
+@@BLOCK:compat@@
+
+## Rollback (TE.3 leg)
+Not run in TA.1: TE.3's leg.
+
+## Host state
+@@BLOCK:host@@
+
+## For you to read
+- Differences from your real machines this run cannot see: Ghostty and
+  WezTerm specifics (the pty is `TERM=xterm-256color`), macOS, GUI popups that
+  need a display, the excluded keys above, and a real clipboard (the
+  clipboard commands and `claude` are stubs).
+- The login unit was started by hand: its `graphical-session.target` never
+  comes up in a headless container.
+- Anything that passed only because of a skip: @@SKIP_PASSES@@

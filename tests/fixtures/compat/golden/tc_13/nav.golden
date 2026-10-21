@@ -1,7 +1,7 @@
 $ new-session -d -s main -n main -x 200 -y 50 cat
 ? 0
-$ display-message -p "pins: canopy 4faa58fff9d8 athome df412f5987af"
-pins: canopy 4faa58fff9d8 athome df412f5987af
+$ display-message -p "pins: canopy 4faa58fff9d8 athome 1a6648277c29"
+pins: canopy 4faa58fff9d8 athome 1a6648277c29
 ? 0
 $ set-environment -g CANOPY_STORE {fixtures}/../../compat/scenarios/trees/canopy
 ? 0
