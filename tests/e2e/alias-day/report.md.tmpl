@@ -3,7 +3,7 @@
 Run @@RUN_ID@@, @@DATE@@. Verdict: **@@VERDICT@@**
 
 TA.1 is TE.2b's stages 1 to 3, narrowed: no container restart (stage 4 needs
-M4), no agents step (W13 needs M7), no rollback leg (TE.3). W15 and W16 add
+M4), no agents step (W13: M7 is dropped), no rollback leg (TE.3). W15 and W16 add
 copy mode and tmux-yank.
 
 ## What ran
@@ -41,7 +41,7 @@ Checks:
 
 Excluded:
 
-- W13 (agents rollups): needs M7's agents plugin, which does not exist yet.
+- W13 (agents rollups): M7 is dropped (owner ruling, 2026-10-06); agent awareness is left to tmux plugins run through canopy's loader, which W10 covers (opensessions, the claude popup and picker).
 - `prefix g` and `prefix G` (gh-dash, enhance-pr): need a GitHub login.
 - `prefix M` (slk): needs a Slack token.
 - `prefix N` (matterhorn): needs a Mattermost server.

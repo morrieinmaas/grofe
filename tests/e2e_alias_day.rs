@@ -6,7 +6,7 @@
 //! `tmux` is typed into it as the owner does; athome's login unit has
 //! already started the server. The steps are TE.2b's W1 to W12 and W14
 //! (`.superpowers/sdd/m35/e2e-athome-amendment.md`, section 4, stage 3),
-//! without W13 (M7's agents), plus TA.1's W15 (copy mode over a soft wrap)
+//! without W13 (M7, dropped by the owner), plus TA.1's W15 (copy mode over a soft wrap)
 //! and W16 (tmux-yank's `y`). The keys are the owner's: prefix `C-s`.
 //!
 //! Each step runs to its end even when an earlier one failed, and writes a
