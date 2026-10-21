@@ -195,6 +195,14 @@ impl Ctx {
         if self.pane("#{pane_in_mode}").ok().as_deref() == Some("1") {
             let _ = self.tmux(&["send-keys", "-X", "cancel"]);
         }
+        // A program still in the foreground (an editor the step started)
+        // would take the next step's typing: kill its pane, so the client
+        // lands on a shell.
+        let cmd = self.pane("#{pane_current_command}").unwrap_or_default();
+        if !matches!(cmd.trim_start_matches('-'), "zsh" | "bash" | "sh") {
+            let _ = self.tmux(&["kill-pane"]);
+            sleep(Duration::from_millis(500));
+        }
         let _ = self.shell("true");
     }
 }
@@ -726,18 +734,25 @@ fn w11(c: &mut Ctx) -> Step {
     let right = c.active()?;
     sleep(Duration::from_secs(1));
     c.send("cd /tmp && nvim -O ad-left.txt ad-right.txt\r");
-    c.wait("nvim in the right pane", 60, |c| {
-        (c.pane("#{pane_current_command}").ok()? == "nvim").then_some(())
-    })?;
-    c.wait_screen("nvim's two splits", 60, |s| {
-        s.contains("ad-left.txt") && s.contains("ad-right.txt")
-    })?;
-    let result = nvim_navigation(c, &left, &right);
+    // Every failure from here on quits nvim, so the next step types into
+    // a shell, not into an nvim left in insert mode.
+    let result = (|| {
+        c.wait("nvim in the right pane", 30, |c| {
+            (c.pane("#{pane_current_command}").ok()? == "nvim").then_some(())
+        })?;
+        c.wait_screen("nvim's two splits", 30, |s| {
+            s.contains("ad-left.txt") && s.contains("ad-right.txt")
+        })?;
+        nvim_navigation(c, &left, &right)
+    })();
     if result.is_err() {
+        let _ = c.tmux(&["select-pane", "-t", &right.id]);
         c.send("\x1b");
         sleep(Duration::from_millis(300));
         c.send(":qa!\r");
-        sleep(Duration::from_secs(1));
+        let _ = c.wait("nvim to quit after the failure", 10, |c| {
+            (c.pane("#{pane_current_command}").ok()? != "nvim").then_some(())
+        });
     }
     result
 }
@@ -755,9 +770,9 @@ fn nvim_navigation(c: &mut Ctx, left: &Geom, right: &Geom) -> Step {
         let w = format!("ADWIN{want}");
         c.wait_screen(&format!("nvim window {want}"), 10, |s| s.contains(&w))
     };
-    // The first nvim on this machine installs its plugins; it answers once
-    // that settles.
-    c.wait("nvim to answer a command", 120, |c| {
+    // Stage 2 ran nvim once, so its plugins are installed; it answers once
+    // its VimEnter setups have run.
+    c.wait("nvim to answer a command", 30, |c| {
         ask(c);
         sleep(Duration::from_secs(1));
         c.h.text().contains("ADWIN1").then_some(())

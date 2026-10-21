@@ -139,6 +139,12 @@ stage_apply() {
   # so the login-zsh checks and stage 3 start from a machine that has been
   # used once, and zinit's install output is not mistaken for theirs.
   zsh -lic 'exit' </dev/null >"$OUT/zsh-first-run.log" 2>&1 || true
+  # The same for nvim: its first start clones vim.pack's 38 plugins and
+  # builds the treesitter parsers, all over the network. Left to W11, that
+  # raced the step's timeouts, and a slow clone failed it.
+  local nvim_rc=0
+  (cd /tmp && timeout 400 nvim --headless -c "luafile $E2E/alias-day/nvim-first-run.lua") \
+    </dev/null >"$OUT/nvim-first-run.log" 2>&1 || nvim_rc=$?
 
   # 5. The stage 2 checks.
   local home_bin="$HOME/.local/lib/grofe"
@@ -161,6 +167,11 @@ stage_apply() {
     bash -c "test \"\$(/usr/local/bin/tmux -V)\" = 'tmux 3.7b' &&
       p=\"\$(zsh -lic 'print -r -- TMUXPATH=\$(command -v tmux)' </dev/null 2>/dev/null | sed -n 's/.*TMUXPATH=//p' | tail -n 1)\" &&
       test \"\$p\" != /usr/local/bin/tmux"
+  check "nvim's first run installed its plugins (vim-tmux-navigator among them) and treesitter parsers" \
+    bash -c "echo 'first run exit $nvim_rc'; test $nvim_rc -eq 0 &&
+      test -d ~/.local/share/nvim/site/pack/core/opt/vim-tmux-navigator &&
+      ls ~/.local/share/nvim/site/parser/lua.so ~/.local/share/nvim/site/parser/markdown.so &&
+      ! tr '\\r' '\\n' <'$OUT/nvim-first-run.log' | grep -E ' error: |^E[0-9]+:'"
   check "no ~/.secrets, ~/.local/share/rbw or ~/.config/rbw" \
     bash -c 'test ! -e ~/.secrets -a ! -e ~/.local/share/rbw -a ! -e ~/.config/rbw'
   check "grofe show-config loads the installed tree with no errors" \
