@@ -31,10 +31,9 @@
 //!   as tmux's CLI prints it: a job tmux starts for a CLI client is never
 //!   read back.
 //!
-//! tmux's modifiers grofe's language lacks (`E:`, `T:`, `q:`, `=N:`,
-//! `s/a/b/:`, `n:`, `w:` and the rest) are left for the expander, which
-//! gives them nothing, and noted in `compat-miss.log` by their first
-//! letter only (a modifier can carry user text).
+//! tmux's other modifiers (`E:`, `T:`, `q:`, `=N:`, `s/a/b/:`, `n:`, `w:`,
+//! the loops and the rest) are grofe's own too, and pass through as they are
+//! written: the expander follows tmux's `format_build_modifiers`.
 //!
 //! **Where formats are.** Every argument tmux expands as a format gets
 //! [`to_native`]: `display-message`'s message and `-F`; `list-*`'s `-F`
@@ -193,9 +192,6 @@ impl Rewriter {
         if let Some(m) = NATIVE_MODIFIERS.iter().find(|m| body.starts_with(**m)) {
             let rest = &body[m.len()..];
             return format!("#{{{m}{}}}", self.convert(rest, true));
-        }
-        if let Some(modifier) = foreign_modifier(body) {
-            crate::compat::note_miss(&format!("format modifier {modifier}"));
         }
         format!("#{{{}}}", self.convert(body, true))
     }
@@ -372,13 +368,6 @@ fn job_len(s: &str) -> Option<usize> {
         }
     }
     None
-}
-
-/// The first letter of a tmux modifier grofe's language lacks, when
-/// `body` starts with one: a `:` before any nested format or comma.
-fn foreign_modifier(body: &str) -> Option<char> {
-    let head = body.split(['#', ',']).next().unwrap_or_default();
-    head.contains(':').then(|| head.chars().next()).flatten()
 }
 
 // ---- Where formats are -------------------------------------------------------
@@ -985,12 +974,13 @@ mod tests {
     }
 
     #[test]
-    fn foreign_modifiers_are_left_for_the_expander() {
+    fn the_other_modifiers_pass_through_for_the_expander() {
         assert_eq!(native("#{E:status-left}"), "#{E:status-left}");
         assert_eq!(native("#{=21:pane_title}"), "#{=21:pane_title}");
-        assert_eq!(foreign_modifier("=21:pane_title"), Some('='));
-        assert_eq!(foreign_modifier("session_name"), None);
-        assert_eq!(foreign_modifier("?a,b:c,d"), None);
+        assert_eq!(
+            native("#{W:#I ,[#I] }"),
+            "#{W:#{window_index} ,[#{window_index}] }"
+        );
     }
 
     /// A `#(cmd)` source stops once no option reads it: a `set` that

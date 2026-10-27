@@ -778,7 +778,13 @@ pub(crate) fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> Stri
     let model = &state.model;
     let hook = hooks::current_formats(state);
     let with_hook = |inner: &dyn cmd::FormatVars| match hook {
-        Some(formats) => cmd::expand(text, &hooks::HookVars { formats, inner }),
+        Some(formats) => cmd::expand(
+            text,
+            &hooks::HookVars {
+                formats,
+                inner: cmd::Inner::Ref(inner),
+            },
+        ),
         None => cmd::expand(text, inner),
     };
     let Ok(pane) = model.resolve_pane(&cmd::Target::Current, ctx) else {

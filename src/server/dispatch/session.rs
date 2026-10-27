@@ -92,6 +92,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         bell_flag: false,
         activity_flag: false,
         silence_flag: false,
+        activity: std::time::SystemTime::now(),
         last_panes: Vec::new(),
         floating: Vec::new(),
     });

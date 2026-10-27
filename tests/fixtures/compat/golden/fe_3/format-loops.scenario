@@ -1,0 +1,123 @@
+# B1b: tmux 3.7b's #{W:} #{S:} #{P:} #{L:} loops with their sort flags,
+# loop_last_flag and the variables the loops add, the three *_mode_format
+# defaults, and a custom status-format that loops. Windows: 1 zeta (three
+# panes titled b, a, c), 2 alpha, 3 mid; session main's current window is 2
+# and its last 1. Session other has one window.
+$ new-session -d -s main -n zeta -x 80 -y 24 cat -u
+$ split-window -d -t main:1 cat -u
+$ split-window -d -t main:1 cat -u
+$ select-pane -t main:1.1 -T b
+$ select-pane -t main:1.2 -T a
+$ select-pane -t main:1.3 -T c
+$ new-window -d -t main -n alpha cat -u
+$ new-window -d -t main -n mid cat -u
+$ new-session -d -s other -n solo -x 80 -y 24 cat -u
+$ select-window -t main:1
+$ select-window -t main:2
+$ select-pane -t main:1.2
+# windows
+$ display -p -t main:1.1 '#{W:[#{window_index}:#{window_name}] }'
+$ display -p -t main:1.1 '#{W:#{window_name} ,<#{window_name}> }'
+$ display -p -t main:1.1 '#{W/r:#{window_name} }'
+$ display -p -t main:1.1 '#{W/n:#{window_name} }'
+$ display -p -t main:1.1 '#{W/nr:#{window_name} }'
+$ display -p -t main:1.1 '#{W/i:#{window_name} }'
+$ display -p -t main:1.1 '#{W/ir:#{window_name} }'
+$ display -p -t main:1.1 '#{W/x:#{window_name} }'
+$ display -p -t main:1.1 '#{W/nt:#{window_name} }'
+$ display -p -t main:1.1 '#{W/rn:#{window_name} }'
+$ display -p -t main:1.1 '#{W:#{window_name}}'
+$ display -p -t main:1.1 '#{W:}'
+$ display -p -t main:1.1 '#{W:x,}'
+$ display -p -t main:1.1 '#{W:,y}'
+$ display -p -t main:1.1 '#{W:#{window_index}#{?loop_last_flag,.,;}}'
+$ display -p -t main:1.1 '#{W:#{window_index}/#{window_last_flag}/#{window_active}/#{window_after_active}/#{window_before_active} }'
+$ display -p -t main:1.1 '#{W:#{prev_window_index}/#{next_window_index} }'
+$ display -p -t main:1.1 '#{W:#{prev_window_active}/#{next_window_active} }'
+$ display -p -t main:1.1 '#{W:#{window_flags} }'
+$ display -p -t main:1.1 '#{W:#{pane_index}:#{pane_title} }'
+$ display -p -t main:1.1 '#{W:#{session_name}#{pane_id} }'
+$ display -p -t main:1.1 '#{loop_last_flag}'
+$ display -p -t main:1.1 '#{window_last_flag}'
+$ display -p -t main:2.1 '#{window_last_flag}'
+$ display -p -t main:3.1 '#{window_last_flag}'
+$ display -p -t main:1.1 '#{W:#{window_name}'
+$ display -p -t main:1.1 'a#{W:#{window_name}#{S:#{loop_last_flag}}} z'
+# sessions
+$ display -p -t main:1.1 '#{S:#{session_name} }'
+$ display -p -t main:1.1 '#{S/n:#{session_name} }'
+$ display -p -t main:1.1 '#{S/nr:#{session_name} }'
+$ display -p -t main:1.1 '#{S/r:#{session_name} }'
+$ display -p -t main:1.1 '#{S/i:#{session_name} }'
+$ display -p -t main:1.1 '#{S:#{session_name},<#{session_name}> }'
+$ display -p -t main:1.1 '#{S:#{session_name}=#{W:#{window_index}}; }'
+$ display -p -t main:1.1 '#{S:#{session_name}:#{?loop_last_flag,last,more} }'
+$ display -p -t main:1.1 '#{S:#{session_windows} }'
+$ display -p -t main:1.1 '#{S:#{pane_id} }'
+# panes
+$ display -p -t main:1.1 '#{P:#{pane_index}#{?pane_active,*,} }'
+$ display -p -t main:1.1 '#{P/r:#{pane_index}#{?pane_active,*,} }'
+$ display -p -t main:1.1 '#{P:#{pane_index}:#{pane_title},<#{pane_index}:#{pane_title}> }'
+$ display -p -t main:1.1 '#{P:#{pane_index}#{?loop_last_flag,.,;}}'
+$ display -p -t main:2.1 '#{P:#{pane_index} }'
+$ display -p -t main:1.1 '#{P:#{pane_last}}'
+$ display -p -t main:1.1 '#{P:#{pane_id}#{pane_last} }'
+$ display -p -t main:1.1 '#{P/x:#{pane_index} }'
+$ display -p -t main:1.1 '#{P:#{window_name}/#{pane_width} }'
+# modifiers around loops
+$ display -p -t main:1.1 '[#{=5:#{W:#{window_name} }}]'
+$ display -p -t main:1.1 '[#{s/a/A/;W:#{window_name} }]'
+$ display -p -t main:1.1 '[#{W;s/a/A/:#{window_name} }]'
+$ display -p -t main:1.1 '[#{n:#{W:#{window_name}}}]'
+$ display -p -t main:1.1 '[#{p20:#{W:#{window_name} }}]'
+$ display -p -t main:1.1 '[#{E:#{W:#{window_name} }}]'
+# the mode formats
+$ display -p -t main:1.1 '#{tree_mode_format}'
+$ display -p -t main:1.1 '#{buffer_mode_format}'
+$ display -p -t main:1.1 '#{client_mode_format}'
+$ display -p -t main:1.1 '#{T:tree_mode_format}'
+$ display -p -t main:1.1 '#{T:buffer_mode_format}'
+$ display -p -t main:1.1 '#{T:client_mode_format}'
+$ display -p -t main:1.1 '#{E:tree_mode_format}'
+$ display -p -t main:1.1 '#{n:tree_mode_format}'
+$ display -p -t main:1.1 '#{T:#{tree_mode_format}}'
+$ display -p -t main:1.1 '#{W:#{T:tree_mode_format}|}'
+$ display -p -t main:1.1 '#{P:#{T:tree_mode_format}|}'
+$ display -p -t main:1.1 '#{S:#{T:tree_mode_format}|}'
+# variables the loops and tools read
+$ display -p -t main:1.1 '#{pane_last}'
+$ display -p -t main:1.2 '#{pane_last}'
+$ display -p -t main:1.3 '#{pane_last}'
+$ display -p -t main:1.1 '#{session_activity}'
+$ display -p -t main:1.1 '#{e|>:#{session_activity},0}'
+$ display -p -t main:1.1 '#{e|>:#{window_activity},0}'
+$ display -p -t main:1.1 '#{mouse_word}|#{mouse_line}|#{mouse_hyperlink}|#{pane_search_string}'
+$ display -p -t main:1.1 '#{mouse_x}|#{mouse_y}|#{mouse_pane}|#{mouse_status_line}|#{mouse_status_range}'
+$ display -p -t main:1.1 '#{active_window_index}|#{last_window_index}'
+$ display -p -t main:1.1 '#{session_many_attached}|#{session_attached_list}'
+$ display -p -t main:1.1 '#{pane_synchronized}|#{pane_marked}|#{pane_marked_set}|#{window_marked_flag}'
+$ display -p -t main:1.1 '#{pane_start_path}|#{pane_dead_signal}|#{pane_dead_time}'
+$ display -p -t main:1.1 '#{window_start_flag}|#{window_end_flag}'
+$ display -p -t main:3.1 '#{window_start_flag}|#{window_end_flag}'
+$ display -p -t main:1.1 '#{window_linked}|#{window_linked_sessions}|#{window_bigger}'
+$ display -p -t main:1.1 '#{client_termtype}|#{client_utf8}|#{client_readonly}|#{client_control_mode}'
+$ display -p -t main:1.1 '#{P:[#{pane_flags}] }'
+$ display -p -t main:1.1 '#{pane_flags}'
+$ display -p -t main:1.2 '#{pane_flags}'
+$ resize-pane -Z -t main:1.2
+$ display -p -t main:1.1 '#{P:[#{pane_flags}] }'
+$ display -p -t main:1.1 '#{W:[#{window_flags}] }'
+$ resize-pane -Z -t main:1.2
+# a custom status-format that loops, on an attached client
+$ set -g status-format[0] 'L:#{W:#{window_index}.#{window_name} ,[#{window_index}.#{window_name}] }:R'
+$ set -g status 2
+$ set -g status-format[1] 'S:#{S:#{session_name} ,[#{session_name}] }P:#{P:#{pane_index} }L:#{L:#{client_session}}'
+client 80x24 attach -t main
+screen S:
+$ display -p -t main:1.1 '#{L:[#{client_session}]}'
+$ display -p -t main:1.1 '#{L/r:[#{client_session}]}'
+$ display -p -t main:1.1 '#{L/n:[#{loop_last_flag}]}'
+$ display -p -c {client} '#{S:#{session_name} ,[#{session_name}] }'
+$ display -p -c {client} '#{client_termtype}|#{client_utf8}|#{client_readonly}|#{client_control_mode}'
+$ display -p -c {client} '#{W:#{window_name} ,[#{window_name}] }'
+$ display -p -c {client} '#{session_many_attached}|#{session_attached_list}'

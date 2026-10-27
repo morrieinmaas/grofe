@@ -84,6 +84,10 @@ pub struct Window {
     /// (`server::alerts`), cleared as the bell flag is.
     pub activity_flag: bool,
     pub silence_flag: bool,
+    /// When the window was made or last printed something or became its
+    /// session's current window: tmux's `activity_time`
+    /// (`window_activity`, and `#{W/t:}`'s order).
+    pub activity: std::time::SystemTime,
     /// The panes that were active before `active`, most recent last
     /// (tmux's `last_panes`, for `last-pane`), kept by
     /// [`Window::set_active`] and [`Window::lose_pane`].
@@ -1076,6 +1080,7 @@ mod tests {
             bell_flag: false,
             activity_flag: false,
             silence_flag: false,
+            activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
         });
@@ -1092,6 +1097,7 @@ mod tests {
             bell_flag: false,
             activity_flag: false,
             silence_flag: false,
+            activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
         });
@@ -1142,6 +1148,7 @@ mod tests {
             bell_flag: false,
             activity_flag: false,
             silence_flag: false,
+            activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
         };
@@ -1188,6 +1195,7 @@ mod tests {
                 bell_flag: true,
                 activity_flag: false,
                 silence_flag: false,
+                activity: std::time::SystemTime::now(),
                 last_panes: Vec::new(),
                 floating: Vec::new(),
             });

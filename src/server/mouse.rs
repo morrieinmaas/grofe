@@ -845,6 +845,11 @@ pub fn format_var(state: &State, name: &str) -> Option<String> {
         "mouse_pane" => Some(m.pane.to_string()),
         "mouse_x" => m.pane_cell.map(|(x, _)| x.to_string()),
         "mouse_y" => m.pane_cell.map(|(_, y)| y.to_string()),
+        // Over a pane's text; the status line has no such cell.
+        "mouse_word" | "mouse_line" | "mouse_hyperlink" if m.range.is_none() => {
+            let (x, y) = m.pane_cell?;
+            crate::server::copy::mouse_text(state, m.pane, x, y, name)
+        }
         _ => None,
     }
 }

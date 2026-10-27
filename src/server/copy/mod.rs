@@ -511,6 +511,65 @@ impl Grid {
     }
 }
 
+impl Grid {
+    /// tmux's `format_grid_line`: row `y` up to its used width, a tab as
+    /// itself.
+    pub fn line_text(&self, y: usize) -> String {
+        let mut out = String::new();
+        for x in 0..self.line_length(y) {
+            let gc = self.get(x, y);
+            if gc.padding {
+                continue;
+            }
+            if gc.tab > 0 {
+                out.push('\t');
+                continue;
+            }
+            out.push(gc.c);
+            if let Some((_, look)) = self.look(x, y) {
+                out.extend(&look.zerowidth);
+            }
+        }
+        out
+    }
+
+    /// tmux's `format_grid_hyperlink`: the target of the link at `(x, y)`,
+    /// looking left over the second half of a wide character.
+    pub fn hyperlink_at(&self, mut x: usize, y: usize) -> Option<String> {
+        while self.get(x, y).padding {
+            x = x.checked_sub(1)?;
+        }
+        let (_, look) = self.look(x, y)?;
+        look.hyperlink.as_ref().map(|h| h.uri().to_string())
+    }
+}
+
+/// `#{mouse_word}`, `#{mouse_line}` and `#{mouse_hyperlink}` for the cell
+/// `(x, y)` of `pane` (tmux's `format_cb_mouse_*`): from the pane's screen,
+/// or from the copy view while it is in copy mode. `None` in any other mode,
+/// as tmux gives nothing then.
+pub fn mouse_text(state: &State, pane: PaneId, x: u16, y: u16, name: &str) -> Option<String> {
+    let (x, y) = (usize::from(x), usize::from(y));
+    let separators = state
+        .model
+        .options
+        .lookup("word-separators", &[])
+        .unwrap_or_default();
+    let read = |grid: &Grid, row: usize| match name {
+        "mouse_word" => Some(grid.word(x, row, separators)),
+        "mouse_line" => Some(grid.line_text(row)),
+        _ => grid.hyperlink_at(x, row),
+    };
+    if let Some(mode) = state.copy.get(pane) {
+        return read(&mode.grid, (mode.grid.hsize + y).checked_sub(mode.oy)?);
+    }
+    if crate::server::tree::format_var(state, pane, "pane_in_mode").is_some() {
+        return None;
+    }
+    let (grid, _) = Grid::from_pane(&state.model.panes.get(&pane)?.handle);
+    read(&grid, grid.hsize + y)
+}
+
 // ---- tmux's grid reader --------------------------------------------------
 
 /// A cursor moving over the copy (tmux's `struct grid_reader`).

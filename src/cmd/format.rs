@@ -34,6 +34,13 @@ pub trait FormatVars {
         None
     }
 
+    /// `text`, a format that something read back out of a variable and is
+    /// about to be expanded again (`#{E:}`, `#{T:}`), in the language the
+    /// expander reads: a tmux server stores formats as tmux wrote them.
+    fn reexpand(&self, text: &str) -> String {
+        text.to_string()
+    }
+
     /// The first screen line of the context's pane that matches `term`
     /// (`#{C:}`), 1-based, 0 for none; `None` with no pane.
     fn pane_search(&self, _term: &str, _regex: bool, _ignore: bool) -> Option<u32> {
@@ -93,12 +100,31 @@ impl LoopSort {
     }
 }
 
-/// One thing a loop visits: its variables, whether it takes the second
-/// (`active`) branch, and variables that exist only inside this loop.
+/// One thing a loop visits: its variables, the pane they are read for
+/// (what a layer over them needs to know to be rebuilt for the item),
+/// whether it takes the second (`active`) branch, and variables that exist
+/// only inside this loop.
 pub struct LoopItem<'a> {
     pub vars: Box<dyn FormatVars + 'a>,
+    pub pane: Option<crate::types::PaneId>,
     pub active: bool,
     pub extras: Vec<(String, String)>,
+}
+
+/// The variables a layer sits over: borrowed from where the layer was
+/// built, or owned when the layer was rebuilt for a loop's item.
+pub enum Inner<'a> {
+    Ref(&'a dyn FormatVars),
+    Own(Box<dyn FormatVars + 'a>),
+}
+
+impl Inner<'_> {
+    pub fn vars(&self) -> &dyn FormatVars {
+        match self {
+            Inner::Ref(v) => *v,
+            Inner::Own(v) => v.as_ref(),
+        }
+    }
 }
 
 /// tmux 3.7b's `FORMAT_LOOP_LIMIT`: an expansion nested this deep gives
@@ -451,7 +477,10 @@ impl<'a> Expander<'a> {
         if arg.contains("#{") {
             self.expand(arg)
         } else {
-            basename(&self.vars.get(arg).unwrap_or_default())
+            self.vars
+                .get(arg)
+                .map(|v| posix_basename(&v))
+                .unwrap_or_default()
         }
     }
 
@@ -727,15 +756,35 @@ fn bracket(p: &[u8]) -> Option<(Bracket<'_>, &[u8])> {
     ))
 }
 
-/// tmux's basename modifier: the last `/`-separated component, with any
-/// trailing slashes stripped first. Basename of an empty string is empty,
-/// not `.` as POSIX `basename(1)` would give.
-fn basename(s: &str) -> String {
-    s.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
+/// tmux's `window_pane_search`: the 1-based number of the first of `lines`
+/// that has `term` in it (a glob pattern as `*term*`, or with `regex` a
+/// regular expression), 0 for none. Trailing blanks of a line do not count.
+pub fn search_lines<'l>(
+    lines: impl Iterator<Item = &'l str>,
+    term: &str,
+    regex: bool,
+    ignore: bool,
+) -> u32 {
+    let glob = format!("*{term}*");
+    let glob = if ignore {
+        glob.to_ascii_lowercase()
+    } else {
+        glob
+    };
+    for (i, line) in lines.enumerate() {
+        let line = line.trim_end_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b');
+        let found = if regex {
+            regex_match(term, line, ignore)
+        } else if ignore {
+            fnmatch(glob.as_bytes(), line.to_ascii_lowercase().as_bytes())
+        } else {
+            fnmatch(glob.as_bytes(), line.as_bytes())
+        };
+        if found {
+            return i as u32 + 1;
+        }
+    }
+    0
 }
 
 /// POSIX `basename(3)`, which `#{b:}` calls: trailing slashes go first,

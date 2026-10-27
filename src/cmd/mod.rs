@@ -12,7 +12,7 @@ pub mod keys;
 pub mod parse;
 pub mod target;
 
-pub use format::{FormatVars, expand};
+pub use format::{FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, expand};
 pub use keys::{is_key_name, key_bytes};
 pub use parse::{
     ConfigHost, parse, parse_sequence, split_command_string, split_config_file,
