@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, Inner, ListKeys, ListPanes, ListSessions,
     ListWindows, LoopItem, LoopKind, LoopSort, NameKind, OptionScope, Reload, Resolve, SetOption,
-    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time, split_command_string,
+    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time,
+    split_command_string,
 };
 use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
@@ -2531,8 +2532,7 @@ fn check_live_names(tables: &KeyTables, resolved: &Resolved) -> Result<(), Strin
 }
 
 /// tmux's default `display-message` text.
-const DEFAULT_MESSAGE: &str =
-    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (%H:%M %d-%b-%y)";
+const DEFAULT_MESSAGE: &str = "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (%H:%M %d-%b-%y)";
 
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
