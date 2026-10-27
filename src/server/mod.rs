@@ -110,8 +110,17 @@ pub enum ServerMsg {
         tx: mpsc::Sender<Event>,
     },
     Pane(PaneEvent),
-    /// A client connection ended.
-    Closed,
+    /// A client connection ended. `observer`: it had already stopped
+    /// counting (see [`ServerMsg::Observer`]).
+    Closed {
+        observer: bool,
+    },
+    /// A connection turned out to be a long-lived observer (a plugin's, or
+    /// one that subscribed to events): it stops counting as an open
+    /// connection. As in tmux, whose server exits when no client is
+    /// attached to a session, such a connection does not keep an empty
+    /// auto-started server up. A one-shot CLI mid-request still does.
+    Observer,
     /// An attach hello; the actor accepts it (the connection then sends
     /// the ok line and switches to frames) or refuses it.
     Attach {
@@ -240,6 +249,8 @@ pub struct State {
     /// it off, so that server stays up empty.
     exit_when_empty: bool,
     /// Open client connections, counted by the actor as it accepts them.
+    /// Observers (a plugin's connection, a subscriber) leave the count, see
+    /// [`ServerMsg::Observer`].
     connections: usize,
     /// (dev, ino) of the socket we bound, so we only ever remove our own.
     socket_id: Option<(u64, u64)>,
@@ -568,8 +579,8 @@ impl Connections {
         let msgs = self.msgs.clone();
         let (shutdown, alive) = (self.shutdown.clone(), self.alive.clone());
         tokio::spawn(async move {
-            connection(stream, msgs.clone(), shutdown, alive).await;
-            let _ = msgs.send(ServerMsg::Closed).await;
+            let observer = connection(stream, msgs.clone(), shutdown, alive).await;
+            let _ = msgs.send(ServerMsg::Closed { observer }).await;
         });
     }
 }
@@ -771,7 +782,12 @@ fn handle(state: &mut State, msg: ServerMsg) {
             finish(state, req.id, result, reply);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
-        ServerMsg::Closed => state.connections = state.connections.saturating_sub(1),
+        ServerMsg::Closed { observer } => {
+            if !observer {
+                state.connections = state.connections.saturating_sub(1);
+            }
+        }
+        ServerMsg::Observer => state.connections = state.connections.saturating_sub(1),
         ServerMsg::Attach { req, reply } => {
             let _ = reply.send(clients::attach(state, req));
         }
@@ -866,12 +882,25 @@ fn reply_later(
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One client connection. `_alive` is held until the task ends, so shutdown
-/// can wait for in-flight replies to be written.
+/// can wait for in-flight replies to be written. Returns whether the
+/// connection became an observer ([`ServerMsg::Observer`]).
 async fn connection(
     stream: UnixStream,
     msgs: mpsc::Sender<ServerMsg>,
+    shutdown: watch::Receiver<bool>,
+    alive: mpsc::Sender<()>,
+) -> bool {
+    let mut observer = false;
+    connection_loop(stream, &msgs, shutdown, alive, &mut observer).await;
+    observer
+}
+
+async fn connection_loop(
+    stream: UnixStream,
+    msgs: &mpsc::Sender<ServerMsg>,
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
+    observer: &mut bool,
 ) {
     let codec = LinesCodec::new_with_max_length(protocol::HELLO_MAX_LEN);
     let mut lines = Framed::new(stream, codec);
@@ -883,7 +912,18 @@ async fn connection(
     // Past the hello, requests may be as large as any message.
     *lines.codec_mut() = protocol::lines_codec();
     let ctx = match protocol::decode_hello(&hello) {
-        Ok(Hello::Control(ctx)) => ctx,
+        Ok(Hello::Control(ctx)) => {
+            // A plugin's own `grofe control` (its env carries GROFE_PLUGIN,
+            // which a plugin's `env` cannot override) lives as long as the
+            // plugin does.
+            if ctx.env.iter().any(|(k, _)| k == "GROFE_PLUGIN") {
+                *observer = true;
+                if msgs.send(ServerMsg::Observer).await.is_err() {
+                    return;
+                }
+            }
+            ctx
+        }
         Ok(Hello::Attach {
             ctx,
             cols,
@@ -905,7 +945,7 @@ async fn connection(
                 nest,
                 tty,
             };
-            attach(lines, req, msgs).await;
+            attach(lines, req, msgs.clone()).await;
             return;
         }
         Err(e) => {
@@ -957,6 +997,12 @@ async fn connection(
         };
         let (reply_tx, reply_rx) = oneshot::channel();
         let msg = if req.argv.first().is_some_and(|verb| verb == "subscribe") {
+            if !*observer {
+                *observer = true;
+                if msgs.send(ServerMsg::Observer).await.is_err() {
+                    break;
+                }
+            }
             ServerMsg::Subscribe {
                 ctx: ctx.clone(),
                 req,

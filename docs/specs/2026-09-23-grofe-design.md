@@ -131,6 +131,14 @@ touches the user's real state.
 
 **Server exit:** when the last session closes, unless configured to stay.
 
+A server started implicitly by a session-creating command (not `start-server`)
+also exits as soon as it has no sessions and no open connection, even if it
+never had a session (the starting command failed). As in tmux, whose server
+exits when no client is attached to a session, a long-lived observer does not
+count as an open connection: a plugin's own `grofe control` (its environment
+carries `GROFE_PLUGIN`) and any connection that has issued `subscribe`. A
+one-shot CLI mid-request does count.
+
 ### 4.2 Object model
 
 ```
