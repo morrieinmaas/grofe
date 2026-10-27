@@ -248,7 +248,10 @@ impl Reader {
             } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
-                let store = self.images_on.load(Ordering::Relaxed).then_some(&mut *images);
+                let store = self
+                    .images_on
+                    .load(Ordering::Relaxed)
+                    .then_some(&mut *images);
                 parser.stop_sync(&mut Written(term, store));
             }
             pending

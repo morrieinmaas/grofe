@@ -200,7 +200,10 @@ pub fn collect(
             _ => fallbacks.push(Fallback {
                 x: shown.0,
                 y: shown.1,
-                cells: (s.cells.0, s.cells.1 - (-s.row).clamp(0, s.cells.1 as i32) as u32),
+                cells: (
+                    s.cells.0,
+                    s.cells.1 - (-s.row).clamp(0, s.cells.1 as i32) as u32,
+                ),
                 left: bounds.0,
                 right: bounds.2,
             }),
@@ -258,7 +261,11 @@ pub fn mark_covered(screen: &mut Screen) -> Option<Vec<SnapCell>> {
         let (x, y, w, h) = image.rect();
         for row in y..y + h {
             let start = row as usize * cols + x as usize;
-            for cell in screen.cells.get_mut(start..start + w as usize).unwrap_or_default() {
+            for cell in screen
+                .cells
+                .get_mut(start..start + w as usize)
+                .unwrap_or_default()
+            {
                 if !cell.zerowidth.contains(&MARK) {
                     cell.zerowidth.push(MARK);
                 }
@@ -343,10 +350,8 @@ fn kitty_delete(out: &mut Vec<u8>, outer: u32, pid: u32) {
 /// The sixel image cut to its visible cells and scaled to the client's.
 fn sixel_put(out: &mut Vec<u8>, s: &SixelShown) {
     let crop = s.crop;
-    let Some(cut) = s
-        .image
-        .scale(s.px.0, s.px.1, crop.0, crop.2, crop.1 - crop.0, crop.3 - crop.2, false)
-    else {
+    let area = (crop.0, crop.2, crop.1 - crop.0, crop.3 - crop.2);
+    let Some(cut) = s.image.scale(s.px, area, false) else {
         return;
     };
     let Some(data) = cut.print(Some(&s.image)) else {
@@ -454,10 +459,13 @@ mod tests {
     fn a_cropped_placement_shows_the_source_its_cells_map_to() {
         let mut out = Vec::new();
         // Columns 1..3 of 4, row 0 of 2, of a 40x40 source.
-        kitty_put(&mut out, &match kitty(7, 9, (5, 6), (1, 3, 0, 1)) {
-            ScreenImage::Kitty(k) => k,
-            ScreenImage::Sixel(_) => unreachable!(),
-        });
+        kitty_put(
+            &mut out,
+            &match kitty(7, 9, (5, 6), (1, 3, 0, 1)) {
+                ScreenImage::Kitty(k) => k,
+                ScreenImage::Sixel(_) => unreachable!(),
+            },
+        );
         assert_eq!(
             text(&out),
             "\x1b[7;6H\x1b_Ga=p,i=7,p=9,x=10,y=0,w=20,h=20,c=2,r=1,z=-1,C=1,q=2\x1b\\"
@@ -473,7 +481,11 @@ mod tests {
         k.off = (3, 4);
         let mut out = Vec::new();
         kitty_put(&mut out, &k);
-        assert!(text(&out).ends_with(",C=1,q=2,X=3,Y=4\x1b\\"), "{}", text(&out));
+        assert!(
+            text(&out).ends_with(",C=1,q=2,X=3,Y=4\x1b\\"),
+            "{}",
+            text(&out)
+        );
         // Cropped at the top: the offset is the cell's, so it goes.
         k.crop = (0, 4, 1, 2);
         let mut out = Vec::new();
@@ -520,7 +532,10 @@ mod tests {
     #[test]
     fn covered_images_are_hidden_whole() {
         let mut screen = Screen::new(10, 5);
-        screen.images = vec![kitty(1, 1, (2, 1), (0, 4, 0, 2)), kitty(2, 2, (7, 3), (0, 2, 0, 2))];
+        screen.images = vec![
+            kitty(1, 1, (2, 1), (0, 4, 0, 2)),
+            kitty(2, 2, (7, 3), (0, 2, 0, 2)),
+        ];
         let before = mark_covered(&mut screen).expect("images");
         // A popup's blank cell, drawn over a blank one inside the first
         // image's rectangle: the same to look at, but not the same cell.
@@ -530,18 +545,33 @@ mod tests {
         hide_covered(&mut screen, before);
         assert_eq!(screen.images.len(), 1);
         assert_eq!(screen.images[0].kitty_key(), Some((2, 2)));
-        assert!(screen.cells.iter().all(|c| c.zerowidth.is_empty()), "the marks are gone");
+        assert!(
+            screen.cells.iter().all(|c| c.zerowidth.is_empty()),
+            "the marks are gone"
+        );
     }
 
     #[test]
     fn the_sixel_text_fallback_is_painted_as_tmux_writes_it() {
-        let at = |x, y, cells, left, right| Fallback { x, y, cells, left, right };
+        let at = |x, y, cells, left, right| Fallback {
+            x,
+            y,
+            cells,
+            left,
+            right,
+        };
         let mut screen = Screen::new(30, 5);
         paint_fallback(&mut screen, at(2, 1, (20, 2), 0, 30));
         let row = |screen: &Screen, y: usize| -> String {
-            screen.cells[y * 30..y * 30 + 30].iter().map(|c| c.c).collect()
+            screen.cells[y * 30..y * 30 + 30]
+                .iter()
+                .map(|c| c.c)
+                .collect()
         };
-        assert_eq!(row(&screen, 1).trim_end(), format!("{:2}SIXEL IMAGE (20x2)++", ""));
+        assert_eq!(
+            row(&screen, 1).trim_end(),
+            format!("{:2}SIXEL IMAGE (20x2)++", "")
+        );
         // The second row starts at the pane's left edge, as tmux's `\r\n`
         // puts it at the terminal's.
         assert_eq!(row(&screen, 2).trim_end(), "+".repeat(20));
@@ -558,9 +588,8 @@ mod tests {
 
     #[test]
     fn sixel_is_drawn_when_new_or_when_cells_under_it_changed() {
-        let image = Arc::new(
-            Sixel::parse(b"q#0;2;100;0;0!10~-!10~-!10~", 0, 10, 10).expect("parses"),
-        );
+        let image =
+            Arc::new(Sixel::parse(b"q#0;2;100;0;0!10~-!10~-!10~", 0, 10, 10).expect("parses"));
         let shown = ScreenImage::Sixel(SixelShown {
             serial: 4,
             x: 3,
@@ -577,15 +606,33 @@ mod tests {
         assert!(s.starts_with("\x1b[0m\x1b[3;4H\x1bP0;0q"), "{s:?}");
         // Unchanged and untouched: nothing.
         let mut out = Vec::new();
-        emit(&mut out, &next, std::slice::from_ref(&shown), false, |_, _| false);
+        emit(
+            &mut out,
+            &next,
+            std::slice::from_ref(&shown),
+            false,
+            |_, _| false,
+        );
         assert!(out.is_empty());
         // A cell inside its rectangle was rewritten: drawn again.
         let mut out = Vec::new();
-        emit(&mut out, &next, std::slice::from_ref(&shown), false, |x, y| (x, y) == (3, 3));
+        emit(
+            &mut out,
+            &next,
+            std::slice::from_ref(&shown),
+            false,
+            |x, y| (x, y) == (3, 3),
+        );
         assert!(!out.is_empty());
         // One outside: not.
         let mut out = Vec::new();
-        emit(&mut out, &next, std::slice::from_ref(&shown), false, |x, y| (x, y) == (4, 3));
+        emit(
+            &mut out,
+            &next,
+            std::slice::from_ref(&shown),
+            false,
+            |x, y| (x, y) == (4, 3),
+        );
         assert!(out.is_empty());
         // Gone: its cells are to be rewritten.
         next.images.clear();

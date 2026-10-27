@@ -320,7 +320,9 @@ fn scan_csi(b: &[u8]) -> Scan {
         None => Scan::Incomplete,
         Some(b'c') => {
             let attrs: Vec<&[u8]> = params.split(|c| *c == b';').collect();
-            let class = attrs.first().and_then(|a| std::str::from_utf8(a).ok()?.parse::<u32>().ok());
+            let class = attrs
+                .first()
+                .and_then(|a| std::str::from_utf8(a).ok()?.parse::<u32>().ok());
             let sixel = matches!(class, Some(61..=65)) && attrs[1..].contains(&&b"4"[..]);
             Scan::Reply(ProbeReply::Da1 { sixel }, i + 1)
         }
@@ -1058,7 +1060,12 @@ mod tests {
         ] {
             let p = parse(reply);
             assert!(p.done(), "{reply:?}");
-            assert_eq!(p.caps(None).sixel, sixel, "{}", String::from_utf8_lossy(reply));
+            assert_eq!(
+                p.caps(None).sixel,
+                sixel,
+                "{}",
+                String::from_utf8_lossy(reply)
+            );
         }
     }
 

@@ -255,11 +255,22 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
                 continue;
             };
             let at = Place {
-                origin: (i32::from(rect.x) - i32::from(vx), i32::from(rect.y) - i32::from(vy)),
+                origin: (
+                    i32::from(rect.x) - i32::from(vx),
+                    i32::from(rect.y) - i32::from(vy),
+                ),
                 size: (rect.cols, rect.rows),
                 area: (cols, win_rows),
             };
-            screenimg::collect(&mut screen.images, &mut fallbacks, *id, view, at, inputs.graphics, caps);
+            screenimg::collect(
+                &mut screen.images,
+                &mut fallbacks,
+                *id,
+                view,
+                at,
+                inputs.graphics,
+                caps,
+            );
         }
         for fallback in fallbacks {
             screenimg::paint_fallback(&mut screen, fallback);

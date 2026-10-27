@@ -79,7 +79,10 @@ pub enum PaneEventKind {
     Graphics(Vec<u8>),
     /// G3: one `DCS q` sixel image from the scanner, as the reader
     /// handles it; never sent to the actor. `body` starts with the `q`.
-    Sixel { p2: u32, body: Vec<u8> },
+    Sixel {
+        p2: u32,
+        body: Vec<u8>,
+    },
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
     /// the `ESC ]` and terminator.
     Osc(Vec<u8>),
@@ -379,8 +382,11 @@ impl PaneHandle {
             term: Term::new(config, &size, Listener(Arc::clone(&events))),
             parser: Processor::new(),
             images: {
-                let mut images =
-                    Store::new(u32::from(size.cols), u32::from(size.rows), spec.history_limit);
+                let mut images = Store::new(
+                    u32::from(size.cols),
+                    u32::from(size.rows),
+                    spec.history_limit,
+                );
                 images.set_cell_px(spec.cell_px);
                 images
             },

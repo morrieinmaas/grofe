@@ -90,9 +90,17 @@ pub enum Erase {
 
 #[derive(Debug, Clone)]
 enum Anchor {
-    Abs { row: u64, col: u32 },
+    Abs {
+        row: u64,
+        col: u32,
+    },
     /// `cols`/`rows` from the top-left cell of another placement.
-    Rel { image: u32, pid: u32, dx: i64, dy: i64 },
+    Rel {
+        image: u32,
+        pid: u32,
+        dx: i64,
+        dy: i64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -230,7 +238,10 @@ impl PlaceKeys {
             h: cmd.num(b'h').filter(|n| *n > 0),
             xo: cmd.num(b'X').unwrap_or(0),
             yo: cmd.num(b'Y').unwrap_or(0),
-            z: cmd.int(b'z').unwrap_or(0).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            z: cmd
+                .int(b'z')
+                .unwrap_or(0)
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
             user_pid: cmd.num(b'p').unwrap_or(0),
             parent: cmd.num(b'P').filter(|n| *n > 0).map(|p| {
                 (
@@ -390,8 +401,8 @@ impl Store {
     pub fn scroll_op(&mut self, op: ScrollOp, before: Probe, history: usize) {
         if self.region != (0, self.rows) {
             // Only a region that is the whole screen moves the viewport.
-            let feed = matches!(op, ScrollOp::Feed | ScrollOp::Wrap)
-                && before.line + 1 == self.region.1;
+            let feed =
+                matches!(op, ScrollOp::Feed | ScrollOp::Wrap) && before.line + 1 == self.region.1;
             if feed || matches!(op, ScrollOp::Up(_)) {
                 self.check_line(self.region.0, self.region.1 - self.region.0);
             }
@@ -751,7 +762,10 @@ impl Store {
             cols,
             rows,
             src: [sx, sy, sw, sh],
-            off: (keys.xo.min(cw.saturating_sub(1)), keys.yo.min(ch.saturating_sub(1))),
+            off: (
+                keys.xo.min(cw.saturating_sub(1)),
+                keys.yo.min(ch.saturating_sub(1)),
+            ),
             z: keys.z,
         });
         if layer.kitty.len() > MAX_KITTY {
@@ -786,7 +800,8 @@ impl Store {
         let covers = |layer: &Layer, p: &Placement, (x, y): (i64, i64)| {
             layer.pos(p, 0).is_some_and(|(row, col)| {
                 let r = row - v;
-                (col..col + i64::from(p.cols)).contains(&x) && (r..r + i64::from(p.rows)).contains(&y)
+                (col..col + i64::from(p.cols)).contains(&x)
+                    && (r..r + i64::from(p.rows)).contains(&y)
             })
         };
         let visible = |layer: &Layer, p: &Placement| {
@@ -853,9 +868,9 @@ impl Store {
                     .iter()
                     .filter(|p| {
                         visible(layer, p)
-                            && layer.pos(p, 0).is_some_and(|(_, col)| {
-                                (col..col + i64::from(p.cols)).contains(&x)
-                            })
+                            && layer
+                                .pos(p, 0)
+                                .is_some_and(|(_, col)| (col..col + i64::from(p.cols)).contains(&x))
                     })
                     .map(|p| p.serial)
                     .collect()
@@ -943,7 +958,7 @@ impl Store {
                 x
             };
             let sy = y.min(self.rows - 1);
-            let Some(new) = si.scale(0, 0, 0, y - sy, sx, sy, true) else {
+            let Some(new) = si.scale((0, 0), (0, y - sy, sx, sy), true) else {
                 return Vec::new();
             };
             si = new;
@@ -959,11 +974,7 @@ impl Store {
                 inject.extend_from_slice(b"\x1bD");
             }
         }
-        let top = if scrolled > cur.line {
-            0
-        } else {
-            cur.line - scrolled
-        };
+        let top = cur.line.saturating_sub(scrolled);
         let layer = self.layer_mut();
         layer.sixel.push(SixelImg {
             serial: next_serial(),
@@ -1160,7 +1171,11 @@ mod tests {
     fn placement_ids_replace_and_retransmits_clear() {
         let mut s = store();
         put(&mut s, "a=T,i=1,f=24,s=40,v=40,p=5,C=1;AAAA", CUR);
-        put(&mut s, "a=p,i=1,p=5,C=1,c=2,r=1", Cursor { line: 9, col: 9 });
+        put(
+            &mut s,
+            "a=p,i=1,p=5,C=1,c=2,r=1",
+            Cursor { line: 9, col: 9 },
+        );
         let v = view(&s);
         assert_eq!(v.len(), 1);
         assert_eq!((v[0].col, v[0].row), (9, 9));
@@ -1176,8 +1191,15 @@ mod tests {
     fn relative_placements_follow_their_parent_and_die_with_it() {
         let mut s = store();
         put(&mut s, "a=T,i=1,f=24,s=20,v=20,p=1,C=1;AAAA", CUR);
-        let out = put(&mut s, "a=T,i=2,f=24,s=20,v=20,p=1,P=1,Q=1,H=2,V=3;AAAA", Cursor { line: 0, col: 0 });
-        assert!(out.inject.is_empty(), "relative placements do not move the cursor");
+        let out = put(
+            &mut s,
+            "a=T,i=2,f=24,s=20,v=20,p=1,P=1,Q=1,H=2,V=3;AAAA",
+            Cursor { line: 0, col: 0 },
+        );
+        assert!(
+            out.inject.is_empty(),
+            "relative placements do not move the cursor"
+        );
         let v = view(&s);
         assert_eq!((v[1].col, v[1].row), (5, 5));
         // The parent moves, the child with it.
@@ -1198,9 +1220,21 @@ mod tests {
     /// (3,10) 1x1.
     fn three() -> Store {
         let mut s = store();
-        put(&mut s, "a=T,i=1,f=24,s=40,v=40,C=1;AAAA", Cursor { line: 2, col: 3 });
-        put(&mut s, "a=T,i=2,f=24,s=20,v=20,C=1,z=-1,c=2,r=1;AAAA", Cursor { line: 5, col: 20 });
-        put(&mut s, "a=T,i=3,f=24,s=10,v=10,C=1,c=1,r=1;AAAA", Cursor { line: 10, col: 3 });
+        put(
+            &mut s,
+            "a=T,i=1,f=24,s=40,v=40,C=1;AAAA",
+            Cursor { line: 2, col: 3 },
+        );
+        put(
+            &mut s,
+            "a=T,i=2,f=24,s=20,v=20,C=1,z=-1,c=2,r=1;AAAA",
+            Cursor { line: 5, col: 20 },
+        );
+        put(
+            &mut s,
+            "a=T,i=3,f=24,s=10,v=10,C=1,c=1,r=1;AAAA",
+            Cursor { line: 10, col: 3 },
+        );
         assert_eq!(view(&s).len(), 3);
         s
     }
@@ -1255,10 +1289,7 @@ mod tests {
     fn uppercase_frees_images_left_without_placements() {
         let mut s = three();
         let out = put(&mut s, "a=d,d=P,x=21,y=6", CUR);
-        assert_eq!(
-            out.forward,
-            Forward::Replace(vec![apc("a=d,d=I,i=2,q=2")])
-        );
+        assert_eq!(out.forward, Forward::Replace(vec![apc("a=d,d=I,i=2,q=2")]));
         // The lowercase form keeps the data: nothing for the actor.
         let out = put(&mut s, "a=d,d=p,x=4,y=3", CUR);
         assert_eq!(out.forward, Forward::Replace(vec![]));
@@ -1319,7 +1350,8 @@ mod tests {
     #[test]
     fn png_headers_give_sizes() {
         let png = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphics/red-blue-4x4.png"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/graphics/red-blue-4x4.png"),
         )
         .expect("fixture");
         assert_eq!(png_size(&png), Some((4, 4)));
@@ -1342,7 +1374,10 @@ mod tests {
         let mut s = store();
         let inject = s.on_sixel(SIXEL, 0, CUR);
         let v = s.view().expect("stored");
-        assert_eq!((v.sixel[0].col, v.sixel[0].row, v.sixel[0].cells), (3, 2, (2, 2)));
+        assert_eq!(
+            (v.sixel[0].col, v.sixel[0].row, v.sixel[0].cells),
+            (3, 2, (2, 2))
+        );
         assert_eq!(inject, b"\x1b[5;1H", "column 0 of the row after the image");
     }
 

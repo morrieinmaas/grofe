@@ -59,8 +59,18 @@ fn image(id: u32, extra: &str) -> String {
 /// `sh`, with the `graphics` option as asked.
 fn session(srv: &TestServer, script: &str, graphics: bool) {
     let cmd = format!("sh -c {}", shell_quote(script));
-    srv.cmd(&["new-session", "-d", "-s", "main", "-x", "80", "-y", "23", &cmd])
-        .expect("new-session");
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "23",
+        &cmd,
+    ])
+    .expect("new-session");
     if graphics {
         srv.cmd(&["set-option", "-g", "graphics", "on"])
             .expect("set graphics");
@@ -127,7 +137,9 @@ fn puts(bytes: &[u8]) -> Vec<Put> {
     let mut from = 0;
     while let Some(i) = text[from..].find("\x1b_Ga=p,") {
         let start = from + i;
-        let end = text[start..].find("\x1b\\").map_or(text.len(), |e| start + e);
+        let end = text[start..]
+            .find("\x1b\\")
+            .map_or(text.len(), |e| start + e);
         let keys = keys_of(&text[start + 3..end]);
         // The move before it: ESC [ row ; col H.
         let before = &text[..start];
@@ -206,7 +218,11 @@ fn a_placement_is_clipped_at_the_pane_edge() {
             image(2, "c=8,r=2,C=1")
         ),
     );
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
     let mut a = attach(&srv, KITTY);
     touch(&go);
     let (found, mark) = wait_puts(&mut a, 0, 2);
@@ -214,19 +230,33 @@ fn a_placement_is_clipped_at_the_pane_edge() {
     assert_eq!(edge.col, 76);
     // Columns 0..5 of 8, both rows, of the 4x4 source.
     assert_eq!(
-        (edge.n("c"), edge.n("r"), edge.n("x"), edge.n("y"), edge.n("w"), edge.n("h")),
+        (
+            edge.n("c"),
+            edge.n("r"),
+            edge.n("x"),
+            edge.n("y"),
+            edge.n("w"),
+            edge.n("h")
+        ),
         (5, 2, 0, 0, 2, 4),
         "{edge:?}"
     );
     assert_eq!(edge.n("z"), 0);
     assert_eq!(edge.keys.get("C").map(String::as_str), Some("1"));
     let whole = found.iter().find(|p| p.row == 8).expect("the second");
-    assert_eq!((whole.n("c"), whole.n("w")), (8, 4), "not cut yet: {whole:?}");
+    assert_eq!(
+        (whole.n("c"), whole.n("w")),
+        (8, 4),
+        "not cut yet: {whole:?}"
+    );
     // The transmits went ahead of them, as plain `a=t`: the terminal must
     // not place them by itself.
     let out = a.output().to_vec();
     assert_eq!(transmitted(&out).len(), 2);
-    assert!(!String::from_utf8_lossy(&out).contains("a=T,"), "no placing transmit");
+    assert!(
+        !String::from_utf8_lossy(&out).contains("a=T,"),
+        "no placing transmit"
+    );
     // Split: the left pane is 40 wide, so the second is cut at its edge and
     // the first is no longer in a pane that shows it.
     srv.cmd(&["split-window", "-h", "-t", "main", "sleep 600"])
@@ -253,7 +283,11 @@ fn a_placement_is_clipped_at_the_pane_edge() {
 fn a_placement_moves_with_scrolling() {
     let srv = TestServer::start();
     let (go, scroll) = (srv.home.join("go"), srv.home.join("scroll"));
-    let draw = cat(&srv, "draw.bin", &format!("{}{}", at(20, 1), image(1, "c=4,r=2,C=1")));
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!("{}{}", at(20, 1), image(1, "c=4,r=2,C=1")),
+    );
     let script = format!(
         "{}; {draw}; {}; printf '\\033[23;1H\\n\\n\\n'; exec sleep 600",
         wait_flag(&go),
@@ -267,7 +301,11 @@ fn a_placement_moves_with_scrolling() {
     touch(&scroll);
     let (moved, mark) = next_put(&mut a, mark);
     assert_eq!((moved.row, moved.col), (17, 1), "three lines up");
-    assert_eq!(moved.keys.get("p"), first.keys.get("p"), "replaced in place");
+    assert_eq!(
+        moved.keys.get("p"),
+        first.keys.get("p"),
+        "replaced in place"
+    );
     // Two more lines and its first row is above the screen: the visible
     // second row is shown alone.
     let _ = mark;
@@ -282,16 +320,27 @@ fn nothing_is_sent_with_the_option_off() {
     let draw = cat(
         &srv,
         "draw.bin",
-        &format!("{}{}\x1bP0;0;0q#0;2;100;0;0!10~\x1b\\done", at(3, 5), image(1, "c=4,r=2")),
+        &format!(
+            "{}{}\x1bP0;0;0q#0;2;100;0;0!10~\x1b\\done",
+            at(3, 5),
+            image(1, "c=4,r=2")
+        ),
     );
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), false);
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        false,
+    );
     let mut a = attach(&srv, BOTH);
     touch(&go);
     a.wait_for("done");
     let out = String::from_utf8_lossy(a.output()).into_owned();
     assert!(!out.contains("a=p,"), "a placement");
     assert!(!out.contains("a=t,") && !out.contains("a=T,"), "a transmit");
-    assert!(!out.contains("\x1bP0;0q") && !out.contains("\x1bP0;"), "a sixel image");
+    assert!(
+        !out.contains("\x1bP0;0q") && !out.contains("\x1bP0;"),
+        "a sixel image"
+    );
     assert!(!a.text().contains("SIXEL IMAGE"), "a text fallback");
     let _ = Stdio::null();
 }
@@ -330,18 +379,37 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 fn a_popup_hides_a_placement_and_a_late_client_gets_it() {
     let srv = TestServer::start();
     let go = srv.home.join("go");
-    let draw = cat(&srv, "draw.bin", &format!("{}{}", at(5, 10), image(1, "c=8,r=2,C=1")));
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!("{}{}", at(5, 10), image(1, "c=8,r=2,C=1")),
+    );
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
     let mut a = attach(&srv, KITTY);
     touch(&go);
     let (put, mark) = next_put(&mut a, 0);
     let (outer, pid) = (put.keys["i"].clone(), put.keys["p"].clone());
 
     let mut cmd = srv.command();
-    cmd.args(["display-popup", "-w", "30", "-h", "8", "-x", "5", "-y", "3", "sleep 600"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args([
+        "display-popup",
+        "-w",
+        "30",
+        "-h",
+        "8",
+        "-x",
+        "5",
+        "-y",
+        "3",
+        "sleep 600",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     let mut child = cmd.spawn().expect("display-popup");
     let after = wait_bytes(&mut a, "the placement deleted", mark, |b| {
         deletes(b)
@@ -385,8 +453,16 @@ fn a_popup_hides_a_placement_and_a_late_client_gets_it() {
 fn placements_follow_window_switches_zoom_and_resize() {
     let srv = TestServer::start();
     let go = srv.home.join("go");
-    let draw = cat(&srv, "draw.bin", &format!("{}{}", at(5, 10), image(1, "c=8,r=2,C=1")));
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!("{}{}", at(5, 10), image(1, "c=8,r=2,C=1")),
+    );
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
     let mut a = attach(&srv, KITTY);
     touch(&go);
     let (put, mark) = next_put(&mut a, 0);
@@ -401,20 +477,31 @@ fn placements_follow_window_switches_zoom_and_resize() {
     };
 
     // Another window: the image goes; back: it returns.
-    srv.cmd(&["new-window", "-t", "main", "sleep 600"]).expect("new-window");
-    let mark = wait_bytes(&mut a, "deleted on a window switch", mark, gone(&outer, &pid));
-    srv.cmd(&["select-window", "-t", "main:1"]).expect("select-window");
+    srv.cmd(&["new-window", "-t", "main", "sleep 600"])
+        .expect("new-window");
+    let mark = wait_bytes(
+        &mut a,
+        "deleted on a window switch",
+        mark,
+        gone(&outer, &pid),
+    );
+    srv.cmd(&["select-window", "-t", "main:1"])
+        .expect("select-window");
     let (back, mark) = next_put(&mut a, mark);
     assert_eq!((back.row, back.col, &back.keys["p"]), (5, 10, &pid));
 
     // Zoom with a split: the image's pane fills the window.
-    srv.cmd(&["split-window", "-h", "-t", "main:1", "sleep 600"]).expect("split");
-    srv.cmd(&["select-pane", "-t", "main:1.2"]).expect("select-pane");
+    srv.cmd(&["split-window", "-h", "-t", "main:1", "sleep 600"])
+        .expect("split");
+    srv.cmd(&["select-pane", "-t", "main:1.2"])
+        .expect("select-pane");
     let mark = a.output().len().max(mark);
-    srv.cmd(&["resize-pane", "-Z", "-t", "main:1.2"]).expect("zoom");
+    srv.cmd(&["resize-pane", "-Z", "-t", "main:1.2"])
+        .expect("zoom");
     // Zooming the other pane hides ours; unzooming puts it back.
     let mark = wait_bytes(&mut a, "deleted under a zoom", mark, gone(&outer, &pid));
-    srv.cmd(&["resize-pane", "-Z", "-t", "main:1.2"]).expect("unzoom");
+    srv.cmd(&["resize-pane", "-Z", "-t", "main:1.2"])
+        .expect("unzoom");
     let (back, mark) = next_put(&mut a, mark);
     assert_eq!(&back.keys["p"], &pid);
 
@@ -439,7 +526,10 @@ fn every_delete_form_deletes_the_client_placement() {
     for (n, form) in forms.iter().enumerate() {
         let id = n + 1;
         let row = 2 + n as u32;
-        let (place, delete) = (srv.home.join(format!("place{n}")), srv.home.join(format!("del{n}")));
+        let (place, delete) = (
+            srv.home.join(format!("place{n}")),
+            srv.home.join(format!("del{n}")),
+        );
         let body = match *form {
             "a" | "A" => format!("a=d,d={form}"),
             "i" | "I" => format!("a=d,d={form},i={id}"),
@@ -451,13 +541,21 @@ fn every_delete_form_deletes_the_client_placement() {
             "z" | "Z" => format!("a=d,d={form},z=0"),
             _ => format!("a=d,d={form},x={id},y={id}"),
         };
-        let cursor = if matches!(*form, "c" | "C") { at(row, 5) } else { String::new() };
+        let cursor = if matches!(*form, "c" | "C") {
+            at(row, 5)
+        } else {
+            String::new()
+        };
         let drawn = cat(
             &srv,
             &format!("place{n}.bin"),
             &format!("{}{}", at(row, 5), image(id as u32, "c=2,r=1,C=1")),
         );
-        let deleted = cat(&srv, &format!("del{n}.bin"), &format!("{cursor}{}", apc(&body)));
+        let deleted = cat(
+            &srv,
+            &format!("del{n}.bin"),
+            &format!("{cursor}{}", apc(&body)),
+        );
         script.push_str(&format!(
             "{}; {drawn}; {}; {deleted}; ",
             wait_flag(&place),
@@ -473,19 +571,29 @@ fn every_delete_form_deletes_the_client_placement() {
         let (put, at_end) = next_put(&mut a, mark);
         let (outer, pid) = (put.keys["i"].clone(), put.keys["p"].clone());
         touch(&flags[n].1);
-        mark = wait_bytes(&mut a, &format!("d={form} to delete the placement"), at_end, |b| {
-            deletes(b)
-                .iter()
-                .any(|d| d.get("i") == Some(&outer) && d.get("p") == Some(&pid))
-        });
+        mark = wait_bytes(
+            &mut a,
+            &format!("d={form} to delete the placement"),
+            at_end,
+            |b| {
+                deletes(b)
+                    .iter()
+                    .any(|d| d.get("i") == Some(&outer) && d.get("p") == Some(&pid))
+            },
+        );
         if form.chars().all(|c| c.is_ascii_uppercase()) {
             // The image is freed with it.
             let freed = |b: &[u8]| {
-                deletes(b)
-                    .iter()
-                    .any(|d| d.get("d").map(String::as_str) == Some("I") && d.get("i") == Some(&outer))
+                deletes(b).iter().any(|d| {
+                    d.get("d").map(String::as_str) == Some("I") && d.get("i") == Some(&outer)
+                })
             };
-            wait_bytes(&mut a, &format!("d={form} to free the image"), at_end, freed);
+            wait_bytes(
+                &mut a,
+                &format!("d={form} to free the image"),
+                at_end,
+                freed,
+            );
         }
     }
 }
@@ -513,11 +621,16 @@ fn sixel_goes_to_capable_clients_only() {
     plain.wait_for("after");
     capable.wait_for("after");
     // The tmux cursor rule: column 0 of the row after the image.
-    assert_eq!(&plain.text().lines().nth(4).unwrap_or_default()[..5], "after");
+    assert_eq!(
+        &plain.text().lines().nth(4).unwrap_or_default()[..5],
+        "after"
+    );
     // The plain client: no sixel, text instead, from the image's cell.
     let text = plain.text();
     assert!(
-        text.lines().nth(3).is_some_and(|l| l[2..].starts_with("SIXEL IMAGE (2x1)")),
+        text.lines()
+            .nth(3)
+            .is_some_and(|l| l[2..].starts_with("SIXEL IMAGE (2x1)")),
         "{text}"
     );
     let out = String::from_utf8_lossy(plain.output()).into_owned();
@@ -533,7 +646,10 @@ fn sixel_goes_to_capable_clients_only() {
     plain.wait_for("cleared");
     capable.wait_for("cleared");
     assert!(!plain.text().contains("SIXEL IMAGE"), "{}", plain.text());
-    assert!(find(&since(&mut capable, mark), b"\x1bP0;").is_none(), "not drawn again");
+    assert!(
+        find(&since(&mut capable, mark), b"\x1bP0;").is_none(),
+        "not drawn again"
+    );
 }
 
 /// Case 8: a sixel image is dropped when text is written over it and when
@@ -548,7 +664,11 @@ fn sixel_is_freed_by_text_and_by_scrolling() {
     let draw = cat(&srv, "draw.bin", &format!("{}{SIXEL_IMAGE}", at(2, 1)));
     // The second time on a cleared row, so that no letter is under the
     // stand-in text, which is only written into blank cells.
-    let again = cat(&srv, "again.bin", &format!("{}\x1b[K{SIXEL_IMAGE}", at(2, 1)));
+    let again = cat(
+        &srv,
+        "again.bin",
+        &format!("{}\x1b[K{SIXEL_IMAGE}", at(2, 1)),
+    );
     let script = format!(
         "{}; {draw}; {}; printf '\\033[2;2HX'; {}; {again}; {}; seq 1 40; exec sleep 600",
         wait_flag(&flags[0]),
@@ -588,7 +708,11 @@ fn animation_is_forwarded_and_replayed() {
         "done"
     );
     let draw = cat(&srv, "draw.bin", &body);
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
     let mut a = attach(&srv, KITTY);
     touch(&go);
     a.wait_for("done");
@@ -630,10 +754,18 @@ fn z_index_and_relative_placements() {
             image(2, "C=1,p=1,P=1,Q=1,H=2,V=1,c=2,r=1")
         ),
     );
-    let move_parent = cat(&srv, "move.bin", &format!("{}{}", at(10, 20), apc("a=p,i=1,p=1,C=1,c=4,r=2,z=-3,q=2")));
+    let move_parent = cat(
+        &srv,
+        "move.bin",
+        &format!("{}{}", at(10, 20), apc("a=p,i=1,p=1,C=1,c=4,r=2,z=-3,q=2")),
+    );
     session(
         &srv,
-        &format!("{}; {draw}; {}; {move_parent}; exec sleep 600", wait_flag(&go), wait_flag(&moved)),
+        &format!(
+            "{}; {draw}; {}; {move_parent}; exec sleep 600",
+            wait_flag(&go),
+            wait_flag(&moved)
+        ),
         true,
     );
     let mut a = attach(&srv, KITTY);
@@ -645,7 +777,10 @@ fn z_index_and_relative_placements() {
     assert_eq!((child.row, child.col), (6, 7), "parent + (2, 1)");
     touch(&moved);
     let (found, _) = wait_puts(&mut a, mark, 2);
-    let child = found.iter().find(|p| p.n("z") == 0).expect("the child again");
+    let child = found
+        .iter()
+        .find(|p| p.n("z") == 0)
+        .expect("the child again");
     assert_eq!((child.row, child.col), (11, 22), "it moved with the parent");
 }
 
@@ -662,13 +797,24 @@ fn the_sixel_bytes_are_tmux_s() {
     let mut bytes = at(3, 5).into_bytes();
     bytes.extend_from_slice(&image);
     std::fs::write(srv.home.join("draw.bin"), &bytes).expect("draw");
-    let draw = format!("cat {}", shell_quote(&srv.home.join("draw.bin").to_string_lossy()));
-    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    let draw = format!(
+        "cat {}",
+        shell_quote(&srv.home.join("draw.bin").to_string_lossy())
+    );
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
     let mut a = attach(&srv, SIXEL_16);
     touch(&go);
     a.wait_for_output(&want, 0);
     // Where it went: the image's own cell.
     let out = a.output().to_vec();
     let at = find(&out, &want).expect("tmux's bytes");
-    assert!(out[..at].ends_with(b"\x1b[0m\x1b[3;5H"), "{:?}", &out[at.saturating_sub(20)..at]);
+    assert!(
+        out[..at].ends_with(b"\x1b[0m\x1b[3;5H"),
+        "{:?}",
+        &out[at.saturating_sub(20)..at]
+    );
 }

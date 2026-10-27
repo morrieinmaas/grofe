@@ -241,7 +241,8 @@ impl Sixel {
         if c as usize + 1 > self.colours.len() {
             self.colours.resize(c as usize + 1, 0);
         }
-        self.colours[c as usize] = ((ty as u32) << 25) | ((c1 as u32) << 16) | ((c2 as u32) << 8) | c3 as u32;
+        self.colours[c as usize] =
+            ((ty as u32) << 25) | ((c1 as u32) << 16) | ((c2 as u32) << 8) | c3 as u32;
         Some(last)
     }
 
@@ -270,17 +271,13 @@ impl Sixel {
         Some(last + 1)
     }
 
-    /// The part of the image at cell `ox,oy` and `sx` by `sy` cells big,
-    /// mapped onto cells of `xpixel` by `ypixel` pixels (0 keeps the
-    /// image's own), as `sixel_scale`. With `colours` the palette is kept.
+    /// The part of the image at cell `ox,oy` and `sx` by `sy` cells big
+    /// (the second tuple), mapped onto cells of `xpixel` by `ypixel` pixels
+    /// (the first; 0 keeps the image's own), as `sixel_scale`. With `colours` the palette is kept.
     pub fn scale(
         &self,
-        xpixel: u32,
-        ypixel: u32,
-        ox: u32,
-        oy: u32,
-        mut sx: u32,
-        mut sy: u32,
+        (xpixel, ypixel): (u32, u32),
+        (ox, oy, mut sx, mut sy): (u32, u32, u32, u32),
         colours: bool,
     ) -> Option<Sixel> {
         let (cx, cy) = self.size_in_cells();
@@ -350,7 +347,7 @@ impl Sixel {
             active.clear();
             self.compress_colours(&mut chunks, y, &mut active);
             for &c in &active {
-                let chunk = &mut chunks[c as usize];
+                let chunk = &mut chunks[c];
                 out.extend_from_slice(format!("#{c}").as_bytes());
                 out.extend_from_slice(&chunk.data);
                 repeat(&mut out, chunk.count, chunk.pattern + 0x3f);
@@ -552,16 +549,16 @@ mod tests {
         // 4 pixels wide, 12 tall, 2x6 pixel cells: a 2x2 cell image.
         let si = Sixel::parse(b"q#0;2;1;1;1!4~-!4~", 0, 2, 6).expect("parses");
         assert_eq!(si.size_in_cells(), (2, 2));
-        let top = si.scale(0, 0, 0, 0, 2, 1, true).expect("scales");
+        let top = si.scale((0, 0), (0, 0, 2, 1), true).expect("scales");
         assert_eq!(top.size_px(), (4, 6));
-        let bottom = si.scale(0, 0, 0, 1, 2, 1, true).expect("scales");
+        let bottom = si.scale((0, 0), (0, 1, 2, 1), true).expect("scales");
         assert_eq!(bottom.size_px(), (4, 6));
-        let right = si.scale(0, 0, 1, 0, 1, 2, false).expect("scales");
+        let right = si.scale((0, 0), (1, 0, 1, 2), false).expect("scales");
         assert_eq!(right.size_px(), (2, 12));
         // Past the image.
-        assert!(si.scale(0, 0, 2, 0, 1, 1, false).is_none());
+        assert!(si.scale((0, 0), (2, 0, 1, 1), false).is_none());
         // Onto bigger cells: pixels are repeated.
-        let wide = si.scale(4, 12, 0, 0, 2, 2, true).expect("scales");
+        let wide = si.scale((4, 12), (0, 0, 2, 2), true).expect("scales");
         assert_eq!(wide.size_px(), (8, 24));
     }
 
@@ -581,7 +578,7 @@ mod tests {
         let si = Sixel::parse(body, 0, 16, 32).expect("parses");
         assert_eq!(si.size_in_cells(), (3, 2));
         // tmux scales the whole image onto the client's cells to print it.
-        let whole = si.scale(16, 32, 0, 0, 3, 2, false).expect("scales");
+        let whole = si.scale((16, 32), (0, 0, 3, 2), false).expect("scales");
         let got = whole.print(Some(&si)).expect("prints");
         assert_eq!(
             String::from_utf8_lossy(&got),
@@ -589,7 +586,7 @@ mod tests {
         );
         // Scrolled up by a row: tmux cut it to its second row.
         let want = std::fs::read(dir.join("sixel-3x2.tmux-scrolled.bin")).expect("tmux's output");
-        let low = si.scale(16, 32, 0, 1, 3, 1, false).expect("scales");
+        let low = si.scale((16, 32), (0, 1, 3, 1), false).expect("scales");
         let got = low.print(Some(&si)).expect("prints");
         assert_eq!(
             String::from_utf8_lossy(&got),

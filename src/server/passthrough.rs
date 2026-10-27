@@ -204,10 +204,7 @@ impl Scanner {
     /// [`Self::scan`], with where in the returned bytes each event was
     /// found: the emulator should have parsed that many bytes when the
     /// event is handled (a placement is made at the cursor as it was).
-    pub fn scan_at<'a>(
-        &mut self,
-        bytes: &'a [u8],
-    ) -> (Cow<'a, [u8]>, Vec<(usize, PaneEventKind)>) {
+    pub fn scan_at<'a>(&mut self, bytes: &'a [u8]) -> (Cow<'a, [u8]>, Vec<(usize, PaneEventKind)>) {
         let mut found = Vec::new();
         if self.state == ScanState::Ground && !bytes.contains(&ESC) {
             return (Cow::Borrowed(bytes), found);
@@ -281,7 +278,11 @@ impl Scanner {
                     }
                     self.begin(Sixel);
                     self.buf.push(b'q');
-                } else if self.sixel && digits && params.len() < 32 && (b.is_ascii_digit() || b == b';') {
+                } else if self.sixel
+                    && digits
+                    && params.len() < 32
+                    && (b.is_ascii_digit() || b == b';')
+                {
                     self.held.push(b);
                 } else {
                     // Another DCS: the emulator's.

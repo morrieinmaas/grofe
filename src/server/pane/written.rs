@@ -152,7 +152,9 @@ impl<L: EventListener> Handler for Written<'_, L> {
         self.0.grid_mut().cursor.template.flags.remove(WRITTEN);
         self.scrolled(ScrollOp::Wrap, before);
         if let (Some((col, line)), Some(store)) = (target, self.1.as_deref_mut()) {
-            let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1) as u32;
+            let width = unicode_width::UnicodeWidthChar::width(c)
+                .unwrap_or(1)
+                .max(1) as u32;
             store.check_area(col, line, width, 1);
         }
         // Insert mode (`IRM`) shifts the line right as `ICH` does, which
@@ -398,8 +400,10 @@ mod tests {
         }
 
         fn feed(&mut self, bytes: &str) {
-            self.parser
-                .advance(&mut Written(&mut self.term, Some(&mut self.store)), bytes.as_bytes());
+            self.parser.advance(
+                &mut Written(&mut self.term, Some(&mut self.store)),
+                bytes.as_bytes(),
+            );
         }
 
         /// A 10x20 pixel image placed at the cursor, one cell, no movement.
@@ -456,7 +460,11 @@ mod tests {
     fn su_and_dl_scroll_and_a_region_does_not() {
         assert_eq!(scroll_case(100, "", "\x1b[2S"), Some(2));
         assert_eq!(scroll_case(0, "", "\x1b[2S"), Some(2));
-        assert_eq!(scroll_case(100, "", "\x1b[1;1H\x1b[2M"), Some(2), "DL at the top");
+        assert_eq!(
+            scroll_case(100, "", "\x1b[1;1H\x1b[2M"),
+            Some(2),
+            "DL at the top"
+        );
         // A scroll region that is not the whole screen scrolls what is in
         // it and leaves the viewport be.
         assert_eq!(scroll_case(100, "", "\x1b[1;4r\x1b[4;1H\n\n"), Some(4));
