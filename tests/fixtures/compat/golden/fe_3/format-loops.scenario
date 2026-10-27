@@ -136,3 +136,5 @@ $ display -p -c {client} '#{S:#{session_name} ,[#{session_name}] }'
 $ display -p -c {client} '#{client_termtype}|#{client_utf8}|#{client_readonly}|#{client_control_mode}'
 $ display -p -c {client} '#{W:#{window_name} ,[#{window_name}] }'
 $ display -p -c {client} '#{session_many_attached}|#{session_attached_list}'
+$ display -p -c {client} '#{==:#{client_uid},#{uid}}|#{!=:#{client_user},}'
+$ list-clients

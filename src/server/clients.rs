@@ -2233,6 +2233,15 @@ impl FormatVars for ClientVars<'_> {
             // The terminal's own answer to XDA is not asked for.
             "client_termtype" => Some(String::new()),
             "client_utf8" => Some("1".to_string()),
+            // Only this user's processes can connect to the socket.
+            "client_uid" => Some(nix::unistd::getuid().as_raw().to_string()),
+            "client_user" => Some(
+                nix::unistd::User::from_uid(nix::unistd::getuid())
+                    .ok()
+                    .flatten()
+                    .map(|u| u.name)
+                    .unwrap_or_default(),
+            ),
             "client_readonly" | "client_control_mode" => Some("0".to_string()),
             "client_session" => Some(self.session_name(c.session)),
             "client_last_session" => Some(

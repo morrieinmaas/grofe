@@ -374,3 +374,9 @@ zeta [alpha] mid
 $ display -p -c {client} '#{session_many_attached}|#{session_attached_list}'
 0|<TTY>
 ? 0
+$ display -p -c {client} '#{==:#{client_uid},#{uid}}|#{!=:#{client_user},}'
+1|1
+? 0
+$ list-clients
+<TTY>: main [80x24 xterm-256color] (attached,focused,UTF-8)
+? 0
