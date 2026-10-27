@@ -59,6 +59,15 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("synchronize-panes", "synchronize-panes"),
     ("window-style", "window-style"),
     ("window-active-style", "window-active-style"),
+    // B1a: options plugins and themes set; see docs/compat-coverage.md.
+    ("prefix2", "prefix2"),
+    ("status-bg", "status-bg"),
+    ("status-fg", "status-fg"),
+    ("window-status-activity-style", "window-status-activity-style"),
+    ("focus-follows-mouse", "focus-follows-mouse"),
+    ("default-size", "default-size"),
+    ("exit-empty", "exit-empty"),
+    ("detach-on-destroy", "detach-on-destroy"),
     ("main-pane-width", "main-pane-width"),
     ("main-pane-height", "main-pane-height"),
     ("window-size", "window-size"),
@@ -123,6 +132,7 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("command-alias", "command-alias"),
     ("update-environment", "update-environment"),
     ("terminal-features", "terminal-features"),
+    ("terminal-overrides", "terminal-overrides"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -146,7 +156,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
         | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes"
-        | "monitor-bell" | "monitor-activity" | "wrap-search" | "graphics" => Ty::Bool,
+        | "monitor-bell" | "monitor-activity" | "wrap-search" | "graphics"
+        | "focus-follows-mouse" | "exit-empty" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

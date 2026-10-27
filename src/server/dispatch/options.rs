@@ -47,6 +47,10 @@ enum Kind {
     Choice(&'static [&'static str]),
     /// A key name or `None`, stored in tmux's canonical spelling.
     Key,
+    /// A colour word, stored in tmux's spelling of it ([`colour_text`]).
+    Colour,
+    /// `<columns>x<rows>`, tmux's pattern `[0-9]*x[0-9]*`.
+    Size,
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -607,6 +611,61 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "default",
     },
+    // B1a: options plugins and themes set, tmux 3.7b's kinds, scopes and
+    // defaults (options-table.c). `prefix2`, `status-bg`, `status-fg`,
+    // `default-size`, `exit-empty` and `detach-on-destroy` are read (input,
+    // the status line, `new-session`, the server loop, a destroyed
+    // session's clients). `window-status-activity-style` and
+    // `focus-follows-mouse` are stored (`NO_EFFECT`): grofe has no activity
+    // flag styling and no hover focus.
+    Builtin {
+        name: "prefix2",
+        kind: Kind::Key,
+        scope: OptionScope::Session,
+        default: "None",
+    },
+    Builtin {
+        name: "status-bg",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "status-fg",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-activity-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "reverse",
+    },
+    Builtin {
+        name: "focus-follows-mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "default-size",
+        kind: Kind::Size,
+        scope: OptionScope::Session,
+        default: "80x24",
+    },
+    Builtin {
+        name: "exit-empty",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "detach-on-destroy",
+        kind: Kind::Choice(&["off", "on", "no-detached", "previous", "next"]),
+        scope: OptionScope::Session,
+        default: "on",
+    },
 ];
 
 /// A built-in option's scope (a list's too), `None` for anything else.
@@ -941,6 +1000,10 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
+        Kind::Colour => colour_text(value).ok_or_else(|| format!("bad colour: {value}")),
+        Kind::Size => size_text(value)
+            .then(|| value.to_string())
+            .ok_or_else(|| format!("value is invalid: {value}")),
         Kind::Choice(words) => words
             .contains(&value)
             .then(|| value.to_string())
@@ -962,6 +1025,52 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             }
         }
     }
+}
+
+/// A colour option's value as tmux shows it: `default` and `terminal`, the
+/// sixteen names in lower case, `colourN` for the 256 palette, and
+/// `#rrggbb` in lower case. `None` for anything else (tmux also takes the
+/// X11 colour names; grofe does not).
+fn colour_text(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    const NAMES: &[&str] = &[
+        "default", "terminal", "black", "red", "green", "yellow", "blue", "magenta", "cyan",
+        "white", "brightblack", "brightred", "brightgreen", "brightyellow", "brightblue",
+        "brightmagenta", "brightcyan", "brightwhite",
+    ];
+    if NAMES.contains(&lower.as_str()) {
+        return Some(lower);
+    }
+    if let Some(hex) = lower.strip_prefix('#') {
+        let ok = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
+        return ok.then_some(lower);
+    }
+    let n = lower
+        .strip_prefix("colour")
+        .or_else(|| lower.strip_prefix("color"))?;
+    n.parse::<u8>().ok().map(|n| format!("colour{n}"))
+}
+
+/// tmux's `[0-9]*x[0-9]*` (an fnmatch pattern): a digit first, then an `x`
+/// followed by a digit somewhere after it.
+fn size_text(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        && bytes
+            .windows(2)
+            .skip(1)
+            .any(|w| w[0] == b'x' && w[1].is_ascii_digit())
+}
+
+/// `default-size` as `(columns, rows)`, read as tmux's `%ux%u`.
+pub(crate) fn parse_size(value: &str) -> Option<(u16, u16)> {
+    let (cols, rows) = value.split_once('x')?;
+    let digits = |s: &str| {
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        s[..end].parse::<u32>().ok()
+    };
+    let clamp = |n: u32| u16::try_from(n.clamp(1, 10_000)).unwrap_or(u16::MAX);
+    Some((clamp(digits(cols)?), clamp(digits(rows)?)))
 }
 
 /// The scope a command acts on: the explicit flag, else the option's own
@@ -1248,7 +1357,10 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         if c.value_only {
             format!("{value}\n")
         } else {
-            format!("{name} {}\n", quote(value))
+            // tmux prints a colour as colour_tostring does, unquoted.
+            let colour = builtin(name).is_some_and(|b| b.kind == Kind::Colour);
+            let shown = if colour { value.to_string() } else { quote(value) };
+            format!("{name} {shown}\n")
         }
     };
     // The server table listed whole (tmux's bare `show -s`) is the
@@ -2721,7 +2833,7 @@ impl FormatVars for FormatCtx<'_> {
             // `session_group` is empty with no groups. `client_tty` is a
             // client's (`ClientVars`), empty with none.
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
-            | "client_tty" => return Some(String::new()),
+            | "client_tty" | "client_pid" => return Some(String::new()),
             "pane_in_mode" => return Some("0".to_string()),
             _ => {}
         }
@@ -3035,13 +3147,19 @@ const LISTS: &[ListBuiltin] = &[
             "rxvt*:ignorefkeys",
         ],
     },
+    // B1a: tmux 3.7b's (recorded); no effect, as `terminal-features`.
+    ListBuiltin {
+        name: "terminal-overrides",
+        scope: OptionScope::Global,
+        default: &["linux*:AX@"],
+    },
 ];
 
 /// The separator tmux 3.7b splits a list option's value on when it is set
 /// or appended without an index (recorded); `status-format` has none.
 fn list_separator(name: &str) -> Option<char> {
     match name {
-        "terminal-features" | "command-alias" => Some(','),
+        "terminal-features" | "terminal-overrides" | "command-alias" => Some(','),
         "update-environment" => Some(' '),
         _ => None,
     }
@@ -3077,8 +3195,11 @@ const NO_EFFECT: &[&str] = &[
     "status-keys",
     "synchronize-panes",
     "terminal-features",
+    "terminal-overrides",
     "window-active-style",
+    "window-status-activity-style",
     "window-style",
+    "focus-follows-mouse",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.

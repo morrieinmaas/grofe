@@ -1,0 +1,5 @@
+# #{client_pid} is the pid of the client process.
+$ new-session -d -s main -x 80 -y 24 cat
+client 80x24 attach -t main
+$ list-clients -F '#{client_pid}'
+$ display-message -p -c {client} '#{?#{>:#{client_pid},1},pid,nopid}'

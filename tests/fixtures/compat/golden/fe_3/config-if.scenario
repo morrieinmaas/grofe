@@ -1,0 +1,25 @@
+# %if / %elif / %else / %endif, NAME=value and %hidden NAME=value in a
+# config file (cmd-parse.y): conditions are formats expanded against the
+# target pane, nested scopes, assignments set the global environment at
+# parse time, and a false scope parses (syntax errors count) but runs
+# nothing.
+$ new-session -d -s main -x 80 -y 24 cat
+$ source-file {fixtures}/cfg-if.conf
+$ show-environment -g FOO
+$ show-environment -gh SECRET
+$ show-environment -g SECRET
+$ show-environment -g BAR
+$ source-file {fixtures}/cfg-assign.conf
+$ show-environment -g A
+$ show-environment -g B
+$ show-environment -g C
+$ source-file {fixtures}/cfg-if-else-orphan.conf
+$ source-file {fixtures}/cfg-if-endif-orphan.conf
+$ source-file {fixtures}/cfg-if-open.conf
+$ source-file {fixtures}/cfg-if-extra.conf
+$ source-file {fixtures}/cfg-if-bare.conf
+$ source-file {fixtures}/cfg-if-badword.conf
+$ source-file {fixtures}/cfg-if-hidden.conf
+$ source-file {fixtures}/cfg-if-elif-after-else.conf
+$ source-file {fixtures}/cfg-if-endif-extra.conf
+$ source-file {fixtures}/cfg-if-false-syntax.conf

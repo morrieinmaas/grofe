@@ -2333,14 +2333,27 @@ pub const TMUX_STOCK: &[(&str, bool, &str, &str)] = &[
 pub struct KeySettings {
     /// `prefix`; `None` is tmux's `None` (no prefix key).
     pub prefix: Option<Key>,
+    /// `prefix2`, a second prefix key; `None` is tmux's `None`.
+    pub prefix2: Option<Key>,
     /// `repeat-time`; zero turns repeat off.
     pub repeat_time: Duration,
+}
+
+impl KeySettings {
+    /// Whether `key` is the prefix or the second prefix.
+    pub fn is_prefix(&self, key: &Key) -> bool {
+        [self.prefix, self.prefix2]
+            .into_iter()
+            .flatten()
+            .any(|p| p.matches(key))
+    }
 }
 
 impl Default for KeySettings {
     fn default() -> KeySettings {
         KeySettings {
             prefix: Some(Key::new(KeyCode::Char('b'), ctrl())),
+            prefix2: None,
             repeat_time: Duration::from_millis(500),
         }
     }
@@ -2437,7 +2450,7 @@ impl KeyState {
         let mut first = self.table.clone();
         loop {
             // The prefix always wins, unless already in the prefix table.
-            if settings.prefix.is_some_and(|p| p.matches(&key)) && self.table != PREFIX_TABLE {
+            if settings.is_prefix(&key) && self.table != PREFIX_TABLE {
                 self.set_table(PREFIX_TABLE);
                 return Routed::Consumed;
             }

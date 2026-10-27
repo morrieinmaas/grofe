@@ -79,6 +79,9 @@ pub struct AttachRequest {
     pub size: (u16, u16),
     pub term: String,
     pub caps: Caps,
+    /// The attaching process, from the socket's peer credentials
+    /// (`client_pid`).
+    pub pid: Option<i32>,
     /// `attach -t`, raw.
     pub target: Option<String>,
     pub detach_others: bool,
@@ -204,6 +207,8 @@ pub struct ClientEntry {
     pub name: String,
     /// `client_tty`: the client's terminal device, if it said.
     pub tty: Option<String>,
+    /// `client_pid`: the client process.
+    pub pid: Option<i32>,
     pub session: SessionId,
     /// The attaching CLI's context, with `client` set to this client.
     pub ctx: ClientCtx,
@@ -402,6 +407,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         ClientEntry {
             name,
             tty,
+            pid: req.pid,
             session,
             ctx,
             size: clamp_size(req.size),
@@ -1111,6 +1117,40 @@ pub fn shutdown(state: &mut State, reason: &str) {
     }
 }
 
+/// The session a client of the destroyed session `name` moves to, by its
+/// `detach-on-destroy` `mode` (tmux's `server_destroy_session`): `off`, the
+/// most recently active other session; `no-detached`, the most recent one
+/// no client shows; `previous` and `next`, the neighbour in name order
+/// (tmux 3.7b's crash on a NULL sort order is not copied). `on` detaches.
+fn successor(state: &State, name: &str, mode: &str) -> Option<SessionId> {
+    let mut sessions: Vec<_> = state.model.sessions.values().collect();
+    sessions.sort_by(|a, b| a.name.cmp(&b.name));
+    let newest = |keep: &dyn Fn(&crate::server::model::Session) -> bool| {
+        sessions
+            .iter()
+            .filter(|s| keep(s))
+            .fold(None::<&&crate::server::model::Session>, |best, s| {
+                best.filter(|b| s.activity <= b.activity).or(Some(s))
+            })
+            .map(|s| s.id)
+    };
+    // Where the destroyed session sat in name order.
+    let before = sessions.iter().filter(|s| s.name.as_str() < name).count();
+    match mode {
+        "off" => newest(&|_| true),
+        "no-detached" => newest(&|s| !state.clients.values().any(|c| c.session == s.id)),
+        "previous" => before
+            .checked_sub(1)
+            .or(sessions.len().checked_sub(1))
+            .map(|i| sessions[i].id),
+        "next" => sessions
+            .get(before)
+            .or(sessions.first())
+            .map(|s| s.id),
+        _ => None,
+    }
+}
+
 /// After anything that may have changed what clients show (a command, a
 /// pane exiting): clients of a session that is gone leave (as tmux's
 /// `[exited]`), window sizes follow their owners, and every client redraws.
@@ -1121,8 +1161,20 @@ pub fn changed(state: &mut State) {
         .filter(|(_, c)| !state.model.sessions.contains_key(&c.session))
         .map(|(id, _)| *id)
         .collect();
+    let destroyed = std::mem::take(&mut state.model.destroyed_sessions);
     for id in orphans {
-        remove(state, id, Some("exited".to_string()));
+        let next = state
+            .clients
+            .get(&id)
+            .and_then(|c| destroyed.get(&c.session))
+            .and_then(|(name, mode)| successor(state, name, mode));
+        match next {
+            Some(session) => {
+                show_session(state, id, session);
+                state.model.client_last_session.remove(&id);
+            }
+            None => remove(state, id, Some("exited".to_string())),
+        }
     }
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
@@ -1974,7 +2026,8 @@ fn status_rows(
         Some(v) => v,
         None => &client_vars,
     };
-    let style = opt("status-style", "");
+    let style = status_style(opt);
+    let style = style.as_str();
     let message = c.message.as_ref().map(|(text, _)| {
         status::message_row(text, opt("message-style", MESSAGE_STYLE), vars, width)
     });
@@ -2066,7 +2119,7 @@ fn default_row(
         right: opt("status-right", ""),
         left_length: length("status-left-length"),
         right_length: length("status-right-length"),
-        style: opt("status-style", ""),
+        style: &status_style(opt),
         left_style: opt("status-left-style", "default"),
         right_style: opt("status-right-style", "default"),
         justify: opt("status-justify", "left"),
@@ -2075,6 +2128,20 @@ fn default_row(
         width: c.size.0,
         now,
     })
+}
+
+/// `status-style` with `status-fg` and `status-bg` over it, as tmux draws
+/// the status line (status.c): a colour other than `default` replaces the
+/// style's.
+fn status_style<'a>(opt: impl Fn(&str, &'static str) -> &'a str) -> String {
+    let mut style = opt("status-style", "").to_string();
+    for (key, name) in [("fg", "status-fg"), ("bg", "status-bg")] {
+        let colour = opt(name, "default");
+        if colour != "default" && colour != "terminal" {
+            style.push_str(&format!(",{key}={colour}"));
+        }
+    }
+    style
 }
 
 /// The local broken-down time, for strftime sequences in the status line.
@@ -2129,6 +2196,7 @@ impl FormatVars for ClientVars<'_> {
             "client_height" => Some(c.size.1.to_string()),
             "client_name" => Some(c.name.clone()),
             "client_tty" => Some(c.tty.clone().unwrap_or_default()),
+            "client_pid" => Some(c.pid.unwrap_or(0).to_string()),
             "client_termname" => Some(c.term.clone()),
             // tmux: bytes not sent because the client fell behind; here,
             // the dropped frames' diffs.
@@ -2190,6 +2258,11 @@ pub(crate) fn key_settings(model: &Model, session: SessionId) -> KeySettings {
             .map_or(default.prefix, |v| {
                 parse_prefix(v).unwrap_or(default.prefix)
             }),
+        prefix2: model
+            .options
+            .lookup("prefix2", &chain)
+            .and_then(|v| parse_prefix(v).ok())
+            .flatten(),
         repeat_time: model
             .options
             .lookup("repeat-time", &chain)
@@ -2737,6 +2810,7 @@ mod tests {
                     size: (80, 24),
                     term: "xterm".to_string(),
                     caps: Caps::default(),
+                    pid: None,
                     target: Some("main".to_string()),
                     detach_others: false,
                     nest: true,
@@ -2818,6 +2892,7 @@ mod tests {
             ClientEntry {
                 name: client_name(id),
                 tty: None,
+                pid: None,
                 session: SessionId(0),
                 ctx: ClientCtx {
                     cwd: PathBuf::from("/"),

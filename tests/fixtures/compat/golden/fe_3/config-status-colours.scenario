@@ -1,0 +1,17 @@
+# status-bg and status-fg override status-style's colours when the
+# status line is drawn (status.c), and `default` leaves them to it.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-option -g status-left 'LEFT'
+$ set-option -g status-right ''
+$ set-option -g window-status-format ''
+$ set-option -g window-status-current-format ''
+client 80x24 attach -t main
+styles 23-23 LEFT
+$ set-option -g status-bg red
+styles 23-23 LEFT
+$ set-option -g status-fg blue
+styles 23-23 LEFT
+$ set-option -g status-style bg=green,fg=yellow
+styles 23-23 LEFT
+$ set-option -g status-bg default
+styles 23-23 LEFT

@@ -1,0 +1,142 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ show-options -g prefix2
+prefix2 None
+? 0
+$ set-option -g prefix2 C-a
+? 0
+$ show-options -g prefix2
+prefix2 C-a
+? 0
+$ set-option -g prefix2 M-x
+? 0
+$ show-options -gv prefix2
+M-x
+? 0
+$ set-option -g prefix2 None
+? 0
+$ show-options -g prefix2
+prefix2 None
+? 0
+$ set-option -g prefix2 bogus
+! bad key: bogus
+? 1
+$ show-options -g status-bg
+status-bg default
+? 0
+$ show-options -g status-fg
+status-fg default
+? 0
+$ set-option -g status-bg red
+? 0
+$ show-options -g status-bg
+status-bg red
+? 0
+$ set-option -g status-fg '#112233'
+? 0
+$ show-options -g status-fg
+status-fg #112233
+? 0
+$ show-options -g status-style
+status-style bg=green,fg=black
+? 0
+$ set-option -g status-bg bogus
+! bad colour: bogus
+? 1
+$ set-option -g status-bg default
+? 0
+$ show-options -gv status-bg
+default
+? 0
+$ show-options -gw window-status-activity-style
+window-status-activity-style reverse
+? 0
+$ set-option -gw window-status-activity-style bold
+? 0
+$ show-options -gw window-status-activity-style
+window-status-activity-style bold
+? 0
+$ show-options -s terminal-overrides
+terminal-overrides[0] linux*:AX@
+? 0
+$ set-option -s terminal-overrides ',xterm*:Tc'
+? 0
+$ set-option -as terminal-overrides ',foo:bar'
+? 0
+$ show-options -s terminal-overrides
+terminal-overrides[0] xterm*:Tc
+terminal-overrides[1] foo:bar
+? 0
+$ show-options -g focus-follows-mouse
+focus-follows-mouse off
+? 0
+$ set-option -g focus-follows-mouse on
+? 0
+$ show-options -gv focus-follows-mouse
+on
+? 0
+$ set-option -g focus-follows-mouse maybe
+! bad value: maybe
+? 1
+$ show-options -g default-size
+default-size 80x24
+? 0
+$ set-option -g default-size 100x30
+? 0
+$ show-options -g default-size
+default-size 100x30
+? 0
+$ set-option -g default-size bogus
+! value is invalid: bogus
+? 1
+$ new-session -d -s sized cat
+? 0
+$ display-message -p -t sized '#{window_width}x#{window_height}'
+100x30
+? 0
+$ show-options -s exit-empty
+exit-empty on
+? 0
+$ set-option -s exit-empty off
+? 0
+$ show-options -sv exit-empty
+off
+? 0
+$ set-option -s exit-empty on
+? 0
+$ show-options -g detach-on-destroy
+detach-on-destroy on
+? 0
+$ set-option -g detach-on-destroy no-detached
+? 0
+$ show-options -g detach-on-destroy
+detach-on-destroy no-detached
+? 0
+$ set-option -g detach-on-destroy previous
+? 0
+$ show-options -gv detach-on-destroy
+previous
+? 0
+$ set-option -g detach-on-destroy next
+? 0
+$ show-options -gv detach-on-destroy
+next
+? 0
+$ set-option -g detach-on-destroy off
+? 0
+$ show-options -gv detach-on-destroy
+off
+? 0
+$ set-option -g detach-on-destroy bogus
+! unknown value: bogus
+? 1
+$ set-option -g detach-on-destroy on
+? 0
+$ show-options -gv detach-on-destroy
+on
+? 0
+$ set-option -t main detach-on-destroy off
+? 0
+$ show-options -t main detach-on-destroy
+detach-on-destroy off
+? 0

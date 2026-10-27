@@ -1,0 +1,73 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ source-file {fixtures}/cfg-if.conf
+start
+yes1
+elif2
+inner-else
+outer-after
+format-with-space
+in-session
+third
+v=bar
+s=s3
+b=
+end
+? 0
+$ show-environment -g FOO
+FOO=bar
+? 0
+$ show-environment -gh SECRET
+SECRET=s3
+? 0
+$ show-environment -g SECRET
+? 0
+$ show-environment -g BAR
+! unknown variable: BAR
+? 1
+$ source-file {fixtures}/cfg-assign.conf
+ab=12
+a=[]
+x
+ok=2
+y
+? 0
+$ show-environment -g A
+A=
+? 0
+$ show-environment -g B
+B=2
+? 0
+$ show-environment -g C
+C=x
+? 0
+$ source-file {fixtures}/cfg-if-else-orphan.conf
+/src/tests/fixtures/compat/cfg-if-else-orphan.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-endif-orphan.conf
+/src/tests/fixtures/compat/cfg-if-endif-orphan.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-open.conf
+/src/tests/fixtures/compat/cfg-if-open.conf:4: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-extra.conf
+/src/tests/fixtures/compat/cfg-if-extra.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-bare.conf
+/src/tests/fixtures/compat/cfg-if-bare.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-badword.conf
+/src/tests/fixtures/compat/cfg-if-badword.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-hidden.conf
+/src/tests/fixtures/compat/cfg-if-hidden.conf:2: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-elif-after-else.conf
+/src/tests/fixtures/compat/cfg-if-elif-after-else.conf:6: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-endif-extra.conf
+/src/tests/fixtures/compat/cfg-if-endif-extra.conf:4: syntax error
+? 1
+$ source-file {fixtures}/cfg-if-false-syntax.conf
+/src/tests/fixtures/compat/cfg-if-false-syntax.conf:4: syntax error
+? 1

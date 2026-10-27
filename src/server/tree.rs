@@ -726,7 +726,7 @@ fn goes_to_tables(state: &State, client: ClientId, key: &Key) -> bool {
         return true;
     }
     let settings = clients::key_settings(&state.model, c.session);
-    if settings.prefix.is_some_and(|p| p.matches(key)) {
+    if settings.is_prefix(key) {
         return true;
     }
     state.registry.key_tables.get(ROOT_TABLE, key).is_some()
