@@ -112,8 +112,19 @@ fn wait_state(srv: &TestServer, name: &str, state: &str) {
     });
 }
 
+/// Whether `pid` is a running process. A zombie is not: in a container whose
+/// init does not reap (act's), a process orphaned by a killed plugin stays a
+/// zombie for good, though it is dead.
 fn alive(pid: i32) -> bool {
-    kill(Pid::from_raw(pid), None).is_ok()
+    if kill(Pid::from_raw(pid), None).is_err() {
+        return false;
+    }
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }
 
 fn sigkill(pid: i32) {
