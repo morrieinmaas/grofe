@@ -186,6 +186,45 @@ Where grofe differs:
 - **The indicator** is `[offset/size]` in `mode-style`, without the line
   time `copy-mode-position-format` puts before it.
 
+## Prompt marks (OSC 133)
+
+As tmux 3.4 and later do, a pane's `OSC 133 ; A` (prompt start) and
+`OSC 133 ; C` (output start) flag the line the cursor is on, and
+`send-keys -X next-prompt` and `previous-prompt` (`-o` for output starts)
+jump to column 0 of the next or previous flagged line, over history and
+screen, extending a selection as any move does. Nothing else flags a line:
+`B`, `D`, other letters, a missing letter and `OSC 133` inside a
+`DCS tmux;` wrapper (which tmux passes to the outer terminal) do nothing.
+A count is ignored, and a flag or argument they do not take drops the
+command, as in tmux. There are no default keys for them.
+
+tmux keeps the flags on its grid lines. alacritty's grid has no spare line
+flag, so `src/server/pane/marks.rs` keeps them beside it, keyed by a
+line's distance from the oldest history line plus the number of lines the
+history has dropped: a line scrolling into history keeps its place, the
+history limit and `ED 3` drop the flags of the lines they drop. The marks
+follow tmux's rules, each recorded in `tests/fixtures/compat/golden/tm_1`
+(`prompts*`): a whole-line clear resets a line's flags (`EL`, `ED`, `ECH`,
+but `EL 0` and `EL 2` leave a line with no cells alone), a partial one
+keeps them, and `ED 2` scrolls the used lines into history with theirs. A
+resize that changes the width moves them as `grid_reflow` moves a line's
+flags: a split line keeps them on its first piece, a line joined into the
+one before loses them, and a line only part consumed keeps them on its
+remainder.
+
+Where grofe differs:
+
+- **Scroll regions.** A line moved by a scroll region, `IL` or `DL` keeps
+  its position, so its flags stay behind where tmux moves them with it.
+  Full-screen scrolling, the case for a shell, is exact.
+- **The alternate screen.** Marks are made on the normal screen only, and
+  a resize that changes the width while the alternate screen is up drops
+  them all, as the normal screen's lines cannot be seen to reflow.
+- **Synchronized updates.** A mark inside a `CSI ? 2026` block is made
+  where the block ends, not where the sequence is.
+- **`clear-history`** is not a grofe command; `ED 3` drops the marks of
+  the history it drops, as tmux does.
+
 ## Selection over wrapped lines
 
 A selection runs over logical lines, not screen rows, as tmux 3.7b's

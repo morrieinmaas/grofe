@@ -29,7 +29,7 @@ respawn and reboot, and a plugin surface built on a real event stream.
    command that resumes it" is a struct field, not a save-command strategy patched
    into a vendored plugin. This is the strongest argument for the project.
 2. **Config semantics.** TOML with a schema, layering, and provenance ("what did
-   this resolve to, and which file said so"). Lua for the escape hatch.
+   this resolve to, and which file said so").
 3. **Plugin semantics.** Events and a scriptable control surface, designed after
    dogfooding, from what actually hurt.
 
@@ -431,16 +431,18 @@ The server answers the attach hello with exactly one JSON reply line (`{"id": 0,
 | server → client | `output` | bytes to write to the tty |
 | server → client | `exit` | UTF-8 reason (`detached`, `server exited`, `session killed`) |
 
-Protocol version mismatch is a clean error naming the side to upgrade. Until M6
-the protocol is internal and may change between commits.
+Protocol version mismatch is a clean error naming the side to upgrade (§7.3).
+M6 freezes the protocol as v1 under the rules in §7.3; until then it is
+internal and may change between commits.
 
-**Events:** M1 ships `pane-exited` and `pane-output` (base64, for tests). Others
-are added when a test, the status line, or a plugin needs them. Candidates:
-`session-created/closed/renamed`, `window-created/closed/renamed`,
-`layout-changed`, `pane-created`, `pane-focus`, `option-changed`,
-`client-attached/detached`, `config-reloaded`, `bell`. tmux-style hooks
-(`set-hook`, M3.6) run commands on the internal events behind the hook names
-in §4.5; that is a command surface, not the plugin API (D9).
+**Events:** a control client receives events after `subscribe`. §7.2 holds
+the catalog (each event's payload, emitter and consumer), the `subscribe`
+filters and the delivery rules; an event enters it only with a named
+consumer. tmux-style hooks (`set-hook`, M3.6) run commands on the same
+internal events, under the tmux hook names in §4.5. That is a command
+surface, not the plugin API (D9), and its delivery rules are tmux's: per
+origin queues, the `#{hook_*}` variables, and no `after-*` hook for a
+hook's own commands.
 
 ### 4.7 Input
 
@@ -653,17 +655,20 @@ Load order, later wins:
 2. `~/.config/grofe/config.toml`
 3. `~/.config/grofe/conf.d/*.toml`, lexical order
 4. `~/.config/grofe/user.toml`, the user's final word
-5. `~/.config/grofe/init.lua` (M6)
-6. runtime `set-option` commands
+5. runtime `set-option` commands
 
 Tools such as canopy write only `conf.d/NN-*.toml`; `config.toml` and
 `user.toml` belong to the user and no tool writes them. `user.toml` loads after
 every generated fragment, so the user's own settings always win over a tool's.
+There is no scripting layer: the Lua `init.lua` layer was dropped with the
+Lua runtime (owner ruling 2026-09-29). Plugins (§7.4) are not a layer
+either. A plugin is declared in layers 1 to 4 like any setting, and changes
+settings only by running commands, which land in layer 5.
 
 `source-file <path>` loads another TOML file at the current layer. A relative
 path resolves against the directory of the file that includes it, never the
 server's cwd or environment. At runtime, `source-file` of a file not named
-`*.toml` (or `*.lua`) reads it as a tmux config through the tmux front end,
+`*.toml` reads it as a tmux config through the tmux front end,
 as tmux does, but only when the request is tmux's: one in the tmux dialect,
 or any request to a server with tmux identity (D12). tmux plugins source
 their own `*.tmux` and `*.conf` files that way (M3.7). A native request to a
@@ -890,9 +895,30 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
 
 ## 7. Plugins (M6), agents (dropped), canopy on grofe
 
-The plugin part is a sketch: M6's first task (plan T6.0) rewrites it from the
-dogfood log into an event catalog, the protocol v1 rules, the plugin config
-and the Lua API. The agents part was M7's.
+**Plugins run out of process.** A plugin is any program, in any language,
+that the server starts from a `[plugins.<name>]` table (§7.4) and
+supervises. It speaks control mode (§4.6) over the socket `$GROFE` names,
+or over stdio through `grofe control`, which bridges JSON lines in and out
+so a plugin needs no socket code. It acts with ordinary commands and learns
+what happened through `subscribe` (§7.2). There is no in-process scripting:
+the Lua runtime was dropped (owner ruling 2026-09-29), and with it
+`init.lua`, Lua key bindings and format functions. A key binding runs a
+command or `run-shell`, and dynamic status content comes from options and
+status sources (D8). The event catalog (§7.2) and the protocol (§7.3) are
+frozen as v1 in M6 and change only by addition after that.
+
+**An event enters the catalog only with a named consumer:** a tmux hook name
+row (§4.5) that a plugin the owner runs binds, the in-tree event-log plugin
+(plan T6.6), or a test. The catalog below was derived on 2026-10-27 (plan
+T6.0) from TC.5's event list (`EVENTS` in `src/server/hooks.rs`), the
+existing `subscribe` stream (`src/event.rs`, `src/server/events.rs`), the
+hooks the owner's plugins bind, and `docs/dogfood.md`. Of those plugins,
+opensessions binds twelve of TC.5's tmux hook names (every one but the three
+alert hooks), and canopy's copy of tmux-claude-session-manager binds
+`alert-bell`; the rest bind none. Neither the dogfood log nor the
+`compat-miss.log` reviews named an event or hook grofe lacks; one that does
+later enters by §7.3's additive rule. The owner approved this rewrite
+(plan T6.0) on 2026-10-27. The agents part of this section was M7's.
 
 **M7 is dropped (owner ruling 2026-10-06).** The three bullets marked
 *[dropped]* below (the agents plugin, resumes from it, the adapter contract)
@@ -902,16 +928,6 @@ through canopy's loader, such as tmux-claude-session-manager and
 opensessions, and to canopy's own adapters and strategies. A grofe gap such a
 plugin finds shows up in `compat-miss.log` and is fixed as a compat bug.
 
-- **Out-of-process plugins** speak control mode over the socket, in any
-  language, and subscribe to events. The server launches the plugins configured
-  under `[plugins.<name>]` and restarts them with backoff. `grofe control`
-  bridges stdio for a plugin that does not speak sockets. The event catalog and
-  the protocol are frozen as v1 in M6; after that they change only by addition.
-  An event enters the catalog only with a named consumer.
-- **In-process Lua** (`mlua`) runs `init.lua` and synchronous callbacks (key
-  bindings, format functions) where a socket round trip would be wrong. It is
-  sandboxed: no subprocess and no file I/O, and every callback runs under a
-  budget, so D8 holds.
 - *[dropped]* **agents plugin:** a supervised plugin that ships in the grofe binary
   (`grofe __agents`). The five normalized states (`idle`, `working`, `blocked`,
   `completed`, `exited`) live in the pane option `<prefix>state`. The prefix is
@@ -997,6 +1013,198 @@ with `sleep 600` and `env -i`; the M-s/M-r key relocation; the five-minute save
 interval (grofe snapshots on change). **Kept on purpose:** reading the session
 id off a process argv for hand-started panes.
 
+### 7.2 Event catalog
+
+Every event is one JSON line on a subscribed connection: an object whose
+`event` field is the event's name, followed by its payload fields. Ids are
+runtime ids (`%N`, `@N`, `$N`, §4.2); `uid` is the pane's stable uid;
+`client` is the client's name as `#{client_name}` shows it. A field the
+table marks nullable is always present, as `null`, never omitted. An event
+names what it is about by id and carries little else; a subscriber that
+needs more asks with a command (`display -p -t <id> <format>`), which keeps
+payloads small and stable under §7.3.
+
+| Event | Payload (after `event`) | Fires when | Emitter (`src/`) | First consumer |
+|---|---|---|---|---|
+| `pane-exited` | `pane`, `uid`, `status` (exit code; null when a kill removed the pane while its process ran) | a pane's process exited, whether or not `remain-on-exit` keeps the pane; or a kill removed a live pane (`kill-pane`, `kill-window`, `kill-session`, `kill-server`, the structure verbs) | `handle_pane_event` in `server/mod.rs` for an exit; `Events::panes_killed` in `server/events.rs` for kills (existing, T1.6) | T1.6's `tests/events.rs`; opensessions' `pane-exited` and `after-kill-pane` hooks, which share one handler |
+| `pane-died` | `pane`, `uid`, `window`, `status` | a pane's process exited and `remain-on-exit` kept the pane; after that pane's `pane-exited` | `hooks::pane_exited` in `server/hooks.rs`, the kept branch | opensessions' `pane-died` hook; `tests/compat/fe_3.rs` |
+| `pane-output` | `pane`, `data` (base64, standard alphabet) | a pane's reader read output, only while a subscriber names this event | `handle_pane_event` in `server/mod.rs` (existing, T1.6) | T1.6's `tests/events.rs` |
+| `pane-focus` | `pane`, `window`, `session`, `client` | a pane becomes the active pane of the current window of an attached client (`select-pane`, a click, a window or session switch, a split or kill that moves the active pane, an attach), or that client's terminal regains focus while the pane is active; never for a session with no attached client | new (T6.1), at one site: see below | T6.1's `tests/events_v1.rs`; the event-log plugin (T6.6); on the stream it stands in for opensessions' `after-select-pane` handler |
+| `pane-resized` | `pane`, `window` | `resize-pane` succeeded | `hooks::run_command`, `Before::ResizePane` | opensessions' `after-resize-pane` hook (it repairs its sidebar's width) |
+| `window-focused` | `window`, `session`, `pane` (the window's active pane) | `select-window` succeeded, even onto the current window | `hooks::run_command`, `Before::SelectWindow` | opensessions' `after-select-window` hook |
+| `window-created` | `window`, `session`, `pane` (its first pane) | `new-window` made a window | `hooks::run_command`, `Before::NewWindow` | opensessions' `after-new-window` hook |
+| `window-resized` | `window`, `session` | `resize-window` succeeded | `hooks::run_command`, `Before::ResizeWindow` | opensessions' `after-resize-window` hook |
+| `session-created` | `session`, `name` | `new-session` made a session | `hooks::session_created`, called from `server/dispatch/session.rs` | opensessions' `session-created` hook |
+| `session-closed` | `session`, `name` | a session was removed (killed, or its last pane went) | `hooks::run_pending`, draining `closed_sessions` from `server/model.rs` | opensessions' `session-closed` hook |
+| `client-session-changed` | `client`, `session` | a client attached, or `switch-client` or `attach-session` ran for it, even to the session it already showed | `hooks::client_session_changed`, called from `server/clients.rs` | opensessions' `client-session-changed` hook |
+| `client-resized` | `client`, `session`, `cols`, `rows` | a client attached, or its terminal reported a size, even an unchanged one | `hooks::client_resized`, called from `server/clients.rs` | opensessions' `client-resized` hook |
+| `alert-bell` | `window`, `session`, `pane` (the window's active pane) | a bell in a monitored window, when `bell-action` applies | `hooks::window_alert`, called from `server/alerts.rs` | canopy's copy of tmux-claude-session-manager, whose `alert-bell` hook forwards the bell (`tests/compat/tp_10.rs`) |
+| `alert-activity` | `window`, `session`, `pane` | output in a monitored window, when `activity-action` applies | `hooks::window_alert` | its tmux hook name row (§4.5); `tests/alerts.rs` |
+| `alert-silence` | `window`, `session`, `pane` | no output in a monitored window for `monitor-silence` seconds | `hooks::window_alert` | its tmux hook name row (§4.5); `tests/alerts.rs` |
+| `option-changed` | `scope` (`global`, `$N`, `@N` or `%N`), `name`, `value` (nullable: null once unset) | an option's value changed; setting the current value emits nothing (§4.2) | `server/dispatch/options.rs`, and `server/sources.rs` for status sources (existing) | T1.6's `tests/events.rs` |
+| `events-dropped` | `count` | a subscriber's queue overflowed; sent before its next delivered event | `Subscriber::offer` in `server/events.rs` (existing) | T1.6's `tests/events.rs`; a notice, not subscribable: every subscriber can receive it |
+
+**Rules for emitting.**
+
+- **One internal event, two surfaces.** Each row TC.5 already raises is
+  emitted where TC.5 fires its hook, but before the check for a bound hook,
+  so a subscriber gets it whether or not any hook is set. It fires for
+  commands a hook, a binding or a plugin runs too: that a hook's own
+  commands fire no `after-*` hook is tmux's recursion guard for hooks, not
+  a filter on events. Each event has one emission site (T6.1); the two
+  existing multi-site rows, `pane-exited` and `option-changed`, keep theirs.
+- **grofe's names, not tmux's.** The catalog uses the grofe event names of
+  `EVENTS`; tmux's hook names map onto them for `set-hook` only (§4.5).
+- **Where the stream differs from the hooks, on purpose.** T1.6's tests pin
+  the stream's `pane-exited`: it covers every way a pane's process ends or
+  a live pane goes, where tmux's `pane-exited` hook fires only for an exit
+  that removed the pane. Each pane process gets at most one `pane-exited`:
+  killing a pane whose process already exited (kept by `remain-on-exit`)
+  emits no second one, and `respawn-pane` starts a process that can exit
+  again. T6.1 pins this with a test, including a pane that `remain-on-exit`
+  kept and that is then killed. Two of TC.5's event names stay hook-only for that reason.
+  `pane-closed` (tmux's `after-kill-pane`) is `pane-exited` with a null
+  status on the stream, which is how opensessions treats it anyway.
+  `pane-focused` (tmux's `after-select-pane`) is covered on the stream by
+  `pane-focus`, which also catches every other way focus moves.
+- **`pane-focus` at one site.** After each command sequence and each client
+  input, the server compares each attached client's current window, active
+  pane and terminal focus with what it last reported for that client, and
+  emits on a change. So one action gives one event per client whose view
+  changed, however many verbs it took, and a split followed by a
+  `select-pane` gives two (T6.6's acceptance). A terminal focus report
+  counts only while `focus-events` is on, as it does for hooks (§4.7).
+
+**`subscribe <event>... [-t target]`.**
+
+- Names are literal or `*` patterns. An unknown literal name is an error
+  (`unknown event: <name>`); a pattern may match nothing.
+- A bare `subscribe` and every pattern match the v1.0 catalog above except
+  `pane-output`. `pane-output`, for its volume, and any event added after
+  v1.0 (§7.3) reach only a subscription that names them literally.
+- `-t` resolves to a pane, window or session when `subscribe` runs. An event
+  passes when its `pane`, `window` or `session` field lies inside that
+  target: a pane target passes that pane's events, a window target its own
+  and its panes', a session target everything in the session.
+  `option-changed` passes by its `scope`, and an event with none of those
+  fields (`events-dropped`) always passes. A target that goes away leaves a
+  subscription that passes nothing more.
+- A later `subscribe` on the same connection replaces the earlier one.
+
+**Delivery.** A subscriber receives events in the order they happened, so
+per-pane events arrive in the order of their actions (a pane's
+`pane-exited` before its `pane-died`, a session's panes' `pane-exited`
+before its `session-closed`). Each subscriber has a bounded queue of 1024
+events; on overflow events are dropped and `events-dropped` with the count
+comes before the next one delivered. A slow subscriber never delays the
+server or another subscriber (D8). Nothing is replayed: events while a
+plugin is down or before it subscribes are gone.
+
+**Considered and left out for lack of a consumer:** `session-renamed`,
+`window-closed`, `window-renamed`, `layout-changed`, `pane-created`,
+`client-attached`, `client-detached`, `config-reloaded`, and `bell` (which
+`alert-bell` covers), from the earlier candidate list; and every tmux hook
+the owner's plugins do not bind, such as `after-split-window`,
+`window-linked` and `pane-mode-changed`. `restore-done` and `resume-changed`
+join the catalog with M4 (owner ruling 2026-10-27: M6 runs before M4), as
+additions under §7.3.
+
+### 7.3 Protocol v1 rules
+
+`docs/protocol-v1.md` and `tests/fixtures/protocol/v1/` (plan T6.2) are the
+frozen record: both hellos, every request, reply, event and attach frame,
+one JSON line per message and event kind. These rules govern every change
+after the freeze.
+
+- **Versions in the hello.** Every hello carries `"grofe": 1`, and the
+  server speaks exactly one version; there is no negotiation. A hello with
+  no integer `grofe` field is an error (`hello has no valid "grofe"
+  protocol version`). A hello with another version gets one error line, in
+  either mode, and the server closes the connection:
+  `{"id": 0, "ok": false, "err": "protocol mismatch: this build speaks v1, the peer speaks v2; upgrade the server"}`.
+  The side named is the one with the lower version: `upgrade the client`
+  when the peer is older, `upgrade the server` when it is newer. `dialect`
+  absent means `grofe`.
+- **Additive only.** Within v1 a change may add: optional fields to a hello
+  or a request, which default when absent; fields to a reply or an event;
+  events, which reach only subscriptions that name them (§7.2); verbs, and
+  optional flags on existing verbs. It may not remove or rename a field, an
+  event or a verb; change a field's type, nullability or meaning; make an
+  optional field required; add an attach frame kind or change a frame's
+  payload; or reword the version-mismatch error. A change that rewrites an
+  existing fixture line is not additive. Anything else is `grofe: 2`.
+- **Unknown fields are ignored.** The server ignores fields it does not know
+  in a hello or a request. A client or plugin must ignore fields it does not
+  know in a reply or an event, so a v1 plugin keeps working against any
+  later v1 server.
+- **Unknown verbs error.** A request whose verb the server does not know
+  gets `{"id": N, "ok": false, "err": "unknown command: <verb>"}`. The
+  connection stays open and later requests run. An unknown event name in
+  `subscribe` is an error the same way (§7.2). An unknown `mode` in a hello
+  is a malformed hello and closes the connection.
+- **Shape.** A reply echoes its request's `id` and carries `ok` with `out`,
+  or `ok: false` with `err`. Replies to one connection's requests come in
+  request order; events carry no `id` and interleave between replies.
+- **Attach frames** are the five kinds in §4.6, frozen. An unknown frame
+  kind closes the connection.
+
+### 7.4 `[plugins.<name>]`
+
+```toml
+[plugins.event-log]
+cmd = ["sh", "event-log/event-log.sh"]
+env = { LC_ALL = "C" }
+enabled = true
+restart = "always"
+```
+
+| Key | Type, default | Meaning |
+|---|---|---|
+| `cmd` | array of strings, required, non-empty | the argv, run directly and never through a shell. `cmd[0]` without a `/` is looked up on the plugin's `PATH`; a relative path containing `/` resolves against the directory of the file that set `cmd`, as `source-file` does (§5.1) |
+| `env` | table of strings, empty | variables added over the server environment |
+| `enabled` | boolean, `true` | `false` declares the plugin without starting it |
+| `restart` | `always` (default), `on-failure` or `never` | `always` restarts after any exit; `on-failure` only after a non-zero exit or a signal, and an exit 0 leaves it `exited`; `never` leaves it `exited` after any exit |
+
+- **Names and validation.** `<name>` matches `[A-Za-z0-9._-]+`, since it
+  names the log file and `GROFE_PLUGIN`. Unknown keys and wrong types are
+  errors naming the file, as everywhere in the schema (§5.2).
+- **Layering.** A plugin's table merges key by key across layers 1 to 4
+  (§5.1), so `user.toml` can set `enabled = false` on a plugin a canopy
+  fragment declares; `cmd` must be present once merged. `show-config
+  --explain` gives each key's provenance (§5.4).
+- **Environment.** The server's global environment (`set-environment -g`,
+  hidden variables left out as for any process, §4.2), then `env`, then
+  `GROFE` (the socket path) and `GROFE_PLUGIN=<name>`, which `env` cannot
+  override. On a server with tmux identity (D12) a plugin also gets `TMUX`
+  in tmux's format, `<socket path>,<server pid>,-1` (the session field is
+  `-1`, as tmux gives a process outside any session), so its `tmux` calls
+  reach this server. A plugin is in no pane, so it gets no `GROFE_PANE` or
+  `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
+  `<state dir>/plugins/<name>.log`, rotated at 1 MiB.
+- **Start and stop.** Enabled plugins start after the config loads (and,
+  once M4 lands, after its restore), each spawned off the actor under the
+  spawn lock, in its own process group, so a plugin that never reads its
+  socket delays nothing. On server exit each group gets SIGTERM, then
+  SIGKILL after 2 s, so `kill-server` leaves no plugin process.
+- **Restarts.** Restarts back off from 1 s, doubling to 60 s, and the backoff
+  resets after 60 s alive. Every exit the server did not ask for counts as a
+  crash; five crashes within 60 s disable the plugin with a line in the
+  server log, and nothing more is spawned for it.
+- **`reload`** compares the merged tables: a new or newly enabled plugin
+  starts, a removed or disabled one stops, one whose `cmd`, `env` or
+  `restart` changed restarts, and the rest are left alone.
+- **`list-plugins`** prints `name`, `pid`, `state`, `restarts` and `since`
+  per plugin. The states are `running`, `backoff` (waiting to restart),
+  `exited` (its policy does not restart it), `disabled` (five crashes) and
+  `off` (`enabled = false`).
+- **`plugin-restart <name>`** stops the plugin as on server exit and starts
+  it again at once, clearing its backoff and crash count; it also starts an
+  `exited` or `disabled` plugin. An `off` plugin or an unknown name is an
+  error.
+- **Trust.** A plugin runs as the user with the server's environment, as
+  `run-shell` does; a config file that declares one is trusted like a shell
+  rc file.
+
 ---
 
 ## 8. Libraries and terminal support
@@ -1013,7 +1221,6 @@ confirms them in practice before anything is built on top.
 | client tty | `crossterm` 0.29 | Raw mode, SIGWINCH, size; Zellij's client uses it | `rustix` termios |
 | diff rendering | own compositor (§4.4) | Pane content is arbitrary styled cells; Zellij does the same (`output/mod.rs`) | `termwiz` 0.23 `Surface` |
 | config | `serde` 1.0, `toml` 1.1; `schemars` 1.2 later | Validation through serde | none |
-| scripting (M6) | `mlua` 0.12 (Lua 5.4, `vendored`, `async`, `serde`) | Active and mature | none |
 | async, sockets, framing | `tokio` 1.53 Unix sockets, `tokio-util` 0.7 codecs | Standard stack | `interprocess` 2.4 (Zellij) |
 | tests | `insta` 1.48 snapshots; `expectrl` 0.9 for pty-driven acceptance; `bats` for the CLI smoke suite | Snapshot the screen an emulator reconstructs from our output | `rexpect` 0.7 |
 

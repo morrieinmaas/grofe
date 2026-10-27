@@ -12,6 +12,11 @@
 //! (recorded): a clear that covers a whole line empties it, a partial one
 //! keeps the width, a delete (`DCH`) widens it to `columns - n` and an
 //! insert (`ICH`) to the whole line.
+//!
+//! It also keeps the pane's OSC 133 [`Marks`] in step: the history is held
+//! to its limit after every operation, and the clears that reset a tmux
+//! line's flags (the same whole-line clears, with the exceptions recorded
+//! in `marks.rs` and below) erase the marks of the lines they empty.
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
@@ -21,12 +26,13 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::cursor_icon::CursorIcon;
 use alacritty_terminal::vte::ansi::{
-    Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
-    KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, PrivateMode, Rgb,
-    ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
+    Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler, Hyperlink,
+    KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, NamedColor,
+    PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
 };
 
 use super::CellFlags;
+use super::marks::{self, Marks};
 use crate::server::imgstore::{Cursor, Erase, Probe, ScrollOp, Store};
 
 /// A cell the program wrote. Bit 15 is free in alacritty 0.26's flags;
@@ -41,10 +47,15 @@ pub fn used(row: &alacritty_terminal::grid::Row<Cell>) -> usize {
         .map_or(0, |c| c + 1)
 }
 
-/// The emulator as the parser's handler: [`Term`], marking written cells.
-/// With a [`Store`] (the pane's images are on) it also tells it what the
-/// parser does to the screen: scrolls, erases and writes over its images.
-pub struct Written<'a, L: EventListener>(pub &'a mut Term<L>, pub Option<&'a mut Store>);
+/// The emulator as the parser's handler: [`Term`], marking written cells,
+/// and the pane's [`Marks`]. With a [`Store`] (the pane's images are on) it
+/// also tells it what the parser does to the screen: scrolls, erases and
+/// writes over its images.
+pub struct Written<'a, L: EventListener>(
+    pub &'a mut Term<L>,
+    pub &'a mut Marks,
+    pub Option<&'a mut Store>,
+);
 
 impl<L: EventListener> Written<'_, L> {
     fn point(&self) -> Cursor {
@@ -57,7 +68,7 @@ impl<L: EventListener> Written<'_, L> {
 
     /// How the parser stands, when there is a store to tell.
     fn probe(&self) -> Option<Probe> {
-        self.1.as_ref()?;
+        self.2.as_ref()?;
         let grid = self.0.grid();
         Some(Probe {
             history: grid.history_size(),
@@ -70,7 +81,7 @@ impl<L: EventListener> Written<'_, L> {
     /// An operation that may have scrolled the viewport ran.
     fn scrolled(&mut self, kind: ScrollOp, before: Option<Probe>) {
         let history = self.0.grid().history_size();
-        if let (Some(store), Some(before)) = (self.1.as_deref_mut(), before) {
+        if let (Some(store), Some(before)) = (self.2.as_deref_mut(), before) {
             store.scroll_op(kind, before, history);
         }
     }
@@ -80,7 +91,7 @@ impl<L: EventListener> Written<'_, L> {
         let was = self.0.mode().contains(TermMode::ALT_SCREEN);
         op(self.0);
         let now = self.0.mode().contains(TermMode::ALT_SCREEN);
-        if let Some(store) = self.1.as_deref_mut()
+        if let Some(store) = self.2.as_deref_mut()
             && was != now
         {
             store.alt_changed(now);
@@ -91,8 +102,40 @@ impl<L: EventListener> Written<'_, L> {
     fn line_touched(&mut self, to_foot: bool) {
         let at = self.point();
         let rows = self.0.screen_lines() as u32;
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.check_line(at.line, if to_foot { rows - at.line.min(rows) } else { 1 });
+        }
+    }
+
+    /// Whether marks are being kept up: there are some, on the normal screen.
+    fn marked(&self) -> bool {
+        !self.1.is_empty() && !self.0.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// The cursor's row, counted from the oldest row of the history.
+    fn top(&self) -> usize {
+        let grid = self.0.grid();
+        grid.history_size() + grid.cursor.point.line.0.max(0) as usize
+    }
+
+    /// Whether clearing with the pen's background touches a line that has no
+    /// cells (tmux's `screen_write_clearline` leaves such a line alone, flags
+    /// and all, unless the background is coloured).
+    fn clears_empty_lines(&self) -> bool {
+        self.0.grid().cursor.template.bg != Color::Named(NamedColor::Background)
+    }
+
+    /// Resets the cursor line's marks when `whole` of it is about to be
+    /// cleared, as tmux's `grid_clear_lines` resets a line's flags.
+    /// `conditional` is `screen_write_clearline`'s early return for a line
+    /// with no cells.
+    fn reset_line(&mut self, whole: bool, conditional: bool) {
+        if whole
+            && self.marked()
+            && (!conditional || self.line_used() > 0 || self.clears_empty_lines())
+        {
+            let top = self.top();
+            self.1.erase(top);
         }
     }
 
@@ -130,7 +173,8 @@ impl<L: EventListener> Written<'_, L> {
 macro_rules! forward {
     ($($name:ident($($arg:ident: $ty:ty),*);)*) => {
         $(fn $name(&mut self, $($arg: $ty),*) {
-            Handler::$name(&mut *self.0, $($arg),*)
+            Handler::$name(&mut *self.0, $($arg),*);
+            self.1.sync(&mut *self.0);
         })*
     };
 }
@@ -138,7 +182,7 @@ macro_rules! forward {
 impl<L: EventListener> Handler for Written<'_, L> {
     fn input(&mut self, c: char) {
         // Where the character lands, for a sixel it would overwrite.
-        let target = self.1.as_ref().filter(|s| s.has_sixel()).and_then(|_| {
+        let target = self.2.as_ref().filter(|s| s.has_sixel()).and_then(|_| {
             let (p, at) = (self.probe()?, self.point());
             Some(if p.needs_wrap {
                 (0, (at.line + 1).min(p.rows - 1))
@@ -151,7 +195,7 @@ impl<L: EventListener> Handler for Written<'_, L> {
         Handler::input(&mut *self.0, c);
         self.0.grid_mut().cursor.template.flags.remove(WRITTEN);
         self.scrolled(ScrollOp::Wrap, before);
-        if let (Some((col, line)), Some(store)) = (target, self.1.as_deref_mut()) {
+        if let (Some((col, line)), Some(store)) = (target, self.2.as_deref_mut()) {
             let width = unicode_width::UnicodeWidthChar::width(c)
                 .unwrap_or(1)
                 .max(1) as u32;
@@ -163,6 +207,7 @@ impl<L: EventListener> Handler for Written<'_, L> {
             let cols = self.0.columns();
             self.widen(cols);
         }
+        self.1.sync(&mut *self.0);
     }
 
     fn insert_blank(&mut self, n: usize) {
@@ -172,6 +217,7 @@ impl<L: EventListener> Handler for Written<'_, L> {
             Handler::insert_blank(&mut *self.0, n);
             self.widen(cols);
         } else {
+            self.reset_line(col == 0, false);
             self.clear(col, cols, |t| Handler::insert_blank(t, n));
         }
     }
@@ -185,14 +231,16 @@ impl<L: EventListener> Handler for Written<'_, L> {
             Handler::delete_chars(&mut *self.0, n);
             self.widen(width.max(cols - n));
         } else {
+            self.reset_line(col == 0, false);
             self.clear(col, cols, |t| Handler::delete_chars(t, n));
         }
     }
 
     fn erase_chars(&mut self, n: usize) {
         self.line_touched(false);
-        let (col, _) = self.cursor();
+        let (col, cols) = self.cursor();
         let to = col.saturating_add(n.max(1));
+        self.reset_line(col == 0 && to >= cols, false);
         self.clear(col, to, |t| Handler::erase_chars(t, n));
     }
 
@@ -204,13 +252,14 @@ impl<L: EventListener> Handler for Written<'_, L> {
             LineClearMode::Left => (0, col + 1),
             LineClearMode::All => (0, cols),
         };
+        self.reset_line(from == 0 && to >= cols, true);
         self.clear(from, to, |t| Handler::clear_line(t, mode));
     }
 
     fn clear_screen(&mut self, mode: ClearMode) {
         let at = self.point();
         let before = self.probe();
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.erase(
                 match mode {
                     ClearMode::Below => Erase::Below,
@@ -227,49 +276,86 @@ impl<L: EventListener> Handler for Written<'_, L> {
             ClearMode::Above => (0, col + 1),
             ClearMode::All | ClearMode::Saved => (0, cols),
         };
-        let all = matches!(mode, ClearMode::All);
+        let history = self.0.grid().history_size();
+        let rows = self.0.screen_lines();
+        let top = self.top();
+        let normal = !self.0.mode().contains(TermMode::ALT_SCREEN);
+        let (all, saved) = (
+            matches!(mode, ClearMode::All),
+            matches!(mode, ClearMode::Saved),
+        );
+        match mode {
+            ClearMode::Below => {
+                self.reset_line(col == 0, false);
+                if self.marked() {
+                    self.1.erase_range(top + 1, history + rows);
+                }
+            }
+            ClearMode::Above => {
+                self.reset_line(col + 1 >= cols, false);
+                if self.marked() {
+                    self.1.erase_range(history, top);
+                }
+            }
+            ClearMode::All | ClearMode::Saved => {}
+        }
         self.clear(from, to, |t| Handler::clear_screen(t, mode));
         if all {
             self.scrolled(ScrollOp::Clear, before);
         }
+        if all && normal && !self.1.is_empty() {
+            // The rows below the last used one are emptied, the rest
+            // scrolled into the history with their marks.
+            let pushed = self.0.grid().history_size() - history;
+            self.1.erase_range(history + pushed, history + rows);
+        } else if saved && normal {
+            self.1.trim(history);
+        }
+        self.1.sync(&mut *self.0);
     }
 
     fn linefeed(&mut self) {
         let before = self.probe();
         Handler::linefeed(&mut *self.0);
         self.scrolled(ScrollOp::Feed, before);
+        self.1.sync(&mut *self.0);
     }
 
     fn newline(&mut self) {
         let before = self.probe();
         Handler::newline(&mut *self.0);
         self.scrolled(ScrollOp::Feed, before);
+        self.1.sync(&mut *self.0);
     }
 
     fn scroll_up(&mut self, n: usize) {
         let before = self.probe();
         Handler::scroll_up(&mut *self.0, n);
         self.scrolled(ScrollOp::Up(n), before);
+        self.1.sync(&mut *self.0);
     }
 
     fn scroll_down(&mut self, n: usize) {
         Handler::scroll_down(&mut *self.0, n);
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.free_sixels();
         }
+        self.1.sync(&mut *self.0);
     }
 
     fn reverse_index(&mut self) {
         let at = self.point();
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.reverse_index(at.line);
         }
         Handler::reverse_index(&mut *self.0);
+        self.1.sync(&mut *self.0);
     }
 
     fn insert_blank_lines(&mut self, n: usize) {
         self.line_touched(true);
         Handler::insert_blank_lines(&mut *self.0, n);
+        self.1.sync(&mut *self.0);
     }
 
     fn delete_lines(&mut self, n: usize) {
@@ -277,35 +363,51 @@ impl<L: EventListener> Handler for Written<'_, L> {
         let before = self.probe();
         Handler::delete_lines(&mut *self.0, n);
         self.scrolled(ScrollOp::Delete(n), before);
+        self.1.sync(&mut *self.0);
     }
 
     fn decaln(&mut self) {
         Handler::decaln(&mut *self.0);
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.free_sixels();
         }
+        self.1.sync(&mut *self.0);
     }
 
     fn reset_state(&mut self) {
         Handler::reset_state(&mut *self.0);
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.reset();
         }
+        self.1.clear();
+        self.1.sync(&mut *self.0);
     }
 
     fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
         Handler::set_scrolling_region(&mut *self.0, top, bottom);
-        if let Some(store) = self.1.as_deref_mut() {
+        if let Some(store) = self.2.as_deref_mut() {
             store.set_region(top, bottom);
         }
+        self.1.sync(&mut *self.0);
     }
 
+    /// A mark the reader fed in-band ([`marks::MARK_PROMPT`]) is made here,
+    /// at the point of the stream the emulator has reached: a synchronized
+    /// update buffers its bytes, and the mark must wait for them with it.
     fn set_private_mode(&mut self, mode: PrivateMode) {
-        self.swapping(|t| Handler::set_private_mode(t, mode));
+        match mode {
+            PrivateMode::Unknown(marks::MARK_PROMPT) => self.1.record(&*self.0, marks::PROMPT),
+            PrivateMode::Unknown(marks::MARK_OUTPUT) => self.1.record(&*self.0, marks::OUTPUT),
+            mode => {
+                self.swapping(|t| Handler::set_private_mode(t, mode));
+                self.1.sync(&mut *self.0);
+            }
+        }
     }
 
     fn unset_private_mode(&mut self, mode: PrivateMode) {
         self.swapping(|t| Handler::unset_private_mode(t, mode));
+        self.1.sync(&mut *self.0);
     }
 
     forward! {
@@ -381,6 +483,7 @@ mod tests {
     struct Rig {
         term: Term<VoidListener>,
         parser: Processor<StdSyncHandler>,
+        marks: Marks,
         store: Store,
     }
 
@@ -395,13 +498,14 @@ mod tests {
             Rig {
                 term: Term::new(config, &TermSize::new(COLS, ROWS), VoidListener),
                 parser: Processor::new(),
+                marks: Marks::new(history),
                 store,
             }
         }
 
         fn feed(&mut self, bytes: &str) {
             self.parser.advance(
-                &mut Written(&mut self.term, Some(&mut self.store)),
+                &mut Written(&mut self.term, &mut self.marks, Some(&mut self.store)),
                 bytes.as_bytes(),
             );
         }

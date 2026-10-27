@@ -1,0 +1,199 @@
+$ new-session -d -s main -x 20 -y 8 'printf "\033]133;A\007> one\n\033]133;C\007out1\n\033]133;a\007\033]133\007\033]133;\007\033]1330;A\007\033]133A\007more\n\033]133;A\007> two\n\033]133;C\007out2\n\033]133;B\007\033]133;D;0\007b and d\n\033]133;A;aid=1\007> three\n\033]133;C;x\007out3\ntail1\n\033]133;A\007> four \033]133;C\007ran\ntail2\ntail3\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ display -p -t main '#{history_size}'
+5
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,7,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,2
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,5
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,5
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,2
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,0
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X next-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,4
+? 0
+$ send-keys -t main -X next-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,1
+? 0
+$ send-keys -t main -X next-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,2,0
+? 0
+$ send-keys -t main -X next-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X next-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,2,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,1
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,4
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,4
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,4
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X -N 3 next-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,2
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X next-prompt -o -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,1
+? 0
+$ send-keys -t main -X next-prompt -x
+? 0
+$ send-keys -t main -X next-prompt extra
+? 0
+$ send-keys -t main -X next-prompt -- -o
+? 0
+$ send-keys -t main -X next-prompt --
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,0
+? 0
+$ send-keys -t main -X previous-prompt -oo
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,1
+? 0
+$ send-keys -t main -X bogus-command
+? 0
+$ send-keys -t main -X bogus-command -o
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,0,1
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 0,0 0,3 0,0,2
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ send-keys -t main -X next-prompt
+? 0
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+1 0,0 0,9 0,4,0
+? 0
+$ send-keys -t main -X copy-selection
+? 0
+$ show-buffer
+> one
+out1
+more
+> two
+out2
+b and d
+> three
+out3
+tail1
+>
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ send-keys -t main -X refresh-from-pane
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,4,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+0,1,0
+? 0

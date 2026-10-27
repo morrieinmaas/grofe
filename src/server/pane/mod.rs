@@ -7,6 +7,7 @@
 //! command, argv and cwd are sampled on demand ([`procinfo::Cache`]).
 
 pub mod io;
+pub mod marks;
 pub mod procinfo;
 mod written;
 
@@ -43,6 +44,7 @@ use crate::types::{
     CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
 };
 use io::{InputQueue, Listener};
+use marks::{HISTORY_SLACK, Marks};
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
@@ -178,6 +180,8 @@ pub(crate) struct Emu {
     pub(crate) parser: Processor,
     /// The pane's image placements (G3).
     pub(crate) images: Store,
+    /// The OSC 133 marks of the normal screen's lines.
+    pub(crate) marks: Marks,
 }
 
 /// alacritty's tab stops, every 8 columns.
@@ -372,7 +376,9 @@ impl PaneHandle {
 
         let events = Arc::default();
         let config = term::Config {
-            scrolling_history: spec.history_limit,
+            // `Marks::sync` holds the history to the limit, counting the rows
+            // it drops; the emulator never drops one on its own.
+            scrolling_history: spec.history_limit.saturating_add(HISTORY_SLACK),
             // Off by default in alacritty_terminal: push/pop/query would be
             // ignored and a pane could never ask for kitty keys (spec §4.7).
             kitty_keyboard: true,
@@ -390,6 +396,7 @@ impl PaneHandle {
                 images.set_cell_px(spec.cell_px);
                 images
             },
+            marks: Marks::new(spec.history_limit),
         }));
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
@@ -450,14 +457,18 @@ impl PaneHandle {
         // than its written blanks loses them and `-J` then trims them, where
         // tmux keeps its width. Carrying widths across resizes misplaced them
         // when lines moved or re-wrapped; the loss is the accepted divergence.
-        {
-            let mut emu = lock(&self.emu);
-            let before = emu.term.grid().history_size();
-            emu.term.resize(size);
-            let after = emu.term.grid().history_size();
-            emu.images
-                .resized(u32::from(size.cols), u32::from(size.rows), (before, after));
-        }
+        let mut emu = lock(&self.emu);
+        let Emu {
+            term,
+            marks,
+            images,
+            ..
+        } = &mut *emu;
+        let before = term.grid().history_size();
+        marks.resize(term, size);
+        let after = term.grid().history_size();
+        images.resized(u32::from(size.cols), u32::from(size.rows), (before, after));
+        drop(emu);
         self.set_winsize(size)
     }
 
@@ -712,12 +723,18 @@ impl PaneHandle {
     /// With each row goes which of its cells an intact tab covers (the
     /// blanks it moved over to its stop, as [`Self::capture_lines`] reads
     /// a tab), which copy mode treats as tmux treats a tab's padding.
-    /// Both are buffers reused for the next row.
-    pub fn copy_grid(&self, mut row: impl FnMut(&mut [SnapCell], &[bool])) -> (usize, CursorState) {
+    /// Both are buffers reused for the next row. The third is the row's
+    /// OSC 133 [`marks`] bits.
+    pub fn copy_grid(
+        &self,
+        mut row: impl FnMut(&mut [SnapCell], &[bool], u8),
+    ) -> (usize, CursorState) {
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size();
         let cols = grid.columns();
+        // The marks are the normal screen's.
+        let marked = !emu.term.mode().contains(TermMode::ALT_SCREEN);
         let mut cells = Vec::with_capacity(cols);
         let mut covered = vec![false; cols];
         for r in -(history as i32)..grid.screen_lines() as i32 {
@@ -737,7 +754,12 @@ impl PaneHandle {
                 }
             }
             snap_row_into(&mut cells, line, cols);
-            row(&mut cells, &covered);
+            let bits = if marked {
+                emu.marks.get((r + history as i32) as usize)
+            } else {
+                0
+            };
+            row(&mut cells, &covered, bits);
         }
         (history, cursor_state(&emu.term))
     }

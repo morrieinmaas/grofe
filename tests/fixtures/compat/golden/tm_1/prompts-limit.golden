@@ -1,0 +1,165 @@
+$ new-session -d -s hold 'exec sleep 100000'
+? 0
+$ set -g history-limit 20
+? 0
+$ new-session -d -s main -x 24 -y 6 'for i in $(seq 1 20); do if [ $((i % 3)) = 0 ]; then printf "\033]133;A\007line-$i-abcdefghijklmnopqrstuvwxyz\n"; else printf "line-$i-abcdefghijklmnopqrstuvwxyz\n"; fi; done; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,13
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 40
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 2,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,4
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+40 0,7
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 24
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,7
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,13
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+24 0,19
+? 0
+$ send-keys -t main -X cancel
+? 0

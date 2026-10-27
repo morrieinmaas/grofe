@@ -24,8 +24,8 @@ pub mod pipe;
 pub mod search;
 pub mod select;
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
@@ -35,7 +35,7 @@ use crate::server::dispatch::options;
 use crate::server::imgstore::PaneImages;
 use crate::server::input::{Input, InputHook, ROOT_TABLE, Routed};
 use crate::server::model::Window;
-use crate::server::pane::{CellFlags, CursorShape, CursorState, PaneHandle, SnapCell};
+use crate::server::pane::{CellFlags, CursorShape, CursorState, PaneHandle, SnapCell, marks};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::screenimg::{self, ImageCaps, Place};
 use crate::server::status::{self, Style};
@@ -133,6 +133,9 @@ struct Row {
     cells: Vec<Cell>,
     /// The row runs on into the next (tmux's `GRID_LINE_WRAPPED`).
     wrapped: bool,
+    /// The OSC 133 marks of the row ([`marks`]: `GRID_LINE_START_PROMPT`
+    /// and `GRID_LINE_START_OUTPUT`).
+    mark: u8,
 }
 
 /// A copy of a pane's history and screen (tmux's backing screen): `hsize`
@@ -226,7 +229,12 @@ impl Grid {
     /// screen).
     pub fn from_pane(handle: &PaneHandle) -> (Grid, (usize, usize)) {
         let mut grid = Grid::empty(0, 0, 0);
-        let (hsize, cursor) = handle.copy_grid(|cells, tabs| grid.push_row(cells, tabs));
+        let (hsize, cursor) = handle.copy_grid(|cells, tabs, mark| {
+            grid.push_row(cells, tabs);
+            if let Some(row) = grid.rows.last_mut() {
+                row.mark = mark;
+            }
+        });
         grid.rows.shrink_to_fit();
         grid.looks.shrink_to_fit();
         grid.hsize = hsize.min(grid.rows.len());
@@ -290,6 +298,7 @@ impl Grid {
         let mut row = Row {
             cells: Vec::with_capacity(cells.len()),
             wrapped,
+            mark: 0,
         };
         // The cell with the latest interned look, and that look.
         let mut last: Option<(usize, u32)> = None;
@@ -1257,6 +1266,34 @@ impl Mode {
         self.scroll_to(ox, oy);
     }
 
+    /// `next-prompt` and `previous-prompt` (`window_copy_cursor_prompt`):
+    /// to column 0 of the next or previous row marked as a prompt start, or
+    /// as an output start with `output`. Nothing moves when there is none.
+    fn cursor_prompt(&mut self, down: bool, output: bool) {
+        let bit = if output { marks::OUTPUT } else { marks::PROMPT };
+        let end = if down { self.grid.total() - 1 } else { 0 };
+        let mut line = self.py();
+        loop {
+            if line == end {
+                return;
+            }
+            line = if down { line + 1 } else { line - 1 };
+            if self.grid.rows[line].mark & bit != 0 {
+                break;
+            }
+        }
+        self.cx = 0;
+        let hsize = self.grid.hsize;
+        if line > hsize {
+            self.cy = line - hsize;
+            self.oy = 0;
+        } else {
+            self.cy = 0;
+            self.oy = hsize - line;
+        }
+        self.update_selection();
+    }
+
     fn history_top(&mut self) {
         let oy = self.py();
         if self.line_sel == LineSel::LeftRight && oy == self.sel_start.1 {
@@ -1537,6 +1574,31 @@ fn positionals(args: &[String], min: usize, max: usize) -> Option<&[String]> {
     (min..=max).contains(&args.len()).then_some(args)
 }
 
+/// Most distinct names [`note_ignored`] remembers; past it nothing new is
+/// noted, so a loop of made-up names grows neither the set nor the log.
+const NOTED_MAX: usize = 64;
+
+/// Whether `name` is new to `seen`, which it joins unless it is full.
+fn remember(seen: &mut BTreeSet<String>, name: &str) -> bool {
+    seen.len() < NOTED_MAX && seen.insert(name.to_string())
+}
+
+/// Notes in `compat-miss.log`, once per name, a command that did nothing
+/// because grofe does not know it or its arguments do not fit (tmux drops
+/// both silently too). Only a name made of lowercase letters and dashes is
+/// written: nothing a command carries but its name ever is.
+fn note_ignored(name: &str) {
+    static SEEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+    let plain = !name.is_empty()
+        && name.len() <= 48
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
+    let shown = if plain { name } else { "(not a name)" };
+    let first = remember(&mut SEEN.lock().unwrap_or_else(|e| e.into_inner()), shown);
+    if first {
+        crate::compat::note_miss(&format!("send-keys -X {shown}: ignored"));
+    }
+}
+
 /// Runs one `send-keys -X` command (`args[0]` is its name) with the
 /// mode's count, then resets the count, as tmux's `window_copy_command`.
 /// A command it does not know, or whose arguments do not fit, does
@@ -1546,6 +1608,9 @@ pub fn run(mode: &mut Mode, args: &[String], ctx: &Ctx<'_>) -> Action {
         return Action::Nothing;
     };
     let action = command(mode, name, rest, ctx);
+    if action.is_none() {
+        note_ignored(name);
+    }
     search::after_command(mode, name, action.is_some());
     mode.prefix = 1;
     action.unwrap_or(Action::Nothing)
@@ -1717,6 +1782,11 @@ fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Optio
         "previous-matching-bracket" => {
             none(rest)?;
             mode.previous_matching_bracket(np, seps);
+            Nothing
+        }
+        "next-prompt" | "previous-prompt" => {
+            let (flags, _) = select::parse(rest, "o", 0)?;
+            mode.cursor_prompt(name == "next-prompt", flags.contains('o'));
             Nothing
         }
         "goto-line" => {
@@ -2300,6 +2370,87 @@ mod tests {
 
     fn at(m: &Mode) -> (usize, usize, usize) {
         (m.cx, m.cy, m.oy)
+    }
+
+    /// A copy of `rows` (the first `hsize` of them history) with the marks
+    /// `marked` gives to rows by index.
+    fn marked(rows: &[&str], hsize: usize, marked: &[(usize, u8)], cursor: (usize, usize)) -> Mode {
+        let mut g = Grid::from_text(20, hsize, rows);
+        for &(row, bits) in marked {
+            g.rows[row].mark = bits;
+        }
+        Mode::new(g, cursor, true)
+    }
+
+    #[test]
+    fn ignored_command_names_are_noted_once_and_only_so_many() {
+        let mut seen = BTreeSet::new();
+        assert!(remember(&mut seen, "nope"));
+        assert!(!remember(&mut seen, "nope"));
+        for i in 0..NOTED_MAX * 2 {
+            remember(&mut seen, &format!("n{i}"));
+        }
+        assert_eq!(seen.len(), NOTED_MAX);
+        assert!(!remember(&mut seen, "fresh"));
+    }
+
+    #[test]
+    fn prompt_jumps_land_in_column_0_of_the_next_or_previous_mark() {
+        let rows = ["a", "b", "c", "d", "e", "f"];
+        let marks = [(1, marks::PROMPT), (3, marks::OUTPUT), (4, marks::PROMPT)];
+        // Two rows of history; the cursor on the last row.
+        let mut m = marked(&rows, 2, &marks, (0, 3));
+        x(&mut m, &["previous-prompt"]);
+        assert_eq!(at(&m), (0, 2, 0), "row 4");
+        x(&mut m, &["previous-prompt"]);
+        assert_eq!(
+            at(&m),
+            (0, 0, 1),
+            "row 1 is in the history: the view scrolls"
+        );
+        x(&mut m, &["previous-prompt"]);
+        assert_eq!(at(&m), (0, 0, 1), "no more");
+        x(&mut m, &["next-prompt"]);
+        assert_eq!(at(&m), (0, 2, 0));
+        x(&mut m, &["next-prompt"]);
+        assert_eq!(at(&m), (0, 2, 0), "no more");
+        // -o looks for output starts.
+        x(&mut m, &["previous-prompt", "-o"]);
+        assert_eq!(at(&m), (0, 1, 0), "row 3");
+        x(&mut m, &["previous-prompt", "-o"]);
+        assert_eq!(at(&m), (0, 1, 0));
+        x(&mut m, &["next-prompt", "-o"]);
+        assert_eq!(at(&m), (0, 1, 0));
+    }
+
+    #[test]
+    fn prompt_jumps_take_the_selection_along_and_ignore_the_count() {
+        let rows = ["a", "b", "c", "d"];
+        let marks = [(2, marks::PROMPT)];
+        let mut m = marked(&rows, 0, &marks, (0, 0));
+        x(&mut m, &["begin-selection"]);
+        m.prefix = 9;
+        x(&mut m, &["next-prompt"]);
+        assert_eq!(at(&m), (0, 2, 0));
+        assert_eq!(m.sel_end.1, 2, "the selection follows the cursor");
+        assert_eq!(m.prefix, 1);
+    }
+
+    #[test]
+    fn prompt_jumps_refuse_what_tmux_refuses() {
+        let rows = ["a", "b", "c"];
+        let marks = [(2, marks::PROMPT)];
+        let mut m = marked(&rows, 0, &marks, (0, 0));
+        for args in [&["-x"][..], &["extra"], &["-o", "extra"]] {
+            let mut a = vec!["next-prompt"];
+            a.extend(args);
+            x(&mut m, &a);
+            assert_eq!(at(&m), (0, 0, 0), "{args:?}");
+        }
+        x(&mut m, &["next-prompt", "-oo"]);
+        assert_eq!(at(&m), (0, 0, 0), "-o finds no output start");
+        x(&mut m, &["next-prompt", "--"]);
+        assert_eq!(at(&m), (0, 2, 0));
     }
 
     #[test]

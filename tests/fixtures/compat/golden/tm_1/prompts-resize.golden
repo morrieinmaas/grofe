@@ -1,0 +1,482 @@
+$ new-session -d -s main -x 20 -y 8 'printf "\033]133;A\007abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH\n\033]133;C\007out-1\n12345678901234567890123\033]133;A\007 tail\nshort\n\033]133;A\007\n\033]133;A\007\033]133;C\007wrapped-output-line-that-is-long-enough\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,4,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,2,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 10
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,3,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,2,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,8
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,8
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,8
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,3,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+10x8 8 0,0,3
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 7
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,1,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,2
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,13
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,13
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,13
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,1,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,6
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,6
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+7x8 13 0,0,6
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 5
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,2
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,4
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,19
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,19
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,1
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,10
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,10
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+5x8 19 0,0,10
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 30
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,4,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,0,1
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,0,1
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,1,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,1,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+30x8 1 0,1,0
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 20
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,4,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,3
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,5,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x8 3 0,0,0
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -y 5
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,2,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,1,0
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,6
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,6
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,6
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,6
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,2,0
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+20x5 6 0,0,3
+? 0
+$ send-keys -t main -X cancel
+? 0
+$ resize-window -t main -x 9 -y 4
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,2
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,3
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,14
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,14
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,14
+? 0
+$ send-keys -t main -X previous-prompt
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,14
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,2
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,9
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,9
+? 0
+$ send-keys -t main -X previous-prompt -o
+? 0
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+9x4 14 0,0,9
+? 0
+$ send-keys -t main -X cancel
+? 0

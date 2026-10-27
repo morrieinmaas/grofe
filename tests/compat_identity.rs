@@ -399,6 +399,37 @@ fn misses_append_one_line_each_to_the_test_state_dir() {
     );
 }
 
+/// A copy-mode command grofe does not know does nothing, as in tmux (which
+/// answers success), and is noted once by name in `compat-miss.log`.
+#[test]
+fn an_unknown_copy_mode_command_is_noted_once() {
+    let srv = start_as_tmux();
+    let new = tmux(&srv, &["new-session", "-d", "-s", "main", "sleep 100000"]);
+    assert!(new.status.success(), "{}", new.stderr);
+    assert!(tmux(&srv, &["copy-mode", "-t", "main"]).status.success());
+    for _ in 0..2 {
+        let out = tmux(
+            &srv,
+            &["send-keys", "-t", "main", "-X", "bogus-command", "secret"],
+        );
+        assert!(out.status.success(), "{}", out.stderr);
+        assert_eq!((out.stdout.as_str(), out.stderr.as_str()), ("", ""));
+    }
+    let out = tmux(&srv, &["send-keys", "-t", "main", "-X", "Not A Name; rm"]);
+    assert!(out.status.success());
+    let lines = miss_lines(&srv);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].ends_with(" send-keys -X bogus-command: ignored"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].ends_with(" send-keys -X (not a name): ignored"),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|l| !l.contains("secret")), "{lines:?}");
+}
+
 /// A grofe-identity server logs no misses, even for a tmux request.
 #[test]
 fn a_grofe_server_logs_no_misses() {
