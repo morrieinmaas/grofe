@@ -595,13 +595,13 @@ pub fn on_full_redraw(state: &mut State, id: ClientId) {
 // ---- commands ----
 
 /// One parsed graphics command: its keys, in order, and its payload.
-struct Cmd<'a> {
+pub(crate) struct Cmd<'a> {
     keys: Vec<(u8, &'a [u8])>,
-    payload: &'a [u8],
+    pub(crate) payload: &'a [u8],
 }
 
 impl<'a> Cmd<'a> {
-    fn parse(apc: &'a [u8]) -> Option<Cmd<'a>> {
+    pub(crate) fn parse(apc: &'a [u8]) -> Option<Cmd<'a>> {
         let body = apc.strip_prefix(b"\x1b_G")?.strip_suffix(b"\x1b\\")?;
         let (head, payload) = match body.iter().position(|b| *b == b';') {
             Some(i) => (&body[..i], &body[i + 1..]),
@@ -634,15 +634,20 @@ impl<'a> Cmd<'a> {
         Some(Cmd { keys, payload })
     }
 
-    fn get(&self, key: u8) -> Option<&'a [u8]> {
+    pub(crate) fn get(&self, key: u8) -> Option<&'a [u8]> {
         self.keys.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
 
-    fn num(&self, key: u8) -> Option<u32> {
+    pub(crate) fn num(&self, key: u8) -> Option<u32> {
         std::str::from_utf8(self.get(key)?).ok()?.parse().ok()
     }
 
-    fn ch(&self, key: u8) -> Option<u8> {
+    /// A signed number key (`z`, `H`, `V`).
+    pub(crate) fn int(&self, key: u8) -> Option<i64> {
+        std::str::from_utf8(self.get(key)?).ok()?.parse().ok()
+    }
+
+    pub(crate) fn ch(&self, key: u8) -> Option<u8> {
         match self.get(key)? {
             [c] => Some(*c),
             _ => None,
@@ -651,7 +656,7 @@ impl<'a> Cmd<'a> {
 
     /// The keys with `set` replacing (or appended after) existing ones and
     /// `drop` removed.
-    fn rewritten(&self, set: &[(u8, String)], drop: &[u8]) -> Vec<(u8, String)> {
+    pub(crate) fn rewritten(&self, set: &[(u8, String)], drop: &[u8]) -> Vec<(u8, String)> {
         let mut keys: Vec<(u8, String)> = self
             .keys
             .iter()
@@ -673,7 +678,7 @@ impl<'a> Cmd<'a> {
     }
 }
 
-fn encode(keys: &[(u8, String)], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn encode(keys: &[(u8, String)], payload: &[u8]) -> Vec<u8> {
     let mut out = b"\x1b_G".to_vec();
     for (i, (k, v)) in keys.iter().enumerate() {
         if i > 0 {

@@ -18,6 +18,7 @@ pub mod dispatch;
 pub mod events;
 pub mod graphics;
 pub mod hooks;
+pub mod imgstore;
 pub mod input;
 pub mod layout;
 pub mod menu;
