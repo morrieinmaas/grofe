@@ -32,7 +32,7 @@ use alacritty_terminal::vte::ansi::{
 };
 
 use super::CellFlags;
-use super::marks::Marks;
+use super::marks::{self, Marks};
 
 /// A cell the program wrote. Bit 15 is free in alacritty 0.26's flags;
 /// nothing but `capture-pane -J` reads it.
@@ -221,6 +221,20 @@ impl<L: EventListener> Handler for Written<'_, L> {
         self.1.sync(&mut *self.0);
     }
 
+    /// A mark the reader fed in-band ([`marks::MARK_PROMPT`]) is made here,
+    /// at the point of the stream the emulator has reached: a synchronized
+    /// update buffers its bytes, and the mark must wait for them with it.
+    fn set_private_mode(&mut self, mode: PrivateMode) {
+        match mode {
+            PrivateMode::Unknown(marks::MARK_PROMPT) => self.1.record(&*self.0, marks::PROMPT),
+            PrivateMode::Unknown(marks::MARK_OUTPUT) => self.1.record(&*self.0, marks::OUTPUT),
+            mode => {
+                Handler::set_private_mode(&mut *self.0, mode);
+                self.1.sync(&mut *self.0);
+            }
+        }
+    }
+
     fn reset_state(&mut self) {
         Handler::reset_state(&mut *self.0);
         self.1.clear();
@@ -265,7 +279,6 @@ impl<L: EventListener> Handler for Written<'_, L> {
         set_mode(mode: Mode);
         unset_mode(mode: Mode);
         report_mode(mode: Mode);
-        set_private_mode(mode: PrivateMode);
         unset_private_mode(mode: PrivateMode);
         report_private_mode(mode: PrivateMode);
         set_scrolling_region(top: usize, bottom: Option<usize>);

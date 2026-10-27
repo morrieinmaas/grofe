@@ -13,6 +13,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
+use super::marks;
 use super::written::Written;
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::server::graphics;
@@ -261,7 +262,7 @@ impl Reader {
     /// sends after the query), never through the actor (T3.8).
     fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
         let (bytes, mut found) = self.scanner.scan(bytes);
-        let marks = self.scanner.take_marks();
+        let found_marks = self.scanner.take_marks();
         for kind in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
@@ -278,12 +279,19 @@ impl Reader {
                 parser,
                 marks: store,
             } = &mut *emu;
-            // An OSC 133 mark is made where the sequence ended, so the
-            // emulator gets the bytes up to it first.
+            // An OSC 133 mark is made where the sequence ended: the emulator
+            // gets the bytes up to it, then a private mode that `Written`
+            // turns into the mark. In-band so a synchronized update, which
+            // holds its bytes back, makes the mark when they are applied.
             let mut from = 0;
-            for (at, bits) in marks {
+            for (at, bits) in found_marks {
                 parser.advance(&mut Written(term, store), &bytes[from..at]);
-                store.record(term, bits);
+                let marker: &[u8] = if bits == marks::PROMPT {
+                    b"\x1b[?65533h"
+                } else {
+                    b"\x1b[?65534h"
+                };
+                parser.advance(&mut Written(term, store), marker);
                 from = at;
             }
             parser.advance(&mut Written(term, store), &bytes[from..]);

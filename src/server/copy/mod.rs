@@ -1568,6 +1568,15 @@ fn positionals(args: &[String], min: usize, max: usize) -> Option<&[String]> {
     (min..=max).contains(&args.len()).then_some(args)
 }
 
+/// Most distinct names [`note_ignored`] remembers; past it nothing new is
+/// noted, so a loop of made-up names grows neither the set nor the log.
+const NOTED_MAX: usize = 64;
+
+/// Whether `name` is new to `seen`, which it joins unless it is full.
+fn remember(seen: &mut BTreeSet<String>, name: &str) -> bool {
+    seen.len() < NOTED_MAX && seen.insert(name.to_string())
+}
+
 /// Notes in `compat-miss.log`, once per name, a command that did nothing
 /// because grofe does not know it or its arguments do not fit (tmux drops
 /// both silently too). Only a name made of lowercase letters and dashes is
@@ -1578,10 +1587,7 @@ fn note_ignored(name: &str) {
         && name.len() <= 48
         && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
     let shown = if plain { name } else { "(not a name)" };
-    let first = SEEN
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(shown.to_string());
+    let first = remember(&mut SEEN.lock().unwrap_or_else(|e| e.into_inner()), shown);
     if first {
         crate::compat::note_miss(&format!("send-keys -X {shown}: ignored"));
     }
@@ -2343,6 +2349,18 @@ mod tests {
             g.rows[row].mark = bits;
         }
         Mode::new(g, cursor, true)
+    }
+
+    #[test]
+    fn ignored_command_names_are_noted_once_and_only_so_many() {
+        let mut seen = BTreeSet::new();
+        assert!(remember(&mut seen, "nope"));
+        assert!(!remember(&mut seen, "nope"));
+        for i in 0..NOTED_MAX * 2 {
+            remember(&mut seen, &format!("n{i}"));
+        }
+        assert_eq!(seen.len(), NOTED_MAX);
+        assert!(!remember(&mut seen, "fresh"));
     }
 
     #[test]

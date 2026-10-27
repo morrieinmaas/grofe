@@ -41,6 +41,12 @@ pub const PROMPT: u8 = 1;
 /// `GRID_LINE_START_OUTPUT`: `OSC 133 ; C`.
 pub const OUTPUT: u8 = 2;
 
+/// The private modes the reader sets, in-band, to put a mark in the emulator's
+/// stream (`CSI ? 65533 h` for a prompt, `65534` for output). No program
+/// uses them.
+pub const MARK_PROMPT: u16 = 65533;
+pub const MARK_OUTPUT: u16 = 65534;
+
 /// Rows of history the emulator keeps beyond `history-limit` between two
 /// calls to [`Marks::sync`]. More than one operation can push (a scroll of
 /// the whole screen, `ED 2`), so it exceeds any screen's height.
@@ -414,6 +420,12 @@ mod tests {
                 );
             }
 
+            /// Bytes as they come from the pty, in-band marks included.
+            pub fn raw(&mut self, bytes: &[u8]) {
+                self.parser
+                    .advance(&mut Written(&mut self.term, &mut self.marks), bytes);
+            }
+
             pub fn history(&self) -> usize {
                 self.term.grid().history_size()
             }
@@ -521,6 +533,23 @@ mod tests {
         e.marks.resize(&mut e.term, Size(5, 30));
         e.feed("\x1b[?1049l");
         assert!(e.marks.is_empty());
+    }
+
+    /// A synchronized update holds its bytes back; a mark inside it is
+    /// made when they are applied, on the line the cursor is then on.
+    #[test]
+    fn a_mark_inside_a_synchronized_update_lands_on_its_line() {
+        let mut e = Emu::new(5, 10, 100);
+        e.raw(b"a\r\n\x1b[?2026hb\r\nc\r\n\x1b[?65533hd\x1b[?2026l");
+        assert_eq!(e.marked(), ["*d"]);
+        e.raw(b"\r\n\x1b[?65534h");
+        assert_eq!(e.marked(), ["*d", "+"]);
+    }
+
+    #[test]
+    fn the_in_band_marker_bytes_match_their_modes() {
+        assert_eq!(MARK_PROMPT, 65533);
+        assert_eq!(MARK_OUTPUT, 65534);
     }
 
     #[test]
