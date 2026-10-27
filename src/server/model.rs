@@ -953,6 +953,7 @@ mod tests {
             term: crate::server::pane::inner_term(),
             cell_px: None,
             graphics_ok: false,
+            images: false,
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(

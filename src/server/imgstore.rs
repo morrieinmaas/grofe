@@ -167,6 +167,31 @@ impl Layer {
     }
 }
 
+/// What the parser looked like before an operation that may scroll.
+#[derive(Debug, Clone, Copy)]
+pub struct Probe {
+    pub history: usize,
+    pub line: u32,
+    pub rows: u32,
+    /// A character is waiting to wrap to the next line.
+    pub needs_wrap: bool,
+}
+
+/// An operation that may scroll the viewport.
+#[derive(Debug, Clone, Copy)]
+pub enum ScrollOp {
+    /// `LF`, `IND`, `NEL`.
+    Feed,
+    /// A character written at the end of a line.
+    Wrap,
+    /// `SU`.
+    Up(usize),
+    /// `DL`.
+    Delete(usize),
+    /// `ED 2`.
+    Clear,
+}
+
 /// A transmit still arriving in chunks.
 #[derive(Debug)]
 struct Pending {
@@ -282,6 +307,8 @@ pub struct Store {
     pending: Option<Pending>,
     anon: u32,
     cell_px: (u32, u32),
+    /// The scrolling region, `(top, bottom + 1)`.
+    region: (u32, u32),
 }
 
 impl Store {
@@ -297,6 +324,7 @@ impl Store {
             pending: None,
             anon: 0,
             cell_px: sixel::DEFAULT_CELL_PX,
+            region: (0, rows),
         }
     }
 
@@ -334,6 +362,60 @@ impl Store {
 
     // ---- terminal events ----
 
+    /// Whether the screen holds a sixel image.
+    pub fn has_sixel(&self) -> bool {
+        !self.layer().sixel.is_empty()
+    }
+
+    /// `DECSTBM`, as the emulator takes it.
+    pub fn set_region(&mut self, top: usize, bottom: Option<usize>) {
+        let bottom = bottom.unwrap_or(self.rows as usize);
+        if top >= bottom {
+            return;
+        }
+        let start = (top as i64 - 1).max(0) as u32;
+        self.region = (start.min(self.rows), bottom.min(self.rows as usize) as u32);
+    }
+
+    /// `RI` with the cursor on `line`: tmux frees every sixel image when it
+    /// scrolls the region down.
+    pub fn reverse_index(&mut self, line: u32) {
+        if line == self.region.0 {
+            self.free_sixels();
+        }
+    }
+
+    /// An operation that may have scrolled the viewport ran; `before` is
+    /// how things stood, `history` the scrollback size now.
+    pub fn scroll_op(&mut self, op: ScrollOp, before: Probe, history: usize) {
+        if self.region != (0, self.rows) {
+            // Only a region that is the whole screen moves the viewport.
+            let feed = matches!(op, ScrollOp::Feed | ScrollOp::Wrap)
+                && before.line + 1 == self.region.1;
+            if feed || matches!(op, ScrollOp::Up(_)) {
+                self.check_line(self.region.0, self.region.1 - self.region.0);
+            }
+            return;
+        }
+        let rows = before.rows;
+        let full = self.in_alt || history >= self.history_limit;
+        let k = if !full {
+            history.saturating_sub(before.history) as u32
+        } else {
+            match op {
+                ScrollOp::Feed => u32::from(before.line + 1 == rows),
+                ScrollOp::Wrap => u32::from(before.needs_wrap && before.line + 1 == rows),
+                ScrollOp::Up(n) => (n.max(1) as u32).min(rows),
+                ScrollOp::Delete(n) if before.line == 0 => (n.max(1) as u32).min(rows),
+                ScrollOp::Delete(_) => 0,
+                ScrollOp::Clear => rows,
+            }
+        };
+        if k > 0 {
+            self.scrolled(k);
+        }
+    }
+
     /// The viewport scrolled up `k` lines.
     pub fn scrolled(&mut self, k: u32) {
         self.layer_mut().v += u64::from(k);
@@ -369,6 +451,7 @@ impl Store {
         self.alt = Layer::default();
         self.in_alt = false;
         self.pending = None;
+        self.region = (0, self.rows);
     }
 
     /// An erase of the display, called before the emulator does it.
@@ -449,16 +532,20 @@ impl Store {
 
     /// The pane was resized. `history` is its size before and after.
     pub fn resized(&mut self, cols: u32, rows: u32, history: (usize, usize)) {
-        let (width_changed, rows_changed) = (cols != self.cols, rows != self.rows);
+        let rows_changed = rows != self.rows;
         let full = self.history_full(history.0);
         self.cols = cols;
         self.rows = rows;
+        self.region = (0, rows);
         self.alt = Layer::default();
         self.main.sixel.clear();
-        if !(width_changed || rows_changed) || self.in_alt {
+        if self.in_alt {
             return;
         }
-        if width_changed || full {
+        // Placements keep their cells through a reflow; what moved into or
+        // out of the history moves the viewport. With the history full it
+        // cannot be told how far, so they go.
+        if rows_changed && full {
             self.main.kitty.clear();
             return;
         }
@@ -1219,9 +1306,9 @@ mod tests {
         // Fewer rows with room in the history: lines moved into it.
         s.resized(80, 20, (0, 3));
         assert_eq!(view(&s)[0].row, -1);
-        // A width change drops the placements.
+        // A width change keeps them where they are.
         s.resized(70, 20, (3, 3));
-        assert!(s.is_empty());
+        assert_eq!(ids(&s).len(), 3);
         // Full history cannot tell how far things moved.
         let mut s = store();
         put(&mut s, RAW, CUR);

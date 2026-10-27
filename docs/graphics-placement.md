@@ -31,8 +31,10 @@ arrived, and every scroll. So the **placement store** lives in the pane's
   wrapping `input`, `clear_screen`) compares the history size before and
   after; with history full (or off) the count is computed from the op and
   the cursor instead. Alt screen has no history, so rows above `v` just go.
-- Resize: a width change drops all placements; a height change moves `v` by
-  the history delta. Sixel is dropped on any resize, as tmux does.
+- Resize: kitty placements keep their cells (no reflow of images) and `v`
+  moves by the history delta; with the history full and the height changed
+  they are dropped, as the shift cannot be told. Sixel is dropped on any
+  resize, as tmux does.
 - `RIS`, ED 2 (screen rows) and ED 3 (history rows) drop what they cover;
   entering the alt screen starts an empty alt layer, leaving it drops it.
 

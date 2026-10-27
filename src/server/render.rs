@@ -19,6 +19,7 @@ use crate::server::State;
 use crate::server::graphics;
 use crate::server::layout::BorderSegment;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, Hyperlink, RowsSnapshot, SnapCell};
+use crate::server::screenimg::{self, ImageCaps, Place, ScreenImage};
 use crate::server::status::{Style, StyledLine};
 use crate::types::{ClientId, PaneId, Rect};
 
@@ -33,6 +34,8 @@ pub struct Screen {
     pub cells: Vec<SnapCell>,
     /// Where the outer cursor goes, in client coordinates; `None` hides it.
     pub cursor: Option<CursorState>,
+    /// The images the terminal shows over the cells (G3).
+    pub images: Vec<ScreenImage>,
 }
 
 impl Screen {
@@ -52,6 +55,7 @@ impl Screen {
             rows,
             cells: vec![blank; cols as usize * rows as usize],
             cursor: None,
+            images: Vec::new(),
         }
     }
 }
@@ -89,6 +93,9 @@ pub struct FrameInputs<'a> {
     /// Kitty graphics placeholder ids to rewrite (T3.8); `None` while no
     /// pane has an image.
     pub graphics: Option<&'a graphics::Remap>,
+    /// What the client can show of the panes' images (G3); `None` shows
+    /// none.
+    pub images: Option<ImageCaps>,
 }
 
 /// Where things are on one client's screen, for an [`Overlay`] (and for
@@ -239,6 +246,23 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
                 cell = blank_like(&cell);
             }
             screen.cells[cy as usize * cols as usize + cx as usize] = cell;
+        }
+    }
+    if let Some(caps) = inputs.images {
+        let mut fallbacks = Vec::new();
+        for (id, rect, snap) in &inputs.panes {
+            let Some(view) = &snap.images else {
+                continue;
+            };
+            let at = Place {
+                origin: (i32::from(rect.x) - i32::from(vx), i32::from(rect.y) - i32::from(vy)),
+                size: (rect.cols, rect.rows),
+                area: (cols, win_rows),
+            };
+            screenimg::collect(&mut screen.images, &mut fallbacks, *id, view, at, inputs.graphics, caps);
+        }
+        for (x, y, crop, cells) in fallbacks {
+            screenimg::paint_fallback(&mut screen, x, y, crop, cells);
         }
     }
     if let (Some(status), true) = (&inputs.status, rows > 0) {
@@ -473,6 +497,8 @@ pub fn with_status(window: Screen, status: &[StyledLine], top: bool) -> Screen {
     let cols = usize::from(window.cols);
     let start = usize::from(above) * cols;
     screen.cells[start..start + window.cells.len()].clone_from_slice(&window.cells);
+    screen.images = window.images;
+    screenimg::shift_down(&mut screen.images, above);
     let first = if top { 0 } else { window.rows };
     for (i, line) in status.iter().enumerate() {
         draw_line(&mut screen, first + i as u16, line);
@@ -540,6 +566,18 @@ fn draw_line(screen: &mut Screen, row: u16, line: &StyledLine) {
 /// follows every wide or zero-width cell (spec §4.4: the outer terminal's
 /// width table may disagree with ours).
 pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
+    diff_placed(prev, next, caps, prev.map_or(&[], |p| &p.images))
+}
+
+/// [`diff`] for a terminal that shows the images `placed`, which are not
+/// always those of `prev` (a dropped frame forgets `prev`, not the
+/// terminal's images).
+pub fn diff_placed(
+    prev: Option<&Screen>,
+    next: &Screen,
+    caps: &Caps,
+    placed: &[ScreenImage],
+) -> Vec<u8> {
     let blank;
     let (base, full) = match prev {
         Some(p) if p.cols == next.cols && p.rows == next.rows => (p, false),
@@ -564,11 +602,21 @@ pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
     }
     let cols = next.cols as usize;
     let mut changed = vec![false; cols];
+    // A sixel image the terminal wipes only when its cells are written.
+    let wipe = if full {
+        Vec::new()
+    } else {
+        screenimg::wipe_rects(placed, &next.images)
+    };
     for y in 0..next.rows as usize {
         let row = &next.cells[y * cols..(y + 1) * cols];
         let old = &base.cells[y * cols..(y + 1) * cols];
         for x in 0..cols {
-            changed[x] = row[x] != old[x];
+            changed[x] = row[x] != old[x]
+                || wipe.iter().any(|&(wx, wy, ww, wh)| {
+                    (wx as usize..(wx + ww) as usize).contains(&x)
+                        && (wy as usize..(wy + wh) as usize).contains(&y)
+                });
         }
         // A changed right half redraws its wide char.
         for x in 1..cols {
@@ -582,6 +630,14 @@ pub fn diff(prev: Option<&Screen>, next: &Screen, caps: &Caps) -> Vec<u8> {
             }
         }
         w.link_to(None);
+    }
+    if !(placed.is_empty() && next.images.is_empty()) {
+        let mut images = Vec::new();
+        screenimg::emit(&mut images, next, placed, full, |x, y| {
+            let i = y as usize * cols + x as usize;
+            full || next.cells[i] != base.cells[i]
+        });
+        w.out.extend_from_slice(&images);
     }
     let drew = !w.out.is_empty();
     let was = if full { None } else { base.cursor };
@@ -892,6 +948,7 @@ mod tests {
             status: None,
             cursor: None,
             graphics: None,
+            images: None,
         });
         // What an overlay might do: overwrite the spacer of the first pair
         // and the wide char of the second.

@@ -130,6 +130,8 @@ pub struct Caps {
     pub sync: bool,
     pub kitty_keys: bool,
     pub kitty_graphics: bool,
+    /// Sixel images (DA1 attribute 4, or `terminal-features`'s `sixel`).
+    pub sixel: bool,
     /// One cell's `(width, height)` in pixels, from `CSI 16 t`; `None`
     /// when the terminal did not say. Panes get their pixel size from it
     /// (image tools need it).
@@ -595,6 +597,7 @@ mod tests {
                 sync: true,
                 kitty_keys: true,
                 kitty_graphics: true,
+                sixel: true,
                 cell_px: Some((10, 20)),
             },
             target: Some("main:2".to_string()),

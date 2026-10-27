@@ -921,6 +921,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("extended-keys", "extended-keys"),
     ("extended-keys-format", "extended-keys-format"),
     ("focus-events", "focus-events"),
+    ("graphics", "graphics"),
     ("history-limit", "history-limit"),
     ("main-pane-height", "main-pane-height"),
     ("main-pane-width", "main-pane-width"),

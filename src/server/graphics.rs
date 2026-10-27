@@ -17,7 +17,11 @@
 //!   is kept under [`CACHE_CAP`] and re-sent on attach and full redraw.
 //! - **Queries** (`a=q`) are answered on the pane's reader task
 //!   ([`answer_query`]), ahead of the emulator's DA1 reply.
-//! - Direct placements (no `U=1`), animation and sixel are dropped.
+//! - Direct placements (no `U=1`), animation and sixel are dropped, unless
+//!   the `graphics` option is on (G3, `docs/graphics-placement.md`): then a
+//!   direct transmit is forwarded as `a=t`, frames and animation control
+//!   (`a=f`, `a=a`, `a=c`) are forwarded and cached after their image, and
+//!   the placements themselves are the pane store's and the renderer's.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -66,6 +70,8 @@ pub struct Graphics {
     pending: HashMap<PaneId, Pending>,
     /// Clients the cache was re-sent to.
     sent: HashSet<ClientId>,
+    /// The `graphics` option is on (G3): set before each command.
+    pub direct: bool,
 }
 
 impl Default for Graphics {
@@ -94,11 +100,15 @@ struct Image {
     data: Arc<[u8]>,
     /// Virtual placements (`a=p,U=1`) by placement id, as forwarded.
     placements: Vec<(u32, Vec<u8>)>,
+    /// Animation frames and control commands, in order (G3).
+    extras: Vec<Vec<u8>>,
 }
 
 impl Image {
     fn size(&self) -> usize {
-        self.data.len() + self.placements.iter().map(|(_, p)| p.len()).sum::<usize>()
+        self.data.len()
+            + self.placements.iter().map(|(_, p)| p.len()).sum::<usize>()
+            + self.extras.iter().map(Vec::len).sum::<usize>()
     }
 }
 
@@ -108,6 +118,8 @@ impl Image {
 struct Pending {
     /// False for a transmit being dropped: its chunks are swallowed.
     forward: bool,
+    /// Frame data (`a=f`): kept after its image, whose chunks say `a=f`.
+    frame: bool,
     local: u32,
     q: u32,
     /// The first chunk's keys (`i=` set on `finish`) and payload.
@@ -121,6 +133,7 @@ impl Pending {
     fn dropped() -> Pending {
         Pending {
             forward: false,
+            frame: false,
             local: 0,
             q: 2,
             head: Vec::new(),
@@ -157,6 +170,7 @@ impl Graphics {
             cap,
             pending: HashMap::new(),
             sent: HashSet::new(),
+            direct: false,
         }
     }
 
@@ -185,7 +199,8 @@ impl Graphics {
             b't' | b'T' => self.transmit(pane, &cmd, &mut out),
             b'p' => self.place(pane, &cmd, &mut out),
             b'd' => self.delete(pane, &cmd, &mut out),
-            // ponytail: animation (`a=f`, `a=a`, `a=c`) is dropped.
+            b'f' if self.direct => self.transmit(pane, &cmd, &mut out),
+            b'a' | b'c' if self.direct => self.animate(pane, &cmd, &mut out),
             _ => self.swallow(pane, &cmd),
         }
         out
@@ -201,17 +216,24 @@ impl Graphics {
     fn transmit(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
         let virtual_placement = cmd.num(b'U') == Some(1);
         let action = cmd.ch(b'a').unwrap_or(b't');
+        let frame = action == b'f';
         // ponytail: image numbers (`I=`) are not supported, only ids.
         let local = cmd.num(b'i').filter(|i| *i != 0);
-        let Some(local) = local.filter(|_| action == b't' || virtual_placement) else {
+        let Some(local) = local.filter(|_| frame || action == b't' || virtual_placement) else {
             self.swallow(pane, cmd);
             return;
         };
         let q = cmd.num(b'q').unwrap_or(0);
+        if frame && self.remap.get(pane, local).is_none() {
+            out.reply = reply(local, q, Err("ENOENT:no such image".into()));
+            self.swallow(pane, cmd);
+            return;
+        }
         match cmd.ch(b't').unwrap_or(b'd') {
             b'd' => {
                 let p = Pending {
                     forward: true,
+                    frame,
                     local,
                     q,
                     head: cmd.rewritten(&[(b'i', String::new()), (b'q', "2".into())], &[]),
@@ -242,6 +264,7 @@ impl Graphics {
                 let (head, first, rest) = inline_chunks(keys, &data);
                 let p = Pending {
                     forward: true,
+                    frame,
                     local,
                     q,
                     head,
@@ -258,7 +281,10 @@ impl Graphics {
         let more = cmd.num(b'm') == Some(1);
         if p.forward {
             let m = if more { "1" } else { "0" };
-            let keys = vec![(b'm', m.to_string()), (b'q', "2".to_string())];
+            let mut keys = vec![(b'm', m.to_string()), (b'q', "2".to_string())];
+            if p.frame {
+                keys.insert(0, (b'a', "f".to_string()));
+            }
             p.rest.extend_from_slice(&encode(&keys, cmd.payload));
             if p.len() > self.cap {
                 out.reply = reply(p.local, p.q, Err("EFBIG:image too large".into()));
@@ -283,16 +309,48 @@ impl Graphics {
         let mut bytes = encode(&p.head, &p.first);
         bytes.extend_from_slice(&p.rest);
         out.forward.extend_from_slice(&bytes);
+        if p.frame {
+            self.keep_extra(outer, bytes);
+            out.reply = reply(p.local, p.q, Ok(()));
+            return;
+        }
         self.uncache(outer);
         let image = Image {
             id: outer,
             data: bytes.into(),
             placements: Vec::new(),
+            extras: Vec::new(),
         };
         self.cached += image.size();
         self.cache.push(image);
         self.evict();
         out.reply = reply(p.local, p.q, Ok(()));
+    }
+
+    /// Animation data or control for image `outer`: re-sent after it.
+    fn keep_extra(&mut self, outer: u32, bytes: Vec<u8>) {
+        if let Some(image) = self.cache.iter_mut().find(|i| i.id == outer) {
+            self.cached += bytes.len();
+            image.extras.push(bytes);
+            self.evict();
+        }
+    }
+
+    /// `a=a` (animation control) and `a=c` (frame composition).
+    fn animate(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
+        let q = cmd.num(b'q').unwrap_or(0);
+        let Some(local) = cmd.num(b'i').filter(|i| *i != 0) else {
+            return;
+        };
+        let Some(outer) = self.remap.get(pane, local) else {
+            out.reply = reply(local, q, Err("ENOENT:no such image".into()));
+            return;
+        };
+        let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
+        let bytes = encode(&keys, b"");
+        out.forward.extend_from_slice(&bytes);
+        self.keep_extra(outer, bytes);
+        out.reply = reply(local, q, Ok(()));
     }
 
     fn place(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
@@ -305,6 +363,10 @@ impl Graphics {
             return;
         };
         if cmd.num(b'U') != Some(1) {
+            // A direct placement is the pane store's and the renderer's.
+            if self.direct {
+                out.reply = reply(local, q, Ok(()));
+            }
             return;
         }
         let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
@@ -354,7 +416,18 @@ impl Graphics {
                     .collect()
             }
             b'a' | b'c' | b'p' | b'q' | b'x' | b'y' | b'z' => mine(self),
-            // ponytail: `d=n` (image numbers) and `d=f` (frames) are dropped.
+            b'f' if self.direct => {
+                if let Some(local) = cmd.num(b'i')
+                    && let Some(outer) = self.remap.get(pane, local)
+                {
+                    let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
+                    let bytes = encode(&keys, b"");
+                    out.forward.extend_from_slice(&bytes);
+                    self.keep_extra(outer, bytes);
+                }
+                Vec::new()
+            }
+            // ponytail: `d=n` (image numbers) is dropped.
             _ => Vec::new(),
         };
         for (local, outer) in targets {
@@ -435,6 +508,9 @@ impl Graphics {
         let mut out = Vec::new();
         for image in &self.cache {
             out.extend_from_slice(&image.data);
+            for extra in &image.extras {
+                out.extend_from_slice(extra);
+            }
             for (_, p) in &image.placements {
                 out.extend_from_slice(p);
             }
@@ -467,6 +543,7 @@ impl Graphics {
 /// One framed APC `_G ... ESC \` from `pane` (T3.3's scanner).
 pub fn on_graphics(state: &mut State, pane: PaneId, bytes: Vec<u8>) {
     prune(state);
+    state.graphics.direct = images_enabled(&state.model);
     let out = state.graphics.handle(pane, &bytes);
     if let (Some(reply), Some(p)) = (out.reply, state.model.panes.get(&pane)) {
         let _ = p.handle.enqueue_input(reply);
@@ -481,6 +558,19 @@ fn prune(state: &mut State) {
     let panes = &state.model.panes;
     let deletes = state.graphics.prune(|p| panes.contains_key(&p));
     to_kitty_clients(state, &deletes);
+}
+
+/// Whether the `graphics` option is on (G3).
+pub fn images_enabled(model: &crate::server::model::Model) -> bool {
+    model.options.lookup("graphics", &[]) == Some("on")
+}
+
+/// The `graphics` option may have changed: tells every pane's reader.
+pub fn sync_option(model: &crate::server::model::Model) {
+    let on = images_enabled(model);
+    for p in model.panes.values() {
+        p.handle.set_images(on);
+    }
 }
 
 /// The clients whose terminals show kitty graphics.
@@ -1969,6 +2059,7 @@ mod tests {
             status: None,
             cursor: None,
             graphics: Some(remap),
+            images: None,
         })
     }
 
@@ -2024,6 +2115,7 @@ mod tests {
             status: None,
             cursor: None,
             graphics: Some(&remap),
+            images: None,
         });
         assert_eq!(screen.cells[0].c, PLACEHOLDER);
         assert_eq!(

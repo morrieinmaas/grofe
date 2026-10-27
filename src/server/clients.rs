@@ -47,6 +47,7 @@ use crate::server::input::{
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
+use crate::server::screenimg::{self, ImageCaps, ScreenImage};
 use crate::server::status::{
     self, RangeKind, StatusInputs, StatusRow, StyledLine, WindowOptions, WindowStatus,
 };
@@ -114,6 +115,9 @@ pub struct Outbox {
     raw: Vec<u8>,
     /// Bytes of dropped diffs, ever (`client_discarded`).
     discarded: u64,
+    /// The images the client's terminal shows once everything sent so far
+    /// is written (G3); unlike `prev`, kept across a dropped frame.
+    placed: Vec<ScreenImage>,
 }
 
 /// Most raw bytes held for a client whose frames are being dropped.
@@ -131,6 +135,7 @@ impl Outbox {
             blocked: false,
             raw: Vec::new(),
             discarded: 0,
+            placed: Vec::new(),
         };
         (outbox, rx)
     }
@@ -163,7 +168,7 @@ impl Outbox {
     /// client still needs one, and must be offered it again once
     /// [`Outbox::ready`].
     pub fn offer(&mut self, next: Screen, caps: &Caps) -> bool {
-        let diff = render::diff(self.prev.as_ref(), &next, caps);
+        let diff = render::diff_placed(self.prev.as_ref(), &next, caps, &self.placed);
         if diff.is_empty() && self.raw.is_empty() {
             return true;
         }
@@ -172,6 +177,7 @@ impl Outbox {
         bytes.extend_from_slice(&diff);
         match self.tx.try_send(bytes) {
             Ok(()) => {
+                self.placed.clone_from(&next.images);
                 self.prev = Some(next);
                 self.blocked = false;
                 true
@@ -1840,7 +1846,9 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         status: None,
         cursor,
         graphics: state.graphics.remap(),
+        images: Some(ImageCaps::of(&c.caps)),
     });
+    let window_before = (!window.images.is_empty()).then(|| window.cells.clone());
     if !w.zoomed && !w.floating.is_empty() {
         let mut stack = w.floating.clone();
         stack.sort_by_key(|f| f.z);
@@ -1864,6 +1872,10 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             &window_style(model, w, "pane-active-border-style"),
         );
     }
+    // Floating panes cover what is under them, images included.
+    if let Some(before) = &window_before {
+        screenimg::hide_covered(&mut window, before);
+    }
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if let Some(first) = lines.first_mut() {
@@ -1883,6 +1895,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         window
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
+    let screen_before = (!screen.images.is_empty()).then(|| screen.cells.clone());
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
@@ -1891,6 +1904,10 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         screen.cursor = None;
     }
     render::fix_wide_pairs(&mut screen);
+    // Popups, menus, prompts and choosers cover images the same way.
+    if let Some(before) = &screen_before {
+        screenimg::hide_covered(&mut screen, before);
+    }
     Some((screen, viewport, rows, geom.first_row))
 }
 

@@ -445,6 +445,7 @@ pub(crate) fn respawn(
         term: state.inner_term,
         cell_px: clients::cell_px(state, model.windows[&p.window].session),
         graphics_ok: graphics::panes_graphics_ok(state),
+        images: graphics::images_enabled(&state.model),
     };
     let cwd = spec.cwd.clone();
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())

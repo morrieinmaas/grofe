@@ -35,6 +35,7 @@ pub use alacritty_terminal::term::cell::Flags as CellFlags;
 pub use alacritty_terminal::term::cell::Hyperlink;
 
 use crate::protocol::Caps;
+use crate::server::imgstore::{PaneImages, Store};
 use crate::server::passthrough::Scanner;
 use crate::server::render::write_sgr;
 use crate::server::status::Style;
@@ -76,6 +77,9 @@ pub enum PaneEventKind {
     Path(String),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
+    /// G3: one `DCS q` sixel image from the scanner, as the reader
+    /// handles it; never sent to the actor. `body` starts with the `q`.
+    Sixel { p2: u32, body: Vec<u8> },
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
     /// the `ESC ]` and terminator.
     Osc(Vec<u8>),
@@ -109,6 +113,8 @@ pub struct PaneSpawn {
     /// Whether the pane's graphics queries are answered from the start
     /// (`graphics::panes_graphics_ok`).
     pub graphics_ok: bool,
+    /// The `graphics` option (G3): kitty direct placements and sixel.
+    pub images: bool,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -159,12 +165,16 @@ pub struct CursorState {
 pub struct RowsSnapshot {
     pub rows: Vec<Vec<SnapCell>>,
     pub cursor: CursorState,
+    /// The pane's visible image placements (G3); `None` while it has none.
+    pub images: Option<PaneImages>,
 }
 
 /// The emulator: `Term` and its parser, always locked together.
 pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
+    /// The pane's image placements (G3).
+    pub(crate) images: Store,
 }
 
 /// alacritty's tab stops, every 8 columns.
@@ -316,6 +326,8 @@ pub struct PaneHandle {
     /// Set from the server when an attached client has kitty graphics;
     /// the reader answers the pane's graphics queries from it (T3.8).
     graphics_ok: Arc<AtomicBool>,
+    /// The `graphics` option, read by the reader for every chunk (G3).
+    images_on: Arc<AtomicBool>,
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: procinfo::Cache,
@@ -366,9 +378,16 @@ impl PaneHandle {
         let emu = Arc::new(Mutex::new(Emu {
             term: Term::new(config, &size, Listener(Arc::clone(&events))),
             parser: Processor::new(),
+            images: {
+                let mut images =
+                    Store::new(u32::from(size.cols), u32::from(size.rows), spec.history_limit);
+                images.set_cell_px(spec.cell_px);
+                images
+            },
         }));
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
+        let images_on = Arc::new(AtomicBool::new(spec.images));
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
 
@@ -385,6 +404,7 @@ impl PaneHandle {
             to_actor,
             scanner: Scanner::default(),
             graphics_ok: Arc::clone(&graphics_ok),
+            images_on: Arc::clone(&images_on),
         }));
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
@@ -401,6 +421,7 @@ impl PaneHandle {
             dirty,
             sample,
             graphics_ok,
+            images_on,
             cell_px: Mutex::new(spec.cell_px),
             reported_path: Mutex::new(None),
             tty,
@@ -423,7 +444,14 @@ impl PaneHandle {
         // than its written blanks loses them and `-J` then trims them, where
         // tmux keeps its width. Carrying widths across resizes misplaced them
         // when lines moved or re-wrapped; the loss is the accepted divergence.
-        lock(&self.emu).term.resize(size);
+        {
+            let mut emu = lock(&self.emu);
+            let before = emu.term.grid().history_size();
+            emu.term.resize(size);
+            let after = emu.term.grid().history_size();
+            emu.images
+                .resized(u32::from(size.cols), u32::from(size.rows), (before, after));
+        }
         self.set_winsize(size)
     }
 
@@ -445,7 +473,8 @@ impl PaneHandle {
             *current = cell_px;
         }
         let size = {
-            let emu = lock(&self.emu);
+            let mut emu = lock(&self.emu);
+            emu.images.set_cell_px(cell_px);
             Size {
                 cols: emu.term.columns() as u16,
                 rows: emu.term.screen_lines() as u16,
@@ -458,6 +487,21 @@ impl PaneHandle {
     /// the pane's graphics queries by it (T3.8), without the actor.
     pub fn set_graphics_ok(&self, ok: bool) {
         self.graphics_ok.store(ok, Ordering::Relaxed);
+    }
+
+    /// Turns the `graphics` option on or off for this pane (G3).
+    pub fn set_images(&self, on: bool) {
+        if !on && self.images_on.swap(false, Ordering::Relaxed) {
+            // Not tracked while off: what it held would drift from the text.
+            lock(&self.emu).images.reset();
+            self.dirty.store(true, Ordering::Release);
+        }
+        self.images_on.store(on, Ordering::Relaxed);
+    }
+
+    /// See [`Self::set_images`].
+    pub fn images(&self) -> bool {
+        self.images_on.load(Ordering::Relaxed)
     }
 
     /// See [`Self::set_graphics_ok`].
@@ -737,7 +781,11 @@ impl PaneHandle {
         let rows = (rows.start..end)
             .map(|r| snap_row(&grid[Line(r as i32)], grid.columns()))
             .collect();
-        RowsSnapshot { rows, cursor }
+        RowsSnapshot {
+            rows,
+            cursor,
+            images: emu.images.view(),
+        }
     }
 }
 
@@ -955,6 +1003,7 @@ mod tests {
             term,
             cell_px: None,
             graphics_ok: false,
+            images: false,
         }
     }
 

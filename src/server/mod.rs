@@ -29,6 +29,7 @@ pub mod passthrough;
 pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod screenimg;
 pub mod sixel;
 pub mod sources;
 pub mod status;
@@ -331,6 +332,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Path(_)
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
+        // The reader handles sixel images; they never reach the actor.
+        PaneEventKind::Sixel { .. } => {}
     }
     hooks::run_pending(state);
     state.events.flush();

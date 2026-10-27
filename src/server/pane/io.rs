@@ -16,6 +16,7 @@ use tokio::time::Instant;
 use super::written::Written;
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::server::graphics;
+use crate::server::imgstore::{Cursor, Forward};
 use crate::server::passthrough::Scanner;
 use crate::types::PaneId;
 
@@ -140,6 +141,8 @@ pub(crate) struct Reader {
     pub(crate) scanner: Scanner,
     /// See `PaneHandle::set_graphics_ok`.
     pub(crate) graphics_ok: Arc<AtomicBool>,
+    /// See `PaneHandle::set_images`.
+    pub(crate) images_on: Arc<AtomicBool>,
 }
 
 /// Reader task: parse output, answer the emulator's queries, drive the sync
@@ -238,10 +241,15 @@ impl Reader {
     fn flush_sync(&self) {
         let pending = {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser, .. } = &mut *emu;
+            let Emu {
+                term,
+                parser,
+                images,
+            } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
-                parser.stop_sync(&mut Written(term));
+                let store = self.images_on.load(Ordering::Relaxed).then_some(&mut *images);
+                parser.stop_sync(&mut Written(term, store));
             }
             pending
         };
@@ -256,23 +264,78 @@ impl Reader {
     /// ahead of the emulator's own replies (its DA1 answer, which a tool
     /// sends after the query), never through the actor (T3.8).
     fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
-        let (bytes, mut found) = self.scanner.scan(bytes);
-        for kind in &found {
+        let images = self.images_on.load(Ordering::Relaxed);
+        self.scanner.set_sixel(images);
+        let (bytes, found) = self.scanner.scan_at(bytes);
+        for (_, kind) in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
             {
                 self.reply(answer);
             }
         }
-        // A query is answered here only; the actor never sees it.
-        found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
+        let mut events = Vec::new();
         {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser, .. } = &mut *emu;
-            parser.advance(&mut Written(term), &bytes);
+            let Emu {
+                term,
+                parser,
+                images: store,
+            } = &mut *emu;
+            if !images {
+                parser.advance(&mut Written(term, None), &bytes);
+                // A query is answered here only; the actor never sees it.
+                events.extend(found.into_iter().map(|(_, kind)| kind).filter(
+                    |k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)),
+                ));
+            } else {
+                let mut fed = 0;
+                for (at, kind) in found {
+                    match kind {
+                        PaneEventKind::Graphics(apc) if graphics::is_query(&apc) => {}
+                        PaneEventKind::Graphics(_) | PaneEventKind::Sixel { .. } => {
+                            // The cursor must be where the command's bytes
+                            // put it: past what the parser holds back in a
+                            // synchronized update, and what precedes it.
+                            parser.advance(&mut Written(term, Some(&mut *store)), &bytes[fed..at]);
+                            fed = at;
+                            if parser.sync_timeout().sync_timeout().is_some() {
+                                parser.stop_sync(&mut Written(term, Some(&mut *store)));
+                            }
+                            let point = term.grid().cursor.point;
+                            let cur = Cursor {
+                                line: point.line.0.max(0) as u32,
+                                col: point.column.0 as u32,
+                            };
+                            let (inject, forward) = match kind {
+                                PaneEventKind::Sixel { p2, body } => {
+                                    (store.on_sixel(&body, p2, cur), Forward::Replace(vec![]))
+                                }
+                                PaneEventKind::Graphics(apc) => {
+                                    let out = store.on_apc(&apc, cur);
+                                    match out.forward {
+                                        Forward::Same => (out.inject, Forward::Replace(vec![apc])),
+                                        other => (out.inject, other),
+                                    }
+                                }
+                                _ => (Vec::new(), Forward::Replace(vec![])),
+                            };
+                            if !inject.is_empty() {
+                                parser.advance(&mut Written(term, Some(&mut *store)), &inject);
+                            }
+                            if let Forward::Replace(list) = forward {
+                                events.extend(list.into_iter().map(PaneEventKind::Graphics));
+                            }
+                        }
+                        other => events.push(other),
+                    }
+                }
+                parser.advance(&mut Written(term, Some(&mut *store)), &bytes[fed..]);
+                store.prune(term.grid().history_size());
+            }
         }
         self.after_parse();
-        found
+        events
     }
 
     /// Handle buffered listener events, then mark the pane dirty and wake the
