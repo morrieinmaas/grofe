@@ -509,6 +509,74 @@ fn pane_focus_only_for_the_session_a_client_shows() {
     quiet(&mut sub);
 }
 
+#[test]
+fn killing_the_active_pane_moves_focus_after_its_pane_exited() {
+    let (srv, _client, _sub, right, name) = focus_rig();
+    let session = display(&srv, "s", "#{session_id}");
+    let window = display(&srv, "s", "#{window_id}");
+    let left = display(&srv, "s:1.1", "#{pane_id}");
+    let uid = display(&srv, &left, "#{pane_uid}");
+    let mut sub = srv.subscribe(&["pane-exited", "pane-focus"]).unwrap();
+    ok(&srv, &["kill-pane", "-t", &left]);
+    assert_eq!(
+        next(&mut sub),
+        format!(r#"{{"event":"pane-exited","pane":"{left}","uid":"{uid}","status":null}}"#)
+    );
+    assert_eq!(next(&mut sub), focus(&right, &window, &session, &name));
+    quiet(&mut sub);
+}
+
+#[test]
+fn zoom_moves_no_focus() {
+    let (srv, _client, mut sub, _right, _name) = focus_rig();
+    ok(&srv, &["resize-pane", "-Z", "-t", "s:1.1"]);
+    ok(&srv, &["resize-pane", "-Z", "-t", "s:1.1"]);
+    quiet(&mut sub);
+}
+
+#[test]
+fn switch_client_moves_focus_to_the_other_sessions_pane() {
+    let (srv, _client, mut sub, _right, name) = focus_rig();
+    ok(&srv, &["new-session", "-d", "-s", "other", "sleep 600"]);
+    let session = display(&srv, "other", "#{session_id}");
+    let window = display(&srv, "other", "#{window_id}");
+    let pane = display(&srv, "other", "#{pane_id}");
+    ok(&srv, &["switch-client", "-c", &name, "-t", "other"]);
+    assert_eq!(next(&mut sub), focus(&pane, &window, &session, &name));
+    // Switching to the session it already shows moves nothing.
+    ok(&srv, &["switch-client", "-c", &name, "-t", "other"]);
+    quiet(&mut sub);
+}
+
+#[test]
+fn a_second_client_on_the_session_gets_its_own_event() {
+    let (srv, _client, mut sub, right, name) = focus_rig();
+    let session = display(&srv, "s", "#{session_id}");
+    let window = display(&srv, "s", "#{window_id}");
+    let left = display(&srv, "s:1.1", "#{pane_id}");
+    let _second = Harness::spawn_attach_with_env(srv.command(), "s", &[], 80, 24);
+    // Its attach is its own focus change.
+    let got = next(&mut sub);
+    assert!(
+        got.contains(&format!(r#""pane":"{left}""#)) && !got.contains(&name),
+        "{got}"
+    );
+    quiet(&mut sub);
+    // One select-pane moves both clients' views: one event each.
+    ok(&srv, &["select-pane", "-t", &right]);
+    let (a, b) = (next(&mut sub), next(&mut sub));
+    assert_ne!(a, b);
+    for got in [&a, &b] {
+        assert!(
+            got.contains(&format!(
+                r#""pane":"{right}","window":"{window}","session":"{session}""#
+            )),
+            "{got}"
+        );
+    }
+    quiet(&mut sub);
+}
+
 // --- subscribe filters ---------------------------------------------------
 
 #[test]
