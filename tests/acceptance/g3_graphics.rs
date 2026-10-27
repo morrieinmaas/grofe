@@ -1054,3 +1054,30 @@ fn a_stalled_client_gets_its_placements_again() {
         "{text:?}"
     );
 }
+
+/// Case 17: `terminal-features` can grant a client sixel, as tmux's does
+/// for a terminal that does not say so in its DA1 reply.
+#[test]
+fn terminal_features_can_grant_sixel() {
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let draw = cat(&srv, "draw.bin", &format!("{}{SIXEL_IMAGE}", at(4, 3)));
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
+    srv.cmd(&["set-option", "-g", "terminal-features[0]", "xterm*:sixel"])
+        .expect("terminal-features");
+    // The harness client is an xterm-256color whose probe says nothing of
+    // sixel; it knows its cell size.
+    let mut a = attach(&srv, &[("GROFE_TEST_CAPS", "cell_px=10x20")]);
+    touch(&go);
+    a.wait_for_output(b"\x1b[4;3H\x1bP0;0q", 0);
+    assert!(!a.text().contains("SIXEL IMAGE"));
+    // Another terminal name gets the stand-in.
+    srv.cmd(&["set-option", "-g", "terminal-features[0]", "screen*:sixel"])
+        .expect("terminal-features");
+    let mut b = attach(&srv, &[("GROFE_TEST_CAPS", "cell_px=10x20")]);
+    b.wait_for("SIXEL IMAGE (2x1)");
+}

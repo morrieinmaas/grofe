@@ -3462,6 +3462,17 @@ mod tests {
     }
 
     #[test]
+    fn terminal_feature_patterns_are_globs() {
+        assert!(glob("xterm*", "xterm-256color"));
+        assert!(glob("*", "anything"));
+        assert!(glob("screen?256color", "screen-256color"));
+        assert!(glob("foot", "foot"));
+        assert!(!glob("foot", "foot-extra"));
+        assert!(!glob("xterm*", "screen"));
+        assert!(!glob("a?", "a"));
+    }
+
+    #[test]
     fn a_full_outbox_drops_the_diff_and_redraws_in_full_once_free() {
         let caps = Caps::default();
         let (mut outbox, mut rx) = Outbox::new();
