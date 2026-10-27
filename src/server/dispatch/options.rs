@@ -2834,7 +2834,8 @@ impl FormatVars for FormatCtx<'_> {
             "window_flags" => window_flags(s, w),
             // ponytail: `client_width`/`client_height` need clients (M2);
             // `host` and `host_short` are `ServerVars`' (TC.11).
-            _ => return None,
+            // The emulator's screen state (`cursor_x`, `wrap_flag`, ...).
+            _ => return p.handle.term_var(name),
         })
     }
 }

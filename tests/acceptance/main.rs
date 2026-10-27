@@ -9,6 +9,7 @@
 //! T2.5a on, scenario modules drive `grofe attach` instead (via
 //! `env!("CARGO_BIN_EXE_grofe")`).
 
+mod f1;
 mod harness;
 mod m2_gate;
 mod m2_robust;

@@ -222,8 +222,9 @@ Where grofe differs:
   them all, as the normal screen's lines cannot be seen to reflow.
 - **Synchronized updates.** A mark inside a `CSI ? 2026` block is made
   where the block ends, not where the sequence is.
-- **`clear-history`** is not a grofe command; `ED 3` drops the marks of
-  the history it drops, as tmux does.
+- **`clear-history`** drops the marks of the history it drops, as `ED 3`
+  does and tmux does. On the alternate screen it does nothing, as the
+  normal screen's scrollback is not reachable there.
 
 ## Selection over wrapped lines
 

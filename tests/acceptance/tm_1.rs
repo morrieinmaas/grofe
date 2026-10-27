@@ -24,7 +24,13 @@ fn fixtures() -> PathBuf {
 }
 
 fn golden_text(name: &str) -> String {
-    fs::read_to_string(fixtures().join(format!("golden/tm_1/{name}.golden"))).unwrap()
+    // A name with a directory (`f1/cursor`) is another task's golden.
+    let rel = if name.contains('/') {
+        name.to_string()
+    } else {
+        format!("tm_1/{name}")
+    };
+    fs::read_to_string(fixtures().join(format!("golden/{rel}.golden"))).unwrap()
 }
 
 /// The fixture as a pane command: 500 lines of history in 80x24.
@@ -150,7 +156,7 @@ fn load(name: &str) -> Vec<Step> {
 }
 
 /// Runs golden `name` on a fresh server, comparing each command with tmux.
-fn replay(name: &str) {
+pub fn replay(name: &str) {
     let srv = TestServer::start();
     let mut client: Option<Harness> = None;
     // Typed keys reach the server in order but after the CLI's commands
