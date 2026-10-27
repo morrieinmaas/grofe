@@ -1,0 +1,1 @@
+{"caps":{"cell_px":[9,18],"kitty_graphics":true,"kitty_keys":true,"sixel":false,"styled_underline":true,"sync":true,"truecolor":true},"cols":200,"cwd":"/home/u/src","detach_others":false,"dialect":"tmux","env":{"SSH_AUTH_SOCK":"/run/user/1000/ssh.sock"},"grofe":1,"mode":"attach","nest":false,"pane":null,"rows":50,"target":"main","term":"xterm-ghostty","tty":"/dev/ttys004"}
