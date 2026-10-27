@@ -227,3 +227,24 @@ fn run_shell_and_if_shell_use_bin_sh() {
         .unwrap();
     assert_eq!(out, "yes\n");
 }
+
+/// The harness pins the server's shell: a user's `$SHELL` (bash in a CI
+/// container) would run `exec sh` through `bash -c`, which drops the
+/// exported `PS1` and leaves `sh` showing its own prompt (`# ` as root).
+#[test]
+fn the_harness_server_runs_pane_commands_through_sh_whatever_shell_the_user_has() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "m",
+        "echo shell-is-$SHELL; exec sh",
+    ])
+    .unwrap();
+    srv.wait_for(
+        || srv.capture("m:1").contains("shell-is-/bin/sh"),
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|e| panic!("{e}\n{}", srv.capture("m:1")));
+}

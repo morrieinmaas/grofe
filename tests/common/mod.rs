@@ -113,7 +113,9 @@ impl TestServer {
     ///
     /// A server it starts hands its environment to panes, so a pane's
     /// shell prompts [`PROMPT`] whoever runs the tests: `sh` would print
-    /// `# ` as root (a CI container) and `$ ` otherwise. `ENV` is cleared so
+    /// `# ` as root (a CI container) and `$ ` otherwise. `SHELL` is pinned to
+    /// `sh` (the pane command strings run through `$SHELL -c`, and a bash there
+    /// drops the exported `PS1`); `ENV` is cleared so
     /// no startup file sets another prompt.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
@@ -126,6 +128,7 @@ impl TestServer {
             .env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_STATE_HOME", &self.state_home)
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
+            .env("SHELL", "/bin/sh")
             .env("PS1", PROMPT)
             .env("ENV", "")
             .env(StartOptions::RESTORE_ON_START_ENV, "0")
