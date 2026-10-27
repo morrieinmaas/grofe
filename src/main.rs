@@ -127,7 +127,8 @@ fn main() -> ExitCode {
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
         // A stdio bridge to the server (T6.2).
-        "control" => fail("grofe control: not yet supported"),
+        "control" if rest.len() == 1 => control_bridge(&globals.socket()),
+        "control" => fail("grofe control: takes no arguments"),
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
@@ -511,6 +512,109 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         Ok(Reply::Event(_)) => fail("unexpected event reply"),
         Err(e) => fail(&e),
     }
+}
+
+/// What the two halves of [`control_bridge`] share.
+#[derive(Default)]
+struct BridgeState {
+    /// Requests sent that have no reply yet.
+    pending: usize,
+    /// Ids of `subscribe` requests still waiting for their reply.
+    subscribing: Vec<u64>,
+    /// A `subscribe` was accepted: the stream goes on after stdin ends.
+    subscribed: bool,
+    /// Stdin has ended.
+    eof: bool,
+}
+
+/// `grofe control` (T6.2): a stdio bridge to the control socket. Each line on
+/// stdin is a request (spec §4.6), each line the server sends goes to stdout
+/// as it came, so a plugin in any language needs no socket code. The hello is
+/// this CLI's own. With stdin at its end, the bridge leaves once every reply
+/// is out, unless a `subscribe` was sent; then it streams until the server
+/// closes the connection or stdout does.
+fn control_bridge(socket: &Path) -> ExitCode {
+    use std::sync::{Arc, Mutex};
+
+    let hello = match control_hello(socket) {
+        Ok(h) => h,
+        Err(e) => return fail(&e),
+    };
+    let stream = match connect(socket) {
+        Ok(s) => s,
+        Err(e) => return fail(&e),
+    };
+    let mut writer = match stream.try_clone() {
+        Ok(w) => w,
+        Err(e) => return fail(&format!("control: {e}")),
+    };
+    if let Err(e) = writeln!(writer, "{hello}") {
+        return fail(&format!("sending hello: {e}"));
+    }
+    let state = Arc::new(Mutex::new(BridgeState::default()));
+
+    let sender_state = Arc::clone(&state);
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            {
+                let mut s = sender_state.lock().unwrap();
+                s.pending += 1;
+                if let Ok(r) = serde_json::from_str::<Request>(&line)
+                    && r.argv.first().is_some_and(|v| v == "subscribe")
+                {
+                    s.subscribing.push(r.id);
+                }
+            }
+            if writeln!(writer, "{line}").is_err() {
+                return;
+            }
+        }
+        let mut s = sender_state.lock().unwrap();
+        s.eof = true;
+        if s.pending == 0 && !s.subscribed {
+            std::process::exit(0);
+        }
+    });
+
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let value = serde_json::from_str::<serde_json::Value>(&line).unwrap_or_default();
+        // The state stays locked through the write, so stdin's end cannot
+        // exit the process half-way through a line.
+        let mut s = state.lock().unwrap();
+        let mut stdout = io::stdout().lock();
+        if stdout.write_all(line.trim_end().as_bytes()).is_err()
+            || stdout.write_all(b"\n").is_err()
+            || stdout.flush().is_err()
+        {
+            return ExitCode::SUCCESS;
+        }
+        if value.get("event").is_none() {
+            s.pending = s.pending.saturating_sub(1);
+            let id = value.get("id").and_then(serde_json::Value::as_u64);
+            if let Some(at) = s.subscribing.iter().position(|i| Some(*i) == id) {
+                s.subscribing.remove(at);
+                s.subscribed |= value.get("ok") == Some(&serde_json::Value::Bool(true));
+            }
+            if s.eof && s.pending == 0 && !s.subscribed {
+                return ExitCode::SUCCESS;
+            }
+        }
+    }
+    if state.lock().unwrap().pending > 0 {
+        return fail("server closed the connection without replying");
+    }
+    ExitCode::SUCCESS
 }
 
 /// tmux's `-c <shell-command>`: the command run by the default shell, as
