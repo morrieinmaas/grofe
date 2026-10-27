@@ -201,7 +201,10 @@ server as a request and each line the server sends to stdout as it came,
 flushed per line. It takes no arguments and does not start a server. At the
 end of stdin it leaves once every reply is out, unless a `subscribe` was
 accepted: then it streams events until the server closes the connection or
-stdout does. It exits 1 if the server closes the connection with a request
+stdout does. A stdin line the server could not take (over 16 MiB, or not
+UTF-8) is not sent: the bridge prints an `ok: false` reply with `id` 0 for it
+and goes on. `grofe control` is grofe's own verb; invoked as `tmux` it is an
+unknown command. It exits 1 if the server closes the connection with a request
 unanswered (a refused hello, for one), with the server's line already on
 stdout. The bridge does not buffer events: a reader that stalls stalls the
 socket, and the server drops events and sends `events-dropped` (section 6).

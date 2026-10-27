@@ -127,8 +127,11 @@ fn main() -> ExitCode {
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
         // A stdio bridge to the server (T6.2).
-        "control" if rest.len() == 1 => control_bridge(&globals.socket()),
-        "control" => fail("grofe control: takes no arguments"),
+        // grofe's own verb: under the tmux name `control` is an unknown command.
+        "control" if dialect() == Dialect::Grofe && rest.len() == 1 => {
+            control_bridge(&globals.socket())
+        }
+        "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
@@ -527,6 +530,50 @@ struct BridgeState {
     eof: bool,
 }
 
+/// One request line from `input`, without its `\n` or `\r\n`: `None` at the
+/// end of input, `Some(Err(why))` for a line the server could not take (past
+/// the frame cap, which is skipped to its end without being kept, or not
+/// UTF-8).
+fn read_request_line(input: &mut impl BufRead) -> io::Result<Option<Result<String, String>>> {
+    let max = grofe::protocol::MAX_MESSAGE_LEN;
+    let mut buf = Vec::new();
+    let mut over = false;
+    loop {
+        let chunk = input.fill_buf()?;
+        if chunk.is_empty() {
+            if buf.is_empty() && !over {
+                return Ok(None);
+            }
+            break;
+        }
+        let end = chunk.iter().position(|b| *b == b'\n');
+        let take = end.map_or(chunk.len(), |i| i + 1);
+        if !over {
+            buf.extend_from_slice(&chunk[..take]);
+            if buf.len() > max + 2 {
+                over = true;
+                buf = Vec::new();
+            }
+        }
+        input.consume(take);
+        if end.is_some() {
+            break;
+        }
+    }
+    if over {
+        return Ok(Some(Err(format!("request line over {max} bytes"))));
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+    }
+    if buf.last() == Some(&b'\r') {
+        buf.pop();
+    }
+    Ok(Some(String::from_utf8(buf).map_err(|_| {
+        "request line is not valid UTF-8".to_string()
+    })))
+}
+
 /// `grofe control` (T6.2): a stdio bridge to the control socket. Each line on
 /// stdin is a request (spec §4.6), each line the server sends goes to stdout
 /// as it came, so a plugin in any language needs no socket code. The hello is
@@ -555,8 +602,24 @@ fn control_bridge(socket: &Path) -> ExitCode {
 
     let sender_state = Arc::clone(&state);
     std::thread::spawn(move || {
-        for line in io::stdin().lock().lines() {
-            let Ok(line) = line else { break };
+        let mut input = io::stdin().lock();
+        loop {
+            let line = match read_request_line(&mut input) {
+                Ok(Some(Ok(line))) => line,
+                Ok(Some(Err(why))) => {
+                    // Not sent: the server would only close the connection.
+                    let reply = serde_json::to_string(&Reply::err(0, &why)).unwrap_or_default();
+                    let mut stdout = io::stdout().lock();
+                    if writeln!(stdout, "{reply}")
+                        .and_then(|()| stdout.flush())
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                Ok(None) | Err(_) => break,
+            };
             if line.trim().is_empty() {
                 continue;
             }

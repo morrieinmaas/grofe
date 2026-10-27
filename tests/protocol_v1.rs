@@ -949,3 +949,100 @@ fn control_keeps_streaming_after_stdin_ends_when_subscribed() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+// --- the bridge's line framing ----------------------------------------------
+
+/// Sends `input` to a bridge, closes stdin and returns what it printed.
+fn run_bridge(srv: &TestServer, input: &[u8]) -> Finished {
+    let mut child = bridge(srv);
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_vec();
+    // A writer thread: a large input must not wait on the bridge's output.
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let out = finish(child);
+    writer.join().unwrap();
+    out
+}
+
+fn out_lines(out: &Finished) -> Vec<String> {
+    String::from_utf8(out.stdout.clone())
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn control_takes_crlf_lines_and_a_last_line_without_a_newline() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "a"]).unwrap();
+    let out = run_bridge(
+        &srv,
+        b"{\"id\":1,\"argv\":[\"list-sessions\"]}\r\n{\"id\":2,\"argv\":[\"list-sessions\"]}",
+    );
+    let lines = out_lines(&out);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains(r#""id":1"#) && lines[0].contains(r#""ok":true"#));
+    assert!(lines[1].contains(r#""id":2"#) && lines[1].contains(r#""ok":true"#));
+    assert!(out.status.success());
+}
+
+#[test]
+fn control_answers_a_line_that_is_not_utf8_and_goes_on() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "a"]).unwrap();
+    let out = run_bridge(
+        &srv,
+        b"{\"id\":1,\"argv\":[\"list-sessions\",\"\xff\"]}\n{\"id\":2,\"argv\":[\"list-sessions\"]}\n",
+    );
+    let lines = out_lines(&out);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("not valid UTF-8") && lines[0].contains(r#""ok":false"#));
+    assert!(lines[1].contains(r#""id":2"#) && lines[1].contains(r#""ok":true"#));
+    assert!(out.status.success());
+}
+
+#[test]
+fn control_answers_a_line_over_the_frame_cap_and_goes_on() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "a"]).unwrap();
+    let mut input = vec![b'x'; grofe::protocol::MAX_MESSAGE_LEN + 10];
+    input.push(b'\n');
+    input.extend_from_slice(b"{\"id\":2,\"argv\":[\"list-sessions\"]}\n");
+    let out = run_bridge(&srv, &input);
+    let lines = out_lines(&out);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("request line over") && lines[0].contains(r#""ok":false"#));
+    assert!(lines[1].contains(r#""id":2"#) && lines[1].contains(r#""ok":true"#));
+    assert!(out.status.success());
+}
+
+#[test]
+fn control_is_not_a_command_under_the_tmux_name() {
+    let srv = TestServer::start();
+    let bin = srv.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let tmux = bin.join("tmux");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grofe"), &tmux).unwrap();
+    let mut cmd = std::process::Command::new(&tmux);
+    cmd.arg("-S").arg(&srv.socket).arg("control");
+    for (key, value) in srv.command().get_envs() {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
+    }
+    let out = cmd
+        .current_dir(&srv.home)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    // The server's own tmux-dialect answer, as for any unknown command, and
+    // no bridge: nothing on stdout, whatever stdin was.
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown command: control"), "{err}");
+}

@@ -430,6 +430,7 @@ The server answers the attach hello with exactly one JSON reply line (`{"id": 0,
 | client → server | `detach` | none |
 | server → client | `output` | bytes to write to the tty |
 | server → client | `exit` | UTF-8 reason (`detached`, `server exited`, `session killed`) |
+| server → client | `suspend` | none: give the terminal back and stop with SIGTSTP (`suspend-client`), then send a `resize` once continued |
 
 Protocol version mismatch is a clean error naming the side to upgrade (§7.3).
 M6 freezes the protocol as v1 under the rules in §7.3; until then it is
@@ -1145,7 +1146,7 @@ after the freeze.
 - **Shape.** A reply echoes its request's `id` and carries `ok` with `out`,
   or `ok: false` with `err`. Replies to one connection's requests come in
   request order; events carry no `id` and interleave between replies.
-- **Attach frames** are the five kinds in §4.6, frozen. An unknown frame
+- **Attach frames** are the six kinds in §4.6, frozen. An unknown frame
   kind closes the connection.
 
 ### 7.4 `[plugins.<name>]`
