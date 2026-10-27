@@ -2884,6 +2884,9 @@ mod tests {
         let now = Instant::now();
         arm_names(&mut state, now);
         assert_eq!(deadline(&state), Some(now + NAME_INTERVAL));
+        // One check, and no timer after it: a detached server idles at 0 wakes.
+        tick(&mut state, now + NAME_INTERVAL);
+        assert_eq!(deadline(&state), None);
     }
 
     #[test]

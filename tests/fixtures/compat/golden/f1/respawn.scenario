@@ -55,3 +55,10 @@ $ respawn-pane -k -t r4 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r4x;
 $ wait-for r4x
 $ display -p -t r4 '#{alternate_on}'
 $ capture-pane -e -p -t r4
+# case 5: the path the pane reported stays
+$ new-session -d -s r5 -x 20 -y 4 'printf "\033]7;file:///tmp/zzz\007"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5; else tmux wait-for -S r5; fi; exec sleep 100000'
+$ wait-for r5
+$ display -p -t r5 '[#{pane_path}]'
+$ respawn-pane -k -t r5 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5x; else tmux wait-for -S r5x; fi; exec sleep 100000'
+$ wait-for r5x
+$ display -p -t r5 '[#{pane_path}]'

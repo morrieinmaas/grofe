@@ -169,6 +169,9 @@ pub(crate) struct Emu {
     pub(crate) parser: Processor,
     /// The OSC 133 marks of the normal screen's lines.
     pub(crate) marks: Marks,
+    /// The spawn whose reader may feed this emulator: a respawn hands it to
+    /// the new reader, and the old one's last read must not land on it.
+    pub(crate) generation: u64,
 }
 
 /// What a respawned pane's emulator is sent: the modes tmux's `screen_reinit`
@@ -183,11 +186,13 @@ impl Emu {
     /// cursor, modes, tab stops and hyperlinks are reset; the scrollback and
     /// the title stay.
     // ponytail: G3's image placements are freed where it stores them.
-    fn reinit(&mut self) {
+    fn reinit(&mut self, generation: u64) {
+        self.generation = generation;
         let Emu {
             term,
             parser,
             marks,
+            ..
         } = self;
         *parser = Processor::new();
         parser.advance(&mut written::Written(term, marks), REINIT);
@@ -431,7 +436,10 @@ impl PaneHandle {
                 for task in &old.tasks {
                     task.abort();
                 }
-                lock(&old.emu).reinit();
+                lock(&old.emu).reinit(generation);
+                // What the old process's output queued (a reply to its
+                // query) is not for the new one.
+                lock(&old.events).clear();
                 (Arc::clone(&old.events), Arc::clone(&old.emu))
             }
             None => {
@@ -451,6 +459,7 @@ impl PaneHandle {
                     term: Term::new(config, &size, Listener(Arc::clone(&events))),
                     parser: Processor::new(),
                     marks: Marks::new(spec.history_limit),
+                    generation,
                 }));
                 (events, emu)
             }
@@ -491,7 +500,8 @@ impl PaneHandle {
             sample,
             graphics_ok,
             cell_px: Mutex::new(spec.cell_px),
-            reported_path: Mutex::new(None),
+            // A respawned pane keeps what it reported, as tmux's does.
+            reported_path: Mutex::new(over.and_then(PaneHandle::reported_path)),
             tty,
             tasks: vec![reader, writer],
         })
@@ -839,11 +849,19 @@ impl PaneHandle {
         let mode = *emu.term.mode();
         let flag = |m: TermMode| Some(u8::from(mode.contains(m)).to_string());
         match name {
-            "cursor_x" => Some(emu.term.grid().cursor.point.column.0.to_string()),
+            // tmux's cursor sits one past the last column after a write
+            // there, where alacritty holds it on the column and a wrap pending.
+            "cursor_x" => {
+                let cursor = &emu.term.grid().cursor;
+                Some((cursor.point.column.0 + usize::from(cursor.input_needs_wrap)).to_string())
+            }
             "cursor_y" => Some(emu.term.grid().cursor.point.line.0.max(0).to_string()),
             // The cell under the cursor; empty on the spacer of a wide character.
             "cursor_character" => {
                 let point = emu.term.grid().cursor.point;
+                if emu.term.grid().cursor.input_needs_wrap {
+                    return Some(" ".to_string());
+                }
                 let cell = &emu.term.grid()[point];
                 if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
                     return Some(String::new());
@@ -858,8 +876,9 @@ impl PaneHandle {
             "keypad_flag" => flag(TermMode::APP_KEYPAD),
             "wrap_flag" => flag(TermMode::LINE_WRAP),
             "origin_flag" => flag(TermMode::ORIGIN),
-            // tmux keeps the last of 1000, 1002 and 1003 set; the widest
-            // one set stands for it here.
+            // A set of 1000, 1002 or 1003 replaces the others and a reset
+            // of any clears them all ([`written`]), as in tmux, so at most
+            // one is on.
             "mouse_standard_flag" | "mouse_button_flag" | "mouse_all_flag" => {
                 let want = match name {
                     "mouse_standard_flag" => MouseMode::Click,
@@ -1275,6 +1294,95 @@ mod tests {
         marked = 0;
         handle.copy_grid(|_, _, bits| marked += usize::from(bits != 0));
         assert_eq!(marked, 0, "the mark went with its line");
+    }
+
+    /// Waits until `ready` holds of the pane's `term_var` values.
+    async fn until_vars(handle: &PaneHandle, names: &[&str], ready: impl Fn(&[String]) -> bool) {
+        for _ in 0..500 {
+            let got: Vec<String> = names.iter().filter_map(|n| handle.term_var(n)).collect();
+            if ready(&got) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the screen never reached the state");
+    }
+
+    /// F1: tmux's cursor is one past the last column after a write there
+    /// (alacritty holds it on the column, a wrap pending), with a blank under it.
+    #[tokio::test]
+    async fn a_cursor_past_the_last_column_is_one_past_it() {
+        let (tx, _rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            cols: 10,
+            ..spec_for(&["sh", "-c", "printf 1234567890; sleep 100"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        until_vars(&handle, &["cursor_x"], |v| v[0] != "0").await;
+        assert_eq!(handle.term_var("cursor_x").as_deref(), Some("10"));
+        assert_eq!(handle.term_var("cursor_character").as_deref(), Some(" "));
+    }
+
+    /// F1: tmux resets 1000, 1002 and 1003 together, whichever is named.
+    #[tokio::test]
+    async fn resetting_one_mouse_mode_resets_them_all() {
+        let (tx, _rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(
+            spec_for(&[
+                "sh",
+                "-c",
+                "printf '\\033[?1003h\\033[?1000l\\033[?6h'; sleep 100",
+            ]),
+            tx,
+            Arc::new(Notify::new()),
+        )
+        .expect("spawn");
+        let names = [
+            "origin_flag",
+            "mouse_standard_flag",
+            "mouse_button_flag",
+            "mouse_all_flag",
+        ];
+        until_vars(&handle, &names, |v| v[0] == "1").await;
+        let got: Vec<_> = names.iter().map(|n| handle.term_var(n).unwrap()).collect();
+        assert_eq!(got, ["1", "0", "0", "0"]);
+    }
+
+    /// F1: a respawned pane keeps what it reported (OSC 7), as tmux's does,
+    /// and the old process's output does not reach the new screen.
+    #[tokio::test]
+    async fn a_respawn_keeps_the_reported_path_and_drops_old_output() {
+        let (tx, _rx) = mpsc::channel(64);
+        let old = PaneHandle::spawn(
+            spec_for(&["sh", "-c", "while :; do printf OLD; sleep 0.01; done"]),
+            tx.clone(),
+            Arc::new(Notify::new()),
+        )
+        .expect("spawn");
+        old.set_reported_path("file:///there".into());
+        let text = |h: &PaneHandle| {
+            h.capture(&CaptureOpts {
+                start: None,
+                end: None,
+                escapes: false,
+            })
+        };
+        for _ in 0..500 {
+            if text(&old).contains("OLD") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let new = PaneHandle::spawn_over(
+            spec_for(&["sleep", "100"]),
+            tx,
+            Arc::new(Notify::new()),
+            &old,
+        )
+        .expect("respawn");
+        assert_eq!(new.reported_path().as_deref(), Some("file:///there"));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!text(&new).contains("OLD"), "{:?}", text(&new));
     }
 
     fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {

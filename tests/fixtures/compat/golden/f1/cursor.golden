@@ -82,3 +82,24 @@ $ wait-for c12
 $ display -p -t c12 '#{cursor_x},#{cursor_y},#{history_size}'
 1,4,2
 ? 0
+$ new-session -d -s c13 -x 10 -y 5 'printf "1234567890"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c13; else tmux wait-for -S c13; fi; exec sleep 100000'
+? 0
+$ wait-for c13
+? 0
+$ display -p -t c13 '#{cursor_x},#{cursor_y},[#{cursor_character}]'
+10,0,[ ]
+? 0
+$ new-session -d -s c14 -x 20 -y 5 'printf "\033[?1003h\033[?1000l"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c14; else tmux wait-for -S c14; fi; exec sleep 100000'
+? 0
+$ wait-for c14
+? 0
+$ display -p -t c14 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_any_flag}'
+0000
+? 0
+$ new-session -d -s c15 -x 20 -y 5 'printf "\033[?1002h\033[?1000h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c15; else tmux wait-for -S c15; fi; exec sleep 100000'
+? 0
+$ wait-for c15
+? 0
+$ display -p -t c15 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_any_flag}'
+1001
+? 0

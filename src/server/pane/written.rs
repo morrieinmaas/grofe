@@ -28,7 +28,8 @@ use alacritty_terminal::vte::ansi::cursor_icon::CursorIcon;
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler, Hyperlink,
     KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, NamedColor,
-    PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
+    NamedPrivateMode, PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset,
+    TabulationClearMode,
 };
 
 use super::CellFlags;
@@ -235,6 +236,29 @@ impl<L: EventListener> Handler for Written<'_, L> {
         }
     }
 
+    /// Resetting any of the mouse modes (1000, 1002, 1003) turns all of them
+    /// off, as tmux's `ALL_MOUSE_MODES` clear does; alacritty clears only
+    /// the one named.
+    fn unset_private_mode(&mut self, mode: PrivateMode) {
+        Handler::unset_private_mode(&mut *self.0, mode);
+        if matches!(
+            mode,
+            PrivateMode::Named(
+                NamedPrivateMode::ReportMouseClicks
+                    | NamedPrivateMode::ReportCellMouseMotion
+                    | NamedPrivateMode::ReportAllMouseMotion
+            )
+        ) {
+            for other in [
+                NamedPrivateMode::ReportMouseClicks,
+                NamedPrivateMode::ReportCellMouseMotion,
+                NamedPrivateMode::ReportAllMouseMotion,
+            ] {
+                Handler::unset_private_mode(&mut *self.0, PrivateMode::Named(other));
+            }
+        }
+    }
+
     fn reset_state(&mut self) {
         Handler::reset_state(&mut *self.0);
         self.1.clear();
@@ -279,7 +303,6 @@ impl<L: EventListener> Handler for Written<'_, L> {
         set_mode(mode: Mode);
         unset_mode(mode: Mode);
         report_mode(mode: Mode);
-        unset_private_mode(mode: PrivateMode);
         report_private_mode(mode: PrivateMode);
         set_scrolling_region(top: usize, bottom: Option<usize>);
         set_keypad_application_mode();

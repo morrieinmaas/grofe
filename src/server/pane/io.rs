@@ -239,10 +239,14 @@ impl Reader {
     fn flush_sync(&self) {
         let pending = {
             let mut emu = lock(&self.emu);
+            if emu.generation != self.generation {
+                return;
+            }
             let Emu {
                 term,
                 parser,
                 marks,
+                ..
             } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
@@ -274,10 +278,15 @@ impl Reader {
         found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
         {
             let mut emu = lock(&self.emu);
+            // A respawn handed the emulator to a newer reader.
+            if emu.generation != self.generation {
+                return Vec::new();
+            }
             let Emu {
                 term,
                 parser,
                 marks: store,
+                ..
             } = &mut *emu;
             // An OSC 133 mark is made where the sequence ended: the emulator
             // gets the bytes up to it, then a private mode that `Written`

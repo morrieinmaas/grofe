@@ -977,6 +977,20 @@ mod tests {
             .collect()
     }
 
+    /// Every other CSI, private modes included, reaches the emulator byte
+    /// for byte, however the reads are cut, and an ESC inside one starts the
+    /// next sequence.
+    #[test]
+    fn other_private_modes_pass_unchanged() {
+        let all: &[u8] = b"a\x1b[?1049h\x1b[?25l\x1b[?2026$p\x1b[?1;2;3h\x1b[?65535h\
+            \x1b[?6553h\x1b[?65533\x1b[?65533l\x1b[1;65533h\x1b[?99999999999999999999h\x1b[?";
+        for cut in 0..=all.len() {
+            assert_eq!(through(&[&all[..cut], &all[cut..]]), all, "cut at {cut}");
+        }
+        let long = [b"\x1b[?".as_slice(), &b"1;".repeat(100_000), b"h"].concat();
+        assert_eq!(through(&[&long]), long);
+    }
+
     #[test]
     fn a_pane_cannot_forge_the_in_band_mark() {
         for forged in [
