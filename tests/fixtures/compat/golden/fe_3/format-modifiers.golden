@@ -229,7 +229,7 @@ $ display -p -t main:1.1 '[#{e|/:7,2}]'
 $ display -p -t main:1.1 '[#{e|m:7,2}]'
 [1]
 ? 0
-$ display -p -t main:1.1 '[#{e|%:7,2}]'
+$ display -p -t main:1.1 '[#{e|%%:7,2}]'
 [1]
 ? 0
 $ display -p -t main:1.1 '[#{e|/|f:7,2}]'
@@ -567,6 +567,23 @@ $ display -p -t main:1.1 '[#{s/#//:session_name}]'
 ? 0
 $ display -p -t main:1.1 '[#{s/a/#,/:session_name}]'
 [m,in]
+? 0
+$ set -g @hash 'a#b'
+? 0
+$ display -p -t main:1.1 '[#{s/#/x/:@hash}]'
+[a#b]
+? 0
+$ display -p -t main:1.1 '[#{s/##/x/:@hash}]'
+[a#b]
+? 0
+$ display -p -t main:1.1 '[#{s/b/#/:@hash}]'
+[a#]
+? 0
+$ display -p -t main:1.1 '[#{s/b/x##/:@hash}]'
+[a#x]
+? 0
+$ display -p -t main:1.1 '[#{s/b/####/:@hash}]'
+[a##]
 ? 0
 $ display -p -t main:1.1 '[#{l:#{x}}]'
 [#{x}]

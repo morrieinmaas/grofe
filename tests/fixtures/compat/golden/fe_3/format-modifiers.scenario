@@ -1,6 +1,6 @@
 # B1b: tmux 3.7b's format modifiers beyond the comparison set, through
 # display -p against a fixed model: session main (windows first with two
-# panes, second), session other. A fixture holds no strftime sequence, so the
+# panes, second), session other. A display fixture holds no bare % (display-message runs strftime; `e|%%` is the modulo), so the
 # `t/f` forms spell their % as #{a:37} and run through list-windows -F (which
 # does not strftime its template); @f holds %%, which T: turns into one %.
 # Modifier chains (`;`), arguments with any delimiter, and the error forms
@@ -94,7 +94,7 @@ $ display -p -t main:1.1 '[#{e|-:3,4}]'
 $ display -p -t main:1.1 '[#{e|*:3,4}]'
 $ display -p -t main:1.1 '[#{e|/:7,2}]'
 $ display -p -t main:1.1 '[#{e|m:7,2}]'
-$ display -p -t main:1.1 '[#{e|%:7,2}]'
+$ display -p -t main:1.1 '[#{e|%%:7,2}]'
 $ display -p -t main:1.1 '[#{e|/|f:7,2}]'
 $ display -p -t main:1.1 '[#{e|/|f|4:7,3}]'
 $ display -p -t main:1.1 '[#{e|+|f:1.5,2.25}]'
@@ -217,6 +217,12 @@ $ display -p -t main:1.1 '[#{=3#,x:session_name}]'
 $ display -p -t main:1.1 '[#{=/3/a#,b:session_name}]'
 $ display -p -t main:1.1 '[#{s/#//:session_name}]'
 $ display -p -t main:1.1 '[#{s/a/#,/:session_name}]'
+$ set -g @hash 'a#b'
+$ display -p -t main:1.1 '[#{s/#/x/:@hash}]'
+$ display -p -t main:1.1 '[#{s/##/x/:@hash}]'
+$ display -p -t main:1.1 '[#{s/b/#/:@hash}]'
+$ display -p -t main:1.1 '[#{s/b/x##/:@hash}]'
+$ display -p -t main:1.1 '[#{s/b/####/:@hash}]'
 $ display -p -t main:1.1 '[#{l:#{x}}]'
 $ display -p -t main:1.1 '[#{l;=1:#{x}}]'
 $ display -p -t main:1.1 '[#{E:l:#{@opt}}]'

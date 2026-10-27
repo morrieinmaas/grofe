@@ -262,6 +262,15 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   M3.7's native sessionx port (TP.4) replaces them (M36-R9).
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
+- **Format modifiers (B1b)** follow tmux 3.7b's `format.c` and are recorded
+  in `golden/fe_3/format-modifiers` and `format-loops`. Known divergences:
+  `s/pat/with/` and `m/r:` use the `regex` crate, which is not POSIX ERE
+  (Perl classes such as `\d` work here and not in tmux; a pattern that does
+  not compile changes nothing); `#{R:}` stops at 4 MiB of output where tmux
+  stops after 100 ms; a comparison with no comma ends the format in tmux and
+  here only gives nothing for that piece; `display-message`,
+  `set-titles-string`, the status line and `T:` run strftime first (tmux's
+  `format_expand_time`), while `list-* -F`, names and `E:` do not.
 
 ## Key parity
 
