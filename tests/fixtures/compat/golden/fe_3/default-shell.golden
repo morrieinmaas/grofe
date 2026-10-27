@@ -1,0 +1,54 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set-option -g default-shell {fixtures}/default-shell-probe.sh
+? 0
+$ new-window -d -n one 'echo "pane ${SHELL##*/}" > "$HOME/one.out"; sleep 30'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ new-window -d -n two /bin/sh -c 'echo words > "$HOME/two.out"'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ split-window -d -t main:one 'echo "split ${SHELL##*/}" > "$HOME/split.out"'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ respawn-pane -k -t main:one 'echo respawn > "$HOME/respawn.out"; sleep 30'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ new-session -d -s other 'echo "session ${SHELL##*/}" > "$HOME/session.out"'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ set-option -g default-command 'echo "dc ${SHELL##*/}" > "$HOME/dc.out"'
+? 0
+$ new-window -d -n dc
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'cat "$HOME/probe.log"'
+probe -c echo "pane ${SHELL##*/}" > "$HOME/one.out"; sleep 30
+probe -c echo "split ${SHELL##*/}" > "$HOME/split.out"
+probe -c echo respawn > "$HOME/respawn.out"; sleep 30
+probe -c echo "session ${SHELL##*/}" > "$HOME/session.out"
+probe -c echo "dc ${SHELL##*/}" > "$HOME/dc.out"
+? 0
+$ run-shell 'cat "$HOME/one.out" "$HOME/two.out" "$HOME/split.out" "$HOME/respawn.out" "$HOME/session.out" "$HOME/dc.out"'
+pane default-shell-probe.sh
+words
+split default-shell-probe.sh
+respawn
+session default-shell-probe.sh
+dc default-shell-probe.sh
+? 0
+$ run-shell 'echo "$0"'
+sh
+? 0
+$ if-shell 'test "$0" = sh' 'display-message -p yes' 'display-message -p no'
+yes
+? 0
+$ set-option -g default-shell /nonexistent/shell
+! not a suitable shell: /nonexistent/shell
+? 1

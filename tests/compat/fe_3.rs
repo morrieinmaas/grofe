@@ -211,6 +211,14 @@ const HOOK_GAPS: &[(&str, &str)] = &[(
     "refused on purpose: grofe's hooks are global only (TC.5)",
 )];
 
+/// A pane's one-word command runs through `default-shell` (new-window,
+/// split-window, respawn-pane, new-session, `default-command`), several
+/// words do not, and `run-shell` and `if-shell` use `/bin/sh` as `sh`.
+#[test]
+fn default_shell_matches_its_golden() {
+    check("default-shell", &[], same);
+}
+
 /// Case 7: a hook whose command uses tmux-only forms runs them when it
 /// fires.
 #[test]

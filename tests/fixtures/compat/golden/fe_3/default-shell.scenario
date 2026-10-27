@@ -1,0 +1,24 @@
+# default-shell: a pane's one-word command (new-window, split-window,
+# respawn-pane, new-session, default-command) runs as `<default-shell> -c
+# <command>` with SHELL set to it; several words are executed directly;
+# run-shell and if-shell use /bin/sh as `sh` whatever default-shell is.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-option -g default-shell {fixtures}/default-shell-probe.sh
+$ new-window -d -n one 'echo "pane ${SHELL##*/}" > "$HOME/one.out"; sleep 30'
+$ run-shell 'sleep 0.5'
+$ new-window -d -n two /bin/sh -c 'echo words > "$HOME/two.out"'
+$ run-shell 'sleep 0.5'
+$ split-window -d -t main:one 'echo "split ${SHELL##*/}" > "$HOME/split.out"'
+$ run-shell 'sleep 0.5'
+$ respawn-pane -k -t main:one 'echo respawn > "$HOME/respawn.out"; sleep 30'
+$ run-shell 'sleep 0.5'
+$ new-session -d -s other 'echo "session ${SHELL##*/}" > "$HOME/session.out"'
+$ run-shell 'sleep 0.5'
+$ set-option -g default-command 'echo "dc ${SHELL##*/}" > "$HOME/dc.out"'
+$ new-window -d -n dc
+$ run-shell 'sleep 0.5'
+$ run-shell 'cat "$HOME/probe.log"'
+$ run-shell 'cat "$HOME/one.out" "$HOME/two.out" "$HOME/split.out" "$HOME/respawn.out" "$HOME/session.out" "$HOME/dc.out"'
+$ run-shell 'echo "$0"'
+$ if-shell 'test "$0" = sh' 'display-message -p yes' 'display-message -p no'
+$ set-option -g default-shell /nonexistent/shell
