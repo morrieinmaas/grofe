@@ -360,6 +360,8 @@ fn bare_subscribe_gets_everything_but_pane_output() {
     srv.cmd(&["new-session", "-d", "-s", "b", &script]).unwrap();
     srv.wait_for(|| srv.capture("b").contains("visible-output"), WAIT)
         .unwrap();
+    // The v1 catalog (spec 7.2) puts session-created on a bare subscribe.
+    assert!(matches!(next(&mut all), Event::SessionCreated { .. }));
     srv.cmd(&["set", "-g", "@after-output", "1"]).unwrap();
     assert_eq!(next(&mut all), option_changed("@after-output", Some("1")));
     touch(&flag);

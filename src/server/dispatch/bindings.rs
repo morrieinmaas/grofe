@@ -105,7 +105,7 @@ fn shell_form(
                 branch.map_or(Ok(String::new()), |b| run_branch(state, &ctx, &b))
             });
             let inner = state.deferred_reply.take();
-            state.events.flush();
+            state.events.flush(&state.model);
             clients::changed(state);
             // As tmux shows a binding's error: on the client's status line.
             if let (Err(e), Some(id)) = (&result, ctx.client) {

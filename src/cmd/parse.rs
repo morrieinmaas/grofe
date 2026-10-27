@@ -896,11 +896,37 @@ fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::PluginRestart(PluginRestart { name }))
 }
 
+const SUBSCRIBE_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
+
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "subscribe")?;
-    Ok(Command::Subscribe(Subscribe {
-        events: flags.positionals,
-    }))
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: SUBSCRIBE_SHORT,
+            long: &[],
+        },
+        "subscribe",
+    )?;
+    let mut target = flags
+        .values
+        .get(&'t')
+        .map(|t| parse_target(t))
+        .transpose()?;
+    // The usage is `subscribe <event>... [-t target]`: the flag comes after
+    // the names, where the flag scan has already stopped.
+    let mut events = Vec::new();
+    let mut words = flags.positionals.into_iter();
+    while let Some(word) = words.next() {
+        if word == "-t" {
+            let value = words
+                .next()
+                .ok_or_else(|| ParseError::MissingValue("subscribe".to_string(), 't'))?;
+            target = Some(parse_target(&value)?);
+        } else {
+            events.push(word);
+        }
+    }
+    Ok(Command::Subscribe(Subscribe { events, target }))
 }
 
 const ATTACH_SESSION_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('d', FlagKind::Bool)];
@@ -3596,6 +3622,7 @@ mod tests {
             cmd,
             Command::Subscribe(Subscribe {
                 events: vec!["pane-exited".to_string(), "pane-output".to_string()],
+                target: None,
             })
         );
     }
@@ -3603,7 +3630,24 @@ mod tests {
     #[test]
     fn subscribe_with_no_events_means_all() {
         let cmd = parse(&argv(&["subscribe"])).unwrap();
-        assert_eq!(cmd, Command::Subscribe(Subscribe { events: vec![] }));
+        assert_eq!(cmd, Command::Subscribe(Subscribe::default()));
+    }
+
+    #[test]
+    fn subscribe_takes_a_target_before_or_after_the_names() {
+        let want = Command::Subscribe(Subscribe {
+            events: vec!["pane-exited".to_string()],
+            target: Some(parse_target("%3").unwrap()),
+        });
+        assert_eq!(
+            parse(&argv(&["subscribe", "pane-exited", "-t", "%3"])).unwrap(),
+            want
+        );
+        assert_eq!(
+            parse(&argv(&["subscribe", "-t", "%3", "pane-exited"])).unwrap(),
+            want
+        );
+        assert!(parse(&argv(&["subscribe", "pane-exited", "-t"])).is_err());
     }
 
     #[test]

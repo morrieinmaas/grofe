@@ -43,6 +43,7 @@ use tokio::sync::oneshot;
 
 use crate::cmd::{self, Command, FormatVars, Resolve, Target};
 use crate::config::Resolved;
+use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::dispatch;
 use crate::server::{Job, State};
@@ -478,6 +479,10 @@ fn notify(state: &mut State, f: Fired) {
 /// `session-created`: new-session made `session`. Its pane is the new
 /// session's.
 pub fn session_created(state: &mut State, session: SessionId) {
+    if let Some(s) = state.model.sessions.get(&session) {
+        let name = s.name.clone();
+        state.events.emit(Event::SessionCreated { session, name });
+    }
     if !wanted(state, "session-created") {
         return;
     }
@@ -500,6 +505,22 @@ pub fn client_resized(state: &mut State, id: ClientId) {
 }
 
 fn client_event(state: &mut State, id: ClientId, name: &'static str) {
+    if let Some(c) = state.clients.get(&id) {
+        let (client, session) = (c.name.clone(), c.session);
+        let event = if name == "client-resized" {
+            // The size the terminal reported, which applies on the next tick.
+            let (cols, rows) = c.pending_size.unwrap_or(c.size);
+            Event::ClientResized {
+                client,
+                session,
+                cols,
+                rows,
+            }
+        } else {
+            Event::ClientSessionChanged { client, session }
+        };
+        state.events.emit(event);
+    }
     if !wanted(state, name) {
         return;
     }
@@ -515,12 +536,34 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
 /// `alert-bell`, `alert-activity` or `alert-silence` in `window`
 /// (`server::alerts`): run in the window, its active pane current.
 pub fn window_alert(state: &mut State, name: &'static str, window: WindowId) {
-    if !wanted(state, name) {
-        return;
-    }
     let Some(w) = state.model.windows.get(&window) else {
         return;
     };
+    let (session, pane) = (w.session, w.active);
+    let event = match name {
+        "alert-bell" => Some(Event::AlertBell {
+            window,
+            session,
+            pane,
+        }),
+        "alert-activity" => Some(Event::AlertActivity {
+            window,
+            session,
+            pane,
+        }),
+        "alert-silence" => Some(Event::AlertSilence {
+            window,
+            session,
+            pane,
+        }),
+        _ => None,
+    };
+    if let Some(event) = event {
+        state.events.emit(event);
+    }
+    if !wanted(state, name) {
+        return;
+    }
     let mut f = Fired::new(name, Some(w.active));
     f.vars.hook_window = Some(window);
     f.vars.hook_window_name = Some(w.name.clone());
@@ -535,6 +578,15 @@ pub fn window_alert(state: &mut State, name: &'static str, window: WindowId) {
 /// `#{hook_pane}`).
 pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
     let kept = state.model.panes.contains_key(&pane);
+    if let Some(p) = state.model.panes.get(&pane) {
+        let died = Event::PaneDied {
+            pane,
+            uid: p.uid.clone(),
+            window,
+            status: p.dead.flatten(),
+        };
+        state.events.emit(died);
+    }
     let name = if kept { "pane-died" } else { "pane-exited" };
     if !wanted(state, name) {
         return;
@@ -555,7 +607,12 @@ pub fn pane_exited(state: &mut State, pane: PaneId, window: WindowId) {
 /// queue, so the reply waits for every hook the request fired.
 pub fn run_pending(state: &mut State) {
     crate::server::alerts::drain(state);
-    for (_, name) in std::mem::take(&mut state.model.closed_sessions) {
+    for (session, name) in std::mem::take(&mut state.model.closed_sessions) {
+        let closed = Event::SessionClosed {
+            session,
+            name: name.clone(),
+        };
+        state.events.emit(closed);
         if wanted(state, "session-closed") {
             let mut f = Fired::new("session-closed", None);
             f.vars.hook_session_name = Some(name);
@@ -579,6 +636,7 @@ pub fn run_pending(state: &mut State) {
 }
 
 /// What a command-shaped hook needs from before its command ran.
+#[derive(Clone, Copy)]
 enum Before {
     /// select-pane: the window and its active pane.
     SelectPane(WindowId, PaneId),
@@ -624,6 +682,41 @@ impl Before {
         Some(before)
     }
 
+    /// The stream event once the command succeeded, for the four verbs the
+    /// catalog covers.
+    fn event(self, state: &State) -> Option<Event> {
+        let m = &state.model;
+        match self {
+            Before::SelectWindow(session) => {
+                let window = m.sessions.get(&session)?.active;
+                let pane = m.windows.get(&window)?.active;
+                Some(Event::WindowFocused {
+                    window,
+                    session,
+                    pane,
+                })
+            }
+            Before::NewWindow(last) => {
+                let window = m.windows.keys().copied().find(|w| Some(*w) > last)?;
+                let w = m.windows.get(&window)?;
+                Some(Event::WindowCreated {
+                    window,
+                    session: w.session,
+                    pane: w.active,
+                })
+            }
+            Before::ResizePane(pane) => Some(Event::PaneResized {
+                pane,
+                window: m.panes.get(&pane)?.window,
+            }),
+            Before::ResizeWindow(window) => Some(Event::WindowResized {
+                window,
+                session: m.windows.get(&window)?.session,
+            }),
+            Before::SelectPane(..) | Before::KillPane => None,
+        }
+    }
+
     /// The hook's pane once its command succeeded, as tmux 3.7b gives it;
     /// `None` when the hook does not fire.
     fn pane(self, state: &State, ctx: &ClientCtx) -> Option<Option<PaneId>> {
@@ -650,6 +743,14 @@ impl Before {
     }
 }
 
+/// Whether the command-shaped hook `name` has an event on the stream.
+fn streamed(name: &str) -> bool {
+    matches!(
+        name,
+        "window-focused" | "window-created" | "pane-resized" | "window-resized"
+    )
+}
+
 /// Runs one command through `route` and then, if it succeeded, its
 /// command-shaped hook (tmux's `after-<verb>`) on its origin's queue: the
 /// attached client's for a binding, else the CLI request's own. What the
@@ -661,12 +762,20 @@ pub fn run_command(
     cmd: Command,
     route: fn(&mut State, &ClientCtx, Command) -> Result<String, String>,
 ) -> Result<String, String> {
-    let before = Before::of(state, ctx, &cmd)
-        .filter(|(name, _)| !state.hooks.running && state.hooks.bound.contains_key(name));
+    // The stream events fire for hook commands too; the hooks do not.
+    let before = Before::of(state, ctx, &cmd).filter(|(name, _)| {
+        streamed(name) || (!state.hooks.running && state.hooks.bound.contains_key(name))
+    });
     let result = route(state, ctx, cmd);
     let (Ok(out), Some((name, before))) = (&result, before) else {
         return result;
     };
+    if let Some(event) = before.event(state) {
+        state.events.emit(event);
+    }
+    if state.hooks.running || !state.hooks.bound.contains_key(name) {
+        return result;
+    }
     let Some(pane) = before.pane(state, ctx) else {
         return result;
     };

@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
+use crate::event::Place;
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
@@ -38,7 +39,7 @@ pub const DEFAULT_SIZE: (u16, u16) = (80, 24);
 
 /// Panes a removal took out whose exit was not reported yet, as
 /// `(id, uid)`: the caller emits `pane-exited` for each.
-pub type Removed = Vec<(PaneId, String)>;
+pub type Removed = Vec<(PaneId, String, Place)>;
 
 pub struct Session {
     pub id: SessionId,
@@ -428,7 +429,7 @@ impl Model {
             return Vec::new();
         };
         let Some(window) = self.windows.get_mut(&window_id) else {
-            return self.take_panes(&[pane]);
+            return self.take_panes(&[pane], None);
         };
         let order = window.pane_ids();
         if order.len() <= 1 {
@@ -437,19 +438,19 @@ impl Model {
         if window.floating(pane).is_some() {
             window.floating.retain(|f| f.pane != pane);
             window.lose_pane(&order, pane);
-            return self.take_panes(&[pane]);
+            return self.take_panes(&[pane], None);
         }
         if window.tiled_ids().len() <= 1 {
             // Floating panes remain: the window stays, as tmux 3.7b's does.
             window.zoomed = false;
             window.layout.replace(pane, HOLE);
             window.lose_pane(&order, pane);
-            return self.take_panes(&[pane]);
+            return self.take_panes(&[pane], None);
         }
         window.zoomed = false;
         window.layout.remove(pane);
         window.lose_pane(&order, pane);
-        let removed = self.take_panes(&[pane]);
+        let removed = self.take_panes(&[pane], None);
         self.relayout(window_id);
         removed
     }
@@ -461,7 +462,7 @@ impl Model {
             return Vec::new();
         };
         let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
-        let removed = self.take_panes(&ids);
+        let removed = self.take_panes(&ids, Some(w.session));
         self.unlink_window(w.session, window);
         self.renumber_after_removal(w.session);
         removed
@@ -526,7 +527,7 @@ impl Model {
             self.windows.remove(w);
         }
         let ids = self.panes_in(|p| s.windows.contains(&p.window));
-        self.take_panes(&ids)
+        self.take_panes(&ids, Some(session))
     }
 
     /// The live panes, as removing them all (server exit) would return.
@@ -534,8 +535,16 @@ impl Model {
         self.panes
             .values()
             .filter(|p| p.dead.is_none())
-            .map(|p| (p.id, p.uid.clone()))
+            .map(|p| (p.id, p.uid.clone(), self.place_of(p)))
             .collect()
+    }
+
+    /// Where `pane` is now.
+    pub fn place_of(&self, pane: &Pane) -> Place {
+        Place {
+            window: Some(pane.window),
+            session: self.windows.get(&pane.window).map(|w| w.session),
+        }
     }
 
     fn panes_in(&self, keep: impl Fn(&Pane) -> bool) -> Vec<PaneId> {
@@ -548,11 +557,17 @@ impl Model {
 
     /// Drops `ids` from the pane map, returning those whose exit was not
     /// reported yet (a dead pane kept by `remain-on-exit` already was).
-    fn take_panes(&mut self, ids: &[PaneId]) -> Removed {
-        ids.iter()
-            .filter_map(|id| self.panes.remove(id))
+    /// `session` is the panes' session when their window is already gone.
+    fn take_panes(&mut self, ids: &[PaneId], session: Option<SessionId>) -> Removed {
+        let taken: Vec<Pane> = ids.iter().filter_map(|id| self.panes.remove(id)).collect();
+        taken
+            .into_iter()
             .filter(|p| p.dead.is_none())
-            .map(|p| (p.id, p.uid.clone()))
+            .map(|p| {
+                let mut place = self.place_of(&p);
+                place.session = place.session.or(session);
+                (p.id, p.uid, place)
+            })
             .collect()
     }
 

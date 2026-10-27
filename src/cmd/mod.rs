@@ -348,11 +348,13 @@ pub struct DisplayMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct KillServer;
 
-/// `subscribe` (control mode only): event names to subscribe to; empty
-/// means all events.
+/// `subscribe <event>... [-t target]` (control mode only): event names or
+/// `*` patterns; empty means every event but `pane-output`. `target`, when
+/// given, limits the events to a pane, window or session (spec §7.2).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Subscribe {
     pub events: Vec<String>,
+    pub target: Option<Target>,
 }
 
 /// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for

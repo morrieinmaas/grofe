@@ -271,7 +271,7 @@ fn resume(
         held.cleared = cleared;
         hold_rest(state, ctx, held, out + &more, failed, Some(tx));
         hooks::run_pending(state);
-        state.events.flush();
+        state.events.flush(&state.model);
         clients::changed(state);
         return;
     }
@@ -291,7 +291,7 @@ fn resume(
     };
     let later = state.deferred_reply.take().filter(|_| result.is_ok());
     let hold = hooks::take_reply_hold(state);
-    state.events.flush();
+    state.events.flush(&state.model);
     clients::changed(state);
     // Everything printed, as the request's answer; failed if a held
     // command failed.

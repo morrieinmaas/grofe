@@ -205,7 +205,7 @@ pub struct ClientEntry {
     pub size: (u16, u16),
     /// The latest Resize frame's size, applied on the next tick so a
     /// burst of resizes costs one reflow.
-    pending_size: Option<(u16, u16)>,
+    pub(crate) pending_size: Option<(u16, u16)>,
     /// `TERM` of the client's terminal.
     pub term: String,
     pub caps: Caps,
@@ -2471,7 +2471,7 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             hold_input(state, id);
             run.holding = true;
         }
-        state.events.flush();
+        state.events.flush(&state.model);
         changed(state);
         let jobs = state.jobs.clone();
         tokio::spawn(async move {
@@ -2490,7 +2490,7 @@ fn run_from(state: &mut State, mut run: BindingRun) {
     if run.holding {
         release_input(state, id);
     }
-    state.events.flush();
+    state.events.flush(&state.model);
     changed(state);
 }
 

@@ -101,6 +101,7 @@ pub enum ServerMsg {
     /// A `subscribe` request, with the connection's event queue, which the
     /// actor keeps as the subscriber.
     Subscribe {
+        ctx: ClientCtx,
         req: Request,
         reply: oneshot::Sender<Reply>,
         tx: mpsc::Sender<Event>,
@@ -315,7 +316,10 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
     match kind {
         PaneEventKind::Exited(status) => {
             let (uid, window) = (p.uid.clone(), p.window);
-            state.events.emit(Event::PaneExited { pane, uid, status });
+            // The pane may be gone from the model by the time this is sent.
+            let place = state.model.place_of(p);
+            let exited = Event::PaneExited { pane, uid, status };
+            state.events.emit_at(exited, place);
             state.model.pane_exited(pane, status);
             hooks::pane_exited(state, pane, window);
             if state.model.closed() {
@@ -332,7 +336,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
     }
     hooks::run_pending(state);
-    state.events.flush();
+    state.events.flush(&state.model);
 }
 
 /// Runs one [`Job`] on the actor, then sends the events it caused.
@@ -340,7 +344,7 @@ fn run_job(state: &mut State, job: Job) {
     job(state);
     // A job is no CLI request: nothing waits for its hooks.
     drop(hooks::take_reply_hold(state));
-    state.events.flush();
+    state.events.flush(&state.model);
 }
 
 /// Entry point of `grofe __server`: runs the server until it exits and
@@ -630,6 +634,8 @@ async fn actor(
             // As tmux's server: SIGHUP (its terminal going away) is ignored.
             _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
+        events::track_focus(&mut state);
+        state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
         if state.exit {
             break;
@@ -734,11 +740,19 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 clients::changed(state);
             }
         }
-        ServerMsg::Subscribe { req, reply, tx } => {
+        ServerMsg::Subscribe {
+            ctx,
+            req,
+            reply,
+            tx,
+        } => {
             let result = match cmd::parse(&req.argv) {
-                Ok(Command::Subscribe(c)) => {
-                    state.events.subscribe(c.events, tx).map(|()| String::new())
-                }
+                Ok(Command::Subscribe(c)) => c
+                    .target
+                    .map(|t| events::Scope::resolve(&state.model, &ctx, &t))
+                    .transpose()
+                    .and_then(|scope| state.events.subscribe(c.events, scope, tx))
+                    .map(|()| String::new()),
                 // The connection sends only a `subscribe` verb here.
                 Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
@@ -797,7 +811,7 @@ fn finish(
             reply_later(id, later, reply, Some(hold));
         }
     }
-    state.events.flush();
+    state.events.flush(&state.model);
 }
 
 /// Sends a deferred reply once its handler answers, without the actor
@@ -934,6 +948,7 @@ async fn connection(
         let (reply_tx, reply_rx) = oneshot::channel();
         let msg = if req.argv.first().is_some_and(|verb| verb == "subscribe") {
             ServerMsg::Subscribe {
+                ctx: ctx.clone(),
                 req,
                 reply: reply_tx,
                 tx: events_tx.clone(),
