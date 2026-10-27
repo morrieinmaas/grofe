@@ -2152,6 +2152,14 @@ fn resize_to_pane(state: &mut State, pane: PaneId) {
 /// `pane_mode` while it is in the mode, and the mode's own (tmux's
 /// `window_copy_formats`). `None` lets the caller's own variables answer.
 pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
+    // The pane's last search, in the mode or after it (`wp->searchstr`).
+    if name == "pane_search_string" {
+        let last = match state.copy.get(pane) {
+            Some(mode) => search::remember(mode),
+            None => state.copy.searches.get(&pane).cloned(),
+        };
+        return Some(last.map(|l| l.text().to_string()).unwrap_or_default());
+    }
     let mode = state.copy.get(pane)?;
     Some(match name {
         "pane_in_mode" => "1".to_string(),

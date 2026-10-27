@@ -108,6 +108,14 @@ $ resize-pane -Z -t main:1.2
 $ display -p -t main:1.1 '#{P:[#{pane_flags}] }'
 $ display -p -t main:1.1 '#{W:[#{window_flags}] }'
 $ resize-pane -Z -t main:1.2
+$ display -p -t main:1.1 '#{session_stack}|#{window_stack_index}'
+$ display -p -t main:1.1 '#{W:#{window_stack_index} }'
+$ copy-mode -t main:1.3
+$ send-keys -X -t main:1.3 search-forward nosuch
+$ display -p -t main:1.3 '[#{pane_search_string}]'
+$ send-keys -X -t main:1.3 cancel
+$ display -p -t main:1.3 '[#{pane_search_string}]'
+$ display -p -t main:1.2 '[#{pane_search_string}]'
 # a custom status-format that loops, on an attached client
 $ set -g status-format[0] 'L:#{W:#{window_index}.#{window_name} ,[#{window_index}.#{window_name}] }:R'
 $ set -g status 2

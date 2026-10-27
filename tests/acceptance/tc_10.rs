@@ -776,3 +776,36 @@ fn keys_after_a_shell_condition_wait_for_its_branch() {
             .is_some_and(|l| l.contains("unknown command: splat-window"))
     });
 }
+
+/// B1b: `mouse_word`, `mouse_line` and `mouse_hyperlink` are the word, the
+/// line and the OSC 8 link under the pointer (tmux's `format_grid_word`,
+/// `_line` and `_hyperlink`), and nothing off the text.
+#[test]
+fn the_mouse_word_line_and_link_come_from_the_pane_under_the_pointer() {
+    let srv = start(
+        "printf 'foo bar-baz qux\\n\\033]8;;http://example.com\\033\\\\link\\033]8;;\\033\\\\ end\\n'; exec sh",
+    );
+    bind(
+        &srv,
+        &[
+            "-n",
+            "MouseDown3Pane",
+            "set",
+            "-gF",
+            "@seen",
+            "[#{mouse_word}][#{mouse_line}][#{mouse_hyperlink}]",
+        ],
+    );
+    let mut a = attach(&srv, 80, 24);
+    a.wait_for("link end");
+
+    // Cell (4, 0) is the `b` of `bar`, which a `-` ends.
+    click_alone(&mut a, 3, 5, 1);
+    wait_opt(&srv, "@seen", "[bar][foo bar-baz qux][]");
+    // The link on the second row, and its word (the link ends at the blank).
+    click_alone(&mut a, 3, 2, 2);
+    wait_opt(&srv, "@seen", "[link][link end][http://example.com]");
+    // Past the text of a row there is no word.
+    click_alone(&mut a, 3, 60, 1);
+    wait_opt(&srv, "@seen", "[][foo bar-baz qux][]");
+}

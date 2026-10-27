@@ -3348,6 +3348,24 @@ impl FormatVars for FormatCtx<'_> {
                 .max()?
                 .to_string(),
             "session_many_attached" => flag(s.attached > 1),
+            // The windows before this one, most recent first.
+            "session_stack" => std::iter::once(m.windows.get(&s.active)?.index)
+                .chain(
+                    s.last_windows
+                        .iter()
+                        .rev()
+                        .filter_map(|id| m.windows.get(id).map(|w| w.index)),
+                )
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            "window_stack_index" => s
+                .last_windows
+                .iter()
+                .rev()
+                .position(|id| *id == w.id)
+                .map_or(0, |at| at + 1)
+                .to_string(),
             "pane_synchronized" => {
                 flag(m.options.lookup("synchronize-panes", &chain(m, self.pane)) == Some("on"))
             }
