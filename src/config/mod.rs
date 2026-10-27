@@ -89,6 +89,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-border.format", "pane-border-format"),
     ("status.keys", "status-keys"),
     ("compat-identity", "compat-identity"),
+    ("graphics", "graphics"),
     ("allow-passthrough", "allow-passthrough"),
     // Window alerts (TP.10), by tmux's names.
     ("monitor-bell", "monitor-bell"),
@@ -144,7 +145,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
         | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes"
-        | "monitor-bell" | "monitor-activity" | "wrap-search" => Ty::Bool,
+        | "monitor-bell" | "monitor-activity" | "wrap-search" | "graphics" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

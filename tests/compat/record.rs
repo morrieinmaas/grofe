@@ -100,6 +100,12 @@ fn in_container() -> bool {
     Path::new("/run/.containerenv").exists() || Path::new("/.dockerenv").exists()
 }
 
+/// The tmux built with `--enable-sixel` that records the scenarios under
+/// `golden/g3/`: `tmux-sixel` beside `tmux`.
+fn sixel_tmux(tmux: &Path) -> PathBuf {
+    tmux.with_file_name("tmux-sixel")
+}
+
 /// `GROFE_COMPAT_TMUX`, else `/usr/local/bin/tmux` (where the image puts it).
 fn tmux_path() -> PathBuf {
     std::env::var_os("GROFE_COMPAT_TMUX")
@@ -116,6 +122,10 @@ fn record_goldens() {
     );
     let tmux = tmux_path();
     if let Err(e) = check_version(&tmux) {
+        panic!("{e}");
+    }
+    let sixel = sixel_tmux(&tmux);
+    if let Err(e) = check_version(&sixel) {
         panic!("{e}");
     }
     raise_pids();
@@ -158,7 +168,12 @@ fn record_goldens() {
         }
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel_str}: {e}"));
         let steps = parse_scenario(&text).unwrap_or_else(|e| panic!("{rel_str}: {e}"));
-        let golden = record(&tmux, &normalizer, &steps);
+        let binary = if rel_str.starts_with("g3/") {
+            &sixel
+        } else {
+            &tmux
+        };
+        let golden = record(binary, &normalizer, &steps);
         write(&out.join(rel.with_extension("golden")), &golden);
         eprintln!("recorded {rel_str}");
     }

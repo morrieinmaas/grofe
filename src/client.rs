@@ -95,7 +95,7 @@ const RESET_TAIL: &[u8] = concat!(
 pub const TEST_PANIC_ENV: &str = "GROFE_TEST_CLIENT_PANIC";
 
 /// A comma list of capabilities (`truecolor`, `styled_underline`, `sync`,
-/// `kitty_keys`, `kitty_graphics`, `cell_px=<w>x<h>`) to claim on top of
+/// `kitty_keys`, `kitty_graphics`, `sixel`, `cell_px=<w>x<h>`) to claim on top of
 /// what the probe found: the test hook for an outer terminal the test
 /// harness cannot be (T3.8's kitty graphics, pane pixel sizes). Unknown
 /// names are ignored.
@@ -110,6 +110,7 @@ fn with_test_caps(mut caps: Caps, list: &str) -> Caps {
             "sync" => caps.sync = true,
             "kitty_keys" => caps.kitty_keys = true,
             "kitty_graphics" => caps.kitty_graphics = true,
+            "sixel" => caps.sixel = true,
             _ => {
                 if let Some((w, h)) = name
                     .strip_prefix("cell_px=")
@@ -129,8 +130,9 @@ fn with_test_caps(mut caps: Caps, list: &str) -> Caps {
 /// One recognised answer to [`PROBE_QUERY`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProbeReply {
-    /// `CSI ? ... c`: the end marker.
-    Da1,
+    /// `CSI ? ... c`: the end marker. `sixel`: it lists attribute 4, as
+    /// tmux reads it (a class of 61 to 65, then the attributes).
+    Da1 { sixel: bool },
     /// `DCS > | name version ST`.
     XtVersion(String),
     /// `CSI ? mode ; value $ y`.
@@ -163,6 +165,7 @@ pub struct ProbeParser {
     sync_mode: Option<u32>,
     kitty_keys: bool,
     kitty_graphics: bool,
+    sixel: bool,
     cell_px: Option<(u16, u16)>,
     done: bool,
 }
@@ -206,7 +209,10 @@ impl ProbeParser {
 
     fn record(&mut self, reply: ProbeReply) {
         match reply {
-            ProbeReply::Da1 => self.done = true,
+            ProbeReply::Da1 { sixel } => {
+                self.sixel = sixel;
+                self.done = true;
+            }
             ProbeReply::XtVersion(v) => self.xtversion = Some(v),
             ProbeReply::ModeReport { mode: 2026, value } => self.sync_mode = Some(value),
             ProbeReply::ModeReport { .. } => {}
@@ -241,6 +247,7 @@ impl ProbeParser {
             sync: matches!(self.sync_mode, Some(1..=3)),
             kitty_keys: self.kitty_keys,
             kitty_graphics: self.kitty_graphics,
+            sixel: self.sixel,
             cell_px: self.cell_px,
         }
     }
@@ -311,7 +318,14 @@ fn scan_csi(b: &[u8]) -> Scan {
     let params = &b[start..i];
     match b.get(i) {
         None => Scan::Incomplete,
-        Some(b'c') => Scan::Reply(ProbeReply::Da1, i + 1),
+        Some(b'c') => {
+            let attrs: Vec<&[u8]> = params.split(|c| *c == b';').collect();
+            let class = attrs
+                .first()
+                .and_then(|a| std::str::from_utf8(a).ok()?.parse::<u32>().ok());
+            let sixel = matches!(class, Some(61..=65)) && attrs[1..].contains(&&b"4"[..]);
+            Scan::Reply(ProbeReply::Da1 { sixel }, i + 1)
+        }
         Some(b'u') => Scan::Reply(ProbeReply::KittyKeys, i + 1),
         Some(b'$') => match b.get(i + 1) {
             None => Scan::Incomplete,
@@ -1028,12 +1042,40 @@ mod tests {
         p
     }
 
+    /// G3: DA1 lists sixel as attribute 4 after a class of 61 to 65, as tmux
+    /// reads it.
+    #[test]
+    fn da1_attribute_4_is_sixel() {
+        for (reply, sixel) in [
+            (&b"\x1b[?62;4;22c"[..], true),
+            (b"\x1b[?64;1;2;4;6c", true),
+            (b"\x1b[?65;4c", true),
+            (b"\x1b[?62;22c", false),
+            (b"\x1b[?62;14c", false),
+            (b"\x1b[?1;2c", false),
+            // Class 4 alone, or past the attributes: not a sixel list.
+            (b"\x1b[?4c", false),
+            (b"\x1b[?1;2;4c", false),
+            (b"\x1b[?6c", false),
+        ] {
+            let p = parse(reply);
+            assert!(p.done(), "{reply:?}");
+            assert_eq!(
+                p.caps(None).sixel,
+                sixel,
+                "{}",
+                String::from_utf8_lossy(reply)
+            );
+        }
+    }
+
     const ALL: Caps = Caps {
         truecolor: true,
         styled_underline: true,
         sync: true,
         kitty_keys: true,
         kitty_graphics: true,
+        sixel: false,
         cell_px: None,
     };
 
@@ -1053,7 +1095,8 @@ mod tests {
             "../tests/fixtures/probe/wezterm.txt"
         )));
         assert!(p.done());
-        assert_eq!(p.caps(None), ALL);
+        // Its DA1 lists attribute 4: sixel.
+        assert_eq!(p.caps(None), Caps { sixel: true, ..ALL });
     }
 
     #[test]
@@ -1066,6 +1109,7 @@ mod tests {
             p.caps(None),
             Caps {
                 kitty_keys: false,
+                sixel: true,
                 ..ALL
             }
         );

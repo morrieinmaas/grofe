@@ -26,6 +26,20 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
     && rm -rf /tmp/tmux /tmp/tmux.tar.gz \
     && test "$(/usr/local/bin/tmux -V)" = "tmux ${TMUX_VERSION}"
 
+# A second tmux 3.7b, built with --enable-sixel, for the scenarios under
+# golden/g3/ (G3, sixel images). The build above has no sixel support: tmux
+# without it ignores `DCS q` and `#{sixel_support}` is 0. The recorder takes
+# `tmux-sixel` from beside the tmux it is given.
+RUN curl -fsSLo /tmp/tmux.tar.gz \
+        "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
+    && echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c - \
+    && mkdir /tmp/tmux && tar -xzf /tmp/tmux.tar.gz -C /tmp/tmux --strip-components=1 \
+    && cd /tmp/tmux && ./configure --prefix=/opt/tmux-sixel --enable-sixel \
+    && make -j"$(nproc)" && make install \
+    && rm -rf /tmp/tmux /tmp/tmux.tar.gz \
+    && test "$(/opt/tmux-sixel/bin/tmux -V)" = "tmux ${TMUX_VERSION}" \
+    && ln -s /opt/tmux-sixel/bin/tmux /usr/local/bin/tmux-sixel
+
 # Record as an ordinary user: as root, the `word user` normalization would
 # also rewrite tmux's `root` key table. The cargo cache and target dir are
 # the user's, so the named volumes mounted there start out writable.

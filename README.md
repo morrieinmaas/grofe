@@ -61,7 +61,9 @@ redraws stay instant no matter how much you put there.
 **Modern terminal support out of the box.** True colour, the kitty keyboard
 protocol (so keys like a bare `q` or `Ctrl-Enter` reach Neovim, Helix and
 coding agents intact), clipboard over OSC 52, hyperlinks, focus events,
-tear-free redraws, and inline images through kitty's graphics protocol. The
+tear-free redraws, and inline images through kitty's graphics protocol
+(Unicode placeholders by default; `graphics = true` in `config.toml` adds
+direct placements, animation and sixel, see `docs/graphics-placement.md`). The
 defaults are the ones most people end up configuring anyway: mouse on,
 numbering from 1, no half-second escape delay, new panes in the current
 directory.

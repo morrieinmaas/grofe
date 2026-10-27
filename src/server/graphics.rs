@@ -17,7 +17,11 @@
 //!   is kept under [`CACHE_CAP`] and re-sent on attach and full redraw.
 //! - **Queries** (`a=q`) are answered on the pane's reader task
 //!   ([`answer_query`]), ahead of the emulator's DA1 reply.
-//! - Direct placements (no `U=1`), animation and sixel are dropped.
+//! - Direct placements (no `U=1`), animation and sixel are dropped, unless
+//!   the `graphics` option is on (G3, `docs/graphics-placement.md`): then a
+//!   direct transmit is forwarded as `a=t`, frames and animation control
+//!   (`a=f`, `a=a`, `a=c`) are forwarded and cached after their image, and
+//!   the placements themselves are the pane store's and the renderer's.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -66,6 +70,8 @@ pub struct Graphics {
     pending: HashMap<PaneId, Pending>,
     /// Clients the cache was re-sent to.
     sent: HashSet<ClientId>,
+    /// The `graphics` option is on (G3): set before each command.
+    pub direct: bool,
 }
 
 impl Default for Graphics {
@@ -94,11 +100,15 @@ struct Image {
     data: Arc<[u8]>,
     /// Virtual placements (`a=p,U=1`) by placement id, as forwarded.
     placements: Vec<(u32, Vec<u8>)>,
+    /// Animation frames and control commands, in order (G3).
+    extras: Vec<Vec<u8>>,
 }
 
 impl Image {
     fn size(&self) -> usize {
-        self.data.len() + self.placements.iter().map(|(_, p)| p.len()).sum::<usize>()
+        self.data.len()
+            + self.placements.iter().map(|(_, p)| p.len()).sum::<usize>()
+            + self.extras.iter().map(Vec::len).sum::<usize>()
     }
 }
 
@@ -108,6 +118,8 @@ impl Image {
 struct Pending {
     /// False for a transmit being dropped: its chunks are swallowed.
     forward: bool,
+    /// Frame data (`a=f`): kept after its image, whose chunks say `a=f`.
+    frame: bool,
     local: u32,
     q: u32,
     /// The first chunk's keys (`i=` set on `finish`) and payload.
@@ -121,6 +133,7 @@ impl Pending {
     fn dropped() -> Pending {
         Pending {
             forward: false,
+            frame: false,
             local: 0,
             q: 2,
             head: Vec::new(),
@@ -157,6 +170,7 @@ impl Graphics {
             cap,
             pending: HashMap::new(),
             sent: HashSet::new(),
+            direct: false,
         }
     }
 
@@ -185,7 +199,8 @@ impl Graphics {
             b't' | b'T' => self.transmit(pane, &cmd, &mut out),
             b'p' => self.place(pane, &cmd, &mut out),
             b'd' => self.delete(pane, &cmd, &mut out),
-            // ponytail: animation (`a=f`, `a=a`, `a=c`) is dropped.
+            b'f' if self.direct => self.transmit(pane, &cmd, &mut out),
+            b'a' | b'c' if self.direct => self.animate(pane, &cmd, &mut out),
             _ => self.swallow(pane, &cmd),
         }
         out
@@ -201,17 +216,24 @@ impl Graphics {
     fn transmit(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
         let virtual_placement = cmd.num(b'U') == Some(1);
         let action = cmd.ch(b'a').unwrap_or(b't');
+        let frame = action == b'f';
         // ponytail: image numbers (`I=`) are not supported, only ids.
         let local = cmd.num(b'i').filter(|i| *i != 0);
-        let Some(local) = local.filter(|_| action == b't' || virtual_placement) else {
+        let Some(local) = local.filter(|_| frame || action == b't' || virtual_placement) else {
             self.swallow(pane, cmd);
             return;
         };
         let q = cmd.num(b'q').unwrap_or(0);
+        if frame && self.remap.get(pane, local).is_none() {
+            out.reply = reply(local, q, Err("ENOENT:no such image".into()));
+            self.swallow(pane, cmd);
+            return;
+        }
         match cmd.ch(b't').unwrap_or(b'd') {
             b'd' => {
                 let p = Pending {
                     forward: true,
+                    frame,
                     local,
                     q,
                     head: cmd.rewritten(&[(b'i', String::new()), (b'q', "2".into())], &[]),
@@ -242,6 +264,7 @@ impl Graphics {
                 let (head, first, rest) = inline_chunks(keys, &data);
                 let p = Pending {
                     forward: true,
+                    frame,
                     local,
                     q,
                     head,
@@ -258,7 +281,10 @@ impl Graphics {
         let more = cmd.num(b'm') == Some(1);
         if p.forward {
             let m = if more { "1" } else { "0" };
-            let keys = vec![(b'm', m.to_string()), (b'q', "2".to_string())];
+            let mut keys = vec![(b'm', m.to_string()), (b'q', "2".to_string())];
+            if p.frame {
+                keys.insert(0, (b'a', "f".to_string()));
+            }
             p.rest.extend_from_slice(&encode(&keys, cmd.payload));
             if p.len() > self.cap {
                 out.reply = reply(p.local, p.q, Err("EFBIG:image too large".into()));
@@ -283,16 +309,48 @@ impl Graphics {
         let mut bytes = encode(&p.head, &p.first);
         bytes.extend_from_slice(&p.rest);
         out.forward.extend_from_slice(&bytes);
+        if p.frame {
+            self.keep_extra(outer, bytes);
+            out.reply = reply(p.local, p.q, Ok(()));
+            return;
+        }
         self.uncache(outer);
         let image = Image {
             id: outer,
             data: bytes.into(),
             placements: Vec::new(),
+            extras: Vec::new(),
         };
         self.cached += image.size();
         self.cache.push(image);
         self.evict();
         out.reply = reply(p.local, p.q, Ok(()));
+    }
+
+    /// Animation data or control for image `outer`: re-sent after it.
+    fn keep_extra(&mut self, outer: u32, bytes: Vec<u8>) {
+        if let Some(image) = self.cache.iter_mut().find(|i| i.id == outer) {
+            self.cached += bytes.len();
+            image.extras.push(bytes);
+            self.evict();
+        }
+    }
+
+    /// `a=a` (animation control) and `a=c` (frame composition).
+    fn animate(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
+        let q = cmd.num(b'q').unwrap_or(0);
+        let Some(local) = cmd.num(b'i').filter(|i| *i != 0) else {
+            return;
+        };
+        let Some(outer) = self.remap.get(pane, local) else {
+            out.reply = reply(local, q, Err("ENOENT:no such image".into()));
+            return;
+        };
+        let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
+        let bytes = encode(&keys, b"");
+        out.forward.extend_from_slice(&bytes);
+        self.keep_extra(outer, bytes);
+        out.reply = reply(local, q, Ok(()));
     }
 
     fn place(&mut self, pane: PaneId, cmd: &Cmd, out: &mut Outcome) {
@@ -305,6 +363,10 @@ impl Graphics {
             return;
         };
         if cmd.num(b'U') != Some(1) {
+            // A direct placement is the pane store's and the renderer's.
+            if self.direct {
+                out.reply = reply(local, q, Ok(()));
+            }
             return;
         }
         let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
@@ -354,7 +416,18 @@ impl Graphics {
                     .collect()
             }
             b'a' | b'c' | b'p' | b'q' | b'x' | b'y' | b'z' => mine(self),
-            // ponytail: `d=n` (image numbers) and `d=f` (frames) are dropped.
+            b'f' if self.direct => {
+                if let Some(local) = cmd.num(b'i')
+                    && let Some(outer) = self.remap.get(pane, local)
+                {
+                    let keys = cmd.rewritten(&[(b'i', outer.to_string()), (b'q', "2".into())], &[]);
+                    let bytes = encode(&keys, b"");
+                    out.forward.extend_from_slice(&bytes);
+                    self.keep_extra(outer, bytes);
+                }
+                Vec::new()
+            }
+            // ponytail: `d=n` (image numbers) is dropped.
             _ => Vec::new(),
         };
         for (local, outer) in targets {
@@ -435,6 +508,9 @@ impl Graphics {
         let mut out = Vec::new();
         for image in &self.cache {
             out.extend_from_slice(&image.data);
+            for extra in &image.extras {
+                out.extend_from_slice(extra);
+            }
             for (_, p) in &image.placements {
                 out.extend_from_slice(p);
             }
@@ -467,6 +543,7 @@ impl Graphics {
 /// One framed APC `_G ... ESC \` from `pane` (T3.3's scanner).
 pub fn on_graphics(state: &mut State, pane: PaneId, bytes: Vec<u8>) {
     prune(state);
+    state.graphics.direct = images_enabled(&state.model);
     let out = state.graphics.handle(pane, &bytes);
     if let (Some(reply), Some(p)) = (out.reply, state.model.panes.get(&pane)) {
         let _ = p.handle.enqueue_input(reply);
@@ -481,6 +558,19 @@ fn prune(state: &mut State) {
     let panes = &state.model.panes;
     let deletes = state.graphics.prune(|p| panes.contains_key(&p));
     to_kitty_clients(state, &deletes);
+}
+
+/// Whether the `graphics` option is on (G3).
+pub fn images_enabled(model: &crate::server::model::Model) -> bool {
+    model.options.lookup("graphics", &[]) == Some("on")
+}
+
+/// The `graphics` option may have changed: tells every pane's reader.
+pub fn sync_option(model: &crate::server::model::Model) {
+    let on = images_enabled(model);
+    for p in model.panes.values() {
+        p.handle.set_images(on);
+    }
 }
 
 /// The clients whose terminals show kitty graphics.
@@ -595,13 +685,13 @@ pub fn on_full_redraw(state: &mut State, id: ClientId) {
 // ---- commands ----
 
 /// One parsed graphics command: its keys, in order, and its payload.
-struct Cmd<'a> {
+pub(crate) struct Cmd<'a> {
     keys: Vec<(u8, &'a [u8])>,
-    payload: &'a [u8],
+    pub(crate) payload: &'a [u8],
 }
 
 impl<'a> Cmd<'a> {
-    fn parse(apc: &'a [u8]) -> Option<Cmd<'a>> {
+    pub(crate) fn parse(apc: &'a [u8]) -> Option<Cmd<'a>> {
         let body = apc.strip_prefix(b"\x1b_G")?.strip_suffix(b"\x1b\\")?;
         let (head, payload) = match body.iter().position(|b| *b == b';') {
             Some(i) => (&body[..i], &body[i + 1..]),
@@ -634,15 +724,20 @@ impl<'a> Cmd<'a> {
         Some(Cmd { keys, payload })
     }
 
-    fn get(&self, key: u8) -> Option<&'a [u8]> {
+    pub(crate) fn get(&self, key: u8) -> Option<&'a [u8]> {
         self.keys.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
 
-    fn num(&self, key: u8) -> Option<u32> {
+    pub(crate) fn num(&self, key: u8) -> Option<u32> {
         std::str::from_utf8(self.get(key)?).ok()?.parse().ok()
     }
 
-    fn ch(&self, key: u8) -> Option<u8> {
+    /// A signed number key (`z`, `H`, `V`).
+    pub(crate) fn int(&self, key: u8) -> Option<i64> {
+        std::str::from_utf8(self.get(key)?).ok()?.parse().ok()
+    }
+
+    pub(crate) fn ch(&self, key: u8) -> Option<u8> {
         match self.get(key)? {
             [c] => Some(*c),
             _ => None,
@@ -651,7 +746,7 @@ impl<'a> Cmd<'a> {
 
     /// The keys with `set` replacing (or appended after) existing ones and
     /// `drop` removed.
-    fn rewritten(&self, set: &[(u8, String)], drop: &[u8]) -> Vec<(u8, String)> {
+    pub(crate) fn rewritten(&self, set: &[(u8, String)], drop: &[u8]) -> Vec<(u8, String)> {
         let mut keys: Vec<(u8, String)> = self
             .keys
             .iter()
@@ -673,7 +768,7 @@ impl<'a> Cmd<'a> {
     }
 }
 
-fn encode(keys: &[(u8, String)], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn encode(keys: &[(u8, String)], payload: &[u8]) -> Vec<u8> {
     let mut out = b"\x1b_G".to_vec();
     for (i, (k, v)) in keys.iter().enumerate() {
         if i > 0 {
@@ -735,6 +830,19 @@ fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err("EINVAL:path is not absolute".into());
     }
+    // Kitty's rules: nothing under /proc, /sys or /dev (but /dev/shm), and a
+    // `t=t` file only in a temp directory with the marker in its name.
+    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if ["/proc", "/sys", "/dev"]
+        .iter()
+        .any(|d| real.starts_with(d))
+        && !real.starts_with("/dev/shm")
+    {
+        return Err("EPERM:refusing to read from a system directory".into());
+    }
+    if medium == b't' && !kitty_would_delete(path) {
+        return Err("EBADF:a t=t file must be a temporary file".into());
+    }
     // Refused before opening, so that opening a device or fifo never
     // happens; `metadata` follows symlinks.
     let meta = fs::metadata(path).map_err(|e| format!("ENOENT:{e}"))?;
@@ -757,7 +865,7 @@ fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     file.take(want as u64)
         .read_to_end(&mut data)
         .map_err(|e| format!("EINVAL:{e}"))?;
-    if medium == b't' && kitty_would_delete(path) {
+    if medium == b't' {
         let _ = fs::remove_file(path);
     }
     Ok(data)
@@ -776,7 +884,7 @@ fn span(len: u64, size: u64, offset: u64, cap: usize) -> Result<usize, String> {
     Ok(want as usize)
 }
 
-/// Kitty deletes a `t=t` file only in a temp directory and with
+/// Kitty reads (and deletes) a `t=t` file only in a temp directory and with
 /// `tty-graphics-protocol` in its path.
 fn kitty_would_delete(path: &Path) -> bool {
     if !path.to_string_lossy().contains("tty-graphics-protocol") {
@@ -1582,9 +1690,9 @@ mod tests {
         }
     }
 
-    /// Case 7: a `t=t` file is unlinked after reading when kitty would
-    /// (a temp directory and `tty-graphics-protocol` in its path), and kept
-    /// otherwise.
+    /// Case 7: a `t=t` file is read and unlinked only in a temp directory
+    /// with `tty-graphics-protocol` in its path; any other is refused (as
+    /// kitty does) and left alone.
     #[test]
     fn temp_file_transmits_are_unlinked_as_kitty_does() {
         let dir = tempfile::Builder::new()
@@ -1597,13 +1705,46 @@ mod tests {
             fs::copy(fixture("red-blue-4x4.png"), p).expect("copy");
         }
         let mut g = Graphics::default();
-        for (i, p) in [&doomed, &kept].into_iter().enumerate() {
-            let name = STANDARD.encode(p.to_string_lossy().as_bytes());
-            let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i={},q=2;{name}", i + 1)));
-            assert_eq!(apcs(&out.forward).len(), 1, "{p:?}");
-        }
+        let name = STANDARD.encode(doomed.to_string_lossy().as_bytes());
+        let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i=1,q=2;{name}")));
+        assert_eq!(apcs(&out.forward).len(), 1, "{doomed:?}");
         assert!(!doomed.exists(), "the temp file was unlinked");
+
+        let name = STANDARD.encode(kept.to_string_lossy().as_bytes());
+        let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i=2;{name}")));
+        assert!(out.forward.is_empty(), "no marker, no read");
+        let reply = text(out.reply.as_deref().unwrap_or_default());
+        assert!(reply.starts_with("\x1b_Gi=2;EBADF:"), "{reply:?}");
         assert!(kept.exists(), "a name without the marker is kept");
+    }
+
+    /// Security: a `t=t` transmit of a file outside the temp directories
+    /// (the user's own secrets), even with the marker in its name, and any
+    /// `t=f` of /proc, /sys or /dev, is refused and nothing is read.
+    #[test]
+    fn media_transmits_cannot_read_arbitrary_or_system_files() {
+        let home = tempfile::Builder::new()
+            .prefix("tty-graphics-protocol-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("tempdir in the working directory");
+        let secret = home.path().join("tty-graphics-protocol-secret");
+        fs::write(&secret, b"hunter2").expect("write");
+        for (medium, path, code) in [
+            ("t", secret.to_string_lossy().to_string(), "EBADF:"),
+            ("f", "/dev/zero".to_string(), "EPERM:"),
+            ("f", "/proc/self/environ".to_string(), "EPERM:"),
+        ] {
+            let mut g = Graphics::default();
+            let name = STANDARD.encode(path.as_bytes());
+            let out = g.handle(A, &apc(&format!("a=T,U=1,t={medium},i=5;{name}")));
+            assert!(out.forward.is_empty(), "{path}");
+            let reply = text(out.reply.as_deref().unwrap_or_default());
+            assert!(
+                reply.starts_with(&format!("\x1b_Gi=5;{code}")),
+                "{path}: {reply:?}"
+            );
+        }
+        assert!(secret.exists(), "a refused file is not unlinked");
     }
 
     /// Shared memory is read, forwarded inline and unlinked.
@@ -1964,6 +2105,7 @@ mod tests {
             status: None,
             cursor: None,
             graphics: Some(remap),
+            images: None,
         })
     }
 
@@ -2019,6 +2161,7 @@ mod tests {
             status: None,
             cursor: None,
             graphics: Some(&remap),
+            images: None,
         });
         assert_eq!(screen.cells[0].c, PLACEHOLDER);
         assert_eq!(

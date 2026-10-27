@@ -296,6 +296,7 @@ pub fn open(
     spawn.cols = cols;
     spawn.rows = rows;
     spawn.graphics_ok = false;
+    spawn.images = false;
     let (events, events_rx) = mpsc::channel(64);
     let wake = Arc::new(Notify::new());
     let cwd = spawn.cwd.clone();
@@ -907,6 +908,7 @@ mod tests {
             term: state.inner_term,
             cell_px: None,
             graphics_ok: false,
+            images: false,
         };
         assert_eq!(open(&mut state, id, frame, spawn), Ok(false));
         assert!(!state.popups.is_open(id));

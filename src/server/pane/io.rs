@@ -17,6 +17,7 @@ use super::marks;
 use super::written::Written;
 use super::{Emu, PaneEvent, PaneEventKind, QueueFull, lock};
 use crate::server::graphics;
+use crate::server::imgstore::{Cursor, Forward};
 use crate::server::passthrough::Scanner;
 use crate::types::PaneId;
 
@@ -141,6 +142,8 @@ pub(crate) struct Reader {
     pub(crate) scanner: Scanner,
     /// See `PaneHandle::set_graphics_ok`.
     pub(crate) graphics_ok: Arc<AtomicBool>,
+    /// See `PaneHandle::set_images`.
+    pub(crate) images_on: Arc<AtomicBool>,
 }
 
 /// Reader task: parse output, answer the emulator's queries, drive the sync
@@ -245,12 +248,17 @@ impl Reader {
             let Emu {
                 term,
                 parser,
+                images,
                 marks,
                 ..
             } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
-                parser.stop_sync(&mut Written(term, marks));
+                let store = self
+                    .images_on
+                    .load(Ordering::Relaxed)
+                    .then_some(&mut *images);
+                parser.stop_sync(&mut Written(term, marks, store));
             }
             pending
         };
@@ -265,17 +273,18 @@ impl Reader {
     /// ahead of the emulator's own replies (its DA1 answer, which a tool
     /// sends after the query), never through the actor (T3.8).
     fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
-        let (bytes, mut found) = self.scanner.scan(bytes);
+        let images = self.images_on.load(Ordering::Relaxed);
+        self.scanner.set_sixel(images);
+        let (bytes, found) = self.scanner.scan_at(bytes);
         let found_marks = self.scanner.take_marks();
-        for kind in &found {
+        for (_, kind) in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
             {
                 self.reply(answer);
             }
         }
-        // A query is answered here only; the actor never sees it.
-        found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
+        let mut events = Vec::new();
         {
             let mut emu = lock(&self.emu);
             // A respawn handed the emulator to a newer reader.
@@ -285,28 +294,94 @@ impl Reader {
             let Emu {
                 term,
                 parser,
-                marks: store,
+                images: store,
+                marks,
                 ..
             } = &mut *emu;
-            // An OSC 133 mark is made where the sequence ended: the emulator
-            // gets the bytes up to it, then a private mode that `Written`
-            // turns into the mark. In-band so a synchronized update, which
-            // holds its bytes back, makes the mark when they are applied.
-            let mut from = 0;
-            for (at, bits) in found_marks {
-                parser.advance(&mut Written(term, store), &bytes[from..at]);
-                let marker: &[u8] = if bits == marks::PROMPT {
-                    b"\x1b[?65533h"
-                } else {
-                    b"\x1b[?65534h"
-                };
-                parser.advance(&mut Written(term, store), marker);
-                from = at;
+            if !images {
+                // An OSC 133 mark is made where the sequence ended: the
+                // emulator gets the bytes up to it, then a private mode that
+                // `Written` turns into the mark. In-band so a synchronized
+                // update, which holds its bytes back, makes the mark when
+                // they are applied.
+                let mut from = 0;
+                for (at, bits) in found_marks {
+                    parser.advance(&mut Written(term, marks, None), &bytes[from..at]);
+                    parser.advance(&mut Written(term, marks, None), marker(bits));
+                    from = at;
+                }
+                parser.advance(&mut Written(term, marks, None), &bytes[from..]);
+                // A query is answered here only; the actor never sees it.
+                events.extend(found.into_iter().map(|(_, kind)| kind).filter(
+                    |k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)),
+                ));
+            } else {
+                // Marks and image commands, in the order the scanner met them.
+                let mut points: Vec<(usize, Point)> = found_marks
+                    .into_iter()
+                    .map(|(at, bits)| (at, Point::Mark(bits)))
+                    .chain(found.into_iter().map(|(at, kind)| (at, Point::Event(kind))))
+                    .collect();
+                points.sort_by_key(|(at, _)| *at);
+                let mut fed = 0;
+                for (at, point) in points {
+                    match point {
+                        Point::Mark(bits) => {
+                            let mut w = Written(term, marks, Some(&mut *store));
+                            parser.advance(&mut w, &bytes[fed..at]);
+                            parser.advance(&mut w, marker(bits));
+                            fed = at;
+                        }
+                        Point::Event(PaneEventKind::Graphics(apc)) if graphics::is_query(&apc) => {}
+                        Point::Event(
+                            kind @ (PaneEventKind::Graphics(_) | PaneEventKind::Sixel { .. }),
+                        ) => {
+                            // The cursor must be where the command's bytes
+                            // put it: past what the parser holds back in a
+                            // synchronized update, and what precedes it.
+                            parser.advance(
+                                &mut Written(term, marks, Some(&mut *store)),
+                                &bytes[fed..at],
+                            );
+                            fed = at;
+                            if parser.sync_timeout().sync_timeout().is_some() {
+                                parser.stop_sync(&mut Written(term, marks, Some(&mut *store)));
+                            }
+                            let point = term.grid().cursor.point;
+                            let cur = Cursor {
+                                line: point.line.0.max(0) as u32,
+                                col: point.column.0 as u32,
+                            };
+                            let (inject, forward) = match kind {
+                                PaneEventKind::Sixel { p2, body } => {
+                                    (store.on_sixel(&body, p2, cur), Forward::Replace(vec![]))
+                                }
+                                PaneEventKind::Graphics(apc) => {
+                                    let out = store.on_apc(&apc, cur);
+                                    match out.forward {
+                                        Forward::Same => (out.inject, Forward::Replace(vec![apc])),
+                                        other => (out.inject, other),
+                                    }
+                                }
+                                _ => (Vec::new(), Forward::Replace(vec![])),
+                            };
+                            if !inject.is_empty() {
+                                parser
+                                    .advance(&mut Written(term, marks, Some(&mut *store)), &inject);
+                            }
+                            if let Forward::Replace(list) = forward {
+                                events.extend(list.into_iter().map(PaneEventKind::Graphics));
+                            }
+                        }
+                        Point::Event(other) => events.push(other),
+                    }
+                }
+                parser.advance(&mut Written(term, marks, Some(&mut *store)), &bytes[fed..]);
+                store.prune(term.grid().history_size());
             }
-            parser.advance(&mut Written(term, store), &bytes[from..]);
         }
         self.after_parse();
-        found
+        events
     }
 
     /// Handle buffered listener events, then mark the pane dirty and wake the
@@ -373,5 +448,22 @@ impl Reader {
     /// stalling output. Only `Exited` is sent with backpressure.
     fn notify(&self, kind: PaneEventKind) {
         let _ = self.to_actor.try_send(self.event(kind));
+    }
+}
+
+/// What the scanner met in a read, in stream order.
+enum Point {
+    /// An OSC 133 mark, with its bits.
+    Mark(u8),
+    /// An event for the actor, or an image command for the store.
+    Event(PaneEventKind),
+}
+
+/// The in-band private mode `Written` turns into an OSC 133 mark.
+fn marker(bits: u8) -> &'static [u8] {
+    if bits == marks::PROMPT {
+        b"\x1b[?65533h"
+    } else {
+        b"\x1b[?65534h"
     }
 }

@@ -47,6 +47,7 @@ use crate::server::input::{
 use crate::server::model::{Model, Session};
 use crate::server::pane::CursorState;
 use crate::server::render::{self, FrameInputs, Overlay, OverlayCtx, Screen};
+use crate::server::screenimg::{self, ImageCaps, ScreenImage};
 use crate::server::status::{
     self, RangeKind, StatusInputs, StatusRow, StyledLine, WindowOptions, WindowStatus,
 };
@@ -114,6 +115,9 @@ pub struct Outbox {
     raw: Vec<u8>,
     /// Bytes of dropped diffs, ever (`client_discarded`).
     discarded: u64,
+    /// The images the client's terminal shows once everything sent so far
+    /// is written (G3); unlike `prev`, kept across a dropped frame.
+    placed: Vec<ScreenImage>,
 }
 
 /// Most raw bytes held for a client whose frames are being dropped.
@@ -131,6 +135,7 @@ impl Outbox {
             blocked: false,
             raw: Vec::new(),
             discarded: 0,
+            placed: Vec::new(),
         };
         (outbox, rx)
     }
@@ -163,7 +168,7 @@ impl Outbox {
     /// client still needs one, and must be offered it again once
     /// [`Outbox::ready`].
     pub fn offer(&mut self, next: Screen, caps: &Caps) -> bool {
-        let diff = render::diff(self.prev.as_ref(), &next, caps);
+        let diff = render::diff_placed(self.prev.as_ref(), &next, caps, &self.placed);
         if diff.is_empty() && self.raw.is_empty() {
             return true;
         }
@@ -172,6 +177,7 @@ impl Outbox {
         bytes.extend_from_slice(&diff);
         match self.tx.try_send(bytes) {
             Ok(()) => {
+                self.placed.clone_from(&next.images);
                 self.prev = Some(next);
                 self.blocked = false;
                 true
@@ -400,8 +406,8 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             ctx,
             size: clamp_size(req.size),
             pending_size: None,
+            caps: terminal_features(&state.model, &req.term, req.caps),
             term: req.term,
-            caps: req.caps,
             activity: now,
             activity_time: SystemTime::now(),
             decoder: Decoder::new(),
@@ -1509,6 +1515,35 @@ fn render_dirty(state: &mut State) {
     }
 }
 
+/// `caps` with what the `terminal-features` option adds for a client whose
+/// `TERM` is `term`, as tmux reads it: entries `pattern:feature:...`, the
+/// pattern a `fnmatch` glob of the terminal name. Only `sixel` is read (G3);
+/// the probe cannot ask for it on a terminal that lists it nowhere else.
+fn terminal_features(model: &Model, term: &str, mut caps: Caps) -> Caps {
+    let features = model.options.lookup_list("terminal-features", &[]);
+    for entry in features.into_iter().flat_map(|f| f.values()) {
+        let mut parts = entry.split(':');
+        let matches = parts.next().is_some_and(|pattern| glob(pattern, term));
+        if matches && parts.any(|feature| feature == "sixel") {
+            caps.sixel = true;
+        }
+    }
+    caps
+}
+
+/// `fnmatch` with `*` and `?` only.
+fn glob(pattern: &str, text: &str) -> bool {
+    fn go(p: &[u8], t: &[u8]) -> bool {
+        match p.split_first() {
+            None => t.is_empty(),
+            Some((b'*', rest)) => (0..=t.len()).any(|i| go(rest, &t[i..])),
+            Some((b'?', rest)) => !t.is_empty() && go(rest, &t[1..]),
+            Some((c, rest)) => t.first() == Some(c) && go(rest, &t[1..]),
+        }
+    }
+    go(pattern.as_bytes(), text.as_bytes())
+}
+
 /// Client `c`'s current window, and whether it fits the client (then
 /// there is nothing to pan).
 fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
@@ -1841,7 +1876,9 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         status: None,
         cursor,
         graphics: state.graphics.remap(),
+        images: Some(ImageCaps::of(&c.caps)),
     });
+    screenimg::mark_covered(&mut window, 0);
     if !w.zoomed && !w.floating.is_empty() {
         let mut stack = w.floating.clone();
         stack.sort_by_key(|f| f.z);
@@ -1865,6 +1902,8 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             &window_style(model, w, "pane-active-border-style"),
         );
     }
+    // Floating panes cover what is under them, images included.
+    screenimg::hide_covered(&mut window);
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if let Some(first) = lines.first_mut() {
@@ -1879,11 +1918,14 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         if let Some(m) = &message
             && let Some(last) = window.rows.checked_sub(1)
         {
+            screenimg::mark_covered(&mut window, 0);
             render::draw_row(&mut window, last, &m.line);
+            screenimg::hide_covered(&mut window);
         }
         window
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
+    screenimg::mark_covered(&mut screen, 0);
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
@@ -1892,6 +1934,8 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         screen.cursor = None;
     }
     render::fix_wide_pairs(&mut screen);
+    // Popups, menus, prompts and choosers cover images the same way.
+    screenimg::hide_covered(&mut screen);
     Some((screen, viewport, rows, geom.first_row))
 }
 
@@ -3429,6 +3473,17 @@ mod tests {
         let mut s = Screen::new(4, 2);
         s.cells[0].c = c;
         s
+    }
+
+    #[test]
+    fn terminal_feature_patterns_are_globs() {
+        assert!(glob("xterm*", "xterm-256color"));
+        assert!(glob("*", "anything"));
+        assert!(glob("screen?256color", "screen-256color"));
+        assert!(glob("foot", "foot"));
+        assert!(!glob("foot", "foot-extra"));
+        assert!(!glob("xterm*", "screen"));
+        assert!(!glob("a?", "a"));
     }
 
     #[test]

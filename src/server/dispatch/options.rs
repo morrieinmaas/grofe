@@ -478,6 +478,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "auto",
     },
+    // G3: kitty direct placements, animation and sixel (grofe's own name,
+    // like `compat-identity`; `docs/graphics-placement.md`). Off, the
+    // clients get what T3.8 sent.
+    Builtin {
+        name: "graphics",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "off",
+    },
     // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
     // any string; `select-layout` reads cells or `N%`, TC.8).
     Builtin {
@@ -1168,6 +1177,9 @@ impl FormatVars for NoVars {
 
 /// `option-changed`, emitted only for a real change (spec §4.2).
 fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
+    if name == "graphics" {
+        crate::server::graphics::sync_option(model);
+    }
     events.emit(Event::OptionChanged {
         scope: match owner {
             Owner::Global | Owner::Server | Owner::GlobalWindow => "global".to_string(),

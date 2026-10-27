@@ -36,6 +36,7 @@ pub use alacritty_terminal::term::cell::Flags as CellFlags;
 pub use alacritty_terminal::term::cell::Hyperlink;
 
 use crate::protocol::Caps;
+use crate::server::imgstore::{PaneImages, Store};
 use crate::server::passthrough::Scanner;
 use crate::server::render::write_sgr;
 use crate::server::status::Style;
@@ -78,6 +79,12 @@ pub enum PaneEventKind {
     Path(String),
     /// M3: one framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
+    /// G3: one `DCS q` sixel image from the scanner, as the reader
+    /// handles it; never sent to the actor. `body` starts with the `q`.
+    Sixel {
+        p2: u32,
+        body: Vec<u8>,
+    },
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
     /// the `ESC ]` and terminator.
     Osc(Vec<u8>),
@@ -111,6 +118,8 @@ pub struct PaneSpawn {
     /// Whether the pane's graphics queries are answered from the start
     /// (`graphics::panes_graphics_ok`).
     pub graphics_ok: bool,
+    /// The `graphics` option (G3): kitty direct placements and sixel.
+    pub images: bool,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -161,12 +170,16 @@ pub struct CursorState {
 pub struct RowsSnapshot {
     pub rows: Vec<Vec<SnapCell>>,
     pub cursor: CursorState,
+    /// The pane's visible image placements (G3); `None` while it has none.
+    pub images: Option<PaneImages>,
 }
 
 /// The emulator: `Term` and its parser, always locked together.
 pub(crate) struct Emu {
     pub(crate) term: Term<Listener>,
     pub(crate) parser: Processor,
+    /// The pane's image placements (G3).
+    pub(crate) images: Store,
     /// The OSC 133 marks of the normal screen's lines.
     pub(crate) marks: Marks,
     /// The spawn whose reader may feed this emulator: a respawn hands it to
@@ -185,17 +198,20 @@ impl Emu {
     /// tmux's `screen_reinit`: the visible lines (and their marks), the
     /// cursor, modes, tab stops and hyperlinks are reset; the scrollback and
     /// the title stay.
-    // ponytail: G3's image placements are freed where it stores them.
+    /// The pane's image placements go too, as a kitty terminal drops its
+    /// images on a reset.
     fn reinit(&mut self, generation: u64) {
         self.generation = generation;
         let Emu {
             term,
             parser,
             marks,
+            images,
             ..
         } = self;
         *parser = Processor::new();
-        parser.advance(&mut written::Written(term, marks), REINIT);
+        parser.advance(&mut written::Written(term, marks, None), REINIT);
+        images.reset();
         let history = term.grid().history_size();
         term.grid_mut().reset_region(..);
         marks.erase_from(history);
@@ -369,6 +385,8 @@ pub struct PaneHandle {
     /// Set from the server when an attached client has kitty graphics;
     /// the reader answers the pane's graphics queries from it (T3.8).
     graphics_ok: Arc<AtomicBool>,
+    /// The `graphics` option, read by the reader for every chunk (G3).
+    images_on: Arc<AtomicBool>,
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: procinfo::Cache,
@@ -458,6 +476,15 @@ impl PaneHandle {
                 let emu = Arc::new(Mutex::new(Emu {
                     term: Term::new(config, &size, Listener(Arc::clone(&events))),
                     parser: Processor::new(),
+                    images: {
+                        let mut images = Store::new(
+                            u32::from(size.cols),
+                            u32::from(size.rows),
+                            spec.history_limit,
+                        );
+                        images.set_cell_px(spec.cell_px);
+                        images
+                    },
                     marks: Marks::new(spec.history_limit),
                     generation,
                 }));
@@ -466,6 +493,7 @@ impl PaneHandle {
         };
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
+        let images_on = Arc::new(AtomicBool::new(spec.images));
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
 
@@ -482,6 +510,7 @@ impl PaneHandle {
             to_actor,
             scanner: Scanner::default(),
             graphics_ok: Arc::clone(&graphics_ok),
+            images_on: Arc::clone(&images_on),
         }));
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
@@ -499,6 +528,7 @@ impl PaneHandle {
             dirty,
             sample,
             graphics_ok,
+            images_on,
             cell_px: Mutex::new(spec.cell_px),
             // A respawned pane keeps what it reported, as tmux's does.
             reported_path: Mutex::new(over.and_then(PaneHandle::reported_path)),
@@ -523,8 +553,16 @@ impl PaneHandle {
         // tmux keeps its width. Carrying widths across resizes misplaced them
         // when lines moved or re-wrapped; the loss is the accepted divergence.
         let mut emu = lock(&self.emu);
-        let Emu { term, marks, .. } = &mut *emu;
+        let Emu {
+            term,
+            marks,
+            images,
+            ..
+        } = &mut *emu;
+        let before = term.grid().history_size();
         marks.resize(term, size);
+        let after = term.grid().history_size();
+        images.resized(u32::from(size.cols), u32::from(size.rows), (before, after));
         drop(emu);
         self.set_winsize(size)
     }
@@ -533,14 +571,19 @@ impl PaneHandle {
     /// (tmux's `grid_clear_history`); `hyperlinks` (`-H`) also forgets every
     /// hyperlink, as `screen_reset_hyperlinks` does.
     // ponytail: on the alternate screen alacritty's grid holds no scrollback,
-    // so the normal screen's is left; and G3's image placements in history
-    // are cleared where it stores them.
+    // so the normal screen's is left (and its image placements with it).
     pub fn clear_history(&self, hyperlinks: bool) {
         let mut emu = lock(&self.emu);
-        let Emu { term, marks, .. } = &mut *emu;
+        let Emu {
+            term,
+            marks,
+            images,
+            ..
+        } = &mut *emu;
         let history = term.grid().history_size();
         term.grid_mut().clear_history();
         marks.trim(history);
+        images.history_cleared();
         if hyperlinks {
             forget_hyperlinks(term);
         }
@@ -566,7 +609,8 @@ impl PaneHandle {
             *current = cell_px;
         }
         let size = {
-            let emu = lock(&self.emu);
+            let mut emu = lock(&self.emu);
+            emu.images.set_cell_px(cell_px);
             Size {
                 cols: emu.term.columns() as u16,
                 rows: emu.term.screen_lines() as u16,
@@ -579,6 +623,21 @@ impl PaneHandle {
     /// the pane's graphics queries by it (T3.8), without the actor.
     pub fn set_graphics_ok(&self, ok: bool) {
         self.graphics_ok.store(ok, Ordering::Relaxed);
+    }
+
+    /// Turns the `graphics` option on or off for this pane (G3).
+    pub fn set_images(&self, on: bool) {
+        if !on && self.images_on.swap(false, Ordering::Relaxed) {
+            // Not tracked while off: what it held would drift from the text.
+            lock(&self.emu).images.reset();
+            self.dirty.store(true, Ordering::Release);
+        }
+        self.images_on.store(on, Ordering::Relaxed);
+    }
+
+    /// See [`Self::set_images`].
+    pub fn images(&self) -> bool {
+        self.images_on.load(Ordering::Relaxed)
     }
 
     /// See [`Self::set_graphics_ok`].
@@ -769,6 +828,13 @@ impl PaneHandle {
         lock(&self.emu).term.grid().history_size()
     }
 
+    /// The pane's kitty placements in the rows [`Self::copy_grid`] gives:
+    /// row 0 is the oldest history row (copy mode's view of its images).
+    pub fn copy_images(&self) -> Option<PaneImages> {
+        let emu = lock(&self.emu);
+        emu.images.copy_view(emu.term.grid().history_size())
+    }
+
     /// Every row of the grid, the oldest history row first and then the
     /// screen, each passed to `row`, under one lock: copy mode's copy of
     /// the pane (M5, TM.1). Returns the number of history rows and the
@@ -913,7 +979,11 @@ impl PaneHandle {
         let rows = (rows.start..end)
             .map(|r| snap_row(&grid[Line(r as i32)], grid.columns()))
             .collect();
-        RowsSnapshot { rows, cursor }
+        RowsSnapshot {
+            rows,
+            cursor,
+            images: emu.images.view(),
+        }
     }
 }
 
@@ -1144,6 +1214,7 @@ mod tests {
             term,
             cell_px: None,
             graphics_ok: false,
+            images: false,
         }
     }
 
@@ -1383,6 +1454,114 @@ mod tests {
         assert_eq!(new.reported_path().as_deref(), Some("file:///there"));
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         assert!(!text(&new).contains("OLD"), "{:?}", text(&new));
+    }
+
+    /// A 5-row pane with images on, showing one 1x1-cell kitty placement on
+    /// its first row that `seq` then scrolls into the scrollback.
+    async fn pane_with_scrolled_image() -> (PaneHandle, mpsc::Sender<PaneEvent>) {
+        let (tx, _rx) = mpsc::channel(64);
+        let spec = PaneSpawn {
+            rows: 5,
+            images: true,
+            cell_px: Some((10, 20)),
+            ..spec_for(&[
+                "sh",
+                "-c",
+                "printf '\\033_Ga=T,f=24,s=10,v=20,i=7,C=1;AAAA\\033\\\\'; \
+                 seq 1 20; exec sleep 100",
+            ])
+        };
+        let handle = PaneHandle::spawn(spec, tx.clone(), Arc::new(Notify::new())).expect("spawn");
+        for _ in 0..500 {
+            if handle.history_size() >= 15 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        (handle, tx)
+    }
+
+    /// G3 + F1: `clear-history` drops the placements that scrolled into the
+    /// scrollback; the ones on the screen stay.
+    #[tokio::test]
+    async fn clear_history_drops_placements_in_the_scrollback() {
+        let (handle, tx) = pane_with_scrolled_image().await;
+        assert!(handle.copy_images().is_some(), "the image is in history");
+        assert!(handle.snapshot_rows(0..5).images.is_none());
+        handle.clear_history(false);
+        assert!(handle.copy_images().is_none(), "no placement in history");
+
+        // One still on the screen is kept.
+        let spec = PaneSpawn {
+            rows: 5,
+            images: true,
+            cell_px: Some((10, 20)),
+            ..spec_for(&[
+                "sh",
+                "-c",
+                "seq 1 10; printf '\\033_Ga=T,f=24,s=10,v=20,i=7,C=1;AAAA\\033\\\\'; exec sleep 100",
+            ])
+        };
+        let on_screen = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        for _ in 0..500 {
+            if on_screen.snapshot_rows(0..5).images.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(on_screen.snapshot_rows(0..5).images.is_some());
+        on_screen.clear_history(false);
+        assert!(on_screen.snapshot_rows(0..5).images.is_some());
+    }
+
+    /// G1 + G3: an OSC 133 mark and an image placement in one read each land
+    /// on the row the stream had reached.
+    #[tokio::test]
+    async fn marks_and_placements_in_one_read_keep_their_rows() {
+        let (tx, _rx) = mpsc::channel(64);
+        let spec = PaneSpawn {
+            rows: 5,
+            images: true,
+            cell_px: Some((10, 20)),
+            ..spec_for(&[
+                "sh",
+                "-c",
+                "printf 'a\\n\\033]133;A\\007b\\n\\033_Ga=T,f=24,s=10,v=20,i=7,C=1;AAAA\\033\\\\\\033]133;A\\007c'; exec sleep 100",
+            ])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        for _ in 0..500 {
+            if handle.snapshot_rows(0..5).images.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let images = handle.snapshot_rows(0..5).images.expect("a placement");
+        assert_eq!(images.kitty[0].row, 2, "placed on the third row");
+        let mut marked = Vec::new();
+        let mut row = 0;
+        handle.copy_grid(|_, _, bits| {
+            if bits != 0 {
+                marked.push(row);
+            }
+            row += 1;
+        });
+        assert_eq!(marked, [1, 2], "marks on the rows of `b` and `c`");
+    }
+
+    /// G3 + F1: a respawn clears the pane's placements, history ones too.
+    #[tokio::test]
+    async fn a_respawn_clears_the_panes_placements() {
+        let (old, tx) = pane_with_scrolled_image().await;
+        assert!(old.copy_images().is_some());
+        let spec = PaneSpawn {
+            rows: 5,
+            images: true,
+            ..spec_for(&["sleep", "100"])
+        };
+        let new = PaneHandle::spawn_over(spec, tx, Arc::new(Notify::new()), &old).expect("respawn");
+        assert!(new.copy_images().is_none());
+        assert!(new.snapshot_rows(0..5).images.is_none());
     }
 
     fn winsize_of(handle: &PaneHandle) -> (u16, u16, u16, u16) {

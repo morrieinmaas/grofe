@@ -22,7 +22,9 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-image=localhost/grofe-compat-golden:3.7b
+# The image has a second tmux, built with sixel, for golden/g3/ (G3); its own
+# tag keeps a checkout without it from replacing this one.
+image=localhost/grofe-compat-golden:3.7b-sixel
 check=0
 tmux_path=/usr/local/bin/tmux
 scenarios=()

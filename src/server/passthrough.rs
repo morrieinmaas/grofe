@@ -51,6 +51,9 @@ use crate::types::{ClientId, PaneId, SessionId, WindowId};
 /// image data in chunks of 4096 base64 bytes, so a real command is far
 /// smaller.
 const MAX_APC: usize = 4 * 1024 * 1024;
+/// Most bytes of one sixel image kept: tmux's `input-buffer-size`, past
+/// which it discards the sequence.
+const MAX_SIXEL: usize = 1024 * 1024;
 /// Most payload bytes of one OSC kept. The OSCs the scanner reads are
 /// short, but for OSC 52 ([`MAX_OSC52`]).
 const MAX_OSC: usize = 4 * 1024;
@@ -145,6 +148,11 @@ pub struct Scanner {
     /// an APC `_G`, which the emulator never sees, the OSC must be closed
     /// for it some other way.
     osc_open: bool,
+    /// Frame `DCS q` sixel images (the `graphics` option, G3); off, they
+    /// go to the emulator, which drops them.
+    sixel: bool,
+    /// The parameters of the `DCS` a sixel image began with.
+    params: Vec<u8>,
     /// The OSC 133 marks found by the last `scan`: how many of the bytes
     /// it returned came before the sequence's end, and the mark's bits.
     marks: Vec<(usize, u8)>,
@@ -174,6 +182,11 @@ enum ScanState {
     Apc,
     /// An `ESC` inside an APC `_G`: `\` ends it.
     ApcEsc,
+    /// Inside a `DCS q` sixel image; its bytes go to `buf`, never the
+    /// emulator.
+    Sixel,
+    /// An `ESC` inside a sixel image: `\` ends it.
+    SixelEsc,
     /// Inside an OSC; its bytes reach the emulator and `buf`.
     Osc,
     /// An `ESC` (held) inside an OSC: `\` ends it.
@@ -194,14 +207,31 @@ impl Scanner {
     /// Other sequences, OSC 7 included, pass to the emulator unchanged.
     /// An OSC 133 `A` or `C` is found too, for [`Self::take_marks`].
     pub fn scan<'a>(&mut self, bytes: &'a [u8]) -> (Cow<'a, [u8]>, Vec<PaneEventKind>) {
+        let (out, found) = self.scan_at(bytes);
+        (out, found.into_iter().map(|(_, kind)| kind).collect())
+    }
+
+    /// Frame `DCS q` sixel images from now on (the `graphics` option).
+    pub fn set_sixel(&mut self, on: bool) {
+        self.sixel = on;
+    }
+
+    /// [`Self::scan`], with where in the returned bytes each event was
+    /// found: the emulator should have parsed that many bytes when the
+    /// event is handled (a placement is made at the cursor as it was).
+    pub fn scan_at<'a>(&mut self, bytes: &'a [u8]) -> (Cow<'a, [u8]>, Vec<(usize, PaneEventKind)>) {
         let mut found = Vec::new();
         self.marks.clear();
         if self.state == ScanState::Ground && !bytes.contains(&ESC) {
             return (Cow::Borrowed(bytes), found);
         }
         let mut out = Vec::with_capacity(bytes.len() + self.held.len());
+        let mut events = Vec::new();
         for &b in bytes {
-            self.step(b, &mut out, &mut found);
+            self.step(b, &mut out, &mut events);
+            if !events.is_empty() {
+                found.extend(events.drain(..).map(|kind| (out.len(), kind)));
+            }
         }
         (Cow::Owned(out), found)
     }
@@ -295,18 +325,36 @@ impl Scanner {
                 }
             }
             DcsIntro => {
-                if DCS_TMUX.get(self.held.len()) != Some(&b) {
-                    // Another DCS: the emulator's.
-                    self.release(out);
-                    self.ground(b, out);
-                } else if self.held.len() + 1 < DCS_TMUX.len() {
-                    self.held.push(b);
-                } else {
+                let params = &self.held[2..];
+                let digits = params.iter().all(|c| c.is_ascii_digit() || *c == b';');
+                if DCS_TMUX[2..].starts_with(params) && DCS_TMUX.get(self.held.len()) == Some(&b) {
+                    if self.held.len() + 1 < DCS_TMUX.len() {
+                        self.held.push(b);
+                    } else {
+                        self.held.clear();
+                        if std::mem::take(&mut self.osc_open) {
+                            out.push(CAN);
+                        }
+                        self.begin(Dcs);
+                    }
+                } else if self.sixel && digits && params.len() < 32 && b == b'q' {
+                    self.params = params.to_vec();
                     self.held.clear();
                     if std::mem::take(&mut self.osc_open) {
                         out.push(CAN);
                     }
-                    self.begin(Dcs);
+                    self.begin(Sixel);
+                    self.buf.push(b'q');
+                } else if self.sixel
+                    && digits
+                    && params.len() < 32
+                    && (b.is_ascii_digit() || b == b';')
+                {
+                    self.held.push(b);
+                } else {
+                    // Another DCS: the emulator's.
+                    self.release(out);
+                    self.ground(b, out);
                 }
             }
             // CAN and SUB are content here, as tmux 3.7b keeps them: a
@@ -353,6 +401,35 @@ impl Scanner {
                 } else {
                     // An ESC ends the string and starts a new sequence;
                     // the unterminated APC is dropped.
+                    self.state = Ground;
+                    self.ground(ESC, out);
+                    self.step(b, out, found);
+                }
+            }
+            Sixel => match b {
+                ESC => self.state = SixelEsc,
+                CAN | SUB => {
+                    self.state = Ground;
+                    out.push(b);
+                }
+                _ => self.keep(b, MAX_SIXEL),
+            },
+            SixelEsc => {
+                if b == b'\\' {
+                    self.state = Ground;
+                    if !self.overlong {
+                        let body = std::mem::take(&mut self.buf);
+                        let p2 = self
+                            .params
+                            .split(|c| *c == b';')
+                            .nth(1)
+                            .and_then(|n| std::str::from_utf8(n).ok()?.parse().ok())
+                            .unwrap_or(0);
+                        found.push(PaneEventKind::Sixel { p2, body });
+                    }
+                } else {
+                    // An ESC ends the string and starts a new sequence; the
+                    // unterminated image is dropped.
                     self.state = Ground;
                     self.ground(ESC, out);
                     self.step(b, out, found);
@@ -907,6 +984,75 @@ mod tests {
         pt.titles.insert(PaneId(4), "mine".to_string());
         assert_eq!(pt.title(PaneId(4)), "mine");
     }
+    /// G3: `DCS q` sixel images are framed once the option is on, and left to
+    /// the emulator while it is off.
+    #[test]
+    fn sixel_images_are_framed_only_when_asked() {
+        let image: &[u8] = b"\x1bP0;1;0q#0;2;100;0;0!20~\x1b\\";
+        let mut off = Scanner::default();
+        let (bytes, found) = off.scan(image);
+        assert_eq!((bytes.as_ref(), found.len()), (image, 0));
+
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let input = [b"ab", image, b"cd"].concat();
+        let (bytes, found) = on.scan(&input);
+        assert_eq!(bytes.as_ref(), b"abcd");
+        assert_eq!(
+            found,
+            vec![PaneEventKind::Sixel {
+                p2: 1,
+                body: b"q#0;2;100;0;0!20~".to_vec()
+            }]
+        );
+        // Split anywhere, one byte at a time.
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let mut out = Vec::new();
+        let mut events = Vec::new();
+        for b in [b"x".as_slice(), image, b"y"].concat() {
+            let one = [b];
+            let (bytes, found) = on.scan(&one);
+            out.extend_from_slice(&bytes);
+            events.extend(found);
+        }
+        assert_eq!(out, b"xy");
+        assert_eq!(events.len(), 1);
+        // Other DCS strings and the tmux wrapper still behave.
+        let other: &[u8] = b"\x1bP1$rm\x1b\\\x1bP+q\x1b\\";
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let (bytes, found) = on.scan(other);
+        assert_eq!((bytes.as_ref(), found.len()), (other, 0));
+        let wrapped = b"\x1bPtmux;\x1b\x1b_Ga=q,i=1\x1b\x1b\\\x1b\\";
+        let (_, found) = on.scan(wrapped);
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_sixel_image_past_tmux_s_buffer_is_dropped() {
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let mut image = b"\x1bPq".to_vec();
+        image.resize(image.len() + MAX_SIXEL + 10, b'~');
+        image.extend_from_slice(b"\x1b\\ok");
+        let (bytes, found) = on.scan(&image);
+        assert_eq!((bytes.as_ref(), found.len()), (&b"ok"[..], 0));
+        // CAN ends it, for the emulator too.
+        let (bytes, found) = on.scan(b"\x1bPq~~\x18ok");
+        assert_eq!((bytes.as_ref(), found.len()), (&b"\x18ok"[..], 0));
+    }
+
+    #[test]
+    fn events_say_how_much_the_emulator_has_seen() {
+        let mut s = Scanner::default();
+        s.set_sixel(true);
+        let (bytes, found) = s.scan_at(b"abc\x1b_Ga=p,i=1\x1b\\de\x1bPq~\x1b\\f");
+        assert_eq!(bytes.as_ref(), b"abcdef");
+        let at: Vec<usize> = found.iter().map(|(at, _)| *at).collect();
+        assert_eq!(at, [3, 5]);
+    }
+
     use proptest::prelude::*;
 
     const APC: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";

@@ -23,6 +23,7 @@ const RICH: Caps = Caps {
     sync: true,
     kitty_keys: false,
     kitty_graphics: false,
+    sixel: false,
     cell_px: None,
 };
 const PLAIN: Caps = Caps {
@@ -31,6 +32,7 @@ const PLAIN: Caps = Caps {
     sync: false,
     kitty_keys: false,
     kitty_graphics: false,
+    sixel: false,
     cell_px: None,
 };
 
@@ -80,6 +82,7 @@ fn pane(cols: u16, rows: u16, bytes: &str) -> RowsSnapshot {
             },
             blink: style.blinking,
         },
+        images: None,
     }
 }
 
@@ -123,6 +126,7 @@ fn inputs<'a>(
         status: None,
         cursor,
         graphics: None,
+        images: None,
     }
 }
 
@@ -691,6 +695,7 @@ mod randomized {
         sync: true,
         kitty_keys: false,
         kitty_graphics: false,
+        sixel: false,
         cell_px: None,
     };
 
@@ -1012,6 +1017,7 @@ mod randomized {
                     shape: CursorShape::Block,
                     blink: false,
                 },
+                images: None,
             }
         }
 
@@ -1054,7 +1060,7 @@ mod randomized {
                 let status_line = status.then(|| StyledLine { spans: vec![Span { text: st.replace("\r\n", "x").replace('\x1b', "E"), style: Style::default() }, Span { text: t3.replace("\r\n","y").replace('\x1b', "E"), style: Style { fg: Color::Named(NamedColor::Red), ..Style::default() } }] });
                 let inputs = FrameInputs { client: (cc, cr), viewport: (vx, vy), area, borders: tree.borders(area),
                     border_style: Style::default(), active_border_style: parse_style("fg=green"),
-                    panes, active: PaneId(1), status: status_line, cursor, graphics: None };
+                    panes, active: PaneId(1), status: status_line, cursor, graphics: None, images: None };
                 let screen = compose(&inputs);
                 // The wide-pair fix-up the server runs after overlays is a
                 // no-op on what compose made (T3.0: no overlay, no change).

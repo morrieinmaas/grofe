@@ -1,0 +1,9 @@
+# G3: An image that does not fit below the cursor scrolls the screen.
+# Recorded with the container's sixel-enabled tmux (`tmux-sixel`); `-q` makes
+# real tmux ignore `graphics`, grofe's option for it.
+$ new-session -d -s main -x 40 -y 12 "stty -echo; read go; sh {fixtures}/g3-sixel.sh bottom"
+$ set -g -q graphics on
+$ set -g status off
+client 40x12 attach -t main
+$ send-keys -t main Enter
+screen last

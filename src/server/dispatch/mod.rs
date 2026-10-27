@@ -484,6 +484,7 @@ pub(crate) fn spawn_pane(
         term: state.inner_term,
         cell_px,
         graphics_ok: graphics::panes_graphics_ok(state),
+        images: graphics::images_enabled(&state.model),
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;

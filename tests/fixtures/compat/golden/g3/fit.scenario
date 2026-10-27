@@ -1,0 +1,9 @@
+# G3: A sixel image in a pane. tmux built with sixel stores it at the cursor and moves the cursor to column 0 of the row below it; a client with no sixel feature (or no cell pixels, as here) gets text instead.
+# Recorded with the container's sixel-enabled tmux (`tmux-sixel`); `-q` makes
+# real tmux ignore `graphics`, grofe's option for it.
+$ new-session -d -s main -x 40 -y 12 "stty -echo; read go; sh {fixtures}/g3-sixel.sh fit"
+$ set -g -q graphics on
+$ set -g status off
+client 40x12 attach -t main
+$ send-keys -t main Enter
+screen after

@@ -408,14 +408,14 @@ mod tests {
                         OUTPUT
                     };
                     self.parser.advance(
-                        &mut Written(&mut self.term, &mut self.marks),
+                        &mut Written(&mut self.term, &mut self.marks, None),
                         head.as_bytes(),
                     );
                     self.marks.record(&self.term, bits);
                     rest = &tail[1..];
                 }
                 self.parser.advance(
-                    &mut Written(&mut self.term, &mut self.marks),
+                    &mut Written(&mut self.term, &mut self.marks, None),
                     rest.as_bytes(),
                 );
             }
@@ -423,7 +423,7 @@ mod tests {
             /// Bytes as they come from the pty, in-band marks included.
             pub fn raw(&mut self, bytes: &[u8]) {
                 self.parser
-                    .advance(&mut Written(&mut self.term, &mut self.marks), bytes);
+                    .advance(&mut Written(&mut self.term, &mut self.marks, None), bytes);
             }
 
             pub fn history(&self) -> usize {
