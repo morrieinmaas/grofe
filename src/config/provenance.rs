@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A config layer (spec §5.1), in load order. Later layers win.
-// ponytail: layer 5 (`init.lua`) is T6.4's and layer 6 (runtime
-// `set-option`) is T3.5's; neither is a file layer T3.1 loads.
+// ponytail: layer 5 (runtime `set-option`) is T3.5's; it is not a file
+// layer T3.1 loads. There is no scripting layer (spec §5.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
     /// Compiled-in defaults.

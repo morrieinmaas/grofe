@@ -111,17 +111,24 @@ fn a_split_and_a_select_pane_are_appended_in_order_within_a_second() {
     }
 }
 
+/// `shellcheck` on `path` (a PATH-style list, never anywhere else). Missing
+/// under `ci` panics, so CI cannot skip the check unseen; locally it is
+/// `None` and the test skips.
+fn find_shellcheck(path: &std::ffi::OsStr, ci: bool) -> Option<PathBuf> {
+    let found = std::env::split_paths(path)
+        .map(|dir| dir.join("shellcheck"))
+        .find(|candidate| candidate.is_file());
+    if found.is_none() && ci {
+        panic!("shellcheck not found on PATH (required under CI)");
+    }
+    found
+}
+
 #[test]
 fn the_plugin_script_passes_shellcheck() {
-    let found = [
-        "shellcheck",
-        "/opt/nanobrew/prefix/bin/shellcheck",
-        "/opt/homebrew/bin/shellcheck",
-    ]
-    .into_iter()
-    .find(|c| Command::new(c).arg("--version").output().is_ok());
-    let Some(bin) = found else {
-        eprintln!("SKIP: shellcheck is not installed (command -v shellcheck found nothing)");
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let Some(bin) = find_shellcheck(&path, std::env::var_os("CI").is_some()) else {
+        eprintln!("SKIP: shellcheck is not on PATH");
         return;
     };
     let out = Command::new(bin)
@@ -134,5 +141,28 @@ fn the_plugin_script_passes_shellcheck() {
         "shellcheck: {}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+#[should_panic(expected = "shellcheck not found on PATH (required under CI)")]
+fn a_missing_shellcheck_fails_under_ci() {
+    let empty = tempfile::tempdir().expect("tempdir");
+    find_shellcheck(empty.path().as_os_str(), true);
+}
+
+#[test]
+fn a_missing_shellcheck_skips_outside_ci() {
+    let empty = tempfile::tempdir().expect("tempdir");
+    assert_eq!(find_shellcheck(empty.path().as_os_str(), false), None);
+}
+
+/// The README tells the reader what the script needs to find `grofe`.
+#[test]
+fn the_readme_says_grofe_must_be_on_path_or_grofe_bin_set() {
+    let readme = fs::read_to_string(script_path().with_file_name("README.md")).expect("README");
+    assert!(
+        readme.contains("`grofe` on the\nserver's `PATH` or `GROFE_BIN` set"),
+        "{readme}"
     );
 }

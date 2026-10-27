@@ -414,7 +414,8 @@ fn a_popup_cannot_write_to_the_terminal() {
     srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     let mut a = attach(&srv, "main");
     // The reviewer's OSC 9 (a C1 CSI and ST and a CR/LF in the body), an
-    // OSC 777 with a C1 CSI, an OSC 52 store and two titles.
+    // OSC 777 with a C1 CSI, an OSC 52 store and two titles, then an OSC 9
+    // that marks the end.
     let script = srv.home.join("osc.sh");
     fs::write(
         &script,
@@ -422,12 +423,19 @@ fn a_popup_cannot_write_to_the_terminal() {
          printf '\\033]777;notify;T;B\\302\\233x\\007'\n\
          printf '\\033]52;c;aGk=\\007'\n\
          printf '\\033]0;tc6-evil\\007\\033]2;tc6-evil2\\033\\\\'\n\
+         printf '\\033]9;tc6-end\\007'\n\
          echo seen; exec cat\n",
     )
     .expect("script");
     let command = format!("sh {}", script.display());
     let child = popup(&srv, &["-w", "30", "-h", "5", &command]);
     a.wait_for("│seen");
+    // A frame is drawn from the popup's screen as it is when the frame is
+    // due, and the OSCs reach the client by the actor's queue, so `seen`
+    // can be on screen before they are relayed (one run in three in the
+    // Linux CI container). They are relayed in the order written, so once
+    // the end marker is there every one before it was relayed or dropped.
+    a.wait_for_output(b"\x1b]9;tc6-end\x07", 0);
     let raw = a.output().to_vec();
     let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
     assert!(!has(b"tc6-evil"), "a popup title reached the terminal");

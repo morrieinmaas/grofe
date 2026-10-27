@@ -388,6 +388,69 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
     assert!(!exists(&srv.socket), "socket left behind");
 }
 
+/// Starts `__server --exit-when-empty` as an auto-start does, and waits for
+/// it to listen.
+fn spawn_empty_auto_server(srv: &TestServer) -> std::process::Child {
+    let mut cmd = srv.command();
+    cmd.args(["__server", "--exit-when-empty"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let server = cmd.spawn().expect("spawn server");
+    srv.wait_listening(WAIT).expect("server comes up");
+    server
+}
+
+/// A plugin's `grofe control` connection (its environment carries
+/// `GROFE_PLUGIN`) stays open as long as the plugin runs. It must not keep
+/// an empty auto-started server up: tmux exits once no client is attached
+/// to a session.
+#[test]
+fn a_plugins_connection_does_not_keep_an_empty_auto_started_server_up() {
+    use std::io::Write;
+
+    let srv = TestServer::unstarted();
+    let server = spawn_empty_auto_server(&srv);
+
+    let mut ctx = srv.ctx();
+    ctx.env
+        .push(("GROFE_PLUGIN".to_string(), "event-log".to_string()));
+    let mut plugin = UnixStream::connect(&srv.socket).expect("connect");
+    let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(ctx)).unwrap();
+    writeln!(plugin, "{hello}").unwrap();
+
+    let out = srv.run(FAILING_NEW_SESSION);
+    assert!(!out.status.success(), "{out:?}");
+    let status = wait_child(server, WAIT)
+        .unwrap_or_else(|e| panic!("server kept up by a plugin: {e}\nlog:\n{}", srv.log()));
+    assert!(status.success(), "{status:?}");
+    drop(plugin);
+}
+
+/// Closing the last session ends an auto-started server even while a
+/// plugin's connection is open.
+#[test]
+fn the_last_session_closing_ends_the_server_whatever_plugins_are_connected() {
+    use std::io::Write;
+
+    let srv = TestServer::unstarted();
+    let server = spawn_empty_auto_server(&srv);
+    let mut ctx = srv.ctx();
+    ctx.env
+        .push(("GROFE_PLUGIN".to_string(), "event-log".to_string()));
+    let mut plugin = UnixStream::connect(&srv.socket).expect("connect");
+    let hello = grofe::protocol::encode_hello(&grofe::protocol::Hello::Control(ctx)).unwrap();
+    writeln!(plugin, "{hello}").unwrap();
+
+    srv.cmd(&["new-session", "-d", "-s", "only", "sleep", "30"])
+        .expect("new-session");
+    srv.cmd(&["kill-session", "-t", "only"]).unwrap();
+    let status = wait_child(server, WAIT)
+        .unwrap_or_else(|e| panic!("server did not exit: {e}\nlog:\n{}", srv.log()));
+    assert!(status.success(), "{status:?}");
+    drop(plugin);
+}
+
 #[test]
 fn concurrent_auto_starts_survive_one_failing_new_session() {
     let srv = TestServer::unstarted();

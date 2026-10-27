@@ -2268,7 +2268,6 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 /// - `*.toml` is grofe's config (spec §5.1), with its includes resolved
 ///   against it. Its values and bindings count as runtime (R10): `reload`
 ///   keeps them. All errors or nothing, as `reload`.
-/// - `*.lua` is M6's.
 /// - Any other file is a tmux config when the request is tmux's (its
 ///   dialect, or a tmux-identity server): tmux's plugins source their own
 ///   `*.tmux` and `*.conf` files through `tmux` ([`source_tmux_file`]). A
@@ -2292,10 +2291,6 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
             return Ok(String::new());
         }
         return Err(format!("No such file or directory: {}", path.display()));
-    }
-    // ponytail: Lua config is layer 5, T6.4's (M6).
-    if path.extension().is_some_and(|e| e == "lua") {
-        return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
     }
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;

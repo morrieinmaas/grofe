@@ -533,15 +533,16 @@ fn file_layers_replace_config_toml_in_order() {
 }
 
 #[test]
-fn a_lua_file_needs_m6_and_other_extensions_fail() {
+fn a_lua_file_is_not_a_config_format_and_other_extensions_fail() {
     let s = Setup::new();
     let lua = s.write("init.lua", "-- lua\n");
     let errs = errors(config::load_with_file(&s.env, &[lua]));
     assert!(
-        joined(&errs).contains("Lua config needs M6"),
+        joined(&errs).contains("not a config file: --file takes a .toml file"),
         "{}",
         joined(&errs)
     );
+    assert!(!joined(&errs).contains("M6"), "{}", joined(&errs));
     let conf = s.write("x.conf", "set -g mouse on\n");
     let errs = errors(config::load_with_file(&s.env, &[conf]));
     assert_eq!(errs.len(), 1);
@@ -601,7 +602,11 @@ fn show_config_rejects_lua_and_unknown_extensions() {
     let lua = s.write("init.lua", "-- lua\n");
     let out = s.show_config(&["--file", &lua.to_string_lossy()], &s.home());
     assert!(!out.status.success());
-    assert!(out.stderr.contains("M6"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("takes a .toml file") && !out.stderr.contains("M6"),
+        "{}",
+        out.stderr
+    );
     let conf = s.write("x.conf", "\n");
     let out = s.show_config(&["--file", &conf.to_string_lossy()], &s.home());
     assert!(!out.status.success());
