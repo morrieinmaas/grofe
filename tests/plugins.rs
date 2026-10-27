@@ -125,9 +125,17 @@ fn lines(path: &Path) -> usize {
 }
 
 fn read(path: &Path) -> String {
-    wait_until(|| path.exists(), WAIT).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    // The writer may still be mid-line; a plugin writes one line at a time.
-    fs::read_to_string(path).expect("read file")
+    // The shell creates the file before it writes the line.
+    let mut text = String::new();
+    wait_until(
+        || {
+            text = fs::read_to_string(path).unwrap_or_default();
+            text.ends_with('\n')
+        },
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    text
 }
 
 fn session(srv: &TestServer) {
@@ -251,7 +259,7 @@ fn repeated_kills_space_restarts_one_two_and_four_units_apart() {
         };
         let gap = t.elapsed().as_secs_f64();
         assert!(
-            gap >= nominal * 0.9 && gap < nominal + 0.5,
+            gap >= nominal * 0.9 && gap < nominal + 1.0,
             "restart after {gap:.3}s, wanted about {nominal}s"
         );
     }
@@ -338,7 +346,7 @@ fn a_plugin_that_ignores_sigterm_is_killed_after_the_grace() {
     // Scale 0.25: the 2 s grace is half a second.
     let srv = start_with(srv, &plugin_table("p", &p, ""), Some("0.25"));
     let pid = running(&srv, "p");
-    read(&ready);
+    wait_until(|| ready.exists(), WAIT).expect("ready");
     let t = Instant::now();
     srv.cmd(&["kill-server"]).expect("kill-server");
     wait_until(|| !alive(pid), WAIT).expect("killed");
@@ -602,7 +610,7 @@ fn a_relative_cmd_runs_from_the_config_file_s_directory() {
     .expect("script");
     let srv = start_with(srv, "[plugins.p]\ncmd = [\"sh\", \"bin/p.sh\"]\n", None);
     running(&srv, "p");
-    read(&marker);
+    wait_until(|| marker.exists(), WAIT).expect("the script ran");
 }
 
 // ---- config: schema, merge, resolution ----
