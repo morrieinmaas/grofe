@@ -28,6 +28,7 @@ pub mod passthrough;
 pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod sixel;
 pub mod sources;
 pub mod status;
 pub mod tree;
