@@ -115,11 +115,11 @@ pub enum ServerMsg {
     Closed {
         observer: bool,
     },
-    /// A connection turned out to be a long-lived observer (a plugin's, or
-    /// one that subscribed to events): it stops counting as an open
-    /// connection. As in tmux, whose server exits when no client is
-    /// attached to a session, such a connection does not keep an empty
-    /// auto-started server up. A one-shot CLI mid-request still does.
+    /// A connection turned out to be a plugin's own `grofe control`: it
+    /// stops counting as an open connection, since the server supervises it
+    /// and it must not keep an empty auto-started server up (tmux's server
+    /// exits when no client is attached to a session). Any other
+    /// connection, a subscriber included, still counts.
     Observer,
     /// An attach hello; the actor accepts it (the connection then sends
     /// the ok line and switches to frames) or refuses it.
@@ -249,8 +249,7 @@ pub struct State {
     /// it off, so that server stays up empty.
     exit_when_empty: bool,
     /// Open client connections, counted by the actor as it accepts them.
-    /// Observers (a plugin's connection, a subscriber) leave the count, see
-    /// [`ServerMsg::Observer`].
+    /// A plugin's connection leaves the count, see [`ServerMsg::Observer`].
     connections: usize,
     /// (dev, ino) of the socket we bound, so we only ever remove our own.
     socket_id: Option<(u64, u64)>,
@@ -997,12 +996,6 @@ async fn connection_loop(
         };
         let (reply_tx, reply_rx) = oneshot::channel();
         let msg = if req.argv.first().is_some_and(|verb| verb == "subscribe") {
-            if !*observer {
-                *observer = true;
-                if msgs.send(ServerMsg::Observer).await.is_err() {
-                    break;
-                }
-            }
             ServerMsg::Subscribe {
                 ctx: ctx.clone(),
                 req,

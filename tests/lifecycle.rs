@@ -427,27 +427,6 @@ fn a_plugins_connection_does_not_keep_an_empty_auto_started_server_up() {
     drop(plugin);
 }
 
-/// Likewise a connection that subscribed to events: it observes, it is not
-/// a client attached to a session.
-#[test]
-fn an_event_subscriber_does_not_keep_an_empty_auto_started_server_up() {
-    let srv = TestServer::unstarted();
-    let server = spawn_empty_auto_server(&srv);
-    // The starter's own connection holds the server up while the
-    // subscription is made; the server must go once that closes, though the
-    // subscription is still open.
-    let starter = UnixStream::connect(&srv.socket).expect("connect");
-    let sub = srv.subscribe(&["pane-exited"]).expect("subscribe");
-
-    let out = srv.run(FAILING_NEW_SESSION);
-    assert!(!out.status.success(), "{out:?}");
-    drop(starter);
-    let status = wait_child(server, WAIT)
-        .unwrap_or_else(|e| panic!("server kept up by a subscriber: {e}\nlog:\n{}", srv.log()));
-    assert!(status.success(), "{status:?}");
-    drop(sub);
-}
-
 /// Closing the last session ends an auto-started server even while a
 /// plugin's connection is open.
 #[test]
