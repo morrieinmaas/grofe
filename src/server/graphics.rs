@@ -830,6 +830,19 @@ fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err("EINVAL:path is not absolute".into());
     }
+    // Kitty's rules: nothing under /proc, /sys or /dev (but /dev/shm), and a
+    // `t=t` file only in a temp directory with the marker in its name.
+    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if ["/proc", "/sys", "/dev"]
+        .iter()
+        .any(|d| real.starts_with(d))
+        && !real.starts_with("/dev/shm")
+    {
+        return Err("EPERM:refusing to read from a system directory".into());
+    }
+    if medium == b't' && !kitty_would_delete(path) {
+        return Err("EBADF:a t=t file must be a temporary file".into());
+    }
     // Refused before opening, so that opening a device or fifo never
     // happens; `metadata` follows symlinks.
     let meta = fs::metadata(path).map_err(|e| format!("ENOENT:{e}"))?;
@@ -852,7 +865,7 @@ fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     file.take(want as u64)
         .read_to_end(&mut data)
         .map_err(|e| format!("EINVAL:{e}"))?;
-    if medium == b't' && kitty_would_delete(path) {
+    if medium == b't' {
         let _ = fs::remove_file(path);
     }
     Ok(data)
@@ -871,7 +884,7 @@ fn span(len: u64, size: u64, offset: u64, cap: usize) -> Result<usize, String> {
     Ok(want as usize)
 }
 
-/// Kitty deletes a `t=t` file only in a temp directory and with
+/// Kitty reads (and deletes) a `t=t` file only in a temp directory and with
 /// `tty-graphics-protocol` in its path.
 fn kitty_would_delete(path: &Path) -> bool {
     if !path.to_string_lossy().contains("tty-graphics-protocol") {
@@ -1677,9 +1690,9 @@ mod tests {
         }
     }
 
-    /// Case 7: a `t=t` file is unlinked after reading when kitty would
-    /// (a temp directory and `tty-graphics-protocol` in its path), and kept
-    /// otherwise.
+    /// Case 7: a `t=t` file is read and unlinked only in a temp directory
+    /// with `tty-graphics-protocol` in its path; any other is refused (as
+    /// kitty does) and left alone.
     #[test]
     fn temp_file_transmits_are_unlinked_as_kitty_does() {
         let dir = tempfile::Builder::new()
@@ -1692,13 +1705,46 @@ mod tests {
             fs::copy(fixture("red-blue-4x4.png"), p).expect("copy");
         }
         let mut g = Graphics::default();
-        for (i, p) in [&doomed, &kept].into_iter().enumerate() {
-            let name = STANDARD.encode(p.to_string_lossy().as_bytes());
-            let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i={},q=2;{name}", i + 1)));
-            assert_eq!(apcs(&out.forward).len(), 1, "{p:?}");
-        }
+        let name = STANDARD.encode(doomed.to_string_lossy().as_bytes());
+        let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i=1,q=2;{name}")));
+        assert_eq!(apcs(&out.forward).len(), 1, "{doomed:?}");
         assert!(!doomed.exists(), "the temp file was unlinked");
+
+        let name = STANDARD.encode(kept.to_string_lossy().as_bytes());
+        let out = g.handle(A, &apc(&format!("a=T,U=1,t=t,i=2;{name}")));
+        assert!(out.forward.is_empty(), "no marker, no read");
+        let reply = text(out.reply.as_deref().unwrap_or_default());
+        assert!(reply.starts_with("\x1b_Gi=2;EBADF:"), "{reply:?}");
         assert!(kept.exists(), "a name without the marker is kept");
+    }
+
+    /// Security: a `t=t` transmit of a file outside the temp directories
+    /// (the user's own secrets), even with the marker in its name, and any
+    /// `t=f` of /proc, /sys or /dev, is refused and nothing is read.
+    #[test]
+    fn media_transmits_cannot_read_arbitrary_or_system_files() {
+        let home = tempfile::Builder::new()
+            .prefix("tty-graphics-protocol-")
+            .tempdir_in(std::env::current_dir().expect("cwd"))
+            .expect("tempdir in the working directory");
+        let secret = home.path().join("tty-graphics-protocol-secret");
+        fs::write(&secret, b"hunter2").expect("write");
+        for (medium, path, code) in [
+            ("t", secret.to_string_lossy().to_string(), "EBADF:"),
+            ("f", "/dev/zero".to_string(), "EPERM:"),
+            ("f", "/proc/self/environ".to_string(), "EPERM:"),
+        ] {
+            let mut g = Graphics::default();
+            let name = STANDARD.encode(path.as_bytes());
+            let out = g.handle(A, &apc(&format!("a=T,U=1,t={medium},i=5;{name}")));
+            assert!(out.forward.is_empty(), "{path}");
+            let reply = text(out.reply.as_deref().unwrap_or_default());
+            assert!(
+                reply.starts_with(&format!("\x1b_Gi=5;{code}")),
+                "{path}: {reply:?}"
+            );
+        }
+        assert!(secret.exists(), "a refused file is not unlinked");
     }
 
     /// Shared memory is read, forwarded inline and unlinked.
