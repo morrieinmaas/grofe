@@ -153,9 +153,7 @@ impl Loader {
             let key = format!("plugins.{name}.{field}");
             let wrong = |want: &str| format!("expected {want}, found {}", v.get_ref().type_str());
             let result: Result<(), String> = match (field, v.get_ref()) {
-                ("cmd", DeValue::Array(a)) => {
-                    cmd_value(a, f.path).map(|cmd| seen.cmd = Some(cmd))
-                }
+                ("cmd", DeValue::Array(a)) => cmd_value(a, f.path).map(|cmd| seen.cmd = Some(cmd)),
                 ("cmd", _) => Err(wrong("an array of strings")),
                 ("env", DeValue::Table(t)) => {
                     let mut result = Ok(());
@@ -164,11 +162,14 @@ impl Loader {
                         match ev.get_ref() {
                             DeValue::String(s) if !var.is_empty() && !var.contains('=') => {
                                 seen.env.insert(var.clone(), s.to_string());
-                                seen.sources
-                                    .insert(format!("env.{var}"), f.source(f.line(ek.span().start)));
+                                seen.sources.insert(
+                                    format!("env.{var}"),
+                                    f.source(f.line(ek.span().start)),
+                                );
                             }
                             DeValue::String(_) => {
-                                result = Err("a variable name is not empty and has no =".to_string());
+                                result =
+                                    Err("a variable name is not empty and has no =".to_string());
                             }
                             other => {
                                 let at = f.line(ek.span().start);

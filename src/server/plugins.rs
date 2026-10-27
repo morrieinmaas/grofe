@@ -560,7 +560,9 @@ async fn terminate(child: &mut Child, group: &Group, grace: Duration) {
     let Some(pgid) = group.0 else { return };
     let _ = killpg(pgid, Signal::SIGTERM);
     let deadline = tokio::time::Instant::now() + grace;
-    let leader_gone = tokio::time::timeout_at(deadline, child.wait()).await.is_ok();
+    let leader_gone = tokio::time::timeout_at(deadline, child.wait())
+        .await
+        .is_ok();
     // The leader is reaped, but its children may outlive it: they get the
     // rest of the grace.
     while leader_gone
@@ -664,20 +666,108 @@ mod tests {
     fn iso8601_formats_utc() {
         assert_eq!(iso8601(UNIX_EPOCH), "1970-01-01T00:00:00Z");
         let t = UNIX_EPOCH + Duration::from_secs(1_793_100_000);
-        assert_eq!(iso8601(t), "2026-10-27T10:40:00Z");
+        assert_eq!(iso8601(t), "2026-10-27T11:20:00Z");
     }
 
     #[test]
     fn the_log_rotates_at_the_limit() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("p.log");
+        let path = dir.path().join("plugins").join("p.log");
         let mut log = Log::new(path.clone());
         let chunk = vec![b'x'; 600 * 1024];
         log.write(&chunk);
         log.write(&chunk);
-        let old = dir.path().join("p.log.1");
+        let old = dir.path().join("plugins").join("p.log.1");
         assert_eq!(fs::metadata(&old).map(|m| m.len()).ok(), Some(600 * 1024));
         assert_eq!(fs::metadata(&path).map(|m| m.len()).ok(), Some(600 * 1024));
+    }
+
+    fn supervisor(restart: Restart, timing: Timing) -> Supervisor {
+        let cfg = ConfigPlugin {
+            cmd: vec!["x".to_string()],
+            env: BTreeMap::new(),
+            enabled: true,
+            restart,
+            sources: BTreeMap::new(),
+        };
+        let status = Arc::new(Mutex::new(Status {
+            phase: Phase::Running,
+            pid: Some(1),
+            restarts: 0,
+            since: SystemTime::now(),
+        }));
+        Supervisor {
+            name: "t".to_string(),
+            cfg,
+            env: Vec::new(),
+            status,
+            log: Arc::new(Mutex::new(Log::new(PathBuf::from("/nonexistent/t.log")))),
+            timing,
+        }
+    }
+
+    fn phase(s: &Supervisor) -> Phase {
+        s.status.lock().expect("status").phase
+    }
+
+    #[test]
+    fn five_crashes_within_the_window_disable_and_four_do_not() {
+        let s = supervisor(Restart::Always, Timing::scaled(1.0));
+        let (mut backoff, mut crashes) = (s.timing.initial, VecDeque::new());
+        for _ in 0..4 {
+            let next = s.after_exit(true, Duration::ZERO, &mut backoff, &mut crashes);
+            assert!(matches!(next, Next::Restart));
+            assert_eq!(phase(&s), Phase::Backoff);
+        }
+        let next = s.after_exit(true, Duration::ZERO, &mut backoff, &mut crashes);
+        assert!(matches!(next, Next::Done));
+        assert_eq!(phase(&s), Phase::Disabled);
+    }
+
+    #[test]
+    fn crashes_outside_the_window_are_forgotten() {
+        // A 60 ms window: the first four crashes age out before the fifth.
+        let s = supervisor(Restart::Always, Timing::scaled(0.001));
+        let (mut backoff, mut crashes) = (s.timing.initial, VecDeque::new());
+        for _ in 0..4 {
+            s.after_exit(true, Duration::ZERO, &mut backoff, &mut crashes);
+        }
+        std::thread::sleep(Duration::from_millis(120));
+        let next = s.after_exit(true, Duration::ZERO, &mut backoff, &mut crashes);
+        assert!(matches!(next, Next::Restart));
+        assert_eq!(crashes.len(), 1);
+    }
+
+    #[test]
+    fn sixty_seconds_alive_resets_the_backoff() {
+        let s = supervisor(Restart::Always, Timing::scaled(1.0));
+        let (mut backoff, mut crashes) = (Duration::from_secs(32), VecDeque::new());
+        s.after_exit(true, Duration::from_secs(59), &mut backoff, &mut crashes);
+        assert_eq!(backoff, Duration::from_secs(32));
+        s.after_exit(true, Duration::from_secs(60), &mut backoff, &mut crashes);
+        assert_eq!(backoff, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_policy_decides_whether_an_exit_restarts() {
+        for (restart, failed, restarts) in [
+            (Restart::Always, false, true),
+            (Restart::OnFailure, false, false),
+            (Restart::OnFailure, true, true),
+            (Restart::Never, true, false),
+        ] {
+            let s = supervisor(restart, Timing::scaled(1.0));
+            let (mut backoff, mut crashes) = (s.timing.initial, VecDeque::new());
+            let next = s.after_exit(failed, Duration::ZERO, &mut backoff, &mut crashes);
+            assert_eq!(
+                matches!(next, Next::Restart),
+                restarts,
+                "{restart:?} {failed}"
+            );
+            if !restarts {
+                assert_eq!(phase(&s), Phase::Exited);
+            }
+        }
     }
 
     #[test]

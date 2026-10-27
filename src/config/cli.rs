@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest,
-    list_tmux_name, load, load_with_file, tmux_name, toml_type,
+    ConfigHook, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved,
+    Ty, closest, list_tmux_name, load, load_with_file, tmux_name, toml_type,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
