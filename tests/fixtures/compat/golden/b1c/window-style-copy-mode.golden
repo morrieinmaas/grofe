@@ -1,0 +1,29 @@
+$ new-session -d -s main -n w -x 30 -y 4 sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+? 0
+$ set -g status off
+? 0
+$ set -g window-style bg=colour17
+? 0
+$ set -g window-active-style fg=colour231,bg=colour52
+? 0
+client 30x4 attach -t main
+screen plain
+| red plain
+|
+|
+|
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:52
+~ 0 3-3 fg=default bg=idx:52
+~ 0 4-8 fg=idx:231 bg=idx:52
+~ 0 9-29 fg=default bg=idx:52
+~ 1 0-29 fg=default bg=idx:52
+$ copy-mode -t main
+? 0
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:52
+~ 0 3-3 fg=default bg=idx:52
+~ 0 4-8 fg=idx:231 bg=idx:52
+~ 0 9-24 fg=default bg=idx:52
+~ 0 25-29 fg=black bg=yellow
+~ 1 0-29 fg=default bg=idx:52

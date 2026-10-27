@@ -63,3 +63,13 @@ fn a_floating_pane_border_follows_pane_border_lines() {
 fn a_style_colour_answers_the_osc_default_colour_queries() {
     check("b1c", "osc-colours", &[]);
 }
+
+#[test]
+fn a_grid_of_panes_joins_borders_and_marks_the_active_pane() {
+    check("b1c", "border-grid", &[]);
+}
+
+#[test]
+fn copy_mode_shows_the_window_style() {
+    check("b1c", "window-style-copy-mode", &[]);
+}

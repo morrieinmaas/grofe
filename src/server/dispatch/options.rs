@@ -550,8 +550,7 @@ const BUILTINS: &[Builtin] = &[
     // (`Model::default_command`, `Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
-    // `pane-border-format` waits for pane border titles; copy mode reads
-    // `mode-keys` (M5).
+    // Copy mode reads `mode-keys` (M5).
     Builtin {
         name: "aggressive-resize",
         kind: Kind::Bool,
@@ -621,7 +620,8 @@ const BUILTINS: &[Builtin] = &[
         default: "off",
     },
     // FE.1: what `select-pane -P` sets on a pane, as tmux 3.7b does
-    // (recorded; free text, unchecked). grofe draws no pane background.
+    // (recorded; free text, unchecked). B1c draws them: the colours of the
+    // cells in the default colours.
     Builtin {
         name: "window-style",
         kind: Kind::String,
@@ -4136,7 +4136,11 @@ mod tests {
             ("set-clipboard", "external", OptionScope::Global),
             ("focus-events", "on", OptionScope::Global),
             ("pane-border-style", "default", OptionScope::Window),
-            ("pane-active-border-style", "fg=green", OptionScope::Window),
+            (
+                "pane-active-border-style",
+                "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}",
+                OptionScope::Window,
+            ),
             ("status-position", "bottom", OptionScope::Session),
             ("allow-passthrough", "off", OptionScope::Window),
         ] {

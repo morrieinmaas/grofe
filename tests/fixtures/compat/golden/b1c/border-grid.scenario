@@ -1,0 +1,34 @@
+# B1c: a grid of four panes and a nested layout under every combination of
+# status, lines and indicators that changes a join: junction glyphs on the
+# status line, the half-coloured borders (none with more than two panes),
+# arrows on each pane's own border.
+$ new-session -d -s main -n w -x 41 -y 13 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.1 cat
+$ split-window -d -v -t main:.3 cat
+$ select-pane -t main:.1 -T a
+$ select-pane -t main:.2 -T b
+$ select-pane -t main:.3 -T c
+$ select-pane -t main:.4 -T d
+client 41x13 attach -t main
+$ set -g pane-border-indicators both
+$ set -g pane-border-lines double
+screen
+styles 0-12
+$ select-pane -t main:.4
+styles 0-12
+$ set -g pane-border-status top
+screen
+styles 0-12
+$ set -g pane-border-status bottom
+$ select-pane -t main:.2
+screen
+styles 0-12
+$ set -g pane-border-indicators arrows
+$ set -g pane-border-lines number
+screen
+$ set -g pane-border-indicators off
+$ resize-pane -Z -t main:.3
+screen
+styles 0-12

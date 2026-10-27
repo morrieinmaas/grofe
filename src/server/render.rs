@@ -23,7 +23,7 @@ use crate::server::graphics;
 use crate::server::layout::BorderSegment;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, Hyperlink, RowsSnapshot, SnapCell};
 use crate::server::screenimg::{self, ImageCaps, Place, ScreenImage};
-use crate::server::status::{Style, StyledLine};
+use crate::server::status::{StatusRow, Style, StyledLine};
 use crate::types::{ClientId, PaneId, Rect};
 
 /// One client's composed frame: a cell buffer the size of its terminal.
@@ -443,19 +443,8 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
     let (w, h) = (win.cols as i32, win.rows as i32);
     let mut mask = vec![false; win.cells.len()];
     let looks = &inputs.look;
-    let boxes: Vec<PaneBox> = inputs
-        .panes
-        .iter()
-        .enumerate()
-        .map(|(i, (id, r, _))| PaneBox {
-            id: *id,
-            x: i32::from(r.x),
-            y: i32::from(r.y),
-            w: i32::from(r.cols),
-            h: i32::from(r.rows),
-            index: looks.panes.get(id).map_or(i, |l| l.index),
-        })
-        .collect();
+    let rects: Vec<(PaneId, Rect)> = inputs.panes.iter().map(|(id, r, _)| (*id, *r)).collect();
+    let boxes = pane_boxes(looks, &rects);
     let active = boxes.iter().position(|b| b.id == inputs.active);
     let geom = Geometry {
         cols: w,
@@ -499,30 +488,105 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
         }
     }
     draw_unowned_segments(win, inputs, &mut mask, &boxes);
-    if looks.status == PaneStatus::Off {
-        return mask;
+    let titles = border_titles(
+        looks,
+        (w, h),
+        &rects,
+        inputs.active,
+        (inputs.border_style, inputs.active_border_style),
+    );
+    for t in titles {
+        draw_line_at(win, t.row as u16, t.x as usize, &t.drawn.line);
+        for i in 0..t.width {
+            mask[(t.row * w + t.x + i) as usize] = true;
+        }
     }
+    mask
+}
+
+/// `rects` as the boxes the border geometry works on.
+fn pane_boxes(looks: &PaneLooks, rects: &[(PaneId, Rect)]) -> Vec<PaneBox> {
+    rects
+        .iter()
+        .enumerate()
+        .map(|(i, (id, r))| PaneBox {
+            id: *id,
+            x: i32::from(r.x),
+            y: i32::from(r.y),
+            w: i32::from(r.cols),
+            h: i32::from(r.rows),
+            index: looks.panes.get(id).map_or(i, |l| l.index),
+        })
+        .collect()
+}
+
+/// One pane's border title, drawn.
+pub struct Title {
+    pub pane: PaneId,
+    /// The window row it is on and the column it starts at.
+    pub row: i32,
+    pub x: i32,
+    /// How many columns it covers.
+    pub width: i32,
+    /// The title over the border glyphs it replaces, with the click ranges
+    /// of its `#[range=...]` parts (columns from `x`).
+    pub drawn: StatusRow,
+}
+
+/// The titles `pane-border-status` draws on `rects`' panes' border lines in
+/// a window `size` cells big (`fallback` styles for a pane `looks` has none
+/// for): the pane's `pane-border-format` over its border, in its border
+/// style (the active one for `active`).
+pub fn border_titles(
+    looks: &PaneLooks,
+    size: (i32, i32),
+    rects: &[(PaneId, Rect)],
+    active: PaneId,
+    fallback: (Style, Style),
+) -> Vec<Title> {
+    if looks.status == PaneStatus::Off {
+        return Vec::new();
+    }
+    let boxes = pane_boxes(looks, rects);
+    let active_index = boxes.iter().position(|b| b.id == active);
+    let geom = Geometry {
+        cols: size.0,
+        rows: size.1,
+        status: looks.status,
+        indicators: looks.indicators,
+        panes: &boxes,
+        active: active_index,
+    };
+    let mut out = Vec::new();
     for (n, b) in boxes.iter().enumerate() {
         let width = geom.title_width(b);
         let row = geom.title_row(b);
-        if width <= 0 || !(0..h).contains(&row) {
+        if width <= 0 || !(0..size.1).contains(&row) {
             continue;
         }
-        let style = style_of(b.id, active == Some(n));
+        let look = looks.panes.get(&b.id);
+        let style = match (active_index == Some(n), look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => fallback.1,
+            (false, None) => fallback.0,
+        };
         let under: Vec<(char, Style)> = (0..width)
             .map(|i| {
                 let cell = geom.type_of_cell(b.x + 2 + i, row);
                 (borders::glyph(looks.lines, cell, Some(b)), style)
             })
             .collect();
-        let title = looks.panes.get(&b.id).map_or("", |l| l.title.as_str());
-        let line = crate::server::status::draw_over(title, style, &under).line;
-        draw_line_at(win, row as u16, (b.x + 2) as usize, &line);
-        for i in 0..width {
-            mask[(row * w + b.x + 2 + i) as usize] = true;
-        }
+        let title = look.map_or("", |l| l.title.as_str());
+        out.push(Title {
+            pane: b.id,
+            row,
+            x: b.x + 2,
+            width,
+            drawn: crate::server::status::draw_over(title, style, &under),
+        });
     }
-    mask
+    out
 }
 
 /// Layout border segments no pane owns in tmux's geometry (a window too
@@ -635,8 +699,18 @@ pub fn draw_floating(
             put(screen, x + i, y + h, styled(g(bottom), &border));
         }
         for j in 0..h {
-            put(screen, x - 1, y + j, styled(g(borders::CELL_TOPBOTTOM), &border));
-            put(screen, x + w, y + j, styled(g(borders::CELL_TOPBOTTOM), &border));
+            put(
+                screen,
+                x - 1,
+                y + j,
+                styled(g(borders::CELL_TOPBOTTOM), &border),
+            );
+            put(
+                screen,
+                x + w,
+                y + j,
+                styled(g(borders::CELL_TOPBOTTOM), &border),
+            );
         }
         for (r, row) in pane.snap.rows.iter().enumerate() {
             for (c, cell) in row.iter().take(pane.size.0 as usize).enumerate() {

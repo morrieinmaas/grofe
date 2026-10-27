@@ -1937,13 +1937,24 @@ fn sync_pane_defaults(model: &Model) {
             let Some(pane) = model.panes.get(&id) else {
                 continue;
             };
-            let chain = options::chain(model, id);
-            let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
-            let (fg, bg) = window_style_colours(&opt, &FormatCtx::new(model, id), id == w.active);
+            let (fg, bg) = pane_defaults(model, id);
             pane.handle
                 .set_default_colours(colour_rgb(fg), colour_rgb(bg));
         }
     }
+}
+
+/// The colours the default-colour cells of `pane` show (`window-style`,
+/// `window-active-style`), the terminal's own where they set none.
+pub(crate) fn pane_defaults(model: &Model, pane: PaneId) -> (Color, Color) {
+    let chain = options::chain(model, pane);
+    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+    let active = model
+        .panes
+        .get(&pane)
+        .and_then(|p| model.windows.get(&p.window))
+        .is_some_and(|w| w.active == pane);
+    window_style_colours(&opt, &FormatCtx::new(model, pane), active)
 }
 
 /// `colour` as RGB (tmux's `colour_force_rgb`); `None` for the terminal's
@@ -2030,6 +2041,36 @@ fn pane_looks(
         );
     }
     looks
+}
+
+/// The border titles client `id`'s window shows, as drawn: where each
+/// pane's title is and what its `#[range=...]` parts cover, for the mouse.
+pub(crate) fn border_titles(state: &State, id: ClientId) -> Vec<render::Title> {
+    let Some(c) = state.clients.get(&id) else {
+        return Vec::new();
+    };
+    let model = &state.model;
+    let Some(w) = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))
+    else {
+        return Vec::new();
+    };
+    if w.pane_status == PaneStatus::Off {
+        return Vec::new();
+    }
+    let rects = visible_panes(w);
+    let ids: Vec<PaneId> = rects.iter().map(|(id, _)| *id).collect();
+    let look = pane_looks(state, c, w, &ids);
+    let plain = status::Style::default();
+    render::border_titles(
+        &look,
+        (i32::from(w.cols), i32::from(w.rows)),
+        &rects,
+        w.active,
+        (plain, plain),
+    )
 }
 
 /// A composed frame: the screen, its viewport, its status rows and the

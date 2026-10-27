@@ -43,6 +43,10 @@
 //!   window;
 //! - `MouseDrag1Border` moves the border under the pointer with it until
 //!   the release (`resize-pane -M`);
+//! - with `pane-border-status` on, a pane's title line is its border, and
+//!   `MouseDown1Control8` and `Control9`, where the default
+//!   `pane-border-format` puts its `[z]` and `[x]` buttons, zoom the pane
+//!   and ask to kill it (tmux's stock bindings);
 //! - every other mouse event reaches a pane that asked for it, filtered by
 //!   the mode it asked for, and nothing else; a pane in copy mode gets none.
 //!
@@ -57,6 +61,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::protocol::Dialect;
+use crate::server::borders::PaneStatus;
 use crate::server::clients;
 use crate::server::copy::{self, select};
 use crate::server::input::{
@@ -270,6 +275,8 @@ fn border_pane(panes: &[(PaneId, Rect)], (x, y): (u32, u32)) -> Option<PaneId> {
 enum Hit {
     Pane(PaneId, u16, u16),
     Border(PaneId),
+    /// A click range (`#[range=control|N]`) in a pane's border title.
+    Control(PaneId, u8),
     /// The status row's index among the status rows, and the range.
     Status(u16, Option<RangeKind>),
     Nothing,
@@ -308,16 +315,56 @@ fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
     if let Some((pane, x, y)) = pane_at(&panes, at) {
         return Hit::Pane(pane, x, y);
     }
+    if let Some(hit) = title_hit(state, client, w, &panes, at) {
+        return hit;
+    }
     if !w.zoomed && on_border(&w.layout.borders(w.area()), at) {
         return border_pane(&panes, at).map_or(Hit::Nothing, Hit::Border);
     }
     Hit::Nothing
 }
 
+/// A click on a pane's border title line, which belongs to that pane as
+/// tmux's `window_get_active_at` finds it: a border, or a control where
+/// the title has a `#[range=control|N]` part (the default
+/// `pane-border-format`'s zoom and close buttons).
+fn title_hit(
+    state: &State,
+    client: ClientId,
+    w: &Window,
+    panes: &[(PaneId, Rect)],
+    (x, y): (u32, u32),
+) -> Option<Hit> {
+    let top = match w.pane_status {
+        PaneStatus::Off => return None,
+        PaneStatus::Top => true,
+        PaneStatus::Bottom => false,
+    };
+    let (pane, _) = panes.iter().find(|(_, r)| {
+        let row = if top {
+            i64::from(r.y) - 1
+        } else {
+            i64::from(r.y) + i64::from(r.rows)
+        };
+        let (left, right) = (u32::from(r.x), u32::from(r.x) + u32::from(r.cols));
+        i64::from(y) == row && (left..=right).contains(&x)
+    })?;
+    let titles = clients::border_titles(state, client);
+    let range = titles.iter().find(|t| t.pane == *pane).and_then(|t| {
+        let col = u16::try_from(i64::from(x) - i64::from(t.x)).ok()?;
+        t.drawn.range_at(col).cloned()
+    });
+    Some(match range.map(|r| r.kind) {
+        Some(RangeKind::Control(n)) => Hit::Control(*pane, n as u8),
+        _ => Hit::Border(*pane),
+    })
+}
+
 fn place(hit: &Hit) -> Option<MousePlace> {
     Some(match hit {
         Hit::Pane(..) => MousePlace::Pane,
         Hit::Border(_) => MousePlace::Border,
+        Hit::Control(_, n) => MousePlace::Control(*n),
         Hit::Status(_, None) => MousePlace::StatusDefault,
         Hit::Status(_, Some(RangeKind::Left)) => MousePlace::StatusLeft,
         Hit::Status(_, Some(RangeKind::Right)) => MousePlace::StatusRight,
@@ -346,7 +393,7 @@ fn target(
     };
     let (pane, target, range, pane_cell) = match hit {
         Hit::Pane(p, x, y) => (*p, p.to_string(), None, Some((*x, *y))),
-        Hit::Border(p) => (*p, p.to_string(), None, None),
+        Hit::Border(p) | Hit::Control(p, _) => (*p, p.to_string(), None, None),
         Hit::Status(line, range) => {
             let (pane, target) = match range {
                 Some(RangeKind::Window(index)) => state
@@ -632,6 +679,30 @@ fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &M
             // As `resize-pane -M`: the first report already moves it.
             let from = target.cell;
             drag_border(state, client, from, (m.col, m.row));
+        }
+        // The default `pane-border-format`'s buttons, tmux's stock
+        // `MouseDown1Control8` and `MouseDown1Control9`.
+        (MousePlace::Control(8), MouseAction::Down, 1) => {
+            run(state, &["resize-pane", "-Z", "-t", "="])
+        }
+        // The menu's command runs after the mouse event, so it names the
+        // pane rather than `=`.
+        (MousePlace::Control(9), MouseAction::Down, 1) => {
+            let kill = format!("kill-pane -t {}", target.pane);
+            run(
+                state,
+                &[
+                    "display-menu",
+                    "-T",
+                    "Kill pane #{pane_index}?",
+                    "Yes",
+                    "y",
+                    &kill,
+                    "No",
+                    "n",
+                    "",
+                ],
+            )
         }
         (MousePlace::Pane, _, _) => in_pane(state, client, m, mk, target),
         _ => {}

@@ -411,7 +411,9 @@ pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) 
         && !w.tiled_ids().is_empty()
     {
         let (area, panes) = (w.area(), w.pane_ids());
-        if w.layout.preset_bordered(area, preset, &panes, w.pane_status) {
+        if w.layout
+            .preset_bordered(area, preset, &panes, w.pane_status)
+        {
             w.floating.clear();
         }
     }

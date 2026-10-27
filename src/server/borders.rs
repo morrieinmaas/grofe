@@ -434,7 +434,7 @@ impl Geometry<'_> {
             }
         }
         // tmux's BORDER_MARKERS "  +,.-" are ACS arrows.
-        arrows.then(|| match border {
+        arrows.then_some(match border {
             Side::Left => '→',
             Side::Right => '←',
             Side::Top => '↓',
