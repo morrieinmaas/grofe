@@ -538,7 +538,7 @@ impl Raw {
     /// Whether the server has closed the connection.
     fn closed(&mut self) -> bool {
         let mut rest = String::new();
-        matches!(self.reader.read_to_string(&mut rest), Ok(_))
+        self.reader.read_to_string(&mut rest).is_ok()
     }
 }
 
