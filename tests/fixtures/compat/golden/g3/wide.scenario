@@ -1,0 +1,9 @@
+# G3: An image wider than the room to its right is cut to the pane.
+# Recorded with the container's sixel-enabled tmux (`tmux-sixel`); `-q` makes
+# real tmux ignore `graphics`, grofe's option for it.
+$ new-session -d -s main -x 40 -y 12 "stty -echo; read go; sh {fixtures}/g3-sixel.sh wide"
+$ set -g -q graphics on
+$ set -g status off
+client 40x12 attach -t main
+$ send-keys -t main Enter
+screen right

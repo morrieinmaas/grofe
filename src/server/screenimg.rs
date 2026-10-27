@@ -116,6 +116,20 @@ pub struct Place {
     pub area: (u16, u16),
 }
 
+/// A sixel image to show as text, as tmux does for a terminal that cannot
+/// show it: written from `(x, y)`, the first row of `cells` as it is and
+/// the others from the pane's `left` edge (tmux's end up at the terminal's
+/// column 0), none past its `right` edge.
+#[derive(Debug, Clone, Copy)]
+pub struct Fallback {
+    pub x: i32,
+    pub y: i32,
+    /// The image's size in cells, less the rows scrolled off the top.
+    pub cells: (u32, u32),
+    pub left: i32,
+    pub right: i32,
+}
+
 /// The part of a `cols` by `rows` placement whose top-left cell is `(x, y)`
 /// that lies in `bounds` (`x0, y0, x1, y1`, the end exclusive).
 pub fn clip(x: i32, y: i32, cols: u32, rows: u32, bounds: (i32, i32, i32, i32)) -> Option<Crop> {
@@ -130,7 +144,7 @@ pub fn clip(x: i32, y: i32, cols: u32, rows: u32, bounds: (i32, i32, i32, i32)) 
 /// sixel images that must be shown as text come back as `(x, y, lines)`.
 pub fn collect(
     images: &mut Vec<ScreenImage>,
-    fallbacks: &mut Vec<(i32, i32, Crop, (u32, u32))>,
+    fallbacks: &mut Vec<Fallback>,
     pane: PaneId,
     view: &PaneImages,
     at: Place,
@@ -183,53 +197,95 @@ pub fn collect(
                 image: Arc::clone(&s.image),
                 px: (u32::from(w), u32::from(h)),
             })),
-            _ => fallbacks.push((shown.0, shown.1, crop, s.cells)),
+            _ => fallbacks.push(Fallback {
+                x: shown.0,
+                y: shown.1,
+                cells: (s.cells.0, s.cells.1 - (-s.row).clamp(0, s.cells.1 as i32) as u32),
+                left: bounds.0,
+                right: bounds.2,
+            }),
         }
     }
 }
 
-/// Paints tmux's text for a sixel image the client cannot show.
-pub fn paint_fallback(screen: &mut Screen, x: i32, y: i32, crop: Crop, cells: (u32, u32)) {
-    let text = sixel::fallback(cells.0, cells.1);
-    let lines: Vec<&[u8]> = text
-        .split(|b| *b == b'\n')
-        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
-        .collect();
+/// Paints tmux's text for a sixel image the client cannot show, as the
+/// terminal would show tmux's write of it: from `(x, y)`, wrapping at the
+/// pane's right edge, `\r` going back to its left edge, into blank cells.
+pub fn paint_fallback(screen: &mut Screen, f: Fallback) {
+    let text = sixel::fallback(f.cells.0, f.cells.1);
     let blank = Screen::new(1, 1).cells.remove(0);
-    for r in crop.2..crop.3 {
-        let Some(line) = lines.get(r as usize) else {
-            continue;
-        };
-        for c in crop.0..crop.1 {
-            let (cx, cy) = (x + (c - crop.0) as i32, y + (r - crop.2) as i32);
-            if cx < 0 || cy < 0 || cx >= i32::from(screen.cols) || cy >= i32::from(screen.rows) {
-                continue;
+    let right = f.right.min(i32::from(screen.cols));
+    let (mut cx, mut cy) = (f.x, f.y);
+    for ch in text {
+        match ch {
+            b'\r' => cx = f.left,
+            b'\n' => cy += 1,
+            _ => {
+                if cx >= right {
+                    cx = f.left;
+                    cy += 1;
+                }
+                if cx >= 0 && cy >= 0 && cy < i32::from(screen.rows) {
+                    // Only into blank cells: the stand-in never hides text
+                    // (tmux's, written once, is overwritten by it).
+                    let cell = &mut screen.cells[cy as usize * screen.cols as usize + cx as usize];
+                    if cell.c == ' ' && cell.zerowidth.is_empty() {
+                        *cell = SnapCell {
+                            c: char::from(ch),
+                            ..blank.clone()
+                        };
+                    }
+                }
+                cx += 1;
             }
-            let ch = line.get(c as usize).copied().unwrap_or(b' ');
-            screen.cells[cy as usize * screen.cols as usize + cx as usize] = SnapCell {
-                c: char::from(ch),
-                ..blank.clone()
-            };
         }
     }
 }
 
-/// Leaves out the images that changed cells cover: `before` is the screen
-/// as it was when the images were laid out, `screen` as it is now.
-pub fn hide_covered(screen: &mut Screen, before: &[SnapCell]) {
-    let cols = screen.cols as usize;
-    if before.len() != screen.cells.len() {
-        return;
+/// Stands in a cell's zero-width characters while overlays draw: a cell an
+/// overlay replaces loses it, even for one that looks the same.
+const MARK: char = '\u{FDD0}';
+
+/// Marks every cell an image covers and returns the screen as it is now,
+/// to give [`hide_covered`] once overlays have drawn. `None` without
+/// images.
+pub fn mark_covered(screen: &mut Screen) -> Option<Vec<SnapCell>> {
+    if screen.images.is_empty() {
+        return None;
     }
-    let cells = &screen.cells;
-    screen.images.retain(|image| {
+    let cols = screen.cols as usize;
+    for image in &screen.images {
         let (x, y, w, h) = image.rect();
-        (y..y + h).all(|row| {
+        for row in y..y + h {
             let start = row as usize * cols + x as usize;
-            let end = start + w as usize;
-            end <= cells.len() && cells[start..end] == before[start..end]
-        })
-    });
+            for cell in screen.cells.get_mut(start..start + w as usize).unwrap_or_default() {
+                if !cell.zerowidth.contains(&MARK) {
+                    cell.zerowidth.push(MARK);
+                }
+            }
+        }
+    }
+    Some(screen.cells.clone())
+}
+
+/// Leaves out the images that something drew over since [`mark_covered`]:
+/// a cell under one that is not the marked cell any more. Unmarks the rest.
+pub fn hide_covered(screen: &mut Screen, before: Vec<SnapCell>) {
+    let cols = screen.cols as usize;
+    if before.len() == screen.cells.len() {
+        let cells = &screen.cells;
+        screen.images.retain(|image| {
+            let (x, y, w, h) = image.rect();
+            (y..y + h).all(|row| {
+                let start = row as usize * cols + x as usize;
+                let end = start + w as usize;
+                end <= cells.len() && cells[start..end] == before[start..end]
+            })
+        });
+    }
+    for cell in &mut screen.cells {
+        cell.zerowidth.retain(|c| *c != MARK);
+    }
 }
 
 /// Shifts every image `by` rows down (a status row above the window).
@@ -463,30 +519,39 @@ mod tests {
     fn covered_images_are_hidden_whole() {
         let mut screen = Screen::new(10, 5);
         screen.images = vec![kitty(1, 1, (2, 1), (0, 4, 0, 2)), kitty(2, 2, (7, 3), (0, 2, 0, 2))];
-        let before = screen.cells.clone();
-        // A popup border cell inside the first image's rectangle.
-        screen.cells[2 * 10 + 4].c = '|';
-        hide_covered(&mut screen, &before);
-        assert_eq!(screen.images.len(), 1);
-        assert_eq!(screen.images[0].kitty_key(), Some((2, 2)));
+        let before = mark_covered(&mut screen).expect("images");
+        // A popup's blank cell, drawn over a blank one inside the first
+        // image's rectangle: the same to look at, but not the same cell.
+        screen.cells[2 * 10 + 4] = Screen::new(1, 1).cells.remove(0);
         // A cell next to the second does not matter.
         screen.cells[3 * 10 + 6].c = '|';
-        hide_covered(&mut screen, &before);
+        hide_covered(&mut screen, before);
         assert_eq!(screen.images.len(), 1);
+        assert_eq!(screen.images[0].kitty_key(), Some((2, 2)));
+        assert!(screen.cells.iter().all(|c| c.zerowidth.is_empty()), "the marks are gone");
     }
 
     #[test]
-    fn the_sixel_text_fallback_is_painted_into_the_cells() {
-        let mut screen = Screen::new(30, 4);
-        paint_fallback(&mut screen, 2, 1, (0, 20, 0, 2), (20, 2));
-        let row = |y: usize| -> String { screen.cells[y * 30..y * 30 + 30].iter().map(|c| c.c).collect() };
-        assert_eq!(row(1).trim_end(), format!("{:2}SIXEL IMAGE (20x2)++", ""));
-        assert_eq!(row(2).trim_end(), format!("{:2}{}", "", "+".repeat(20)));
-        // Cropped at the left by two cells and at the foot.
-        let mut screen = Screen::new(30, 4);
-        paint_fallback(&mut screen, 0, 0, (2, 4, 1, 2), (20, 2));
-        assert_eq!(screen.cells[0].c, '+');
-        assert_eq!(screen.cells[2].c, ' ');
+    fn the_sixel_text_fallback_is_painted_as_tmux_writes_it() {
+        let at = |x, y, cells, left, right| Fallback { x, y, cells, left, right };
+        let mut screen = Screen::new(30, 5);
+        paint_fallback(&mut screen, at(2, 1, (20, 2), 0, 30));
+        let row = |screen: &Screen, y: usize| -> String {
+            screen.cells[y * 30..y * 30 + 30].iter().map(|c| c.c).collect()
+        };
+        assert_eq!(row(&screen, 1).trim_end(), format!("{:2}SIXEL IMAGE (20x2)++", ""));
+        // The second row starts at the pane's left edge, as tmux's `\r\n`
+        // puts it at the terminal's.
+        assert_eq!(row(&screen, 2).trim_end(), "+".repeat(20));
+        // Past the right edge it wraps there, as a terminal does.
+        let mut screen = Screen::new(30, 5);
+        paint_fallback(&mut screen, at(24, 0, (4, 2), 0, 30));
+        assert_eq!(row(&screen, 0).trim_end(), format!("{:24}SIXEL", ""));
+        assert_eq!(row(&screen, 1).trim_end(), "IMAGE (4x2)");
+        assert_eq!(row(&screen, 2).trim_end(), "++++");
+        // Rows below the screen are dropped.
+        paint_fallback(&mut screen, at(0, 4, (4, 3), 0, 30));
+        assert_eq!(&row(&screen, 4)[..4], "SIXE");
     }
 
     #[test]

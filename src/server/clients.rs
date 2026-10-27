@@ -406,8 +406,8 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             ctx,
             size: clamp_size(req.size),
             pending_size: None,
+            caps: terminal_features(&state.model, &req.term, req.caps),
             term: req.term,
-            caps: req.caps,
             activity: now,
             activity_time: SystemTime::now(),
             decoder: Decoder::new(),
@@ -1514,6 +1514,35 @@ fn render_dirty(state: &mut State) {
     }
 }
 
+/// `caps` with what the `terminal-features` option adds for a client whose
+/// `TERM` is `term`, as tmux reads it: entries `pattern:feature:...`, the
+/// pattern a `fnmatch` glob of the terminal name. Only `sixel` is read (G3);
+/// the probe cannot ask for it on a terminal that lists it nowhere else.
+fn terminal_features(model: &Model, term: &str, mut caps: Caps) -> Caps {
+    let features = model.options.lookup_list("terminal-features", &[]);
+    for entry in features.into_iter().flat_map(|f| f.values()) {
+        let mut parts = entry.split(':');
+        let matches = parts.next().is_some_and(|pattern| glob(pattern, term));
+        if matches && parts.any(|feature| feature == "sixel") {
+            caps.sixel = true;
+        }
+    }
+    caps
+}
+
+/// `fnmatch` with `*` and `?` only.
+fn glob(pattern: &str, text: &str) -> bool {
+    fn go(p: &[u8], t: &[u8]) -> bool {
+        match p.split_first() {
+            None => t.is_empty(),
+            Some((b'*', rest)) => (0..=t.len()).any(|i| go(rest, &t[i..])),
+            Some((b'?', rest)) => !t.is_empty() && go(rest, &t[1..]),
+            Some((c, rest)) => t.first() == Some(c) && go(rest, &t[1..]),
+        }
+    }
+    go(pattern.as_bytes(), text.as_bytes())
+}
+
 /// Client `c`'s current window, and whether it fits the client (then
 /// there is nothing to pan).
 fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
@@ -1848,7 +1877,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         graphics: state.graphics.remap(),
         images: Some(ImageCaps::of(&c.caps)),
     });
-    let window_before = (!window.images.is_empty()).then(|| window.cells.clone());
+    let window_before = screenimg::mark_covered(&mut window);
     if !w.zoomed && !w.floating.is_empty() {
         let mut stack = w.floating.clone();
         stack.sort_by_key(|f| f.z);
@@ -1873,7 +1902,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         );
     }
     // Floating panes cover what is under them, images included.
-    if let Some(before) = &window_before {
+    if let Some(before) = window_before {
         screenimg::hide_covered(&mut window, before);
     }
     let (rows, message) = status_rows(state, c, s, geom.lines);
@@ -1895,7 +1924,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         window
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
-    let screen_before = (!screen.images.is_empty()).then(|| screen.cells.clone());
+    let screen_before = screenimg::mark_covered(&mut screen);
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
@@ -1905,7 +1934,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     }
     render::fix_wide_pairs(&mut screen);
     // Popups, menus, prompts and choosers cover images the same way.
-    if let Some(before) = &screen_before {
+    if let Some(before) = screen_before {
         screenimg::hide_covered(&mut screen, before);
     }
     Some((screen, viewport, rows, geom.first_row))

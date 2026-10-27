@@ -12,6 +12,7 @@ mod fe_1;
 mod fe_2;
 mod fe_3;
 mod fe_4;
+mod g3;
 mod grofe_example;
 mod normalize;
 mod record;

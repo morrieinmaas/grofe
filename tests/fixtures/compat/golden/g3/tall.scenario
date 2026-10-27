@@ -1,0 +1,9 @@
+# G3: An image taller than the pane is cut to its height less one row.
+# Recorded with the container's sixel-enabled tmux (`tmux-sixel`); `-q` makes
+# real tmux ignore `graphics`, grofe's option for it.
+$ new-session -d -s main -x 40 -y 12 "stty -echo; read go; sh {fixtures}/g3-sixel.sh tall"
+$ set -g -q graphics on
+$ set -g status off
+client 40x12 attach -t main
+$ send-keys -t main Enter
+screen tall

@@ -1,0 +1,35 @@
+$ new-session -d -s main -x 40 -y 12 "stty -echo; read go; sh {fixtures}/g3-sixel.sh scroll"
+? 0
+$ set -g -q graphics on
+? 0
+$ set -g status off
+? 0
+client 40x12 attach -t main
+$ send-keys -t main Enter
+? 0
+screen bottom
+|
+|
+|
+|
+|
+|
+|     SIXEL IMAGE (2x2)
+| ++
+| bottom
+|
+|
+|
+screen end
+|     SIXEL IMAGE (2x1)
+| bottom
+|
+|
+|
+|
+|
+|
+|
+| 1
+| 2
+| end

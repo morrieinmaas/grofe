@@ -261,8 +261,8 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
             };
             screenimg::collect(&mut screen.images, &mut fallbacks, *id, view, at, inputs.graphics, caps);
         }
-        for (x, y, crop, cells) in fallbacks {
-            screenimg::paint_fallback(&mut screen, x, y, crop, cells);
+        for fallback in fallbacks {
+            screenimg::paint_fallback(&mut screen, fallback);
         }
     }
     if let (Some(status), true) = (&inputs.status, rows > 0) {
