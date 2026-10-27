@@ -13,13 +13,14 @@ use super::{
     ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
     DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
     If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers,
-    ListClients, ListKeys, ListPanes, ListSessions, ListWindows, LoadBuffer, MenuEntry, MoveWindow,
-    NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer,
-    RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow,
-    RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow,
-    SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
-    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
-    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer,
+    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
+    ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource, Reload, Rename,
+    ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer,
+    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
+    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
+    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
+    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -876,6 +877,23 @@ fn parse_kill_server(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(argv, &NO_FLAGS, "kill-server")?;
     no_extra_positionals(&flags, "kill-server", 0)?;
     Ok(Command::KillServer(KillServer))
+}
+
+fn parse_list_plugins(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(argv, &NO_FLAGS, "list-plugins")?;
+    no_extra_positionals(&flags, "list-plugins", 0)?;
+    Ok(Command::ListPlugins(ListPlugins))
+}
+
+fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(argv, &NO_FLAGS, "plugin-restart")?;
+    no_extra_positionals(&flags, "plugin-restart", 1)?;
+    let name = flags
+        .positionals
+        .first()
+        .cloned()
+        .ok_or_else(|| ParseError::TooFewArguments("plugin-restart".to_string(), 1))?;
+    Ok(Command::PluginRestart(PluginRestart { name }))
 }
 
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
@@ -2588,6 +2606,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "list-keys" => parse_list_keys(rest),
         "source-file" => parse_source_file(rest),
         "reload" => parse_reload(rest),
+        "list-plugins" => parse_list_plugins(rest),
+        "plugin-restart" => parse_plugin_restart(rest),
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
         "select-layout" => parse_select_layout(rest),

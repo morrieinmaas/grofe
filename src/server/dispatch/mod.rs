@@ -30,6 +30,7 @@ pub mod hooks;
 pub mod menu;
 pub mod options;
 pub mod pane;
+pub mod plugins;
 pub mod popup;
 pub mod session;
 pub mod structure;
@@ -322,6 +323,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::prune_unreferenced(state);
             out
         }
+        Command::ListPlugins(c) => plugins::list_plugins(state, ctx, c),
+        Command::PluginRestart(c) => plugins::plugin_restart(state, ctx, c),
         Command::Reload(c) => {
             let out = options::reload(state, ctx, c);
             server::sources::prune_unreferenced(state);

@@ -475,6 +475,16 @@ pub struct SourceFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Reload;
 
+/// `list-plugins` (grofe's own, T6.3): each configured plugin's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ListPlugins;
+
+/// `plugin-restart <name>` (grofe's own, T6.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRestart {
+    pub name: String,
+}
+
 /// `command-prompt` (`-p -I`, then a template; R24; from M3.6 `-b -k -1
 /// -T`, TC.7).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1063,6 +1073,9 @@ pub enum Command {
     ListKeys(ListKeys),
     SourceFile(SourceFile),
     Reload(Reload),
+    // M6 (the stub edit adds them; T6.3 implements them).
+    ListPlugins(ListPlugins),
+    PluginRestart(PluginRestart),
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
     SelectLayout(SelectLayout),

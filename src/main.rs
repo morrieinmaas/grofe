@@ -126,6 +126,8 @@ fn main() -> ExitCode {
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
+        // A stdio bridge to the server (T6.2).
+        "control" => fail("grofe control: not yet supported"),
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }

@@ -25,6 +25,7 @@ pub mod model;
 pub mod mouse;
 pub mod pane;
 pub mod passthrough;
+pub mod plugins;
 pub mod popup;
 pub mod prompt;
 pub mod render;
