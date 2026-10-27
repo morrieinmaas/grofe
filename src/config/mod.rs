@@ -21,6 +21,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
+pub use load::plugins::{ConfigPlugin, Restart};
 pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
 
@@ -340,6 +341,8 @@ pub struct Resolved {
     pub hooks: BTreeMap<String, ConfigHook>,
     /// `[status.sources]` by name (TC.4).
     pub sources: BTreeMap<String, ConfigSource>,
+    /// `[plugins.<name>]` (T6.3), merged key by key across the layers.
+    pub plugins: BTreeMap<String, ConfigPlugin>,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// `[user-options]` (TP.0): global user options by name, `@` included,

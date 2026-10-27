@@ -196,6 +196,8 @@ pub struct State {
     pub graphics: graphics::Graphics,
     /// Status sources (TC.4).
     pub sources: sources::Sources,
+    /// Supervised plugins (T6.3).
+    pub plugins: plugins::Plugins,
     /// Event hooks and the server environment (TC.5).
     pub hooks: hooks::Hooks,
     /// Open popups (TC.6).
@@ -502,6 +504,7 @@ async fn serve(
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
+        plugins: plugins::Plugins::default(),
         hooks: hooks::Hooks::for_server(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
@@ -532,6 +535,7 @@ async fn serve(
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
+    plugins::start(&mut state);
     signal_ready(&mut ready, "ok");
 
     // The actor owns the listener (dropped when it returns: no more
@@ -539,6 +543,7 @@ async fn serve(
     let mut state = actor(state, listener, conns, msg_rx, pane_rx, jobs_rx, signals).await;
     state.remove_socket();
     clients::shutdown(&mut state, "server exited");
+    plugins::shutdown(&mut state).await;
     // Hang up the panes and let go of the subscribers' queues before the
     // connections drain them.
     drop(state);
@@ -1143,6 +1148,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
+        plugins: plugins::Plugins::default(),
         hooks: hooks::Hooks::default(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),

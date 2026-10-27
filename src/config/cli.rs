@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest,
+    ConfigHook, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved, Ty, closest,
     list_tmux_name, load, load_with_file, tmux_name, toml_type,
 };
 use crate::server::dispatch::options::has_no_effect;
@@ -117,6 +117,18 @@ fn run(args: &[String]) -> Result<String, String> {
             out.push_str(&format!("  set by {}\n", s.source.describe(home)));
         }
     };
+    let plugin = |out: &mut String, name: &str, p: &ConfigPlugin| {
+        out.push_str(&format!(
+            "plugins.{} = {}\n",
+            bare_or_quoted(name),
+            plugin_value(p)
+        ));
+        if explain {
+            for (key, src) in &p.sources {
+                out.push_str(&format!("  {key} set by {}\n", src.describe(home)));
+            }
+        }
+    };
     let user_option = |out: &mut String, name: &str, value: &str| {
         let name = name.strip_prefix('@').unwrap_or(name);
         out.push_str(&format!(
@@ -169,6 +181,9 @@ fn run(args: &[String]) -> Result<String, String> {
             for (name, s) in &r.sources {
                 status_source(&mut out, name, s);
             }
+            for (name, p) in &r.plugins {
+                plugin(&mut out, name, p);
+            }
             for (name, value) in &r.user_options {
                 user_option(&mut out, name, value);
             }
@@ -176,6 +191,19 @@ fn run(args: &[String]) -> Result<String, String> {
                 variable(&mut out, name, value);
             }
             load_commands(&mut out);
+        }
+        Some("plugins") => {
+            for (name, p) in &r.plugins {
+                plugin(&mut out, name, p);
+            }
+        }
+        Some(k) if k.starts_with("plugins.") => {
+            let name = &k["plugins.".len()..];
+            let p = r
+                .plugins
+                .get(name)
+                .ok_or_else(|| format!("show-config: no plugin {k}"))?;
+            plugin(&mut out, name, p);
         }
         Some("user-options") => {
             for (name, value) in &r.user_options {
@@ -297,6 +325,22 @@ fn source_value(s: &ConfigSource) -> String {
             fields.push(format!("{k} = {v}"));
         }
     }
+    format!("{{ {} }}", fields.join(", "))
+}
+
+fn plugin_value(p: &ConfigPlugin) -> String {
+    let cmd = toml::Value::Array(p.cmd.iter().cloned().map(toml::Value::String).collect());
+    let mut fields = vec![format!("cmd = {cmd}")];
+    if !p.env.is_empty() {
+        let vars: Vec<String> = p
+            .env
+            .iter()
+            .map(|(k, v)| format!("{} = {}", bare_or_quoted(k), quote(v)))
+            .collect();
+        fields.push(format!("env = {{ {} }}", vars.join(", ")));
+    }
+    fields.push(format!("enabled = {}", p.enabled));
+    fields.push(format!("restart = \"{}\"", p.restart.name()));
     format!("{{ {} }}", fields.join(", "))
 }
 

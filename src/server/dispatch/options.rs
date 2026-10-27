@@ -1647,6 +1647,7 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     }
     apply_config_lists(model, events, resolved);
     crate::server::sources::configure(state, resolved);
+    crate::server::plugins::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
     // `[environment]`, then `load-commands` (TP.0), as tmux runs a config

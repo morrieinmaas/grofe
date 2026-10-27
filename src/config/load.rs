@@ -14,6 +14,8 @@ use super::{
     ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
     OPTION_NAMES, Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
+pub mod plugins;
+
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};
 use crate::server::input::{Key, parse_key};
@@ -77,6 +79,8 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
         l.load_path(&dir.join("user.toml"), Layer::User, true);
     }
     l.check_names();
+    let missing = l.plugins.missing_cmds();
+    l.errors.extend(missing);
     l.finish()
 }
 
@@ -92,6 +96,7 @@ struct Loader {
     keys: Vec<KeyBinding>,
     hooks: BTreeMap<String, ConfigHook>,
     sources: BTreeMap<String, ConfigSource>,
+    plugins: plugins::Merge,
     user_options: BTreeMap<String, String>,
     environment: Vec<(String, String)>,
     load_commands: Vec<ConfigCommand>,
@@ -167,6 +172,7 @@ impl Loader {
             keys: Vec::new(),
             hooks: BTreeMap::new(),
             sources: BTreeMap::new(),
+            plugins: plugins::Merge::default(),
             user_options: BTreeMap::new(),
             environment: Vec::new(),
             load_commands: Vec::new(),
@@ -187,6 +193,7 @@ impl Loader {
             keys: self.keys,
             hooks: self.hooks,
             sources: self.sources,
+            plugins: self.plugins.resolved(),
             user_options: self.user_options,
             environment: self.environment,
             load_commands: self.load_commands,
@@ -265,6 +272,7 @@ impl Loader {
                 "source-file" => self.include_list(&f, line, v.get_ref(), &mut includes),
                 "keys" => self.key_tables(&f, line, v.get_ref()),
                 "hooks" => self.hooks(&f, line, v.get_ref()),
+                "plugins" => self.plugins(&f, line, v.get_ref()),
                 "user-options" => self.user_options(&f, line, v.get_ref()),
                 "environment" => self.environment(&f, line, v.get_ref()),
                 "load-commands" => self.load_commands(&f, line, v.get_ref()),
@@ -415,6 +423,7 @@ impl Loader {
                         "source-file",
                         "keys",
                         "hooks",
+                        "plugins",
                         "status.sources",
                         "user-options",
                         "environment",
