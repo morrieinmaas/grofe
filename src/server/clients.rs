@@ -1159,12 +1159,18 @@ pub fn changed(state: &mut State) {
         .map(|(id, _)| *id)
         .collect();
     let destroyed = std::mem::take(&mut state.model.destroyed_sessions);
+    // One successor per destroyed session, chosen before any client moves,
+    // as tmux picks `s_new` once: a second client must not see the first
+    // one's session as attached.
+    let successors: BTreeMap<SessionId, Option<SessionId>> = destroyed
+        .iter()
+        .map(|(id, (name, mode))| (*id, successor(state, name, mode)))
+        .collect();
     for id in orphans {
         let next = state
             .clients
             .get(&id)
-            .and_then(|c| destroyed.get(&c.session))
-            .and_then(|(name, mode)| successor(state, name, mode));
+            .and_then(|c| successors.get(&c.session).copied().flatten());
         match next {
             Some(session) => {
                 show_session(state, id, session);

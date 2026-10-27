@@ -319,9 +319,11 @@ impl Model {
     }
 
     /// True once every session is gone, after at least one existed: the
-    /// server should exit.
+    /// server should exit, unless `exit-empty` is off.
     pub fn closed(&self) -> bool {
-        self.had_session && self.sessions.is_empty()
+        self.had_session
+            && self.sessions.is_empty()
+            && self.options.lookup("exit-empty", &[]) != Some("off")
     }
 
     /// Whether `pane` stays after its process exits with `status` (its

@@ -2233,6 +2233,37 @@ impl ConfigReader<'_> {
         Ok(())
     }
 
+    /// A physical line inside a `{ }` list, `cur[seg..]`: a directive is
+    /// settled and cut out, a line in a false branch is cut out.
+    fn block_line(
+        &mut self,
+        line: usize,
+        cur: &mut String,
+        seg: usize,
+    ) -> Result<(), (usize, ParseError)> {
+        if std::mem::take(&mut self.broken_format) {
+            return Err((line, syntax_error()));
+        }
+        let text = cur[seg..].trim_start();
+        let directive = text.strip_prefix('%').and_then(|rest| {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let word = &rest[..end];
+            (!word.chars().all(|c| c == '%' || c.is_ascii_digit()))
+                .then(|| (word.to_string(), rest[end..].to_string()))
+        });
+        let drop = match &directive {
+            Some((word, rest)) => {
+                self.directive(word, rest).map_err(|e| (line, e))?;
+                true
+            }
+            None => !self.active(),
+        };
+        if drop {
+            cur.truncate(seg);
+        }
+        Ok(())
+    }
+
     /// `%if`, `%elif`, `%else`, `%endif` and `%hidden NAME=value`.
     fn directive(&mut self, word: &str, rest: &str) -> Result<(), ParseError> {
         match word {
@@ -2366,17 +2397,31 @@ pub fn split_config_file_with(
     // Outside quotes: at a word boundary, the open `{ }` lists, and the
     // open `#{` in the current word.
     let (mut word_start, mut depth, mut formats) = (true, 0usize, 0usize);
+    // Where the current physical line starts in `cur`, inside a `{ }` list.
+    let mut seg = 0;
+    // The `%if` scopes open where the outermost `{ }` list began.
+    let mut open_scopes = 0;
     while let Some((c, line)) = chars.next() {
         if start.is_none() && !c.is_whitespace() {
             start = Some(line);
         }
         match c {
-            '\n' if depth > 0 => cur.push_str(" ; "),
-            '\n' => flush(&mut reader, &mut start, &mut cur)?,
+            // Inside a `{ }` list the directives still count (tmux reads
+            // them at the start of a line there too): one is settled here
+            // and its line leaves the text, as does a line in a false branch.
+            '\n' if depth > 0 => {
+                reader.block_line(line, &mut cur, seg)?;
+                cur.push_str(" ; ");
+                seg = cur.len();
+            }
+            '\n' => {
+                seg = 0;
+                flush(&mut reader, &mut start, &mut cur)?
+            }
             // After a directive word a `#{` opens a format, not a comment.
             '#' if word_start
                 && chars.peek().is_some_and(|(n, _)| *n == '{')
-                && is_directive_word(&cur) =>
+                && is_directive_word(&cur[seg..]) =>
             {
                 chars.next();
                 match raw_format(&mut chars) {
@@ -2414,6 +2459,9 @@ pub fn split_config_file_with(
                 }
             }
             '{' if word_start => {
+                if depth == 0 {
+                    open_scopes = reader.scopes.len();
+                }
                 depth += 1;
                 cur.push(c);
                 continue;
@@ -2427,6 +2475,10 @@ pub fn split_config_file_with(
                     formats -= 1;
                 } else {
                     depth = depth.saturating_sub(1);
+                    // A `%if` opened inside a list closes inside it.
+                    if depth == 0 && reader.scopes.len() != open_scopes {
+                        return Err((line, syntax_error()));
+                    }
                 }
                 cur.push(c);
             }
@@ -4653,6 +4705,20 @@ mod tests {
             lines_of("%if ''\na\n%endif\n%if 0\nb\n%endif\n%if x\nc\n%endif\n"),
             [8]
         );
+    }
+
+    /// tmux 3.7b reads `%if` inside a `{ }` list too (checked on a private
+    /// server: the false branch's line is not in the binding), and a `%if`
+    /// opened inside a list must close inside it, at the `}` line.
+    #[test]
+    fn directives_work_inside_a_list() {
+        let text = "bind x if-shell true {\none\n%if 0\nno\n%else\nyes\n%endif\ntwo\n}\n";
+        let got = read(text).unwrap();
+        assert_eq!(got.len(), 1);
+        let all = got[0].1[0].join(" ");
+        assert!(all.ends_with("'one' ; 'yes' ; 'two'"), "{all}");
+        let syntax = |line| Err((line, ParseError::Other("syntax error".into())));
+        assert_eq!(read("bind x if-shell true {\n%if 1\nz\n}\n"), syntax(4));
     }
 
     #[test]
