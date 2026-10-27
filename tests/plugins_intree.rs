@@ -156,3 +156,13 @@ fn a_missing_shellcheck_skips_outside_ci() {
     let empty = tempfile::tempdir().expect("tempdir");
     assert_eq!(find_shellcheck(empty.path().as_os_str(), false), None);
 }
+
+/// The README tells the reader what the script needs to find `grofe`.
+#[test]
+fn the_readme_says_grofe_must_be_on_path_or_grofe_bin_set() {
+    let readme = fs::read_to_string(script_path().with_file_name("README.md")).expect("README");
+    assert!(
+        readme.contains("`grofe` on the\nserver's `PATH` or `GROFE_BIN` set"),
+        "{readme}"
+    );
+}
