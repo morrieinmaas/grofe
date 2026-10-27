@@ -2626,6 +2626,22 @@ mod tests {
         assert_eq!(m.cursor_word(""), "foo.bar");
     }
 
+    /// `#{mouse_line}` (tmux's `format_grid_line`) is the row up to its used
+    /// width, a tab as a tab, and `#{mouse_word}` the word between blanks
+    /// and tabs.
+    #[test]
+    fn a_row_is_its_text_up_to_its_used_width() {
+        let g = Grid::from_text(20, 0, &["ab\tcd  ", "", "  x"]);
+        assert_eq!(g.line_text(0), "ab\tcd");
+        assert_eq!(g.line_text(1), "");
+        assert_eq!(g.line_text(2), "  x");
+        assert_eq!(g.word(9, 0, ""), "cd");
+        assert_eq!(g.word(8, 0, ""), "cd");
+        // On a blank, the word after it.
+        assert_eq!(g.word(10, 0, ""), "");
+        assert_eq!(g.hyperlink_at(0, 0), None);
+    }
+
     /// The copy costs about 8 bytes a written cell: 100 000 rows of 80
     /// cells in alternating colours (`history-limit 100000`) stay under
     /// 100 000 * (80 * 8 + 64) bytes, with a handful of looks.

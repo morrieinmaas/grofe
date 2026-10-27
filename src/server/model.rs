@@ -1243,4 +1243,99 @@ mod tests {
         assert_eq!(step(&items, 2, -7), 1);
         assert_eq!(step(&items, 9, 1), 9);
     }
+
+    /// `#{W:}`, `#{S:}` and `#{P:}` visit in tmux's `sort.c` orders: windows
+    /// by index (`n` by name, `t` by activity, newest first, `r` reversing
+    /// whichever), sessions by id, panes by id. The recorded cases are
+    /// `golden/fe_3/format-loops`; this one has the clocks the golden
+    /// cannot fix.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn loops_visit_in_the_orders_sort_c_gives() {
+        use crate::cmd::{FormatVars, expand};
+        use crate::server::dispatch::options::FormatCtx;
+        use std::time::{Duration, SystemTime};
+
+        let mut model = Model::new(true);
+        let (w1, w2, w3) = (
+            model.alloc_window_id(),
+            model.alloc_window_id(),
+            model.alloc_window_id(),
+        );
+        let (p1, p2, p3) = (
+            spawn_pane(&mut model, w1),
+            spawn_pane(&mut model, w2),
+            spawn_pane(&mut model, w3),
+        );
+        let a = add_session(&mut model, "zed", w1);
+        let t0 = SystemTime::now();
+        // Index 1 "mid" is the oldest, 2 "zeta" the newest, 3 "alpha" between.
+        for (id, index, name, pane, age) in [
+            (w1, 1, "mid", p1, 30),
+            (w2, 2, "zeta", p2, 0),
+            (w3, 3, "alpha", p3, 10),
+        ] {
+            model.insert_window(Window {
+                id,
+                session: a,
+                index,
+                name: name.to_string(),
+                layout: LayoutTree::new(pane),
+                active: pane,
+                zoomed: false,
+                cols: 80,
+                rows: 24,
+                bell_flag: false,
+                activity_flag: false,
+                silence_flag: false,
+                activity: t0 - Duration::from_secs(age),
+                last_panes: Vec::new(),
+                floating: Vec::new(),
+            });
+        }
+        let wb = model.alloc_window_id();
+        let pb = spawn_pane(&mut model, wb);
+        let b = add_session(&mut model, "alpha", wb);
+        model.insert_window(Window {
+            id: wb,
+            session: b,
+            index: 1,
+            name: "solo".to_string(),
+            layout: LayoutTree::new(pb),
+            active: pb,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+            bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
+            activity: t0,
+            last_panes: Vec::new(),
+            floating: Vec::new(),
+        });
+        // `add_session` leaves the window list to the caller.
+        model.sessions.get_mut(&a).unwrap().windows = vec![w1, w2, w3];
+        model.sessions.get_mut(&a).unwrap().active = w2;
+
+        let vars = FormatCtx::new(&model, p1);
+        let names = |fmt: &str| expand(fmt, &vars);
+        assert_eq!(names("#{W:#{window_name} }"), "mid zeta alpha ");
+        assert_eq!(names("#{W/r:#{window_name} }"), "alpha zeta mid ");
+        assert_eq!(names("#{W/n:#{window_name} }"), "alpha mid zeta ");
+        assert_eq!(names("#{W/nr:#{window_name} }"), "zeta mid alpha ");
+        assert_eq!(names("#{W/t:#{window_name} }"), "zeta alpha mid ");
+        assert_eq!(names("#{W/tr:#{window_name} }"), "mid alpha zeta ");
+        // The current window (2) takes the second branch.
+        assert_eq!(names("#{W:#{window_index},[#{window_index}]}"), "1[2]3");
+        assert_eq!(names("#{W:#{window_index}#{loop_last_flag}}"), "102031");
+        // Sessions go by id (creation), whatever their names.
+        assert_eq!(names("#{S:#{session_name} }"), "zed alpha ");
+        assert_eq!(names("#{S/n:#{session_name} }"), "alpha zed ");
+        assert_eq!(names("#{S/r:#{session_name} }"), "alpha zed ");
+        // No client, so no session takes the second branch.
+        assert_eq!(names("#{S:#{session_name},x}"), "zedalpha");
+        assert_eq!(vars.get("loop_last_flag").as_deref(), Some("0"));
+        // A window loop of a pane in a gone window fails the whole `#{}`.
+        let gone = FormatCtx::new(&model, PaneId(999));
+        assert_eq!(expand("a#{W:x}b", &gone), "a");
+    }
 }

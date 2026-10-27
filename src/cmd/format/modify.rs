@@ -286,11 +286,7 @@ fn trim_right(s: &str, limit: usize) -> String {
             let (n, lead, end) = leading_hashes(b, i);
             let mut copy = lead;
             if width <= skip {
-                copy = if skip - width >= copy {
-                    0
-                } else {
-                    copy - (skip - width)
-                };
+                copy = copy.saturating_sub(skip - width);
             }
             if copy != 0 {
                 if n == 1 {
@@ -388,6 +384,12 @@ fn strip(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
 fn localtime(t: i64) -> Option<libc::tm> {
     let t = t as libc::time_t;
     // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
@@ -410,15 +412,12 @@ fn strftime(fmt: &str, tm: &libc::tm, max: usize) -> Option<String> {
 /// `fmt` through `strftime` at the current local time (the first thing
 /// tmux's `format_expand_time` does).
 pub(super) fn strftime_now(fmt: &str, max: usize) -> Option<String> {
-    // SAFETY: `time` with a null pointer only returns the time.
-    let now = i64::from(unsafe { libc::time(std::ptr::null_mut()) });
-    strftime(fmt, &localtime(now)?, max)
+    strftime(fmt, &localtime(now_secs())?, max)
 }
 
 /// tmux's `format_pretty_time`: how long ago, as short as it can be.
 fn pretty_time(t: i64) -> String {
-    // SAFETY: `time` with a null pointer only returns the time.
-    let now = i64::from(unsafe { libc::time(std::ptr::null_mut()) }).max(t);
+    let now = now_secs().max(t);
     let age = now - t;
     let (Some(now_tm), Some(tm)) = (localtime(now), localtime(t)) else {
         return String::new();

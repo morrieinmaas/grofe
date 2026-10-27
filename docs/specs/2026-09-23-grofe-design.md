@@ -270,7 +270,11 @@ v1: fnmatch patterns, `{mouse}`/`{last}`/`{next}`/`{marked}` tokens, `!`,
 
 **Formats:** M1 supports `#{name}` and `#{?cond,then,else}`; M2 adds
 `#{==:a,b}`, the basename modifier `#{b:var}`, nesting and escaping when the
-status line needs them. Formats in
+status line needs them. B1b adds tmux 3.7b's whole modifier language
+(`;` chains, any delimiter: `=N` `=/N/marker` `p` `n` `w` `s/a/b/` `d` `e|op|`
+`a` `c` `C` `N` `R` `E` `T` `t/p` `t/f` `q/e` `q/h`) and the `#{S:}` `#{W:}`
+`#{P:}` `#{L:}` loops with `loop_last_flag`, so a custom `status-format` can
+loop. Formats in
 flag values (`-c '#{pane_current_path}'`) are expanded at **execution** time
 against the target's context, not at parse time. `#(cmd)` never forks during
 expansion: it reads a cached status source (D8).
@@ -363,7 +367,6 @@ lands in the milestone shown.
 | Marked panes: `select-pane -m`/`-M`, the stock `m` binding | The mark only feeds `{marked}` targets and `-s` defaults, which the owner's scripts never use; `m` stays unbound and TP.9 lists it |
 | Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
 | `pipe-pane`, `lock-server`, `clock-mode`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
-| Format modifiers `#{s/../../:}`, `#{=N:}`, `#{l:}`, `#{E:}`, `#{T:}` and the loops `#{S:}`, `#{W:}`, `#{P:}` | Not in the owner's formats; each is added when a ported script needs it (`#{q:}` was, for claude-session-manager, in M3.7) |
 | Sockets under tmux's own directory, or scripts that build `/tmp/tmux-$UID/...` by hand | grofe keeps its socket directory (§4.1, D12); the owner's scripts use `$TMUX` or `#{socket_path}` |
 
 **Window names:** `automatic-rename` is on by default and names a window
