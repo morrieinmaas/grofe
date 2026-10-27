@@ -1,0 +1,14 @@
+# B1c: the default pane-active-border-style turns yellow while the pane is
+# in a mode and red while panes are synchronized; the status line takes it.
+$ new-session -d -s main -n w -x 30 -y 6 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+client 30x6 attach -t main
+styles 0-5
+$ copy-mode -t main:.1
+styles 0-5
+$ send-keys -t main:.1 -X cancel
+$ set -g synchronize-panes on
+styles 0-5
+$ set -g pane-border-status top
+styles 0-5

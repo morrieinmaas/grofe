@@ -24,6 +24,7 @@ use crate::cmd::{
 use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect};
+use crate::server::borders::PaneStatus;
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
@@ -3035,17 +3036,25 @@ impl FormatVars for FormatCtx<'_> {
                 (top + u32::from(p.rows)).saturating_sub(1).to_string()
             }
             // Whether the pane touches that edge of the window, as tmux's
-            // format.c decides (grofe has no pane-border-status to move the
-            // top and bottom edges).
+            // format.c decides: a border status moves the top and bottom
+            // edges in by the row it takes.
             "pane_at_left" => flag(self.get("pane_left")? == "0"),
-            "pane_at_top" => flag(self.get("pane_top")? == "0"),
+            "pane_at_top" => {
+                let top = if w.pane_status == PaneStatus::Top {
+                    "1"
+                } else {
+                    "0"
+                };
+                flag(self.get("pane_top")? == top)
+            }
             "pane_at_right" => {
                 let left: u32 = self.get("pane_left")?.parse().ok()?;
                 flag(left + u32::from(p.cols) >= u32::from(w.cols))
             }
             "pane_at_bottom" => {
                 let top: u32 = self.get("pane_top")?.parse().ok()?;
-                flag(top + u32::from(p.rows) >= u32::from(w.rows))
+                let edge = u32::from(w.rows) - u32::from(w.pane_status == PaneStatus::Bottom);
+                flag(top + u32::from(p.rows) >= edge)
             }
             // The place in the stack, 0 on top: the floating panes, then
             // every tiled pane one below them all (tmux's z_index).

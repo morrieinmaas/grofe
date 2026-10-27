@@ -33,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use nix::libc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -1186,6 +1187,7 @@ pub fn changed(state: &mut State) {
     let panes = &state.model.panes;
     state.copy.retain(|p| panes.contains_key(&p));
     sync_pane_status(&mut state.model);
+    sync_pane_defaults(&state.model);
     apply_sizes(state);
     graphics::on_clients_changed(state);
     sync_mouse_modes(state);
@@ -1904,6 +1906,83 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
+/// What a pane's default-colour cells show: `window-style`'s colours, and
+/// for the window's active pane `window-active-style`'s where it sets one
+/// (tmux's `tty_default_colours`).
+fn window_style_colours<'a>(
+    opt: &dyn Fn(&str) -> &'a str,
+    vars: &dyn FormatVars,
+    is_active: bool,
+) -> (Color, Color) {
+    let plain = status::base_style(opt("window-style"), vars);
+    let active = status::base_style(opt("window-active-style"), vars);
+    let fg = if is_active && active.fg != Color::Named(NamedColor::Foreground) {
+        active.fg
+    } else {
+        plain.fg
+    };
+    let bg = if is_active && active.bg != Color::Named(NamedColor::Background) {
+        active.bg
+    } else {
+        plain.bg
+    };
+    (fg, bg)
+}
+
+/// Tells every pane the colours its `window-style` gives it, which its
+/// OSC 10 and OSC 11 queries are answered with.
+fn sync_pane_defaults(model: &Model) {
+    for w in model.windows.values() {
+        for id in w.pane_ids() {
+            let Some(pane) = model.panes.get(&id) else {
+                continue;
+            };
+            let chain = options::chain(model, id);
+            let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+            let (fg, bg) = window_style_colours(&opt, &FormatCtx::new(model, id), id == w.active);
+            pane.handle
+                .set_default_colours(colour_rgb(fg), colour_rgb(bg));
+        }
+    }
+}
+
+/// `colour` as RGB (tmux's `colour_force_rgb`); `None` for the terminal's
+/// own default.
+fn colour_rgb(colour: Color) -> Option<Rgb> {
+    let index = match colour {
+        Color::Spec(rgb) => return Some(rgb),
+        Color::Indexed(n) => usize::from(n),
+        Color::Named(name) => {
+            let n = name as usize;
+            if n >= 16 {
+                return None;
+            }
+            n
+        }
+    };
+    const ANSI: [u32; 16] = [
+        0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xc0c0c0, 0x808080,
+        0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
+    ];
+    let v = match index {
+        0..16 => ANSI[index],
+        16..232 => {
+            const LEVELS: [u32; 6] = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+            let i = index - 16;
+            LEVELS[i / 36] << 16 | LEVELS[i / 6 % 6] << 8 | LEVELS[i % 6]
+        }
+        _ => {
+            let g = 8 + 10 * (index as u32 - 232);
+            g << 16 | g << 8 | g
+        }
+    };
+    Some(Rgb {
+        r: (v >> 16) as u8,
+        g: (v >> 8) as u8,
+        b: v as u8,
+    })
+}
+
 /// How `w`'s visible `panes` look to client `c`: the colours their
 /// default-colour cells take (`window-style`, and `window-active-style` for
 /// the window's active pane where it sets one), their border styles and
@@ -1914,7 +1993,6 @@ fn pane_looks(
     w: &crate::server::model::Window,
     panes: &[(PaneId, Rect, crate::server::pane::RowsSnapshot)],
 ) -> render::PaneLooks {
-    use alacritty_terminal::vte::ansi::{Color, NamedColor};
     let model = &state.model;
     let wchain = options::chain(model, w.active);
     let wopt = |name: &str| model.options.lookup(name, &wchain).unwrap_or("");
@@ -1933,19 +2011,7 @@ fn pane_looks(
         let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
         let client_vars = ClientVars::new(model, c, Some(FormatCtx::new(model, *id)));
         let vars = options::ServerVars::new(state, *id, &client_vars);
-        let plain = status::base_style(opt("window-style"), &vars);
-        let active = status::base_style(opt("window-active-style"), &vars);
-        let is_active = *id == w.active;
-        let fg = if is_active && active.fg != Color::Named(NamedColor::Foreground) {
-            active.fg
-        } else {
-            plain.fg
-        };
-        let bg = if is_active && active.bg != Color::Named(NamedColor::Background) {
-            active.bg
-        } else {
-            plain.bg
-        };
+        let (fg, bg) = window_style_colours(&opt, &vars, *id == w.active);
         let title = if status == PaneStatus::Off {
             String::new()
         } else {

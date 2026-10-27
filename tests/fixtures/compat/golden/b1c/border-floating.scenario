@@ -1,0 +1,12 @@
+# B1c: a floating pane's border takes pane-border-lines and its own
+# pane-border-style; the tiled borders and the status stay as they were.
+$ new-session -d -s main -n w -x 40 -y 10 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ new-pane -d -t main -x 8 -y 3 -w 12 -h 3 cat
+client 40x10 attach -t main
+screen
+$ set -g pane-border-lines heavy
+screen
+$ set -g pane-border-status top
+screen

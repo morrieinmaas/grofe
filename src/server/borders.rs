@@ -443,3 +443,90 @@ impl Geometry<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boxed(id: u32, x: i32, y: i32, w: i32, h: i32, index: usize) -> PaneBox {
+        PaneBox {
+            id: PaneId(id),
+            x,
+            y,
+            w,
+            h,
+            index,
+        }
+    }
+
+    /// Two side-by-side panes in a 21x6 window: the border is column 10.
+    fn side_by_side(indicators: Indicators, active: usize) -> (Vec<PaneBox>, Indicators, usize) {
+        (
+            vec![boxed(1, 0, 0, 10, 6, 0), boxed(2, 11, 0, 10, 6, 1)],
+            indicators,
+            active,
+        )
+    }
+
+    fn geometry<'a>(
+        panes: &'a [PaneBox],
+        indicators: Indicators,
+        active: usize,
+        status: PaneStatus,
+    ) -> Geometry<'a> {
+        Geometry {
+            cols: 21,
+            rows: 6,
+            status,
+            indicators,
+            panes,
+            active: Some(active),
+        }
+    }
+
+    #[test]
+    fn lines_choose_the_glyph_set() {
+        let p = boxed(1, 0, 0, 1, 1, 7);
+        assert_eq!(glyph(PaneLines::Single, CELL_TOPBOTTOM, Some(&p)), '│');
+        assert_eq!(glyph(PaneLines::Double, CELL_JOIN, Some(&p)), '╬');
+        assert_eq!(glyph(PaneLines::Heavy, CELL_TOPLEFT, Some(&p)), '┏');
+        assert_eq!(glyph(PaneLines::Simple, CELL_LEFTRIGHT, Some(&p)), '-');
+        assert_eq!(glyph(PaneLines::Number, CELL_JOIN, Some(&p)), '7');
+        assert_eq!(glyph(PaneLines::Number, CELL_JOIN, None), '*');
+        assert_eq!(glyph(PaneLines::Spaces, CELL_JOIN, Some(&p)), ' ');
+    }
+
+    #[test]
+    fn a_title_is_the_pane_width_less_two_and_none_under_four() {
+        let panes = [boxed(1, 0, 1, 3, 4, 0), boxed(2, 4, 1, 17, 4, 1)];
+        let g = geometry(&panes, Indicators::Colour, 0, PaneStatus::Top);
+        assert_eq!(g.title_width(&panes[0]), 0);
+        assert_eq!(g.title_width(&panes[1]), 15);
+        assert_eq!(g.title_row(&panes[1]), 0);
+    }
+
+    #[test]
+    fn colour_indicators_split_a_two_pane_border_between_the_panes() {
+        let (panes, ind, active) = side_by_side(Indicators::Colour, 0);
+        let g = geometry(&panes, ind, active, PaneStatus::Off);
+        // Rows 0 to 3 of the shared column are the left pane's, the rest
+        // the right pane's; with indicators off the left pane has all.
+        assert!(g.is_border_of(&panes[0], 10, 3));
+        assert!(!g.is_border_of(&panes[0], 10, 4));
+        assert!(g.is_border_of(&panes[1], 10, 4));
+        let g = geometry(&panes, Indicators::Off, 0, PaneStatus::Off);
+        assert!(g.is_border_of(&panes[0], 10, 5));
+    }
+
+    #[test]
+    fn a_border_status_row_is_a_border_across_the_window() {
+        let panes = [boxed(1, 0, 1, 10, 5, 0), boxed(2, 11, 1, 10, 5, 1)];
+        let g = geometry(&panes, Indicators::Colour, 0, PaneStatus::Top);
+        assert_eq!(g.type_of_cell(0, 0), CELL_LEFTRIGHT);
+        assert_eq!(g.type_of_cell(10, 0), CELL_TOPJOIN);
+        assert_eq!(g.type_of_cell(10, 3), CELL_TOPBOTTOM);
+        // The title cells are the pane's, not border.
+        assert_eq!(g.check_cell(2, 0).0, CELL_INSIDE);
+        assert_eq!(g.check_cell(1, 0).0, CELL_LEFTRIGHT);
+    }
+}

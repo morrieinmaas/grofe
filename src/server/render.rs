@@ -80,6 +80,9 @@ pub struct FrameInputs<'a> {
     /// Each visible pane's id, rect (window coordinates, borders excluded)
     /// and rows, top row first.
     pub panes: Vec<(PaneId, Rect, RowsSnapshot)>,
+    /// The layout's border segments. The borders drawn come from the pane
+    /// boxes, as tmux works them out; a segment no pane owns there is
+    /// drawn from these.
     pub borders: Vec<BorderSegment>,
     /// Border cells away from the active pane (`pane-border-style`).
     pub border_style: Style,
@@ -495,6 +498,7 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
             mask[i] = true;
         }
     }
+    draw_unowned_segments(win, inputs, &mut mask, &boxes);
     if looks.status == PaneStatus::Off {
         return mask;
     }
@@ -519,6 +523,51 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
         }
     }
     mask
+}
+
+/// Layout border segments no pane owns in tmux's geometry (a window too
+/// small for its panes, a hand-built layout) still get a line, its glyph
+/// picked from which neighbours are border, in `pane-border-style`.
+fn draw_unowned_segments(
+    win: &mut Screen,
+    inputs: &FrameInputs,
+    mask: &mut [bool],
+    boxes: &[PaneBox],
+) {
+    let (w, h) = (win.cols as i32, win.rows as i32);
+    let mut seg = vec![false; mask.len()];
+    let mut mark = |x: i32, y: i32| {
+        if (0..w).contains(&x) && (0..h).contains(&y) {
+            seg[(y * w + x) as usize] = true;
+        }
+    };
+    for s in &inputs.borders {
+        match *s {
+            BorderSegment::Vertical { col, row, len } => {
+                (0..len).for_each(|i| mark(i32::from(col), i32::from(row) + i32::from(i)))
+            }
+            BorderSegment::Horizontal { row, col, len } => {
+                (0..len).for_each(|i| mark(i32::from(col) + i32::from(i), i32::from(row)))
+            }
+        }
+    }
+    let joined: Vec<bool> = mask.iter().zip(&seg).map(|(a, b)| *a || *b).collect();
+    let at =
+        |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y) && joined[(y * w + x) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let inside = boxes
+                .iter()
+                .any(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+            if !seg[i] || mask[i] || inside {
+                continue;
+            }
+            let ch = glyph(at(x, y - 1), at(x, y + 1), at(x - 1, y), at(x + 1, y));
+            win.cells[i] = styled(ch, &inputs.border_style);
+            mask[i] = true;
+        }
+    }
 }
 
 /// A floating pane to draw over a window (tmux 3.7's `new-pane`, TC.6):

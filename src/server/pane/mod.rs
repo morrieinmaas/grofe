@@ -16,14 +16,14 @@ use std::io as stdio;
 use std::ops::Range;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{self, TermMode};
-use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor, Rgb};
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
 use nix::pty::{Winsize, openpty};
@@ -395,6 +395,9 @@ pub struct PaneHandle {
     graphics_ok: Arc<AtomicBool>,
     /// The `graphics` option, read by the reader for every chunk (G3).
     images_on: Arc<AtomicBool>,
+    /// The foreground and background `window-style` gives the pane (see
+    /// [`io::pack_colour`]): what its OSC 10 and OSC 11 queries are told.
+    default_colours: Arc<[AtomicU32; 2]>,
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: procinfo::Cache,
@@ -502,6 +505,7 @@ impl PaneHandle {
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
         let images_on = Arc::new(AtomicBool::new(spec.images));
+        let default_colours = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
 
@@ -519,6 +523,7 @@ impl PaneHandle {
             scanner: Scanner::default(),
             graphics_ok: Arc::clone(&graphics_ok),
             images_on: Arc::clone(&images_on),
+            default_colours: Arc::clone(&default_colours),
         }));
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
@@ -537,6 +542,7 @@ impl PaneHandle {
             sample,
             graphics_ok,
             images_on,
+            default_colours,
             cell_px: Mutex::new(spec.cell_px),
             // A respawned pane keeps what it reported, as tmux's does.
             reported_path: Mutex::new(over.and_then(PaneHandle::reported_path)),
@@ -631,6 +637,14 @@ impl PaneHandle {
     /// the pane's graphics queries by it (T3.8), without the actor.
     pub fn set_graphics_ok(&self, ok: bool) {
         self.graphics_ok.store(ok, Ordering::Relaxed);
+    }
+
+    /// The colours `window-style` gives the pane's default foreground and
+    /// background, `None` for the terminal's: the reader answers OSC 10 and
+    /// OSC 11 queries with them, as tmux does.
+    pub fn set_default_colours(&self, fg: Option<Rgb>, bg: Option<Rgb>) {
+        self.default_colours[0].store(io::pack_colour(fg), Ordering::Relaxed);
+        self.default_colours[1].store(io::pack_colour(bg), Ordering::Relaxed);
     }
 
     /// Turns the `graphics` option on or off for this pane (G3).
