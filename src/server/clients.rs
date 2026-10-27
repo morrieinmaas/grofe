@@ -38,6 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
 use crate::protocol::{Caps, ClientCtx, Dialect, Failure, Frame};
+use crate::server::borders::{Indicators, PaneLines, PaneStatus};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
@@ -1184,6 +1185,7 @@ pub fn changed(state: &mut State) {
     // A killed pane's copy mode goes with it (M5).
     let panes = &state.model.panes;
     state.copy.retain(|p| panes.contains_key(&p));
+    sync_pane_status(&mut state.model);
     apply_sizes(state);
     graphics::on_clients_changed(state);
     sync_mouse_modes(state);
@@ -1764,15 +1766,47 @@ fn resize_session(model: &mut Model, session: SessionId, (cols, rows): (u16, u16
         }
         w.cols = cols;
         w.rows = rows;
-        let (zoomed, active) = (w.zoomed, w.active);
         model.relayout(id);
-        if zoomed && let Some(p) = model.panes.get_mut(&active) {
-            p.cols = cols;
-            p.rows = rows;
-            if let Err(e) = p.handle.resize(cols, rows) {
-                eprintln!("grofe server: resizing {active}: {e}");
-            }
+        fit_zoomed(model, id);
+    }
+}
+
+/// A zoomed window's active pane fills the window, less the row a border
+/// status takes.
+fn fit_zoomed(model: &mut Model, window: WindowId) {
+    let Some(w) = model.windows.get(&window).filter(|w| w.zoomed) else {
+        return;
+    };
+    let (active, zoom) = (w.active, w.zoom_rect());
+    if let Some(p) = model.panes.get_mut(&active) {
+        p.cols = zoom.cols;
+        p.rows = zoom.rows;
+        if let Err(e) = p.handle.resize(zoom.cols, zoom.rows) {
+            eprintln!("grofe server: resizing {active}: {e}");
         }
+    }
+}
+
+/// Gives every window the `pane-border-status` its options now say, laying
+/// it out again where that changed: the panes along its top or bottom edge
+/// give up a row to their title.
+fn sync_pane_status(model: &mut Model) {
+    let wanted: Vec<(WindowId, PaneStatus)> = model
+        .windows
+        .values()
+        .filter_map(|w| {
+            let chain = options::chain(model, w.active);
+            let value = model.options.lookup("pane-border-status", &chain)?;
+            Some((w.id, PaneStatus::parse(value)))
+        })
+        .filter(|(id, status)| model.windows[id].pane_status != *status)
+        .collect();
+    for (id, status) in wanted {
+        if let Some(w) = model.windows.get_mut(&id) {
+            w.pane_status = status;
+        }
+        model.relayout(id);
+        fit_zoomed(model, id);
     }
 }
 
@@ -1809,11 +1843,7 @@ pub fn follow(
 /// The visible panes of `w` and their rects in window coordinates (only
 /// the active pane when zoomed).
 pub(crate) fn visible_panes(w: &crate::server::model::Window) -> Vec<(PaneId, Rect)> {
-    if w.zoomed {
-        vec![(w.active, w.area())]
-    } else {
-        w.layout.compute(w.area())
-    }
+    w.pane_rects()
 }
 
 /// Where things are on client `c`'s screen when drawn with `viewport`.
@@ -1874,6 +1904,68 @@ fn window_style(model: &Model, w: &crate::server::model::Window, name: &str) -> 
     status::parse_style(model.options.lookup(name, &chain).unwrap_or(""))
 }
 
+/// How `w`'s visible `panes` look to client `c`: the colours their
+/// default-colour cells take (`window-style`, and `window-active-style` for
+/// the window's active pane where it sets one), their border styles and
+/// titles (`pane-border-format`), and the window's border options.
+fn pane_looks(
+    state: &State,
+    c: &ClientEntry,
+    w: &crate::server::model::Window,
+    panes: &[(PaneId, Rect, crate::server::pane::RowsSnapshot)],
+) -> render::PaneLooks {
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    let model = &state.model;
+    let wchain = options::chain(model, w.active);
+    let wopt = |name: &str| model.options.lookup(name, &wchain).unwrap_or("");
+    let status = PaneStatus::parse(wopt("pane-border-status"));
+    let mut looks = render::PaneLooks {
+        status,
+        lines: PaneLines::parse(wopt("pane-border-lines")),
+        indicators: Indicators::parse(wopt("pane-border-indicators")),
+        panes: Default::default(),
+    };
+    let order = w.pane_ids();
+    let base_index = model.pane_base_index(w.id) as usize;
+    let now = local_now();
+    for (id, _, _) in panes {
+        let chain = options::chain(model, *id);
+        let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+        let client_vars = ClientVars::new(model, c, Some(FormatCtx::new(model, *id)));
+        let vars = options::ServerVars::new(state, *id, &client_vars);
+        let plain = status::base_style(opt("window-style"), &vars);
+        let active = status::base_style(opt("window-active-style"), &vars);
+        let is_active = *id == w.active;
+        let fg = if is_active && active.fg != Color::Named(NamedColor::Foreground) {
+            active.fg
+        } else {
+            plain.fg
+        };
+        let bg = if is_active && active.bg != Color::Named(NamedColor::Background) {
+            active.bg
+        } else {
+            plain.bg
+        };
+        let title = if status == PaneStatus::Off {
+            String::new()
+        } else {
+            status::expand_time(opt("pane-border-format"), &vars, &now)
+        };
+        looks.panes.insert(
+            *id,
+            render::PaneLook {
+                fg,
+                bg,
+                border: status::base_style(opt("pane-border-style"), &vars),
+                active_border: status::base_style(opt("pane-active-border-style"), &vars),
+                title,
+                index: order.iter().position(|p| p == id).unwrap_or(0) + base_index,
+            },
+        );
+    }
+    looks
+}
+
 /// A composed frame: the screen, its viewport, its status rows and the
 /// client row the first of them is on.
 type Composed = (Screen, (u16, u16), Vec<StatusRow>, u16);
@@ -1896,7 +1988,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         w.layout.borders(area)
     };
     let mut cursor = None;
-    let panes = rects
+    let panes: Vec<_> = rects
         .into_iter()
         .filter_map(|(id, rect)| {
             let snap = model.panes.get(&id)?.handle.snapshot_rows(0..rect.rows);
@@ -1919,6 +2011,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             visible,
         ),
     };
+    let look = pane_looks(state, c, w, &panes);
     let mut window = render::compose(&FrameInputs {
         client: visible,
         viewport,
@@ -1932,6 +2025,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         cursor,
         graphics: state.graphics.remap(),
         images: Some(ImageCaps::of(&c.caps)),
+        look,
     });
     screenimg::mark_covered(&mut window, 0);
     if !w.zoomed && !w.floating.is_empty() {

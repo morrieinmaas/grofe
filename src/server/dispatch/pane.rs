@@ -356,7 +356,8 @@ fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
     }
     w.zoomed = true;
     w.set_active(pane);
-    let (cols, rows) = (w.cols, w.rows);
+    let zoom = w.zoom_rect();
+    let (cols, rows) = (zoom.cols, zoom.rows);
     if let Some(p) = model.panes.get_mut(&pane) {
         p.cols = cols;
         p.rows = rows;

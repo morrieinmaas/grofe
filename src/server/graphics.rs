@@ -2106,6 +2106,7 @@ mod tests {
             cursor: None,
             graphics: Some(remap),
             images: None,
+            look: Default::default(),
         })
     }
 
@@ -2162,6 +2163,7 @@ mod tests {
             cursor: None,
             graphics: Some(&remap),
             images: None,
+            look: Default::default(),
         });
         assert_eq!(screen.cells[0].c, PLACEHOLDER);
         assert_eq!(

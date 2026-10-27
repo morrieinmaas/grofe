@@ -8,6 +8,7 @@
 //! `fe_4`, stubbed by the M3.6 stub edit), next to `grofe_example`, which
 //! shows the pattern; TC.13's scenarios live in `scenarios`.
 
+mod b1c;
 mod fe_1;
 mod fe_2;
 mod fe_3;

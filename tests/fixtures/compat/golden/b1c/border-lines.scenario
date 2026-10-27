@@ -1,0 +1,24 @@
+# B1c: pane-border-lines.
+$ new-session -d -s main -n w -x 30 -y 9 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.2 cat
+$ select-pane -t main:.1 -T a
+$ select-pane -t main:.2 -T b
+$ select-pane -t main:.3 -T c
+client 30x9 attach -t main
+$ set -g pane-border-lines double
+screen ║
+$ set -g pane-border-lines heavy
+screen ┃
+$ set -g pane-border-lines simple
+screen
+$ set -g pane-border-lines number
+screen
+$ set -g pane-border-lines spaces
+screen
+$ set -g pane-border-lines single
+screen │
+$ set -g pane-border-lines double
+$ set -g pane-border-status top
+screen ║

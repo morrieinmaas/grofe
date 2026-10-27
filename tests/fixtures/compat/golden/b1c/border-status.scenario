@@ -1,0 +1,24 @@
+# B1c: pane-border-status top and bottom. The title is drawn on the border
+# line: with top, each pane at the window's top edge gives up a row to it;
+# with bottom, each pane at the bottom edge does.
+$ new-session -d -s main -n w -x 40 -y 10 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.2 cat
+$ select-pane -t main:.1 -T one
+$ select-pane -t main:.2 -T two
+$ select-pane -t main:.3 -T three
+client 40x10 attach -t main
+$ set -g pane-border-status top
+screen
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ set -g pane-border-status bottom
+screen
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ resize-pane -Z -t main:.2
+screen
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ resize-pane -Z -t main:.2
+$ set -g pane-border-status off
+screen
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'

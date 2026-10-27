@@ -1,0 +1,70 @@
+$ new-session -d -s main -n w -x 40 -y 8 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ select-pane -t main:.1 -T left
+? 0
+$ select-pane -t main:.2 -T right
+? 0
+client 40x8 attach -t main
+$ set -g pane-border-status top
+? 0
+$ set -g pane-border-format ' #{pane_index}:#{pane_title}:#{pane_width} '
+? 0
+screen 2:right
+| ── 1:left:20 ───────┬── 2:right:19 ─────
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+$ set -g pane-border-format '#{?pane_active,ACTIVE,idle}#[align=right]#{pane_index}'
+? 0
+screen idle
+| ──ACTIVE───────────1┬──idle────────────2
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+styles 0-0 idle
+~ 0 0-20 fg=green bg=default
+$ set -g pane-border-format 'a very long title that cannot fit in the pane at all'
+? 0
+screen very
+| ──a very long title ┬──a very long title
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+$ resize-pane -t main:.1 -x 3
+? 0
+screen very
+| ───┬──a very long title that cannot fit
+|    │
+|    │
+|    │
+|    │
+|    │
+|    │
+|    │
+$ set -g pane-border-format ''
+? 0
+screen
+| ───┬────────────────────────────────────
+|    │
+|    │
+|    │
+|    │
+|    │
+|    │
+|    │

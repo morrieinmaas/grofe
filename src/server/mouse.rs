@@ -215,11 +215,7 @@ fn active_pane(state: &State, id: ClientId) -> Option<PaneId> {
 /// The visible panes of `w` and their full rects in window coordinates
 /// (only the active pane when zoomed), as the renderer lays them out.
 fn pane_rects(w: &Window) -> Vec<(PaneId, Rect)> {
-    if w.zoomed {
-        vec![(w.active, w.area())]
-    } else {
-        w.layout.compute(w.area())
-    }
+    w.pane_rects()
 }
 
 /// Client cell `(col, row)` in window coordinates: through the viewport

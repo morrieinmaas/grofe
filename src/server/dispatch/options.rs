@@ -456,6 +456,27 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "fg=green",
     },
+    // B1c: tmux 3.7b's names, values, window scope and defaults
+    // (options-table.c). `pane-border-status` makes the panes along the
+    // top or bottom edge give up a row to a title line.
+    Builtin {
+        name: "pane-border-status",
+        kind: Kind::Choice(&["off", "top", "bottom"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "pane-border-lines",
+        kind: Kind::Choice(&["single", "double", "heavy", "simple", "number", "spaces"]),
+        scope: OptionScope::Window,
+        default: "single",
+    },
+    Builtin {
+        name: "pane-border-indicators",
+        kind: Kind::Choice(&["off", "colour", "arrows", "both"]),
+        scope: OptionScope::Window,
+        default: "colour",
+    },
     Builtin {
         name: "status-position",
         kind: Kind::Choice(&["top", "bottom"]),
@@ -3166,10 +3187,10 @@ pub(crate) fn escape_arg(s: &str) -> String {
 /// origin for a zoomed window's active pane.
 fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u16)> {
     if w.zoomed && w.active == pane {
-        return Some((0, 0));
+        let r = w.zoom_rect();
+        return Some((r.x, r.y));
     }
-    w.layout
-        .compute(w.area())
+    w.tiled_rects()
         .into_iter()
         .find(|(id, _)| *id == pane)
         .map(|(_, r)| (r.x, r.y))
@@ -3311,14 +3332,11 @@ const NO_EFFECT: &[&str] = &[
     "default-terminal",
     "extended-keys",
     "extended-keys-format",
-    "pane-border-format",
     "status-keys",
     "synchronize-panes",
     "terminal-features",
     "terminal-overrides",
-    "window-active-style",
     "window-status-activity-style",
-    "window-style",
     "focus-follows-mouse",
 ];
 

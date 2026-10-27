@@ -2199,11 +2199,7 @@ impl Overlay for CopyOverlay {
         let Some(w) = client_window(state, client) else {
             return;
         };
-        let rects: Vec<(PaneId, Rect)> = if w.zoomed {
-            vec![(w.active, w.area())]
-        } else {
-            w.layout.compute(w.area())
-        };
+        let rects: Vec<(PaneId, Rect)> = w.pane_rects();
         for (pane, rect) in rects {
             let Some(mode) = state.copy.get(pane) else {
                 continue;

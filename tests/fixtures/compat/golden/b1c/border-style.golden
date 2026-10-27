@@ -1,0 +1,96 @@
+$ new-session -d -s main -n w -x 30 -y 9 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ split-window -d -v -t main:.2 cat
+? 0
+client 30x9 attach -t main
+$ set -g pane-border-style fg=colour244
+? 0
+$ set -g pane-active-border-style fg=colour196,bg=colour17
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=idx:17
+~ 1 15-15 fg=idx:196 bg=idx:17
+~ 2 15-15 fg=idx:196 bg=idx:17
+~ 3 15-15 fg=idx:196 bg=idx:17
+~ 4 15-15 fg=idx:196 bg=idx:17
+~ 4 16-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=idx:17
+~ 6 15-15 fg=idx:196 bg=idx:17
+~ 7 15-15 fg=idx:196 bg=idx:17
+~ 8 15-15 fg=idx:196 bg=idx:17
+$ set -g pane-border-status top
+? 0
+styles 0-8
+~ 0 0-1 fg=idx:196 bg=idx:17
+~ 0 2-2 fg=idx:196 bg=idx:17 reverse
+~ 0 3-3 fg=default bg=idx:17
+~ 0 4-15 fg=idx:196 bg=idx:17
+~ 0 16-18 fg=idx:244 bg=default
+~ 0 20-29 fg=idx:244 bg=default
+~ 1 15-15 fg=idx:196 bg=idx:17
+~ 2 15-15 fg=idx:196 bg=idx:17
+~ 3 15-15 fg=idx:196 bg=idx:17
+~ 4 15-15 fg=idx:196 bg=idx:17
+~ 4 16-18 fg=idx:244 bg=default
+~ 4 20-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=idx:17
+~ 6 15-15 fg=idx:196 bg=idx:17
+~ 7 15-15 fg=idx:196 bg=idx:17
+~ 8 15-15 fg=idx:196 bg=idx:17
+$ select-pane -t main:.3
+? 0
+styles 0-8
+~ 0 0-2 fg=idx:244 bg=default
+~ 0 4-18 fg=idx:244 bg=default
+~ 0 20-29 fg=idx:244 bg=default
+~ 1 15-15 fg=idx:244 bg=default
+~ 2 15-15 fg=idx:244 bg=default
+~ 3 15-15 fg=idx:244 bg=default
+~ 4 15-17 fg=idx:196 bg=idx:17
+~ 4 18-18 fg=idx:196 bg=idx:17 reverse
+~ 4 19-19 fg=default bg=idx:17
+~ 4 20-29 fg=idx:196 bg=idx:17
+~ 5 15-15 fg=idx:196 bg=idx:17
+~ 6 15-15 fg=idx:196 bg=idx:17
+~ 7 15-15 fg=idx:196 bg=idx:17
+~ 8 15-15 fg=idx:196 bg=idx:17
+$ set -p -t main:.2 pane-border-style fg=colour33
+? 0
+styles 0-8
+~ 0 0-2 fg=idx:244 bg=default
+~ 0 4-15 fg=idx:244 bg=default
+~ 0 16-18 fg=idx:33 bg=default
+~ 0 20-29 fg=idx:33 bg=default
+~ 1 15-15 fg=idx:244 bg=default
+~ 2 15-15 fg=idx:244 bg=default
+~ 3 15-15 fg=idx:244 bg=default
+~ 4 15-17 fg=idx:196 bg=idx:17
+~ 4 18-18 fg=idx:196 bg=idx:17 reverse
+~ 4 19-19 fg=default bg=idx:17
+~ 4 20-29 fg=idx:196 bg=idx:17
+~ 5 15-15 fg=idx:196 bg=idx:17
+~ 6 15-15 fg=idx:196 bg=idx:17
+~ 7 15-15 fg=idx:196 bg=idx:17
+~ 8 15-15 fg=idx:196 bg=idx:17
+$ set -g pane-active-border-style 'fg=#{?pane_active,colour46,colour196}'
+? 0
+styles 0-8
+~ 0 0-2 fg=idx:244 bg=default
+~ 0 4-15 fg=idx:244 bg=default
+~ 0 16-18 fg=idx:33 bg=default
+~ 0 20-29 fg=idx:33 bg=default
+~ 1 15-15 fg=idx:244 bg=default
+~ 2 15-15 fg=idx:244 bg=default
+~ 3 15-15 fg=idx:244 bg=default
+~ 4 15-15 fg=idx:196 bg=default
+~ 4 16-17 fg=idx:46 bg=default
+~ 4 18-18 fg=idx:46 bg=default reverse
+~ 4 20-29 fg=idx:46 bg=default
+~ 5 15-15 fg=idx:196 bg=default
+~ 6 15-15 fg=idx:196 bg=default
+~ 7 15-15 fg=idx:196 bg=default
+~ 8 15-15 fg=idx:196 bg=default

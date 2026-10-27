@@ -1,0 +1,74 @@
+$ new-session -d -s main -n w -x 40 -y 4 sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+? 0
+$ set -g window-style fg=colour244,bg=colour17
+? 0
+$ set -g window-active-style fg=colour231
+? 0
+client 40x4 attach -t main
+screen plain
+| red plain           │red plain
+|                     │
+|                     │
+|                     │
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:17
+~ 0 3-3 fg=default bg=idx:17
+~ 0 4-8 fg=idx:231 bg=idx:17
+~ 0 9-19 fg=default bg=idx:17
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-24 fg=default bg=idx:17
+~ 0 25-29 fg=idx:244 bg=idx:17
+~ 0 30-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:17
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17
+$ set -g window-active-style bg=colour52
+? 0
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:52
+~ 0 3-3 fg=default bg=idx:52
+~ 0 4-8 fg=idx:244 bg=idx:52
+~ 0 9-19 fg=default bg=idx:52
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-24 fg=default bg=idx:17
+~ 0 25-29 fg=idx:244 bg=idx:17
+~ 0 30-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:52
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17
+$ set -g window-active-style default
+? 0
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:17
+~ 0 3-3 fg=default bg=idx:17
+~ 0 4-8 fg=idx:244 bg=idx:17
+~ 0 9-19 fg=default bg=idx:17
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-24 fg=default bg=idx:17
+~ 0 25-29 fg=idx:244 bg=idx:17
+~ 0 30-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:17
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17
+$ set -g window-style 'fg=#{?pane_active,colour2,colour3},bg=colour17'
+? 0
+styles 0-1 plain
+~ 0 0-2 fg=red bg=idx:17
+~ 0 3-3 fg=default bg=idx:17
+~ 0 4-8 fg=green bg=idx:17
+~ 0 9-19 fg=default bg=idx:17
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-24 fg=default bg=idx:17
+~ 0 25-29 fg=yellow bg=idx:17
+~ 0 30-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:17
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17

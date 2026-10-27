@@ -1,0 +1,14 @@
+# B1c: stacked panes with a border status: the middle border carries the
+# lower pane's title with top, the upper pane's with bottom.
+$ new-session -d -s main -n w -x 30 -y 11 cat
+$ set -g status off
+$ split-window -d -v -t main cat
+$ split-window -d -v -t main cat
+$ select-pane -t main:.1 -T one
+$ select-pane -t main:.2 -T two
+$ select-pane -t main:.3 -T three
+client 30x11 attach -t main
+$ set -g pane-border-status top
+screen three
+$ set -g pane-border-status bottom
+screen three

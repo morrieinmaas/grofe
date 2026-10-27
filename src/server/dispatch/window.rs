@@ -99,6 +99,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         silence_flag: false,
         last_panes: Vec::new(),
         floating: Vec::new(),
+        pane_status: Default::default(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {

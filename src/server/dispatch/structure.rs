@@ -296,6 +296,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             silence_flag: false,
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         });
         if let Some(p) = model.panes.get_mut(&pane) {
             p.window = id;
