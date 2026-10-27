@@ -1,10 +1,10 @@
 //! PaneHandle, spawn, pre_exec.
 //!
 //! A pane is a child process on a pty, fed through `alacritty_terminal`. Each
-//! pane runs three tokio tasks (spec §4.8): the reader (owns the master's read
-//! side, the emulator's listener, the sync timeout and dead detection), the
-//! writer (owns writes to the master through a bounded queue) and a sampler
-//! (foreground command, argv and cwd, once a second).
+//! pane runs two tokio tasks (spec §4.8): the reader (owns the master's read
+//! side, the emulator's listener, the sync timeout and dead detection) and the
+//! writer (owns writes to the master through a bounded queue). The foreground
+//! command, argv and cwd are sampled on demand ([`procinfo::Cache`]).
 
 pub mod io;
 pub mod procinfo;
@@ -42,7 +42,6 @@ use crate::types::{
     CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
 };
 use io::{InputQueue, Listener};
-use procinfo::ProcSample;
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
@@ -319,7 +318,7 @@ pub struct PaneHandle {
     graphics_ok: Arc<AtomicBool>,
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
-    sample: Arc<Mutex<ProcSample>>,
+    sample: procinfo::Cache,
     /// What the pane itself reported with OSC 7 (T3.3), as tmux keeps it.
     reported_path: Mutex<Option<String>>,
     /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
@@ -370,7 +369,7 @@ impl PaneHandle {
         }));
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
-        let sample = Arc::new(Mutex::new(ProcSample::default()));
+        let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
 
         let reader = tokio::spawn(io::reader(io::Reader {
@@ -392,7 +391,6 @@ impl PaneHandle {
             input_rx,
             Arc::clone(&input),
         ));
-        let sampler = tokio::spawn(procinfo::sampler(Arc::clone(&master), Arc::clone(&sample)));
 
         Ok(Self {
             pid,
@@ -406,7 +404,7 @@ impl PaneHandle {
             cell_px: Mutex::new(spec.cell_px),
             reported_path: Mutex::new(None),
             tty,
-            tasks: vec![reader, writer, sampler],
+            tasks: vec![reader, writer],
         })
     }
 
@@ -604,14 +602,14 @@ impl PaneHandle {
         self.generation
     }
 
-    /// The foreground process's name, from the last sample.
+    /// The foreground process's name, sampled now (cached for a few ms).
     pub fn current_command(&self) -> Option<String> {
-        lock(&self.sample).command.clone()
+        self.sample.get(self.master.get_ref()).command
     }
 
-    /// The foreground process's full argv, from the last sample.
+    /// The foreground process's full argv, sampled now (cached for a few ms).
     pub fn current_argv(&self) -> Option<Vec<String>> {
-        lock(&self.sample).argv.clone()
+        self.sample.get(self.master.get_ref()).argv
     }
 
     /// The pty's foreground process group, read now rather than sampled
@@ -627,7 +625,7 @@ impl PaneHandle {
     pub fn current_path(&self) -> Option<PathBuf> {
         self.foreground_group()
             .and_then(procinfo::cwd)
-            .or_else(|| lock(&self.sample).path.clone())
+            .or_else(|| self.sample.get(self.master.get_ref()).path)
     }
 
     /// What the pane last reported with OSC 7: `#{pane_path}`.
