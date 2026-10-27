@@ -1337,9 +1337,10 @@ pub fn tick(state: &mut State, now: Instant) {
 /// (`PANE_CHANGED`: pane output, a pane or window switch, an option
 /// change) and at most once per `NAME_INTERVAL`: the timer is armed by
 /// those events and is not re-armed by the check, so an idle server never
-/// wakes for it.
+/// wakes for it. tmux runs it from `server_client_loop` for every window,
+/// attached or not, so a detached session is renamed too.
 fn arm_names(state: &mut State, now: Instant) {
-    if state.registry.names_at.is_none() && !state.clients.is_empty() {
+    if state.registry.names_at.is_none() {
         state.registry.names_at = Some(now + NAME_INTERVAL);
     }
 }
@@ -2915,6 +2916,19 @@ mod tests {
         let now = Instant::now();
         arm_names(&mut state, now);
         assert_eq!(deadline(&state), Some(now + NAME_INTERVAL));
+        tick(&mut state, now + NAME_INTERVAL);
+        assert_eq!(deadline(&state), None);
+    }
+
+    /// F1: tmux checks window names whether or not a client is attached.
+    #[test]
+    fn names_are_checked_with_no_client_attached() {
+        let (mut state, _) = state_with_client();
+        state.clients.clear();
+        let now = Instant::now();
+        arm_names(&mut state, now);
+        assert_eq!(deadline(&state), Some(now + NAME_INTERVAL));
+        // One check, and no timer after it: a detached server idles at 0 wakes.
         tick(&mut state, now + NAME_INTERVAL);
         assert_eq!(deadline(&state), None);
     }

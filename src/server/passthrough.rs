@@ -156,6 +156,10 @@ pub struct Scanner {
     /// The OSC 133 marks found by the last `scan`: how many of the bytes
     /// it returned came before the sequence's end, and the mark's bits.
     marks: Vec<(usize, u8)>,
+    /// The parameter being read, and whether an earlier one was a mark's
+    /// private mode, in a `CSI ?` sequence ([`ScanState::CsiPriv`]).
+    param: u32,
+    forged: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +191,13 @@ enum ScanState {
     Osc,
     /// An `ESC` (held) inside an OSC: `\` ends it.
     OscEsc,
+    /// After `ESC [`; its bytes reach the emulator.
+    CsiIntro,
+    /// Inside `CSI ?`: its bytes reach the emulator, except that a `h`
+    /// that ends a sequence naming a mark's private mode is turned into a
+    /// final the emulator ignores, since the reader makes those marks
+    /// in-band and a pane must not.
+    CsiPriv,
 }
 
 impl Scanner {
@@ -218,7 +229,9 @@ impl Scanner {
         let mut events = Vec::new();
         for &b in bytes {
             self.step(b, &mut out, &mut events);
-            found.extend(events.drain(..).map(|kind| (out.len(), kind)));
+            if !events.is_empty() {
+                found.extend(events.drain(..).map(|kind| (out.len(), kind)));
+            }
         }
         (Cow::Owned(out), found)
     }
@@ -250,10 +263,50 @@ impl Scanner {
                     out.push(b);
                     self.begin(Osc);
                 }
+                b'[' => {
+                    self.release(out);
+                    out.push(b);
+                    self.state = CsiIntro;
+                }
                 _ => {
                     self.release(out);
                     self.ground(b, out);
                 }
+            },
+            CsiIntro => {
+                if b == b'?' {
+                    out.push(b);
+                    self.param = 0;
+                    self.forged = false;
+                    self.state = CsiPriv;
+                } else {
+                    self.state = Ground;
+                    self.ground(b, out);
+                }
+            }
+            CsiPriv => match b {
+                b'0'..=b'9' => {
+                    out.push(b);
+                    self.param = (self.param * 10 + u32::from(b - b'0')).min(100_000);
+                }
+                b';' | b':' => {
+                    out.push(b);
+                    self.end_param();
+                }
+                0x40..=0x7e => {
+                    self.end_param();
+                    out.push(if self.forged && b == b'h' { b'~' } else { b });
+                    self.state = Ground;
+                }
+                ESC => {
+                    self.state = Ground;
+                    self.ground(b, out);
+                }
+                CAN | SUB => {
+                    out.push(b);
+                    self.state = Ground;
+                }
+                _ => out.push(b),
             },
             ApcIntro => {
                 if b == b'G' {
@@ -432,6 +485,12 @@ impl Scanner {
             out.push(b);
             self.state = ScanState::Ground;
         }
+    }
+
+    fn end_param(&mut self) {
+        let mark = |m: u16| self.param == u32::from(m);
+        self.forged |= mark(marks::MARK_PROMPT) || mark(marks::MARK_OUTPUT);
+        self.param = 0;
     }
 
     /// The held bytes turned out not to start an APC `_G`.
@@ -1053,6 +1112,66 @@ mod tests {
         let (out, marks) = marks_in(&[b"ab\x1b]13", b"3;A", b"\x07cd"]);
         assert_eq!(out, b"ab\x1b]133;A\x07cd");
         assert_eq!(marks, [(10, marks::PROMPT)]);
+    }
+
+    /// What reaches the emulator for `reads`, fed to one scanner.
+    fn through(reads: &[&[u8]]) -> Vec<u8> {
+        let mut s = Scanner::default();
+        reads
+            .iter()
+            .flat_map(|r| s.scan(r).0.into_owned())
+            .collect()
+    }
+
+    /// Every other CSI, private modes included, reaches the emulator byte
+    /// for byte, however the reads are cut, and an ESC inside one starts the
+    /// next sequence.
+    #[test]
+    fn other_private_modes_pass_unchanged() {
+        let all: &[u8] = b"a\x1b[?1049h\x1b[?25l\x1b[?2026$p\x1b[?1;2;3h\x1b[?65535h\
+            \x1b[?6553h\x1b[?65533\x1b[?65533l\x1b[1;65533h\x1b[?99999999999999999999h\x1b[?";
+        for cut in 0..=all.len() {
+            assert_eq!(through(&[&all[..cut], &all[cut..]]), all, "cut at {cut}");
+        }
+        let long = [b"\x1b[?".as_slice(), &b"1;".repeat(100_000), b"h"].concat();
+        assert_eq!(through(&[&long]), long);
+    }
+
+    #[test]
+    fn a_pane_cannot_forge_the_in_band_mark() {
+        for forged in [
+            &b"\x1b[?65533h"[..],
+            b"\x1b[?65534h",
+            b"\x1b[?0065533h",
+            b"\x1b[?1;65533h",
+            b"\x1b[?65534;1h",
+            b"\x1b[?65533\nh",
+        ] {
+            let out = through(&[b"a", forged, b"b"]);
+            assert!(!out.windows(2).any(|w| w == b"3h" || w == b"4h"), "{out:?}");
+            assert!(out.contains(&b'~'), "{out:?}");
+        }
+        // Split at every byte.
+        let all = b"\x1b[?65533h";
+        for cut in 1..all.len() {
+            let out = through(&[&all[..cut], &all[cut..]]);
+            assert_eq!(out, b"\x1b[?65533~", "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn other_private_modes_pass_untouched() {
+        for ok in [
+            &b"\x1b[?1049h"[..],
+            b"\x1b[?2026h",
+            b"\x1b[?65533l",
+            b"\x1b[?165533h",
+            b"\x1b[?6553h",
+            b"\x1b[65533h",
+            b"\x1b[?25;1000h",
+        ] {
+            assert_eq!(through(&[ok]), ok);
+        }
     }
 
     #[test]

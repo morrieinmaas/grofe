@@ -152,10 +152,6 @@ fn formats_match_their_golden() {
 
 const FORMAT_GAPS: &[(&str, &str)] = &[
     (
-        "$ display -p -t main:1.1 '#{cursor_y}'",
-        "native: no cursor_y variable (TC.3's FormatVars)",
-    ),
-    (
         "$ display -p -t main:1.1 '#{log_info}'",
         "native: tmux formats fall back to the session, then the global, \
          environment; grofe's FormatVars do not",

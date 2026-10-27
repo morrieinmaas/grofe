@@ -1,0 +1,64 @@
+# F1: the screen-state format variables. tmux 3.7b reads them from the pane's
+# base screen: the cursor position and the cell under it (empty on the second
+# half of a wide character), and one 0/1 flag per terminal mode.
+# Each case is its own session.
+# case 1: a fresh pane's flags
+$ new-session -d -s c1 -x 20 -y 5 'printf ""; if [ -n "$GROFE" ]; then {grofe} wait-for -S c1; else tmux wait-for -S c1; fi; exec sleep 100000'
+$ wait-for c1
+$ display -p -t c1 '#{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{keypad_flag},#{wrap_flag},#{origin_flag}'
+# case 2: the cursor after moves, and the cell under it
+$ new-session -d -s c2 -x 20 -y 5 'printf "hello\033[2;1Hworld\033[1;2H"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c2; else tmux wait-for -S c2; fi; exec sleep 100000'
+$ wait-for c2
+$ display -p -t c2 '#{cursor_x},#{cursor_y},#{cursor_character}'
+# case 3: a wide character's second half has no character
+$ new-session -d -s c3 -x 20 -y 5 'printf "\346\227\245\346\234\254\033[1;2H"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c3; else tmux wait-for -S c3; fi; exec sleep 100000'
+$ wait-for c3
+$ display -p -t c3 '#{cursor_x},#{cursor_y},[#{cursor_character}]'
+# case 4: an empty cell is a space
+$ new-session -d -s c4 -x 20 -y 5 'printf "\033[3;4H"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c4; else tmux wait-for -S c4; fi; exec sleep 100000'
+$ wait-for c4
+$ display -p -t c4 '#{cursor_x},#{cursor_y},[#{cursor_character}]'
+# case 5: every mode flag turned over
+$ new-session -d -s c5 -x 20 -y 5 'printf "\033[?25l\033[4h\033[?1h\033=\033[?7l\033[?6h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c5; else tmux wait-for -S c5; fi; exec sleep 100000'
+$ wait-for c5
+$ display -p -t c5 '#{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{keypad_flag},#{wrap_flag},#{origin_flag}'
+# case 6: the cursor shown again, the modes reset
+$ new-session -d -s c6 -x 20 -y 5 'printf "\033[?25l\033[4h\033[?1h\033=\033[?7l\033[?6h\033[?25h\033[4l\033[?1l\033>\033[?7h\033[?6l"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c6; else tmux wait-for -S c6; fi; exec sleep 100000'
+$ wait-for c6
+$ display -p -t c6 '#{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{keypad_flag},#{wrap_flag},#{origin_flag}'
+# case 7: mouse 1000
+$ new-session -d -s c7 -x 20 -y 5 'printf "\033[?1000h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c7; else tmux wait-for -S c7; fi; exec sleep 100000'
+$ wait-for c7
+$ display -p -t c7 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}#{mouse_any_flag}'
+# case 8: mouse 1002
+$ new-session -d -s c8 -x 20 -y 5 'printf "\033[?1002h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c8; else tmux wait-for -S c8; fi; exec sleep 100000'
+$ wait-for c8
+$ display -p -t c8 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}#{mouse_any_flag}'
+# case 9: mouse 1003
+$ new-session -d -s c9 -x 20 -y 5 'printf "\033[?1003h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c9; else tmux wait-for -S c9; fi; exec sleep 100000'
+$ wait-for c9
+$ display -p -t c9 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}#{mouse_any_flag}'
+# case 10: mouse 1000, 1002 then 1006
+$ new-session -d -s c10 -x 20 -y 5 'printf "\033[?1000h\033[?1002h\033[?1006h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c10; else tmux wait-for -S c10; fi; exec sleep 100000'
+$ wait-for c10
+$ display -p -t c10 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}#{mouse_any_flag}'
+# case 11: mouse 1005
+$ new-session -d -s c11 -x 20 -y 5 'printf "\033[?1005h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c11; else tmux wait-for -S c11; fi; exec sleep 100000'
+$ wait-for c11
+$ display -p -t c11 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_utf8_flag}#{mouse_sgr_flag}#{mouse_any_flag}'
+# case 12: the cursor on the last row after output scrolls
+$ new-session -d -s c12 -x 20 -y 5 'printf "1\n2\n3\n4\n5\n6\n7"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c12; else tmux wait-for -S c12; fi; exec sleep 100000'
+$ wait-for c12
+$ display -p -t c12 '#{cursor_x},#{cursor_y},#{history_size}'
+# case 13: the cursor one past the last column after a write there
+$ new-session -d -s c13 -x 10 -y 5 'printf "1234567890"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c13; else tmux wait-for -S c13; fi; exec sleep 100000'
+$ wait-for c13
+$ display -p -t c13 '#{cursor_x},#{cursor_y},[#{cursor_character}]'
+# case 14: resetting any mouse mode resets all of them
+$ new-session -d -s c14 -x 20 -y 5 'printf "\033[?1003h\033[?1000l"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c14; else tmux wait-for -S c14; fi; exec sleep 100000'
+$ wait-for c14
+$ display -p -t c14 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_any_flag}'
+# case 15: a later mode replaces an earlier one
+$ new-session -d -s c15 -x 20 -y 5 'printf "\033[?1002h\033[?1000h"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c15; else tmux wait-for -S c15; fi; exec sleep 100000'
+$ wait-for c15
+$ display -p -t c15 '#{mouse_standard_flag}#{mouse_button_flag}#{mouse_all_flag}#{mouse_any_flag}'

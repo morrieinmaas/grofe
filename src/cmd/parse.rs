@@ -10,14 +10,14 @@ use super::keys;
 use super::target::parse_target;
 use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
-    Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer, DetachClient,
-    DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession, If, JoinPane,
-    KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers, ListClients, ListKeys,
-    ListPanes, ListSessions, ListWindows, LoadBuffer, MenuEntry, MoveWindow, NewPane, NewSession,
-    NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, RefreshClient,
-    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
-    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
-    SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
+    ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
+    DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
+    If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers,
+    ListClients, ListKeys, ListPanes, ListSessions, ListWindows, LoadBuffer, MenuEntry, MoveWindow,
+    NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer,
+    RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow,
+    RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow,
+    SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
     ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
     SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
@@ -704,6 +704,24 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
             escapes: flags.present.contains(&'e'),
         },
         join: flags.present.contains(&'J'),
+    }))
+}
+
+const CLEAR_HISTORY_SHORT: &[(char, FlagKind)] = &[('H', FlagKind::Bool), ('t', FlagKind::Value)];
+
+fn parse_clear_history(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: CLEAR_HISTORY_SHORT,
+            long: &[],
+        },
+        "clear-history",
+    )?;
+    no_extra_positionals(&flags, "clear-history", 0)?;
+    Ok(Command::ClearHistory(ClearHistory {
+        target: target_or_current(&flags.values, 't')?,
+        hyperlinks: flags.present.contains(&'H'),
     }))
 }
 
@@ -2510,6 +2528,7 @@ pub fn canonical_name(name: &str) -> &str {
         "send" => "send-keys",
         "display" => "display-message",
         "capturep" => "capture-pane",
+        "clearhist" => "clear-history",
         "attach" => "attach-session",
         "bind" => "bind-key",
         "unbind" => "unbind-key",
@@ -2542,6 +2561,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "list-panes" => parse_list_panes(rest),
         "send-keys" => parse_send_keys(rest),
         "capture-pane" => parse_capture_pane(rest),
+        "clear-history" => parse_clear_history(rest),
         "set-option" => parse_set_option(rest),
         "show-options" => parse_show_options(rest),
         "display-message" => parse_display_message(rest),

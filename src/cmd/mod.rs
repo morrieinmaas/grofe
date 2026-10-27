@@ -260,6 +260,14 @@ pub struct SendKeys {
     pub format: bool,
 }
 
+/// `clear-history` (`-H`): drops the pane's scrollback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClearHistory {
+    pub target: Target,
+    /// `-H`: forget the pane's hyperlinks too.
+    pub hyperlinks: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturePane {
     pub target: Target,
@@ -1032,6 +1040,7 @@ pub enum Command {
     ListPanes(ListPanes),
     SendKeys(SendKeys),
     CapturePane(CapturePane),
+    ClearHistory(ClearHistory),
     SetOption(SetOption),
     ShowOptions(ShowOptions),
     DisplayMessage(DisplayMessage),

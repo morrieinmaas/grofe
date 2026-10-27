@@ -54,6 +54,7 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("choose-client", ""),
         pass("suspend-client", ""),
         pass("find-window", ""),
+        pass("clear-history", "f1/clear-history"),
     ]
 }
 

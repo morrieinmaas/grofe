@@ -270,6 +270,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::ResizePane(_)
         | Command::RespawnPane(_)
         | Command::SendKeys(_)
+        | Command::ClearHistory(_)
         | Command::CapturePane(_) => pane::run(state, ctx, cmd),
 
         // A status source a `#(cmd)` registered stops once no option

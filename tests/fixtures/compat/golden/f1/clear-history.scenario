@@ -1,0 +1,58 @@
+# F1: clear-history (alias clearhist, -H, -t). tmux 3.7b leaves the pane's modes,
+# drops the scrollback, and with -H forgets the pane's hyperlinks; the prompt
+# marks of the dropped lines go with them and the screen's stay.
+# Each case is its own session.
+# case 1: the history goes, the screen stays, -t picks the pane
+$ new-session -d -s c1 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c1; else tmux wait-for -S c1; fi; exec sleep 100000'
+$ wait-for c1
+$ display -p -t c1 '#{history_size} #{pane_in_mode}'
+$ capture-pane -p -t c1
+$ clear-history -t c1
+$ display -p -t c1 '#{history_size} #{pane_in_mode}'
+$ capture-pane -p -t c1
+$ capture-pane -p -S - -E - -t c1
+# case 2: the alias, and a second clear of an empty history
+$ new-session -d -s c2 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c2; else tmux wait-for -S c2; fi; exec sleep 100000'
+$ wait-for c2
+$ clearhist -t c2
+$ display -p -t c2 '#{history_size} #{pane_in_mode}'
+$ clear-history -t c2
+$ display -p -t c2 '#{history_size} #{pane_in_mode}'
+# case 3: copy mode is left
+$ new-session -d -s c3 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c3; else tmux wait-for -S c3; fi; exec sleep 100000'
+$ wait-for c3
+$ copy-mode -t c3
+$ display -p -t c3 '#{history_size} #{pane_in_mode} #{pane_mode}'
+$ clear-history -t c3
+$ display -p -t c3 '#{history_size} #{pane_in_mode} #{pane_mode}'
+# case 4: arguments
+$ clear-history -t nosuch
+$ clear-history extra
+$ clear-history -x
+# case 5: prompt marks: those of the dropped history go, the screen's stay
+$ new-session -d -s c5 -x 20 -y 4 'printf "\033]133;A\007a\n\033]133;A\007b\n\033]133;A\007c\n\033]133;A\007d\n\033]133;A\007e\n\033]133;A\007f\n\033]133;A\007g\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c5; else tmux wait-for -S c5; fi; exec sleep 100000'
+$ wait-for c5
+$ copy-mode -t c5
+$ send-keys -t c5 -X history-bottom
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ clear-history -t c5
+$ display -p -t c5 '#{history_size} #{pane_in_mode}'
+$ copy-mode -t c5
+$ send-keys -t c5 -X history-bottom
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'

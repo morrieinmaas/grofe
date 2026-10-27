@@ -1,0 +1,198 @@
+$ new-session -d -s r1 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S r1; else tmux wait-for -S r1; fi; exec sleep 100000'
+? 0
+$ wait-for r1
+? 0
+$ display -p -t r1 '#{history_size} #{cursor_x},#{cursor_y}'
+26 0,4
+? 0
+$ capture-pane -p -S - -E - -t r1
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+
+? 0
+$ respawn-pane -k -t r1 'echo new; if [ -n "$GROFE" ]; then {grofe} wait-for -S r1x; else tmux wait-for -S r1x; fi; exec sleep 100000'
+? 0
+$ wait-for r1x
+? 0
+$ display -p -t r1 '#{history_size} #{cursor_x},#{cursor_y}'
+26 0,1
+? 0
+$ capture-pane -p -S - -E - -t r1
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+new
+
+
+
+
+? 0
+$ new-session -d -s r2 -x 20 -y 4 'printf "\033]133;A\007a\n\033]133;A\007b\n\033]133;A\007c\n\033]133;A\007d\n\033]133;A\007e\n\033]133;A\007f\n\033]133;A\007g\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r2; else tmux wait-for -S r2; fi; exec sleep 100000'
+? 0
+$ wait-for r2
+? 0
+$ copy-mode -t r2
+? 0
+$ send-keys -t r2 -X history-bottom
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 2,0
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 1,0
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,0
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,1
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,2
+? 0
+$ respawn-pane -k -t r2 'echo x; if [ -n "$GROFE" ]; then {grofe} wait-for -S r2x; else tmux wait-for -S r2x; fi; exec sleep 100000'
+? 0
+$ wait-for r2x
+? 0
+$ display -p -t r2 '#{history_size} #{pane_in_mode}'
+4 0
+? 0
+$ copy-mode -t r2
+? 0
+$ send-keys -t r2 -X history-bottom
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,1
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,2
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,3
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,4
+? 0
+$ send-keys -t r2 -X previous-prompt
+? 0
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,4
+? 0
+$ new-session -d -s r3 -x 20 -y 4 'printf "\033]2;mytitle\007\033[?25l\033[4h\033[?1h\033[?1000h\033[3;3Hab"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r3; else tmux wait-for -S r3; fi; exec sleep 100000'
+? 0
+$ wait-for r3
+? 0
+$ display -p -t r3 '#{pane_title} #{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{mouse_standard_flag}'
+mytitle 4,2,0,1,1,1
+? 0
+$ respawn-pane -k -t r3 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r3x; else tmux wait-for -S r3x; fi; exec sleep 100000'
+? 0
+$ wait-for r3x
+? 0
+$ display -p -t r3 '#{pane_title} #{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{mouse_standard_flag}'
+mytitle 0,0,1,0,0,0
+? 0
+$ new-session -d -s r4 -x 20 -y 5 'printf "\033]8;;http://x.test/a\033\134link\033]8;;\033\134\n\033[?1049halt"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r4; else tmux wait-for -S r4; fi; exec sleep 100000'
+? 0
+$ wait-for r4
+? 0
+$ display -p -t r4 '#{alternate_on}'
+1
+? 0
+$ respawn-pane -k -t r4 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r4x; else tmux wait-for -S r4x; fi; exec sleep 100000'
+? 0
+$ wait-for r4x
+? 0
+$ display -p -t r4 '#{alternate_on}'
+0
+? 0
+$ capture-pane -e -p -t r4
+
+
+
+
+
+? 0
+$ new-session -d -s r5 -x 20 -y 4 'printf "\033]7;file:///tmp/zzz\007"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5; else tmux wait-for -S r5; fi; exec sleep 100000'
+? 0
+$ wait-for r5
+? 0
+$ display -p -t r5 '[#{pane_path}]'
+[file:///tmp/zzz]
+? 0
+$ respawn-pane -k -t r5 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5x; else tmux wait-for -S r5x; fi; exec sleep 100000'
+? 0
+$ wait-for r5x
+? 0
+$ display -p -t r5 '[#{pane_path}]'
+[file:///tmp/zzz]
+? 0

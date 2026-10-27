@@ -200,6 +200,21 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all,
   `load-buffer` included, and `save-buffer`, which the corpus does not
   send, and refuses `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
+- **`clear-history` and the screen-state formats (F1).** `clear-history`
+  (`clearhist`, `-H`, `-t`) is a native row with a golden
+  (`golden/f1/clear-history`): the pane leaves its modes, the scrollback and
+  its prompt marks go, and `-H` forgets the pane's hyperlinks; on the
+  alternate screen it does nothing, as alacritty keeps the normal screen's
+  scrollback out of reach. `#{cursor_x}`, `#{cursor_y}` (resurrect's
+  `save.sh` reads it), `#{cursor_character}`, `#{cursor_flag}`,
+  `#{insert_flag}`, `#{keypad_cursor_flag}`, `#{keypad_flag}`,
+  `#{wrap_flag}`, `#{origin_flag}` and the `#{mouse_*_flag}` family come
+  from the emulator (`golden/f1/cursor`). Not given: `scroll_region_*` and
+  `alternate_saved_*` (alacritty keeps them private), `cursor_shape`,
+  `cursor_colour` and `cursor_blinking`. tmux keeps the last of mouse modes
+  1000, 1002 and 1003; grofe reads the widest one set. `respawn-pane` keeps
+  the scrollback and resets the screen, modes and tab stops, as tmux's
+  `screen_reinit` does (`golden/f1/respawn`).
 - **A hidden flag, not a rejected one:** opensessions' pane flash sends
   `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
   3.7b still takes it (recorded by FE.1): it selects the pane and sets the

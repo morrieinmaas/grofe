@@ -26,6 +26,7 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
         Command::RespawnPane(c) => respawn_pane(state, ctx, c),
         Command::SendKeys(c) => send_keys(state, ctx, c),
         Command::CapturePane(c) => capture_pane(state, ctx, c),
+        Command::ClearHistory(c) => clear_history(state, ctx, c),
         _ => Err("not a pane command".to_string()),
     }
 }
@@ -409,6 +410,21 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     Ok(String::new())
 }
 
+/// `clear-history`, as tmux's `cmd_capture_pane_exec` runs it: the pane
+/// leaves every mode, its scrollback goes (and the prompt marks of the lines
+/// with it), and with `-H` its hyperlinks are forgotten.
+fn clear_history(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: cmd::ClearHistory,
+) -> Result<String, String> {
+    let pane = state.model.resolve_pane(&c.target, ctx)?;
+    state.copy.remove(pane);
+    crate::server::tree::close_over(state, pane);
+    state.model.panes[&pane].handle.clear_history(c.hyperlinks);
+    Ok(String::new())
+}
+
 /// Starts a new process in `pane` (kept in place, same `%N` and
 /// `pane_uid`): `command`, else the pane's resume argv, in `cwd` (`-c`,
 /// which becomes the pane's spawn cwd) or else its spawn cwd. A live
@@ -448,8 +464,14 @@ pub(crate) fn respawn(
         images: graphics::images_enabled(&state.model),
     };
     let cwd = spec.cwd.clone();
-    let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
-        .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
+    // The scrollback stays, as tmux's `screen_reinit` leaves it.
+    let handle = PaneHandle::spawn_over(
+        spec,
+        state.pane_events.clone(),
+        state.wake.clone(),
+        &state.model.panes[&pane].handle,
+    )
+    .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
         // process (`-k`), and stops its tasks. An `Exited` its reader had

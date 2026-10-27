@@ -312,6 +312,20 @@ fn close(state: &mut State, id: ClientId) {
     }
 }
 
+/// Closes every chooser open over `pane` (it leaves its modes).
+pub fn close_over(state: &mut State, pane: PaneId) {
+    let ids: Vec<ClientId> = state
+        .trees
+        .open
+        .iter()
+        .filter(|(_, t)| t.pane == pane)
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        close(state, id);
+    }
+}
+
 /// Client `id` went away: its chooser closes.
 pub fn client_gone(state: &mut State, id: ClientId) {
     close(state, id);

@@ -1,0 +1,64 @@
+# F1: what respawn-pane resets. tmux 3.7b reinitialises the pane's screen (cursor,
+# modes, tabs, title, visible lines and their flags) but keeps the scrollback.
+# Each case is its own session; the respawned command signals its own channel.
+# case 1: the history stays, the screen is new
+$ new-session -d -s r1 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S r1; else tmux wait-for -S r1; fi; exec sleep 100000'
+$ wait-for r1
+$ display -p -t r1 '#{history_size} #{cursor_x},#{cursor_y}'
+$ capture-pane -p -S - -E - -t r1
+$ respawn-pane -k -t r1 'echo new; if [ -n "$GROFE" ]; then {grofe} wait-for -S r1x; else tmux wait-for -S r1x; fi; exec sleep 100000'
+$ wait-for r1x
+$ display -p -t r1 '#{history_size} #{cursor_x},#{cursor_y}'
+$ capture-pane -p -S - -E - -t r1
+# case 2: marks on the screen go, marks in the history stay
+$ new-session -d -s r2 -x 20 -y 4 'printf "\033]133;A\007a\n\033]133;A\007b\n\033]133;A\007c\n\033]133;A\007d\n\033]133;A\007e\n\033]133;A\007f\n\033]133;A\007g\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r2; else tmux wait-for -S r2; fi; exec sleep 100000'
+$ wait-for r2
+$ copy-mode -t r2
+$ send-keys -t r2 -X history-bottom
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ respawn-pane -k -t r2 'echo x; if [ -n "$GROFE" ]; then {grofe} wait-for -S r2x; else tmux wait-for -S r2x; fi; exec sleep 100000'
+$ wait-for r2x
+$ display -p -t r2 '#{history_size} #{pane_in_mode}'
+$ copy-mode -t r2
+$ send-keys -t r2 -X history-bottom
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t r2 -X previous-prompt
+$ display -p -t r2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 3: modes, the cursor and the title are reset
+$ new-session -d -s r3 -x 20 -y 4 'printf "\033]2;mytitle\007\033[?25l\033[4h\033[?1h\033[?1000h\033[3;3Hab"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r3; else tmux wait-for -S r3; fi; exec sleep 100000'
+$ wait-for r3
+$ display -p -t r3 '#{pane_title} #{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{mouse_standard_flag}'
+$ respawn-pane -k -t r3 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r3x; else tmux wait-for -S r3x; fi; exec sleep 100000'
+$ wait-for r3x
+$ display -p -t r3 '#{pane_title} #{cursor_x},#{cursor_y},#{cursor_flag},#{insert_flag},#{keypad_cursor_flag},#{mouse_standard_flag}'
+# case 4: the alternate screen is left, hyperlinks are forgotten
+$ new-session -d -s r4 -x 20 -y 5 'printf "\033]8;;http://x.test/a\033\134link\033]8;;\033\134\n\033[?1049halt"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r4; else tmux wait-for -S r4; fi; exec sleep 100000'
+$ wait-for r4
+$ display -p -t r4 '#{alternate_on}'
+$ respawn-pane -k -t r4 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r4x; else tmux wait-for -S r4x; fi; exec sleep 100000'
+$ wait-for r4x
+$ display -p -t r4 '#{alternate_on}'
+$ capture-pane -e -p -t r4
+# case 5: the path the pane reported stays
+$ new-session -d -s r5 -x 20 -y 4 'printf "\033]7;file:///tmp/zzz\007"; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5; else tmux wait-for -S r5; fi; exec sleep 100000'
+$ wait-for r5
+$ display -p -t r5 '[#{pane_path}]'
+$ respawn-pane -k -t r5 'true; if [ -n "$GROFE" ]; then {grofe} wait-for -S r5x; else tmux wait-for -S r5x; fi; exec sleep 100000'
+$ wait-for r5x
+$ display -p -t r5 '[#{pane_path}]'

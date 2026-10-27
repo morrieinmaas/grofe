@@ -1,0 +1,132 @@
+$ new-session -d -s c1 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c1; else tmux wait-for -S c1; fi; exec sleep 100000'
+? 0
+$ wait-for c1
+? 0
+$ display -p -t c1 '#{history_size} #{pane_in_mode}'
+26 0
+? 0
+$ capture-pane -p -t c1
+27
+28
+29
+30
+
+? 0
+$ clear-history -t c1
+? 0
+$ display -p -t c1 '#{history_size} #{pane_in_mode}'
+0 0
+? 0
+$ capture-pane -p -t c1
+27
+28
+29
+30
+
+? 0
+$ capture-pane -p -S - -E - -t c1
+27
+28
+29
+30
+
+? 0
+$ new-session -d -s c2 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c2; else tmux wait-for -S c2; fi; exec sleep 100000'
+? 0
+$ wait-for c2
+? 0
+$ clearhist -t c2
+? 0
+$ display -p -t c2 '#{history_size} #{pane_in_mode}'
+0 0
+? 0
+$ clear-history -t c2
+? 0
+$ display -p -t c2 '#{history_size} #{pane_in_mode}'
+0 0
+? 0
+$ new-session -d -s c3 -x 20 -y 5 'seq 1 30; if [ -n "$GROFE" ]; then {grofe} wait-for -S c3; else tmux wait-for -S c3; fi; exec sleep 100000'
+? 0
+$ wait-for c3
+? 0
+$ copy-mode -t c3
+? 0
+$ display -p -t c3 '#{history_size} #{pane_in_mode} #{pane_mode}'
+26 1 copy-mode
+? 0
+$ clear-history -t c3
+? 0
+$ display -p -t c3 '#{history_size} #{pane_in_mode} #{pane_mode}'
+0 0 
+? 0
+$ clear-history -t nosuch
+! can't find pane: nosuch
+? 1
+$ clear-history extra
+! command clear-history: too many arguments (need at most 0)
+? 1
+$ clear-history -x
+! command clear-history: unknown flag -x
+? 1
+$ new-session -d -s c5 -x 20 -y 4 'printf "\033]133;A\007a\n\033]133;A\007b\n\033]133;A\007c\n\033]133;A\007d\n\033]133;A\007e\n\033]133;A\007f\n\033]133;A\007g\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c5; else tmux wait-for -S c5; fi; exec sleep 100000'
+? 0
+$ wait-for c5
+? 0
+$ copy-mode -t c5
+? 0
+$ send-keys -t c5 -X history-bottom
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 2,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 1,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,1
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+4 0,2
+? 0
+$ clear-history -t c5
+? 0
+$ display -p -t c5 '#{history_size} #{pane_in_mode}'
+0 0
+? 0
+$ copy-mode -t c5
+? 0
+$ send-keys -t c5 -X history-bottom
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0

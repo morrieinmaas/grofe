@@ -242,11 +242,15 @@ impl Reader {
     fn flush_sync(&self) {
         let pending = {
             let mut emu = lock(&self.emu);
+            if emu.generation != self.generation {
+                return;
+            }
             let Emu {
                 term,
                 parser,
                 images,
                 marks,
+                ..
             } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
@@ -283,11 +287,16 @@ impl Reader {
         let mut events = Vec::new();
         {
             let mut emu = lock(&self.emu);
+            // A respawn handed the emulator to a newer reader.
+            if emu.generation != self.generation {
+                return Vec::new();
+            }
             let Emu {
                 term,
                 parser,
                 images: store,
                 marks,
+                ..
             } = &mut *emu;
             if !images {
                 // An OSC 133 mark is made where the sequence ended: the

@@ -18,6 +18,11 @@ const HEIGHT_LIMIT: u32 = 10_000;
 const PIXEL_LIMIT: u64 = 16 * 1024 * 1024;
 /// `SIXEL_COLOUR_REGISTERS`: the highest colour register number.
 const COLOUR_REGISTERS: u32 = 1024;
+/// Most sixel characters (a repeat counts its length) one image may spend
+/// writing pixels. `!10000~$` repeated fits 130000 times in tmux's 1 MiB
+/// input limit: over a billion writes, which would hold the pane's lock for
+/// seconds. Real encoders spend a few tens of millions.
+const WORK_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// tmux's `DEFAULT_XPIXEL` and `DEFAULT_YPIXEL`: a cell's size in pixels
 /// until a terminal says otherwise.
@@ -45,6 +50,9 @@ pub struct Sixel {
     dc: u32,
     /// One row of pixels each, as wide as the image once written to.
     lines: Vec<Vec<u16>>,
+    /// Characters written so far, against [`WORK_LIMIT`].
+    work: u64,
+    work_limit: u64,
 }
 
 impl Sixel {
@@ -64,6 +72,8 @@ impl Sixel {
             dy: 0,
             dc: 0,
             lines: Vec::new(),
+            work: 0,
+            work_limit: WORK_LIMIT,
         }
     }
 
@@ -121,6 +131,10 @@ impl Sixel {
     }
 
     fn write(&mut self, ch: u32) -> bool {
+        self.work += 1;
+        if self.work > self.work_limit {
+            return true;
+        }
         for i in 0..6 {
             if ch & (1 << i) != 0 && self.set_pixel(self.dx, self.dy + i, self.dc) {
                 return true;
@@ -142,11 +156,22 @@ impl Sixel {
     /// parameter; the pixel sizes are the cell size the image is measured
     /// in. `None` for an empty or malformed image.
     pub fn parse(body: &[u8], p2: u32, xpixel: u32, ypixel: u32) -> Option<Sixel> {
+        Sixel::parse_limited(body, p2, xpixel, ypixel, WORK_LIMIT)
+    }
+
+    fn parse_limited(
+        body: &[u8],
+        p2: u32,
+        xpixel: u32,
+        ypixel: u32,
+        work_limit: u64,
+    ) -> Option<Sixel> {
         let (&first, rest) = body.split_first()?;
         if first != b'q' || rest.is_empty() {
             return None;
         }
         let mut si = Sixel::new(xpixel.max(1), ypixel.max(1), p2);
+        si.work_limit = work_limit;
         let mut cp = 0;
         while cp < rest.len() {
             let ch = rest[cp];
@@ -494,6 +519,21 @@ mod tests {
 
     fn small() -> Sixel {
         Sixel::parse(SMALL, 0, 1, 1).expect("parses")
+    }
+
+    /// Repeats that rewrite the same pixels cost a bounded amount of work:
+    /// `!10000~$` over and over would otherwise take seconds.
+    #[test]
+    fn a_repeat_flood_is_refused_after_a_bounded_amount_of_work() {
+        let mut body = b"q#0;2;100;0;0".to_vec();
+        for _ in 0..200 {
+            body.extend_from_slice(b"!10000~$");
+        }
+        // 2 million characters against a budget of one million.
+        assert!(Sixel::parse_limited(&body, 0, 10, 20, 1_000_000).is_none());
+        assert!(Sixel::parse_limited(&body, 0, 10, 20, 3_000_000).is_some());
+        // The real budget is far above an honest image's spend.
+        assert!(Sixel::parse(b"q#0;2;100;0;0!10000~", 0, 10, 20).is_some());
     }
 
     #[test]

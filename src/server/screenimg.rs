@@ -134,9 +134,9 @@ pub struct Fallback {
 /// that lies in `bounds` (`x0, y0, x1, y1`, the end exclusive).
 pub fn clip(x: i32, y: i32, cols: u32, rows: u32, bounds: (i32, i32, i32, i32)) -> Option<Crop> {
     let c0 = (bounds.0 - x).max(0);
-    let c1 = (bounds.2 - x).min(cols as i32);
+    let c1 = (bounds.2 - x).min(cols.min(i32::MAX as u32) as i32);
     let r0 = (bounds.1 - y).max(0);
-    let r1 = (bounds.3 - y).min(rows as i32);
+    let r1 = (bounds.3 - y).min(rows.min(i32::MAX as u32) as i32);
     (c0 < c1 && r0 < r1).then_some((c0 as u32, c1 as u32, r0 as u32, r1 as u32))
 }
 
@@ -449,6 +449,12 @@ mod tests {
         assert_eq!(clip(10, 2, 4, 2, area), None);
         // Both sides of a pane narrower than the placement.
         assert_eq!(clip(0, 0, 8, 1, (2, 0, 5, 10)), Some((2, 5, 0, 1)));
+        // A placement of c=4294967295 is not read as negative and hidden.
+        assert_eq!(
+            clip(3, 2, u32::MAX, u32::MAX, area),
+            Some((0, 7, 0, 8)),
+            "huge c and r are clipped to the area"
+        );
     }
 
     #[test]

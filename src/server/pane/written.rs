@@ -28,7 +28,8 @@ use alacritty_terminal::vte::ansi::cursor_icon::CursorIcon;
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler, Hyperlink,
     KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, NamedColor,
-    PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
+    NamedPrivateMode, PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset,
+    TabulationClearMode,
 };
 
 use super::CellFlags;
@@ -80,6 +81,9 @@ impl<L: EventListener> Written<'_, L> {
 
     /// An operation that may have scrolled the viewport ran.
     fn scrolled(&mut self, kind: ScrollOp, before: Option<Probe>) {
+        if self.2.is_none() {
+            return;
+        }
         let history = self.0.grid().history_size();
         if let (Some(store), Some(before)) = (self.2.as_deref_mut(), before) {
             store.scroll_op(kind, before, history);
@@ -100,6 +104,9 @@ impl<L: EventListener> Written<'_, L> {
 
     /// An operation changes the cursor's row (`to_foot`: and all below it).
     fn line_touched(&mut self, to_foot: bool) {
+        if self.2.is_none() {
+            return;
+        }
         let at = self.point();
         let rows = self.0.screen_lines() as u32;
         if let Some(store) = self.2.as_deref_mut() {
@@ -405,8 +412,27 @@ impl<L: EventListener> Handler for Written<'_, L> {
         }
     }
 
+    /// Resetting any of the mouse modes (1000, 1002, 1003) turns all of them
+    /// off, as tmux's `ALL_MOUSE_MODES` clear does; alacritty clears only
+    /// the one named.
     fn unset_private_mode(&mut self, mode: PrivateMode) {
         self.swapping(|t| Handler::unset_private_mode(t, mode));
+        if matches!(
+            mode,
+            PrivateMode::Named(
+                NamedPrivateMode::ReportMouseClicks
+                    | NamedPrivateMode::ReportCellMouseMotion
+                    | NamedPrivateMode::ReportAllMouseMotion
+            )
+        ) {
+            for other in [
+                NamedPrivateMode::ReportMouseClicks,
+                NamedPrivateMode::ReportCellMouseMotion,
+                NamedPrivateMode::ReportAllMouseMotion,
+            ] {
+                Handler::unset_private_mode(&mut *self.0, PrivateMode::Named(other));
+            }
+        }
         self.1.sync(&mut *self.0);
     }
 

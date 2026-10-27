@@ -33,6 +33,9 @@ const MAX_SIZES: usize = 1024;
 pub const ANON_BASE: u32 = 0x8000_0000;
 /// Most rows or columns a placement is moved the cursor by.
 const MAX_MOVE: u32 = 1000;
+/// Most cells a relative placement may sit from its parent, so that sums of
+/// them stay far from overflowing.
+const MAX_OFFSET: i64 = 1 << 20;
 /// A relative placement's chain is followed this deep.
 const MAX_DEPTH: u32 = 8;
 
@@ -247,8 +250,8 @@ impl PlaceKeys {
                 (
                     p,
                     cmd.num(b'Q').unwrap_or(0),
-                    cmd.int(b'H').unwrap_or(0),
-                    cmd.int(b'V').unwrap_or(0),
+                    cmd.int(b'H').unwrap_or(0).clamp(-MAX_OFFSET, MAX_OFFSET),
+                    cmd.int(b'V').unwrap_or(0).clamp(-MAX_OFFSET, MAX_OFFSET),
                 )
             }),
             no_move: cmd.num(b'C') == Some(1),
@@ -515,6 +518,14 @@ impl Store {
             }
             Erase::Below => self.check_line(cursor.line, rows.saturating_sub(cursor.line)),
             Erase::Above => self.check_line(0, cursor.line.saturating_sub(1)),
+        }
+    }
+
+    /// `clear-history`: the placements wholly in the scrollback go. On the
+    /// alternate screen the emulator's grid holds none, so nothing does.
+    pub fn history_cleared(&mut self) {
+        if !self.in_alt {
+            self.erase(Erase::Saved, Cursor { line: 0, col: 0 });
         }
     }
 
@@ -1262,6 +1273,48 @@ mod tests {
         // Deleting the parent deletes the child.
         put(&mut s, "a=d,d=i,i=1", CUR);
         assert!(view(&s).is_empty());
+    }
+
+    /// A relative placement with an offset far past what an `i64` sum holds
+    /// does not overflow (a panic in a debug build, a wrapped position in a
+    /// release one that could show it anywhere).
+    #[test]
+    fn huge_relative_offsets_are_clamped() {
+        let mut s = store();
+        put(&mut s, "a=T,i=1,f=24,s=10,v=10,p=1,C=1;AAAA", CUR);
+        put(
+            &mut s,
+            "a=T,i=2,f=24,s=10,v=10,p=1,P=1,Q=1,H=9223372036854775807,V=-9223372036854775807;AAAA",
+            CUR,
+        );
+        assert_eq!(view(&s).len(), 1, "the far child is off the screen");
+        s.copy_view(10);
+        s.prune(10);
+        assert!(s.view().is_some());
+    }
+
+    /// `history_cleared` drops placements wholly in the scrollback and
+    /// keeps a straddling one.
+    #[test]
+    fn clear_history_keeps_what_reaches_the_screen() {
+        let mut s = store();
+        put(
+            &mut s,
+            "a=T,i=1,f=24,s=10,v=20,C=1;AAAA",
+            Cursor { line: 0, col: 0 },
+        );
+        put(
+            &mut s,
+            "a=T,i=2,f=24,s=10,v=40,C=1;AAAA",
+            Cursor { line: 1, col: 0 },
+        );
+        s.scrolled(2);
+        // Image 1 is wholly above the screen, image 2 (2 rows) reaches its
+        // first row.
+        assert_eq!(view(&s).len(), 1);
+        assert_eq!(s.copy_view(5).map(|v| v.kitty.len()), Some(2));
+        s.history_cleared();
+        assert_eq!(s.copy_view(0).map(|v| v.kitty.len()), Some(1));
     }
 
     /// Three images: one at (3,2) 4x2, one at (20,5) 2x1 z=-1, one at
