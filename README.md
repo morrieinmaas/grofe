@@ -235,6 +235,37 @@ grofe kill-server
 ```
 <!-- readme-test: end -->
 
+## Plugins
+
+grofe runs plugins as separate processes. Declare one in your config and the
+server starts it with the server, restarts it when it exits (backing off, and
+disabling it after five crashes in a minute), and stops it on `kill-server`:
+
+```toml
+[plugins.event-log]
+cmd = ["sh", "event-log/event-log.sh"]
+env = { LC_ALL = "C" }
+restart = "always"
+```
+
+A relative path in `cmd` resolves against the directory of the config file
+that sets it. The plugin gets `GROFE` (the socket), `GROFE_PLUGIN` (its name)
+and `GROFE_STATE` (the state directory); its output goes to
+`<state>/plugins/<name>.log`. `list-plugins` and `plugin-restart <name>` show
+and restart them.
+
+A plugin talks to the server with `grofe control`, a stdio bridge that speaks
+[protocol v1](docs/protocol-v1.md): one JSON request per line in, replies and
+events out, so a plugin in any language needs no socket code.
+
+```sh
+printf '{"id":1,"argv":["subscribe"]}\n' | grofe control
+```
+
+[`plugins/event-log`](plugins/event-log/README.md) is a working example in
+POSIX sh: it subscribes to every event and appends each as a JSON line to
+`<state>/events.log`. Copy it next to your config and use the snippet above.
+
 ## What it isn't
 
 grofe is not a general reimplementation of tmux. It answers to the name `tmux`

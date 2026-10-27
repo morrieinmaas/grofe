@@ -1175,7 +1175,8 @@ restart = "always"
   --explain` gives each key's provenance (§5.4).
 - **Environment.** The server's global environment (`set-environment -g`,
   hidden variables left out as for any process, §4.2), then `env`, then
-  `GROFE` (the socket path) and `GROFE_PLUGIN=<name>`, which `env` cannot
+  `GROFE` (the socket path), `GROFE_PLUGIN=<name>` and `GROFE_STATE` (the
+  state dir, where `plugins/<name>.log` lives), which `env` cannot
   override. On a server with tmux identity (D12) a plugin also gets `TMUX`
   in tmux's format, `<socket path>,<server pid>,-1` (the session field is
   `-1`, as tmux gives a process outside any session), so its `tmux` calls

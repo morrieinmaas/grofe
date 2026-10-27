@@ -397,7 +397,8 @@ pub async fn shutdown(state: &mut State) {
 
 /// The environment a plugin gets: the server's global environment (hidden
 /// variables left out), `TMUX` under tmux identity, the plugin's `env`, then
-/// `GROFE` and `GROFE_PLUGIN`, which `env` cannot override. A plugin is in no
+/// `GROFE`, `GROFE_PLUGIN` and `GROFE_STATE` (the state directory), which `env`
+/// cannot override. A plugin is in no
 /// pane, so it gets no `GROFE_PANE` or `TMUX_PANE`.
 fn plugin_env(state: &State, name: &str, cfg: &ConfigPlugin) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = hooks::variables(state, None)
@@ -418,6 +419,10 @@ fn plugin_env(state: &State, name: &str, cfg: &ConfigPlugin) -> Vec<(String, Str
     env.extend(cfg.env.clone());
     env.insert("GROFE".to_string(), socket);
     env.insert("GROFE_PLUGIN".to_string(), name.to_string());
+    env.insert(
+        "GROFE_STATE".to_string(),
+        paths::state_dir(&Env::from_process()).display().to_string(),
+    );
     env.into_iter().collect()
 }
 
