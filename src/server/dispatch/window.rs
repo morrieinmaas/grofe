@@ -10,7 +10,7 @@ use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
 use crate::server::dispatch::pane::print_pane;
 use crate::server::dispatch::structure::{next_index, shuffle_up};
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, MainSize, Preset};
 use crate::server::model::{Model, Window};
 use crate::server::{State, clients};
@@ -77,7 +77,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         state,
         (session, window),
         env,
-        command_argv(c.command),
+        c.command,
         cwd.clone(),
         size,
         cell_px,

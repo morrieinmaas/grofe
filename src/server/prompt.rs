@@ -823,6 +823,8 @@ pub(crate) async fn shell(
     let child = {
         let _lock = pane::spawn_lock();
         tokio::process::Command::new("/bin/sh")
+            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
+            .arg0("sh")
             .arg("-c")
             .arg(script)
             .current_dir(cwd)
@@ -1251,6 +1253,15 @@ mod tests {
             out: out.to_string(),
             status: Some(status),
         }
+    }
+
+    /// tmux's `job_run` without `JOB_DEFAULTSHELL` (`run-shell`, `if-shell`)
+    /// runs `/bin/sh` with `argv[0]` `sh`, whatever `default-shell` is.
+    #[tokio::test]
+    async fn shell_runs_bin_sh_as_sh() {
+        let dir = std::env::temp_dir().canonicalize().expect("temp dir");
+        let got = shell("echo \"$0\"", dir, Vec::new(), PathBuf::from("/x"), true).await;
+        assert_eq!(got, Ok("sh\n".to_string()));
     }
 
     #[tokio::test]

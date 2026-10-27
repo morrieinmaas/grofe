@@ -7,9 +7,9 @@ use crate::cmd::{DisplayPopup, NewPane, Offset, Resolve};
 use crate::compat;
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::pane::print_pane;
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::model::Floating;
-use crate::server::pane::{PaneSpawn, usable_cwd};
+use crate::server::pane::{PaneSpawn, pane_shell, usable_cwd};
 use crate::server::popup::{self, Frame, Lines, Position};
 use crate::server::status::Style;
 use crate::server::{State, clients, hooks, prompt};
@@ -81,6 +81,15 @@ pub fn display_popup(
             .filter(|(k, _)| k != "TMUX_PANE"),
     );
     env.extend(c.env);
+    // As tmux's `popup_display` (`JOB_DEFAULTSHELL`): `default-shell` runs a
+    // one-word command, else `default-command`, else starts as itself, and
+    // is exported as `SHELL` last.
+    let shell = pane_shell(model.default_shell(session).as_deref());
+    env.push(("SHELL".to_string(), shell.clone()));
+    let argv = match c.command.filter(|a| !a.is_empty() && a != &[""]) {
+        Some(argv) => Some(argv),
+        None => model.default_command(session).map(|cmd| vec![cmd]),
+    };
     let frame = Frame {
         at: (i32::from(at.0), i32::from(at.1)),
         size: (w, h),
@@ -89,9 +98,7 @@ pub fn display_popup(
         border_style: Style::default(),
         close_on_exit: c.close_on_exit,
     };
-    // ponytail: without a command tmux starts its default-shell as a plain
-    // shell; grofe starts the user's login shell, as for a pane.
-    let spawn = spawn_for(state, session, pane, command_argv(c.command), cwd, env);
+    let spawn = spawn_for(state, session, pane, (argv, shell), cwd, env);
     if popup::open(state, id, frame, spawn)? {
         popup::wait_for_close(state, id);
     }
@@ -135,7 +142,7 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         state,
         (session, window),
         env,
-        command_argv(c.command),
+        c.command,
         cwd,
         (width.max(1), height.max(1)),
         cell_px,
@@ -166,7 +173,7 @@ fn spawn_for(
     state: &State,
     session: crate::types::SessionId,
     pane: PaneId,
-    argv: Option<Vec<String>>,
+    (argv, shell): (Option<Vec<String>>, String),
     cwd: std::path::PathBuf,
     env: Vec<(String, String)>,
 ) -> PaneSpawn {
@@ -174,6 +181,8 @@ fn spawn_for(
         id: pane,
         session,
         argv,
+        shell,
+        login: false,
         cwd,
         env,
         cols: 0,

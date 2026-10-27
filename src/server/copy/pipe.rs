@@ -172,6 +172,8 @@ pub async fn run(
     let child = {
         let _lock = pane::spawn_lock();
         tokio::process::Command::new("/bin/sh")
+            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
+            .arg0("sh")
             .arg("-c")
             .arg(command)
             .env_clear()
@@ -265,6 +267,18 @@ mod tests {
         );
         assert!(m.sel.copied.is_empty());
         assert!(m.selecting);
+    }
+
+    /// As tmux's `window_copy_pipe` (`job_run` with `JOB_NOWAIT`): `/bin/sh`
+    /// with `argv[0]` `sh`.
+    #[tokio::test]
+    async fn the_command_runs_bin_sh_as_sh() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let command = format!("echo \"$0\" > '{}'", out.display());
+        let status = run(&command, vec![], Vec::new(), PIPE_TIMEOUT).await;
+        assert!(status.is_some_and(|s| s.success()));
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "sh\n");
     }
 
     #[tokio::test]

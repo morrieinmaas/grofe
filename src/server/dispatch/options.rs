@@ -517,9 +517,10 @@ const BUILTINS: &[Builtin] = &[
     // `renumber-windows`). Spec §4.5: the probe and D7 decide the terminal
     // ones; D6 sizes windows; grofe's prompt keys are emacs's.
     // `renumber-windows` itself is read (`Model::remove_window`).
-    // ponytail: `default-command` and `synchronize-panes` do something in
-    // tmux; grofe stores them only, until a ported script needs one.
-    // `default-shell` is read when a pane starts (`Model::default_shell`);
+    // ponytail: `synchronize-panes` does something in tmux; grofe stores it
+    // only, until a ported script needs one.
+    // `default-command` and `default-shell` are read when a pane starts
+    // (`Model::default_command`, `Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
     // `pane-border-format` waits for pane border titles; copy mode reads
@@ -934,15 +935,9 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             _ => Err(format!("bad value: {value}")),
         },
         // tmux's `checkshell`: an absolute path it may execute, not tmux.
-        Kind::String if name == "default-shell" => {
-            let tmux = value.rsplit('/').next() == Some("tmux");
-            let usable = value.starts_with('/')
-                && !tmux
-                && nix::unistd::access(value, nix::unistd::AccessFlags::X_OK).is_ok();
-            usable
-                .then(|| value.to_string())
-                .ok_or_else(|| format!("not a suitable shell: {value}"))
-        }
+        Kind::String if name == "default-shell" => crate::server::pane::check_shell(value)
+            .then(|| value.to_string())
+            .ok_or_else(|| format!("not a suitable shell: {value}")),
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),

@@ -7,7 +7,7 @@ use crate::cmd::{
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{FormatCtx, Owner, ServerVars};
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane, window::default_name};
+use crate::server::dispatch::{resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
 use crate::server::model::{DEFAULT_SIZE, Session, Window};
@@ -53,7 +53,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         state,
         (id, window),
         env.clone(),
-        command_argv(c.command),
+        c.command,
         cwd.clone(),
         size,
         // A new session has no client yet.

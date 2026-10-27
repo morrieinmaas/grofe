@@ -898,7 +898,9 @@ mod tests {
         let spawn = PaneSpawn {
             id: PaneId(0),
             session: SessionId(0),
-            argv: Some(vec!["/bin/sh".into(), "-c".into(), "exit 3".into()]),
+            argv: Some(vec!["exit 3".into()]),
+            shell: "/bin/sh".into(),
+            login: false,
             cwd: "/".into(),
             env: Vec::new(),
             cols: 0,

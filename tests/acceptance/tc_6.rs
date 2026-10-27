@@ -229,6 +229,43 @@ fn attaching_from_a_popup_shows_the_session_and_detaching_returns() {
     assert_eq!(wait_child(child, WAIT).expect("answers").code(), Some(129));
 }
 
+/// A popup runs through `default-shell`, as tmux 3.7b's `popup_display`
+/// (`JOB_DEFAULTSHELL`): a one-word command is `<shell> -c <command>` with
+/// `argv[0]` the shell's name and `SHELL` its path; several words are
+/// executed directly; with none the shell starts as itself (`argv[0]` its
+/// path, not a login `-name`). A `default-shell` that is not usable is
+/// `/bin/sh`.
+#[test]
+fn a_popup_runs_through_the_default_shell() {
+    let srv = start();
+    let shell = srv.home.join("pshell");
+    std::os::unix::fs::symlink(fs::canonicalize("/bin/sh").expect("sh"), &shell).expect("link");
+    let shell = shell.display().to_string();
+    srv.cmd(&["set-option", "-g", "default-shell", &shell])
+        .expect("default-shell");
+    let _a = attach(&srv, "main");
+
+    let out = srv.home.join("one-word.txt");
+    let script = format!("echo \"$0 $SHELL\" > {}", out.display());
+    let child = popup(&srv, &["-E", &script]);
+    assert!(wait_child(child, WAIT).expect("answers").success());
+    assert_eq!(read(&out), format!("pshell {shell}\n"));
+
+    let out = srv.home.join("words.txt");
+    let script = format!("echo \"$0 $SHELL\" > {}", out.display());
+    let child = popup(&srv, &["-E", "/bin/sh", "-c", &script, "words"]);
+    assert!(wait_child(child, WAIT).expect("answers").success());
+    assert_eq!(read(&out), format!("words {shell}\n"));
+
+    let out = srv.home.join("bare.txt");
+    let mut a = attach(&srv, "main");
+    let child = popup(&srv, &["-E", "-c", &last_client(&srv)]);
+    a.wait_until("the popup's prompt", WAIT, |t| t.contains('│'));
+    a.send(format!("echo \"[$0]\" > {}; exit\r", out.display()));
+    assert!(wait_child(child, WAIT).expect("answers").success());
+    assert_eq!(read(&out), format!("[{shell}]\n"));
+}
+
 /// Case 4: a hidden variable (`set-environment -gh`) stays out of the
 /// popup, as tmux 3.7b keeps it out of a popup's command (recorded); a
 /// visible global and a session variable reach it, and so does `TMUX`,
@@ -332,6 +369,10 @@ fn close_on_exit_and_the_close_keys() {
 #[test]
 fn closing_a_popup_ends_its_process_group_without_zombies() {
     let srv = start();
+    // The hangup's status is the shell's: the popup runs through
+    // `default-shell`, which is the tester's `$SHELL` unless set.
+    srv.cmd(&["set-option", "-g", "default-shell", "/bin/sh"])
+        .expect("default-shell");
     let mut a = attach(&srv, "main");
     let pids = srv.home.join("pids.txt");
     let script = format!("sleep 300 & echo $$ $! > {}; echo up; wait", pids.display());

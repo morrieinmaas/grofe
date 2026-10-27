@@ -440,6 +440,8 @@ async fn run_source(
     let child = {
         let _lock = pane::spawn_lock();
         tokio::process::Command::new("/bin/sh")
+            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
+            .arg0("sh")
             .arg("-c")
             .arg(cmd)
             .env_clear()
@@ -898,6 +900,18 @@ mod tests {
         let inline = register(&mut state, None, "date", None, None);
         assert_eq!(inline, format!("@{}", inline_key("date")));
         assert_eq!(state.sources.entries.len(), 2);
+    }
+
+    /// As tmux's `format_job` (`job_run` with `JOB_NOWAIT`): `/bin/sh` with
+    /// `argv[0]` `sh`.
+    #[tokio::test]
+    async fn a_source_runs_bin_sh_as_sh() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let (jobs, _rx) = mpsc::channel(1);
+        let cmd = format!("echo \"$0\" > '{}'", out.display());
+        run_source(&cmd, Vec::new(), Duration::from_secs(5), &jobs).await;
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "sh\n");
     }
 
     #[test]

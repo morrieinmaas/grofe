@@ -23,6 +23,8 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         id: PaneId(id),
         session: SessionId(0),
         argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+        shell: "/bin/sh".to_string(),
+        login: true,
         cwd: std::env::temp_dir(),
         // The whole environment (a pane inherits none of the server's).
         env: std::env::vars().collect(),

@@ -96,8 +96,16 @@ pub struct PaneSpawn {
     pub id: PaneId,
     /// The session the pane's window belongs to (for `TMUX`, TC.1).
     pub session: SessionId,
-    /// `None` starts the user's shell (`$SHELL`, else `/bin/sh`) as a login shell.
+    /// What to run, as tmux's `spawn_pane`: one word is a command string for
+    /// `shell -c`, several are executed directly, none starts `shell`.
     pub argv: Option<Vec<String>>,
+    /// The shell (`default-shell` once tmux's `checkshell` passed it, else
+    /// `/bin/sh`): what a one-word `argv` runs through and what no `argv`
+    /// starts.
+    pub shell: String,
+    /// With no `argv`, whether `shell` is a login shell (`-zsh` as its
+    /// `argv[0]`, as a pane's); a popup's runs plain.
+    pub login: bool,
     pub cwd: PathBuf,
     /// The child's whole environment (the server's own is not inherited;
     /// `dispatch::pane_env` builds it from the server environment, TC.5);
@@ -1078,17 +1086,21 @@ fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
     env
 }
 
-/// The shell for a pane with no argv: `SHELL` from the spawn env, then the
-/// server's ([`pick_shell`]).
-fn default_shell(spec: &PaneSpawn) -> String {
-    pick_shell(
-        spec.env
-            .iter()
-            .rev()
-            .find(|(k, _)| k == "SHELL")
-            .map(|(_, v)| v.clone())
-            .or_else(|| std::env::var("SHELL").ok()),
-    )
+/// tmux's `checkshell`: an absolute path that may be executed and is not
+/// tmux itself.
+pub fn check_shell(shell: &str) -> bool {
+    shell.starts_with('/')
+        && shell.rsplit('/').next() != Some("tmux")
+        && access(shell, AccessFlags::X_OK).is_ok()
+}
+
+/// The shell tmux starts panes and `default-shell` commands with:
+/// `candidate` if it passes [`check_shell`], else `/bin/sh`.
+pub fn pane_shell(candidate: Option<&str>) -> String {
+    candidate
+        .filter(|s| check_shell(s))
+        .unwrap_or("/bin/sh")
+        .to_string()
 }
 
 /// `candidate` when it is an executable absolute path (tmux's
@@ -1135,7 +1147,16 @@ fn spawn_child(
     spec: &PaneSpawn,
     size: Size,
 ) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>, Option<PathBuf>)> {
-    let mut cmd = match &spec.argv {
+    let name = Path::new(&spec.shell)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| spec.shell.clone());
+    let mut cmd = match spec.argv.as_deref() {
+        Some([script]) => {
+            let mut cmd = tokio::process::Command::new(&spec.shell);
+            cmd.arg0(&name).arg("-c").arg(script);
+            cmd
+        }
         Some(argv) => {
             let (prog, args) = argv
                 .split_first()
@@ -1145,13 +1166,10 @@ fn spawn_child(
             cmd
         }
         None => {
-            let shell = default_shell(spec);
-            let name = Path::new(&shell)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| shell.clone());
-            let mut cmd = tokio::process::Command::new(&shell);
-            cmd.arg0(format!("-{name}"));
+            let mut cmd = tokio::process::Command::new(&spec.shell);
+            if spec.login {
+                cmd.arg0(format!("-{name}"));
+            }
             cmd
         }
     };
@@ -1205,6 +1223,8 @@ mod tests {
             id: PaneId(0),
             session: SessionId(0),
             argv: None,
+            shell: "/bin/sh".into(),
+            login: true,
             cwd: PathBuf::from("/"),
             env: Vec::new(),
             cols: 80,
@@ -1251,7 +1271,7 @@ mod tests {
     async fn a_failed_exec_gives_a_dead_pane_with_status_1() {
         let (tx, mut rx) = mpsc::channel(8);
         let handle = PaneHandle::spawn(
-            spec_for(&["/nonexistent/grofe-no-such-program"]),
+            spec_for(&["/nonexistent/grofe-no-such-program", "arg"]),
             tx,
             Arc::new(Notify::new()),
         )
@@ -1623,26 +1643,24 @@ mod tests {
         assert_eq!(handle.reported_path(), Some(there));
     }
 
-    /// D2: a stale `SHELL` falls back to the passwd shell, as tmux's
-    /// `getshell` does, and to `/bin/sh` only when that is unusable too.
+    /// A `default-shell` that fails tmux's `checkshell` is `/bin/sh` when a
+    /// pane starts, where tmux's `spawn_pane` and `job_run` fall back.
     #[test]
-    fn a_stale_shell_falls_back_to_the_passwd_shell() {
-        let spec = |shell: &str| PaneSpawn {
-            env: vec![("SHELL".to_string(), shell.to_string())],
-            ..spec_with_term("xterm-256color")
-        };
-        let passwd = passwd_shell()
-            .filter(|s| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok())
-            .unwrap_or_else(|| "/bin/sh".into());
-        assert_eq!(default_shell(&spec("/nonexistent/grofe-shell")), passwd);
-        assert_eq!(default_shell(&spec("sh")), passwd);
-        assert_eq!(default_shell(&spec("/etc/hosts")), passwd);
-        assert_eq!(default_shell(&spec("/bin/sh")), "/bin/sh");
+    fn an_unusable_default_shell_is_bin_sh() {
+        for bad in [
+            "/nonexistent/grofe-shell",
+            "sh",
+            "/etc/hosts",
+            "/usr/bin/tmux",
+        ] {
+            assert_eq!(pane_shell(Some(bad)), "/bin/sh", "{bad}");
+        }
+        assert_eq!(pane_shell(None), "/bin/sh");
         let sh = std::fs::canonicalize("/bin/sh")
             .unwrap()
             .display()
             .to_string();
-        assert_eq!(default_shell(&spec(&sh)), sh);
+        assert_eq!(pane_shell(Some(&sh)), sh);
     }
 
     /// D2: with no `SHELL` anywhere, the passwd entry's shell.

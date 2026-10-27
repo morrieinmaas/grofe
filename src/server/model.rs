@@ -200,6 +200,9 @@ pub struct Pane {
     pub window: WindowId,
     /// What was spawned; `None` is the user's shell.
     pub argv: Option<Vec<String>>,
+    /// The shell the pane started with, which a respawn keeps (tmux's
+    /// `wp->shell`).
+    pub shell: String,
     pub cwd: PathBuf,
     /// The argv that brings this pane's process back; `None` starts a shell.
     pub resume: Option<Vec<String>>,
@@ -369,6 +372,15 @@ impl Model {
     pub fn default_shell(&self, session: SessionId) -> Option<String> {
         self.options
             .lookup("default-shell", &[options::Owner::Session(session)])
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    }
+
+    /// `default-command` for `session`: what a new pane runs when it is
+    /// given no command, through its shell.
+    pub fn default_command(&self, session: SessionId) -> Option<String> {
+        self.options
+            .lookup("default-command", &[options::Owner::Session(session)])
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     }
@@ -959,6 +971,8 @@ mod tests {
             id,
             session: SessionId(0),
             argv: Some(vec!["sleep".to_string(), "30".to_string()]),
+            shell: "/bin/sh".to_string(),
+            login: true,
             cwd: std::env::temp_dir(),
             env: Vec::new(),
             cols: 80,
@@ -978,6 +992,7 @@ mod tests {
                 uid: id.to_string(),
                 window,
                 argv: None,
+                shell: "/bin/sh".to_string(),
                 cwd: std::env::temp_dir(),
                 resume: None,
                 dead: None,

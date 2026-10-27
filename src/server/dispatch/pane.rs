@@ -8,7 +8,7 @@ use crate::cmd::{
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options;
-use crate::server::dispatch::{command_argv, resolve_cwd, spawn_pane};
+use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
 use crate::server::layout::{Insert, LayoutError};
 use crate::server::model::Model;
@@ -84,15 +84,7 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         })?;
 
     unzoom(&mut state.model, window);
-    let new = spawn_pane(
-        state,
-        (session, window),
-        env,
-        command_argv(c.command),
-        cwd,
-        size,
-        cell_px,
-    )?;
+    let new = spawn_pane(state, (session, window), env, c.command, cwd, size, cell_px)?;
     let model = &mut state.model;
     let Some(w) = model.windows.get_mut(&window) else {
         model.panes.remove(&new);
@@ -444,16 +436,22 @@ pub(crate) fn respawn(
         .get(&pane)
         .ok_or_else(|| format!("can't find pane: {pane}"))?;
     let argv = match command {
-        Some(command) => command_argv(Some(command)),
+        Some(command) => Some(command),
         None => p.resume.clone(),
     };
     let session = model.windows[&p.window].session;
+    // As tmux's `spawn_pane` on respawn: the pane keeps the shell it started with.
+    let shell = p.shell.clone();
+    let mut env = super::pane_env(state, session, pane, model.sessions[&session].env.clone());
+    env.push(("SHELL".to_string(), shell.clone()));
     let spec = PaneSpawn {
         id: pane,
         session,
         argv: argv.clone(),
+        shell,
+        login: true,
         cwd: usable_cwd(cwd.unwrap_or_else(|| p.cwd.clone())),
-        env: super::pane_env(state, session, pane, model.sessions[&session].env.clone()),
+        env,
         cols: p.cols,
         rows: p.rows,
         history_limit: model.history_limit(model.windows[&p.window].session),

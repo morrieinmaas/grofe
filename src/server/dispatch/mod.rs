@@ -20,7 +20,7 @@
 //! expanded ([`menu::expand_aliases`]). No M3.6 task edits this file.
 //!
 //! Shared helpers for handlers that spawn panes live here too:
-//! [`spawn_pane`], [`command_argv`] and [`resolve_cwd`].
+//! [`spawn_pane`] and [`resolve_cwd`].
 
 pub mod bindings;
 pub mod buffers;
@@ -44,7 +44,7 @@ use ulid::Ulid;
 use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{Model, Pane};
-use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
+use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
 use crate::server::{State, clients, graphics, prompt};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
@@ -391,19 +391,6 @@ pub(crate) fn not_implemented(verb: &str) -> Result<String, String> {
     Err(format!("not implemented: {verb}"))
 }
 
-/// The argv a trailing shell command runs as: a single argument goes
-/// through `/bin/sh -c` (as tmux does), several are executed directly, none
-/// means the user's shell.
-pub(crate) fn command_argv(command: Option<Vec<String>>) -> Option<Vec<String>> {
-    match command {
-        Some(mut args) if args.len() == 1 => {
-            let script = args.remove(0);
-            Some(vec!["/bin/sh".to_string(), "-c".to_string(), script])
-        }
-        other => other,
-    }
-}
-
 /// A `-c` value, its formats expanded against the `target` pane (spec
 /// §4.5: at execution time, so `#{pane_current_path}` is the target's cwd
 /// now) and made absolute against the request's cwd; `default` when no
@@ -466,15 +453,19 @@ pub(crate) fn spawn_pane(
     let id = state.model.alloc_pane_id();
     let cwd = usable_cwd(cwd);
     let mut env = pane_env(state, session, id, env);
-    // tmux starts a pane's shell from `default-shell` and exports it as
-    // `SHELL`; the last `SHELL` is the one the pane starts.
-    if let Some(shell) = state.model.default_shell(session) {
-        env.push(("SHELL".to_string(), shell));
-    }
+    // As tmux's `spawn_pane`: no command means `default-command`, and the
+    // pane's shell is `default-shell` (else `/bin/sh`), exported as `SHELL`.
+    let argv = argv
+        .filter(|a| !a.is_empty())
+        .or_else(|| state.model.default_command(session).map(|c| vec![c]));
+    let shell = pane_shell(state.model.default_shell(session).as_deref());
+    env.push(("SHELL".to_string(), shell.clone()));
     let spec = PaneSpawn {
         id,
         session,
         argv: argv.clone(),
+        shell: shell.clone(),
+        login: true,
         cwd: cwd.clone(),
         env,
         cols,
@@ -496,6 +487,7 @@ pub(crate) fn spawn_pane(
             window,
             resume: argv.clone(),
             argv,
+            shell,
             cwd,
             dead: None,
             cols,
