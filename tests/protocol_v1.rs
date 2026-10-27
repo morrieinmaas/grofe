@@ -665,6 +665,21 @@ fn a_hello_of_another_version_gets_the_named_error_and_a_close() {
     assert!(fixture("error-version-older").ends_with("upgrade the client\"}"));
 }
 
+/// `pane` is optional in a hello (docs/protocol-v1.md section 2): absent is
+/// `null`, the same as a client outside any pane.
+#[test]
+fn a_hello_without_pane_is_accepted_as_no_pane() {
+    for name in ["hello-control", "hello-control-tmux", "hello-attach"] {
+        let mut value: serde_json::Value = serde_json::from_str(&fixture(name)).unwrap();
+        assert!(value.as_object_mut().unwrap().remove("pane").is_some());
+        let hello = decode_hello(&value.to_string()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let ctx = match hello {
+            Hello::Control(ctx) | Hello::Attach { ctx, .. } => ctx,
+        };
+        assert_eq!(ctx.pane, None, "{name}");
+    }
+}
+
 #[test]
 fn an_unknown_mode_is_a_malformed_hello_and_closes() {
     let srv = TestServer::start();

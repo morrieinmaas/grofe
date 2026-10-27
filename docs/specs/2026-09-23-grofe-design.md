@@ -393,11 +393,14 @@ resolve correctly for a CLI call made from inside a pane:
 ```json
 {"grofe": 1, "mode": "control", "dialect": "grofe", "cwd": "/home/u/src", "pane": "%3", "env": {"SSH_AUTH_SOCK": "..."}}
 {"grofe": 1, "mode": "attach", "dialect": "tmux", "cwd": "...", "pane": null, "env": {...},
- "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true},
- "target": "main", "detach_others": false, "nest": false}
+ "cols": 200, "rows": 50, "term": "xterm-ghostty",
+ "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true, "sixel": false, "cell_px": [9, 18]},
+ "target": "main", "detach_others": false, "nest": false, "tty": "/dev/ttys004"}
 ```
 
-`pane` is `$GROFE_PANE` when set. `dialect` is `tmux` when the CLI was invoked
+`pane` is `$GROFE_PANE` when set; it may be `null` or left out. `cell_px` is
+`null` when the terminal did not report a cell size, and `tty` (the client's
+terminal) is left out when it has none. `dialect` is `tmux` when the CLI was invoked
 as `tmux` (D12), as in the attach example from `tmux attach`, and defaults to
 `grofe`. **Nested attach:** attaching from inside a
 grofe pane or popup is allowed when the target session is a different one;
@@ -1152,7 +1155,9 @@ after the freeze.
   `subscribe` is an error the same way (§7.2). An unknown `mode` in a hello
   is a malformed hello and closes the connection.
 - **Shape.** A reply echoes its request's `id` and carries `ok` with `out`,
-  or `ok: false` with `err`. Replies to one connection's requests come in
+  or `ok: false` with `err` and, only when not empty, `out` (what the command
+  printed before it failed) and `status` (the exit status the one-shot CLI
+  uses, 1 when absent). Replies to one connection's requests come in
   request order; events carry no `id` and interleave between replies.
 - **Attach frames** are the six kinds in §4.6, frozen. An unknown frame
   kind closes the connection.

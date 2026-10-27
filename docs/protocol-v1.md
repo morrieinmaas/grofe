@@ -29,7 +29,7 @@ Common fields (every hello):
 | `mode` | `"control"` or `"attach"`, required | the mode for the connection |
 | `dialect` | `"grofe"` or `"tmux"`, optional, default `grofe` | the command language of the argv (`tmux` when the CLI was invoked as `tmux`, D12) |
 | `cwd` | string, required | the client's working directory |
-| `pane` | `"%N"` or `null`, required | `$GROFE_PANE` when set; the `Current` target |
+| `pane` | `"%N"` or `null`, optional, default `null` | `$GROFE_PANE` when set; the `Current` target |
 | `env` | object of strings, required | the client's environment, for panes it starts |
 
 Attach adds `cols`, `rows` (integers), `term` (string), `caps` (object of
@@ -96,6 +96,8 @@ An error is a reply with `ok: false`. The ones the protocol itself defines:
 | unknown verb | `unknown command: <verb>` | `error-unknown-verb.json` | open |
 | unknown event in `subscribe` | `unknown event: <name>` | `error-unknown-event.json` | open |
 | request line that does not parse | `malformed request: ...` (`id` 0) | | open |
+| `grofe control` only, from the bridge itself and never sent to the server: stdin line over 16 MiB | `request line over 16777216 bytes` (`id` 0) | | open |
+| `grofe control` only, likewise: stdin line that is not UTF-8 | `request line is not valid UTF-8` (`id` 0) | | open |
 
 **Version mismatch.** Every hello carries `"grofe": 1`; the server speaks one
 version and there is no negotiation. A hello of another version, in either
@@ -103,6 +105,11 @@ mode, gets one error line (the `id` is `0`) and the connection is closed. The
 side named is the one with the lower version: `upgrade the client` when the
 peer is older, `upgrade the server` when it is newer. The wording is part of
 v1.
+
+The two bridge texts are `ok: false` reply lines the bridge prints on stdout
+in place of a request it could not send (section 9). When the server closes
+the connection with a request unanswered, the bridge prints nothing more and
+exits 1 with `server closed the connection without replying` on stderr.
 
 Other errors are the command's own (tmux 3.7b's texts for tmux-dialect
 requests, grofe's for grofe-dialect ones).
