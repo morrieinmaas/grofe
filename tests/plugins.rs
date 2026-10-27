@@ -279,6 +279,9 @@ fn the_fifth_crash_within_the_window_disables_the_plugin() {
     let srv = start_with(srv, &plugin_table("p", &p, ""), Some("0.05"));
     let mut pid = running(&srv, "p");
     for crash in 1..=5 {
+        // "running" is the fork; the script has not necessarily written its
+        // line yet, and a kill before that loses it.
+        wait_until(|| lines(&starts) >= crash, WAIT).expect("plugin wrote its start line");
         sigkill(pid);
         if crash < 5 {
             let prev = pid;
@@ -614,6 +617,108 @@ fn a_relative_cmd_runs_from_the_config_file_s_directory() {
 }
 
 // ---- config: schema, merge, resolution ----
+
+#[test]
+fn a_plugin_inherits_only_stdio_from_the_server() {
+    let srv = TestServer::unstarted();
+    let out = srv.home.join("fds");
+    let p = script(
+        &srv,
+        "p.sh",
+        &format!("ls /dev/fd > {}\nexec sleep 600", out.display()),
+    );
+    let srv = start_with(srv, &plugin_table("p", &p, "restart = \"never\""), None);
+    running(&srv, "p");
+    wait_until(
+        || fs::read_to_string(&out).is_ok_and(|t| t.ends_with('\n')),
+        WAIT,
+    )
+    .expect("fd list");
+    // `ls` itself may hold its directory open as one more descriptor; the
+    // server's sockets, pty masters and logs are many, and well above it.
+    let fds: Vec<u32> = fs::read_to_string(&out)
+        .expect("fds")
+        .split_whitespace()
+        .filter_map(|f| f.parse().ok())
+        .collect();
+    assert!(
+        fds.iter().filter(|f| **f > 3).count() == 0,
+        "the plugin holds server descriptors: {fds:?}"
+    );
+}
+
+#[test]
+fn a_plugin_starts_with_default_signals_even_if_the_server_ignores_one() {
+    use std::os::unix::process::CommandExt;
+    let srv = TestServer::unstarted();
+    let survived = srv.home.join("survived");
+    // With SIGHUP at its default the shell dies on its own HUP.
+    let p = script(
+        &srv,
+        "p.sh",
+        &format!("kill -HUP $$\ntouch {}", survived.display()),
+    );
+    write_config(&srv, &plugin_table("p", &p, "restart = \"never\""));
+    let mut cmd = srv.command();
+    cmd.arg("start-server");
+    // SAFETY: only signal(2), which is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::sys::signal::signal(Signal::SIGHUP, nix::sys::signal::SigHandler::SigIgn)?;
+            Ok(())
+        });
+    }
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(out.status.success(), "start-server: {}", out.stderr);
+    wait_state(&srv, "p", "exited");
+    assert!(!survived.exists(), "the plugin ran with SIGHUP ignored");
+}
+
+#[test]
+fn a_plugin_re_added_by_reload_waits_for_the_old_process() {
+    let srv = TestServer::unstarted();
+    let pids = srv.home.join("pids");
+    // Ignores TERM, so the old process lives until the grace ends.
+    let p = script(
+        &srv,
+        "p.sh",
+        &format!(
+            "trap '' TERM\necho $$ >> {}\nwhile :; do sleep 0.1; done",
+            pids.display()
+        ),
+    );
+    let table = plugin_table("p", &p, "");
+    let srv = start_with(srv, &table, Some("0.5"));
+    let first = running(&srv, "p");
+    wait_until(|| lines(&pids) == 1, WAIT).expect("first pid");
+    write_config(&srv, "mouse = true\n");
+    srv.cmd(&["reload"]).expect("reload");
+    write_config(&srv, &table);
+    srv.cmd(&["reload"]).expect("reload");
+    wait_until(|| lines(&pids) == 2, WAIT).expect("second pid");
+    assert!(
+        !alive(first),
+        "the old process was still up at the new start"
+    );
+    let second = running(&srv, "p");
+    assert_ne!(first, second);
+}
+
+#[test]
+fn a_stopped_plugin_stays_off_even_if_it_exits_as_it_is_stopped() {
+    let srv = TestServer::unstarted();
+    let p = script(&srv, "p.sh", "exit 1");
+    // Crashing in a loop at scale 0.01 puts the supervisor in after_exit
+    // at every moment; the reload must still leave the state `off`.
+    let srv = start_with(srv, &plugin_table("p", &p, ""), Some("0.01"));
+    wait_until(|| row(&srv, "p").restarts >= 1, WAIT).expect("crashing");
+    write_config(&srv, &plugin_table("p", &p, "enabled = false"));
+    srv.cmd(&["reload"]).expect("reload");
+    for _ in 0..40 {
+        assert_eq!(row(&srv, "p").state, "off");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 
 fn config_env(dir: &Path) -> Env {
     Env {

@@ -287,7 +287,7 @@ const MAX_FD_SCAN: u32 = 65536;
 /// read before `fork` and passed into `pre_exec` by value: `pre_exec` runs in
 /// the child between `fork` and `exec`, where only async-signal-safe calls
 /// are allowed, and `getrlimit` is not one of them.
-fn nofile_limit() -> u32 {
+pub(crate) fn nofile_limit() -> u32 {
     let mut rl = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -316,7 +316,7 @@ fn nofile_limit() -> u32 {
 ///
 /// Async-signal-safe: no allocation, no locks, and never reads `/dev/fd` or
 /// `/proc` (`opendir` allocates).
-fn cloexec_inherited_fds(limit: u32) {
+pub(crate) fn cloexec_inherited_fds(limit: u32) {
     #[cfg(target_os = "linux")]
     {
         // SAFETY: a bare syscall, no allocation. Marks every fd in

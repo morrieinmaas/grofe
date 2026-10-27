@@ -20,11 +20,13 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nix::libc;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use tokio::io::AsyncReadExt;
@@ -111,6 +113,10 @@ impl Phase {
 /// What `list-plugins` shows; the supervisor task keeps it current.
 #[derive(Debug, Clone, Copy)]
 struct Status {
+    /// Which supervisor task may change this status; stopping or
+    /// relaunching a plugin moves it on, so a task being stopped cannot
+    /// overwrite what the actor set after it.
+    generation: u64,
     phase: Phase,
     pid: Option<u32>,
     restarts: u32,
@@ -140,6 +146,9 @@ pub struct Plugins {
     /// restored); a config applied before that only records `desired`.
     started: bool,
     entries: BTreeMap<String, Entry>,
+    /// Plugins dropped from the config, whose process may still be going
+    /// down: a plugin of the same name waits for it and shares its log.
+    retired: BTreeMap<String, Retired>,
     timing: Timing,
     /// `<state>/plugins`.
     dir: PathBuf,
@@ -151,6 +160,7 @@ impl Default for Plugins {
             desired: BTreeMap::new(),
             started: false,
             entries: BTreeMap::new(),
+            retired: BTreeMap::new(),
             timing: Timing::from_env(),
             dir: paths::state_dir(&Env::from_process()).join("plugins"),
         }
@@ -167,6 +177,14 @@ struct Entry {
     status: SharedStatus,
     log: Arc<Mutex<Log>>,
     run: Option<Run>,
+    /// The last supervisor task that was asked to stop; the next one waits
+    /// for it, so two processes of one plugin never overlap.
+    stopping: Option<JoinHandle<()>>,
+}
+
+struct Retired {
+    log: Arc<Mutex<Log>>,
+    stopping: Option<JoinHandle<()>>,
 }
 
 /// A running supervisor task and the way to stop it.
@@ -176,7 +194,19 @@ struct Run {
 }
 
 impl Entry {
-    fn new(name: &str, cfg: ConfigPlugin, dir: &std::path::Path) -> Entry {
+    fn new(
+        name: &str,
+        cfg: ConfigPlugin,
+        dir: &std::path::Path,
+        retired: Option<Retired>,
+    ) -> Entry {
+        let (log, stopping) = match retired {
+            Some(r) => (r.log, r.stopping),
+            None => (
+                Arc::new(Mutex::new(Log::new(dir.join(format!("{name}.log"))))),
+                None,
+            ),
+        };
         let phase = if cfg.enabled {
             Phase::Backoff
         } else {
@@ -185,44 +215,50 @@ impl Entry {
         Entry {
             cfg,
             status: Arc::new(Mutex::new(Status {
+                generation: 0,
                 phase,
                 pid: None,
                 restarts: 0,
                 since: SystemTime::now(),
             })),
-            log: Arc::new(Mutex::new(Log::new(dir.join(format!("{name}.log"))))),
+            log,
             run: None,
+            stopping,
         }
     }
 
-    /// Asks the supervisor task to stop its plugin; the handle ends when it
-    /// has.
-    fn stop(&mut self) -> Option<JoinHandle<()>> {
-        let run = self.run.take()?;
-        let _ = run.stop.send(());
-        Some(run.done)
+    /// Asks the supervisor task to stop its plugin, and cuts it off from the
+    /// status. The task ends once the plugin is gone.
+    fn stop(&mut self) {
+        set(&self.status, |s| s.generation += 1);
+        if let Some(run) = self.run.take() {
+            let _ = run.stop.send(());
+            self.stopping = Some(run.done);
+        }
     }
 
-    /// Starts a supervisor task, once `after` (the task it replaces) ends.
-    fn launch(
-        &mut self,
-        name: &str,
-        env: Vec<(String, String)>,
-        timing: Timing,
-        after: Option<JoinHandle<()>>,
-    ) {
-        set(&self.status, |s| s.restarts = 0);
-        enter(&self.status, Phase::Backoff, None);
+    /// Starts a supervisor task, once the one it replaces has ended.
+    fn launch(&mut self, name: &str, env: Vec<(String, String)>, timing: Timing) {
+        let mut generation = 0;
+        set(&self.status, |s| {
+            s.generation += 1;
+            generation = s.generation;
+            s.restarts = 0;
+            s.phase = Phase::Backoff;
+            s.pid = None;
+            s.since = SystemTime::now();
+        });
         let (stop, stopped) = oneshot::channel();
         let sup = Supervisor {
             name: name.to_string(),
             cfg: self.cfg.clone(),
             env,
             status: self.status.clone(),
+            generation,
             log: self.log.clone(),
             timing,
         };
-        let done = tokio::spawn(sup.run(stopped, after));
+        let done = tokio::spawn(sup.run(stopped, self.stopping.take()));
         self.run = Some(Run { stop, done });
     }
 }
@@ -258,20 +294,26 @@ fn reconcile(state: &mut State) {
     for name in removed {
         if let Some(mut e) = state.plugins.entries.remove(&name) {
             e.stop();
+            let retired = Retired {
+                log: e.log.clone(),
+                stopping: e.stopping.take(),
+            };
+            state.plugins.retired.insert(name, retired);
         }
     }
     for (name, cfg) in desired {
         let env = plugin_env(state, &name, &cfg);
         let Plugins {
             entries,
+            retired,
             timing,
             dir,
             ..
         } = &mut state.plugins;
         let Some(entry) = entries.get_mut(&name) else {
-            let mut entry = Entry::new(&name, cfg.clone(), dir);
+            let mut entry = Entry::new(&name, cfg.clone(), dir, retired.remove(&name));
             if cfg.enabled {
-                entry.launch(&name, env, *timing, None);
+                entry.launch(&name, env, *timing);
             }
             entries.insert(name, entry);
             continue;
@@ -284,10 +326,10 @@ fn reconcile(state: &mut State) {
                 entry.stop();
                 enter(&entry.status, Phase::Off, None);
             }
-            (true, false) => entry.launch(&name, env, *timing, None),
+            (true, false) => entry.launch(&name, env, *timing),
             (true, true) if changed => {
-                let after = entry.stop();
-                entry.launch(&name, env, *timing, after);
+                entry.stop();
+                entry.launch(&name, env, *timing);
             }
             _ => {}
         }
@@ -306,8 +348,8 @@ pub fn restart(state: &mut State, name: &str) -> Result<(), String> {
     let env = plugin_env(state, name, &cfg);
     let timing = state.plugins.timing;
     if let Some(entry) = state.plugins.entries.get_mut(name) {
-        let after = entry.stop();
-        entry.launch(name, env, timing, after);
+        entry.stop();
+        entry.launch(name, env, timing);
     }
     Ok(())
 }
@@ -335,8 +377,16 @@ pub async fn shutdown(state: &mut State) {
     let grace = state.plugins.timing.grace;
     let mut done = Vec::new();
     for e in state.plugins.entries.values_mut() {
-        done.extend(e.stop());
+        e.stop();
+        done.extend(e.stopping.take());
     }
+    done.extend(
+        state
+            .plugins
+            .retired
+            .values_mut()
+            .filter_map(|r| r.stopping.take()),
+    );
     let all = async {
         for d in done {
             let _ = d.await;
@@ -376,6 +426,8 @@ struct Supervisor {
     cfg: ConfigPlugin,
     env: Vec<(String, String)>,
     status: SharedStatus,
+    /// The [`Status::generation`] this task may write under.
+    generation: u64,
     log: Arc<Mutex<Log>>,
     timing: Timing,
 }
@@ -391,6 +443,10 @@ impl Supervisor {
         if let Some(prev) = after {
             let _ = prev.await;
         }
+        // Stopped while it waited for the previous process to go.
+        if !matches!(stop.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
+            return;
+        }
         let t = self.timing;
         let mut backoff = t.initial;
         let mut crashes: VecDeque<Instant> = VecDeque::new();
@@ -402,7 +458,7 @@ impl Supervisor {
                         return;
                     };
                     let guard = Group(Some(Pid::from_raw(pid as i32)));
-                    enter(&self.status, Phase::Running, Some(pid));
+                    self.enter(Phase::Running, Some(pid));
                     tokio::select! {
                         exit = child.wait() => {
                             // Whatever the plugin left running goes with it.
@@ -443,7 +499,7 @@ impl Supervisor {
                 _ = &mut stop => return,
             }
             backoff = (backoff * 2).min(t.max);
-            set(&self.status, |s| s.restarts += 1);
+            self.update(|s| s.restarts += 1);
         }
     }
 
@@ -462,7 +518,7 @@ impl Supervisor {
             Restart::Never => false,
         };
         if !restarts {
-            enter(&self.status, Phase::Exited, None);
+            self.enter(Phase::Exited, None);
             return Next::Done;
         }
         if alive >= t.reset_after {
@@ -477,7 +533,7 @@ impl Supervisor {
             crashes.pop_front();
         }
         if crashes.len() >= MAX_CRASHES {
-            enter(&self.status, Phase::Disabled, None);
+            self.enter(Phase::Disabled, None);
             let msg = format!(
                 "disabled after {MAX_CRASHES} crashes within {}s",
                 t.window.as_secs_f64().round()
@@ -486,7 +542,7 @@ impl Supervisor {
             eprintln!("grofe plugin {}: {msg}", self.name);
             return Next::Done;
         }
-        enter(&self.status, Phase::Backoff, None);
+        self.enter(Phase::Backoff, None);
         Next::Restart
     }
 
@@ -496,20 +552,56 @@ impl Supervisor {
         let _lock = pane::spawn_lock();
         let (read, write) = io::pipe()?;
         let write_err = write.try_clone()?;
-        let child = Command::new(&self.cfg.cmd[0])
-            .args(&self.cfg.cmd[1..])
+        let fd_limit = pane::nofile_limit();
+        let mut cmd = Command::new(&self.cfg.cmd[0]);
+        cmd.args(&self.cfg.cmd[1..])
             .env_clear()
             .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(Stdio::from(write))
             .stderr(Stdio::from(write_err))
             .process_group(0)
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        // SAFETY: the closure only makes async-signal-safe libc calls.
+        unsafe {
+            cmd.pre_exec(move || {
+                // std empties the signal mask and restores SIGPIPE; the
+                // rest of the dispositions are the server's, so a server
+                // started with a signal ignored must not pass that on.
+                for sig in 1..32 {
+                    if sig != libc::SIGKILL && sig != libc::SIGSTOP {
+                        libc::signal(sig, libc::SIG_DFL);
+                    }
+                }
+                // macOS sets close-on-exec on an accepted socket after the
+                // fact, so a client connection can be open here.
+                pane::cloexec_inherited_fds(fd_limit);
+                Ok(())
+            });
+        }
+        let child = cmd.spawn()?;
         let receiver = pipe::Receiver::from_owned_fd(OwnedFd::from(read))?;
         let log = self.log.clone();
         let pump = tokio::spawn(copy_to_log(receiver, log));
         Ok((child, pump))
+    }
+
+    /// Changes the status, unless the plugin has been stopped or relaunched
+    /// since this task started.
+    fn update(&self, f: impl FnOnce(&mut Status)) {
+        set(&self.status, |s| {
+            if s.generation == self.generation {
+                f(s);
+            }
+        });
+    }
+
+    fn enter(&self, phase: Phase, pid: Option<u32>) {
+        self.update(|s| {
+            s.phase = phase;
+            s.pid = pid;
+            s.since = SystemTime::now();
+        });
     }
 
     /// A line in the plugin's log, from the server.
@@ -691,6 +783,7 @@ mod tests {
             sources: BTreeMap::new(),
         };
         let status = Arc::new(Mutex::new(Status {
+            generation: 0,
             phase: Phase::Running,
             pid: Some(1),
             restarts: 0,
@@ -701,6 +794,7 @@ mod tests {
             cfg,
             env: Vec::new(),
             status,
+            generation: 0,
             log: Arc::new(Mutex::new(Log::new(PathBuf::from("/nonexistent/t.log")))),
             timing,
         }

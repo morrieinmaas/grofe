@@ -1161,7 +1161,7 @@ restart = "always"
 
 | Key | Type, default | Meaning |
 |---|---|---|
-| `cmd` | array of strings, required, non-empty | the argv, run directly and never through a shell. `cmd[0]` without a `/` is looked up on the plugin's `PATH`; a relative path containing `/` resolves against the directory of the file that set `cmd`, as `source-file` does (§5.1) |
+| `cmd` | array of strings, required, non-empty | the argv, run directly and never through a shell. `cmd[0]` without a `/` is looked up on the plugin's `PATH`; a relative path containing `/` resolves against the directory of the file that set `cmd`, as `source-file` does (§5.1). Any later word that contains `/`, does not start with `/` or `-`, and names an existing path in that directory resolves the same way, so `["sh", "event-log/event-log.sh"]` finds its script wherever the server runs; a word that names nothing there is left as written |
 | `env` | table of strings, empty | variables added over the server environment |
 | `enabled` | boolean, `true` | `false` declares the plugin without starting it |
 | `restart` | `always` (default), `on-failure` or `never` | `always` restarts after any exit; `on-failure` only after a non-zero exit or a signal, and an exit 0 leaves it `exited`; `never` leaves it `exited` after any exit |
@@ -1186,7 +1186,12 @@ restart = "always"
   once M4 lands, after its restore), each spawned off the actor under the
   spawn lock, in its own process group, so a plugin that never reads its
   socket delays nothing. On server exit each group gets SIGTERM, then
-  SIGKILL after 2 s, so `kill-server` leaves no plugin process.
+  SIGKILL after 2 s, so `kill-server` leaves no plugin process. When the
+  leader exits, the rest of its group is SIGKILLed, so a plugin that forks
+  and leaves cannot pile up under a restart policy. A plugin gets default
+  signal dispositions and only fds 0 to 2. If the server itself dies
+  without running its exit path (SIGKILL, a crash), its plugins are not
+  stopped: nothing ties them to it, and a new server starts its own.
 - **Restarts.** Restarts back off from 1 s, doubling to 60 s, and the backoff
   resets after 60 s alive. Every exit the server did not ask for counts as a
   crash; five crashes within 60 s disable the plugin with a line in the
@@ -1194,8 +1199,11 @@ restart = "always"
 - **`reload`** compares the merged tables: a new or newly enabled plugin
   starts, a removed or disabled one stops, one whose `cmd`, `env` or
   `restart` changed restarts, and the rest are left alone.
+- **Restart count.** `restarts` counts restarts since the plugin was
+  (re)started by the server, `plugin-restart` or a `reload` that changed it.
 - **`list-plugins`** prints `name`, `pid`, `state`, `restarts` and `since`
-  per plugin. The states are `running`, `backoff` (waiting to restart),
+  per plugin, tab separated, one line each, without a header (`-` for no
+  pid). The states are `running`, `backoff` (waiting to restart),
   `exited` (its policy does not restart it), `disabled` (five crashes) and
   `off` (`enabled = false`).
 - **`plugin-restart <name>`** stops the plugin as on server exit and starts
