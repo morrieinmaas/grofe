@@ -386,11 +386,6 @@ fn tmux(ctx: &ClientCtx) -> bool {
     ctx.dialect == crate::protocol::Dialect::Tmux
 }
 
-/// The error a command's stub answers with until its task lands.
-pub(crate) fn not_implemented(verb: &str) -> Result<String, String> {
-    Err(format!("not implemented: {verb}"))
-}
-
 /// A `-c` value, its formats expanded against the `target` pane (spec
 /// §4.5: at execution time, so `#{pane_current_path}` is the target's cwd
 /// now) and made absolute against the request's cwd; `default` when no
