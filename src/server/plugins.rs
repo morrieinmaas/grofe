@@ -396,10 +396,11 @@ pub async fn shutdown(state: &mut State) {
 }
 
 /// The environment a plugin gets: the server's global environment (hidden
-/// variables left out), `TMUX` under tmux identity, the plugin's `env`, then
-/// `GROFE`, `GROFE_PLUGIN` and `GROFE_STATE` (the state directory), which `env`
-/// cannot override. A plugin is in no
-/// pane, so it gets no `GROFE_PANE` or `TMUX_PANE`.
+/// variables left out), the plugin's `env`, then `GROFE`, `GROFE_PLUGIN`,
+/// `GROFE_STATE` (the state directory) and, under tmux identity, `TMUX`,
+/// which `env` cannot override (it cannot set `TMUX` at all under grofe
+/// identity). A plugin is in no pane, so it gets no `GROFE_PANE` or
+/// `TMUX_PANE`.
 fn plugin_env(state: &State, name: &str, cfg: &ConfigPlugin) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = hooks::variables(state, None)
         .into_iter()
@@ -410,13 +411,14 @@ fn plugin_env(state: &State, name: &str, cfg: &ConfigPlugin) -> Vec<(String, Str
         env.remove(pane_var);
     }
     let socket = state.socket.display().to_string();
+    env.extend(cfg.env.clone());
+    env.remove("TMUX");
     if state.model.identity == Identity::Tmux {
         env.insert(
             "TMUX".to_string(),
             format!("{socket},{},-1", std::process::id()),
         );
     }
-    env.extend(cfg.env.clone());
     env.insert("GROFE".to_string(), socket);
     env.insert("GROFE_PLUGIN".to_string(), name.to_string());
     env.insert(

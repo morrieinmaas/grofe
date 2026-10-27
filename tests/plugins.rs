@@ -601,6 +601,37 @@ fn the_plugin_env_is_added_and_cannot_override_grofe() {
 }
 
 #[test]
+fn the_plugin_env_cannot_override_tmux_or_grofe_state() {
+    for (identity, tmux_expected) in [("tmux", true), ("grofe", false)] {
+        let srv = TestServer::unstarted();
+        let out = srv.home.join("env.txt");
+        let p = script(
+            &srv,
+            "p.sh",
+            &format!(
+                "echo \"${{TMUX-unset}}|$GROFE_STATE\" > {}\nexec sleep 600",
+                out.display()
+            ),
+        );
+        let extra = "env = { TMUX = \"/nope,1,0\", GROFE_STATE = \"/nope\" }";
+        let config = format!(
+            "compat-identity = \"{identity}\"\n{}",
+            plugin_table("p", &p, extra)
+        );
+        let srv = start_with(srv, &config, None);
+        running(&srv, "p");
+        let text = read(&out);
+        let (tmux, state) = text.trim_end().split_once('|').expect("two fields");
+        assert_ne!(state, "/nope", "{identity}");
+        if tmux_expected {
+            assert!(tmux.contains(&srv.socket.display().to_string()), "{tmux}");
+        } else {
+            assert_eq!(tmux, "unset", "{identity}");
+        }
+    }
+}
+
+#[test]
 fn a_relative_cmd_runs_from_the_config_file_s_directory() {
     let srv = TestServer::unstarted();
     let dir = srv.config_home.join("grofe");

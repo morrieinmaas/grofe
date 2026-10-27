@@ -1188,8 +1188,9 @@ restart = "always"
   override. On a server with tmux identity (D12) a plugin also gets `TMUX`
   in tmux's format, `<socket path>,<server pid>,-1` (the session field is
   `-1`, as tmux gives a process outside any session), so its `tmux` calls
-  reach this server. A plugin is in no pane, so it gets no `GROFE_PANE` or
-  `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
+  reach this server; `env` cannot override `TMUX` either, and on a server
+  with grofe identity it cannot set it at all. A plugin is in no pane, so
+  it gets no `GROFE_PANE` or `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
   `<state dir>/plugins/<name>.log`, rotated at 1 MiB.
 - **Start and stop.** Enabled plugins start after the config loads (and,
   once M4 lands, after its restore), each spawned off the actor under the
