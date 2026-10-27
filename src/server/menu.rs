@@ -118,7 +118,7 @@ pub enum MenuItem {
 /// read it. For `x` a number is the menu's left column; for `y` it is the
 /// row just below the menu (tmux's convention: the menu sits above it).
 /// Either is then moved inside the client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Position {
     Cells(i64),
     /// `C`: the centre of the client.
@@ -132,6 +132,10 @@ pub enum Position {
     /// The pointer's client cell, for a menu a mouse key opens (TC.10, as
     /// tmux's `M`): centred on it for `x`, its top row for `y`.
     Pointer(u16),
+    /// A `-x`/`-y` that reads the popup position variables (`W`, `S`, or a
+    /// format naming `popup_*`): kept raw until the menu's size is known,
+    /// then expanded as tmux does (see [`resolve`]).
+    Expr(String),
 }
 
 /// An open menu, laid out.
@@ -394,6 +398,7 @@ fn place(
         Position::Pane => i64::from(pane.x),
         Position::PaneRight => i64::from(pane.x) + i64::from(pane.cols) - w,
         Position::Pointer(x) => i64::from(x) - w / 2,
+        Position::Expr(_) => 0,
     };
     if n.saturating_add(w) >= cols {
         n = cols - w;
@@ -406,6 +411,7 @@ fn place(
         Position::Centre => (rows - 1) / 2 + h / 2,
         Position::Pane | Position::PaneRight => i64::from(pane.y) + i64::from(pane.rows),
         Position::Pointer(y) => i64::from(y) + h,
+        Position::Expr(_) => 0,
     };
     n = if n < h { 0 } else { n - h };
     if n.saturating_add(h) >= rows {
@@ -458,7 +464,11 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
     let (Ok(w), Ok(h)) = (u16::try_from(width + 4), u16::try_from(rows.len() + 2)) else {
         return false;
     };
-    let Some(at) = place((menu.x, menu.y), (w, h), size, pane) else {
+    let (x, y) = (
+        resolve(state, ctx, id, menu.x, Axis::X, (w, h), size, pane),
+        resolve(state, ctx, id, menu.y, Axis::Y, (w, h), size, pane),
+    );
+    let Some(at) = place((x, y), (w, h), size, pane) else {
         return false;
     };
     let mut shown = Shown {
@@ -474,6 +484,189 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
     state.menus.open.insert(id, Open::Menu(shown));
     clients::mark_dirty(state, id);
     true
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+/// The names `cmd_display_menu_get_pos` adds to the format its `-x`/`-y`
+/// expand in; one it does not set expands to nothing.
+const POPUP_VARS: &[&str] = &[
+    "popup_mouse_x",
+    "popup_mouse_y",
+    "popup_window_status_line_x",
+    "popup_window_status_line_y",
+    "popup_status_line_y",
+    "popup_width",
+    "popup_height",
+    "popup_centre_x",
+    "popup_centre_y",
+    "popup_mouse_centre_x",
+    "popup_mouse_centre_y",
+    "popup_mouse_top",
+    "popup_mouse_bottom",
+    "popup_pane_top",
+    "popup_pane_bottom",
+    "popup_pane_left",
+    "popup_pane_right",
+];
+
+/// The popup position variables of tmux's `cmd_display_menu_get_pos` for a
+/// `w` by `h` box on a `(sx, sy)` client, `pane` being the current pane's
+/// rect in client cells (its status offset and viewport already applied).
+fn popup_vars(
+    state: &State,
+    ctx: &ClientCtx,
+    id: ClientId,
+    (w, h): (i64, i64),
+    (sx, sy): (i64, i64),
+    pane: Rect,
+) -> BTreeMap<&'static str, i64> {
+    use crate::cmd::Resolve;
+    let mut v = BTreeMap::new();
+    let pointer = crate::server::mouse::pointer(state, id);
+    if let Some((mx, my)) = pointer {
+        v.insert("popup_mouse_x", i64::from(mx));
+        v.insert("popup_mouse_y", i64::from(my));
+    }
+    if let Some(spot) = clients::status_spot(state, id) {
+        let lines = i64::from(spot.lines);
+        let index = state
+            .model
+            .resolve_window(&cmd::Target::Current, ctx)
+            .ok()
+            .and_then(|w| state.model.windows.get(&w))
+            .map(|w| w.index);
+        let found = spot
+            .windows
+            .iter()
+            .find(|(_, _, i)| Some(*i) == index)
+            .copied();
+        if let Some((line, start, _)) = found {
+            v.insert("popup_window_status_line_x", i64::from(start));
+            v.insert(
+                "popup_window_status_line_y",
+                if spot.top {
+                    i64::from(line) + 1 + h
+                } else {
+                    sy - lines + i64::from(line)
+                },
+            );
+        }
+        v.insert(
+            "popup_status_line_y",
+            if spot.top { lines + h } else { sy - lines },
+        );
+    }
+    v.insert("popup_width", w);
+    v.insert("popup_height", h);
+    v.insert("popup_centre_x", ((sx - 1) / 2 - w / 2).max(0));
+    let n = (sy - 1) / 2 + h / 2;
+    v.insert("popup_centre_y", if n >= sy { sy - h } else { n });
+    if let Some((mx, my)) = pointer {
+        let (mx, my) = (i64::from(mx), i64::from(my));
+        v.insert("popup_mouse_centre_x", (mx - w / 2).max(0));
+        let n = my - h / 2;
+        v.insert("popup_mouse_centre_y", if n + h >= sy { sy - h } else { n });
+        let n = my + h;
+        v.insert("popup_mouse_top", if n >= sy { sy - 1 } else { n });
+        v.insert("popup_mouse_bottom", (my - h).max(0));
+    }
+    let n = i64::from(pane.y) + h;
+    v.insert("popup_pane_top", if n >= sy { sy - h } else { n });
+    v.insert(
+        "popup_pane_bottom",
+        i64::from(pane.y) + i64::from(pane.rows),
+    );
+    v.insert("popup_pane_left", i64::from(pane.x));
+    v.insert(
+        "popup_pane_right",
+        (i64::from(pane.x) + i64::from(pane.cols) - w).max(0),
+    );
+    v
+}
+
+/// A [`Position::Expr`] as the cell count tmux's `-x`/`-y` come to; any
+/// other position is returned as it is.
+#[allow(clippy::too_many_arguments)]
+fn resolve(
+    state: &State,
+    ctx: &ClientCtx,
+    id: ClientId,
+    position: Position,
+    axis: Axis,
+    (w, h): (u16, u16),
+    size: (u16, u16),
+    pane: Rect,
+) -> Position {
+    match position {
+        Position::Expr(spec) => Position::Cells(resolve_spec(
+            state,
+            ctx,
+            id,
+            &spec,
+            axis,
+            (w, h),
+            size,
+            pane,
+        )),
+        other => other,
+    }
+}
+
+/// What a `-x`/`-y` value comes to in tmux's `cmd_display_menu_get_pos`:
+/// the letter's variable (`W`, `M`, `S`), or the format itself, with the
+/// popup variables filled in, read as `strtol` reads it. `(w, h)` is the
+/// box, `size` the client, `pane` the current pane's rect on the client.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_spec(
+    state: &State,
+    ctx: &ClientCtx,
+    id: ClientId,
+    spec: &str,
+    axis: Axis,
+    (w, h): (u16, u16),
+    (sx, sy): (u16, u16),
+    pane: Rect,
+) -> i64 {
+    let named = match (spec, axis) {
+        ("W", Axis::X) => "#{popup_window_status_line_x}",
+        ("W", Axis::Y) => "#{popup_window_status_line_y}",
+        ("M", Axis::X) => "#{popup_mouse_centre_x}",
+        ("M", Axis::Y) => "#{popup_mouse_top}",
+        ("S", Axis::Y) => "#{popup_status_line_y}",
+        _ => spec,
+    };
+    let vars = popup_vars(
+        state,
+        ctx,
+        id,
+        (i64::from(w), i64::from(h)),
+        (i64::from(sx), i64::from(sy)),
+        pane,
+    );
+    let mut text = named.to_string();
+    for name in POPUP_VARS {
+        let value = vars.get(name).map(i64::to_string).unwrap_or_default();
+        text = text.replace(&format!("#{{{name}}}"), &value);
+    }
+    strtol(&prompt::expand_command(state, ctx, &text))
+}
+
+/// C's `strtol(s, NULL, 10)`: blanks, a sign, then digits; 0 without any.
+pub fn strtol(s: &str) -> i64 {
+    let s = s.trim_start();
+    let (sign, digits) = match s.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    digits[..end].parse::<i64>().map_or(0, |n| sign * n)
 }
 
 /// The rect, in client cells, of the pane a command with `ctx` runs

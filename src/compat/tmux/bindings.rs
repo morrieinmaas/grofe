@@ -18,9 +18,6 @@
 use super::{FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Row, TmuxError};
 use crate::cmd::Command;
 
-const MOUSE_POSITION: &str = "a mouse position (M, W or S); grofe's built-in mouse model \
-                              opens a mouse key's menu at the pointer when no position is given \
-                              (spec 4.5, M36-R5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
 
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
@@ -203,19 +200,6 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("display-panes", ""),
         pass("confirm-before", "tc_7/confirm-before"),
         pass("choose-tree", ""),
-        // The mouse position letters stay semantic (M36-R5): tmux 3.7b
-        // opens such a menu at the client's top left when no mouse event
-        // is current (recorded), so there is no tmux text to reuse.
-        refuse("display-menu -x[M]", MOUSE_POSITION),
-        refuse("display-menu -y[M]", MOUSE_POSITION),
-        refuse("display-menu -x[W]", MOUSE_POSITION),
-        refuse("display-menu -y[W]", MOUSE_POSITION),
-        refuse("display-menu -y[S]", MOUSE_POSITION),
-        refuse("display-popup -x[M]", MOUSE_POSITION),
-        refuse("display-popup -y[M]", MOUSE_POSITION),
-        refuse("display-popup -x[W]", MOUSE_POSITION),
-        refuse("display-popup -y[W]", MOUSE_POSITION),
-        refuse("display-popup -y[S]", MOUSE_POSITION),
     ]
 }
 

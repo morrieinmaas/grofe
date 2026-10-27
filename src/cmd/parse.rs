@@ -13,7 +13,7 @@ use super::{
     ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
     DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
     If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers,
-    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer,
+    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer, Mark,
     MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
     ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource, Reload, Rename,
     ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer,
@@ -485,6 +485,8 @@ const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
     ('R', FlagKind::Bool),
     ('U', FlagKind::Bool),
     ('D', FlagKind::Bool),
+    ('m', FlagKind::Bool),
+    ('M', FlagKind::Bool),
     ('t', FlagKind::Value),
 ];
 
@@ -519,6 +521,14 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
         last: flags.present.contains(&'l'),
         keep_zoom: flags.present.contains(&'Z'),
         title: flags.values.get(&'T').cloned(),
+        // tmux acts on -m and -M before anything else; -M wins.
+        mark: if flags.present.contains(&'M') {
+            Mark::Clear
+        } else if flags.present.contains(&'m') {
+            Mark::Toggle
+        } else {
+            Mark::No
+        },
     }))
 }
 
@@ -3438,6 +3448,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: Mark::No,
             })
         );
     }
@@ -3457,6 +3468,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: Mark::No,
             })
         );
     }

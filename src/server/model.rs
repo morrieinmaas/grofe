@@ -248,6 +248,10 @@ pub struct Model {
     /// `server::alerts::drain` last took them: tmux counts that as
     /// activity in the window (`session_set_current`).
     pub selected: Vec<WindowId>,
+    /// The server's marked pane (tmux's `marked_pane`), with the window it
+    /// was marked in. Read it through [`Model::marked_pane`], which checks
+    /// it is still there.
+    pub marked: Option<(WindowId, PaneId)>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -261,6 +265,16 @@ impl Model {
             started: Some(std::time::SystemTime::now()),
             ..Model::default()
         }
+    }
+
+    /// The marked pane while it is valid, as tmux's `server_check_marked`:
+    /// the pane exists and is still in the window it was marked in (a pane
+    /// that moved to another window is no longer marked, killed panes and
+    /// windows are gone; ids are never reused).
+    pub fn marked_pane(&self) -> Option<PaneId> {
+        let (window, pane) = self.marked?;
+        let p = self.panes.get(&pane)?;
+        (p.window == window && self.windows.contains_key(&window)).then_some(pane)
     }
 
     pub fn alloc_session_id(&mut self) -> SessionId {
@@ -720,7 +734,20 @@ impl Model {
                 .session_by_name(name)
                 .ok_or_else(|| format!("can't find session: {name}")),
             SessionRef::Mouse => Err(crate::cmd::target::NO_MOUSE_TARGET.to_string()),
+            SessionRef::Marked => {
+                let (window, _) = self.marked_target()?;
+                Ok(self.windows[&window].session)
+            }
         }
+    }
+
+    /// tmux's `~` / `{marked}`: the marked pane and its window, or tmux's
+    /// `no marked target`.
+    fn marked_target(&self) -> Result<(WindowId, PaneId), String> {
+        let pane = self
+            .marked_pane()
+            .ok_or_else(|| "no marked target".to_string())?;
+        Ok((self.panes[&pane].window, pane))
     }
 
     fn window_ref(
@@ -934,6 +961,7 @@ impl Resolve for Model {
             Target::Current => self.current_pane(ctx),
             Target::Pane(r) => self.pane_ref(r, ctx),
             Target::Session(SessionRef::Bare(word)) => self.bare_pane(word, ctx),
+            Target::Session(SessionRef::Marked) => self.marked_target().map(|(_, pane)| pane),
             Target::Session(_) | Target::Window(..) => {
                 let w = self.resolve_window(target, ctx)?;
                 Ok(self.windows[&w].active)
@@ -945,6 +973,7 @@ impl Resolve for Model {
         match target {
             Target::Current => self.current_window(ctx),
             Target::Session(SessionRef::Bare(word)) => self.bare_window(word, ctx),
+            Target::Session(SessionRef::Marked) => self.marked_target().map(|(window, _)| window),
             Target::Session(s) => {
                 let sid = self.session_ref(s, ctx)?;
                 Ok(self.sessions[&sid].active)

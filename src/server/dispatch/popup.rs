@@ -12,7 +12,7 @@ use crate::server::model::Floating;
 use crate::server::pane::{PaneSpawn, pane_shell, usable_cwd};
 use crate::server::popup::{self, Frame, Lines, Position};
 use crate::server::status::Style;
-use crate::server::{State, clients, hooks, prompt};
+use crate::server::{State, clients, hooks, menu, prompt};
 use crate::types::{ClientId, PaneId, Rect, SplitSize};
 
 /// `display-popup` on the current client, or the one `-c` names: the
@@ -47,8 +47,6 @@ pub fn display_popup(
     if h > rows {
         return Err("height too large".to_string());
     }
-    let x = position(state, ctx, c.x.as_deref(), Axis::X)?;
-    let y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
     if state.popups.is_open(id) {
         return Ok(String::new());
     }
@@ -62,6 +60,14 @@ pub fn display_popup(
             cols,
             rows,
         });
+    let spot = Spot {
+        id,
+        size: (w, h),
+        client: (cols, rows),
+        pane: pane_rect,
+    };
+    let x = position(state, ctx, c.x.as_deref(), Axis::X, &spot)?;
+    let y = position(state, ctx, c.y.as_deref(), Axis::Y, &spot)?;
     let at = popup::place((x, y), (w, h), (cols, rows), pane_rect);
     let title = c
         .title
@@ -230,15 +236,25 @@ enum Axis {
     Y,
 }
 
+/// Where a popup goes: its client, its size, the client's size and the
+/// current pane's rect on it.
+struct Spot {
+    id: ClientId,
+    size: (u16, u16),
+    client: (u16, u16),
+    pane: Rect,
+}
+
 /// A `-x`/`-y` value: tmux's letters (`C` either way, `P`, `R` for `x`),
-/// else a format expanded and read as C's `strtol` reads it. The mouse
-/// letters are refused: grofe's mouse model passes the pointer as cells
-/// (TC.10, spec §4.5), as for `display-menu`.
+/// `M`, `W` and `S` as `display-menu` reads them
+/// ([`menu::resolve_spec`]), else a format expanded and read as C's
+/// `strtol` reads it.
 fn position(
     state: &State,
     ctx: &ClientCtx,
     value: Option<&str>,
     axis: Axis,
+    spot: &Spot,
 ) -> Result<Position, String> {
     let Some(value) = value else {
         return Ok(Position::Centre);
@@ -247,14 +263,28 @@ fn position(
         ("C", _) => return Ok(Position::Centre),
         ("P", _) => return Ok(Position::Pane),
         ("R", Axis::X) => return Ok(Position::PaneRight),
-        ("M" | "W", _) | ("S", Axis::Y) => {
-            return Err(format!("position needs the mouse: {value}"));
+        ("M" | "W", _) | ("S", Axis::Y) => {}
+        _ if value.contains("popup_") => {}
+        _ => {
+            return Ok(Position::Cells(strtol(&prompt::expand_command(
+                state, ctx, value,
+            ))));
         }
-        _ => {}
     }
-    Ok(Position::Cells(strtol(&prompt::expand_command(
-        state, ctx, value,
-    ))))
+    let axis = match axis {
+        Axis::X => menu::Axis::X,
+        Axis::Y => menu::Axis::Y,
+    };
+    Ok(Position::Cells(menu::resolve_spec(
+        state,
+        ctx,
+        spot.id,
+        value,
+        axis,
+        spot.size,
+        spot.client,
+        spot.pane,
+    )))
 }
 
 /// C's `strtol(s, NULL, 10)`: blanks, a sign, then digits; 0 without any.

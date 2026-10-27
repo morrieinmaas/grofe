@@ -84,6 +84,9 @@ pub struct FrameInputs<'a> {
     pub active_border_style: Style,
     /// The pane whose borders are drawn active.
     pub active: PaneId,
+    /// The marked pane when it is in this window: its border cells are
+    /// drawn with reverse toggled, as tmux's `screen_redraw_draw_borders`.
+    pub marked: Option<PaneId>,
     /// The status row, drawn on the client's last row; the window then has
     /// the rows above it. `None` when `status` is off.
     pub status: Option<StyledLine>,
@@ -403,12 +406,17 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
         .iter()
         .find(|(id, _, _)| *id == inputs.active)
         .map(|(_, r, _)| *r);
-    let on_ring = |x: i32, y: i32| {
-        active.is_some_and(|r| {
+    let marked = inputs
+        .marked
+        .and_then(|m| inputs.panes.iter().find(|(id, _, _)| *id == m))
+        .map(|(_, r, _)| *r);
+    let ring = |pane: Option<Rect>, x: i32, y: i32| {
+        pane.is_some_and(|r| {
             let (rx, ry) = (r.x as i32, r.y as i32);
             (rx - 1..=rx + r.cols as i32).contains(&x) && (ry - 1..=ry + r.rows as i32).contains(&y)
         })
     };
+    let on_ring = |x: i32, y: i32| ring(active, x, y);
     for y in 0..h {
         for x in 0..w {
             if !at(x, y) {
@@ -420,7 +428,11 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
             } else {
                 &inputs.border_style
             };
-            win.cells[(y * w + x) as usize] = styled(glyph, style);
+            let mut cell = styled(glyph, style);
+            if ring(marked, x, y) {
+                cell.flags ^= CellFlags::INVERSE;
+            }
+            win.cells[(y * w + x) as usize] = cell;
         }
     }
     mask
@@ -956,6 +968,7 @@ mod tests {
             border_style: Style::default(),
             active_border_style: Style::default(),
             active: PaneId(1),
+            marked: None,
             status: None,
             cursor: None,
             graphics: None,

@@ -3,7 +3,7 @@
 //! grofe aliases, expanded before a request is parsed ([`expand_aliases`]).
 
 use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry};
-use crate::protocol::ClientCtx;
+use crate::protocol::{ClientCtx, Dialect};
 use crate::server::input::parse_key;
 use crate::server::menu::{self, Menu, MenuItem, Position};
 use crate::server::{State, clients, prompt};
@@ -28,11 +28,15 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
     if state.popups.is_open(id) {
         return Ok(String::new());
     }
-    let mut x = position(state, ctx, c.x.as_deref(), Axis::X)?;
-    let mut y = position(state, ctx, c.y.as_deref(), Axis::Y)?;
-    // From a mouse key, a menu with no position opens at the pointer
-    // (spec §4.5, TC.10), as tmux's stock `-x M -y M`.
-    if let Some((px, py)) = crate::server::mouse::pointer(state, id) {
+    let pointer = crate::server::mouse::pointer(state, id);
+    let mut x = position(state, ctx, c.x.as_deref(), Axis::X, pointer)?;
+    let mut y = position(state, ctx, c.y.as_deref(), Axis::Y, pointer)?;
+    // From a mouse key, a native menu with no position opens at the pointer
+    // (spec §4.5, TC.10); tmux's own opens at the centre, its stock
+    // bindings say `-x M -y M`.
+    if let Some((px, py)) = pointer
+        && ctx.dialect == Dialect::Grofe
+    {
         if c.x.is_none() {
             x = Position::Pointer(px);
         }
@@ -72,14 +76,15 @@ enum Axis {
 
 /// A `-x`/`-y` value: tmux's letters (`C` either way, `P` and `R` for `x`,
 /// `P` for `y`), else a format expanded and read as C's `strtol` reads it
-/// (a leading number, else 0). The mouse letters (`M`, and `W`/`S` for the
-/// status line) are refused: grofe's mouse model passes the pointer as
-/// cells instead (TC.10, spec §4.5).
+/// (a leading number, else 0). `M` is the pointer's cell, or 0 with no mouse
+/// event as in tmux; `W`, `S` and a format naming `popup_*` wait for the
+/// menu's size ([`Position::Expr`]).
 fn position(
     state: &State,
     ctx: &ClientCtx,
     value: Option<&str>,
     axis: Axis,
+    pointer: Option<(u16, u16)>,
 ) -> Result<Position, String> {
     let Some(value) = value else {
         return Ok(Position::Centre);
@@ -88,9 +93,15 @@ fn position(
         ("C", _) => return Ok(Position::Centre),
         ("P", _) => return Ok(Position::Pane),
         ("R", Axis::X) => return Ok(Position::PaneRight),
-        ("M" | "W", _) | ("S", Axis::Y) => {
-            return Err(format!("position needs the mouse: {value}"));
+        ("M", _) => {
+            return Ok(match (pointer, axis) {
+                (Some((px, _)), Axis::X) => Position::Pointer(px),
+                (Some((_, py)), Axis::Y) => Position::Pointer(py),
+                (None, _) => Position::Cells(0),
+            });
         }
+        ("W", _) | ("S", Axis::Y) => return Ok(Position::Expr(value.to_string())),
+        _ if value.contains("popup_") => return Ok(Position::Expr(value.to_string())),
         _ => {}
     }
     Ok(Position::Cells(strtol(&prompt::expand_command(

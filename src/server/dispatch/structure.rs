@@ -9,7 +9,7 @@
 
 use crate::cmd::{
     BreakPane, JoinPane, LastPane, MovePane, MoveWindow, NextLayout, ResizeWindow, Resolve,
-    RespawnPane, RotateWindow, SwapPane, SwapWindow, Target, WindowRef,
+    RespawnPane, RotateWindow, SessionRef, SwapPane, SwapWindow, Target, WindowRef,
 };
 use crate::protocol::ClientCtx;
 use crate::server::State;
@@ -24,6 +24,18 @@ use crate::types::{Dir, PaneId, SessionId, SplitSize, WindowId, cap_size};
 /// A placeholder id for a pane being moved within its own window, which
 /// is in the tree twice for a moment (tmux splits before it closes).
 const MOVING: PaneId = PaneId(u32::MAX);
+
+/// A source target as tmux's `CMD_FIND_DEFAULT_MARKED` reads it: with none
+/// given, the marked pane stands for the current one while a pane is marked.
+fn default_marked(model: &Model, src: Option<&Target>) -> Target {
+    match src {
+        None | Some(Target::Current) if model.marked_pane().is_some() => {
+            Target::Session(SessionRef::Marked)
+        }
+        Some(t) => t.clone(),
+        None => Target::Current,
+    }
+}
 
 /// `join-pane`.
 pub fn join_pane(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, String> {
@@ -44,7 +56,7 @@ pub fn move_pane(state: &mut State, ctx: &ClientCtx, c: MovePane) -> Result<Stri
 fn join(state: &mut State, ctx: &ClientCtx, c: JoinPane) -> Result<String, String> {
     let model = &mut state.model;
     let dst = model.resolve_pane(&c.dst, ctx)?;
-    let src = model.resolve_pane(&c.src, ctx)?;
+    let src = model.resolve_pane(&default_marked(model, Some(&c.src)), ctx)?;
     let (dst_w, src_w) = (model.panes[&dst].window, model.panes[&src].window);
     unzoom(model, dst_w);
     unzoom(model, src_w);
@@ -172,7 +184,7 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
             (pos + n - 1) % n
         }]
     } else {
-        model.resolve_pane(c.src.as_ref().unwrap_or(&Target::Current), ctx)?
+        model.resolve_pane(&default_marked(model, c.src.as_ref()), ctx)?
     };
     let src_w = model.panes[&src].window;
     let floats = |w: WindowId, p: PaneId| model.windows[&w].floating(p).is_some();
@@ -223,7 +235,7 @@ fn slot(model: &Model, window: WindowId) -> (SessionId, u32) {
 pub fn swap_window(state: &mut State, ctx: &ClientCtx, c: SwapWindow) -> Result<String, String> {
     let model = &mut state.model;
     let dst = model.resolve_window(&c.dst, ctx)?;
-    let src = model.resolve_window(c.src.as_ref().unwrap_or(&Target::Current), ctx)?;
+    let src = model.resolve_window(&default_marked(model, c.src.as_ref()), ctx)?;
     if src == dst {
         return Ok(String::new());
     }

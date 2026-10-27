@@ -190,6 +190,20 @@ pub struct SelectPane {
     /// `-T` (M3.6, TC.11): sets the pane's title (expanded as a format)
     /// instead of selecting it, as tmux does.
     pub title: Option<String>,
+    /// `-m` / `-M`: toggle or clear the server's marked pane instead of
+    /// selecting.
+    pub mark: Mark,
+}
+
+/// `select-pane -m` / `-M`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mark {
+    #[default]
+    No,
+    /// `-m`: mark the target pane, or unmark it if it is the marked pane.
+    Toggle,
+    /// `-M`: clear the marked pane.
+    Clear,
 }
 
 /// What `resize-pane` does: move one or more borders by a shared cell

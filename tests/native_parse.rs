@@ -971,6 +971,7 @@ fn equals_targets_are_bare_words() {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: grofe::cmd::Mark::No,
             })),
             "{given}"
         );
