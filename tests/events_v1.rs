@@ -463,7 +463,7 @@ fn pane_focus_on_terminal_focus_in_only_with_focus_events_on() {
     ok(&srv, &["set", "-g", "focus-events", "off"]);
     client.send("\x1b[O");
     wait_until(
-        || ok(&srv, &["list-clients", "-F", "#{client_flags}"]).contains("focused") == false,
+        || !ok(&srv, &["list-clients", "-F", "#{client_flags}"]).contains("focused"),
         WAIT,
     )
     .unwrap();

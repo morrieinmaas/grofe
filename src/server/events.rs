@@ -315,6 +315,10 @@ impl Events {
 /// client counts as changed (an attach). A session with no attached client
 /// has no clients here, so it never emits.
 pub fn track_focus(state: &mut State) {
+    if state.clients.is_empty() {
+        state.events.seen.clear();
+        return;
+    }
     let focus_events = state.model.options.lookup("focus-events", &[]) == Some("on");
     let State {
         events,
