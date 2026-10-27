@@ -4,9 +4,10 @@
 //! the rules (version mismatch, unknown fields and verbs); and `grofe
 //! control`, the stdio bridge.
 //!
-//! `GROFE_BLESS=1 cargo test --test protocol_v1 blessing` rewrites the
-//! fixtures from the samples below. After the freeze that is only for adding
-//! a fixture: a changed line is not additive (spec §7.3).
+//! `GROFE_BLESS=1 cargo test --test protocol_v1 blessing` writes the fixtures
+//! the samples below have and the directory lacks. It never rewrites one that
+//! exists: a changed line is not additive (spec §7.3), so changing a frozen
+//! fixture takes `GROFE_BLESS=break`, which a reviewer sees in the diff.
 
 mod common;
 
@@ -357,19 +358,79 @@ fn extension(name: &str) -> &'static str {
     }
 }
 
+/// What blessing may do: the files to write, or the names of existing
+/// fixtures it would change (refused unless `allow_break`).
+fn bless_plan(
+    existing: &[(String, String)],
+    wanted: Vec<(String, String)>,
+    allow_break: bool,
+) -> Result<Vec<(String, String)>, Vec<String>> {
+    let mut writes = Vec::new();
+    let mut changed = Vec::new();
+    for (name, line) in wanted {
+        match existing.iter().find(|(n, _)| *n == name) {
+            Some((_, old)) if *old == line => {}
+            Some(_) if !allow_break => changed.push(name),
+            _ => writes.push((name, line)),
+        }
+    }
+    if changed.is_empty() {
+        Ok(writes)
+    } else {
+        Err(changed)
+    }
+}
+
 #[test]
 fn blessing() {
-    if std::env::var_os("GROFE_BLESS").is_none() {
+    let Some(mode) = std::env::var_os("GROFE_BLESS") else {
         return;
-    }
+    };
     std::fs::create_dir_all(dir()).unwrap();
-    for (name, line) in blessed() {
+    let existing = if dir().exists() {
+        fixtures()
+    } else {
+        Vec::new()
+    };
+    let writes = bless_plan(&existing, blessed(), mode == "break").unwrap_or_else(|changed| {
+        panic!(
+            "the frozen v1 fixtures would change: {changed:?}; only GROFE_BLESS=break rewrites one"
+        )
+    });
+    for (name, line) in writes {
         std::fs::write(
             dir().join(format!("{name}.{}", extension(&name))),
             line + "\n",
         )
         .unwrap();
     }
+}
+
+#[test]
+fn blessing_adds_fixtures_but_refuses_to_change_a_frozen_one() {
+    let line = |s: &str| (s.to_string(), format!("{{\"v\":\"{s}\"}}"));
+    let existing = vec![line("a"), line("b")];
+    let changed_a = ("a".to_string(), "{\"v\":\"other\"}".to_string());
+
+    // The same lines plus a new one: only the new one is written.
+    let mut wanted = existing.clone();
+    wanted.push(line("c"));
+    assert_eq!(
+        bless_plan(&existing, wanted, false).unwrap(),
+        vec![line("c")]
+    );
+
+    // A silent protocol change: the sample moved, the fixture did not.
+    let wanted = vec![changed_a.clone(), line("b")];
+    assert_eq!(
+        bless_plan(&existing, wanted.clone(), false),
+        Err(vec!["a".to_string()])
+    );
+    // Only the explicit break mode takes it.
+    assert_eq!(
+        bless_plan(&existing, wanted, true).unwrap(),
+        vec![changed_a]
+    );
 }
 
 // --- reading the fixtures back ---------------------------------------------
@@ -479,35 +540,56 @@ fn every_frame_kind_and_message_kind_has_a_fixture() {
     );
 }
 
-/// The mutation: a struct that lost a field serializes without it. Dropping
-/// each top-level field from the re-serialized fixture stands in for that,
-/// and the byte-identity check must see every one of them.
+/// Every object in `value`, as a path of keys.
+fn object_paths(value: &serde_json::Value, at: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    if let Some(map) = value.as_object() {
+        out.push(at.clone());
+        for (key, child) in map {
+            at.push(key.clone());
+            object_paths(child, at, out);
+            at.pop();
+        }
+    }
+}
+
+/// A struct that lost a field parses a fixture without it, so the key is gone
+/// when the fixture is written again and the byte-identity check goes red.
+/// The same thing seen from the other side: a key the structs do not know is
+/// dropped on the way back. Putting one into every object of every fixture,
+/// the nested ones too, must therefore change the re-serialized line; where
+/// it does not, a struct there would keep a removed field's key alive (a
+/// catch-all) or the reader would not be looking at that object at all.
 #[test]
 fn removing_a_field_from_a_struct_turns_the_suite_red() {
-    let mut mutated = 0;
+    let mut probed = 0;
     for (name, line) in fixtures() {
         if name.starts_with("frame-") {
             continue;
         }
-        let again = reserialize(&name, &line).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&again).unwrap();
-        for key in value.as_object().unwrap().keys() {
-            let mut cut = value.clone();
-            cut.as_object_mut().unwrap().remove(key);
-            assert_ne!(
-                cut.to_string(),
-                line,
-                "{name}: losing `{key}` would pass unseen"
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let mut paths = Vec::new();
+        object_paths(&value, &mut Vec::new(), &mut paths);
+        for path in paths {
+            let mut with = value.clone();
+            let mut at = &mut with;
+            for key in &path {
+                at = at.get_mut(key).unwrap();
+            }
+            at.as_object_mut()
+                .unwrap()
+                .insert("zz_unknown".into(), true.into());
+            let line = with.to_string();
+            // `env` is a free-form map of strings: an unknown key there is
+            // data, and a boolean is refused outright.
+            let outcome = reserialize(&name, &line);
+            assert!(
+                outcome.as_ref().map_or(true, |again| *again != line),
+                "{name}: an unknown key at {path:?} survives the round trip"
             );
-            mutated += 1;
+            probed += 1;
         }
     }
-    assert!(mutated > 100, "only {mutated} mutations");
-
-    // And the other direction: a field the structs do not know is dropped on
-    // the way back, so a fixture that carried one would fail.
-    let line = r#"{"id":1,"argv":["x"],"future":true}"#;
-    assert_ne!(reserialize("request-future", line).unwrap(), line);
+    assert!(probed >= 34, "only {probed} probes");
 }
 
 // --- the rules, against a server -------------------------------------------
