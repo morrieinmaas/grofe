@@ -458,16 +458,20 @@ impl Supervisor {
         loop {
             let started = Instant::now();
             let exit = match self.spawn() {
+                // No pid means it has already been reaped, so it has exited:
+                // that is an exit like any other, not a status left at
+                // `backoff`.
+                Ok((mut child, pump)) if child.id().is_none() => {
+                    exit_status(&mut child, pump).await
+                }
                 Ok((mut child, pump)) => {
-                    let Some(pid) = child.id() else {
-                        return;
-                    };
+                    let pid = child.id().expect("checked by the guard");
                     let guard = Group(Some(Pid::from_raw(pid as i32)));
                     self.enter(Phase::Running, Some(pid));
                     tokio::select! {
                         exit = child.wait() => {
                             // Whatever the plugin left running goes with it.
-                            guard.kill();
+                            guard.kill_survivors();
                             guard.disarm();
                             let _ = tokio::time::timeout(Duration::from_millis(500), pump).await;
                             exit.map(|s| (s.to_string(), !s.success())).map_err(|e| e.to_string())
@@ -634,10 +638,21 @@ async fn copy_to_log(mut from: pipe::Receiver, log: Arc<Mutex<Log>>) {
 struct Group(Option<Pid>);
 
 impl Group {
+    /// SIGKILLs the group. Only while the leader is unreaped: its zombie
+    /// keeps the group id from being handed to anything else.
     fn kill(&self) {
         if let Some(pgid) = self.0 {
             let _ = killpg(pgid, Signal::SIGKILL);
         }
+    }
+
+    /// For after the leader was reaped: SIGKILLs what it left behind, and
+    /// only while the group still has members. An empty group's id is free
+    /// to be reused by an unrelated process, which a blind `killpg` would
+    /// hit. Returns whether it signalled.
+    fn kill_survivors(&self) -> bool {
+        let Some(pgid) = self.0 else { return false };
+        killpg(pgid, None::<Signal>).is_ok() && killpg(pgid, Signal::SIGKILL).is_ok()
     }
 
     fn disarm(mut self) {
@@ -651,6 +666,15 @@ impl Drop for Group {
     }
 }
 
+/// The exit of a plugin: its status once reaped, after the log pump has
+/// had a moment to drain.
+async fn exit_status(child: &mut Child, pump: JoinHandle<()>) -> Result<(String, bool), String> {
+    let exit = child.wait().await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), pump).await;
+    exit.map(|s| (s.to_string(), !s.success()))
+        .map_err(|e| e.to_string())
+}
+
 /// Stops a plugin as the server exit does: SIGTERM to its group, then
 /// SIGKILL once `grace` has passed with the leader or any member still up.
 async fn terminate(child: &mut Child, group: &Group, grace: Duration) {
@@ -660,16 +684,16 @@ async fn terminate(child: &mut Child, group: &Group, grace: Duration) {
     let leader_gone = tokio::time::timeout_at(deadline, child.wait())
         .await
         .is_ok();
-    // The leader is reaped, but its children may outlive it: they get the
-    // rest of the grace.
-    while leader_gone
-        && tokio::time::Instant::now() < deadline
-        && killpg(pgid, None::<Signal>).is_ok()
-    {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let _ = killpg(pgid, Signal::SIGKILL);
-    if !leader_gone {
+    if leader_gone {
+        // The leader is reaped, but its children may outlive it: they get
+        // the rest of the grace, then are killed if still there.
+        while tokio::time::Instant::now() < deadline && killpg(pgid, None::<Signal>).is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        group.kill_survivors();
+    } else {
+        // Still unreaped: its zombie holds the group id.
+        group.kill();
         let _ = child.wait().await;
     }
 }
@@ -803,6 +827,77 @@ mod tests {
             log: Arc::new(Mutex::new(Log::new(PathBuf::from("/nonexistent/t.log")))),
             timing,
         }
+    }
+
+    /// A leader running `script` in its own group, reaped; its group id
+    /// and what the script printed.
+    async fn reaped_leader(script: &str) -> (Pid, String) {
+        use std::process::Stdio;
+        let mut leader = Command::new("sh")
+            .args(["-c", script])
+            .stdout(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("spawn");
+        let pgid = Pid::from_raw(leader.id().expect("pid") as i32);
+        let mut out = String::new();
+        leader
+            .stdout
+            .take()
+            .expect("stdout")
+            .read_to_string(&mut out)
+            .await
+            .expect("read");
+        leader.wait().await.expect("reap");
+        (pgid, out)
+    }
+
+    /// Whether `pid` is a process still running (a zombie nobody has
+    /// reaped yet is not).
+    fn running(pid: &str) -> bool {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .expect("ps");
+        let stat = String::from_utf8_lossy(&out.stdout);
+        !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+    }
+
+    #[tokio::test]
+    async fn survivors_of_a_reaped_leader_are_killed_while_the_group_has_members() {
+        let (pgid, out) = reaped_leader("sleep 60 >/dev/null 2>&1 & echo $!").await;
+        let sleeper = out.trim();
+        assert!(running(sleeper), "the survivor starts up");
+        assert!(Group(Some(pgid)).kill_survivors());
+        for _ in 0..200 {
+            if !running(sleeper) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the survivor {sleeper} is still up");
+    }
+
+    #[tokio::test]
+    async fn an_empty_group_is_not_signalled() {
+        // Nothing is left under that id, which may be anyone's by now.
+        let (pgid, _) = reaped_leader("exit 0").await;
+        assert!(!Group(Some(pgid)).kill_survivors());
+        assert!(!Group(None).kill_survivors());
+    }
+
+    #[tokio::test]
+    async fn a_plugin_without_a_pid_is_an_exit() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 3"])
+            .spawn()
+            .expect("spawn");
+        child.wait().await.expect("reap");
+        assert_eq!(child.id(), None);
+        let pump = tokio::spawn(async {});
+        let (status, failed) = exit_status(&mut child, pump).await.expect("status");
+        assert!(failed, "{status}");
+        assert!(status.contains('3'), "{status}");
     }
 
     fn phase(s: &Supervisor) -> Phase {
