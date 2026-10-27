@@ -18,6 +18,10 @@
 //! attach hello would, without changing anything. Only on an `Ok` does the
 //! client probe the terminal and send the hello, so a bad target never
 //! costs a probe (tmux resolves the target before it opens the terminal).
+//!
+//! **Frozen as v1** (T6.2, spec §7.3): additive changes only; see
+//! `docs/protocol-v1.md`, and `tests/protocol_v1.rs` for the fixtures that
+//! turn a changed wire shape red.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -172,8 +176,9 @@ pub enum Hello {
 }
 
 /// The protocol version this build speaks: the `"grofe"` field of a hello
-/// line (spec §4.6). Until M6 the protocol is internal and may change
-/// between commits.
+/// line (spec §4.6). v1 is frozen (T6.2): `docs/protocol-v1.md` and the
+/// fixtures in `tests/fixtures/protocol/v1/` are its record, and spec §7.3
+/// holds the rules for any change.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The `id` of the one [`Reply`] line that answers an attach hello (a hello
