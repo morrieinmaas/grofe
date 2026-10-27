@@ -168,7 +168,11 @@ fn record_goldens() {
         }
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel_str}: {e}"));
         let steps = parse_scenario(&text).unwrap_or_else(|e| panic!("{rel_str}: {e}"));
-        let binary = if rel_str.starts_with("g3/") { &sixel } else { &tmux };
+        let binary = if rel_str.starts_with("g3/") {
+            &sixel
+        } else {
+            &tmux
+        };
         let golden = record(binary, &normalizer, &steps);
         write(&out.join(rel.with_extension("golden")), &golden);
         eprintln!("recorded {rel_str}");
