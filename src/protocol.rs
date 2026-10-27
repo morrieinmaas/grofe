@@ -247,7 +247,8 @@ pub fn decode_hello(line: &str) -> Result<Hello, ProtocolError> {
         .get("grofe")
         .and_then(serde_json::Value::as_u64)
         .ok_or(ProtocolError::MissingVersion)?;
-    let theirs = theirs as u32;
+    // A version too big for u32 is newer than ours, not a truncated one.
+    let theirs = u32::try_from(theirs).unwrap_or(u32::MAX);
     if theirs != PROTOCOL_VERSION {
         let upgrade = if theirs < PROTOCOL_VERSION {
             Side::Client
@@ -730,6 +731,27 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("upgrade the client"));
+    }
+
+    #[test]
+    fn a_version_beyond_u32_is_newer_not_truncated() {
+        // 2^32 + 1 truncates to this build's own version.
+        for version in [PROTOCOL_VERSION as u64 + (1 << 32), u64::MAX] {
+            let line = format!(
+                r#"{{"grofe":{version},"mode":"control","cwd":"/","pane":null,"env":{{}}}}"#
+            );
+            let err = decode_hello(&line).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ProtocolError::VersionMismatch {
+                        upgrade: Side::Server,
+                        ..
+                    }
+                ),
+                "{version}: {err:?}"
+            );
+        }
     }
 
     #[test]
