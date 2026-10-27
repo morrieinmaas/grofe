@@ -62,8 +62,8 @@ pub const DISPLAY_TIME: Duration = Duration::from_millis(750);
 /// tmux 3.7b's `message-style`, when the session has no such option.
 const MESSAGE_STYLE: &str = "bg=yellow,fg=black,fill=yellow";
 
-/// How often window names are checked for `automatic-rename` while clients
-/// are attached (tmux's `NAME_INTERVAL`).
+/// How soon after a pane changed its window's name is checked for
+/// `automatic-rename` (tmux's `NAME_INTERVAL`).
 pub const NAME_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long a client must stay the latest active one before the window
@@ -1127,6 +1127,7 @@ pub fn changed(state: &mut State) {
     graphics::on_clients_changed(state);
     sync_mouse_modes(state);
     mark_all_dirty(state);
+    arm_names(state, Instant::now());
 }
 
 /// The outer terminal's mouse reporting on and off.
@@ -1195,6 +1196,9 @@ pub fn wake(state: &mut State) {
         .map(|p| p.id)
         .collect();
     crate::server::alerts::output(state, &dirty);
+    if !dirty.is_empty() {
+        arm_names(state, Instant::now());
+    }
     if dirty.is_empty() || state.clients.is_empty() {
         return;
     }
@@ -1320,13 +1324,26 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     arm_status_clock(state, now);
+}
+
+/// Schedules one `automatic-rename` check. As tmux's `check_window_name`
+/// (names.c), which only runs for a window whose active pane changed
+/// (`PANE_CHANGED`: pane output, a pane or window switch, an option
+/// change) and at most once per `NAME_INTERVAL`: the timer is armed by
+/// those events and is not re-armed by the check, so an idle server never
+/// wakes for it.
+fn arm_names(state: &mut State, now: Instant) {
     if state.registry.names_at.is_none() && !state.clients.is_empty() {
         state.registry.names_at = Some(now + NAME_INTERVAL);
     }
 }
 
 /// Schedules the next status redraw for its clock, every `status-interval`
-/// seconds (the shortest among the attached sessions; 0 turns it off).
+/// seconds (the shortest among the attached sessions; 0 turns it off). A
+/// session whose status line provably cannot change with time (see
+/// [`status_is_static`]) gets no timer: every other change redraws it
+/// through its own event, and a `set` of the formats redraws and so
+/// re-evaluates this at the end of the next tick.
 fn arm_status_clock(state: &mut State, now: Instant) {
     if state.registry.status_at.is_some() {
         return;
@@ -1336,6 +1353,7 @@ fn arm_status_clock(state: &mut State, now: Instant) {
         .clients
         .values()
         .filter(|c| status_lines(model, c.session) > 0)
+        .filter(|c| !status_is_static(model, c.session))
         .filter_map(|c| {
             model
                 .options
@@ -1346,6 +1364,105 @@ fn arm_status_clock(state: &mut State, now: Instant) {
         })
         .min()
         .map(|secs| now + Duration::from_secs(secs));
+}
+
+/// Variables a status format may use and still be redrawn only by events
+/// (a rename, a window change, pane output), never by the passage of time.
+const STATIC_STATUS_VARS: &[&str] = &[
+    "session_name",
+    "session_id",
+    "session_windows",
+    "window_index",
+    "window_id",
+    "window_name",
+    "window_flags",
+    "window_active",
+    "window_panes",
+    "host",
+    "host_short",
+];
+
+/// Whether format `text` expands to the same thing at any time: no
+/// strftime `%`, no `#()`, and every `#{}` word a [`STATIC_STATUS_VARS`]
+/// name or a number. Anything else (`#{t:...}`, `#{@user}`, loops, other
+/// variables) may depend on time or on a process, so it is not.
+fn format_is_static(text: &str) -> bool {
+    if text.contains('%') || text.contains("#(") {
+        return false;
+    }
+    let mut rest = text;
+    while let Some(at) = rest.find("#{") {
+        let mut depth = 1;
+        let body = &rest[at + 2..];
+        let mut end = body.len();
+        for (i, ch) in body.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                end = i;
+                break;
+            }
+        }
+        let words = body[..end]
+            .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '@')))
+            .filter(|w| !w.is_empty());
+        for w in words {
+            if !STATIC_STATUS_VARS.contains(&w) && !w.bytes().all(|b| b.is_ascii_digit()) {
+                return false;
+            }
+        }
+        rest = &body[end..];
+    }
+    true
+}
+
+/// Whether session `session`'s status line cannot change with time: every
+/// format that draws it is [`format_is_static`]. When unsure, false (the
+/// clock keeps ticking).
+fn status_is_static(model: &Model, session: SessionId) -> bool {
+    const SESSION: &[&str] = &[
+        "status-left",
+        "status-right",
+        "status-style",
+        "status-left-style",
+        "status-right-style",
+    ];
+    const WINDOW: &[&str] = &[
+        "window-status-format",
+        "window-status-current-format",
+        "window-status-separator",
+        "window-status-style",
+        "window-status-current-style",
+        "window-status-last-style",
+        "window-status-bell-style",
+    ];
+    let own = [Owner::Session(session)];
+    let session_ok = SESSION
+        .iter()
+        .all(|n| model.options.lookup(n, &own).is_none_or(format_is_static));
+    let formats_ok = model
+        .options
+        .lookup_list("status-format", &own)
+        .is_none_or(|f| f.values().all(|t| format_is_static(t)));
+    let windows_ok = |chain: &[Owner]| {
+        WINDOW
+            .iter()
+            .all(|n| model.options.lookup(n, chain).is_none_or(format_is_static))
+    };
+    let listed = model
+        .sessions
+        .get(&session)
+        .map_or(&[][..], |s| &s.windows[..]);
+    session_ok
+        && formats_ok
+        && windows_ok(&own)
+        && listed
+            .iter()
+            .filter_map(|id| model.windows.get(id))
+            .all(|w| windows_ok(&options::chain(model, w.active)))
 }
 
 fn render_dirty(state: &mut State) {
@@ -2691,6 +2808,96 @@ mod tests {
             },
         );
         (state, id)
+    }
+
+    /// Timer wakes the actor would take over `window` of idle time with one
+    /// attached client: each is a `deadline` that falls inside it.
+    fn idle_wakes(state: &mut State, window: Duration) -> usize {
+        let start = Instant::now();
+        tick(state, start);
+        let mut wakes = 0;
+        while let Some(due) = deadline(state).filter(|d| *d <= start + window) {
+            wakes += 1;
+            tick(state, due);
+            assert!(wakes < 100, "runaway timer");
+        }
+        wakes
+    }
+
+    fn set_session_option(state: &mut State, name: &str, value: &str) {
+        let session = state.clients[&ClientId(1)].session;
+        state
+            .model
+            .options
+            .set(Owner::Session(session), name, value, false)
+            .unwrap();
+    }
+
+    /// G2: with a clock in the status line, an idle server wakes only for
+    /// the clock (once per `status-interval`), not every 500 ms for names.
+    #[test]
+    fn an_idle_server_wakes_only_for_the_status_clock() {
+        let (mut state, _) = state_with_client();
+        set_session_option(&mut state, "status-interval", "1");
+        let wakes = idle_wakes(&mut state, Duration::from_millis(3500));
+        assert!((3..=4).contains(&wakes), "{wakes} wakes in 3.5 s");
+    }
+
+    /// G2: a status line with nothing time-dependent in it needs no timer,
+    /// so an idle server does not wake at all.
+    #[test]
+    fn an_idle_server_with_a_static_status_line_never_wakes() {
+        let (mut state, _) = state_with_client();
+        set_session_option(&mut state, "status-interval", "1");
+        set_session_option(&mut state, "status-right", "#{session_name}");
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+    }
+
+    /// G2: a clock put into a static status line starts ticking again, and
+    /// a pane change arms exactly one name check that does not re-arm.
+    #[test]
+    fn the_status_clock_follows_the_formats_and_names_arm_once() {
+        let (mut state, _) = state_with_client();
+        set_session_option(&mut state, "status-interval", "1");
+        set_session_option(&mut state, "status-right", "x");
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+        set_session_option(&mut state, "status-right", "%H:%M");
+        let now = Instant::now();
+        tick(&mut state, now);
+        assert!(deadline(&state).is_some_and(|d| d <= now + Duration::from_secs(1)));
+
+        let (mut state, _) = state_with_client();
+        set_session_option(&mut state, "status-right", "#{session_name}");
+        let now = Instant::now();
+        arm_names(&mut state, now);
+        assert_eq!(deadline(&state), Some(now + NAME_INTERVAL));
+        tick(&mut state, now + NAME_INTERVAL);
+        assert_eq!(deadline(&state), None);
+    }
+
+    #[test]
+    fn only_formats_free_of_time_are_static() {
+        for ok in [
+            "",
+            "plain",
+            "[#{session_name}] ",
+            "#I:#W#{?window_flags,#{window_flags}, }",
+            "#[fg=red]#{=21:window_name}",
+        ] {
+            assert!(format_is_static(ok), "{ok}");
+        }
+        for bad in [
+            "%H:%M",
+            "100%",
+            "#(date)",
+            "#{t:session_created}",
+            "#{@clock}",
+            "#{pane_current_command}",
+            "#{client_activity}",
+            "#{S:#{window_name}}",
+        ] {
+            assert!(!format_is_static(bad), "{bad}");
+        }
     }
 
     #[test]

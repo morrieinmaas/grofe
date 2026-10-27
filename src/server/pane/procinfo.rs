@@ -4,21 +4,15 @@
 //! leader's name, argv and cwd come from `/proc` on Linux and from
 //! `proc_name`, `proc_pidinfo` and `sysctl(KERN_PROCARGS2)` on macOS.
 
-use std::os::fd::OwnedFd;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
-
-use tokio::io::unix::AsyncFd;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::lock;
 
-/// How often the foreground process is sampled.
-const SAMPLE_EVERY: Duration = Duration::from_secs(1);
-
 /// This process's own argv, resolved once. A freshly forked pane child is,
 /// until it execs, still byte-for-byte a copy of the server's own image:
-/// [`sampler`] uses this to recognise (and discard) a sample taken of that
+/// [`Cache`] uses this to recognise (and discard) a sample taken of that
 /// pre-exec image, rather than report the server's own argv as the pane's.
 fn server_argv() -> &'static [String] {
     static ARGV: OnceLock<Vec<String>> = OnceLock::new();
@@ -33,29 +27,36 @@ pub struct ProcSample {
     pub path: Option<PathBuf>,
 }
 
-/// Sampler task: refresh `out` every `SAMPLE_EVERY`. A failed sample (the
-/// pane is dead, or the process vanished mid-sample) keeps the previous one.
-pub(crate) async fn sampler(master: Arc<AsyncFd<OwnedFd>>, out: Arc<Mutex<ProcSample>>) {
-    let mut tick = tokio::time::interval(SAMPLE_EVERY);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tick.tick().await;
-        let Ok(pgrp) = nix::unistd::tcgetpgrp(master.get_ref()) else {
-            continue;
-        };
-        let sample = sample(pgrp.as_raw());
-        // The pty's foreground process group is the child's own pid as
-        // soon as it calls setsid()+TIOCSCTTY, before it execs; on macOS
-        // the introspection APIs below can keep reporting that pre-exec
-        // image (still literally the server's own argv) for close to a
-        // second afterwards. Skip such a sample rather than store it, so a
-        // caller sees either nothing yet or the real command, never ours.
-        if sample.argv.as_deref() == Some(server_argv()) {
-            continue;
+/// How long a sample is reused: a format that reads the command, argv and
+/// path in one expansion samples once, not three times.
+const SAMPLE_TTL: Duration = Duration::from_millis(20);
+
+/// A pane's foreground process, sampled when asked (a format, the
+/// `automatic-rename` check) rather than on a timer, so an idle server
+/// wakes for nothing.
+#[derive(Default)]
+pub(crate) struct Cache(Mutex<(Option<Instant>, ProcSample)>);
+
+impl Cache {
+    /// The foreground process of the pty behind `master`, at most
+    /// `SAMPLE_TTL` old. A failed sample (the pane is dead, or the process
+    /// vanished mid-sample) keeps the previous one.
+    pub(crate) fn get(&self, master: impl std::os::fd::AsFd) -> ProcSample {
+        let mut cache = lock(&self.0);
+        if cache.0.is_some_and(|at| at.elapsed() < SAMPLE_TTL) {
+            return cache.1.clone();
         }
-        if sample.command.is_some() || sample.argv.is_some() || sample.path.is_some() {
-            *lock(&out) = sample;
+        cache.0 = Some(Instant::now());
+        if let Ok(pgrp) = nix::unistd::tcgetpgrp(master) {
+            let sample = sample(pgrp.as_raw());
+            let pre_exec = sample.argv.as_deref() == Some(server_argv());
+            if !pre_exec
+                && (sample.command.is_some() || sample.argv.is_some() || sample.path.is_some())
+            {
+                cache.1 = sample;
+            }
         }
+        cache.1.clone()
     }
 }
 
@@ -70,7 +71,7 @@ pub fn foreground_group(master: impl std::os::fd::AsFd) -> Option<i32> {
 /// The name, argv and cwd of group `pgrp`'s leader, read now; empty once
 /// the leader has exited (the first command of a pipeline often has), or
 /// while it is a forked child that has not exec'd yet (still the server's
-/// own image), which [`sampler`] leaves out too.
+/// own image), which [`Cache`] leaves out too.
 pub fn leader(pgrp: i32) -> ProcSample {
     let leader = sample(pgrp);
     if leader.argv.as_deref() == Some(server_argv()) {

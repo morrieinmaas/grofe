@@ -548,3 +548,50 @@ fn capture_pane_honours_start_and_end() {
         "l5\nl6\nl7\nl8\n\n"
     );
 }
+
+/// G2: the foreground process is sampled when asked, not on a timer, so a
+/// `cd` in the pane shows in `#{pane_current_path}` at once.
+#[test]
+fn pane_current_path_follows_a_cd_in_the_pane() {
+    let srv = TestServer::start();
+    let sub = srv.home.join("proj").join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cd",
+        "-c",
+        srv.home.join("proj").to_str().unwrap(),
+        "sh",
+    ])
+    .unwrap();
+    let cmd = || display(&srv, "cd", "#{pane_current_command}");
+    srv.wait_for(|| cmd().ends_with("sh"), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", cmd()));
+    srv.cmd(&["send-keys", "-t", "cd", "cd sub", "Enter"])
+        .unwrap();
+    let path = || display(&srv, "cd", "#{pane_current_path}");
+    srv.wait_for(|| path().ends_with("/proj/sub"), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", path()));
+}
+
+/// G2: a window is renamed after its pane starts a new command, with no
+/// periodic timer behind it (the pane's output arms the name check).
+#[test]
+fn automatic_rename_follows_a_new_command_in_the_pane() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "ar", "sh"]).unwrap();
+    srv.cmd(&[
+        "set-option",
+        "-g",
+        "automatic-rename-format",
+        "#{pane_current_command}",
+    ])
+    .unwrap();
+    srv.cmd(&["send-keys", "-t", "ar", "exec sleep 30", "Enter"])
+        .unwrap();
+    let name = || display(&srv, "ar", "#{window_name}");
+    srv.wait_for(|| name().ends_with("sleep"), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", name()));
+}
