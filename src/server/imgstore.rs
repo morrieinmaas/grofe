@@ -268,6 +268,22 @@ impl PaneImages {
     pub fn is_empty(&self) -> bool {
         self.kitty.is_empty() && self.sixel.is_empty()
     }
+
+    /// The kitty placements `by` rows further down (negative: up), as
+    /// copy mode sees them under its own scroll.
+    pub fn shifted(&self, by: i32) -> PaneImages {
+        PaneImages {
+            kitty: self
+                .kitty
+                .iter()
+                .map(|k| ViewKitty {
+                    row: k.row + by,
+                    ..k.clone()
+                })
+                .collect(),
+            sixel: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -607,6 +623,38 @@ impl Store {
                 cells: s.cells,
                 image: Arc::clone(&s.image),
                 cell_px: self.cell_px,
+            });
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// The kitty placements in the rows of a copy of the pane taken now,
+    /// whose first row is the oldest of its `history` rows of scrollback:
+    /// copy mode shows them as the text is scrolled back (sixel images are
+    /// not kept past the screen, as in tmux).
+    pub fn copy_view(&self, history: usize) -> Option<PaneImages> {
+        let layer = self.layer();
+        let top = layer.v as i64 - history as i64;
+        let total = history as i64 + i64::from(self.rows);
+        let mut out = PaneImages::default();
+        for p in &layer.kitty {
+            let Some((row, col)) = layer.pos(p, 0) else {
+                continue;
+            };
+            let r = row - top;
+            if r + i64::from(p.rows) <= 0 || r >= total {
+                continue;
+            }
+            out.kitty.push(ViewKitty {
+                serial: p.serial,
+                image: p.image,
+                col: col as i32,
+                row: r as i32,
+                cols: p.cols,
+                rows: p.rows,
+                src: p.src,
+                off: p.off,
+                z: p.z,
             });
         }
         (!out.is_empty()).then_some(out)

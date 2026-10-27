@@ -698,6 +698,13 @@ impl PaneHandle {
         lock(&self.emu).term.grid().history_size()
     }
 
+    /// The pane's kitty placements in the rows [`Self::copy_grid`] gives:
+    /// row 0 is the oldest history row (copy mode's view of its images).
+    pub fn copy_images(&self) -> Option<PaneImages> {
+        let emu = lock(&self.emu);
+        emu.images.copy_view(emu.term.grid().history_size())
+    }
+
     /// Every row of the grid, the oldest history row first and then the
     /// screen, each passed to `row`, under one lock: copy mode's copy of
     /// the pane (M5, TM.1). Returns the number of history rows and the

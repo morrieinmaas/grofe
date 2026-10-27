@@ -261,6 +261,7 @@ this task; the owner's Ghostty and WezTerm are the check.
   popups).
 - Per pane, not per server: 19 sixel images (tmux keeps 19 for the whole
   server).
-- Not done: copy mode shows no images; images in a scroll region that does
-  not start at the top do not move; image numbers (`I=`); a sub-cell `X`/`Y`
+- Not done: copy mode shows no sixel images (tmux keeps none past the
+  screen either); images in a scroll region that does not start at the top
+  do not move; image numbers (`I=`); a sub-cell `X`/`Y`
   offset is dropped when the placement is cropped at the top or left.

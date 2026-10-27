@@ -818,3 +818,126 @@ fn the_sixel_bytes_are_tmux_s() {
         &out[at.saturating_sub(20)..at]
     );
 }
+
+fn fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/graphics")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Case 12: what the owner's image tools really send, captured from
+/// `kitten icat` 0.49.1, chafa 1.14.5 and timg 1.6.0 (in the T3.8 survey
+/// container) in their direct modes: each is placed where the cursor was,
+/// at the size its own keys give.
+#[test]
+fn real_tools_direct_output_is_placed() {
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let script = format!(
+        "{}; printf '\\033[2;1H'; cat {}; printf '\\033[6;1H'; cat {}; \
+         printf '\\033[12;1H'; cat {}; printf '\\033[20;1Hdone'; exec sleep 600",
+        wait_flag(&go),
+        shell_quote(&fixture("icat-direct.bin")),
+        shell_quote(&fixture("chafa-kitty.bin")),
+        shell_quote(&fixture("timg-kitty.bin")),
+    );
+    session(&srv, &script, true);
+    let mut a = attach(&srv, KITTY);
+    touch(&go);
+    let (found, _) = wait_puts(&mut a, 0, 3);
+    let at_row = |row: u32| {
+        found
+            .iter()
+            .find(|p| p.row == row)
+            .unwrap_or_else(|| panic!("row {row}: {found:?}"))
+    };
+    // icat: `\r`, `ESC[39C`, a 4x4 pixel image with `X=3`: one cell.
+    let icat = at_row(2);
+    assert_eq!((icat.col, icat.n("c"), icat.n("r")), (40, 1, 1), "{icat:?}");
+    assert_eq!(icat.n("X"), 3);
+    // chafa: 40x40 pixels in chunks, `c=4,r=2`.
+    let chafa = at_row(6);
+    assert_eq!(
+        (chafa.col, chafa.n("c"), chafa.n("r")),
+        (1, 4, 2),
+        "{chafa:?}"
+    );
+    // timg: a 4x4 PNG under a random id, no size: one cell of 10x20.
+    let timg = at_row(12);
+    assert_eq!((timg.col, timg.n("c"), timg.n("r")), (1, 1, 1), "{timg:?}");
+    // Three transmits, as plain ones; the text after them landed where
+    // each tool left the cursor.
+    assert_eq!(transmitted(a.output()).len(), 3);
+    a.wait_for("done");
+}
+
+/// Case 13: chafa's sixel output: stored, shown as text to a client
+/// without sixel, and sent on (re-encoded, with chafa's `P2` of 1) to one
+/// with it.
+#[test]
+fn real_chafa_sixel_is_shown_or_sent() {
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let script = format!(
+        "{}; printf '\\033[2;3H'; cat {}; printf 'after'; exec sleep 600",
+        wait_flag(&go),
+        shell_quote(&fixture("chafa-sixel.bin")),
+    );
+    session(&srv, &script, true);
+    let mut plain = attach(&srv, KITTY);
+    let mut capable = attach(&srv, SIXEL_16);
+    touch(&go);
+    plain.wait_for("after");
+    capable.wait_for("after");
+    assert!(plain.text().contains("SIXEL IMAGE ("), "{}", plain.text());
+    let out = capable.output().to_vec();
+    assert!(find(&out, b"\x1b[2;3H\x1bP0;1q\"1;1;").is_some());
+    assert!(find(plain.output(), b"\x1bP0;").is_none());
+}
+
+/// Case 14: a placement that scrolled off the top is in the scrollback, as
+/// kitty keeps it: gone from the screen, back when copy mode goes up to its
+/// rows.
+#[test]
+fn a_scrolled_off_placement_returns_in_copy_mode() {
+    let srv = TestServer::start();
+    let (go, more) = (srv.home.join("go"), srv.home.join("more"));
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!("{}{}", at(3, 1), image(1, "c=4,r=2,C=1")),
+    );
+    let script = format!(
+        "{}; {draw}; {}; seq 1 80; exec sleep 600",
+        wait_flag(&go),
+        wait_flag(&more)
+    );
+    session(&srv, &script, true);
+    let mut a = attach(&srv, KITTY);
+    touch(&go);
+    let (put, mark) = next_put(&mut a, 0);
+    let (outer, pid) = (put.keys["i"].clone(), put.keys["p"].clone());
+    touch(&more);
+    a.wait_for("80");
+    let mark = wait_bytes(
+        &mut a,
+        "the placement deleted when it scrolled off",
+        mark,
+        |b| {
+            deletes(b)
+                .iter()
+                .any(|d| d.get("i") == Some(&outer) && d.get("p") == Some(&pid))
+        },
+    );
+    srv.cmd(&["copy-mode", "-t", "main"]).expect("copy-mode");
+    srv.cmd(&["send-keys", "-t", "main", "-X", "history-top"])
+        .expect("history-top");
+    let (back, _) = next_put(&mut a, mark);
+    assert_eq!((back.row, back.col), (3, 1), "{back:?}");
+    assert_eq!(back.keys["i"], outer);
+    // And it goes again when copy mode ends.
+    srv.cmd(&["send-keys", "-t", "main", "-X", "cancel"])
+        .expect("cancel");
+}

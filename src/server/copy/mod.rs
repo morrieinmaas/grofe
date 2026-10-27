@@ -32,10 +32,12 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 use crate::protocol::Dialect;
 use crate::server::dispatch::options;
+use crate::server::imgstore::PaneImages;
 use crate::server::input::{Input, InputHook, ROOT_TABLE, Routed};
 use crate::server::model::Window;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, PaneHandle, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
+use crate::server::screenimg::{self, ImageCaps, Place};
 use crate::server::status::{self, Style};
 use crate::server::{State, clients};
 use crate::types::{ClientId, PaneId, Rect};
@@ -145,6 +147,8 @@ pub struct Grid {
     looks: Vec<SnapCell>,
     /// Interns [`Grid::looks`].
     look_ids: HashMap<LookKey, u32>,
+    /// The pane's kitty placements in the copy's rows (G3).
+    images: Option<PaneImages>,
 }
 
 /// A look as a hashable key (the colours as numbers).
@@ -214,6 +218,7 @@ impl Grid {
             rows: Vec::new(),
             looks: vec![blank()],
             look_ids,
+            images: None,
         }
     }
 
@@ -226,6 +231,7 @@ impl Grid {
         grid.looks.shrink_to_fit();
         grid.hsize = hsize.min(grid.rows.len());
         grid.sy = grid.rows.len() - grid.hsize;
+        grid.images = handle.copy_images();
         (grid, (usize::from(cursor.col), usize::from(cursor.row)))
     }
 
@@ -2217,6 +2223,31 @@ impl Overlay for CopyOverlay {
                     shape: CursorShape::Block,
                     blink: false,
                 });
+            }
+            // Images the text had scrolled away with it, shown again as the
+            // view goes back to them.
+            if let (Some(images), Some(c)) = (&mode.grid.images, state.clients.get(&client)) {
+                let from = screen.images.len();
+                let place = Place {
+                    origin: (
+                        i32::from(rect.x) - i32::from(cx.viewport.0),
+                        i32::from(rect.y) - i32::from(cx.viewport.1) + i32::from(cx.window_top),
+                    ),
+                    size: (rect.cols, rect.rows),
+                    area: (clip.x + clip.cols, clip.y + clip.rows),
+                };
+                let view = images.shifted(-(top as i32));
+                let mut none = Vec::new();
+                screenimg::collect(
+                    &mut screen.images,
+                    &mut none,
+                    pane,
+                    &view,
+                    place,
+                    state.graphics.remap(),
+                    ImageCaps::of(&c.caps),
+                );
+                screenimg::mark_covered(screen, from);
             }
         }
     }

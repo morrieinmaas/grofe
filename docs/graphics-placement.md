@@ -68,10 +68,13 @@ Each frame, `compose_client` turns the visible panes' store views into
 `Screen::images`: for every placement the cell rectangle on the client,
 clipped to its pane rect, the client viewport and the window. Then:
 
-1. **Hidden when covered.** The screen cells before the overlays are kept;
-   after popups, menus, prompts, choosers and floating panes have drawn, an
-   image whose visible rectangle contains a changed cell is left out whole.
-   (Hiding whole beats cutting a hole: a kitty placement is a rectangle.)
+1. **Hidden when covered.** Every cell under an image is marked (a
+   private zero-width character) before popups, menus, prompts, choosers and
+   floating panes draw; they replace cells, which drops the mark, and an
+   image with an unmarked cell under it is left out whole. (Hiding whole
+   beats cutting a hole: a kitty placement is a rectangle.) Copy mode adds
+   the kitty placements of the rows it shows, marked after it drew, so what
+   scrolled into the history is seen again when the view goes back to it.
 2. **Kitty.** `Outbox` remembers what it placed. A new or changed placement
    is `CUP` + `a=p,i=<outer>,p=<serial>,c,r,x,y,w,h,X,Y,z,C=1,q=2`; a gone one
    is `a=d,d=i,i=<outer>,p=<serial>,q=2` (lowercase: data stays). The same
@@ -123,5 +126,7 @@ unknown DCS. Sixel goldens use a second image built with the flag.
 
 Per pane: 512 kitty placements, 19 sixel images, 16 MiB of decoded sixel.
 Transmit cache stays 12 MiB (T3.8). Animation frames count against it.
-Not done: copy-mode view of images, scroll regions that do not start at the
-top moving images, image numbers (`I=`), sub-cell offsets under a crop.
+Not done: sixel in copy mode (tmux keeps none either), scroll regions that
+do not start at the top moving images, image numbers (`I=`), sub-cell
+offsets under a crop, the XTSMGRAPHICS reply (`CSI ? 1 ; 1 ; 0 S`) tmux's
+sixel build gives.

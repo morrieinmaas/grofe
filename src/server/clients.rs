@@ -1877,7 +1877,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         graphics: state.graphics.remap(),
         images: Some(ImageCaps::of(&c.caps)),
     });
-    let window_before = screenimg::mark_covered(&mut window);
+    screenimg::mark_covered(&mut window, 0);
     if !w.zoomed && !w.floating.is_empty() {
         let mut stack = w.floating.clone();
         stack.sort_by_key(|f| f.z);
@@ -1902,9 +1902,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         );
     }
     // Floating panes cover what is under them, images included.
-    if let Some(before) = window_before {
-        screenimg::hide_covered(&mut window, before);
-    }
+    screenimg::hide_covered(&mut window);
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if let Some(first) = lines.first_mut() {
@@ -1924,7 +1922,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         window
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
-    let screen_before = screenimg::mark_covered(&mut screen);
+    screenimg::mark_covered(&mut screen, 0);
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
@@ -1934,9 +1932,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     }
     render::fix_wide_pairs(&mut screen);
     // Popups, menus, prompts and choosers cover images the same way.
-    if let Some(before) = screen_before {
-        screenimg::hide_covered(&mut screen, before);
-    }
+    screenimg::hide_covered(&mut screen);
     Some((screen, viewport, rows, geom.first_row))
 }
 

@@ -249,15 +249,10 @@ pub fn paint_fallback(screen: &mut Screen, f: Fallback) {
 /// overlay replaces loses it, even for one that looks the same.
 const MARK: char = '\u{FDD0}';
 
-/// Marks every cell an image covers and returns the screen as it is now,
-/// to give [`hide_covered`] once overlays have drawn. `None` without
-/// images.
-pub fn mark_covered(screen: &mut Screen) -> Option<Vec<SnapCell>> {
-    if screen.images.is_empty() {
-        return None;
-    }
+/// Marks the cells under `screen.images[from..]`.
+pub fn mark_covered(screen: &mut Screen, from: usize) {
     let cols = screen.cols as usize;
-    for image in &screen.images {
+    for image in &screen.images[from.min(screen.images.len())..] {
         let (x, y, w, h) = image.rect();
         for row in y..y + h {
             let start = row as usize * cols + x as usize;
@@ -272,24 +267,25 @@ pub fn mark_covered(screen: &mut Screen) -> Option<Vec<SnapCell>> {
             }
         }
     }
-    Some(screen.cells.clone())
 }
 
 /// Leaves out the images that something drew over since [`mark_covered`]:
-/// a cell under one that is not the marked cell any more. Unmarks the rest.
-pub fn hide_covered(screen: &mut Screen, before: Vec<SnapCell>) {
-    let cols = screen.cols as usize;
-    if before.len() == screen.cells.len() {
-        let cells = &screen.cells;
-        screen.images.retain(|image| {
-            let (x, y, w, h) = image.rect();
-            (y..y + h).all(|row| {
-                let start = row as usize * cols + x as usize;
-                let end = start + w as usize;
-                end <= cells.len() && cells[start..end] == before[start..end]
-            })
-        });
+/// one with a cell under it that is not marked any more. Unmarks the rest.
+pub fn hide_covered(screen: &mut Screen) {
+    if screen.images.is_empty() {
+        return;
     }
+    let cols = screen.cols as usize;
+    let cells = &screen.cells;
+    screen.images.retain(|image| {
+        let (x, y, w, h) = image.rect();
+        (y..y + h).all(|row| {
+            let start = row as usize * cols + x as usize;
+            cells
+                .get(start..start + w as usize)
+                .is_some_and(|run| run.iter().all(|c| c.zerowidth.contains(&MARK)))
+        })
+    });
     for cell in &mut screen.cells {
         cell.zerowidth.retain(|c| *c != MARK);
     }
@@ -536,15 +532,19 @@ mod tests {
             kitty(1, 1, (2, 1), (0, 4, 0, 2)),
             kitty(2, 2, (7, 3), (0, 2, 0, 2)),
         ];
-        let before = mark_covered(&mut screen).expect("images");
+        mark_covered(&mut screen, 0);
         // A popup's blank cell, drawn over a blank one inside the first
         // image's rectangle: the same to look at, but not the same cell.
         screen.cells[2 * 10 + 4] = Screen::new(1, 1).cells.remove(0);
         // A cell next to the second does not matter.
         screen.cells[3 * 10 + 6].c = '|';
-        hide_covered(&mut screen, before);
-        assert_eq!(screen.images.len(), 1);
-        assert_eq!(screen.images[0].kitty_key(), Some((2, 2)));
+        // An image an overlay adds after the others were marked is marked
+        // on its own, and a later overlay can cover it.
+        screen.images.push(kitty(3, 3, (0, 4), (0, 2, 0, 1)));
+        mark_covered(&mut screen, 2);
+        hide_covered(&mut screen);
+        let keys: Vec<_> = screen.images.iter().map(|i| i.kitty_key()).collect();
+        assert_eq!(keys, [Some((2, 2)), Some((3, 3))]);
         assert!(
             screen.cells.iter().all(|c| c.zerowidth.is_empty()),
             "the marks are gone"
