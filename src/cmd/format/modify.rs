@@ -1335,6 +1335,12 @@ mod tests {
             ("#{s/a//:session_name}", "min"),
             ("#{s/#{@opt}/Z/:@opt}", "Z"),
             ("#{s/a/A/:nosuchvar}", ""),
+            // A `#` that ends an argument is dropped by tmux's expansion (recorded),
+            // so these patterns are empty and these replacements are nothing.
+            ("#{s/#/x/:@spaced}", "a b|c#d"),
+            ("#{s/##/x/:@spaced}", "a b|c#d"),
+            ("#{s/c/#/:@spaced}", "a b|#d"),
+            ("#{s/c/x##/:@spaced}", "a b|x#d"),
         ]);
     }
 

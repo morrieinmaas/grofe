@@ -323,6 +323,14 @@ impl<'a> Expander<'a> {
                 .chars()
                 .next()
                 .expect("i is a char boundary within fmt");
+            // tmux's `format_expand1` drops a `#` that ends its text. The
+            // front end drops one at the end of a whole format; this is the
+            // same on a modifier's argument or a re-expanded value
+            // (`#{s/#/x/:v}` has an empty pattern in tmux), which is every
+            // expansion nested inside the outermost one.
+            if ch == '#' && i + 1 == fmt.len() && self.shared.depth.get() > 1 {
+                break;
+            }
             out.push(ch);
             i += ch.len_utf8();
         }
