@@ -118,13 +118,18 @@ on a client's first full redraw as before.
 - Drawn only for a terminal with the `sixel` feature and known cell pixels;
   else the text fallback. tmux draws it over popups; grofe hides it.
 
-The golden recorder's tmux is built without `--enable-sixel` (see
-`containers/compat/golden.Containerfile`), so it treats `DCS q` as an
-unknown DCS. Sixel goldens use a second image built with the flag.
+The golden recorder's default tmux is built without `--enable-sixel`, so it
+treats `DCS q` as an unknown DCS and `#{sixel_support}` is 0. The golden
+image therefore has a second build, `tmux-sixel`, which the recorder uses
+for the scenarios under `golden/g3/`. Their client reports no cell pixels,
+so what they record is the text stand-in and where the cursor, the scroll and
+the frees put it; `sixel.rs` is checked against the bytes that build sent to
+a pty client with the `sixel` feature (`tests/fixtures/graphics/sixel-3x2.*`).
 
 ## Limits
 
 Per pane: 512 kitty placements, 19 sixel images, 16 MiB of decoded sixel.
+One sixel image at most 16 Mpixel (tmux's 10000 x 10000 would be 200 MB).
 Transmit cache stays 12 MiB (T3.8). Animation frames count against it.
 Not done: sixel in copy mode (tmux keeps none either), scroll regions that
 do not start at the top moving images, image numbers (`I=`), sub-cell

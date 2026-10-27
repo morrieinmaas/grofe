@@ -1917,7 +1917,9 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         if let Some(m) = &message
             && let Some(last) = window.rows.checked_sub(1)
         {
+            screenimg::mark_covered(&mut window, 0);
             render::draw_row(&mut window, last, &m.line);
+            screenimg::hide_covered(&mut window);
         }
         window
     };

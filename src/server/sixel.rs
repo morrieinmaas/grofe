@@ -12,6 +12,10 @@ use std::fmt::Write as _;
 
 const WIDTH_LIMIT: u32 = 10_000;
 const HEIGHT_LIMIT: u32 = 10_000;
+/// Most pixels one image may hold. tmux's two limits alone allow 10000 by
+/// 10000, which is 200 MB of palette indexes for one string; grofe's server
+/// holds every session's, so it stops at 16 Mpixel (32 MB).
+const PIXEL_LIMIT: u64 = 16 * 1024 * 1024;
 /// `SIXEL_COLOUR_REGISTERS`: the highest colour register number.
 const COLOUR_REGISTERS: u32 = 1024;
 
@@ -77,7 +81,7 @@ impl Sixel {
         if y <= self.y {
             return false;
         }
-        if y > HEIGHT_LIMIT {
+        if y > HEIGHT_LIMIT || u64::from(y) * u64::from(self.x) > PIXEL_LIMIT {
             return true;
         }
         self.lines.resize(y as usize, Vec::new());
@@ -89,7 +93,7 @@ impl Sixel {
         if x <= self.lines[line].len() as u32 {
             return false;
         }
-        if x > WIDTH_LIMIT {
+        if x > WIDTH_LIMIT || u64::from(self.y) * u64::from(x.max(self.x)) > PIXEL_LIMIT {
             return true;
         }
         if x > self.x {
@@ -520,6 +524,19 @@ mod tests {
         assert!(Sixel::parse(b"q#0;2;1;1;1", 0, 1, 1).is_none());
         // A repeat with no data byte.
         assert!(Sixel::parse(b"q!5", 0, 1, 1).is_none());
+    }
+
+    #[test]
+    fn an_image_past_the_pixel_limit_is_refused() {
+        // 10000 wide and 2400 tall is 24 Mpixel: tmux would hold it.
+        let mut body = b"q#0;2;1;1;1".to_vec();
+        for _ in 0..400 {
+            body.extend_from_slice(b"!10000~-");
+        }
+        assert!(Sixel::parse(&body, 0, 16, 32).is_none());
+        // Half of that is fine.
+        body.truncate(b"q#0;2;1;1;1".len() + 200 * b"!10000~-".len());
+        assert!(Sixel::parse(&body, 0, 16, 32).is_some());
     }
 
     #[test]

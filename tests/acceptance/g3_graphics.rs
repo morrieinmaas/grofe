@@ -716,6 +716,9 @@ fn animation_is_forwarded_and_replayed() {
     let mut a = attach(&srv, KITTY);
     touch(&go);
     a.wait_for("done");
+    // The commands reach the client through the actor, so a frame with the
+    // text can come first.
+    a.wait_for_output(b"a=c,", 0);
     let in_order = |out: &[u8]| {
         let at = |needle: &[u8]| find(out, needle);
         match (at(b"a=t,"), at(b"a=f,"), at(b"a=a,"), at(b"a=c,")) {
@@ -733,7 +736,7 @@ fn animation_is_forwarded_and_replayed() {
     // The client's own stream has the pane's id in none of them.
     assert!(!text.contains("a=f,i=5,"));
     let mut b = attach(&srv, KITTY);
-    std::thread::sleep(Duration::from_millis(300));
+    b.wait_for_output(b"a=c,", 0);
     let late = b.output().to_vec();
     assert!(in_order(&late), "{:?}", String::from_utf8_lossy(&late));
 }
@@ -835,8 +838,10 @@ fn fixture(name: &str) -> String {
 fn real_tools_direct_output_is_placed() {
     let srv = TestServer::start();
     let go = srv.home.join("go");
+    // chafa sends no `q=2`, so the terminal answers, and a tty with echo on
+    // would print the answer: a pane that draws turns echo off.
     let script = format!(
-        "{}; printf '\\033[2;1H'; cat {}; printf '\\033[6;1H'; cat {}; \
+        "stty -echo; {}; printf '\\033[2;1H'; cat {}; printf '\\033[6;1H'; cat {}; \
          printf '\\033[12;1H'; cat {}; printf '\\033[20;1Hdone'; exec sleep 600",
         wait_flag(&go),
         shell_quote(&fixture("icat-direct.bin")),
@@ -940,4 +945,112 @@ fn a_scrolled_off_placement_returns_in_copy_mode() {
     // And it goes again when copy mode ends.
     srv.cmd(&["send-keys", "-t", "main", "-X", "cancel"])
         .expect("cancel");
+}
+
+/// Case 15: turning the option off takes the images away again: the
+/// placement is deleted from the client, the sixel stand-in goes.
+#[test]
+fn turning_the_option_off_takes_the_images_away() {
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!(
+            "{}{}{}{SIXEL_IMAGE}",
+            at(3, 1),
+            image(1, "c=4,r=2,C=1"),
+            at(8, 1)
+        ),
+    );
+    session(
+        &srv,
+        &format!("{}; {draw}; exec sleep 600", wait_flag(&go)),
+        true,
+    );
+    let mut a = attach(&srv, KITTY);
+    touch(&go);
+    let (put, mark) = next_put(&mut a, 0);
+    a.wait_for("SIXEL IMAGE (2x1)");
+    srv.cmd(&["set-option", "-g", "graphics", "off"])
+        .expect("off");
+    let (outer, pid) = (put.keys["i"].clone(), put.keys["p"].clone());
+    wait_bytes(&mut a, "the placement deleted", mark, |b| {
+        deletes(b)
+            .iter()
+            .any(|d| d.get("i") == Some(&outer) && d.get("p") == Some(&pid))
+    });
+    a.wait_until("the stand-in gone", WAIT, |t| !t.contains("SIXEL IMAGE"));
+}
+
+/// Case 16: a client that stops reading while the pane redraws loses
+/// frames, and the full redraw it gets when it resumes puts the placement
+/// back: the same placement, once.
+#[test]
+fn a_stalled_client_gets_its_placements_again() {
+    let srv = TestServer::start();
+    let (go, churn, stop) = (
+        srv.home.join("go"),
+        srv.home.join("churn"),
+        srv.home.join("stop"),
+    );
+    let draw = cat(
+        &srv,
+        "draw.bin",
+        &format!("{}{}", at(18, 1), image(1, "c=4,r=2,C=1")),
+    );
+    let script = format!(
+        "{}; {draw}; {}; i=0; while [ ! -e {} ]; do r=1; while [ $r -le 10 ]; do \
+         printf '\\033[%d;1H%s%s' $r $i {}; r=$((r+1)); done; i=$((i+1)); \
+         [ $((i % 10)) -eq 0 ] && sleep 0.03; done; printf '\\033[12;1HEND'; exec sleep 600",
+        wait_flag(&go),
+        wait_flag(&churn),
+        shell_quote(&stop.to_string_lossy()),
+        shell_quote(&"x".repeat(70)),
+    );
+    session(&srv, &script, true);
+    let mut a = attach(&srv, KITTY);
+    touch(&go);
+    let (put, mark) = next_put(&mut a, 0);
+    let pattern = format!("{} attach", srv.socket.display());
+    let pgrep = std::process::Command::new("pgrep")
+        .args(["-f", &pattern])
+        .output()
+        .expect("pgrep");
+    let pids: Vec<i32> = String::from_utf8_lossy(&pgrep.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    assert_eq!(pids.len(), 1, "the attach client: {pids:?}");
+    let pid = nix::unistd::Pid::from_raw(pids[0]);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).expect("SIGSTOP");
+    touch(&churn);
+    let discarded = || {
+        srv.cmd(&["list-clients", "-F", "#{client_discarded}"])
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let stalled = common::wait_until(|| discarded() > 0, WAIT);
+    touch(&stop);
+    let ended = common::wait_until(|| srv.capture("main").contains("END"), WAIT);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).expect("SIGCONT");
+    stalled.expect("a frame was dropped for the stopped client");
+    ended.expect("the pane finished");
+    a.wait_for("END");
+    let after = since(&mut a, mark);
+    let again = puts(&after);
+    assert!(
+        again
+            .iter()
+            .any(|p| p.keys["p"] == put.keys["p"] && (p.row, p.col) == (18, 1)),
+        "the placement after the stall: {again:?}"
+    );
+    // Whatever was sent in between, the last word on the placement is a put.
+    let text = String::from_utf8_lossy(&after).into_owned();
+    let (last_put, last_del) = (text.rfind("a=p,"), text.rfind("a=d,d=i"));
+    assert!(
+        last_put.is_some_and(|p| last_del.is_none_or(|d| p > d)),
+        "{text:?}"
+    );
 }
