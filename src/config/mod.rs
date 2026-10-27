@@ -63,7 +63,10 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("prefix2", "prefix2"),
     ("status-bg", "status-bg"),
     ("status-fg", "status-fg"),
-    ("window-status-activity-style", "window-status-activity-style"),
+    (
+        "window-status-activity-style",
+        "window-status-activity-style",
+    ),
     ("focus-follows-mouse", "focus-follows-mouse"),
     ("default-size", "default-size"),
     ("exit-empty", "exit-empty"),
@@ -154,10 +157,21 @@ pub(crate) enum Ty {
 
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
-        "mouse" | "remain-on-exit" | "automatic-rename" | "allow-rename" | "focus-events"
-        | "set-titles" | "aggressive-resize" | "renumber-windows" | "synchronize-panes"
-        | "monitor-bell" | "monitor-activity" | "wrap-search" | "graphics"
-        | "focus-follows-mouse" | "exit-empty" => Ty::Bool,
+        "mouse"
+        | "remain-on-exit"
+        | "automatic-rename"
+        | "allow-rename"
+        | "focus-events"
+        | "set-titles"
+        | "aggressive-resize"
+        | "renumber-windows"
+        | "synchronize-panes"
+        | "monitor-bell"
+        | "monitor-activity"
+        | "wrap-search"
+        | "graphics"
+        | "focus-follows-mouse"
+        | "exit-empty" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"

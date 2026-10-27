@@ -48,10 +48,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         .lookup("default-size", &[])
         .and_then(|v| super::options::parse_size(v))
         .unwrap_or(DEFAULT_SIZE);
-    let size = cap_size(
-        c.width.unwrap_or(default.0),
-        c.height.unwrap_or(default.1),
-    );
+    let size = cap_size(c.width.unwrap_or(default.0), c.height.unwrap_or(default.1));
     let window = model.alloc_window_id();
     // Only what `update-environment` names comes from the client (TC.5).
     let env = crate::server::hooks::session_environment(state, id, &ctx.env);

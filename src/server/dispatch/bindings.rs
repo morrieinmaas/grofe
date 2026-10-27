@@ -160,7 +160,7 @@ fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, 
 
 /// `text` expanded against `pane`, with the client's and the server's
 /// variables, a running hook's, and the mouse's over them.
-fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> String {
+pub(super) fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> String {
     let model = &state.model;
     let with = |inner: &dyn FormatVars| {
         let vars = MouseVars { state, inner };

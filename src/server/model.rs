@@ -522,7 +522,8 @@ impl Model {
                 .lookup("detach-on-destroy", &[options::Owner::Session(session)])
                 .unwrap_or("on")
                 .to_string();
-            self.destroyed_sessions.insert(session, (name.clone(), mode));
+            self.destroyed_sessions
+                .insert(session, (name.clone(), mode));
             self.closed_sessions.push((session, name));
             self.sessions.remove(&session);
             self.client_last_session.retain(|_, last| *last != session);

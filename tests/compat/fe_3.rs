@@ -445,7 +445,12 @@ fn a_value_inside_the_pid_window_is_not_a_pid() {
 /// The recorder sees the fixtures at `/src/tests/fixtures/compat`; tmux
 /// prints that path in a config file's errors.
 fn recorder_paths(s: String) -> String {
-    s.replace(&fixtures_dir().display().to_string(), "/src/tests/fixtures/compat")
+    s.lines()
+        .map(|line| match line.find("/tests/fixtures/compat/") {
+            Some(at) if line.starts_with('/') => format!("/src{}\n", &line[at..]),
+            _ => format!("{line}\n"),
+        })
+        .collect()
 }
 
 /// B1a: `%if`/`%elif`/`%else`/`%endif`, `NAME=value` and `%hidden

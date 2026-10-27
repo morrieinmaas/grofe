@@ -1197,13 +1197,21 @@ fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: &[('q', FlagKind::Bool)],
+            // `-v` is tmux's verbose parse trace, which grofe leaves out.
+            short: &[
+                ('q', FlagKind::Bool),
+                ('F', FlagKind::Bool),
+                ('n', FlagKind::Bool),
+                ('v', FlagKind::Bool),
+            ],
             long: &[],
         },
         "source-file",
     )?;
     Ok(Command::SourceFile(SourceFile {
         quiet: flags.present.contains(&'q'),
+        format: flags.present.contains(&'F'),
+        parse_only: flags.present.contains(&'n'),
         path: one_positional(&flags, "source-file")?,
     }))
 }
@@ -2139,6 +2147,180 @@ fn split_commands(
 /// starts on and its commands, which run as one group.
 pub type ConfigLine = (usize, Vec<Vec<String>>);
 
+/// What reading a config file asks of whoever runs it (tmux's parser does
+/// both while it parses, `cmd-parse.y`).
+pub trait ConfigHost {
+    /// Whether a `%if`/`%elif` condition holds: `format` expanded, then
+    /// tmux's `format_true` (neither empty nor `0`).
+    fn condition(&mut self, format: &str) -> bool;
+    /// `NAME=value` outside a false `%if` branch: set in the global
+    /// environment now, so the lines after it see it (`$NAME`).
+    fn assign(&mut self, assignment: &str, hidden: bool);
+}
+
+/// A host that expands nothing and sets nothing: a condition is its text.
+struct Plain;
+
+impl ConfigHost for Plain {
+    fn condition(&mut self, format: &str) -> bool {
+        !format.is_empty() && format != "0"
+    }
+    fn assign(&mut self, _: &str, _: bool) {}
+}
+
+/// [`split_config_file_with`] on a host that expands no format and sets no
+/// variable.
+pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
+    split_config_file_with(text, &mut Plain)
+}
+
+/// One open `%if`.
+struct Scope {
+    /// Some branch so far held.
+    taken: bool,
+    /// This branch's lines count.
+    active: bool,
+    else_seen: bool,
+}
+
+/// The state of [`split_config_file_with`]: the lines read, the open `%if`
+/// scopes, and the host.
+struct ConfigReader<'h> {
+    lines: Vec<ConfigLine>,
+    scopes: Vec<Scope>,
+    host: &'h mut dyn ConfigHost,
+    /// A `%if` format ran into the end of its line.
+    broken_format: bool,
+}
+
+/// Whether `word` names an assignment, as tmux's lexer: `NAME=` with
+/// `NAME` letters, digits and `_`, not starting with a digit.
+fn is_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+impl ConfigReader<'_> {
+    fn active(&self) -> bool {
+        self.scopes.iter().all(|s| s.active)
+    }
+
+    /// One logical line, starting on `line`.
+    fn line(&mut self, line: usize, text: &str) -> Result<(), (usize, ParseError)> {
+        let at = |e: ParseError| (line, e);
+        if std::mem::take(&mut self.broken_format) {
+            return Err(at(syntax_error()));
+        }
+        // `%` starts a directive unless the word is all `%` and digits, then
+        // it is a token (`%1`).
+        if let Some(rest) = text.trim_start().strip_prefix('%') {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let word = &rest[..end];
+            if !word.chars().all(|c| c == '%' || c.is_ascii_digit()) {
+                return self.directive(word, &rest[end..]).map_err(at);
+            }
+        }
+        let cmds = self.commands(text).map_err(at)?;
+        if self.active() && !cmds.is_empty() {
+            self.lines.push((line, cmds));
+        }
+        Ok(())
+    }
+
+    /// `%if`, `%elif`, `%else`, `%endif` and `%hidden NAME=value`.
+    fn directive(&mut self, word: &str, rest: &str) -> Result<(), ParseError> {
+        match word {
+            "if" => {
+                let held = self.condition(rest)?;
+                self.scopes.push(Scope {
+                    taken: held,
+                    active: held,
+                    else_seen: false,
+                });
+            }
+            "elif" => {
+                if self.scopes.last().is_none_or(|s| s.else_seen) {
+                    return Err(syntax_error());
+                }
+                let held = self.condition(rest)?;
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.active = held && !scope.taken;
+                    scope.taken |= held;
+                }
+            }
+            "else" | "endif" if !rest.trim().is_empty() => return Err(syntax_error()),
+            "else" => match self.scopes.last_mut() {
+                Some(scope) if !scope.else_seen => {
+                    scope.active = !scope.taken;
+                    scope.taken = true;
+                    scope.else_seen = true;
+                }
+                _ => return Err(syntax_error()),
+            },
+            "endif" => {
+                self.scopes.pop().ok_or_else(syntax_error)?;
+            }
+            "hidden" => {
+                let mut cmds = split_command_string(rest)?;
+                let assignment = match cmds.as_mut_slice() {
+                    [cmd] if cmd.len() == 1 && is_assignment(&cmd[0]) => cmd.remove(0),
+                    _ => return Err(syntax_error()),
+                };
+                if self.active() {
+                    self.host.assign(&assignment, true);
+                }
+            }
+            _ => return Err(syntax_error()),
+        }
+        Ok(())
+    }
+
+    /// The condition of a `%if` or `%elif`: exactly one word.
+    fn condition(&mut self, rest: &str) -> Result<bool, ParseError> {
+        match split_command_string(rest)?.as_slice() {
+            [cmd] if cmd.len() == 1 => Ok(self.host.condition(&cmd[0])),
+            _ => Err(syntax_error()),
+        }
+    }
+
+    /// A line's commands, with `NAME=value` at the start of one taken out
+    /// and set as tmux's parser sets it, so a `$NAME` later on the line
+    /// (or after it) reads the new value.
+    // ponytail: the whole line is read again after each assignment, so a
+    // `$NAME` before the assignment on the same line sees it too.
+    fn commands(&mut self, text: &str) -> Result<Vec<Vec<String>>, ParseError> {
+        let mut applied = 0;
+        loop {
+            let mut cmds = split_command_string(text)?;
+            let assigning: Vec<usize> = (0..cmds.len())
+                .filter(|i| cmds[*i].first().is_some_and(|w| is_assignment(w)))
+                .collect();
+            if let Some(i) = assigning.get(applied) {
+                if self.active() {
+                    self.host.assign(&cmds[*i][0], false);
+                }
+                applied += 1;
+                continue;
+            }
+            for i in assigning {
+                cmds[i].remove(0);
+                // `A=1 B=2`: a command name cannot be an assignment.
+                if cmds[i].first().is_some_and(|w| is_assignment(w)) {
+                    return Err(syntax_error());
+                }
+            }
+            cmds.retain(|c| !c.is_empty());
+            return Ok(cmds);
+        }
+    }
+}
+
 /// Splits a tmux config file into its lines' commands, as tmux 3.7b's
 /// `source-file` reads one (recorded on a private socket):
 ///
@@ -2148,31 +2330,36 @@ pub type ConfigLine = (usize, Vec<Vec<String>>);
 ///   `{ }` list, where it separates the list's commands;
 /// - quotes may span lines and keep the newline;
 /// - a `#` that starts a word, outside quotes, is a comment to the end of
-///   the line (`#{...}` too; mid-word, `a#b` is a word);
-/// - each line is then a command string ([`split_command_string`]).
+///   the line (`#{...}` too; mid-word, `a#b` is a word), except after a
+///   `%` directive, where `#{...}` is a format, read raw to its closing
+///   brace, spaces and all;
+/// - each line is then a command string ([`split_command_string`]);
+/// - `%if`, `%elif`, `%else` and `%endif` choose which lines count, the
+///   condition a format `host` expands ([`ConfigHost::condition`]); a
+///   false branch is still read, so a syntax error in it is an error;
+/// - `NAME=value`, alone or before a command, and `%hidden NAME=value`
+///   are set through `host` as they are read.
 ///
-/// An error names the line it is on. tmux's `%if`/`%hidden` directives
-/// and `NAME=value` lines are not read (spec §4.5 keeps `%if` out of
-/// scope): a `%` line is an error, and an assignment reads as a command.
-pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
-    let mut lines = Vec::new();
+/// An error names the line it is on; an unterminated `{` or `%if` is
+/// reported at the end of the file.
+pub fn split_config_file_with(
+    text: &str,
+    host: &mut dyn ConfigHost,
+) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
+    let mut reader = ConfigReader {
+        lines: Vec::new(),
+        scopes: Vec::new(),
+        host,
+        broken_format: false,
+    };
     let mut cur = String::new();
     let mut start = None;
-    let mut flush = |start: &mut Option<usize>, cur: &mut String| {
+    let flush = |reader: &mut ConfigReader, start: &mut Option<usize>, cur: &mut String| {
         let text = std::mem::take(cur);
-        let Some(line) = start.take() else {
-            return Ok(());
-        };
-        if let Some(rest) = text.trim_start().strip_prefix('%') {
-            let word = rest.split_whitespace().next().unwrap_or_default();
-            let msg = format!("%{word}: not supported (spec 4.5)");
-            return Err((line, ParseError::Other(msg)));
+        match start.take() {
+            Some(line) => reader.line(line, &text),
+            None => Ok(()),
         }
-        let cmds = split_command_string(&text).map_err(|e| (line, e))?;
-        if !cmds.is_empty() {
-            lines.push((line, cmds));
-        }
-        Ok(())
     };
     let src = join_continuations(text);
     let mut chars = src.iter().copied().peekable();
@@ -2185,7 +2372,20 @@ pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseErr
         }
         match c {
             '\n' if depth > 0 => cur.push_str(" ; "),
-            '\n' => flush(&mut start, &mut cur)?,
+            '\n' => flush(&mut reader, &mut start, &mut cur)?,
+            // After a directive word a `#{` opens a format, not a comment.
+            '#' if word_start
+                && chars.peek().is_some_and(|(n, _)| *n == '{')
+                && is_directive_word(&cur) =>
+            {
+                chars.next();
+                match raw_format(&mut chars) {
+                    Some(format) => cur.push_str(&quote_word(&format)),
+                    None => reader.broken_format = true,
+                }
+                word_start = false;
+                continue;
+            }
             '#' if word_start => {
                 while chars.next_if(|(c, _)| *c != '\n').is_some() {}
                 if cur.trim().is_empty() {
@@ -2237,14 +2437,51 @@ pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseErr
             formats = 0;
         }
     }
-    // An unclosed `{` is an error at the end of the file, as tmux reports
-    // it (recorded: a file of four lines ending in a newline says line 5).
+    // An unclosed `{` or `%if` is an error at the end of the file, as tmux
+    // reports it (recorded: a file of four lines ending in a newline says
+    // line 5).
     let eof = src
         .last()
         .map_or(1, |(c, line)| line + usize::from(*c == '\n'));
     let unclosed = depth > 0;
-    flush(&mut start, &mut cur).map_err(|(line, e)| (if unclosed { eof } else { line }, e))?;
-    Ok(lines)
+    flush(&mut reader, &mut start, &mut cur)
+        .map_err(|(line, e)| (if unclosed { eof } else { line }, e))?;
+    if !reader.scopes.is_empty() {
+        return Err((eof, syntax_error()));
+    }
+    Ok(reader.lines)
+}
+
+/// Whether `cur` is nothing but one `%` directive word and the blanks
+/// after it (where tmux's lexer expects a condition).
+fn is_directive_word(cur: &str) -> bool {
+    let word = cur.trim();
+    word.starts_with('%') && !word.contains(char::is_whitespace)
+}
+
+/// A format after `#{`, read raw to its closing brace as tmux's
+/// `yylex_format`: `#{` nests, `#` escapes the next character, and the end
+/// of the line is an error (`None`). The `#{` is in the result.
+fn raw_format(chars: &mut impl Iterator<Item = (char, usize)>) -> Option<String> {
+    let mut out = String::from("#{");
+    let mut brackets = 1;
+    loop {
+        let (mut ch, _) = chars.next().filter(|(c, _)| *c != '\n')?;
+        if ch == '#' {
+            out.push('#');
+            ch = chars.next().filter(|(c, _)| *c != '\n')?.0;
+            if ch == '{' {
+                brackets += 1;
+            }
+        } else if ch == '}' {
+            brackets -= 1;
+            if brackets == 0 {
+                out.push('}');
+                return Some(out);
+            }
+        }
+        out.push(ch);
+    }
 }
 
 /// `text`'s characters, each with its line number, with every
@@ -4215,6 +4452,8 @@ mod tests {
             parse(&argv(&["source", "-q", "sub.toml"])),
             Ok(Command::SourceFile(SourceFile {
                 quiet: true,
+                format: false,
+                parse_only: false,
                 path: "sub.toml".to_string(),
             }))
         );
@@ -4371,10 +4610,107 @@ mod tests {
         // An unclosed `{` is reported at the end of the file (tmux 3.7b).
         let err = split_config_file("set -g @u 1\nbind x {\n  display a\n\n").unwrap_err();
         assert_eq!(err.0, 5);
-        let err = split_config_file("%if 1\nset -g @a 1\n%endif\n").unwrap_err();
+    }
+
+    /// A host that expands nothing and records what it is asked.
+    #[derive(Default)]
+    struct Recorder {
+        conditions: Vec<String>,
+        assigned: Vec<(String, bool)>,
+    }
+
+    impl ConfigHost for Recorder {
+        fn condition(&mut self, format: &str) -> bool {
+            self.conditions.push(format.to_string());
+            !format.is_empty() && format != "0"
+        }
+        fn assign(&mut self, assignment: &str, hidden: bool) {
+            self.assigned.push((assignment.to_string(), hidden));
+        }
+    }
+
+    fn read(text: &str) -> Result<Vec<(usize, Vec<Vec<String>>)>, (usize, ParseError)> {
+        split_config_file_with(text, &mut Recorder::default())
+    }
+
+    fn lines_of(text: &str) -> Vec<usize> {
+        read(text).unwrap().into_iter().map(|(l, _)| l).collect()
+    }
+
+    /// tmux 3.7b's `%if` family (recorded, `golden/fe_3/config-if`): the
+    /// first true branch counts, a false branch is still read, scopes nest.
+    #[test]
+    fn conditions_choose_lines() {
+        assert_eq!(lines_of("%if 1\na\n%else\nb\n%endif\n"), [2]);
+        assert_eq!(lines_of("%if 0\na\n%else\nb\n%endif\n"), [4]);
         assert_eq!(
-            err,
-            (1, ParseError::Other("%if: not supported (spec 4.5)".into()))
+            lines_of("%if 0\na\n%elif 1\nb\n%elif 1\nc\n%else\nd\n%endif\ne\n"),
+            [4, 10]
         );
+        assert_eq!(lines_of("%if 0\n%if 1\na\n%endif\n%else\nb\n%endif\n"), [6]);
+        // `0` and the empty string are false; anything else is true.
+        assert_eq!(
+            lines_of("%if ''\na\n%endif\n%if 0\nb\n%endif\n%if x\nc\n%endif\n"),
+            [8]
+        );
+    }
+
+    #[test]
+    fn a_condition_is_one_word_and_a_raw_format_keeps_its_spaces() {
+        let mut host = Recorder::default();
+        let got = split_config_file_with(
+            "%if #{==:a b,#{x}}\n%endif\n%if \"#{y}\" # c\n%endif\n%if #{a} # c\n%endif\n",
+            &mut host,
+        );
+        assert_eq!(got, Ok(vec![]));
+        assert_eq!(host.conditions, ["#{==:a b,#{x}}", "#{y}", "#{a}"]);
+    }
+
+    #[test]
+    fn directive_errors_name_their_line() {
+        let syntax = |line| Err((line, ParseError::Other("syntax error".into())));
+        assert_eq!(read("a\n%else\n"), syntax(2));
+        assert_eq!(read("a\n%endif\n"), syntax(2));
+        assert_eq!(read("a\n%elif 1\n"), syntax(2));
+        assert_eq!(read("a\n%if 1\nb\n"), syntax(4));
+        assert_eq!(read("%if\n%endif\n"), syntax(1));
+        assert_eq!(read("%if 1 2\n%endif\n"), syntax(1));
+        assert_eq!(read("%if 1\n%else\n%elif 1\n%endif\n"), syntax(3));
+        assert_eq!(read("%if 1\n%endif x\n"), syntax(2));
+        assert_eq!(read("%frob\n"), syntax(1));
+        assert_eq!(read("%hidden display x\n"), syntax(1));
+        // A false branch is read all the same.
+        assert_eq!(read("%if 0\n'a\n%endif\n%if 0\n"), syntax(5));
+        // `%1` is a word, not a directive.
+        assert_eq!(lines_of("select-window -t %1\n"), [1]);
+    }
+
+    /// `NAME=value` alone or before a command goes to the host, in order,
+    /// outside false branches; `%hidden` is hidden.
+    #[test]
+    fn assignments_go_to_the_host() {
+        let mut host = Recorder::default();
+        let got = split_config_file_with(
+            "A=1\nB=2 display x\n%hidden C=3\n%if 0\nD=4\n%hidden E=5\n%endif\ndisplay A=1\n",
+            &mut host,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            [
+                (2, vec![argv(&["display", "x"])]),
+                (8, vec![argv(&["display", "A=1"])])
+            ]
+        );
+        assert_eq!(
+            host.assigned,
+            [
+                ("A=1".to_string(), false),
+                ("B=2".to_string(), false),
+                ("C=3".to_string(), true)
+            ]
+        );
+        // A command name cannot be an assignment.
+        assert!(read("A=1 B=2\n").is_err());
     }
 }

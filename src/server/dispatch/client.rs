@@ -282,11 +282,13 @@ fn resume(
     // exits 0 (tmux 3.7b).
     let result = match result {
         Ok(()) if errors.is_empty() => Ok(more),
-        Ok(()) if errors.len() == cleared => Err((errors.join("\n"), more, Some(0))),
-        Ok(()) => Err((errors.join("\n"), more, None)),
+        Ok(()) if errors.len() == cleared => {
+            Err((dispatch::options::join_nonempty(&errors), more, Some(0)))
+        }
+        Ok(()) => Err((dispatch::options::join_nonempty(&errors), more, None)),
         Err(e) => {
             errors.push(e);
-            Err((errors.join("\n"), more, None))
+            Err((dispatch::options::join_nonempty(&errors), more, None))
         }
     };
     let later = state.deferred_reply.take().filter(|_| result.is_ok());

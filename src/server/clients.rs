@@ -1143,10 +1143,7 @@ fn successor(state: &State, name: &str, mode: &str) -> Option<SessionId> {
             .checked_sub(1)
             .or(sessions.len().checked_sub(1))
             .map(|i| sessions[i].id),
-        "next" => sessions
-            .get(before)
-            .or(sessions.first())
-            .map(|s| s.id),
+        "next" => sessions.get(before).or(sessions.first()).map(|s| s.id),
         _ => None,
     }
 }
