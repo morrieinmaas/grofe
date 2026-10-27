@@ -3104,63 +3104,7 @@ fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Win
     format!("{activity}{rest}")
 }
 
-/// One word of `pane_start_command`, quoted as tmux's `args_escape`
-/// quotes it (checked against tmux 3.7b): double quotes around a word
-/// with any of ` #';${}%`, else single quotes around one with a space or
-/// `"`; a lone special character, or a leading `~`, gets a backslash;
-/// control characters and backslashes are escaped C-style.
-pub(crate) fn escape_arg(s: &str) -> String {
-    const DQUOTED: &str = " #';${}%";
-    const SQUOTED: &str = " \"";
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let quote = if s.contains(|c| DQUOTED.contains(c)) {
-        Some('"')
-    } else if s.contains(|c| SQUOTED.contains(c)) {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = s.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quote.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let bytes = s.as_bytes();
-    let mut body = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        match c {
-            '\\' => body.push_str("\\\\"),
-            '\n' => body.push_str("\\n"),
-            '\t' => body.push_str("\\t"),
-            '\r' => body.push_str("\\r"),
-            '\x07' => body.push_str("\\a"),
-            '\x08' => body.push_str("\\b"),
-            '\x0b' => body.push_str("\\v"),
-            '\x0c' => body.push_str("\\f"),
-            c if c.is_ascii_control() => body.push_str(&format!("\\{:03o}", c as u32)),
-            '"' if quote == Some('"') => body.push_str("\\\""),
-            // `$` only where a shell would start a variable after it.
-            '$' if quote == Some('"')
-                && bytes.get(i + 1).is_some_and(|&n| {
-                    n == b'_' || n == b'{' || n.is_ascii_alphabetic() || n >= 0x80
-                }) =>
-            {
-                body.push_str("\\$")
-            }
-            c => body.push(c),
-        }
-    }
-    let tilde = if body.starts_with('~') { "\\" } else { "" };
-    match quote {
-        Some('\'') => format!("'{body}'"),
-        Some(q) => format!("{q}{tilde}{body}{q}"),
-        None => format!("{tilde}{body}"),
-    }
-}
+pub(crate) use crate::cmd::format::escape_arg;
 
 /// A pane's top-left cell in its window: the layout's, or the window's
 /// origin for a zoomed window's active pane.
