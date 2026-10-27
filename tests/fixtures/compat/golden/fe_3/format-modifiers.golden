@@ -472,10 +472,10 @@ $ display -p -t main:1.1 '[#{q:#{@spaced}}]'
 $ list-windows -t other -F '[#{t:@ts}]'
 [<TIME>]
 ? 0
-$ list-windows -t other -F '[#{t/f/%Y:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y:@ts}]'
 [2023]
 ? 0
-$ list-windows -t other -F '[#{t/f/%Y-%j:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y-#{a:37}j:@ts}]'
 [2023-319]
 ? 0
 $ list-windows -t other -F '[#{t/p:@ts}]'
@@ -493,10 +493,10 @@ $ list-windows -t other -F '[#{t:@opt}]'
 $ list-windows -t other -F '[#{t:nosuchvar}]'
 []
 ? 0
-$ list-windows -t other -F '[#{t/f/%Y|=4:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y|=4:@ts}]'
 [2023|=4]
 ? 0
-$ list-windows -t other -F '[#{t/f|%Y|:@ts}]'
+$ list-windows -t other -F '[#{t/f|#{a:37}Y|:@ts}]'
 [<TIME>]
 ? 0
 $ display -p -t main:1.1 '[#{&&;!:1,0}]'

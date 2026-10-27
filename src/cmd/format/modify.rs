@@ -1502,4 +1502,30 @@ mod tests {
     fn a_loop_with_no_session_ends_the_format() {
         check(&[("a#{W:x}b", "a"), ("a#{S:x}b", "a"), ("a#{N:first}b", "a")]);
     }
+
+    /// The loop limit holds for the modifiers too, on a test thread's small
+    /// stack: a format that names itself and one nested a thousand deep end.
+    #[test]
+    fn nesting_through_modifiers_stops_at_the_loop_limit() {
+        struct Selfish;
+        impl FormatVars for Selfish {
+            fn get(&self, name: &str) -> Option<String> {
+                (name == "@a").then(|| "x#{E:@a}".to_string())
+            }
+        }
+        let got = expand("#{E:@a}", &Selfish);
+        assert!(got.len() < 1000, "{}", got.len());
+        for open in [
+            "#{n:",
+            "#{=9:",
+            "#{s/a/b/:",
+            "#{E:",
+            "#{T:",
+            "#{p3:",
+            "#{!;!:",
+        ] {
+            let deep = format!("{}session_name{}", open.repeat(1000), "}".repeat(1000));
+            let _ = expand(&deep, &vars());
+        }
+    }
 }

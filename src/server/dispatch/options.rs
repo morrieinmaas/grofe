@@ -3179,6 +3179,8 @@ impl FormatVars for FormatCtx<'_> {
             "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
             // Outside a loop; the loop's items say otherwise.
             "loop_last_flag" => return Some("0".to_string()),
+            "server_sessions" => return Some(m.sessions.len().to_string()),
+            "uid" => return Some(nix::unistd::getuid().as_raw().to_string()),
             "tree_mode_format" => return Some(TREE_MODE_FORMAT.to_string()),
             "buffer_mode_format" => return Some(BUFFER_MODE_FORMAT.to_string()),
             "client_mode_format" => return Some(CLIENT_MODE_FORMAT.to_string()),
@@ -3348,6 +3350,50 @@ impl FormatVars for FormatCtx<'_> {
                 .max()?
                 .to_string(),
             "session_many_attached" => flag(s.attached > 1),
+            "pane_zoomed_flag" => flag(w.zoomed && w.active == p.id),
+            // No linked windows (spec 4.5): the window's only session.
+            "window_active_sessions" => flag(s.active == w.id),
+            "window_active_sessions_list" => {
+                if s.active == w.id {
+                    s.name.clone()
+                } else {
+                    String::new()
+                }
+            }
+            "window_linked_sessions_list" => s.name.clone(),
+            // Each kind of alert once, windows in index order.
+            "session_alert" => {
+                let windows: Vec<_> = s
+                    .windows
+                    .iter()
+                    .filter_map(|id| m.windows.get(id))
+                    .collect();
+                [
+                    ('#', windows.iter().any(|w| w.activity_flag)),
+                    ('!', windows.iter().any(|w| w.bell_flag)),
+                    ('~', windows.iter().any(|w| w.silence_flag)),
+                ]
+                .into_iter()
+                .filter_map(|(c, on)| on.then_some(c))
+                .collect()
+            }
+            // `idx` and its alerts, for each window that has any.
+            "session_alerts" => s
+                .windows
+                .iter()
+                .filter_map(|id| m.windows.get(id))
+                .filter(|w| w.activity_flag || w.bell_flag || w.silence_flag)
+                .map(|w| {
+                    format!(
+                        "{}{}{}{}",
+                        w.index,
+                        if w.activity_flag { "#" } else { "" },
+                        if w.bell_flag { "!" } else { "" },
+                        if w.silence_flag { "~" } else { "" },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(","),
             // The windows before this one, most recent first.
             "session_stack" => std::iter::once(m.windows.get(&s.active)?.index)
                 .chain(

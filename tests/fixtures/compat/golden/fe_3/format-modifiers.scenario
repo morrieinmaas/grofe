@@ -1,9 +1,10 @@
 # B1b: tmux 3.7b's format modifiers beyond the comparison set, through
 # display -p against a fixed model: session main (windows first with two
-# panes, second), session other. display -p runs strftime over the whole
-# template first, so every % is doubled; the `t/f` forms run through
-# list-windows -F, which does not. Modifier chains (`;`), arguments with
-# any delimiter, and the error forms are in the same file.
+# panes, second), session other. A fixture holds no strftime sequence, so the
+# `t/f` forms spell their % as #{a:37} and run through list-windows -F (which
+# does not strftime its template); @f holds %%, which T: turns into one %.
+# Modifier chains (`;`), arguments with any delimiter, and the error forms
+# are in the same file.
 $ new-session -d -s main -n first -x 80 -y 24 cat -u
 $ split-window -d -t main:1 cat -u
 $ new-window -d -t main -n second cat -u
@@ -182,15 +183,15 @@ $ display -p -t main:1.1 '[#{q;=3:@spaced}]'
 $ display -p -t main:1.1 '[#{q:#{@spaced}}]'
 # times
 $ list-windows -t other -F '[#{t:@ts}]'
-$ list-windows -t other -F '[#{t/f/%Y:@ts}]'
-$ list-windows -t other -F '[#{t/f/%Y-%j:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y-#{a:37}j:@ts}]'
 $ list-windows -t other -F '[#{t/p:@ts}]'
 $ list-windows -t other -F '[#{t/f:@ts}]'
 $ list-windows -t other -F '[#{t/x:@ts}]'
 $ list-windows -t other -F '[#{t:@opt}]'
 $ list-windows -t other -F '[#{t:nosuchvar}]'
-$ list-windows -t other -F '[#{t/f/%Y|=4:@ts}]'
-$ list-windows -t other -F '[#{t/f|%Y|:@ts}]'
+$ list-windows -t other -F '[#{t/f/#{a:37}Y|=4:@ts}]'
+$ list-windows -t other -F '[#{t/f|#{a:37}Y|:@ts}]'
 # chained and boolean forms with the new parser
 $ display -p -t main:1.1 '[#{&&;!:1,0}]'
 $ display -p -t main:1.1 '[#{||:0,0,1}]'
