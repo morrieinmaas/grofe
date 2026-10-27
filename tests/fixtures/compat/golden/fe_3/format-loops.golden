@@ -14,6 +14,10 @@ $ new-window -d -t main -n alpha cat -u
 ? 0
 $ new-window -d -t main -n mid cat -u
 ? 0
+$ select-pane -t main:2.1 -T al
+? 0
+$ select-pane -t main:3.1 -T mi
+? 0
 $ new-session -d -s other -n solo -x 80 -y 24 cat -u
 ? 0
 $ select-window -t main:1
@@ -80,7 +84,7 @@ $ display -p -t main:1.1 '#{W:#{window_flags} }'
 - *  
 ? 0
 $ display -p -t main:1.1 '#{W:#{pane_index}:#{pane_title} }'
-2:a 1:<HOST> 1:<HOST> 
+2:a 1:al 1:mi 
 ? 0
 $ display -p -t main:1.1 '#{W:#{session_name}#{pane_id} }'
 main%2 main%3 main%4 
@@ -206,7 +210,7 @@ $ display -p -t main:1.1 '#{T:#{tree_mode_format}}'
 cat-: "b"
 ? 0
 $ display -p -t main:1.1 '#{W:#{T:tree_mode_format}|}'
-zeta-|alpha*|mid|
+zeta-|alpha*: "al"|mid: "mi"|
 ? 0
 $ display -p -t main:1.1 '#{P:#{T:tree_mode_format}|}'
 cat-: "b"|cat: "c"|cat*: "a"|
