@@ -19,6 +19,8 @@ default-terminal = "tmux-256color"
 mode-keys = "vi"
 # ~/.tmux.conf:12
 renumber-windows = true
+# ~/.tmux.conf:3
+terminal-overrides = ["linux*:AX@", "xterm-256color:Tc"]
 load-commands = [
 # ~/.tmux.conf:36
 '''if-shell 'uname | grep -q Darwin' "set-option -g default-command \"reattach-to-user-namespace -l zsh\""''',

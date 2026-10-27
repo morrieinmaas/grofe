@@ -4629,7 +4629,7 @@ mod tests {
         }
     }
 
-    fn read(text: &str) -> Result<Vec<(usize, Vec<Vec<String>>)>, (usize, ParseError)> {
+    fn read(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
         split_config_file_with(text, &mut Recorder::default())
     }
 

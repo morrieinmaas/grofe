@@ -1,5 +1,5 @@
-# %if / %elif / %else / %endif, NAME=value and %hidden NAME=value in a
-# config file (cmd-parse.y): conditions are formats expanded against the
+# The if, elif, else and endif directives, NAME=value and the hidden
+# directive in a config file (cmd-parse.y): conditions are formats expanded against the
 # target pane, nested scopes, assignments set the global environment at
 # parse time, and a false scope parses (syntax errors count) but runs
 # nothing.

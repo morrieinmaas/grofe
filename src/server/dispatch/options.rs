@@ -3279,6 +3279,19 @@ fn pieces(value: &str, sep: char) -> impl Iterator<Item = String> + '_ {
         .map(str::to_string)
 }
 
+/// `op` as the edits tmux makes: a list with a separator takes a value set
+/// or appended without an index as one element per piece, empty pieces
+/// skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
+pub(crate) fn by_separator(op: ListOp, base: &str) -> Vec<ListOp> {
+    match (op, list_separator(base)) {
+        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
+        (ListOp::Replace(value), Some(sep)) => {
+            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
+        }
+        (op, _) => vec![op],
+    }
+}
+
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
     LISTS.iter().find(|l| l.name == name)
 }
@@ -3539,13 +3552,7 @@ fn set_list(
     // As tmux 3.7b (recorded, FE.1): a list with a separator takes a value
     // set or appended without an index as one element per piece, empty
     // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
-    let ops = match (op, list_separator(base)) {
-        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
-        (ListOp::Replace(value), Some(sep)) => {
-            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
-        }
-        (op, _) => vec![op],
-    };
+    let ops = by_separator(op, base);
     let element = index.map(|i| format!("{base}[{i}]"));
     let before = element.as_ref().and_then(|full| {
         let old = model.options.list(owner, base)?.items.get(&index?)?;

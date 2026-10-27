@@ -1,5 +1,5 @@
 ~/.tmux.conf:2: note: default-terminal: grofe keeps and shows it, with no effect
-~/.tmux.conf:3: option grofe does not have: set -ga terminal-overrides ",xterm-256color:Tc"
+~/.tmux.conf:3: note: terminal-overrides: grofe keeps and shows it, with no effect
 ~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
 ~/.tmux.conf:32: note: mouse with no value toggles it, as tmux does, to off
 ~/.tmux.conf:7: note: mouse is overridden by a later set at ~/.tmux.conf:32

@@ -46,7 +46,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     let default = model
         .options
         .lookup("default-size", &[])
-        .and_then(|v| super::options::parse_size(v))
+        .and_then(super::options::parse_size)
         .unwrap_or(DEFAULT_SIZE);
     let size = cap_size(c.width.unwrap_or(default.0), c.height.unwrap_or(default.1));
     let window = model.alloc_window_id();
