@@ -1107,7 +1107,7 @@ pub fn pane_shell(candidate: Option<&str>) -> String {
 /// `checkshell`), else the user's passwd shell when that is, else
 /// `/bin/sh`, as tmux's `getshell` falls back (spec D2 in the M3.6 ledger).
 pub fn pick_shell(candidate: Option<String>) -> String {
-    let usable = |s: &String| s.starts_with('/') && access(s.as_str(), AccessFlags::X_OK).is_ok();
+    let usable = |s: &String| check_shell(s);
     candidate
         .filter(usable)
         .or_else(|| passwd_shell().filter(usable))
@@ -1645,6 +1645,14 @@ mod tests {
 
     /// A `default-shell` that fails tmux's `checkshell` is `/bin/sh` when a
     /// pane starts, where tmux's `spawn_pane` and `job_run` fall back.
+    #[test]
+    fn the_server_default_shell_is_never_tmux_itself() {
+        assert_eq!(
+            pick_shell(Some("/usr/bin/tmux".into())),
+            pick_shell(Some("/nonexistent/x".into()))
+        );
+    }
+
     #[test]
     fn an_unusable_default_shell_is_bin_sh() {
         for bad in [

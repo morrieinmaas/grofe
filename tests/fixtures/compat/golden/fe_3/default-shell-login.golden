@@ -1,0 +1,30 @@
+$ new-session -d -s first -x 80 -y 24 cat
+? 0
+$ set-option -g default-shell /bin/sh
+? 0
+$ new-session -d -s ns
+? 0
+$ send-keys -t ns 'echo "ns:$0" > "$HOME/ns.out"' Enter
+? 0
+$ new-window -d -t first -n w
+? 0
+$ respawn-pane -k -t first:w
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ send-keys -t first:w 'echo "rp:$0" > "$HOME/rp.out"' Enter
+? 0
+$ split-window -t first:w
+? 0
+$ send-keys -t first:w 'echo "sp:$0" > "$HOME/sp.out"' Enter
+? 0
+$ new-window -d -t first -n c 'echo "cmd:$0" > "$HOME/cmd.out"'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'cat "$HOME/ns.out" "$HOME/rp.out" "$HOME/sp.out" "$HOME/cmd.out"'
+ns:-sh
+rp:-sh
+sp:-sh
+cmd:sh
+? 0

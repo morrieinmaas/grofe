@@ -1,0 +1,17 @@
+# default-shell with no command: the pane starts the shell as a login shell
+# (tmux's spawn_pane: argv[0] is "-" and the shell's name, so $0 starts with
+# a dash) in new-session, new-window, split-window and respawn-pane. A
+# command string does not (shell -c), and run-shell never does.
+$ new-session -d -s first -x 80 -y 24 cat
+$ set-option -g default-shell /bin/sh
+$ new-session -d -s ns
+$ send-keys -t ns 'echo "ns:$0" > "$HOME/ns.out"' Enter
+$ new-window -d -t first -n w
+$ respawn-pane -k -t first:w
+$ run-shell 'sleep 0.5'
+$ send-keys -t first:w 'echo "rp:$0" > "$HOME/rp.out"' Enter
+$ split-window -t first:w
+$ send-keys -t first:w 'echo "sp:$0" > "$HOME/sp.out"' Enter
+$ new-window -d -t first -n c 'echo "cmd:$0" > "$HOME/cmd.out"'
+$ run-shell 'sleep 0.5'
+$ run-shell 'cat "$HOME/ns.out" "$HOME/rp.out" "$HOME/sp.out" "$HOME/cmd.out"'

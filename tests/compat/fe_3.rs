@@ -219,6 +219,13 @@ fn default_shell_matches_its_golden() {
     check("default-shell", &[], same);
 }
 
+/// With no command a pane starts `default-shell` as a login shell
+/// (`argv[0]` `-sh`) in every verb; a command string does not.
+#[test]
+fn default_shell_login_matches_its_golden() {
+    check("default-shell-login", &[], same);
+}
+
 /// Case 7: a hook whose command uses tmux-only forms runs them when it
 /// fires.
 #[test]
