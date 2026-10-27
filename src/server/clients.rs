@@ -1991,7 +1991,7 @@ fn pane_looks(
     state: &State,
     c: &ClientEntry,
     w: &crate::server::model::Window,
-    panes: &[(PaneId, Rect, crate::server::pane::RowsSnapshot)],
+    panes: &[PaneId],
 ) -> render::PaneLooks {
     let model = &state.model;
     let wchain = options::chain(model, w.active);
@@ -2006,7 +2006,7 @@ fn pane_looks(
     let order = w.pane_ids();
     let base_index = model.pane_base_index(w.id) as usize;
     let now = local_now();
-    for (id, _, _) in panes {
+    for id in panes {
         let chain = options::chain(model, *id);
         let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
         let client_vars = ClientVars::new(model, c, Some(FormatCtx::new(model, *id)));
@@ -2077,7 +2077,12 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             visible,
         ),
     };
-    let look = pane_looks(state, c, w, &panes);
+    let shown: Vec<PaneId> = panes
+        .iter()
+        .map(|(id, _, _)| *id)
+        .chain(w.floating.iter().map(|f| f.pane).filter(|_| !w.zoomed))
+        .collect();
+    let look = pane_looks(state, c, w, &shown);
     let mut window = render::compose(&FrameInputs {
         client: visible,
         viewport,
@@ -2091,7 +2096,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         cursor,
         graphics: state.graphics.remap(),
         images: Some(ImageCaps::of(&c.caps)),
-        look,
+        look: look.clone(),
     });
     screenimg::mark_covered(&mut window, 0);
     if !w.zoomed && !w.floating.is_empty() {
@@ -2102,6 +2107,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             .filter_map(|f| {
                 let p = model.panes.get(&f.pane)?;
                 Some(render::FloatingPane {
+                    id: f.pane,
                     at: (f.x, f.y),
                     size: (p.cols, p.rows),
                     snap: p.handle.snapshot_rows(0..p.rows),
@@ -2115,6 +2121,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
             viewport,
             &window_style(model, w, "pane-border-style"),
             &window_style(model, w, "pane-active-border-style"),
+            &look,
         );
     }
     // Floating panes cover what is under them, images included.

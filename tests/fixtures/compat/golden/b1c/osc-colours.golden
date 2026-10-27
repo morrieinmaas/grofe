@@ -1,0 +1,18 @@
+$ new-session -d -s main -n w -x 60 -y 8 cat
+? 0
+$ set -g status off
+? 0
+$ set -g window-style fg=#102030,bg=#405060
+? 0
+$ respawn-pane -k -t main sh -c 'stty raw -echo; printf "\033]10;?\033\\"; dd bs=1 count=25 2>/dev/null | tr -d "\033"; echo; printf "\033]11;?\033\\"; dd bs=1 count=25 2>/dev/null | tr -d "\033"; echo; sleep 30'
+? 0
+client 60x8 attach -t main
+screen 6060
+| ]10;rgb:1010/2020/3030\
+|                        ]11;rgb:4040/5050/6060\
+|
+|
+|
+|
+|
+|

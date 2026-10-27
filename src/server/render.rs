@@ -574,6 +574,7 @@ fn draw_unowned_segments(
 /// its top-left content cell in window coordinates, its size and rows,
 /// and whether it is the window's active pane.
 pub struct FloatingPane {
+    pub id: PaneId,
     pub at: (i32, i32),
     pub size: (u16, u16),
     pub snap: RowsSnapshot,
@@ -582,16 +583,20 @@ pub struct FloatingPane {
 
 /// Draws `panes` (lowest first) over a window's composed `screen`, seen
 /// through `viewport`, as tmux 3.7b draws floating panes (recorded): each
-/// is a box of single lines around its content, in `active_style` for the
-/// active pane and `style` for the others, over the tiled panes and any
-/// lower floating pane. The cursor is the active floating pane's; the
-/// active tiled pane's is hidden when a floating pane covers it.
+/// is a box of `pane-border-lines` around its content, in the pane's
+/// active border style for the active pane and its border style for the
+/// others (`style` and `active_style` where `looks` has none for it), over
+/// the tiled panes and any lower floating pane, with the pane's border
+/// title on its top (or bottom) line while `pane-border-status` is on. The
+/// cursor is the active floating pane's; the active tiled pane's is hidden
+/// when a floating pane covers it.
 pub fn draw_floating(
     screen: &mut Screen,
     panes: &[FloatingPane],
     viewport: (u16, u16),
     style: &Style,
     active_style: &Style,
+    looks: &PaneLooks,
 ) {
     let (cols, rows) = (i32::from(screen.cols), i32::from(screen.rows));
     let put = |screen: &mut Screen, x: i32, y: i32, cell: SnapCell| {
@@ -603,23 +608,66 @@ pub fn draw_floating(
         let x = pane.at.0 - i32::from(viewport.0);
         let y = pane.at.1 - i32::from(viewport.1);
         let (w, h) = (i32::from(pane.size.0), i32::from(pane.size.1));
-        let border = if pane.active { active_style } else { style };
+        let look = looks.panes.get(&pane.id);
+        let border = match (pane.active, look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => *active_style,
+            (false, None) => *style,
+        };
+        let index = look.map(|l| l.index);
+        let shown = PaneBox {
+            id: pane.id,
+            x: pane.at.0,
+            y: pane.at.1,
+            w,
+            h,
+            index: index.unwrap_or(0),
+        };
+        let g = |cell| borders::glyph(looks.lines, cell, Some(&shown));
         for i in -1..=w {
             let (top, bottom) = match i {
-                -1 => ('┌', '└'),
-                i if i == w => ('┐', '┘'),
-                _ => ('─', '─'),
+                -1 => (borders::CELL_TOPLEFT, borders::CELL_BOTTOMLEFT),
+                i if i == w => (borders::CELL_TOPRIGHT, borders::CELL_BOTTOMRIGHT),
+                _ => (borders::CELL_LEFTRIGHT, borders::CELL_LEFTRIGHT),
             };
-            put(screen, x + i, y - 1, styled(top, border));
-            put(screen, x + i, y + h, styled(bottom, border));
+            put(screen, x + i, y - 1, styled(g(top), &border));
+            put(screen, x + i, y + h, styled(g(bottom), &border));
         }
         for j in 0..h {
-            put(screen, x - 1, y + j, styled('│', border));
-            put(screen, x + w, y + j, styled('│', border));
+            put(screen, x - 1, y + j, styled(g(borders::CELL_TOPBOTTOM), &border));
+            put(screen, x + w, y + j, styled(g(borders::CELL_TOPBOTTOM), &border));
         }
         for (r, row) in pane.snap.rows.iter().enumerate() {
             for (c, cell) in row.iter().take(pane.size.0 as usize).enumerate() {
-                put(screen, x + c as i32, y + r as i32, cell.clone());
+                let mut cell = cell.clone();
+                if let Some(l) = look {
+                    if cell.fg == Color::Named(NamedColor::Foreground) {
+                        cell.fg = l.fg;
+                    }
+                    if cell.bg == Color::Named(NamedColor::Background) {
+                        cell.bg = l.bg;
+                    }
+                }
+                put(screen, x + c as i32, y + r as i32, cell);
+            }
+        }
+        if let (Some(l), true) = (look, looks.status != PaneStatus::Off) {
+            // The title runs from two cells in, the pane's width less two,
+            // and not past the window's right edge.
+            let width = if w < 4 { 0 } else { w - 2 };
+            let width = width.min((cols - (x + 2)).max(0)).min(cols);
+            let row = if looks.status == PaneStatus::Top {
+                y - 1
+            } else {
+                y + h
+            };
+            if width > 0 && x + 2 >= 0 && (0..rows).contains(&row) {
+                let under: Vec<(char, Style)> = (0..width)
+                    .map(|_| (g(borders::CELL_LEFTRIGHT), border))
+                    .collect();
+                let line = crate::server::status::draw_over(&l.title, border, &under).line;
+                draw_line_at(screen, row as u16, (x + 2) as usize, &line);
             }
         }
         let covers =

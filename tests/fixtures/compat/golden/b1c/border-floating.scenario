@@ -3,7 +3,10 @@
 $ new-session -d -s main -n w -x 40 -y 10 cat
 $ set -g status off
 $ split-window -d -h -t main cat
-$ new-pane -d -t main -x 8 -y 3 -w 12 -h 3 cat
+$ new-pane -t main -x 12 -y 3 -X 8 -Y 3 cat
+$ select-pane -t main:.1 -T one
+$ select-pane -t main:.2 -T two
+$ select-pane -t main:.3 -T three
 client 40x10 attach -t main
 screen
 $ set -g pane-border-lines heavy

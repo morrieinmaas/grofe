@@ -43,3 +43,23 @@ fn pane_border_indicators_colour_half_a_border_or_draw_arrows() {
 fn border_styles_follow_the_owning_pane_and_expand_formats() {
     check("b1c", "border-style", &[]);
 }
+
+#[test]
+fn layouts_resizes_and_splits_count_the_row_a_border_status_takes() {
+    check("b1c", "border-status-layout", &[]);
+}
+
+#[test]
+fn the_default_active_border_is_yellow_in_a_mode_and_red_when_synchronized() {
+    check("b1c", "border-copy-mode", &[]);
+}
+
+#[test]
+fn a_floating_pane_border_follows_pane_border_lines() {
+    check("b1c", "border-floating", &[]);
+}
+
+#[test]
+fn a_style_colour_answers_the_osc_default_colour_queries() {
+    check("b1c", "osc-colours", &[]);
+}

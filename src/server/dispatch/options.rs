@@ -455,7 +455,8 @@ const BUILTINS: &[Builtin] = &[
         name: "pane-active-border-style",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "fg=green",
+        // tmux 3.7b's: yellow in a mode, red while panes are synchronized.
+        default: "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}",
     },
     // B1c: tmux 3.7b's names, values, window scope and defaults
     // (options-table.c). `pane-border-status` makes the panes along the
@@ -2933,10 +2934,14 @@ impl FormatVars for FormatCtx<'_> {
         use crate::types::MouseMode;
         let m = self.model;
         if name.starts_with('@') || builtin(name).is_some() {
-            return m
-                .options
-                .lookup(name, &chain(m, self.pane))
-                .map(str::to_string);
+            let value = m.options.lookup(name, &chain(m, self.pane))?;
+            // A flag is 1 or 0 in a format (tmux's `options_to_string`
+            // with `numeric`), so `#{?synchronize-panes,...}` is false off.
+            return Some(match (builtin(name).map(|b| b.kind), value) {
+                (Some(Kind::Bool), "on") => "1".to_string(),
+                (Some(Kind::Bool), "off") => "0".to_string(),
+                _ => value.to_string(),
+            });
         }
         match name {
             "version" => {

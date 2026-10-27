@@ -1,0 +1,37 @@
+$ new-session -d -s main -n w -x 30 -y 6 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+client 30x6 attach -t main
+styles 0-5
+~ 0 15-15 fg=green bg=default
+~ 1 15-15 fg=green bg=default
+~ 2 15-15 fg=green bg=default
+~ 3 15-15 fg=green bg=default
+$ copy-mode -t main:.1
+? 0
+styles 0-5
+~ 0 10-14 fg=black bg=yellow
+~ 0 15-15 fg=yellow bg=default
+~ 1 15-15 fg=yellow bg=default
+~ 2 15-15 fg=yellow bg=default
+~ 3 15-15 fg=yellow bg=default
+$ send-keys -t main:.1 -X cancel
+? 0
+$ set -g synchronize-panes on
+? 0
+styles 0-5
+~ 0 15-15 fg=red bg=default
+~ 1 15-15 fg=red bg=default
+~ 2 15-15 fg=red bg=default
+~ 3 15-15 fg=red bg=default
+$ set -g pane-border-status top
+? 0
+styles 0-5
+~ 0 0-1 fg=red bg=default
+~ 0 2-2 fg=red bg=default reverse
+~ 0 4-15 fg=red bg=default
+~ 1 15-15 fg=red bg=default
+~ 2 15-15 fg=red bg=default

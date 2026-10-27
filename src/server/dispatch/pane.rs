@@ -7,6 +7,7 @@ use crate::cmd::{
     SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
+use crate::server::borders::PaneStatus;
 use crate::server::dispatch::options;
 use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
@@ -319,7 +320,20 @@ fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<Stri
         w.layout.resize_to(area, pane, Dir::Horizontal, cells);
     }
     if let Some(height) = c.height {
-        let cells = cells(height, area.rows);
+        let mut cells = cells(height, area.rows);
+        // The title row of a pane along the edge is not part of its size
+        // (tmux's `cmd_resize_pane_exec`).
+        let at_edge = w.tiled_rects().iter().any(|(id, r)| {
+            *id == pane
+                && match w.pane_status {
+                    PaneStatus::Top => r.y == 1,
+                    PaneStatus::Bottom => r.y + r.rows + 1 == area.rows,
+                    PaneStatus::Off => false,
+                }
+        });
+        if at_edge {
+            cells = cells.saturating_add(1);
+        }
         w.layout.resize_to(area, pane, Dir::Vertical, cells);
     }
     for edge in edges {
