@@ -1,0 +1,216 @@
+# G1: what clears OSC 133 marks. tmux 3.7b resets a line's flags when a whole
+# line is cleared (a line with no cells yet is left alone by EL 0 and EL 2
+# from column 0), keeps them for a partial clear, moves them with the line
+# into history when ED 2 scrolls the screen up, and keeps the screen's flags
+# when ED 3 drops the history. Each case is its own session; the marks are
+# read back with previous-prompt from the end of the history.
+# case 1: EL 0 at column 0 of a line with no cells keeps the mark
+$ new-session -d -s c1 -x 20 -y 6 'printf "\033]133;A\007\033[Kab\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c1; else tmux wait-for -S c1; fi; exec sleep 100000'
+$ wait-for c1
+$ copy-mode -t c1
+$ send-keys -t c1 -X history-bottom
+$ send-keys -t c1 -X previous-prompt
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c1 -X previous-prompt
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c1 -X previous-prompt
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c1 -X previous-prompt
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c1 -X previous-prompt
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 2: EL 0 at column 0 of a line with cells resets it
+$ new-session -d -s c2 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c2; else tmux wait-for -S c2; fi; exec sleep 100000'
+$ wait-for c2
+$ copy-mode -t c2
+$ send-keys -t c2 -X history-bottom
+$ send-keys -t c2 -X previous-prompt
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c2 -X previous-prompt
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c2 -X previous-prompt
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c2 -X previous-prompt
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c2 -X previous-prompt
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 3: EL 2 of a line with cells resets it
+$ new-session -d -s c3 -x 20 -y 6 'printf "abc\033]133;A\007\033[2Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c3; else tmux wait-for -S c3; fi; exec sleep 100000'
+$ wait-for c3
+$ copy-mode -t c3
+$ send-keys -t c3 -X history-bottom
+$ send-keys -t c3 -X previous-prompt
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c3 -X previous-prompt
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c3 -X previous-prompt
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c3 -X previous-prompt
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c3 -X previous-prompt
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 4: EL 2 of a line with no cells keeps it
+$ new-session -d -s c4 -x 20 -y 6 'printf "\033]133;A\007\033[2Kab\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c4; else tmux wait-for -S c4; fi; exec sleep 100000'
+$ wait-for c4
+$ copy-mode -t c4
+$ send-keys -t c4 -X history-bottom
+$ send-keys -t c4 -X previous-prompt
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c4 -X previous-prompt
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c4 -X previous-prompt
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c4 -X previous-prompt
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c4 -X previous-prompt
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 5: EL 1 from the middle of a line keeps it
+$ new-session -d -s c5 -x 20 -y 6 'printf "abc\033]133;A\007\033[1Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c5; else tmux wait-for -S c5; fi; exec sleep 100000'
+$ wait-for c5
+$ copy-mode -t c5
+$ send-keys -t c5 -X history-bottom
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c5 -X previous-prompt
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 6: EL 0 from the middle of a line keeps it
+$ new-session -d -s c6 -x 20 -y 6 'printf "abc\033]133;A\007\033[2D\033[Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c6; else tmux wait-for -S c6; fi; exec sleep 100000'
+$ wait-for c6
+$ copy-mode -t c6
+$ send-keys -t c6 -X history-bottom
+$ send-keys -t c6 -X previous-prompt
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c6 -X previous-prompt
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c6 -X previous-prompt
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c6 -X previous-prompt
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c6 -X previous-prompt
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 7: ED 0 from column 0 resets that line and the ones below
+$ new-session -d -s c7 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2A\r\033[J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c7; else tmux wait-for -S c7; fi; exec sleep 100000'
+$ wait-for c7
+$ copy-mode -t c7
+$ send-keys -t c7 -X history-bottom
+$ send-keys -t c7 -X previous-prompt
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c7 -X previous-prompt
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c7 -X previous-prompt
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c7 -X previous-prompt
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c7 -X previous-prompt
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 8: ED 0 from the middle of a line keeps that line and resets below
+$ new-session -d -s c8 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2A\033[1C\033[J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c8; else tmux wait-for -S c8; fi; exec sleep 100000'
+$ wait-for c8
+$ copy-mode -t c8
+$ send-keys -t c8 -X history-bottom
+$ send-keys -t c8 -X previous-prompt
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c8 -X previous-prompt
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c8 -X previous-prompt
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c8 -X previous-prompt
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c8 -X previous-prompt
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 9: ED 1 resets the lines above and keeps a partly cleared line
+$ new-session -d -s c9 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033]133;A\007l4\n\033[2A\033[1C\033[1J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c9; else tmux wait-for -S c9; fi; exec sleep 100000'
+$ wait-for c9
+$ copy-mode -t c9
+$ send-keys -t c9 -X history-bottom
+$ send-keys -t c9 -X previous-prompt
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c9 -X previous-prompt
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c9 -X previous-prompt
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c9 -X previous-prompt
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c9 -X previous-prompt
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 10: ED 2 scrolls the used lines into history with their marks
+$ new-session -d -s c10 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c10; else tmux wait-for -S c10; fi; exec sleep 100000'
+$ wait-for c10
+$ copy-mode -t c10
+$ send-keys -t c10 -X history-bottom
+$ send-keys -t c10 -X previous-prompt
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c10 -X previous-prompt
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c10 -X previous-prompt
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c10 -X previous-prompt
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c10 -X previous-prompt
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 11: ED 2 resets the mark of a line beyond the last used one
+$ new-session -d -s c11 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007\n\033[2J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c11; else tmux wait-for -S c11; fi; exec sleep 100000'
+$ wait-for c11
+$ copy-mode -t c11
+$ send-keys -t c11 -X history-bottom
+$ send-keys -t c11 -X previous-prompt
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c11 -X previous-prompt
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c11 -X previous-prompt
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c11 -X previous-prompt
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c11 -X previous-prompt
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 12: ED 3 drops the history and its marks, not the screen's
+$ new-session -d -s c12 -x 20 -y 6 'printf "\033]133;A\0071\n\033]133;A\0072\n\033]133;A\0073\n\033]133;A\0074\n\033]133;A\0075\n\033]133;A\0076\n\033]133;A\0077\n\033]133;A\0078\n\033[3J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c12; else tmux wait-for -S c12; fi; exec sleep 100000'
+$ wait-for c12
+$ copy-mode -t c12
+$ send-keys -t c12 -X history-bottom
+$ send-keys -t c12 -X previous-prompt
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c12 -X previous-prompt
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c12 -X previous-prompt
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c12 -X previous-prompt
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c12 -X previous-prompt
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 13: ECH over the whole line resets it
+$ new-session -d -s c13 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[20Xxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c13; else tmux wait-for -S c13; fi; exec sleep 100000'
+$ wait-for c13
+$ copy-mode -t c13
+$ send-keys -t c13 -X history-bottom
+$ send-keys -t c13 -X previous-prompt
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c13 -X previous-prompt
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c13 -X previous-prompt
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c13 -X previous-prompt
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c13 -X previous-prompt
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+# case 14: ECH over part of a line keeps it
+$ new-session -d -s c14 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[5Xxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c14; else tmux wait-for -S c14; fi; exec sleep 100000'
+$ wait-for c14
+$ copy-mode -t c14
+$ send-keys -t c14 -X history-bottom
+$ send-keys -t c14 -X previous-prompt
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c14 -X previous-prompt
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c14 -X previous-prompt
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c14 -X previous-prompt
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t c14 -X previous-prompt
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'

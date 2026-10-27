@@ -111,7 +111,10 @@ fn load(name: &str) -> Vec<Step> {
         if let Some(args) = line.strip_prefix("$ ") {
             let args = split_words(args)
                 .into_iter()
-                .map(|a| a.replace("{fixtures}", &fixtures().display().to_string()))
+                .map(|a| {
+                    a.replace("{fixtures}", &fixtures().display().to_string())
+                        .replace("{grofe}", env!("CARGO_BIN_EXE_grofe"))
+                })
                 .collect();
             steps.push(Step::Run {
                 line: line.to_string(),
@@ -240,6 +243,37 @@ fn tabs_equal_the_golden() {
 #[test]
 fn keys_through_a_client_equal_the_golden() {
     replay("counts");
+}
+
+/// OSC 133 marks (G1): `A` and `C` flag a line, nothing else does;
+/// `next-prompt` and `previous-prompt`, with `-o`, jump between them, over
+/// history and screen, with their argument errors and a selection.
+#[test]
+fn prompt_marks_and_jumps_equal_the_golden() {
+    replay("prompts");
+}
+
+/// The same marks through resizes that reflow the lines and change the
+/// height: a mark stays on a split line's first piece and is lost when the
+/// line is joined into the one before.
+#[test]
+fn prompt_marks_through_resizes_equal_the_golden() {
+    replay("prompts-resize");
+}
+
+/// The marks of lines that fall off a small `history-limit` go with them,
+/// the others stay on their lines, also through a reflow that overflows
+/// the limit.
+#[test]
+fn prompt_marks_follow_a_history_limit_as_the_golden() {
+    replay("prompts-limit");
+}
+
+/// What clears a mark: whole-line clears, not partial ones; ED 2 moves the
+/// used lines into history and ED 3 drops the history.
+#[test]
+fn what_clears_prompt_marks_equals_the_golden() {
+    replay("prompts-clear");
 }
 
 fn readout(srv: &TestServer) -> String {

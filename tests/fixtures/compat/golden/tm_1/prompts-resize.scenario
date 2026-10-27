@@ -1,0 +1,206 @@
+# G1: OSC 133 marks through a reflowing resize. tmux 3.7b keeps a line's flags
+# on the line itself: a split line keeps them on its first piece, a line
+# joined into the one before it loses them, and a line the join only part
+# consumed keeps them on its remainder. The marks are read back with
+# previous-prompt and previous-prompt -o from the end of the history.
+$ new-session -d -s main -x 20 -y 8 'printf "\033]133;A\007abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH\n\033]133;C\007out-1\n12345678901234567890123\033]133;A\007 tail\nshort\n\033]133;A\007\n\033]133;A\007\033]133;C\007wrapped-output-line-that-is-long-enough\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 10
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 7
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 5
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 30
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 20
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -y 5
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 9 -y 4
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{pane_width}x#{pane_height} #{history_size} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel

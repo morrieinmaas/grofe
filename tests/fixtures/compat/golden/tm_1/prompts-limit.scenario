@@ -1,0 +1,73 @@
+# G1: OSC 133 marks with a small history-limit: the marks of lines that fall
+# off the top of the history go with them, and the others stay on their lines
+# while more output scrolls and through a resize that joins and splits the
+# wrapped lines.
+$ new-session -d -s hold 'exec sleep 100000'
+$ set -g history-limit 20
+$ new-session -d -s main -x 24 -y 6 'for i in $(seq 1 20); do if [ $((i % 3)) = 0 ]; then printf "\033]133;A\007line-$i-abcdefghijklmnopqrstuvwxyz\n"; else printf "line-$i-abcdefghijklmnopqrstuvwxyz\n"; fi; done; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 40
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel
+$ resize-window -t main -x 24
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{pane_width} #{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X cancel

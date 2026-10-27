@@ -43,7 +43,7 @@ use base64::Engine as _;
 use crate::cmd::{FormatVars, expand};
 use crate::server::dispatch::options::{self, FormatCtx};
 use crate::server::model::Model;
-use crate::server::pane::PaneEventKind;
+use crate::server::pane::{PaneEventKind, marks};
 use crate::server::{State, clients};
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
 
@@ -145,6 +145,9 @@ pub struct Scanner {
     /// an APC `_G`, which the emulator never sees, the OSC must be closed
     /// for it some other way.
     osc_open: bool,
+    /// The OSC 133 marks found by the last `scan`: how many of the bytes
+    /// it returned came before the sequence's end, and the mark's bits.
+    marks: Vec<(usize, u8)>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -178,8 +181,10 @@ impl Scanner {
     /// `Graphics` per APC `_G` (bytes from `ESC _ G` to `ESC \` inclusive,
     /// none of which reach the emulator) and one `Path` per usable OSC 7.
     /// Other sequences, OSC 7 included, pass to the emulator unchanged.
+    /// An OSC 133 `A` or `C` is found too, for [`Self::take_marks`].
     pub fn scan<'a>(&mut self, bytes: &'a [u8]) -> (Cow<'a, [u8]>, Vec<PaneEventKind>) {
         let mut found = Vec::new();
+        self.marks.clear();
         if self.state == ScanState::Ground && !bytes.contains(&ESC) {
             return (Cow::Borrowed(bytes), found);
         }
@@ -188,6 +193,15 @@ impl Scanner {
             self.step(b, &mut out, &mut found);
         }
         (Cow::Owned(out), found)
+    }
+
+    /// The OSC 133 marks the last [`Self::scan`] found, as the offset in
+    /// its returned bytes just after each sequence and the bits to mark the
+    /// cursor's line with (`marks::PROMPT`, `marks::OUTPUT`). tmux 3.7b
+    /// reads only the first character after `133;`, and only `A` and `C`
+    /// mark anything.
+    pub fn take_marks(&mut self) -> Vec<(usize, u8)> {
+        std::mem::take(&mut self.marks)
     }
 
     fn step(&mut self, b: u8, out: &mut Vec<u8>, found: &mut Vec<PaneEventKind>) {
@@ -297,7 +311,7 @@ impl Scanner {
                 BEL => {
                     out.push(b);
                     self.state = Ground;
-                    self.osc_end(found);
+                    self.osc_end(found, out.len());
                 }
                 ESC => {
                     self.held.push(b);
@@ -322,7 +336,7 @@ impl Scanner {
                     self.release(out);
                     out.push(b);
                     self.state = Ground;
-                    self.osc_end(found);
+                    self.osc_end(found, out.len());
                 } else {
                     // The held ESC starts a new sequence.
                     self.state = Esc;
@@ -372,12 +386,21 @@ impl Scanner {
         }
     }
 
-    fn osc_end(&mut self, found: &mut Vec<PaneEventKind>) {
+    fn osc_end(&mut self, found: &mut Vec<PaneEventKind>, out_len: usize) {
         let payload = std::mem::take(&mut self.buf);
         if self.overlong {
             return;
         }
-        if let Some(uri) = payload.strip_prefix(b"7;")
+        if let Some(rest) = payload.strip_prefix(b"133;") {
+            let bits = match rest.first() {
+                Some(b'A') => marks::PROMPT,
+                Some(b'C') => marks::OUTPUT,
+                _ => 0,
+            };
+            if bits != 0 {
+                self.marks.push((out_len, bits));
+            }
+        } else if let Some(uri) = payload.strip_prefix(b"7;")
             && let Some(text) = osc7_text(uri)
         {
             found.push(PaneEventKind::Path(text));
@@ -843,6 +866,55 @@ mod tests {
             events.extend(found);
         }
         (out, events)
+    }
+
+    /// The marks `chunks` make, as (bytes the emulator got before it, bits).
+    fn marks_in(chunks: &[&[u8]]) -> (Vec<u8>, Vec<(usize, u8)>) {
+        let mut s = Scanner::default();
+        let mut out = Vec::new();
+        let mut marks = Vec::new();
+        for chunk in chunks {
+            let (bytes, _) = s.scan(chunk);
+            marks.extend(
+                s.take_marks()
+                    .into_iter()
+                    .map(|(at, bits)| (out.len() + at, bits)),
+            );
+            out.extend_from_slice(&bytes);
+        }
+        (out, marks)
+    }
+
+    #[test]
+    fn osc_133_a_and_c_make_marks_where_they_end() {
+        let (out, marks) = marks_in(&[b"x\x1b]133;A\x07$ \x1b]133;C;aid=1\x1b\\y"]);
+        assert_eq!(out, b"x\x1b]133;A\x07$ \x1b]133;C;aid=1\x1b\\y");
+        // After the BEL and after the ST.
+        assert_eq!(marks, [(9, marks::PROMPT), (out.len() - 1, marks::OUTPUT)]);
+    }
+
+    #[test]
+    fn only_the_first_character_after_133_decides() {
+        let (_, marks) = marks_in(&[
+            b"\x1b]133;B\x07\x1b]133;D;0\x07\x1b]133;a\x07\x1b]133\x07\x1b]133;\x07",
+            b"\x1b]1330;A\x07\x1b]133A\x07\x1b]13;A\x07\x1b]134;A\x07",
+        ]);
+        assert!(marks.is_empty(), "{marks:?}");
+        let (_, marks) = marks_in(&[b"\x1b]133;Anything\x07"]);
+        assert_eq!(marks.len(), 1);
+    }
+
+    #[test]
+    fn a_mark_split_across_reads_is_found_in_the_read_it_ends_in() {
+        let (out, marks) = marks_in(&[b"ab\x1b]13", b"3;A", b"\x07cd"]);
+        assert_eq!(out, b"ab\x1b]133;A\x07cd");
+        assert_eq!(marks, [(10, marks::PROMPT)]);
+    }
+
+    #[test]
+    fn a_tmux_wrapper_carries_no_mark() {
+        let (_, marks) = marks_in(&[b"\x1bPtmux;\x1b\x1b]133;A\x07\x1b\\"]);
+        assert!(marks.is_empty());
     }
 
     #[test]

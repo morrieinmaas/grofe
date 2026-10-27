@@ -109,8 +109,13 @@ fn canopy_config() -> String {
 /// The `compat-miss.log` lines a scenario must leave: the front end logs
 /// every request it cannot translate, and these are the scenarios' own
 /// usage errors (`load-buffer` with no path, `save-buffer` with two),
-/// which tmux 3.7b refuses with the same text.
-const USAGE_ERRORS: &[(&str, &[&str])] = &[("tm_7/load-save", &["load-buffer", "save-buffer"])];
+/// which tmux 3.7b refuses with the same text; and the copy-mode command
+/// `forms` sends that no table has, which tmux drops silently and grofe
+/// drops after noting it once.
+const USAGE_ERRORS: &[(&str, &[&str])] = &[
+    ("tm_7/load-save", &["load-buffer", "save-buffer"]),
+    ("tm_7/forms", &["send-keys -X frobnicate: ignored"]),
+];
 
 /// The steps a scenario skips when the tests run as root (as in act's
 /// container), and their golden entries with them: root reads and writes a

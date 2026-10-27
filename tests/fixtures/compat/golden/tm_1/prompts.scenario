@@ -1,0 +1,85 @@
+# G1: OSC 133 marks and copy mode's next-prompt / previous-prompt. tmux 3.7b
+# flags the cursor's line on `A` (a prompt start) and `C` (an output start)
+# only; B, D, other letters, a missing letter and OSC 1330 flag nothing. The
+# jumps put the cursor in column 0 of the next or previous flagged line, -o
+# looks for output starts instead, and at the last flagged line they stay put.
+# 13 lines in 8 rows: the first five are history.
+$ new-session -d -s main -x 20 -y 8 'printf "\033]133;A\007> one\n\033]133;C\007out1\n\033]133;a\007\033]133\007\033]133;\007\033]1330;A\007\033]133A\007more\n\033]133;A\007> two\n\033]133;C\007out2\n\033]133;B\007\033]133;D;0\007b and d\n\033]133;A;aid=1\007> three\n\033]133;C;x\007out3\ntail1\n\033]133;A\007> four \033]133;C\007ran\ntail2\ntail3\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S ready; else tmux wait-for -S ready; fi; exec sleep 100000'
+$ wait-for ready
+$ display -p -t main '#{history_size}'
+$ copy-mode -t main
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X next-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X -N 3 next-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X -N 3 cursor-right
+$ send-keys -t main -X next-prompt -o -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt -x
+$ send-keys -t main -X next-prompt extra
+$ send-keys -t main -X next-prompt -- -o
+$ send-keys -t main -X next-prompt --
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt -oo
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X bogus-command
+$ send-keys -t main -X bogus-command -o
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X history-top
+$ send-keys -t main -X begin-selection
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X next-prompt
+$ send-keys -t main -X next-prompt
+$ display -p -t main '#{selection_present} #{selection_start_x},#{selection_start_y} #{selection_end_x},#{selection_end_y} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X copy-selection
+$ show-buffer
+$ copy-mode -t main
+$ send-keys -t main -X history-bottom
+$ send-keys -t main -X previous-prompt
+$ send-keys -t main -X refresh-from-pane
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'
+$ send-keys -t main -X previous-prompt
+$ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position}'

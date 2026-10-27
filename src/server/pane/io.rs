@@ -238,10 +238,14 @@ impl Reader {
     fn flush_sync(&self) {
         let pending = {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser, .. } = &mut *emu;
+            let Emu {
+                term,
+                parser,
+                marks,
+            } = &mut *emu;
             let pending = parser.sync_timeout().sync_timeout().is_some();
             if pending {
-                parser.stop_sync(&mut Written(term));
+                parser.stop_sync(&mut Written(term, marks));
             }
             pending
         };
@@ -257,6 +261,7 @@ impl Reader {
     /// sends after the query), never through the actor (T3.8).
     fn feed(&mut self, bytes: &[u8]) -> Vec<PaneEventKind> {
         let (bytes, mut found) = self.scanner.scan(bytes);
+        let marks = self.scanner.take_marks();
         for kind in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)
@@ -268,8 +273,20 @@ impl Reader {
         found.retain(|k| !matches!(k, PaneEventKind::Graphics(apc) if graphics::is_query(apc)));
         {
             let mut emu = lock(&self.emu);
-            let Emu { term, parser, .. } = &mut *emu;
-            parser.advance(&mut Written(term), &bytes);
+            let Emu {
+                term,
+                parser,
+                marks: store,
+            } = &mut *emu;
+            // An OSC 133 mark is made where the sequence ended, so the
+            // emulator gets the bytes up to it first.
+            let mut from = 0;
+            for (at, bits) in marks {
+                parser.advance(&mut Written(term, store), &bytes[from..at]);
+                store.record(term, bits);
+                from = at;
+            }
+            parser.advance(&mut Written(term, store), &bytes[from..]);
         }
         self.after_parse();
         found

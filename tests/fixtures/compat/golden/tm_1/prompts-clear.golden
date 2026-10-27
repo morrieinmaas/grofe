@@ -1,0 +1,462 @@
+$ new-session -d -s c1 -x 20 -y 6 'printf "\033]133;A\007\033[Kab\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c1; else tmux wait-for -S c1; fi; exec sleep 100000'
+? 0
+$ wait-for c1
+? 0
+$ copy-mode -t c1
+? 0
+$ send-keys -t c1 -X history-bottom
+? 0
+$ send-keys -t c1 -X previous-prompt
+? 0
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c1 -X previous-prompt
+? 0
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c1 -X previous-prompt
+? 0
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c1 -X previous-prompt
+? 0
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c1 -X previous-prompt
+? 0
+$ display -p -t c1 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c2 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c2; else tmux wait-for -S c2; fi; exec sleep 100000'
+? 0
+$ wait-for c2
+? 0
+$ copy-mode -t c2
+? 0
+$ send-keys -t c2 -X history-bottom
+? 0
+$ send-keys -t c2 -X previous-prompt
+? 0
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c2 -X previous-prompt
+? 0
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c2 -X previous-prompt
+? 0
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c2 -X previous-prompt
+? 0
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c2 -X previous-prompt
+? 0
+$ display -p -t c2 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ new-session -d -s c3 -x 20 -y 6 'printf "abc\033]133;A\007\033[2Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c3; else tmux wait-for -S c3; fi; exec sleep 100000'
+? 0
+$ wait-for c3
+? 0
+$ copy-mode -t c3
+? 0
+$ send-keys -t c3 -X history-bottom
+? 0
+$ send-keys -t c3 -X previous-prompt
+? 0
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c3 -X previous-prompt
+? 0
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c3 -X previous-prompt
+? 0
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c3 -X previous-prompt
+? 0
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c3 -X previous-prompt
+? 0
+$ display -p -t c3 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ new-session -d -s c4 -x 20 -y 6 'printf "\033]133;A\007\033[2Kab\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c4; else tmux wait-for -S c4; fi; exec sleep 100000'
+? 0
+$ wait-for c4
+? 0
+$ copy-mode -t c4
+? 0
+$ send-keys -t c4 -X history-bottom
+? 0
+$ send-keys -t c4 -X previous-prompt
+? 0
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c4 -X previous-prompt
+? 0
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c4 -X previous-prompt
+? 0
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c4 -X previous-prompt
+? 0
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c4 -X previous-prompt
+? 0
+$ display -p -t c4 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c5 -x 20 -y 6 'printf "abc\033]133;A\007\033[1Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c5; else tmux wait-for -S c5; fi; exec sleep 100000'
+? 0
+$ wait-for c5
+? 0
+$ copy-mode -t c5
+? 0
+$ send-keys -t c5 -X history-bottom
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c5 -X previous-prompt
+? 0
+$ display -p -t c5 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c6 -x 20 -y 6 'printf "abc\033]133;A\007\033[2D\033[Kxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c6; else tmux wait-for -S c6; fi; exec sleep 100000'
+? 0
+$ wait-for c6
+? 0
+$ copy-mode -t c6
+? 0
+$ send-keys -t c6 -X history-bottom
+? 0
+$ send-keys -t c6 -X previous-prompt
+? 0
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c6 -X previous-prompt
+? 0
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c6 -X previous-prompt
+? 0
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c6 -X previous-prompt
+? 0
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c6 -X previous-prompt
+? 0
+$ display -p -t c6 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c7 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2A\r\033[J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c7; else tmux wait-for -S c7; fi; exec sleep 100000'
+? 0
+$ wait-for c7
+? 0
+$ copy-mode -t c7
+? 0
+$ send-keys -t c7 -X history-bottom
+? 0
+$ send-keys -t c7 -X previous-prompt
+? 0
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c7 -X previous-prompt
+? 0
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c7 -X previous-prompt
+? 0
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c7 -X previous-prompt
+? 0
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c7 -X previous-prompt
+? 0
+$ display -p -t c7 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c8 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2A\033[1C\033[J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c8; else tmux wait-for -S c8; fi; exec sleep 100000'
+? 0
+$ wait-for c8
+? 0
+$ copy-mode -t c8
+? 0
+$ send-keys -t c8 -X history-bottom
+? 0
+$ send-keys -t c8 -X previous-prompt
+? 0
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c8 -X previous-prompt
+? 0
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c8 -X previous-prompt
+? 0
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c8 -X previous-prompt
+? 0
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c8 -X previous-prompt
+? 0
+$ display -p -t c8 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c9 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033]133;A\007l4\n\033[2A\033[1C\033[1J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c9; else tmux wait-for -S c9; fi; exec sleep 100000'
+? 0
+$ wait-for c9
+? 0
+$ copy-mode -t c9
+? 0
+$ send-keys -t c9 -X history-bottom
+? 0
+$ send-keys -t c9 -X previous-prompt
+? 0
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 3,0
+? 0
+$ send-keys -t c9 -X previous-prompt
+? 0
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ send-keys -t c9 -X previous-prompt
+? 0
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ send-keys -t c9 -X previous-prompt
+? 0
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ send-keys -t c9 -X previous-prompt
+? 0
+$ display -p -t c9 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ new-session -d -s c10 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007l3\n\033[2J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c10; else tmux wait-for -S c10; fi; exec sleep 100000'
+? 0
+$ wait-for c10
+? 0
+$ copy-mode -t c10
+? 0
+$ send-keys -t c10 -X history-bottom
+? 0
+$ send-keys -t c10 -X previous-prompt
+? 0
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+3 0,1
+? 0
+$ send-keys -t c10 -X previous-prompt
+? 0
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+3 0,2
+? 0
+$ send-keys -t c10 -X previous-prompt
+? 0
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+3 0,3
+? 0
+$ send-keys -t c10 -X previous-prompt
+? 0
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+3 0,3
+? 0
+$ send-keys -t c10 -X previous-prompt
+? 0
+$ display -p -t c10 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+3 0,3
+? 0
+$ new-session -d -s c11 -x 20 -y 6 'printf "\033]133;A\007l1\n\033]133;A\007l2\n\033]133;A\007\n\033[2J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c11; else tmux wait-for -S c11; fi; exec sleep 100000'
+? 0
+$ wait-for c11
+? 0
+$ copy-mode -t c11
+? 0
+$ send-keys -t c11 -X history-bottom
+? 0
+$ send-keys -t c11 -X previous-prompt
+? 0
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+2 0,1
+? 0
+$ send-keys -t c11 -X previous-prompt
+? 0
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+2 0,2
+? 0
+$ send-keys -t c11 -X previous-prompt
+? 0
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+2 0,2
+? 0
+$ send-keys -t c11 -X previous-prompt
+? 0
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+2 0,2
+? 0
+$ send-keys -t c11 -X previous-prompt
+? 0
+$ display -p -t c11 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+2 0,2
+? 0
+$ new-session -d -s c12 -x 20 -y 6 'printf "\033]133;A\0071\n\033]133;A\0072\n\033]133;A\0073\n\033]133;A\0074\n\033]133;A\0075\n\033]133;A\0076\n\033]133;A\0077\n\033]133;A\0078\n\033[3J"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c12; else tmux wait-for -S c12; fi; exec sleep 100000'
+? 0
+$ wait-for c12
+? 0
+$ copy-mode -t c12
+? 0
+$ send-keys -t c12 -X history-bottom
+? 0
+$ send-keys -t c12 -X previous-prompt
+? 0
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 4,0
+? 0
+$ send-keys -t c12 -X previous-prompt
+? 0
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 3,0
+? 0
+$ send-keys -t c12 -X previous-prompt
+? 0
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 2,0
+? 0
+$ send-keys -t c12 -X previous-prompt
+? 0
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c12 -X previous-prompt
+? 0
+$ display -p -t c12 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ new-session -d -s c13 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[20Xxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c13; else tmux wait-for -S c13; fi; exec sleep 100000'
+? 0
+$ wait-for c13
+? 0
+$ copy-mode -t c13
+? 0
+$ send-keys -t c13 -X history-bottom
+? 0
+$ send-keys -t c13 -X previous-prompt
+? 0
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c13 -X previous-prompt
+? 0
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c13 -X previous-prompt
+? 0
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c13 -X previous-prompt
+? 0
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c13 -X previous-prompt
+? 0
+$ display -p -t c13 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ new-session -d -s c14 -x 20 -y 6 'printf "abc\r\033]133;A\007\033[5Xxy\n\033]133;A\007cd\n"; if [ -n "$GROFE" ]; then {grofe} wait-for -S c14; else tmux wait-for -S c14; fi; exec sleep 100000'
+? 0
+$ wait-for c14
+? 0
+$ copy-mode -t c14
+? 0
+$ send-keys -t c14 -X history-bottom
+? 0
+$ send-keys -t c14 -X previous-prompt
+? 0
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 1,0
+? 0
+$ send-keys -t c14 -X previous-prompt
+? 0
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c14 -X previous-prompt
+? 0
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c14 -X previous-prompt
+? 0
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
+$ send-keys -t c14 -X previous-prompt
+? 0
+$ display -p -t c14 '#{history_size} #{copy_cursor_y},#{scroll_position}'
+0 0,0
+? 0
