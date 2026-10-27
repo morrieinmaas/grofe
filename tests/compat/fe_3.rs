@@ -441,3 +441,52 @@ fn a_value_inside_the_pid_window_is_not_a_pid() {
         "$ show -gqv history-limit\n50000\n? 0\n$ display -p '#{pid}'\n<PID>\n? 0\n"
     );
 }
+
+/// The recorder sees the fixtures at `/src/tests/fixtures/compat`; tmux
+/// prints that path in a config file's errors.
+fn recorder_paths(s: String) -> String {
+    s.lines()
+        .map(|line| match line.find("/tests/fixtures/compat/") {
+            Some(at) if line.starts_with('/') => format!("/src{}\n", &line[at..]),
+            _ => format!("{line}\n"),
+        })
+        .collect()
+}
+
+/// B1a: `%if`/`%elif`/`%else`/`%endif`, `NAME=value` and `%hidden
+/// NAME=value` in a config file, and their syntax errors by line.
+#[test]
+fn config_conditionals_match_their_golden() {
+    check("config-if", &[], recorder_paths);
+}
+
+/// B1a: the options plugins and themes set that grofe used to refuse.
+#[test]
+fn config_options_match_their_golden() {
+    check("config-options", &[], same);
+}
+
+/// B1a: `detach-on-destroy` moves or detaches the client of a destroyed
+/// session.
+#[test]
+fn detach_on_destroy_matches_its_golden() {
+    check("config-detach-on-destroy", &[], same);
+}
+
+/// B1a: `prefix2` opens the prefix table like `prefix`.
+#[test]
+fn prefix2_matches_its_golden() {
+    check("config-prefix2", &[], same);
+}
+
+/// B1a: `status-bg` and `status-fg` override `status-style` when drawn.
+#[test]
+fn status_colours_match_their_golden() {
+    check("config-status-colours", &[], same);
+}
+
+/// B1a: `#{client_pid}` is a pid.
+#[test]
+fn client_pid_matches_its_golden() {
+    check("config-client-pid", &[], same);
+}

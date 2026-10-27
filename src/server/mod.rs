@@ -681,7 +681,10 @@ async fn actor(
 /// such as `has-session`) gets ENOENT even if the server then stays up; the
 /// CLI retries such a connect once after a short wait to cover this window.
 fn exit_if_empty(state: &mut State, listener: &UnixListener) {
+    // `set -s exit-empty off` keeps the server up with no sessions.
+    let keep = state.model.options.lookup("exit-empty", &[]) == Some("off");
     if !state.exit_when_empty
+        || keep
         || state.exit
         || state.connections > 0
         || !state.model.sessions.is_empty()
@@ -935,6 +938,7 @@ async fn connection_loop(
             tty,
         }) => {
             let req = clients::AttachRequest {
+                pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
                 ctx,
                 size: (cols, rows),
                 term,

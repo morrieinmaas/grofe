@@ -42,10 +42,13 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     };
     let here = ctx.pane.filter(|p| model.panes.contains_key(p));
     let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
-    let size = cap_size(
-        c.width.unwrap_or(DEFAULT_SIZE.0),
-        c.height.unwrap_or(DEFAULT_SIZE.1),
-    );
+    // A missing -x or -y is `default-size`'s, as tmux's detached sessions.
+    let default = model
+        .options
+        .lookup("default-size", &[])
+        .and_then(super::options::parse_size)
+        .unwrap_or(DEFAULT_SIZE);
+    let size = cap_size(c.width.unwrap_or(default.0), c.height.unwrap_or(default.1));
     let window = model.alloc_window_id();
     // Only what `update-environment` names comes from the client (TC.5).
     let env = crate::server::hooks::session_environment(state, id, &ctx.env);

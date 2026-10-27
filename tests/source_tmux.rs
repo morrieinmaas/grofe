@@ -93,22 +93,157 @@ fn a_tmux_file_runs_its_commands() {
 
 /// A parse error anywhere (here an unknown command on line 3) runs
 /// nothing, and names the file and line, as tmux 3.7b's
-/// `<path>:6: unknown command: frobnicate`.
+/// `<path>:6: unknown command: frobnicate`. tmux collects such errors and
+/// prints them on stdout when the file is done; the request fails.
 #[test]
 fn a_parse_error_runs_nothing_and_names_its_line() {
     let srv = server();
     let file = write(&srv, "bad.conf", "set -g @a 1\n\nfrobnicate\n");
-    let err = tmux(&srv, &["source-file", &file]).unwrap_err();
+    let out = tmux_run(&srv, &["source-file", &file]);
+    assert!(!out.status.success());
     assert_eq!(
-        err.trim_end(),
+        out.stdout.trim_end(),
         format!("{file}:3: unknown command: frobnicate")
     );
+    assert_eq!(out.stderr, "");
     assert_eq!(opt(&srv, "@a"), "");
     // An unknown flag is a parse error too, as in tmux.
     let file = write(&srv, "flag.conf", "display -p one\nset -Z @m 1\n");
-    let err = tmux(&srv, &["source-file", &file]).unwrap_err();
-    assert!(err.starts_with(&format!("{file}:2: ")), "{err}");
-    assert!(!err.contains("one"), "{err}");
+    let out = tmux_run(&srv, &["source-file", &file]);
+    assert!(!out.status.success());
+    assert!(
+        out.stdout.starts_with(&format!("{file}:2: ")),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("one"), "{}", out.stdout);
+}
+
+/// Valid tmux that grofe cannot do (a hook it lacks, `set-hook` without
+/// `-g`) fails its own command and the rest of its line; the other lines
+/// run, and the request fails with each error named by file and line.
+#[test]
+fn a_command_grofe_lacks_fails_only_its_own_line() {
+    let srv = server();
+    let file = write(
+        &srv,
+        "lack.conf",
+        "set -g @a 1\n\
+         set-hook client-attached 'display x'\n\
+         set -g @b 2\n\
+         set -g @before 1 ; set-hook -g client-attached 'display y' ; set -g @skipped 1\n\
+         set -g @c 3\n",
+    );
+    let out = tmux_run(&srv, &["source-file", &file]);
+    assert!(!out.status.success());
+    for (name, want) in [("@a", "1"), ("@b", "2"), ("@before", "1"), ("@c", "3")] {
+        assert_eq!(opt(&srv, name), want, "{name}");
+    }
+    assert_eq!(opt(&srv, "@skipped"), "");
+    assert!(
+        out.stderr.contains(&format!("{file}:2: ")),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains(&format!("{file}:4: ")),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains(&format!("{file}:3: ")),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A file sourced from a file is the same: its parse error runs none of
+/// its lines and fails that `source-file`, the outer file's lines go on.
+#[test]
+fn a_nested_file_fails_alone() {
+    let srv = server();
+    let inner = write(&srv, "inner.conf", "set -g @inner 1\nfrobnicate\n");
+    let lack = write(
+        &srv,
+        "lack-inner.conf",
+        "set -g @i1 1\nset-hook client-attached x\nset -g @i2 2\n",
+    );
+    let outer = write(
+        &srv,
+        "outer.conf",
+        &format!("set -g @o1 1\nsource-file {inner}\nsource-file {lack}\nset -g @o2 2\n"),
+    );
+    let out = tmux_run(&srv, &["source-file", &outer]);
+    assert!(!out.status.success());
+    assert_eq!(opt(&srv, "@inner"), "");
+    for (name, want) in [("@o1", "1"), ("@o2", "2"), ("@i1", "1"), ("@i2", "2")] {
+        assert_eq!(opt(&srv, name), want, "{name}");
+    }
+    assert!(
+        out.stdout
+            .contains(&format!("{inner}:2: unknown command: frobnicate")),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains(&format!("{lack}:2: ")),
+        "{}",
+        out.stderr
+    );
+}
+
+/// `%if`/`%elif`/`%else`/`%endif` choose lines by a format expanded for
+/// the requester's pane; `NAME=value` and `%hidden NAME=value` set the
+/// global environment, and a later line reads `$NAME`.
+#[test]
+fn conditionals_and_assignments_in_a_file() {
+    let srv = server();
+    let file = write(
+        &srv,
+        "cond.conf",
+        "%if \"#{==:#{session_name},main}\"\n\
+         set -g @in main\n\
+         %else\n\
+         set -g @in other\n\
+         %endif\n\
+         %if #{==:a b,a b}\n\
+         set -g @spaced yes\n\
+         %endif\n\
+         FOO=bar\n\
+         %hidden HID=h\n\
+         set -g @foo \"$FOO$HID\"\n\
+         %if 0\n\
+         NEVER=1\n\
+         set -Z\n\
+         %endif\n",
+    );
+    tmux(&srv, &["source-file", &file]).expect("source");
+    assert_eq!(opt(&srv, "@in"), "main");
+    assert_eq!(opt(&srv, "@spaced"), "yes");
+    assert_eq!(opt(&srv, "@foo"), "barh");
+    assert_eq!(
+        tmux(&srv, &["show-environment", "-g", "FOO"]).unwrap(),
+        "FOO=bar\n"
+    );
+    assert!(tmux(&srv, &["show-environment", "-g", "NEVER"]).is_err());
+}
+
+/// `source-file -n` reads the file, reports its errors and runs nothing
+/// (and sets no variable); `-F` expands the path as a format.
+#[test]
+fn source_file_dash_n_and_dash_f() {
+    let srv = server();
+    let file = write(&srv, "n.conf", "set -g @n 1\nPARSED=1\n");
+    tmux(&srv, &["source-file", "-n", &file]).expect("-n");
+    assert_eq!(opt(&srv, "@n"), "");
+    assert!(tmux(&srv, &["show-environment", "-g", "PARSED"]).is_err());
+    let bad = write(&srv, "nbad.conf", "set -g @n 1\n%endif\n");
+    let out = tmux_run(&srv, &["source-file", "-n", &bad]);
+    assert!(!out.status.success());
+    assert!(out.stdout.contains(":2: syntax error"), "{}", out.stdout);
+    write(&srv, "main.conf", "set -g @f 1\n");
+    tmux(&srv, &["source-file", "-F", "#{session_name}.conf"]).expect("-F");
+    assert_eq!(opt(&srv, "@f"), "1");
 }
 
 /// A command that fails while running stops the rest of its line; the

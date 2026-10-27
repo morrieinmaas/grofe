@@ -381,6 +381,30 @@ pub fn parse_split(ctx: &ClientCtx, argv: &[String]) -> Result<Vec<Command>, Str
     }
 }
 
+/// [`parse_split`] for a sourced tmux file's command: the failure says
+/// whether tmux itself would have refused the command at parse time
+/// (`true`: the file is refused whole) or grofe just cannot run it.
+pub fn parse_split_checked(
+    ctx: &ClientCtx,
+    argv: &[String],
+) -> Result<Vec<Command>, (bool, String)> {
+    let refusal = match ctx.dialect {
+        Dialect::Grofe => return parse_split(ctx, argv).map_err(|e| (true, e)),
+        Dialect::Tmux => match tmux::dispatch_checked(argv, ctx) {
+            Ok(commands) => return Ok(commands),
+            Err(refusal) => refusal,
+        },
+    };
+    let (syntax, error) = match refusal {
+        tmux::Refusal::Syntax(e) => (true, e),
+        tmux::Refusal::Unsupported(e) => (false, e),
+    };
+    if let Some(path) = MISS_LOG.get() {
+        append_miss(path, &miss_summary(argv));
+    }
+    Err((syntax, error.to_string()))
+}
+
 fn tmux_dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, String> {
     logged(argv, tmux::dispatch(argv, ctx))
 }

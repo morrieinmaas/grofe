@@ -399,6 +399,28 @@ fn misses_append_one_line_each_to_the_test_state_dir() {
     );
 }
 
+/// A tmux command grofe cannot do, in a sourced file, fails only its own
+/// line and is noted in `compat-miss.log` like any other miss (B1a).
+#[test]
+fn a_refused_line_of_a_sourced_file_is_noted() {
+    let srv = start_as_tmux();
+    let new = tmux(&srv, &["new-session", "-d", "-s", "main", "sleep 100000"]);
+    assert!(new.status.success(), "{}", new.stderr);
+    let file = srv.home.join("lack.conf");
+    fs::write(
+        &file,
+        "set -g @a 1\nset-hook -g client-attached 'display x'\nset -g @b 2\n",
+    )
+    .unwrap();
+    let out = tmux(&srv, &["source-file", file.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let value = |name: &str| tmux(&srv, &["show-options", "-gqv", name]).stdout;
+    assert_eq!((value("@a").trim(), value("@b").trim()), ("1", "2"));
+    let lines = miss_lines(&srv);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("set-hook"), "{lines:?}");
+}
+
 /// A copy-mode command grofe does not know does nothing, as in tmux (which
 /// answers success), and is noted once by name in `compat-miss.log`.
 #[test]

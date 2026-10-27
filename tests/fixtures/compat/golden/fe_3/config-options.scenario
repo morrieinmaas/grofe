@@ -1,0 +1,58 @@
+# Options a plugin or theme sets that grofe used to refuse (options-table.c):
+# prefix2, status-bg, status-fg, window-status-activity-style,
+# terminal-overrides, focus-follows-mouse, default-size, exit-empty and
+# detach-on-destroy, by default value, set, error and show.
+$ new-session -d -s main -x 80 -y 24 cat
+$ show-options -g prefix2
+$ set-option -g prefix2 C-a
+$ show-options -g prefix2
+$ set-option -g prefix2 M-x
+$ show-options -gv prefix2
+$ set-option -g prefix2 None
+$ show-options -g prefix2
+$ set-option -g prefix2 bogus
+$ show-options -g status-bg
+$ show-options -g status-fg
+$ set-option -g status-bg red
+$ show-options -g status-bg
+$ set-option -g status-fg '#112233'
+$ show-options -g status-fg
+$ show-options -g status-style
+$ set-option -g status-bg bogus
+$ set-option -g status-bg default
+$ show-options -gv status-bg
+$ show-options -gw window-status-activity-style
+$ set-option -gw window-status-activity-style bold
+$ show-options -gw window-status-activity-style
+$ show-options -s terminal-overrides
+$ set-option -s terminal-overrides ',xterm*:Tc'
+$ set-option -as terminal-overrides ',foo:bar'
+$ show-options -s terminal-overrides
+$ show-options -g focus-follows-mouse
+$ set-option -g focus-follows-mouse on
+$ show-options -gv focus-follows-mouse
+$ set-option -g focus-follows-mouse maybe
+$ show-options -g default-size
+$ set-option -g default-size 100x30
+$ show-options -g default-size
+$ set-option -g default-size bogus
+$ new-session -d -s sized cat
+$ display-message -p -t sized '#{window_width}x#{window_height}'
+$ show-options -s exit-empty
+$ set-option -s exit-empty off
+$ show-options -sv exit-empty
+$ set-option -s exit-empty on
+$ show-options -g detach-on-destroy
+$ set-option -g detach-on-destroy no-detached
+$ show-options -g detach-on-destroy
+$ set-option -g detach-on-destroy previous
+$ show-options -gv detach-on-destroy
+$ set-option -g detach-on-destroy next
+$ show-options -gv detach-on-destroy
+$ set-option -g detach-on-destroy off
+$ show-options -gv detach-on-destroy
+$ set-option -g detach-on-destroy bogus
+$ set-option -g detach-on-destroy on
+$ show-options -gv detach-on-destroy
+$ set-option -t main detach-on-destroy off
+$ show-options -t main detach-on-destroy

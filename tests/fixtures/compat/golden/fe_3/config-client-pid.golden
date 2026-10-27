@@ -1,0 +1,9 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+client 80x24 attach -t main
+$ list-clients -F '#{client_pid}'
+<PID>
+? 0
+$ display-message -p -c {client} '#{?#{>:#{client_pid},1},pid,nopid}'
+pid
+? 0

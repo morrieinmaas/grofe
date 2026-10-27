@@ -1,0 +1,43 @@
+$ new-session -d -s a -x 80 -y 24 cat
+? 0
+$ new-session -d -s b -x 80 -y 24 cat
+? 0
+$ new-session -d -s c -x 80 -y 24 cat
+? 0
+$ new-session -d -s d -x 80 -y 24 cat
+? 0
+$ new-session -d -s e -x 80 -y 24 cat
+? 0
+$ set-option -g detach-on-destroy off
+? 0
+client 80x24 attach -t c
+$ list-clients -F '#{client_session}'
+c
+? 0
+$ kill-session -t c
+? 0
+$ list-clients -F '#{client_session}'
+e
+? 0
+$ set-option -g detach-on-destroy no-detached
+? 0
+$ kill-session -t e
+? 0
+$ list-clients -F '#{client_session}'
+d
+? 0
+$ list-sessions -F '#{session_name} #{session_attached}'
+a 0
+b 0
+d 1
+? 0
+$ set-option -g detach-on-destroy on
+? 0
+$ kill-session -t d
+? 0
+$ list-clients -F '#{client_session}'
+? 0
+$ list-sessions -F '#{session_name} #{session_attached}'
+a 0
+b 0
+? 0

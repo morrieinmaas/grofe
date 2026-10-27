@@ -116,6 +116,24 @@ pub(crate) fn parse_split(
     Ok(cmds)
 }
 
+/// [`parse_split`] for a sourced tmux file's command, a failure marked
+/// `true` when tmux itself refuses the command at parse time
+/// ([`compat::parse_split_checked`]).
+pub(crate) fn parse_split_checked(
+    state: &State,
+    ctx: &ClientCtx,
+    argv: &[String],
+) -> Result<Vec<Command>, (bool, String)> {
+    let Some(expanded) = menu::expand_alias_command(state, argv) else {
+        return compat::parse_split_checked(ctx, argv);
+    };
+    let mut cmds = Vec::new();
+    for argv in &expanded {
+        cmds.extend(compat::parse_split_checked(ctx, argv)?);
+    }
+    Ok(cmds)
+}
+
 /// Runs one command of a key binding: as [`run_split`], without
 /// expanding an alias, since `bind-key` expanded it when the key was
 /// bound, as tmux 3.7b does (a chain `a=b`, `b=...` expands once).
@@ -323,6 +341,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::prune_unreferenced(state);
             out
         }
+        Command::Refused(text) => Err(text),
         Command::ListPlugins(c) => plugins::list_plugins(state, ctx, c),
         Command::PluginRestart(c) => plugins::plugin_restart(state, ctx, c),
         Command::Reload(c) => {

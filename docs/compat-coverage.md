@@ -221,6 +221,42 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   pane's `window-style` and `window-active-style`, with no check on the
   style. The front end does the same; grofe draws no pane background, so
   the two options have no effect.
+- **A sourced tmux file (B1a).** It reads as tmux's `cmd-parse.y` does
+  (goldens `fe_3/config-if` and friends). `%if`/`%elif`/`%else`/`%endif`
+  take a format expanded for the requester's pane (`#{...}` after the
+  directive is read raw, spaces and all); a false branch is still parsed, so
+  a syntax error in it counts. `NAME=value` and `%hidden NAME=value` set the
+  global environment as the lines are read. What tmux refuses while parsing
+  (a syntax error, an unknown command, a flag its usage lacks, a wrong
+  argument count) refuses the file, runs nothing, and prints
+  `<path>:<line>: <error>` on stdout with exit 1, as tmux's
+  `cfg_print_causes`. A command that is valid tmux but that grofe cannot do
+  (an `Unsupported` row, a hook or flag it lacks, `set-hook` without `-g`)
+  fails only itself and the rest of its `;` line, with the same text on
+  stderr, and is noted in `compat-miss.log`; the other lines run. A nested
+  `source-file` is the same. `source-file` takes `-F` (path as a format),
+  `-n` (parse only: report errors, run nothing, set no variable) and `-v`
+  (accepted, no trace). Not done: several paths or globs in one
+  `source-file`, `-t`, and tmux's error for a stray `%word` in the middle of
+  a line (grofe only reads `%` at the start of a line).
+- **Options plugins and themes set (B1a).** `prefix2` (a second prefix key,
+  `send-prefix -2` is not done), `status-bg` and `status-fg` (drawn over
+  `status-style`, as `status.c`), `default-size` (the size of a `new-session
+  -d` without `-x`/`-y`), `exit-empty` (`off` keeps an auto-started server up
+  with no sessions) and `detach-on-destroy` (`golden/fe_3/config-detach-on-destroy`)
+  have effect. `detach-on-destroy off` moves a destroyed session's clients to
+  the most recently active other session, `no-detached` to the most recent
+  one no client shows, `on` detaches. `previous` and `next` crash tmux 3.7b's
+  server (`session_previous_session` passes a NULL sort order that
+  `sort_qsort` dereferences, recorded: "server exited unexpectedly"); grofe
+  moves the client to the neighbour in name order instead. Stored with no
+  effect, like `terminal-features`: `terminal-overrides` (a list),
+  `window-status-activity-style` and `focus-follows-mouse`. A colour option
+  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names). Still
+  absent: `key-table`, `exit-unattached`, `destroy-unattached`,
+  `display-panes-*`, `message-command-style`.
+- **`#{client_pid}` (B1a)** is the pid of the attached client, from the
+  socket's peer credentials (`tests/client_pid.rs`); empty with no client.
 - **Session groups and linked windows** are out of scope (spec), and sessionx
   sends both: `new-session -d -s <name> -t <session>` and `link-window`.
   M3.7's native sessionx port (TP.4) replaces them (M36-R9).

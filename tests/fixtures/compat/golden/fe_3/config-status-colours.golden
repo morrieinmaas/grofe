@@ -1,0 +1,34 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ set-option -g status-left 'LEFT'
+? 0
+$ set-option -g status-right ''
+? 0
+$ set-option -g window-status-format ''
+? 0
+$ set-option -g window-status-current-format ''
+? 0
+client 80x24 attach -t main
+styles 23-23 LEFT
+~ 23 0-3 fg=black bg=green
+~ 23 4-79 fg=default bg=green
+$ set-option -g status-bg red
+? 0
+styles 23-23 LEFT
+~ 23 0-3 fg=black bg=red
+~ 23 4-79 fg=default bg=red
+$ set-option -g status-fg blue
+? 0
+styles 23-23 LEFT
+~ 23 0-3 fg=blue bg=red
+~ 23 4-79 fg=default bg=red
+$ set-option -g status-style bg=green,fg=yellow
+? 0
+styles 23-23 LEFT
+~ 23 0-3 fg=blue bg=red
+~ 23 4-79 fg=default bg=red
+$ set-option -g status-bg default
+? 0
+styles 23-23 LEFT
+~ 23 0-3 fg=blue bg=green
+~ 23 4-79 fg=default bg=green

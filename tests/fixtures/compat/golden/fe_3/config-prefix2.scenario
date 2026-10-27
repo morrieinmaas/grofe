@@ -1,0 +1,19 @@
+# prefix2 is a second prefix key: it opens the prefix table as prefix
+# does, and `None` turns it off (server-client.c).
+$ new-session -d -s main -x 80 -y 24 cat
+$ bind-key x set-option -g @hit yes
+$ set-option -g prefix2 C-a
+client 80x24 attach -t main
+keys C-a x
+$ run-shell 'sleep 0.3'
+$ show-options -gv @hit
+$ set-option -g @hit no
+$ set-option -g prefix2 None
+keys C-a x
+$ run-shell 'sleep 0.3'
+$ show-options -gv @hit
+$ set-option -g prefix2 C-a
+$ set-option -g @hit no
+keys C-b x
+$ run-shell 'sleep 0.3'
+$ show-options -gv @hit

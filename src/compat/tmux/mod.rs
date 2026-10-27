@@ -793,6 +793,44 @@ pub fn dispatch(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxEr
     Ok(out)
 }
 
+/// Why [`dispatch_checked`] could not translate a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// tmux 3.7b refuses the command itself, while parsing it: an unknown
+    /// command, a flag its usage lacks, a missing flag value, or the wrong
+    /// number of arguments.
+    Syntax(TmuxError),
+    /// Valid tmux that grofe does not do (an `Unsupported` row, a flag or
+    /// hook it lacks).
+    Unsupported(TmuxError),
+}
+
+/// [`dispatch_command`], telling tmux's own parse errors from commands
+/// grofe merely cannot run. A sourced file stops at the first kind and goes
+/// on past the second.
+pub fn dispatch_checked(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, Refusal> {
+    let (name, args) = argv
+        .split_first()
+        .ok_or_else(|| Refusal::Syntax(ParseError::EmptyCommand.into()))?;
+    let spec = resolve(name).map_err(Refusal::Syntax)?;
+    let inv = Invocation {
+        verb: spec.name,
+        args,
+        ctx,
+        spec,
+    };
+    check_flags(&inv).map_err(Refusal::Syntax)?;
+    dispatch_command(argv, ctx).map_err(|e| {
+        let counts = e.0.starts_with("command ")
+            && (e.0.contains(": too many arguments") || e.0.contains(": too few arguments"));
+        if counts {
+            Refusal::Syntax(e)
+        } else {
+            Refusal::Unsupported(e)
+        }
+    })
+}
+
 /// Translates one command whose argv is already split (a stored command
 /// string, a binding, prompt text): a `;` argument in it is literal.
 pub fn dispatch_command(argv: &[String], ctx: &ClientCtx) -> Result<Vec<Command>, TmuxError> {
@@ -915,12 +953,16 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("copy-mode-match-style", "copy-mode-match-style"),
     ("default-command", "default-command"),
     ("default-shell", "default-shell"),
+    ("default-size", "default-size"),
     ("default-terminal", "default-terminal"),
+    ("detach-on-destroy", "detach-on-destroy"),
     ("display-time", "display-time"),
     ("escape-time", "escape-time"),
+    ("exit-empty", "exit-empty"),
     ("extended-keys", "extended-keys"),
     ("extended-keys-format", "extended-keys-format"),
     ("focus-events", "focus-events"),
+    ("focus-follows-mouse", "focus-follows-mouse"),
     ("graphics", "graphics"),
     ("history-limit", "history-limit"),
     ("main-pane-height", "main-pane-height"),
@@ -937,6 +979,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-border-format", "pane-border-format"),
     ("pane-border-style", "pane-border-style"),
     ("prefix", "prefix"),
+    ("prefix2", "prefix2"),
     ("remain-on-exit", "remain-on-exit"),
     ("renumber-windows", "renumber-windows"),
     ("repeat-time", "repeat-time"),
@@ -945,6 +988,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("set-titles-string", "set-titles-string"),
     ("silence-action", "silence-action"),
     ("status", "status"),
+    ("status-bg", "status-bg"),
+    ("status-fg", "status-fg"),
     ("status-format", "status-format"),
     ("status-interval", "status-interval"),
     ("status-justify", "status-justify"),
@@ -959,11 +1004,16 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status-style", "status-style"),
     ("synchronize-panes", "synchronize-panes"),
     ("terminal-features", "terminal-features"),
+    ("terminal-overrides", "terminal-overrides"),
     ("update-environment", "update-environment"),
     ("visual-activity", "visual-activity"),
     ("visual-bell", "visual-bell"),
     ("visual-silence", "visual-silence"),
     ("window-size", "window-size"),
+    (
+        "window-status-activity-style",
+        "window-status-activity-style",
+    ),
     ("window-status-bell-style", "window-status-bell-style"),
     (
         "window-status-current-format",

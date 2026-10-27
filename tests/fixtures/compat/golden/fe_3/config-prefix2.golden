@@ -1,0 +1,33 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ bind-key x set-option -g @hit yes
+? 0
+$ set-option -g prefix2 C-a
+? 0
+client 80x24 attach -t main
+keys C-a x
+$ run-shell 'sleep 0.3'
+? 0
+$ show-options -gv @hit
+yes
+? 0
+$ set-option -g @hit no
+? 0
+$ set-option -g prefix2 None
+? 0
+keys C-a x
+$ run-shell 'sleep 0.3'
+? 0
+$ show-options -gv @hit
+no
+? 0
+$ set-option -g prefix2 C-a
+? 0
+$ set-option -g @hit no
+? 0
+keys C-b x
+$ run-shell 'sleep 0.3'
+? 0
+$ show-options -gv @hit
+yes
+? 0

@@ -14,7 +14,10 @@ pub mod target;
 
 pub use format::{FormatVars, expand};
 pub use keys::{is_key_name, key_bytes};
-pub use parse::{parse, parse_sequence, split_command_string, split_config_file};
+pub use parse::{
+    ConfigHost, parse, parse_sequence, split_command_string, split_config_file,
+    split_config_file_with,
+};
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
 use crate::types::{CaptureOpts, Dir, Edge, SplitSize};
@@ -466,10 +469,14 @@ pub struct ListKeys {
     pub key: Option<String>,
 }
 
-/// `source-file` (`-q`, a path).
+/// `source-file` (`-q`, `-F`, `-n`, `-v`, a path).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFile {
     pub quiet: bool,
+    /// `-F`: the path is a format.
+    pub format: bool,
+    /// `-n`: read a tmux file and report its errors, run nothing.
+    pub parse_only: bool,
     pub path: String,
 }
 
@@ -1114,6 +1121,9 @@ pub enum Command {
     SetEnvironment(SetEnvironment),
     ShowEnvironment(ShowEnvironment),
     RegisterSource(RegisterSource),
+    /// A tmux command grofe cannot do, in a sourced file: it fails with
+    /// this text when its turn comes, and the file's other lines run.
+    Refused(String),
     // M5: buffers (TM.4).
     SetBuffer(SetBuffer),
     ShowBuffer(ShowBuffer),

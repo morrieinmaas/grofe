@@ -1,0 +1,25 @@
+# detach-on-destroy (server-fn.c server_destroy_session): when the
+# attached client's session is destroyed, `off` moves it to the most
+# recently active other session, `no-detached` to the most recent one
+# that has no client, and `on` detaches it. (`previous` and `next` crash
+# tmux 3.7b's server: sort_qsort dereferences the NULL sort criteria
+# session_previous_session passes; grofe moves to the neighbour in name
+# order, see docs/compat-coverage.md.)
+$ new-session -d -s a -x 80 -y 24 cat
+$ new-session -d -s b -x 80 -y 24 cat
+$ new-session -d -s c -x 80 -y 24 cat
+$ new-session -d -s d -x 80 -y 24 cat
+$ new-session -d -s e -x 80 -y 24 cat
+$ set-option -g detach-on-destroy off
+client 80x24 attach -t c
+$ list-clients -F '#{client_session}'
+$ kill-session -t c
+$ list-clients -F '#{client_session}'
+$ set-option -g detach-on-destroy no-detached
+$ kill-session -t e
+$ list-clients -F '#{client_session}'
+$ list-sessions -F '#{session_name} #{session_attached}'
+$ set-option -g detach-on-destroy on
+$ kill-session -t d
+$ list-clients -F '#{client_session}'
+$ list-sessions -F '#{session_name} #{session_attached}'

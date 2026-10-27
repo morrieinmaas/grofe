@@ -233,6 +233,10 @@ pub struct Model {
     /// Sessions removed since `hooks::run_pending` last took them, as
     /// `(id, name)`, for the `session-closed` hook (TC.5).
     pub closed_sessions: Vec<(SessionId, String)>,
+    /// Sessions removed since `clients::changed` last looked, as
+    /// `(name, detach-on-destroy)`: where their clients go
+    /// (`server_destroy_session`).
+    pub destroyed_sessions: BTreeMap<SessionId, (String, String)>,
     /// When the server started (`start_time`); `None` only for a model
     /// built with `Model::default()`.
     pub started: Option<std::time::SystemTime>,
@@ -315,9 +319,11 @@ impl Model {
     }
 
     /// True once every session is gone, after at least one existed: the
-    /// server should exit.
+    /// server should exit, unless `exit-empty` is off.
     pub fn closed(&self) -> bool {
-        self.had_session && self.sessions.is_empty()
+        self.had_session
+            && self.sessions.is_empty()
+            && self.options.lookup("exit-empty", &[]) != Some("off")
     }
 
     /// Whether `pane` stays after its process exits with `status` (its
@@ -513,6 +519,13 @@ impl Model {
         s.last_windows.retain(|id| *id != window);
         if s.windows.is_empty() {
             let name = std::mem::take(&mut s.name);
+            let mode = self
+                .options
+                .lookup("detach-on-destroy", &[options::Owner::Session(session)])
+                .unwrap_or("on")
+                .to_string();
+            self.destroyed_sessions
+                .insert(session, (name.clone(), mode));
             self.closed_sessions.push((session, name));
             self.sessions.remove(&session);
             self.client_last_session.retain(|_, last| *last != session);
@@ -533,6 +546,13 @@ impl Model {
         let Some(s) = self.sessions.remove(&session) else {
             return Vec::new();
         };
+        let mode = self
+            .options
+            .lookup("detach-on-destroy", &[options::Owner::Session(session)])
+            .unwrap_or("on")
+            .to_string();
+        self.destroyed_sessions
+            .insert(session, (s.name.clone(), mode));
         self.closed_sessions.push((session, s.name.clone()));
         self.client_last_session.retain(|_, last| *last != session);
         for w in &s.windows {

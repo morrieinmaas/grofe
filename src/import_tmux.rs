@@ -34,7 +34,7 @@ use crate::cmd::{self, Command, RegisterSource};
 use crate::compat::tmux;
 use crate::config::provenance::tilde;
 use crate::config::{self, ConfigError, Ty, toml_type};
-use crate::server::dispatch::options::{ListOp, Options, Owner, split_index};
+use crate::server::dispatch::options::{ListOp, Options, Owner, by_separator, split_index};
 use crate::server::input::{Key, KeyCode, parse_key};
 
 const USAGE: &str = "usage: import-tmux [<tmux.conf>] [-o <path>]";
@@ -1097,8 +1097,10 @@ impl Importer {
             }
         };
         let reset = op == ListOp::Reset;
-        if let Err(msg) = self.store.edit_list(Owner::Global, name, op, false) {
-            return self.report(file, line, &msg, text);
+        for op in by_separator(op, name) {
+            if let Err(msg) = self.store.edit_list(Owner::Global, name, op, false) {
+                return self.report(file, line, &msg, text);
+            }
         }
         if reset {
             for (old_file, old_line) in self.lists.remove(toml_key).unwrap_or_default() {

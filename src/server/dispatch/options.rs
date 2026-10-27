@@ -47,6 +47,10 @@ enum Kind {
     Choice(&'static [&'static str]),
     /// A key name or `None`, stored in tmux's canonical spelling.
     Key,
+    /// A colour word, stored in tmux's spelling of it ([`colour_text`]).
+    Colour,
+    /// `<columns>x<rows>`, tmux's pattern `[0-9]*x[0-9]*`.
+    Size,
 }
 
 /// A built-in option: its type, the scope `set`/`show` use when no scope
@@ -607,6 +611,61 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "default",
     },
+    // B1a: options plugins and themes set, tmux 3.7b's kinds, scopes and
+    // defaults (options-table.c). `prefix2`, `status-bg`, `status-fg`,
+    // `default-size`, `exit-empty` and `detach-on-destroy` are read (input,
+    // the status line, `new-session`, the server loop, a destroyed
+    // session's clients). `window-status-activity-style` and
+    // `focus-follows-mouse` are stored (`NO_EFFECT`): grofe has no activity
+    // flag styling and no hover focus.
+    Builtin {
+        name: "prefix2",
+        kind: Kind::Key,
+        scope: OptionScope::Session,
+        default: "None",
+    },
+    Builtin {
+        name: "status-bg",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "status-fg",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "window-status-activity-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "reverse",
+    },
+    Builtin {
+        name: "focus-follows-mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "default-size",
+        kind: Kind::Size,
+        scope: OptionScope::Session,
+        default: "80x24",
+    },
+    Builtin {
+        name: "exit-empty",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "detach-on-destroy",
+        kind: Kind::Choice(&["off", "on", "no-detached", "previous", "next"]),
+        scope: OptionScope::Session,
+        default: "on",
+    },
 ];
 
 /// A built-in option's scope (a list's too), `None` for anything else.
@@ -941,6 +1000,10 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
+        Kind::Colour => colour_text(value).ok_or_else(|| format!("bad colour: {value}")),
+        Kind::Size => size_text(value)
+            .then(|| value.to_string())
+            .ok_or_else(|| format!("value is invalid: {value}")),
         Kind::Choice(words) => words
             .contains(&value)
             .then(|| value.to_string())
@@ -962,6 +1025,67 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
             }
         }
     }
+}
+
+/// A colour option's value as tmux shows it: `default` and `terminal`, the
+/// sixteen names in lower case, `colourN` for the 256 palette, and
+/// `#rrggbb` in lower case. `None` for anything else (tmux also takes the
+/// X11 colour names; grofe does not).
+fn colour_text(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    const NAMES: &[&str] = &[
+        "default",
+        "terminal",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "brightblack",
+        "brightred",
+        "brightgreen",
+        "brightyellow",
+        "brightblue",
+        "brightmagenta",
+        "brightcyan",
+        "brightwhite",
+    ];
+    if NAMES.contains(&lower.as_str()) {
+        return Some(lower);
+    }
+    if let Some(hex) = lower.strip_prefix('#') {
+        let ok = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
+        return ok.then_some(lower);
+    }
+    let n = lower
+        .strip_prefix("colour")
+        .or_else(|| lower.strip_prefix("color"))?;
+    n.parse::<u8>().ok().map(|n| format!("colour{n}"))
+}
+
+/// tmux's `[0-9]*x[0-9]*` (an fnmatch pattern): a digit first, then an `x`
+/// followed by a digit somewhere after it.
+fn size_text(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        && bytes
+            .windows(2)
+            .skip(1)
+            .any(|w| w[0] == b'x' && w[1].is_ascii_digit())
+}
+
+/// `default-size` as `(columns, rows)`, read as tmux's `%ux%u`.
+pub(crate) fn parse_size(value: &str) -> Option<(u16, u16)> {
+    let (cols, rows) = value.split_once('x')?;
+    let digits = |s: &str| {
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        s[..end].parse::<u32>().ok()
+    };
+    let clamp = |n: u32| u16::try_from(n.clamp(1, 10_000)).unwrap_or(u16::MAX);
+    Some((clamp(digits(cols)?), clamp(digits(rows)?)))
 }
 
 /// The scope a command acts on: the explicit flag, else the option's own
@@ -1248,7 +1372,14 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         if c.value_only {
             format!("{value}\n")
         } else {
-            format!("{name} {}\n", quote(value))
+            // tmux prints a colour as colour_tostring does, unquoted.
+            let colour = builtin(name).is_some_and(|b| b.kind == Kind::Colour);
+            let shown = if colour {
+                value.to_string()
+            } else {
+                quote(value)
+            };
+            format!("{name} {shown}\n")
         }
     };
     // The server table listed whole (tmux's bare `show -s`) is the
@@ -2146,7 +2277,14 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 /// run `source-file` (its includes are `config::load_one`'s, which refuse
 /// a cycle), so only a tmux file nests this way.
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
-    let path = ctx.cwd.join(&c.path);
+    // `-F`: the path is a format, expanded for the requester's pane.
+    let given = if c.format {
+        let pane = state.model.resolve_pane(&Target::Current, ctx).ok();
+        super::bindings::expand(state, ctx, pane, &c.path)
+    } else {
+        c.path.clone()
+    };
+    let path = ctx.cwd.join(&given);
     if !path.exists() {
         if c.quiet {
             return Ok(String::new());
@@ -2160,7 +2298,9 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         if depth >= MAX_SOURCE_DEPTH {
             return Err("too many nested files".to_string());
         }
-        return with_source_depth(depth + 1, || source_tmux_file(state, ctx, &path));
+        return with_source_depth(depth + 1, || {
+            source_tmux_file(state, ctx, &path, c.parse_only)
+        });
     }
     let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
@@ -2214,31 +2354,99 @@ pub(crate) fn with_source_depth<T>(depth: u32, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Reads a config file for [`source_tmux_file`]: `%if` conditions are
+/// formats expanded against the requester's pane, and `NAME=value` sets the
+/// global environment (not for `source-file -n`).
+struct FileHost<'a> {
+    state: &'a mut State,
+    ctx: &'a ClientCtx,
+    parse_only: bool,
+}
+
+impl crate::cmd::ConfigHost for FileHost<'_> {
+    fn condition(&mut self, format: &str) -> bool {
+        let pane = self
+            .state
+            .model
+            .resolve_pane(&Target::Current, self.ctx)
+            .ok();
+        let text = super::bindings::expand(self.state, self.ctx, pane, format);
+        !text.is_empty() && text != "0"
+    }
+
+    fn assign(&mut self, assignment: &str, hidden: bool) {
+        let Some((name, value)) = assignment.split_once('=') else {
+            return;
+        };
+        if !self.parse_only {
+            crate::server::hooks::set_global(self.state, name, Some(value.to_string()), hidden);
+        }
+    }
+}
+
 /// A tmux config file, read as tmux 3.7b's `source-file` reads one
-/// (recorded): split into lines ([`cmd::split_config_file`]) and every
-/// command parsed through the tmux front end before any runs, so an error
-/// anywhere (a syntax error, an unknown command or flag) runs nothing and
-/// is `<path>:<line>: <error>`. Then each line's commands run as one
-/// group: an error stops the rest of its line, the next line still runs,
-/// and the request fails at the end with every error, after what the
-/// commands printed. A command that holds the request (`run-shell`
-/// without `-b`, `wait-for`) holds the lines after it too, as tmux's queue
-/// waits; those lines still run on after an error, and the errors from
-/// before the hold and after it fail the request at the end.
-fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<String, String> {
+/// (recorded): split into lines ([`cmd::split_config_file_with`], which
+/// also settles `%if` and `NAME=value`) and every command parsed through
+/// the tmux front end before any runs. What tmux refuses while parsing (a
+/// syntax error, an unknown command, a flag its usage lacks) runs nothing
+/// and is `<path>:<line>: <error>`. A command that is valid tmux but that
+/// grofe cannot translate fails only itself, with the same text: it stops
+/// the rest of its line, the lines around it run, and it is noted in
+/// `compat-miss.log`. Then each line's commands run as one group: an error
+/// stops the rest of its line, the next line still runs, and the request
+/// fails at the end with every error, after what the commands printed. A
+/// command that holds the request (`run-shell` without `-b`, `wait-for`)
+/// holds the lines after it too, as tmux's queue waits; those lines still
+/// run on after an error, and the errors from before the hold and after it
+/// fail the request at the end. With `parse_only` (`-n`) nothing runs.
+fn source_tmux_file(
+    state: &mut State,
+    ctx: &ClientCtx,
+    path: &Path,
+    parse_only: bool,
+) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
+    // tmux collects what it refuses while parsing and prints it on stdout
+    // when the file is done (`cfg_print_causes`), and the request fails.
+    let refused = |state: &mut State, message: String| {
+        state.failed_out = format!("{message}\n");
+        Err(String::new())
+    };
     let ctx = ClientCtx {
         dialect: Dialect::Tmux,
         ..ctx.clone()
     };
+    let split = {
+        let mut host = FileHost {
+            state: &mut *state,
+            ctx: &ctx,
+            parse_only,
+        };
+        crate::cmd::split_config_file_with(&text, &mut host)
+    };
     let mut groups = Vec::new();
-    for (line, cmds) in crate::cmd::split_config_file(&text).map_err(|(l, e)| at(l, &e))? {
+    let split = match split {
+        Ok(split) => split,
+        Err((line, e)) => return refused(state, at(line, &e)),
+    };
+    for (line, cmds) in split {
         let mut group = Vec::new();
         for argv in cmds {
-            group.extend(super::parse_split(state, &ctx, &argv).map_err(|e| at(line, &e))?);
+            match super::parse_split_checked(state, &ctx, &argv) {
+                Ok(parsed) => group.extend(parsed),
+                Err((true, e)) => return refused(state, at(line, &e)),
+                Err((false, e)) => {
+                    // Fails when its turn comes; the line stops there.
+                    group.push(Command::Refused(at(line, &e)));
+                    break;
+                }
+            }
         }
         groups.push(group);
+    }
+    if parse_only {
+        return Ok(String::new());
     }
     let mut out = String::new();
     let mut errors = Vec::new();
@@ -2268,7 +2476,18 @@ fn source_tmux_file(state: &mut State, ctx: &ClientCtx, path: &Path) -> Result<S
         return Ok(out);
     }
     state.failed_out = out;
-    Err(errors.join("\n"))
+    Err(join_nonempty(&errors))
+}
+
+/// `errors` one to a line, leaving out those whose text already went to
+/// stdout (a nested file's parse errors).
+pub(crate) fn join_nonempty(errors: &[String]) -> String {
+    let shown: Vec<&str> = errors
+        .iter()
+        .map(String::as_str)
+        .filter(|e| !e.is_empty())
+        .collect();
+    shown.join("\n")
 }
 
 /// A `name` is unique across the live tables too (R6): `load_one` checks
@@ -2716,7 +2935,7 @@ impl FormatVars for FormatCtx<'_> {
             // `session_group` is empty with no groups. `client_tty` is a
             // client's (`ClientVars`), empty with none.
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
-            | "client_tty" => return Some(String::new()),
+            | "client_tty" | "client_pid" => return Some(String::new()),
             "pane_in_mode" => return Some("0".to_string()),
             _ => {}
         }
@@ -3030,13 +3249,19 @@ const LISTS: &[ListBuiltin] = &[
             "rxvt*:ignorefkeys",
         ],
     },
+    // B1a: tmux 3.7b's (recorded); no effect, as `terminal-features`.
+    ListBuiltin {
+        name: "terminal-overrides",
+        scope: OptionScope::Global,
+        default: &["linux*:AX@"],
+    },
 ];
 
 /// The separator tmux 3.7b splits a list option's value on when it is set
 /// or appended without an index (recorded); `status-format` has none.
 fn list_separator(name: &str) -> Option<char> {
     match name {
-        "terminal-features" | "command-alias" => Some(','),
+        "terminal-features" | "terminal-overrides" | "command-alias" => Some(','),
         "update-environment" => Some(' '),
         _ => None,
     }
@@ -3047,6 +3272,19 @@ fn pieces(value: &str, sep: char) -> impl Iterator<Item = String> + '_ {
         .split(sep)
         .filter(|p| !p.is_empty())
         .map(str::to_string)
+}
+
+/// `op` as the edits tmux makes: a list with a separator takes a value set
+/// or appended without an index as one element per piece, empty pieces
+/// skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
+pub(crate) fn by_separator(op: ListOp, base: &str) -> Vec<ListOp> {
+    match (op, list_separator(base)) {
+        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
+        (ListOp::Replace(value), Some(sep)) => {
+            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
+        }
+        (op, _) => vec![op],
+    }
 }
 
 fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
@@ -3072,8 +3310,11 @@ const NO_EFFECT: &[&str] = &[
     "status-keys",
     "synchronize-panes",
     "terminal-features",
+    "terminal-overrides",
     "window-active-style",
+    "window-status-activity-style",
     "window-style",
+    "focus-follows-mouse",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.
@@ -3306,13 +3547,7 @@ fn set_list(
     // As tmux 3.7b (recorded, FE.1): a list with a separator takes a value
     // set or appended without an index as one element per piece, empty
     // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
-    let ops = match (op, list_separator(base)) {
-        (ListOp::Push(value), Some(sep)) => pieces(&value, sep).map(ListOp::Push).collect(),
-        (ListOp::Replace(value), Some(sep)) => {
-            vec![ListOp::Items((0..).zip(pieces(&value, sep)).collect())]
-        }
-        (op, _) => vec![op],
-    };
+    let ops = by_separator(op, base);
     let element = index.map(|i| format!("{base}[{i}]"));
     let before = element.as_ref().and_then(|full| {
         let old = model.options.list(owner, base)?.items.get(&index?)?;

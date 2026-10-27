@@ -2146,7 +2146,7 @@ impl InputHook for CopyHook {
         match input {
             Input::Key(key) => {
                 let settings = clients::key_settings(&state.model, c.session);
-                if settings.prefix.is_some_and(|p| p.matches(key)) {
+                if settings.is_prefix(key) {
                     return None;
                 }
                 let tables = &state.registry.key_tables;
