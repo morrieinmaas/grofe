@@ -211,3 +211,56 @@ the brief before coding:
   passes `--use-window-size`.
 - Leave risks 6 and 7 to T3.6/M3.6 and TC.12, and log in the dogfood week
   which tools draw images inside grofe in Ghostty and WezTerm (**[owner]**).
+
+## G3: direct placements, animation and sixel
+
+Added after the survey above, behind the `graphics` option (off by default,
+`graphics = true` in `config.toml` or `set -g graphics on`); the design is in
+`graphics-placement.md`. What it changes for the tools surveyed:
+
+- `kitten icat` without `--unicode-placeholder`, chafa and timg in their
+  kitty modes (the survey found them sending direct placements `a=T`
+  without `U=1`) now show their images, clipped to the pane, moving with the
+  text and hidden under popups, in a terminal with kitty graphics.
+- Their escapes still need the multiplexer to look like a terminal that can
+  draw: `kitten icat` needs cell pixels (grofe passes the size owner's cell
+  size to the pty), and chafa decides from `$TMUX` and `TERM` whether to use
+  placeholders instead (risk 6 above is unchanged).
+- snacks.nvim and superfile stay in placeholder mode; they do not use the
+  new code.
+- Sixel producers (`img2sixel`, `chafa -f sixel`, `lsix`, `mpv --vo=sixel`)
+  are shown in a client whose terminal lists sixel in its DA1 reply (xterm
+  with `-ti vt340`, foot, WezTerm, mlterm, Windows Terminal; not kitty or
+  Ghostty). Any other client sees tmux's `SIXEL IMAGE (WxH)` stand-in.
+
+### What each terminal shows
+
+| Terminal | Placeholders (`U=1`) | Direct placement | Animation | Sixel |
+|---|---|---|---|---|
+| kitty | yes (its own protocol) | yes | yes | no |
+| Ghostty | yes | yes | in development | no |
+| WezTerm | no | yes | partly (frames) | yes (its DA1 lists 4) |
+
+Sources: the protocol text,
+[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+(`docs/graphics-protocol.rst` in the repository); Ghostty's
+`src/terminal/kitty/graphics_exec.zig` and `graphics_animation.zig` on
+`main` (animation is on `main`, its release notes are the place to check
+which build has it); WezTerm's `term/src/terminalstate/kitty.rs` (it
+handles `TransmitFrame` and `ComposeFrame`, and has no virtual-placement
+handling, consistent with snacks.nvim's table marking WezTerm as no
+placeholders) and its feature list
+([wezterm.org/features](https://wezterm.org/features.html): kitty graphics,
+and sixel "experimental" since 20200620). Not tested on a live terminal by
+this task; the owner's Ghostty and WezTerm are the check.
+
+### Where grofe differs from kitty and tmux
+
+- A popup, menu or floating pane over any cell of an image hides it whole
+  (kitty cannot clip a placement to a non-rectangle; tmux draws sixel over
+  popups).
+- Per pane, not per server: 19 sixel images (tmux keeps 19 for the whole
+  server).
+- Not done: copy mode shows no images; images in a scroll region that does
+  not start at the top do not move; image numbers (`I=`); a sub-cell `X`/`Y`
+  offset is dropped when the placement is cropped at the top or left.

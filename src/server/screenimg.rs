@@ -352,6 +352,8 @@ fn sixel_put(out: &mut Vec<u8>, s: &SixelShown) {
     let Some(data) = cut.print(Some(&s.image)) else {
         return;
     };
+    // Unset pixels take the pen's background: draw with the terminal's own.
+    out.extend_from_slice(b"\x1b[0m");
     cup(out, s.x, s.y);
     out.extend_from_slice(&data);
 }
@@ -572,7 +574,7 @@ mod tests {
         let mut out = Vec::new();
         emit(&mut out, &next, &[], false, |_, _| false);
         let s = text(&out);
-        assert!(s.starts_with("\x1b[3;4H\x1bP0;0q"), "{s:?}");
+        assert!(s.starts_with("\x1b[0m\x1b[3;4H\x1bP0;0q"), "{s:?}");
         // Unchanged and untouched: nothing.
         let mut out = Vec::new();
         emit(&mut out, &next, std::slice::from_ref(&shown), false, |_, _| false);

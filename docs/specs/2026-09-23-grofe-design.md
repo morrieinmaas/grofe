@@ -508,9 +508,10 @@ window title, bell (also sets the window activity flag, which agents rely on),
 OSC 8 hyperlinks (re-emitted from cell hyperlink attributes), and OSC 9 / OSC 777
 notifications. `vte` 0.15 does not parse OSC 9 or OSC 777, so those come from
 the same grofe OSC byte scanner that reads OSC 7 (§4.8), run over pane output
-before the parser sees it. Unsupported in v1: sixel, kitty graphics direct
-placement, arbitrary DCS passthrough (a nested tmux works as a normal terminal
-app, without passthrough). The one exception is the `DCS tmux;` wrapper that
+before the parser sees it. Unsupported: arbitrary DCS passthrough (a nested
+tmux works as a normal terminal app, without passthrough). Kitty graphics
+direct placement, animation and sixel are opt-in (the `graphics` option, G3,
+below). The one exception is the `DCS tmux;` wrapper that
 apps send once `$TMUX` is set (D12): it is unwrapped and its content handled
 exactly as if sent bare (§4.5) [M3.6]. A wrapper is let out only when its
 content is nothing but complete sequences the bare path acts on (OSC 0, 2,
@@ -546,9 +547,38 @@ colour (and the placement id in the underline colour).
 - **Late attach.** The server keeps the last transmitted data per image id,
   under a memory cap (oldest evicted first), and re-sends it to a client that
   attaches later or needs a full redraw.
-- **Out of scope in v1:** direct placement (any placement without `U=1`) and
-  sixel. Both draw at screen positions and need
-  per-pane image tracking and clipping.
+
+**Direct placements, animation and sixel (G3, opt-in).** With the `graphics`
+option on (grofe's own, off by default; TOML `graphics = true`) the placements
+that draw at screen positions are tracked per pane and drawn per client.
+`docs/graphics-placement.md` is the design; in short:
+
+- **Store.** Each pane keeps its placements in the emulator, anchored to
+  absolute rows (the viewport's first row has an id that scrolling advances),
+  so a placement follows its text up and into the scrollback and is freed
+  when it is further up than the history. The parser's handler tells the
+  store about every scroll, erase and write; resize, the alternate screen
+  (an empty layer of its own) and `RIS` have rules of their own.
+- **Kitty.** `a=T`/`a=p` without `U=1` are placed at the cursor (size from
+  `c`,`r`, or the image's pixels over the pane's cell size) and move the
+  cursor as the protocol says, unless `C=1`; relative placements (`P`,`Q`,
+  `H`,`V`) follow their parent; `z` is kept; every `d=` key of `a=d`, in both
+  cases, is applied (an upper-case one also frees an image no placement uses
+  any more). The transmit goes to clients as a plain `a=t`; frames and
+  animation control (`a=f`, `a=a`, `a=c`) are forwarded with the remapped id
+  and replayed after it to a later client. Each frame the renderer gives a
+  client the placements clipped to their pane and to its screen, as `a=p`
+  with a source rectangle; one a popup, menu, prompt, chooser or floating pane
+  covers is deleted whole; a full redraw deletes and puts them all again.
+- **Sixel.** `DCS q` is parsed as tmux 3.7b does (a port of its
+  `image-sixel.c`), stored at the cursor, which goes to column 0 of the row
+  below, scrolling the screen if the image does not fit; freed by the writes
+  tmux frees it by; sent to a client with the `sixel` capability (DA1
+  attribute 4, or a matching `terminal-features` entry) re-encoded for its
+  cell size and cut to what is visible. A client without it gets tmux's text
+  stand-in, as tmux does without cell pixels. The goldens under
+  `tests/fixtures/compat/golden/g3/` come from a tmux built with sixel.
+- **Off,** nothing above runs and clients get what T3.8 sent.
 
 ### 4.10 Status line
 
@@ -954,7 +984,7 @@ plugins rather than grofe.
 | `reboot-check` | core (M4) gives each pane's verdict from the snapshot on disk; an expectation set with `pane-set-resume --expect` adds the reason ("no session id reported"); `canopy reboot-check` on grofe prints `grofe reboot-check` and exits with its status |
 | `adopt` | *[dropped]* `grofe agents adopt` (M7), which `canopy adopt` calls on grofe. No respawn: adopt only calls `pane-set-resume` on the live pane, so the unsent-input guard is unnecessary for adopt itself. Keeps dry-run by default and idempotence, never invents an id, and treats a pane already carrying its resume as adopted |
 | rollups, attention, render path | *[dropped]* agents plugin options, rendered by canopy's `40-agents` fragment with formats only, no `#()` (canopy §6.3) |
-| inline images (`allow-passthrough on`) | an agent's kitty graphics in placeholder mode pass through natively (§4.9), with no passthrough option; direct placement and sixel do not pass, and those programs fall back to whatever they draw without graphics |
+| inline images (`allow-passthrough on`) | an agent's kitty graphics in placeholder mode pass through natively (§4.9), with no passthrough option; direct placement, animation and sixel pass with `graphics on` (G3), and without it those programs fall back to whatever they draw without graphics |
 | palette, which-key, key search | `display-popup -E` + fzf and `display-menu` (M3.6), backed by `list-keys` descriptions |
 | login autostart | canopy ships the launchd/systemd unit running `tmux start-server --restore` through the `tmux` symlink, so the server starts with tmux identity (D12); the unit gives panes a real `PATH`, or relies on `argv[0]` resolution (§6); `reboot-check` finds the unit (§6) |
 
@@ -1101,7 +1131,7 @@ claims daily-driver status is done.
 | Hooks and status sources reintroduce the forks D8 removed | Sources are interval-bound with one run in flight and a timeout; hooks and `if-shell` shell forms run off the actor. The M3.6 tests count spawns under forced 60 Hz redraws. |
 | Protocol churn breaking tests | Protocol internal until M6; tests go through one harness module. |
 | Terminal replies stuck behind the actor, making apps hang | §4.8: replies go from the reader straight to the writer queue. |
-| Inline images help only programs that use kitty's placeholder mode | Before building it, a T0-style check records which of the owner's tools emit placeholders (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant). Programs that use direct placement or sixel still show nothing, as in v1's non-goals. |
+| Inline images help only programs that use kitty's placeholder mode | Before building it, a T0-style check records which of the owner's tools emit placeholders (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant). Programs that use direct placement or sixel show nothing unless `graphics` is on (G3). |
 
 ---
 
@@ -1114,7 +1144,8 @@ claims daily-driver status is done.
   owner's inventory (§4.5).
 - WASM plugins.
 - Network session sharing.
-- Sixel, kitty graphics direct placement, arbitrary DCS passthrough. Kitty
-  graphics in Unicode-placeholder mode are supported (§4.9).
+- Arbitrary DCS passthrough. Kitty graphics in Unicode-placeholder mode are
+  supported (§4.9); direct placement, animation and sixel are opt-in (the
+  `graphics` option, G3).
 - Scrollback persistence across restarts.
 - Layout presets beyond `main-vertical` and `even-*` (§4.3), until dogfooding asks.

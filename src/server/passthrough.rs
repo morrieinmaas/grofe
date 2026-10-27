@@ -901,6 +901,75 @@ mod tests {
         pt.titles.insert(PaneId(4), "mine".to_string());
         assert_eq!(pt.title(PaneId(4)), "mine");
     }
+    /// G3: `DCS q` sixel images are framed once the option is on, and left to
+    /// the emulator while it is off.
+    #[test]
+    fn sixel_images_are_framed_only_when_asked() {
+        let image: &[u8] = b"\x1bP0;1;0q#0;2;100;0;0!20~\x1b\\";
+        let mut off = Scanner::default();
+        let (bytes, found) = off.scan(image);
+        assert_eq!((bytes.as_ref(), found.len()), (image, 0));
+
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let input = [b"ab", image, b"cd"].concat();
+        let (bytes, found) = on.scan(&input);
+        assert_eq!(bytes.as_ref(), b"abcd");
+        assert_eq!(
+            found,
+            vec![PaneEventKind::Sixel {
+                p2: 1,
+                body: b"q#0;2;100;0;0!20~".to_vec()
+            }]
+        );
+        // Split anywhere, one byte at a time.
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let mut out = Vec::new();
+        let mut events = Vec::new();
+        for b in [b"x".as_slice(), image, b"y"].concat() {
+            let one = [b];
+            let (bytes, found) = on.scan(&one);
+            out.extend_from_slice(&bytes);
+            events.extend(found);
+        }
+        assert_eq!(out, b"xy");
+        assert_eq!(events.len(), 1);
+        // Other DCS strings and the tmux wrapper still behave.
+        let other: &[u8] = b"\x1bP1$rm\x1b\\\x1bP+q\x1b\\";
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let (bytes, found) = on.scan(other);
+        assert_eq!((bytes.as_ref(), found.len()), (other, 0));
+        let wrapped = b"\x1bPtmux;\x1b\x1b_Ga=q,i=1\x1b\x1b\\\x1b\\";
+        let (_, found) = on.scan(wrapped);
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_sixel_image_past_tmux_s_buffer_is_dropped() {
+        let mut on = Scanner::default();
+        on.set_sixel(true);
+        let mut image = b"\x1bPq".to_vec();
+        image.resize(image.len() + MAX_SIXEL + 10, b'~');
+        image.extend_from_slice(b"\x1b\\ok");
+        let (bytes, found) = on.scan(&image);
+        assert_eq!((bytes.as_ref(), found.len()), (&b"ok"[..], 0));
+        // CAN ends it, for the emulator too.
+        let (bytes, found) = on.scan(b"\x1bPq~~\x18ok");
+        assert_eq!((bytes.as_ref(), found.len()), (&b"\x18ok"[..], 0));
+    }
+
+    #[test]
+    fn events_say_how_much_the_emulator_has_seen() {
+        let mut s = Scanner::default();
+        s.set_sixel(true);
+        let (bytes, found) = s.scan_at(b"abc\x1b_Ga=p,i=1\x1b\\de\x1bPq~\x1b\\f");
+        assert_eq!(bytes.as_ref(), b"abcdef");
+        let at: Vec<usize> = found.iter().map(|(at, _)| *at).collect();
+        assert_eq!(at, [3, 5]);
+    }
+
     use proptest::prelude::*;
 
     const APC: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";

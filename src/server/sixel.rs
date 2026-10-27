@@ -565,6 +565,38 @@ mod tests {
         assert_eq!(wide.size_px(), (8, 24));
     }
 
+    /// `sixel-3x2.six` (48 pixels wide, 60 tall, four colours, runs of every
+    /// length) shown by a tmux 3.7b built with `--enable-sixel` on a terminal
+    /// with 16x32 pixel cells and the `sixel` feature: its output is the
+    /// fixture, from the `DCS` to the `ST`. Recorded in the golden container
+    /// (`tmux-sixel`) with a pty client that answers DA1 with attribute 4.
+    /// `sixel-3x2.tmux-scrolled.bin` is what it printed once the image had
+    /// scrolled up until only its second row was left.
+    #[test]
+    fn printing_is_byte_for_byte_what_tmux_sends() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphics");
+        let input = std::fs::read(dir.join("sixel-3x2.six")).expect("input");
+        let want = std::fs::read(dir.join("sixel-3x2.tmux-out.bin")).expect("tmux's output");
+        let body = &input[2..input.len() - 2];
+        let si = Sixel::parse(body, 0, 16, 32).expect("parses");
+        assert_eq!(si.size_in_cells(), (3, 2));
+        // tmux scales the whole image onto the client's cells to print it.
+        let whole = si.scale(16, 32, 0, 0, 3, 2, false).expect("scales");
+        let got = whole.print(Some(&si)).expect("prints");
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(&want)
+        );
+        // Scrolled up by a row: tmux cut it to its second row.
+        let want = std::fs::read(dir.join("sixel-3x2.tmux-scrolled.bin")).expect("tmux's output");
+        let low = si.scale(16, 32, 0, 1, 3, 1, false).expect("scales");
+        let got = low.print(Some(&si)).expect("prints");
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(&want)
+        );
+    }
+
     #[test]
     fn fallback_matches_tmux() {
         assert_eq!(fallback(3, 1), b"SIXEL IMAGE (3x1)\r\n");

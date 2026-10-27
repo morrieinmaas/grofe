@@ -24,6 +24,8 @@ use crate::harness::Harness;
 const WAIT: Duration = Duration::from_secs(10);
 const KITTY: &[(&str, &str)] = &[("GROFE_TEST_CAPS", "kitty_graphics,cell_px=10x20")];
 const SIXEL: &[(&str, &str)] = &[("GROFE_TEST_CAPS", "sixel,cell_px=10x20")];
+/// Cells of 16x32 pixels, what tmux's own sixel fixtures were recorded with.
+const SIXEL_16: &[(&str, &str)] = &[("GROFE_TEST_CAPS", "sixel,cell_px=16x32")];
 const BOTH: &[(&str, &str)] = &[("GROFE_TEST_CAPS", "kitty_graphics,sixel,cell_px=10x20")];
 
 fn shell_quote(s: &str) -> String {
@@ -522,7 +524,7 @@ fn sixel_goes_to_capable_clients_only() {
     assert!(!out.contains("\x1bP0;"), "a sixel string: {out:?}");
     // The capable one: the image, cut and scaled to its cells, at (4, 3).
     let out = capable.output().to_vec();
-    let i = find(&out, b"\x1b[4;3H\x1bP0;0q").expect("a sixel at the image's cell");
+    let i = find(&out, b"\x1b[0m\x1b[4;3H\x1bP0;0q").expect("a sixel at the image's cell");
     assert!(out[i..].windows(2).any(|w| w == b"\x1b\\"));
     assert!(!capable.text().contains("SIXEL IMAGE"));
     // A clear frees it: the stand-in goes.
@@ -539,25 +541,32 @@ fn sixel_goes_to_capable_clients_only() {
 #[test]
 fn sixel_is_freed_by_text_and_by_scrolling() {
     let srv = TestServer::start();
-    let (go, over, scroll) = (srv.home.join("go"), srv.home.join("over"), srv.home.join("scroll"));
+    let flags: Vec<PathBuf> = ["go", "over", "again", "scroll"]
+        .iter()
+        .map(|n| srv.home.join(n))
+        .collect();
     let draw = cat(&srv, "draw.bin", &format!("{}{SIXEL_IMAGE}", at(2, 1)));
-    let draw2 = cat(&srv, "draw2.bin", &format!("{}{SIXEL_IMAGE}", at(2, 1)));
+    // The second time on a cleared row, so that no letter is under the
+    // stand-in text, which is only written into blank cells.
+    let again = cat(&srv, "again.bin", &format!("{}\x1b[K{SIXEL_IMAGE}", at(2, 1)));
     let script = format!(
-        "{}; {draw}; {}; printf '\\033[2;2HX'; {}; {draw2}; seq 1 40; exec sleep 600",
-        wait_flag(&go),
-        wait_flag(&over),
-        wait_flag(&scroll)
+        "{}; {draw}; {}; printf '\\033[2;2HX'; {}; {again}; {}; seq 1 40; exec sleep 600",
+        wait_flag(&flags[0]),
+        wait_flag(&flags[1]),
+        wait_flag(&flags[2]),
+        wait_flag(&flags[3]),
     );
     session(&srv, &script, true);
     let mut a = attach(&srv, KITTY);
-    touch(&go);
+    touch(&flags[0]);
     a.wait_for("SIXEL IMAGE (2x1)");
-    touch(&over);
+    touch(&flags[1]);
     a.wait_until("the stand-in freed by text over it", WAIT, |t| {
         !t.contains("SIXEL IMAGE")
     });
-    touch(&scroll);
+    touch(&flags[2]);
     a.wait_for("SIXEL IMAGE (2x1)");
+    touch(&flags[3]);
     a.wait_until("the stand-in scrolled off", WAIT, |t| {
         !t.contains("SIXEL IMAGE") && t.contains("40")
     });
@@ -638,4 +647,28 @@ fn z_index_and_relative_placements() {
     let (found, _) = wait_puts(&mut a, mark, 2);
     let child = found.iter().find(|p| p.n("z") == 0).expect("the child again");
     assert_eq!((child.row, child.col), (11, 22), "it moved with the parent");
+}
+
+/// Case 11: the bytes a sixel client is sent are the ones tmux 3.7b sent
+/// for the same image on the same cells (`tests/fixtures/graphics/`,
+/// recorded in the golden container's sixel-enabled tmux).
+#[test]
+fn the_sixel_bytes_are_tmux_s() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphics");
+    let image = std::fs::read(dir.join("sixel-3x2.six")).expect("image");
+    let want = std::fs::read(dir.join("sixel-3x2.tmux-out.bin")).expect("tmux's bytes");
+    let srv = TestServer::start();
+    let go = srv.home.join("go");
+    let mut bytes = at(3, 5).into_bytes();
+    bytes.extend_from_slice(&image);
+    std::fs::write(srv.home.join("draw.bin"), &bytes).expect("draw");
+    let draw = format!("cat {}", shell_quote(&srv.home.join("draw.bin").to_string_lossy()));
+    session(&srv, &format!("{}; {draw}; exec sleep 600", wait_flag(&go)), true);
+    let mut a = attach(&srv, SIXEL_16);
+    touch(&go);
+    a.wait_for_output(&want, 0);
+    // Where it went: the image's own cell.
+    let out = a.output().to_vec();
+    let at = find(&out, &want).expect("tmux's bytes");
+    assert!(out[..at].ends_with(b"\x1b[0m\x1b[3;5H"), "{:?}", &out[at.saturating_sub(20)..at]);
 }

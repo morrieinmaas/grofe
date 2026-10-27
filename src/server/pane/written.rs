@@ -362,3 +362,144 @@ impl<L: EventListener> Handler for Written<'_, L> {
         set_scp(path: ScpCharPath, update: ScpUpdateMode);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::term::Config;
+    use alacritty_terminal::term::test::TermSize;
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+    use super::*;
+
+    const COLS: usize = 5;
+    const ROWS: usize = 5;
+
+    /// A parser, emulator and store, `history` lines of scrollback.
+    struct Rig {
+        term: Term<VoidListener>,
+        parser: Processor<StdSyncHandler>,
+        store: Store,
+    }
+
+    impl Rig {
+        fn new(history: usize) -> Rig {
+            let config = Config {
+                scrolling_history: history,
+                ..Config::default()
+            };
+            let mut store = Store::new(COLS as u32, ROWS as u32, history);
+            store.set_cell_px(Some((10, 20)));
+            Rig {
+                term: Term::new(config, &TermSize::new(COLS, ROWS), VoidListener),
+                parser: Processor::new(),
+                store,
+            }
+        }
+
+        fn feed(&mut self, bytes: &str) {
+            self.parser
+                .advance(&mut Written(&mut self.term, Some(&mut self.store)), bytes.as_bytes());
+        }
+
+        /// A 10x20 pixel image placed at the cursor, one cell, no movement.
+        fn place(&mut self) {
+            let point = self.term.grid().cursor.point;
+            let cur = Cursor {
+                line: point.line.0 as u32,
+                col: point.column.0 as u32,
+            };
+            let apc = b"\x1b_Ga=T,i=1,f=24,s=10,v=20,C=1;AAAA\x1b\\";
+            self.store.on_apc(apc, cur);
+        }
+
+        /// The screen row the one placement is on, if it is visible.
+        fn row(&self) -> Option<i32> {
+            self.store.view()?.kitty.first().map(|p| p.row)
+        }
+    }
+
+    /// The first row of the image after `feed`ing something that scrolls.
+    fn scroll_case(history: usize, fill: &str, scroll: &str) -> Option<i32> {
+        let mut rig = Rig::new(history);
+        rig.feed(fill);
+        rig.feed("\x1b[5;1H");
+        rig.place();
+        assert_eq!(rig.row(), Some(4));
+        rig.feed(scroll);
+        rig.row()
+    }
+
+    #[test]
+    fn linefeeds_at_the_foot_move_the_placement_up() {
+        assert_eq!(scroll_case(100, "", "\n\n"), Some(2));
+        assert_eq!(scroll_case(100, "", "\x1bD\x1bE"), Some(2), "IND and NEL");
+    }
+
+    #[test]
+    fn a_full_history_scrolls_all_the_same() {
+        // Ten lines already printed: the three of history are full.
+        let fill = "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9";
+        assert_eq!(scroll_case(3, fill, "\n\n"), Some(2));
+        // No history at all.
+        assert_eq!(scroll_case(0, "", "\n\n\n"), Some(1));
+    }
+
+    #[test]
+    fn a_character_that_wraps_at_the_foot_scrolls_too() {
+        // Six characters in five columns: the sixth wraps below the foot.
+        assert_eq!(scroll_case(100, "", "abcdef"), Some(3));
+        assert_eq!(scroll_case(0, "", "abcdef"), Some(3));
+    }
+
+    #[test]
+    fn su_and_dl_scroll_and_a_region_does_not() {
+        assert_eq!(scroll_case(100, "", "\x1b[2S"), Some(2));
+        assert_eq!(scroll_case(0, "", "\x1b[2S"), Some(2));
+        assert_eq!(scroll_case(100, "", "\x1b[1;1H\x1b[2M"), Some(2), "DL at the top");
+        // A scroll region that is not the whole screen scrolls what is in
+        // it and leaves the viewport be.
+        assert_eq!(scroll_case(100, "", "\x1b[1;4r\x1b[4;1H\n\n"), Some(4));
+    }
+
+    #[test]
+    fn erasing_the_screen_deletes_what_is_on_it() {
+        assert_eq!(scroll_case(100, "", "\x1b[2J"), None);
+        assert_eq!(scroll_case(100, "", "\x1bc"), None, "RIS");
+    }
+
+    #[test]
+    fn the_alternate_screen_has_its_own() {
+        let mut rig = Rig::new(100);
+        rig.feed("\x1b[5;1H");
+        rig.place();
+        rig.feed("\x1b[?1049h");
+        assert_eq!(rig.row(), None);
+        rig.feed("\x1b[?1049l");
+        assert_eq!(rig.row(), Some(4));
+    }
+
+    #[test]
+    fn text_over_a_sixel_image_frees_it() {
+        let sixel = b"q#0;2;100;0;0!20~-!20~";
+        let mut rig = Rig::new(100);
+        let place = |rig: &mut Rig| {
+            let inject = rig.store.on_sixel(sixel, 0, Cursor { line: 1, col: 1 });
+            rig.feed(std::str::from_utf8(&inject).expect("ascii"));
+        };
+        place(&mut rig);
+        assert!(rig.store.has_sixel());
+        rig.feed("\x1b[1;1Hx");
+        assert!(rig.store.has_sixel(), "beside it");
+        rig.feed("\x1b[2;3Hy");
+        assert!(!rig.store.has_sixel(), "a character in it");
+        place(&mut rig);
+        rig.feed("\x1b[2;1H\x1b[K");
+        assert!(!rig.store.has_sixel(), "its row cleared");
+        place(&mut rig);
+        rig.feed("\x1b[5;1H\n");
+        assert!(rig.store.has_sixel(), "a scroll by one only moves it up");
+        rig.feed("\n\n\n");
+        assert!(!rig.store.has_sixel() || rig.store.view().is_none());
+    }
+}

@@ -1040,6 +1040,28 @@ mod tests {
         p
     }
 
+    /// G3: DA1 lists sixel as attribute 4 after a class of 61 to 65, as tmux
+    /// reads it.
+    #[test]
+    fn da1_attribute_4_is_sixel() {
+        for (reply, sixel) in [
+            (&b"\x1b[?62;4;22c"[..], true),
+            (b"\x1b[?64;1;2;4;6c", true),
+            (b"\x1b[?65;4c", true),
+            (b"\x1b[?62;22c", false),
+            (b"\x1b[?62;14c", false),
+            (b"\x1b[?1;2c", false),
+            // Class 4 alone, or past the attributes: not a sixel list.
+            (b"\x1b[?4c", false),
+            (b"\x1b[?1;2;4c", false),
+            (b"\x1b[?6c", false),
+        ] {
+            let p = parse(reply);
+            assert!(p.done(), "{reply:?}");
+            assert_eq!(p.caps(None).sixel, sixel, "{}", String::from_utf8_lossy(reply));
+        }
+    }
+
     const ALL: Caps = Caps {
         truecolor: true,
         styled_underline: true,
