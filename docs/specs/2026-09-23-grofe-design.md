@@ -29,7 +29,7 @@ respawn and reboot, and a plugin surface built on a real event stream.
    command that resumes it" is a struct field, not a save-command strategy patched
    into a vendored plugin. This is the strongest argument for the project.
 2. **Config semantics.** TOML with a schema, layering, and provenance ("what did
-   this resolve to, and which file said so"). Lua for the escape hatch.
+   this resolve to, and which file said so").
 3. **Plugin semantics.** Events and a scriptable control surface, designed after
    dogfooding, from what actually hurt.
 
@@ -887,8 +887,8 @@ opensessions binds twelve of TC.5's tmux hook names (every one but the three
 alert hooks), and canopy's copy of tmux-claude-session-manager binds
 `alert-bell`; the rest bind none. Neither the dogfood log nor the
 `compat-miss.log` reviews named an event or hook grofe lacks; one that does
-later enters by §7.3's additive rule. The agents part of this section was
-M7's.
+later enters by §7.3's additive rule. The owner approved this rewrite
+(plan T6.0) on 2026-10-27. The agents part of this section was M7's.
 
 **M7 is dropped (owner ruling 2026-10-06).** The three bullets marked
 *[dropped]* below (the agents plugin, resumes from it, the adapter contract)
@@ -1031,7 +1031,8 @@ payloads small and stable under §7.3.
   that removed the pane. Each pane process gets at most one `pane-exited`:
   killing a pane whose process already exited (kept by `remain-on-exit`)
   emits no second one, and `respawn-pane` starts a process that can exit
-  again. Two of TC.5's event names stay hook-only for that reason.
+  again. T6.1 pins this with a test, including a pane that `remain-on-exit`
+  kept and that is then killed. Two of TC.5's event names stay hook-only for that reason.
   `pane-closed` (tmux's `after-kill-pane`) is `pane-exited` with a null
   status on the stream, which is how opensessions treats it anyway.
   `pane-focused` (tmux's `after-select-pane`) is covered on the stream by
@@ -1144,7 +1145,10 @@ restart = "always"
 - **Environment.** The server's global environment (`set-environment -g`,
   hidden variables left out as for any process, §4.2), then `env`, then
   `GROFE` (the socket path) and `GROFE_PLUGIN=<name>`, which `env` cannot
-  override. A plugin is in no pane, so it gets no `GROFE_PANE` or
+  override. On a server with tmux identity (D12) a plugin also gets `TMUX`
+  in tmux's format, `<socket path>,<server pid>,-1` (the session field is
+  `-1`, as tmux gives a process outside any session), so its `tmux` calls
+  reach this server. A plugin is in no pane, so it gets no `GROFE_PANE` or
   `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
   `<state dir>/plugins/<name>.log`, rotated at 1 MiB.
 - **Start and stop.** Enabled plugins start after the config loads (and,
@@ -1187,7 +1191,6 @@ confirms them in practice before anything is built on top.
 | client tty | `crossterm` 0.29 | Raw mode, SIGWINCH, size; Zellij's client uses it | `rustix` termios |
 | diff rendering | own compositor (§4.4) | Pane content is arbitrary styled cells; Zellij does the same (`output/mod.rs`) | `termwiz` 0.23 `Surface` |
 | config | `serde` 1.0, `toml` 1.1; `schemars` 1.2 later | Validation through serde | none |
-| scripting (M6) | `mlua` 0.12 (Lua 5.4, `vendored`, `async`, `serde`) | Active and mature | none |
 | async, sockets, framing | `tokio` 1.53 Unix sockets, `tokio-util` 0.7 codecs | Standard stack | `interprocess` 2.4 (Zellij) |
 | tests | `insta` 1.48 snapshots; `expectrl` 0.9 for pty-driven acceptance; `bats` for the CLI smoke suite | Snapshot the screen an emulator reconstructs from our output | `rexpect` 0.7 |
 
