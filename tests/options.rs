@@ -268,7 +268,32 @@ fn display_message_prints_pane_variables() {
 
     let default = srv.cmd(&["display-message", "-p", "-t", "d"]).unwrap();
     assert!(default.starts_with("[d] 1:"), "{default}");
-    assert!(default.trim_end().ends_with("current pane 1"), "{default}");
+    // tmux's default text ends in the clock: ` - (%H:%M %d-%b-%y)`.
+    let (head, clock) = default.trim_end().split_once(" - (").expect(&default);
+    assert!(head.ends_with("current pane 1"), "{default}");
+    let b = clock.trim_end_matches(')').as_bytes();
+    assert!(
+        b.len() == 15 && b[2] == b':' && b[5] == b' ' && b[8] == b'-' && b[12] == b'-',
+        "{default}"
+    );
+}
+
+/// `display-message` expands its text with `format_expand_time`: strftime
+/// first, so `%H:%M` is the clock and `%%` a literal `%`.
+#[test]
+fn display_message_runs_strftime() {
+    let srv = TestServer::start();
+    new_session(&srv, "d");
+    let out = display(&srv, "d", "%H:%M");
+    let b = out.trim_end().as_bytes();
+    assert!(b.len() == 5 && b[2] == b':', "{out:?}");
+    assert!(
+        b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 2 || c.is_ascii_digit()),
+        "{out:?}"
+    );
+    assert_eq!(display(&srv, "d", "100%%").trim_end(), "100%");
 }
 
 /// tmux silently falls back to the current pane when `-t` names nothing;

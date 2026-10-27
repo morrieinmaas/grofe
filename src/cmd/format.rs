@@ -159,6 +159,20 @@ pub fn expand(fmt: &str, vars: &dyn FormatVars) -> String {
     .expand(fmt)
 }
 
+/// tmux's `format_expand_time`: `fmt` through strftime at the current local
+/// time, then expanded. `display-message` and `set-titles-string` use it;
+/// `list-*` formats and names do not. A format too long for strftime's
+/// 8 KiB buffer gives nothing.
+pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
+    if !fmt.contains('%') {
+        return expand(fmt, vars);
+    }
+    match modify::strftime_now(fmt, 8192) {
+        Some(timed) => expand(&timed, vars),
+        None => String::new(),
+    }
+}
+
 /// The state every level of one [`expand`] call shares.
 #[derive(Default)]
 struct Shared {

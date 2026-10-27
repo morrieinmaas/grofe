@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, Inner, ListKeys, ListPanes, ListSessions,
     ListWindows, LoopItem, LoopKind, LoopSort, NameKind, OptionScope, Reload, Resolve, SetOption,
-    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, split_command_string,
+    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time, split_command_string,
 };
 use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
@@ -2530,10 +2530,9 @@ fn check_live_names(tables: &KeyTables, resolved: &Resolved) -> Result<(), Strin
     }
 }
 
-/// tmux's default `display-message` text, minus the clock (strftime is
-/// M2).
+/// tmux's default `display-message` text.
 const DEFAULT_MESSAGE: &str =
-    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index}";
+    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (%H:%M %d-%b-%y)";
 
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
@@ -2579,9 +2578,9 @@ fn display_message(
     let out = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            expand(text, &ServerVars::fresh(state, pane, &client))
+            expand_time(text, &ServerVars::fresh(state, pane, &client))
         }
-        None => expand(text, &ServerVars::fresh(state, pane, &vars)),
+        None => expand_time(text, &ServerVars::fresh(state, pane, &vars)),
     };
     if c.print {
         return Ok(format!("{out}\n"));
