@@ -754,3 +754,22 @@ fn run_shell_jobs_get_tmux_s_variables() {
     assert_eq!(out.stdout, "yes\n", "{}", out.stderr);
     let _ = tmux(&srv, &["kill-server"]);
 }
+
+/// `list-plugins` and `plugin-restart` are grofe's own verbs (spec §7.4):
+/// under the `tmux` name they are unknown commands, as in tmux 3.7b, even
+/// on a server that has them, and a grofe-name call still runs them.
+#[test]
+fn plugin_verbs_are_unknown_commands_under_the_tmux_name() {
+    let srv = start_as_tmux();
+    for args in [&["list-plugins"][..], &["plugin-restart", "p"]] {
+        let out = tmux(&srv, args);
+        assert!(!out.status.success(), "{args:?}: {out:?}");
+        assert_eq!(
+            out.stderr,
+            format!("unknown command: {}\n", args[0]),
+            "{args:?}"
+        );
+    }
+    assert_eq!(grofe(&srv, &["list-plugins"]), Ok(String::new()));
+    let _ = tmux(&srv, &["kill-server"]);
+}
