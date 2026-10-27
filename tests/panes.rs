@@ -578,6 +578,12 @@ fn pane_current_path_follows_a_cd_in_the_pane() {
 
 /// G2: a window is renamed after its pane starts a new command, with no
 /// periodic timer behind it (the pane's output arms the name check).
+///
+/// The command runs in the foreground of the pane's interactive `sh`,
+/// which gives it the terminal's process group: the group tmux names the
+/// window after. An `exec` is not used, since a one-word command runs as
+/// `/bin/sh -c sh` and dash (Debian's `/bin/sh`) keeps that wrapper as the
+/// group leader, so tmux 3.7b itself keeps the name `sh` there.
 #[test]
 fn automatic_rename_follows_a_new_command_in_the_pane() {
     let srv = TestServer::start();
@@ -589,7 +595,7 @@ fn automatic_rename_follows_a_new_command_in_the_pane() {
         "#{pane_current_command}",
     ])
     .unwrap();
-    srv.cmd(&["send-keys", "-t", "ar", "exec sleep 30", "Enter"])
+    srv.cmd(&["send-keys", "-t", "ar", "sleep 30", "Enter"])
         .unwrap();
     let name = || display(&srv, "ar", "#{window_name}");
     srv.wait_for(|| name().ends_with("sleep"), WAIT)
