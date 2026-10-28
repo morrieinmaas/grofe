@@ -15,6 +15,7 @@ mod f1;
 mod float_mouse;
 mod g3_graphics;
 mod harness;
+mod layouts;
 mod m2_gate;
 mod m2_robust;
 mod plugin_rig;

@@ -284,6 +284,9 @@ fn neovim_alt_screen_true_colour_and_cursor_shape() {
     });
     a.send(":q\r");
     a.wait_for("after-nvim");
+    // The primary screen can land over more than one frame; a stale nvim
+    // row that never goes still times out here.
+    a.wait_until("nvim gone", Duration::from_secs(10), |t| !t.contains('~'));
     let text = a.text();
     assert!(text.contains("before-nvim"), "primary screen:\n{text}");
     assert!(!text.contains('~'), "nvim left on screen:\n{text}");
