@@ -1225,6 +1225,7 @@ fn draw_on(expanded: &str, base: Style, row: Vec<Cell>, keep_cut: bool) -> Statu
         Align::AbsoluteCentre => cv.draw_absolute_centre(available, focus),
     }
     if let Some(under) = under {
+        #[allow(clippy::needless_range_loop)]
         for x in 0..available {
             let w = cv.row[x].width;
             let whole = if w == 2 {
