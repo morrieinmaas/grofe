@@ -389,3 +389,325 @@ impl Model {
         removed
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use crate::server::dispatch;
+    use crate::server::model::Model;
+    use crate::server::{State, test_ctx, test_state};
+
+    /// The invariants every link, window and group keeps between commands.
+    /// With `groups` also that the members of a group list the same
+    /// windows at the same indexes (tmux itself breaks that between a
+    /// renumber of one member and the next change, so a run with
+    /// `renumber-windows` skips it).
+    fn invariants(m: &Model, groups: bool) -> Result<(), String> {
+        for (id, w) in &m.windows {
+            if w.links.is_empty() {
+                return Err(format!("{id} has no link"));
+            }
+            if (w.session, w.index) != w.links[0] {
+                return Err(format!(
+                    "{id}: first link {:?} is not {}:{}",
+                    w.links[0], w.session, w.index
+                ));
+            }
+            let sessions: BTreeSet<_> = w.links.iter().map(|(s, _)| *s).collect();
+            if sessions.len() != w.links.len() {
+                return Err(format!(
+                    "{id} is linked twice into one session: {:?}",
+                    w.links
+                ));
+            }
+            for (s, i) in &w.links {
+                let Some(session) = m.sessions.get(s) else {
+                    return Err(format!("{id} is linked into the gone {s}"));
+                };
+                if !session.windows.contains(id) {
+                    return Err(format!("{id} links {s}:{i} but {s} does not list it"));
+                }
+            }
+            let panes = w.pane_ids();
+            if panes.is_empty()
+                || panes
+                    .iter()
+                    .any(|p| m.panes.get(p).is_none_or(|p| p.window != *id))
+            {
+                return Err(format!("{id}: panes {panes:?} do not belong to it"));
+            }
+        }
+        for p in m.panes.values() {
+            if !m
+                .windows
+                .get(&p.window)
+                .is_some_and(|w| w.pane_ids().contains(&p.id))
+            {
+                return Err(format!("{} is in no window", p.id));
+            }
+        }
+        for (id, s) in &m.sessions {
+            if s.windows.is_empty() {
+                return Err(format!("{id} has no window"));
+            }
+            let mut seen = BTreeSet::new();
+            let mut last = None;
+            for w in &s.windows {
+                if !seen.insert(*w) {
+                    return Err(format!("{id} lists {w} twice"));
+                }
+                let Some(i) = m.index_in(*id, *w) else {
+                    return Err(format!("{id} lists {w} which has no link to it"));
+                };
+                if last.is_some_and(|l| l >= i) {
+                    return Err(format!("{id}: indexes not ascending at {w}"));
+                }
+                last = Some(i);
+            }
+            if !s.windows.contains(&s.active) {
+                return Err(format!("{id}: current window {} is not listed", s.active));
+            }
+            let mut stack = BTreeSet::new();
+            for w in &s.last_windows {
+                if *w == s.active || !s.windows.contains(w) || !stack.insert(*w) {
+                    return Err(format!("{id}: bad last-window stack {:?}", s.last_windows));
+                }
+            }
+        }
+        let mut grouped = BTreeSet::new();
+        for g in &m.groups {
+            if g.members.is_empty() {
+                return Err(format!("group {} is empty", g.name));
+            }
+            for s in &g.members {
+                if !m.sessions.contains_key(s) || !grouped.insert(*s) {
+                    return Err(format!("group {} has {s} gone or in two groups", g.name));
+                }
+            }
+            if groups {
+                let list = |s| {
+                    let session = &m.sessions[&s];
+                    session
+                        .windows
+                        .iter()
+                        .map(|w| (*w, m.index_in(s, *w)))
+                        .collect::<Vec<_>>()
+                };
+                let first = list(g.members[0]);
+                if g.members.iter().any(|s| list(*s) != first) {
+                    return Err(format!("group {}: members list different windows", g.name));
+                }
+            }
+        }
+        if let Some((s, w, p)) = m.marked
+            && m.marked_pane() == Some(p)
+            && !m.has_link(s, w)
+        {
+            return Err("the mark is valid without its link".to_string());
+        }
+        Ok(())
+    }
+
+    /// xorshift: a seed gives the same run every time.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self, below: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % below as u64) as usize
+        }
+
+        fn chance(&mut self, one_in: usize) -> bool {
+            self.next(one_in) == 0
+        }
+    }
+
+    fn windows_of(m: &Model, s: &str) -> Vec<u32> {
+        let Some(id) = m.session_by_name(s) else {
+            return Vec::new();
+        };
+        m.sessions[&id]
+            .windows
+            .iter()
+            .filter_map(|w| m.index_in(id, *w))
+            .collect()
+    }
+
+    /// A target `session:index` that mostly exists.
+    fn target(m: &Model, r: &mut Rng, names: &[String]) -> String {
+        let s = &names[r.next(names.len())];
+        let have = windows_of(m, s);
+        if have.is_empty() || r.chance(6) {
+            format!("{s}:{}", r.next(9))
+        } else {
+            format!("{s}:{}", have[r.next(have.len())])
+        }
+    }
+
+    fn step(state: &mut State, r: &mut Rng, made: &mut usize) -> Vec<String> {
+        let m = &state.model;
+        let mut names: Vec<String> = m.sessions.values().map(|s| s.name.clone()).collect();
+        names.sort();
+        let a = target(m, r, &names);
+        // Mostly another session, or a link would find the window there.
+        let others: Vec<String> = names
+            .iter()
+            .filter(|n| a.split(':').next() != Some(n.as_str()))
+            .cloned()
+            .collect();
+        let b = if others.is_empty() || r.chance(4) {
+            target(m, r, &names)
+        } else {
+            target(m, r, &others)
+        };
+        let session = names[r.next(names.len())].clone();
+        let flag = |r: &mut Rng, f: &str| r.chance(3).then(|| f.to_string());
+        let mut argv: Vec<String> = match r.next(17) {
+            0 => vec![
+                "new-window".into(),
+                "-d".into(),
+                "-t".into(),
+                format!("{session}:"),
+            ],
+            1 => vec!["new-window".into(), "-d".into(), "-t".into(), a],
+            2 => vec![
+                "new-window".into(),
+                "-a".into(),
+                "-d".into(),
+                "-t".into(),
+                a,
+            ],
+            3 | 4 => {
+                let mut v = vec!["link-window".to_string()];
+                v.extend(["-a", "-b", "-d", "-k"].iter().filter_map(|f| flag(r, f)));
+                let dst = if r.chance(2) && !others.is_empty() {
+                    format!("{}:", others[r.next(others.len())])
+                } else {
+                    b
+                };
+                v.extend(["-s".to_string(), a, "-t".to_string(), dst]);
+                v
+            }
+            5 => vec!["unlink-window".into(), "-k".into(), "-t".into(), a],
+            6 => vec!["unlink-window".into(), "-t".into(), a],
+            7 | 8 => {
+                let mut v = vec!["move-window".to_string()];
+                v.extend(["-a", "-b", "-d", "-k"].iter().filter_map(|f| flag(r, f)));
+                let dst = if r.chance(2) && !others.is_empty() {
+                    format!("{}:", others[r.next(others.len())])
+                } else {
+                    b
+                };
+                v.extend(["-s".to_string(), a, "-t".to_string(), dst]);
+                v
+            }
+            9 => {
+                let mut v = vec!["swap-window".to_string()];
+                v.extend(flag(r, "-d"));
+                v.extend(["-s".to_string(), a, "-t".to_string(), b]);
+                v
+            }
+            10 => {
+                let mut v = vec!["kill-window".to_string()];
+                v.extend(flag(r, "-a"));
+                v.extend(["-t".to_string(), a]);
+                v
+            }
+            11 => vec!["split-window".into(), "-d".into(), "-t".into(), a],
+            12 => vec!["kill-pane".into(), "-t".into(), format!("{a}.1")],
+            13 if names.len() < 6 => {
+                *made += 1;
+                if !r.chance(4) {
+                    vec![
+                        "new-session".into(),
+                        "-d".into(),
+                        "-s".into(),
+                        format!("n{made}"),
+                    ]
+                } else {
+                    vec!["new-session".into(), "-d".into(), "-t".into(), session]
+                }
+            }
+            14 if names.len() > 1 => vec!["kill-session".into(), "-t".into(), session],
+            15 => vec!["select-window".into(), "-t".into(), a],
+            _ => vec![
+                ["last-window", "next-window", "previous-window"][r.next(3)].into(),
+                "-t".into(),
+                session,
+            ],
+        };
+        if argv[0] != "kill-pane"
+            && argv[0] != "select-window"
+            && argv[0].starts_with(['n', 's'])
+            && argv[0] != "new-session"
+            && argv[0] != "swap-window"
+            && r.chance(2)
+        {
+            argv.push("sleep 600".into());
+        }
+        argv
+    }
+
+    fn run_sequence(seed: u64, steps: usize, renumber: bool) {
+        let mut state = test_state();
+        let ctx = test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            dispatch::run(state, &ctx, &argv)
+        };
+        run(&mut state, &["new-session", "-d", "-s", "s0", "sleep 600"]).expect("first session");
+        if renumber {
+            run(&mut state, &["set", "-g", "renumber-windows", "on"]).expect("option");
+        }
+        let (mut r, mut made, mut log) = (Rng(seed), 0, Vec::new());
+        for n in 0..steps {
+            if state.model.sessions.is_empty() {
+                run(
+                    &mut state,
+                    &["new-session", "-d", "-s", &format!("r{n}"), "sleep 600"],
+                )
+                .expect("restart");
+            }
+            let argv = step(&mut state, &mut r, &mut made);
+            log.push(argv.join(" "));
+            let _ = dispatch::run(&mut state, &ctx, &argv);
+            if let Err(e) = invariants(&state.model, !renumber) {
+                let tail = log
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n  ");
+                panic!("seed {seed} step {n}: {e}\n  {tail}");
+            }
+        }
+        let names: Vec<String> = state
+            .model
+            .sessions
+            .values()
+            .map(|s| s.name.clone())
+            .collect();
+        for name in names {
+            let _ = run(&mut state, &["kill-session", "-t", &format!("={name}")]);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn random_link_unlink_move_swap_kill_and_group_commands_keep_the_invariants() {
+        for seed in [0x9e37_79b9_7f4a_7c15, 7, 0xdead_beef_cafe] {
+            run_sequence(seed, 300, false);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_same_with_renumber_windows_on() {
+        for seed in [11, 0x1234_5678_9abc_def1] {
+            run_sequence(seed, 300, true);
+        }
+    }
+}

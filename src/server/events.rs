@@ -118,8 +118,7 @@ impl Scope {
             Scope::Pane(p) => at.pane == Some(p),
             Scope::Window(w) => at.window == Some(w),
             Scope::Session(s) => {
-                at.session == Some(s)
-                    || windowed && at.window.is_some_and(|w| model.has_link(s, w))
+                at.session == Some(s) || windowed && at.window.is_some_and(|w| model.has_link(s, w))
             }
         }
     }
