@@ -3388,14 +3388,12 @@ impl FormatVars for FormatCtx<'_> {
             "pane_marked_set" => return Some(flag(m.marked_pane().is_some())),
             "window_marked_flag" | "session_marked" => {
                 let here = m.panes.get(&self.pane)?.window;
-                let there = m
-                    .marked_pane()
-                    .and_then(|p| m.panes.get(&p))
-                    .map(|p| p.window);
-                let same = if name == "session_marked" {
-                    there.is_some_and(|t| m.windows[&t].session == m.windows[&here].session)
-                } else {
-                    there == Some(here)
+                let in_session = self.session_for(m.windows.get(&here)?);
+                // The mark names the session and window link it was made in.
+                let same = match m.marked_pane().and(m.marked) {
+                    Some((session, _, _)) if name == "session_marked" => session == in_session,
+                    Some((session, window, _)) => session == in_session && window == here,
+                    None => false,
                 };
                 return Some(flag(same));
             }
@@ -3754,8 +3752,8 @@ fn window_flags(
 ) -> String {
     let marked = m
         .marked_pane()
-        .and_then(|p| m.panes.get(&p))
-        .is_some_and(|p| p.window == w.id);
+        .and(m.marked)
+        .is_some_and(|(session, window, _)| session == s.id && window == w.id);
     let activity = if w.activity_flag { "##" } else { "" };
     let rest: String = [
         (w.bell_flag, '!'),

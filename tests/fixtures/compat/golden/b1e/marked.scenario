@@ -1,0 +1,18 @@
+# B1e review: a mark holds while the session it was made in still has the window.
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+$ link-window -d -s a:2 -t b:7
+$ select-pane -m -t b:7
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+$ unlink-window -t a:2
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+$ link-window -d -s b:7 -t a:5
+$ select-pane -m -t a:5
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+$ unlink-window -t b:7
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set}'
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'

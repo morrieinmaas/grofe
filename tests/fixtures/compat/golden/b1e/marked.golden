@@ -1,0 +1,52 @@
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t a: -n a2 cat
+? 0
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+? 0
+$ link-window -d -s a:2 -t b:7
+? 0
+$ select-pane -m -t b:7
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+a:1.1 m=0 set=1 f=*
+a:2.1 m=1 set=1 f=
+b:1.1 m=0 set=1 f=*
+b:7.1 m=1 set=1 f=M
+? 0
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+b:7 %1
+? 0
+$ unlink-window -t a:2
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+a:1.1 m=0 set=1 f=*
+b:1.1 m=0 set=1 f=*
+b:7.1 m=1 set=1 f=M
+? 0
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+b:7 %1
+? 0
+$ link-window -d -s b:7 -t a:5
+? 0
+$ select-pane -m -t a:5
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set} f=#{window_flags}'
+a:1.1 m=0 set=1 f=*
+a:5.1 m=1 set=1 f=M
+b:1.1 m=0 set=1 f=*
+b:7.1 m=1 set=1 f=
+? 0
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+a:5 %1
+? 0
+$ unlink-window -t b:7
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} m=#{pane_marked} set=#{pane_marked_set}'
+a:1.1 m=0 set=1
+a:5.1 m=1 set=1
+b:1.1 m=0 set=1
+? 0
+$ display -p -t '~' '#{session_name}:#{window_index} #{pane_id}'
+a:5 %1
+? 0

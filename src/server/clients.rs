@@ -2224,8 +2224,10 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         border_style: window_style(model, w, "pane-border-style"),
         active_border_style: window_style(model, w, "pane-active-border-style"),
         active: w.active,
+        // The border is marked in the session the mark was made in.
         marked: model
             .marked_pane()
+            .filter(|_| model.marked.is_some_and(|(s, ..)| s == c.session))
             .filter(|p| model.panes.get(p).is_some_and(|p| p.window == w.id)),
         status: None,
         cursor,

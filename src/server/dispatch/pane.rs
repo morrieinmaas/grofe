@@ -187,7 +187,9 @@ fn mark_pane(state: &mut State, ctx: &ClientCtx, c: &SelectPane) -> Result<Strin
         return Ok(String::new());
     }
     let floating = w.floating(pane).is_some();
-    model.marked = if c.mark == Mark::Clear || model.marked_pane() == Some(pane) {
+    model.marked = if c.mark == Mark::Clear
+        || model.marked_pane().is_some() && model.marked == Some((session, window, pane))
+    {
         None
     } else {
         Some((session, window, pane))

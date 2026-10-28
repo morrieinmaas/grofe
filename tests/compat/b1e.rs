@@ -52,3 +52,8 @@ fn swap_window_d_keeps_the_current_windows() {
 fn group_members_follow_each_other_through_every_window_change() {
     check("b1e", "groups2", &[]);
 }
+
+#[test]
+fn a_mark_holds_while_the_session_it_was_made_in_has_the_window() {
+    check("b1e", "marked", &[]);
+}
