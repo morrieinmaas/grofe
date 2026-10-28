@@ -448,9 +448,12 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
         hooks::update_environment(state, session, &client_env);
     }
-    // As tmux 3.7b (recorded): an attach is a session change, then a resize.
+    // As tmux 3.7b (recorded): the panes it focuses, a session change, a
+    // resize, then the attach.
+    hooks::track_focus(state);
     hooks::client_session_changed(state, id);
     hooks::client_resized(state, id);
+    hooks::client_attached(state, id);
     Ok(Accepted {
         id,
         output,
@@ -584,6 +587,7 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
         hooks::update_environment(state, session, &client_env);
     }
+    hooks::track_focus(state);
     hooks::client_session_changed(state, id);
 }
 
@@ -1120,6 +1124,8 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     sync_attached(state);
     leave_session(state, id, c.session);
     graphics::on_clients_changed(state);
+    hooks::track_focus(state);
+    hooks::client_detached(state, &c.name, c.session);
 }
 
 /// `id` no longer shows `session`: if it owned the size, the session's
@@ -2818,6 +2824,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
         if state.model.options.lookup("focus-events", &[]) != Some("on") {
             return;
         }
+        hooks::client_focus(state, id, focused);
     }
     let hooks = state.registry.input_hooks.clone();
     let hooked = hooks

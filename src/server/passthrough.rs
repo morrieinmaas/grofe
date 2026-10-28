@@ -686,6 +686,7 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         {
             let limit = crate::server::buffers::limit(state);
             let _ = state.buffers.add(data.clone(), limit);
+            crate::server::hooks::pane_set_clipboard(state, pane);
             let to = clients_showing(state, window);
             send_clipboard(state, to, &osc52(&param, &data));
         }

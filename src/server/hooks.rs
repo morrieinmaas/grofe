@@ -49,6 +49,8 @@ use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::dispatch;
 use crate::server::{Job, State};
+pub use watch::{track, track_focus};
+
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
 
 /// One grofe event a hook can be bound to.
@@ -524,6 +526,8 @@ struct Var {
 
 type Env = BTreeMap<String, Var>;
 
+mod watch;
+
 /// Bound hooks and the server environment (TC.5). Lives on `State.hooks`.
 pub struct Hooks {
     /// The hooks, as tmux keeps them (options): each event at a scope holds
@@ -546,6 +550,9 @@ pub struct Hooks {
     depth: u32,
     /// The running hook's variables.
     current: Option<HookFormats>,
+    /// What the model looked like at the last look, for the notify hooks
+    /// that are found by comparing ([`watch`]).
+    watch: watch::Watch,
     /// See [`take_reply_hold`].
     reply_hold: Option<oneshot::Receiver<String>>,
     global: Arc<RwLock<Env>>,
@@ -597,6 +604,7 @@ impl Default for Hooks {
             running: false,
             depth: 0,
             current: None,
+            watch: watch::Watch::default(),
             reply_hold: None,
             global: Arc::new(RwLock::new(env)),
             session_hidden: BTreeMap::new(),
@@ -776,6 +784,7 @@ pub fn assign(
             from_config: false,
         },
     );
+    watch::start(state);
     Ok(())
 }
 
@@ -1039,19 +1048,23 @@ pub fn client_resized(state: &mut State, id: ClientId) {
 fn client_event(state: &mut State, id: ClientId, name: &'static str) {
     if let Some(c) = state.clients.get(&id) {
         let (client, session) = (c.name.clone(), c.session);
-        let event = if name == "client-resized" {
-            // The size the terminal reported, which applies on the next tick.
-            let (cols, rows) = c.pending_size.unwrap_or(c.size);
-            Event::ClientResized {
-                client,
-                session,
-                cols,
-                rows,
+        let event = match name {
+            "client-resized" => {
+                // The size the terminal reported, which applies on the next tick.
+                let (cols, rows) = c.pending_size.unwrap_or(c.size);
+                Some(Event::ClientResized {
+                    client,
+                    session,
+                    cols,
+                    rows,
+                })
             }
-        } else {
-            Event::ClientSessionChanged { client, session }
+            "client-session-changed" => Some(Event::ClientSessionChanged { client, session }),
+            _ => None,
         };
-        state.events.emit(event);
+        if let Some(event) = event {
+            state.events.emit(event);
+        }
     }
     if !wanted(state, name) {
         return;
@@ -1063,6 +1076,46 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
     f.client = Some(id);
     f.vars.hook_client = Some(client.name.clone());
     notify(state, f);
+}
+
+/// `pane-set-clipboard`: `pane` set the clipboard (OSC 52).
+pub fn pane_set_clipboard(state: &mut State, pane: PaneId) {
+    if !wanted(state, "pane-set-clipboard") {
+        return;
+    }
+    if let Some(f) = watch::pane_fired(state, "pane-set-clipboard", pane) {
+        notify(state, f);
+    }
+}
+
+/// `client-attached`: client `id` attached.
+pub fn client_attached(state: &mut State, id: ClientId) {
+    client_event(state, id, "client-attached");
+}
+
+/// `client-detached`: the attached client `name`, which showed `session`,
+/// is gone. The hook runs in that session.
+pub fn client_detached(state: &mut State, name: &str, session: SessionId) {
+    if !wanted(state, "client-detached") {
+        return;
+    }
+    let mut f = Fired::new("client-detached", session_pane(state, session));
+    f.vars.hook_client = Some(name.to_string());
+    notify(state, f);
+}
+
+/// `client-focus-in` and `client-focus-out`: client `id`'s terminal
+/// reported that it gained or lost focus (while `focus-events` is on). The
+/// panes' focus hooks come before the client's on losing it, after it on
+/// gaining it, as tmux orders them.
+pub fn client_focus(state: &mut State, id: ClientId, focused: bool) {
+    if focused {
+        client_event(state, id, "client-focus-in");
+        track_focus(state);
+    } else {
+        track_focus(state);
+        client_event(state, id, "client-focus-out");
+    }
 }
 
 /// `alert-bell`, `alert-activity` or `alert-silence` in `window`
@@ -1374,6 +1427,14 @@ pub fn run_command(
         streamed(name) || (!state.hooks.running && (wanted(state, name) || sets_hooks(name)))
     });
     let result = route(state, ctx, cmd);
+    // A failed command runs `command-error` instead, in the current
+    // context. What the hook prints is dropped: the error is all the reply
+    // can carry.
+    if result.is_err() && !state.hooks.running && wanted(state, "command-error") {
+        let mut f = Fired::new("command-error", context_pane(state, ctx.pane));
+        f.client = ctx.client;
+        let _ = fire_now(state, ctx, &f);
+    }
     let (Ok(out), Some((name, before))) = (&result, before) else {
         return result;
     };

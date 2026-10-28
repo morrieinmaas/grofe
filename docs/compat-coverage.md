@@ -253,7 +253,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   argument count) refuses the file, runs nothing, and prints
   `<path>:<line>: <error>` on stdout with exit 1, as tmux's
   `cfg_print_causes`. A command that is valid tmux but that grofe cannot do
-  (an `Unsupported` row, a hook or flag it lacks, `set-hook` without `-g`)
+  (an `Unsupported` row, a flag it lacks)
   fails only itself and the rest of its `;` line, with the same text on
   stderr, and is noted in `compat-miss.log`; the other lines run. A nested
   `source-file` is the same. `source-file` takes `-F` (path as a format),
@@ -277,15 +277,43 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   takes the sixteen names, `colourN` and `#rrggbb` (not X11 names). Still
   absent: `key-table`, `exit-unattached`, `destroy-unattached`,
   `display-panes-*`, `message-command-style`.
+- **Hooks (B2a)** are tmux's: an array of commands per scope (`set-hook -g`
+  global, `-t` a session, `-w -t` a window, `-p -t` a pane), `-a` appends,
+  `name[N]` sets one element, `-u` removes (a local hook falls back to the
+  wider scope again, an empty local one hides it), `-R` runs the hook now,
+  and `show-hooks [-gpw] [-t]` lists them as tmux does
+  (`golden/b2a/hook-scopes`, `hook-fire`). All 68 hook names are accepted. A
+  firing hook runs the nearest scope that has commands (a session hook:
+  session, global; `pane-*`: pane, window, global; `window-*`: window,
+  global). Every `after-<verb>` hook of a command grofe has fires with
+  tmux's context (`hook-after`), and `command-error` fires when a command
+  fails (what it prints is dropped; tmux's exit status is the hook's).
+  The notify hooks `session-renamed`, `session-window-changed`,
+  `window-renamed`, `window-pane-changed`, `window-layout-changed`,
+  `window-resized`, `window-linked`, `window-unlinked`, `pane-title-changed`,
+  `pane-focus-in`/`-out` and `pane-set-clipboard` are found by comparing the
+  model with its last look after each message (`server/hooks/watch.rs`;
+  `hook-events`); `client-attached`, `client-detached` and
+  `client-focus-in`/`-out` fire where the client changes. Never fired,
+  accepted so a tmux config loads: `after-lock-server`, `after-queue`,
+  `after-pipe-pane`, `client-active`, `client-light-theme`,
+  `client-dark-theme`, `pane-mode-changed`. Known divergences: a rename to
+  the same name is not seen; `select-layout` fires `window-layout-changed`
+  only when the layout changed (tmux fires it twice every time); a
+  `new-session` that attaches also fires `client-attached` (tmux does so
+  only for `attach-session`); `hook_arguments` and `hook_flag_*` are not set.
+  grofe's own names for the first fifteen (`pane-focused`, ...) still work
+  with `set-hook` in its own dialect.
 - **`#{client_pid}` (B1a)** is the pid of the attached client, from the
   socket's peer credentials (`tests/client_pid.rs`); empty with no client.
 - **Linked windows and session groups (B1e)** follow tmux 3.7b
   (`docs/linked-windows.md`, `golden/b1e`): `link-window -a -b -d -k`,
   `unlink-window -k`, `move-window -a -b -d -k -r`, `new-session -t`, and the
   `window_linked*` and `session_group*` formats. Known divergences: a window
-  can be linked into a session once (tmux allows twice); the
-  `window-linked` and `window-unlinked` hooks do not exist; alert flags and
-  `pane`-level option lookups use the window's first link.
+  can be linked into a session once (tmux allows twice); a
+  `window-linked` hook for a second session runs in the window's first
+  link; alert flags and `pane`-level option lookups use the window's first
+  link.
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
 - **Format modifiers (B1b)** follow tmux 3.7b's `format.c` and are recorded

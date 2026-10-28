@@ -662,6 +662,7 @@ async fn actor(
             _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
         events::track_focus(&mut state);
+        hooks::track(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
         if state.exit {

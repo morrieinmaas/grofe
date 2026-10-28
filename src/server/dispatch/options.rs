@@ -3725,7 +3725,7 @@ const CLIENT_MODE_FORMAT: &str = "#{t/p:client_activity}: session #{session_name
 
 /// tmux's `window_layout`: the layout string of the window's tiled and
 /// floating panes (`layout::tmux_layout`).
-fn window_layout(w: &crate::server::model::Window) -> String {
+pub(crate) fn window_layout(w: &crate::server::model::Window) -> String {
     use crate::server::layout::{FloatingCell, tmux_layout};
     let floating: Vec<FloatingCell> = w
         .floating

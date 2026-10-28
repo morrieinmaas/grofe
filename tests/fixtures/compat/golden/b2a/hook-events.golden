@@ -1,0 +1,187 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ new-window -d -t main -n second cat
+? 0
+$ new-session -d -s other -n o cat
+? 0
+$ set -g focus-events on
+? 0
+$ set-hook -g session-renamed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-renamed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-linked 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-unlinked 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-layout-changed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-pane-changed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g session-window-changed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g pane-title-changed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g pane-focus-in 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g pane-focus-out 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g window-resized 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g client-attached 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g client-detached 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ set-hook -g session-window-changed 'run-shell "echo #{hook} sn=#{hook_session_name} s=#{hook_session} w=#{hook_window} wn=#{hook_window_name} p=#{hook_pane} c=#{hook_client} ctx=#{session_name}:#{window_index}.#{pane_index} >> $HOME/h.log"'
+? 0
+$ run-shell 'echo == rename-session >> $HOME/h.log'
+? 0
+$ rename-session -t other renamed
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == rename-window >> $HOME/h.log'
+? 0
+$ rename-window -t main:2 two
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == select-pane >> $HOME/h.log'
+? 0
+$ select-pane -t main:1.2
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == select-window >> $HOME/h.log'
+? 0
+$ select-window -t main:2
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == split-window >> $HOME/h.log'
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == new-window >> $HOME/h.log'
+? 0
+$ new-window -d -t main -n third cat
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == link-window >> $HOME/h.log'
+? 0
+$ link-window -d -s main:3 -t renamed:9
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == unlink-window >> $HOME/h.log'
+? 0
+$ unlink-window -t renamed:9
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == kill-window >> $HOME/h.log'
+? 0
+$ kill-window -t main:3
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == resize-window >> $HOME/h.log'
+? 0
+$ resize-window -t main:1 -x 70
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == select-pane-title >> $HOME/h.log'
+? 0
+$ select-pane -t main:1.1 -T hello
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == attach >> $HOME/h.log'
+? 0
+client 80x24 attach -t main
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == split-attached >> $HOME/h.log'
+? 0
+$ split-window -d -t main:2 cat
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == select-pane-attached >> $HOME/h.log'
+? 0
+$ select-pane -t main:2.2
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == select-window-attached >> $HOME/h.log'
+? 0
+$ select-window -t main:1
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ set-hook -g command-error 'run-shell "echo #{hook} >> $HOME/h.log"'
+? 0
+$ run-shell 'echo == command-error >> $HOME/h.log'
+? 0
+$ rename-window -t nope x
+! can't find window: nope
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'echo == detach >> $HOME/h.log'
+? 0
+$ detach-client -s main
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'cat $HOME/h.log'
+== rename-session
+session-renamed sn=renamed s= wn= p= c= ctx=renamed:1.1
+== rename-window
+window-renamed sn= s= w=@1 wn=two p= c= ctx=main:2.1
+== select-pane
+window-pane-changed sn= s= w=@0 wn=first p= c= ctx=main:1.2
+== select-window
+session-window-changed sn=main s=sh w= wn= p= c= ctx=main:2.1
+== split-window
+window-layout-changed sn= s= w=@0 wn=first p= c= ctx=main:1.2
+== new-window
+window-linked sn=main s=sh w=@3 wn=third p= c=
+== link-window
+window-linked sn=renamed s= w=@3 wn=third p= c=
+== unlink-window
+window-unlinked sn=renamed s= w=@3 wn=third p= c=
+== kill-window
+window-unlinked sn=main s=sh w=@3 wn=third p= c=
+== resize-window
+window-layout-changed sn= s= w=@0 wn=first p= c= ctx=main:1.2
+window-resized sn= s= w=@0 wn=first p= c= ctx=main:1.2
+== select-pane-title
+pane-title-changed sn= s= w=@0 wn=first p=%0 c= ctx=main:1.1
+== attach
+pane-focus-in sn= s= w=@1 wn=two p=%2 c= ctx=main:2.1
+client-attached sn= s= w= wn= p= c=<TTY> ctx=main:2.1
+window-layout-changed sn= s= w=@1 wn=two p= c= ctx=main:2.1
+window-resized sn= s= w=@1 wn=two p= c= ctx=main:2.1
+== split-attached
+window-layout-changed sn= s= w=@1 wn=two p= c= ctx=main:2.1
+== select-pane-attached
+pane-focus-out sn= s= w=@1 wn=two p=%2 c= ctx=main:2.1
+pane-focus-in sn= s= w=@1 wn=two p=%6 c= ctx=main:2.2
+window-pane-changed sn= s= w=@1 wn=two p= c= ctx=main:2.2
+== select-window-attached
+pane-focus-out sn= s= w=@1 wn=two p=%6 c= ctx=main:2.2
+pane-focus-in sn= s= w=@0 wn=first p=%1 c= ctx=main:1.2
+session-window-changed sn=main s=sh w= wn= p= c= ctx=main:1.2
+== command-error
+command-error
+== detach
+pane-focus-out sn= s= w=@0 wn=first p=%1 c= ctx=main:1.2
+client-detached sn= s= w= wn= p= c=<TTY> ctx=main:1.2
+? 0
