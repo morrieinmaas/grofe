@@ -30,9 +30,6 @@ display-menu -x[S]	oos:Mouse argv forms
 display-menu -y[S]	oos:Mouse argv forms
 select-pane -m	oos:Marked panes
 select-pane -M	oos:Marked panes
-link-window	oos:`link-window`
-unlink-window	oos:`link-window`
-new-session -t	oos:`link-window`
 %if	oos:`%if`
 %endif	oos:`%if`
 
@@ -42,6 +39,9 @@ tmux	area:Invocation
 
 # --- sessions and clients -------------------------------------------------------
 new-session -A	area:Sessions and clients
+new-session -t	area:Sessions and clients
+link-window	area:Windows and panes
+unlink-window	area:Windows and panes
 new-session	cmd:M1
 has-session	area:Sessions and clients
 kill-session	cmd:M1

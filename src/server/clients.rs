@@ -2621,6 +2621,17 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
         owner.activity(id, now);
     }
     touch_session(&mut state.model, session);
+    // The client that was active last sizes the windows its session shares
+    // with another ([`apply_sizes`]).
+    let shared = |m: &Model| {
+        m.sessions
+            .get(&session)
+            .is_some_and(|s| s.windows.iter().any(|w| m.windows[w].links.len() > 1))
+    };
+    if shared(&state.model) {
+        apply_sizes(state);
+        mark_all_dirty(state);
+    }
     for input in inputs {
         deliver(state, id, input, now);
     }

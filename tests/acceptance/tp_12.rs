@@ -397,3 +397,58 @@ fn record_tp12_goldens() {
         &auto_restore(&self::rig(Some(&tmux))),
     );
 }
+
+/// Case 6 (B1e): a grouped session is saved as a line pointing at its
+/// original and restored by resurrect's `new-session -d -s <name> -t
+/// <original>`: back in the same group, with the original's windows.
+#[test]
+fn case_6_a_grouped_session_comes_back_in_its_group() {
+    let rig = rig(None);
+    rig.start("main");
+    build(&rig);
+    rig.t(&["new-session", "-d", "-s", "mirror", "-t", "main"]);
+    let list = |rig: &Rig| {
+        rig.t(&[
+            "list-sessions",
+            "-F",
+            "#{session_name} group=#{session_group} [#{session_group_list}] windows=#{session_windows}",
+        ])
+    };
+    let before = list(&rig);
+    assert!(
+        before.contains("mirror group=main [main,mirror] windows=2"),
+        "{before}"
+    );
+    let mut a = rig.attach("main");
+    a.send(format!("{PREFIX}\x1bs"));
+    rig.wait_lines("saves.log", 1, "M-s");
+    rig.kill_server();
+    a.wait_exit();
+
+    rig.start("scratch");
+    let mut b = rig.attach("scratch");
+    b.send(format!("{PREFIX}\x1br"));
+    rig.wait_lines("restores.log", 1, "M-r");
+    let after = list(&rig);
+    assert!(
+        after.contains("main group=main [main,mirror] windows=2")
+            && after.contains("mirror group=main [main,mirror] windows=2"),
+        "{after}"
+    );
+    // One window list: the windows are the original's, not copies.
+    let ids = rig.t(&[
+        "list-windows",
+        "-a",
+        "-F",
+        "#{session_name}:#{window_index}:#{window_id}",
+    ]);
+    let id_of = |s: &str| {
+        ids.lines()
+            .filter(|l| l.starts_with(s))
+            .map(|l| l.rsplit(':').next().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(id_of("main:"), id_of("mirror:"), "{ids}");
+    rig.kill_server();
+    b.wait_exit();
+}

@@ -279,9 +279,13 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `display-panes-*`, `message-command-style`.
 - **`#{client_pid}` (B1a)** is the pid of the attached client, from the
   socket's peer credentials (`tests/client_pid.rs`); empty with no client.
-- **Session groups and linked windows** are out of scope (spec), and sessionx
-  sends both: `new-session -d -s <name> -t <session>` and `link-window`.
-  M3.7's native sessionx port (TP.4) replaces them (M36-R9).
+- **Linked windows and session groups (B1e)** follow tmux 3.7b
+  (`docs/linked-windows.md`, `golden/b1e`): `link-window -a -b -d -k`,
+  `unlink-window -k`, `move-window -a -b -d -k -r`, `new-session -t`, and the
+  `window_linked*` and `session_group*` formats. Known divergences: a window
+  can be linked into a session once (tmux allows twice); the
+  `window-linked` and `window-unlinked` hooks do not exist; alert flags and
+  `pane`-level option lookups use the window's first link.
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
 - **Format modifiers (B1b)** follow tmux 3.7b's `format.c` and are recorded
@@ -519,7 +523,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `if-shell -F -t` | 1 | 0 | cp1 | area:Bindings | yes |  | container:pane |
 | `if-shell -F -t[=]` | 4 | 4 | cs4 | oos:Mouse argv forms |  |  | container:list-keys |
 | `join-pane` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
-| `join-pane -b -d -f -h -l -s -t` | 1 | 0 | cj1 | area:Windows and panes | yes | `-b`, `-f`, `-l` | container:job |
+| `join-pane -b -d -f -h -l -s -t` | 1 | 0 | cj1 | area:Windows and panes | yes | `-f`, `-l` | container:job |
 | `join-pane -d -s -t` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `kill-pane` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `kill-pane -t` | 8 | 0 | cc1 cj1 sc6 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+5) |
@@ -530,7 +534,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `kill-window -t` | 3 | 0 | cc1 sc2 | cmd:M1 | yes | `-t` | container:cli, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `last-pane` | 1 | 0 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `last-window` | 1 | 1 | sc1 | cmd:M2 | yes |  | plugin:tmux-sensible/sensible.tmux |
-| `link-window -a -s -t` | 1 | 0 | sc1 | oos:`link-window` |  |  | plugin:tmux-fzf/scripts/window.sh |
+| `link-window -a -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
 | `list-buffers` | 2 | 1 | cs1 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-fzf/scripts/clipboard.sh |
 | `list-clients` | 3 | 0 | cj1 cp1 sc1 | cmd:M2 | yes |  | canopy:bin/canopy-reboot-check, canopy:plugins/tmux-continuum/scripts/helpers.sh, container:job (+1) |
 | `list-clients -F` | 4 | 0 | cj1 sc3 | area:Sessions and clients | yes |  | container:job, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:tmux-claude-session-manager/scripts/list.sh |
@@ -553,8 +557,8 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `load-buffer` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
 | `move-pane -s` | 1 | 0 | sc1 | area:Windows and panes | **no** |  | plugin:tmux-fzf/scripts/pane.sh |
 | `move-window -a -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
-| `move-window -r` | 2 | 2 | cs2 | area:Windows and panes | yes | `-r` | container:list-keys |
-| `move-window -r -s -t` | 1 | 0 | cc1 | area:Windows and panes | yes | `-r` | container:cli |
+| `move-window -r` | 2 | 2 | cs2 | area:Windows and panes | yes |  | container:list-keys |
+| `move-window -r -s -t` | 1 | 0 | cc1 | area:Windows and panes | yes |  | container:cli |
 | `move-window -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `move-window -t` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `new-pane` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
@@ -571,7 +575,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `new-session -d -F -P` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -d -F -P -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -d -s` | 3 | 0 | sc3 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, plugin:tmux-fzf/scripts/session.sh, plugin:tmux-sessionx/scripts/sessionx.sh |
-| `new-session -d -s -t` | 1 | 0 | sc1 | oos:`link-window` |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
+| `new-session -d -s -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
 | `new-session -d -s -x -y` | 3 | 0 | cc1 cj1 sc1 | cmd:M1 | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `new-window` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | athome:home/.chezmoitemplates/gh-dash/config.yml, container:list-keys |
 | `new-window -a` | 3 | 3 | cs3 | cmd:M1 | yes | `-a` | container:list-keys |
@@ -728,7 +732,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `unbind-key` | 6 | 0 | sc5 sf1 | cmd:M3 | yes |  | canopy:tmux/conf.d/00-core.conf, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:tmux-sensible/sensible.tmux |
 | `unbind-key -T` | 5 | 0 | sc5 | cmd:M3 | yes | `-T` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
 | `unbind-key -n` | 2 | 0 | sc2 | cmd:M3 | yes | `-n` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
-| `unlink-window -k -t` | 1 | 0 | sc1 | oos:`link-window` |  |  | plugin:tmux-fzf/scripts/window.sh |
+| `unlink-window -k -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
 | `wait-for` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
 | `wait-for -S` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
 
@@ -755,7 +759,7 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `escape-time` | 3 | yes |
 | `extended-keys` | 2 | yes |
 | `extended-keys-format` | 1 | yes |
-| `focus-events` | 3 | no |
+| `focus-events` | 3 | yes |
 | `history-limit` | 3 | yes |
 | `main-pane-width` | 1 | yes |
 | `mode-keys` | 3 | yes |
@@ -887,7 +891,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `modifier b:` | 1 | yes |
 | `modifier m/r:` | 10 | yes |
 | `modifier m:` | 2 | yes |
-| `modifier q:` | 18 | yes |
+| `modifier q:` | 18 | no |
 | `modifier \|\|:` | 6 | yes |
 | `short #F` | 1 | no |
 | `short #I` | 6 | yes |

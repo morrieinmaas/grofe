@@ -89,8 +89,9 @@ ordinary programs in whatever language you like.
 >   the vi keys are there; `mode-keys emacs` has no table.
 > - **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
 >   config with `grofe import-tmux` first.
-> - **Out of scope:** tmux's control mode (`-C` and `-CC`) and session groups
->   (`new-session -t`, `link-window`).
+> - **Out of scope:** tmux's control mode (`-C` and `-CC`). A window linked
+>   twice into one session (`link-window` onto a session that has it) is
+>   refused.
 >
 > Keep real tmux reachable by its full path while you try grofe.
 

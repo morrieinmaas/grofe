@@ -29,12 +29,25 @@ const SLEEP: &str = "sleep 300";
 fn session(srv: &TestServer, name: &str) {
     ok(
         srv,
-        &["new-session", "-d", "-s", name, "-x", "80", "-y", "24", SLEEP],
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-x",
+            "80",
+            "-y",
+            "24",
+            SLEEP,
+        ],
     );
 }
 
 fn window(srv: &TestServer, session: &str) {
-    ok(srv, &["new-window", "-d", "-t", &format!("{session}:"), SLEEP]);
+    ok(
+        srv,
+        &["new-window", "-d", "-t", &format!("{session}:"), SLEEP],
+    );
 }
 
 /// Every window as `session:index @id linked`, `*` on a current one.
@@ -113,11 +126,7 @@ fn a_group_lives_on_with_one_member_and_goes_with_the_last() {
     ok(&srv, &["new-session", "-d", "-s", "c", "-t", "b"]);
     assert_eq!(
         groups(&srv),
-        [
-            "a 1 a [a,b,c]",
-            "b 1 a [a,b,c]",
-            "c 1 a [a,b,c]"
-        ]
+        ["a 1 a [a,b,c]", "b 1 a [a,b,c]", "c 1 a [a,b,c]"]
     );
     ok(&srv, &["kill-session", "-t", "a"]);
     ok(&srv, &["kill-session", "-t", "b"]);
@@ -163,15 +172,46 @@ fn the_window_made_in_one_member_is_current_only_there() {
 fn a_grouped_session_has_the_group_formats_and_no_window_of_its_own() {
     let srv = server();
     session(&srv, "a");
-    let name = ok(&srv, &["new-session", "-d", "-P", "-F", "#{session_name}", "-t", "a"]);
+    let name = ok(
+        &srv,
+        &[
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            "#{session_name}",
+            "-t",
+            "a",
+        ],
+    );
     assert_eq!(name, "a-1");
     assert_eq!(
-        ok(&srv, &["display-message", "-p", "-t", "a-1:", "#{session_windows} #{session_group_size}"]),
+        ok(
+            &srv,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "a-1:",
+                "#{session_windows} #{session_group_size}"
+            ]
+        ),
         "1 2"
     );
     // Window and pane ids burnt by the dropped window, as tmux (recorded).
     assert_eq!(
-        ok(&srv, &["new-window", "-d", "-t", "a:", "-P", "-F", "#{window_id} #{pane_id}"]),
+        ok(
+            &srv,
+            &[
+                "new-window",
+                "-d",
+                "-t",
+                "a:",
+                "-P",
+                "-F",
+                "#{window_id} #{pane_id}"
+            ]
+        ),
         "@2 %2"
     );
     let e = err(&srv, &["new-session", "-d", "-t", "a", "-n", "x"]);

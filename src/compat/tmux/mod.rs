@@ -2166,7 +2166,7 @@ mod tests {
             "",
         );
         let mut rows = vec![two_flags];
-        rows.extend(core_rows());
+        rows.push(unsupported("new-session -t", "a refusal", SEMANTIC));
         let err = translate_with(
             &args(&["new", "-d", "-s", "x", "-t", "y"]),
             &ctx(),

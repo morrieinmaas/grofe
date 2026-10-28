@@ -10,6 +10,7 @@
 //! `env!("CARGO_BIN_EXE_grofe")`).
 
 mod b1c;
+mod b1e;
 mod f1;
 mod g3_graphics;
 mod harness;
