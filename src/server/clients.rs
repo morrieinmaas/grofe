@@ -589,6 +589,7 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     }
     hooks::track_focus(state);
     hooks::client_session_changed(state, id);
+    check_unattached(state);
 }
 
 /// Session activity (tmux's `session_update_activity`): what makes it the
@@ -637,9 +638,8 @@ pub fn display_message(state: &mut State, id: ClientId, text: &str, delay: Optio
     set_message(state, id, text.to_string(), delay);
 }
 
-/// How many messages `show-messages` keeps: tmux's `message-limit`
-/// default.
-// ponytail: fixed until `message-limit` is an option.
+/// How many messages `show-messages` keeps when `message-limit` is unset:
+/// tmux's default.
 const MESSAGE_LIMIT: usize = 1000;
 
 /// Adds a status-line message for client `id` to the server's message
@@ -652,9 +652,15 @@ fn log_message(state: &mut State, id: ClientId, text: &str) {
 }
 
 fn push_message(state: &mut State, line: String) {
+    let limit = state
+        .model
+        .options
+        .lookup("message-limit", &[])
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(MESSAGE_LIMIT);
     let log = &mut state.registry.messages;
     log.push_back((SystemTime::now(), line));
-    while log.len() > MESSAGE_LIMIT {
+    while log.len() > limit {
         log.pop_front();
     }
 }
@@ -1126,6 +1132,42 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     graphics::on_clients_changed(state);
     hooks::track_focus(state);
     hooks::client_detached(state, &c.name, c.session);
+    check_unattached(state);
+}
+
+/// tmux's `server_check_unattached`: a session no client shows goes when
+/// its `destroy-unattached` says so (`on`; `keep-last` keeps the last of a
+/// group and every ungrouped one; `keep-group` keeps the last of a group).
+/// Run where a session loses or gains a client, and when the option is set.
+pub fn check_unattached(state: &mut State) {
+    use crate::server::dispatch::options::Owner;
+    let unattached: Vec<SessionId> = state
+        .model
+        .sessions
+        .values()
+        .filter(|s| s.attached == 0)
+        .map(|s| s.id)
+        .collect();
+    for id in unattached {
+        let mode = state
+            .model
+            .options
+            .lookup("destroy-unattached", &[Owner::Session(id)]);
+        let grouped = state.model.group_of(id).map(|g| g.members.len());
+        let destroy = match mode {
+            Some("on") => true,
+            Some("keep-last") => grouped.is_some_and(|n| n > 1),
+            Some("keep-group") => grouped.is_none_or(|n| n > 1),
+            _ => false,
+        };
+        if destroy {
+            let removed = state.model.remove_session(id);
+            state.events.panes_killed(removed);
+        }
+    }
+    if state.model.closed() {
+        state.exit = true;
+    }
 }
 
 /// `id` no longer shows `session`: if it owned the size, the session's
@@ -2646,6 +2688,16 @@ pub(crate) fn key_settings(model: &Model, session: SessionId) -> KeySettings {
             .lookup("repeat-time", &chain)
             .and_then(|v| v.parse::<u64>().ok())
             .map_or(default.repeat_time, Duration::from_millis),
+        initial_repeat_time: model
+            .options
+            .lookup("initial-repeat-time", &chain)
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default.initial_repeat_time, Duration::from_millis),
+        prefix_timeout: model
+            .options
+            .lookup("prefix-timeout", &[])
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default.prefix_timeout, Duration::from_millis),
     }
 }
 
@@ -3483,6 +3535,18 @@ mod tests {
         assert_eq!(
             messages(&state).next().map(|(_, m)| m.as_str()),
             Some("client-1 message: 0")
+        );
+        // `message-limit` is the cap once it is set.
+        state
+            .model
+            .options
+            .set(Owner::Global, "message-limit", "3", false)
+            .unwrap();
+        display_message(&mut state, id, "last", None);
+        assert_eq!(messages(&state).count(), 3);
+        assert_eq!(
+            messages(&state).next_back().map(|(_, m)| m.as_str()),
+            Some("client-1 message: last")
         );
     }
 

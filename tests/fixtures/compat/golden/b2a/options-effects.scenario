@@ -1,0 +1,29 @@
+# B2a options that do something to panes and layouts: tiled-layout-max-columns
+# narrows the grid, allow-set-title off keeps a pane from naming itself,
+# (the log's message-limit is a unit test).
+$ new-session -d -s w -n one -x 200 -y 60 sh -c 'printf "\033]2;first\007"; exec cat'
+$ split-window -d -t w sh -c 'printf "\033]2;second\007"; exec cat'
+$ run-shell 'sleep 0.5'
+$ list-panes -t w -F '#{pane_index} #{pane_title}'
+$ set -gw allow-set-title off
+$ split-window -d -t w sh -c 'printf "\033]2;third\007"; exec cat'
+$ run-shell 'sleep 0.5'
+$ list-panes -t w -F '#{pane_index} #{pane_title}'
+$ set -gw allow-set-title on
+$ split-window -d -t w cat
+$ split-window -d -t w cat
+$ split-window -d -t w cat
+$ split-window -d -t w cat
+$ split-window -d -t w cat
+$ split-window -d -t w cat
+$ select-layout -t w tiled
+$ display -p -t w '#{window_layout}'
+$ set -gw tiled-layout-max-columns 2
+$ select-layout -t w tiled
+$ display -p -t w '#{window_layout}'
+$ set -gw tiled-layout-max-columns 1
+$ select-layout -t w tiled
+$ display -p -t w '#{window_layout}'
+$ set -gw tiled-layout-max-columns 9
+$ select-layout -t w tiled
+$ display -p -t w '#{window_layout}'

@@ -274,9 +274,31 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   moves the client to the neighbour in name order instead. Stored with no
   effect, like `terminal-features`: `terminal-overrides` (a list),
   `window-status-activity-style` and `focus-follows-mouse`. A colour option
-  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names). Still
-  absent: `key-table`, `exit-unattached`, `destroy-unattached`,
-  `display-panes-*`, `message-command-style`.
+  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names).
+- **The rest of tmux 3.7b's options (B2a).** Every option in tmux's table is
+  now a real option that `set` and `show` take, with tmux's type, scope,
+  default and error words (`golden/b2a/options`): the 33 style options are
+  checked with `style_parse` as tmux checks them (`invalid style: x`, unless
+  the value holds a format), `pane-colours` elements as colours, and
+  `default-client-command` as commands. `codepoint-widths`, `pane-colours`
+  and `user-keys` are arrays. `prompt-cursor-colour` and `cursor-colour`
+  accept `none` (tmux shows it but refuses it). These have an effect:
+  `destroy-unattached` (also on every request's end, as tmux checks as each
+  CLI client goes), `exit-unattached`, `initial-repeat-time`, `prefix-timeout`,
+  `display-panes-time`, `-colour` and `-active-colour`, `message-limit`,
+  `allow-set-title`, `tiled-layout-max-columns`, and `popup-border-lines`
+  and `popup-border-style` (the defaults of `display-popup`'s `-b` and
+  `-S`; `golden/b2a/options-effects`, `options-sessions`, `options-popup`).
+  The others are stored with no effect (`show-config --explain` marks
+  them): `alternate-screen`, `scroll-on-clear`, `cursor-style`,
+  `cursor-colour`, `fill-character`, `key-table`, `lock-*`, `menu-*`,
+  `popup-style`, `copy-mode-*-style` and `-format`, `pane-scrollbars*`,
+  `pane-status-*`, `other-pane-height`/`-width` (the `main-*` layouts size
+  from `main-pane-*` alone), `remain-on-exit-format`, `message-format`,
+  `message-line`, `message-command-style`, `prompt-*-cursor-*`, `editor`,
+  `history-file`, `get-clipboard`, `backspace`, `user-keys`,
+  `codepoint-widths`, `input-buffer-size`, `prompt-history-limit` and
+  `variation-selector-always-wide`.
 - **Hooks (B2a)** are tmux's: an array of commands per scope (`set-hook -g`
   global, `-t` a session, `-w -t` a window, `-p -t` a pane), `-a` appends,
   `name[N]` sets one element, `-u` removes (a local hook falls back to the

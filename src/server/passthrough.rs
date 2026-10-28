@@ -690,6 +690,8 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             let to = clients_showing(state, window);
             send_clipboard(state, to, &osc52(&param, &data));
         }
+        // `allow-set-title off` drops the pane's own title changes.
+        PaneEventKind::Title(_) if title_blocked(state, pane) => {}
         PaneEventKind::Title(title) => {
             state.passthrough.titles.insert(pane, safe_title(&title));
             refresh_session(state, session);
@@ -705,6 +707,12 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         PaneEventKind::Osc(body) => send(state, clients_on(state, session), &osc(&body)),
         _ => {}
     }
+}
+
+/// Whether `allow-set-title` is off for `pane`.
+fn title_blocked(state: &State, pane: PaneId) -> bool {
+    let chain = crate::server::dispatch::options::chain(&state.model, pane);
+    state.model.options.lookup("allow-set-title", &chain) == Some("off")
 }
 
 fn refresh_session(state: &mut State, session: SessionId) {

@@ -335,6 +335,13 @@ pub fn base_style(value: &str, vars: &dyn FormatVars) -> Style {
     }
 }
 
+/// Whether `value` is a style tmux's `style_parse` takes (a style option
+/// is checked when it is set, unless it holds a format).
+pub fn style_valid(value: &str) -> bool {
+    let mut sy = DrawStyle::new(Style::default());
+    parse_directive(&mut sy, &Style::default(), value)
+}
+
 /// strftime over the raw template, then `#{...}` (tmux's
 /// `format_expand_time`).
 pub fn expand_time(fmt: &str, vars: &dyn FormatVars, now: &libc::tm) -> String {

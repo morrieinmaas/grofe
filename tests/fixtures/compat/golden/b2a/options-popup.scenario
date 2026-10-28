@@ -1,0 +1,10 @@
+# popup-border-lines and popup-border-style are the defaults of a popup
+# with no -b or -S.
+$ new-session -d -s main -n first -x 60 -y 14 cat
+$ set -g status off
+$ set -gw popup-border-lines double
+$ set -gw popup-border-style fg=red
+client 60x14 attach -t main
+$& display-popup -c {client} -w 30 -h 6 "echo in-popup; exec cat"
+screen in-popup
+styles 4-7 in-popup

@@ -1,0 +1,23 @@
+# B2a options that end sessions and servers: destroy-unattached ends an
+# unattached session when a client goes (tmux checks as each CLI client
+# disconnects), and exit-unattached ends the server once no client is
+# attached.
+$ new-session -d -s keep -x 80 -y 24 cat
+client 80x24 attach -t keep
+$ new-session -d -s other cat
+$ list-sessions -F '#{session_name}'
+$ set -g destroy-unattached on
+$ list-sessions -F '#{session_name}'
+$ new-session -d -s zz cat
+$ list-sessions -F '#{session_name}'
+$ set -g destroy-unattached off
+$ new-session -d -s zz cat
+$ switch-client -t zz
+$ set -g destroy-unattached keep-last
+$ list-sessions -F '#{session_name}'
+$ set -g destroy-unattached keep-group
+$ list-sessions -F '#{session_name}'
+$ set -g destroy-unattached off
+$ detach-client -s zz
+$ set -s exit-unattached on
+$ list-sessions

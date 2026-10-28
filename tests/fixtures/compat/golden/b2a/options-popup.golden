@@ -1,0 +1,34 @@
+$ new-session -d -s main -n first -x 60 -y 14 cat
+? 0
+$ set -g status off
+? 0
+$ set -gw popup-border-lines double
+? 0
+$ set -gw popup-border-style fg=red
+? 0
+client 60x14 attach -t main
+$& display-popup -c {client} -w 30 -h 6 "echo in-popup; exec cat"
+screen in-popup
+|
+|
+|
+|               ╔════════════════════════════╗
+|               ║in-popup                    ║
+|               ║                            ║
+|               ║                            ║
+|               ║                            ║
+|               ╚════════════════════════════╝
+|
+|
+|
+|
+|
+styles 4-7 in-popup
+~ 4 14-14 fg=red bg=default
+~ 4 43-43 fg=red bg=default
+~ 5 14-14 fg=red bg=default
+~ 5 43-43 fg=red bg=default
+~ 6 14-14 fg=red bg=default
+~ 6 43-43 fg=red bg=default
+~ 7 14-14 fg=red bg=default
+~ 7 43-43 fg=red bg=default

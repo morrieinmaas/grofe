@@ -663,6 +663,7 @@ async fn actor(
         }
         events::track_focus(&mut state);
         hooks::track(&mut state);
+        clients::check_unattached(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
         if state.exit {
@@ -689,13 +690,18 @@ async fn actor(
 /// such as `has-session`) gets ENOENT even if the server then stays up; the
 /// CLI retries such a connect once after a short wait to cover this window.
 fn exit_if_empty(state: &mut State, listener: &UnixListener) {
-    // `set -s exit-empty off` keeps the server up with no sessions.
+    // `set -s exit-empty off` keeps the server up with no sessions;
+    // `set -s exit-unattached on` takes it down when no client is attached,
+    // sessions or not (tmux's `server_loop`).
     let keep = state.model.options.lookup("exit-empty", &[]) == Some("off");
+    let unattached = state.model.options.lookup("exit-unattached", &[]) == Some("on");
+    let has_sessions = !state.model.sessions.is_empty() && !unattached;
     if !state.exit_when_empty
         || keep
         || state.exit
         || state.connections > 0
-        || !state.model.sessions.is_empty()
+        || has_sessions
+        || !state.clients.is_empty()
     {
         return;
     }

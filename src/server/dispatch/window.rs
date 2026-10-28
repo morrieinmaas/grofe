@@ -370,7 +370,8 @@ pub fn select_layout(
         return Err(format!("can't find window: {window}"));
     };
     w.zoomed = false;
-    let Some(preset) = Preset::from_name(&c.name, width, height) else {
+    let columns = tiled_max_columns(model, window);
+    let Some(preset) = Preset::from_name(&c.name, width, height, columns) else {
         // Not a preset: a tmux layout string (spec §4.3), which puts every
         // pane, floating ones too, into its cells, as tmux 3.7b does. tmux
         // also resizes the window to the layout's size; a client showing
@@ -418,6 +419,19 @@ pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) 
         }
     }
     model.relayout(window);
+}
+
+/// `window`'s `tiled-layout-max-columns` (0: no limit).
+pub(crate) fn tiled_max_columns(model: &Model, window: WindowId) -> u16 {
+    let Some(w) = model.windows.get(&window) else {
+        return 0;
+    };
+    let chain = options::chain(model, w.active);
+    model
+        .options
+        .lookup("tiled-layout-max-columns", &chain)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
 }
 
 /// `window`'s `main-pane-width` and `main-pane-height`, or tmux's defaults

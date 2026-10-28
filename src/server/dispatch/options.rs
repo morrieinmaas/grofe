@@ -704,6 +704,421 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "on",
     },
+    // B2a: the options tmux 3.7b has that grofe rejected, with tmux's kinds,
+    // scopes and defaults (options-table.c). Those in `NO_EFFECT` are stored
+    // only; the rest are read where the comment on `NO_EFFECT` says.
+    Builtin {
+        name: "assume-paste-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "1",
+    },
+    Builtin {
+        name: "destroy-unattached",
+        kind: Kind::Choice(&["off", "on", "keep-last", "keep-group"]),
+        scope: OptionScope::Session,
+        default: "off",
+    },
+    Builtin {
+        name: "display-panes-active-colour",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "red",
+    },
+    Builtin {
+        name: "display-panes-colour",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "blue",
+    },
+    Builtin {
+        name: "display-panes-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "1000",
+    },
+    Builtin {
+        name: "initial-repeat-time",
+        kind: Kind::Number { max: 2_000_000 },
+        scope: OptionScope::Session,
+        default: "0",
+    },
+    Builtin {
+        name: "key-table",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "root",
+    },
+    Builtin {
+        name: "lock-after-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "0",
+    },
+    Builtin {
+        name: "lock-command",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "lock -np",
+    },
+    Builtin {
+        name: "message-command-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=black,fg=yellow,fill=black",
+    },
+    Builtin {
+        name: "message-format",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}",
+    },
+    Builtin {
+        name: "message-line",
+        kind: Kind::Choice(&["0", "1", "2", "3", "4"]),
+        scope: OptionScope::Session,
+        default: "0",
+    },
+    Builtin {
+        name: "prompt-cursor-colour",
+        kind: Kind::Colour,
+        scope: OptionScope::Session,
+        default: "none",
+    },
+    Builtin {
+        name: "prompt-cursor-style",
+        kind: Kind::Choice(&[
+            "default",
+            "blinking-block",
+            "block",
+            "blinking-underline",
+            "underline",
+            "blinking-bar",
+            "bar",
+        ]),
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "prompt-command-cursor-style",
+        kind: Kind::Choice(&[
+            "default",
+            "blinking-block",
+            "block",
+            "blinking-underline",
+            "underline",
+            "blinking-bar",
+            "bar",
+        ]),
+        scope: OptionScope::Session,
+        default: "default",
+    },
+    Builtin {
+        name: "cursor-colour",
+        kind: Kind::Colour,
+        scope: OptionScope::Window,
+        default: "none",
+    },
+    Builtin {
+        name: "cursor-style",
+        kind: Kind::Choice(&[
+            "default",
+            "blinking-block",
+            "block",
+            "blinking-underline",
+            "underline",
+            "blinking-bar",
+            "bar",
+        ]),
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "menu-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "menu-selected-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=yellow,fg=black",
+    },
+    Builtin {
+        name: "menu-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "menu-border-lines",
+        kind: Kind::Choice(&[
+            "single", "double", "heavy", "simple", "rounded", "padded", "none",
+        ]),
+        scope: OptionScope::Window,
+        default: "single",
+    },
+    Builtin {
+        name: "pane-status-current-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "pane-status-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "session-status-current-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "session-status-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "allow-set-title",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "alternate-screen",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "copy-mode-mark-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=red,fg=black",
+    },
+    Builtin {
+        name: "copy-mode-position-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}",
+    },
+    Builtin {
+        name: "copy-mode-position-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{E:mode-style}",
+    },
+    Builtin {
+        name: "copy-mode-selection-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{E:mode-style}",
+    },
+    Builtin {
+        name: "copy-mode-current-line-number-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "fg=yellow",
+    },
+    Builtin {
+        name: "copy-mode-line-number-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "fg=white,dim",
+    },
+    Builtin {
+        name: "copy-mode-line-numbers",
+        kind: Kind::Choice(&["off", "default", "absolute", "relative", "hybrid"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "fill-character",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "",
+    },
+    Builtin {
+        name: "other-pane-height",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "0",
+    },
+    Builtin {
+        name: "other-pane-width",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "0",
+    },
+    Builtin {
+        name: "pane-scrollbars",
+        kind: Kind::Choice(&["off", "modal", "on"]),
+        scope: OptionScope::Window,
+        default: "off",
+    },
+    Builtin {
+        name: "pane-scrollbars-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=black,fg=white,width=1,pad=0",
+    },
+    Builtin {
+        name: "pane-scrollbars-position",
+        kind: Kind::Choice(&["right", "left"]),
+        scope: OptionScope::Window,
+        default: "right",
+    },
+    Builtin {
+        name: "popup-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "popup-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+    },
+    Builtin {
+        name: "popup-border-lines",
+        kind: Kind::Choice(&[
+            "single", "double", "heavy", "simple", "rounded", "padded", "none",
+        ]),
+        scope: OptionScope::Window,
+        default: "single",
+    },
+    Builtin {
+        name: "remain-on-exit-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})",
+    },
+    Builtin {
+        name: "scroll-on-clear",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "tiled-layout-max-columns",
+        kind: Kind::Number { max: 65_535 },
+        scope: OptionScope::Window,
+        default: "0",
+    },
+    Builtin {
+        name: "tree-mode-preview-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}",
+    },
+    Builtin {
+        name: "tree-mode-preview-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}",
+    },
+    Builtin {
+        name: "window-pane-current-status-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
+    },
+    Builtin {
+        name: "window-pane-status-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
+    },
+    Builtin {
+        name: "xterm-keys",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "backspace",
+        kind: Kind::Key,
+        scope: OptionScope::Global,
+        default: "C-?",
+    },
+    Builtin {
+        name: "default-client-command",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "new-session",
+    },
+    Builtin {
+        name: "editor",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "/usr/bin/vi",
+    },
+    Builtin {
+        name: "exit-unattached",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "off",
+    },
+    Builtin {
+        name: "get-clipboard",
+        kind: Kind::Choice(&["off", "buffer", "request", "both"]),
+        scope: OptionScope::Global,
+        default: "buffer",
+    },
+    Builtin {
+        name: "history-file",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "",
+    },
+    Builtin {
+        name: "input-buffer-size",
+        kind: Kind::Number { max: 4_294_967_295 },
+        scope: OptionScope::Global,
+        default: "1048576",
+    },
+    Builtin {
+        name: "message-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "1000",
+    },
+    Builtin {
+        name: "prompt-history-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "100",
+    },
+    Builtin {
+        name: "prefix-timeout",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "0",
+    },
+    Builtin {
+        name: "variation-selector-always-wide",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
 ];
 
 /// A built-in option's scope (a list's too), `None` for anything else.
@@ -1035,9 +1450,34 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         Kind::String if name == "default-shell" => crate::server::pane::check_shell(value)
             .then(|| value.to_string())
             .ok_or_else(|| format!("not a suitable shell: {value}")),
+        // tmux checks a style when it is set, unless it holds a format.
+        Kind::String if STYLE_OPTIONS.contains(&name) && !value.contains("#{") => {
+            if crate::server::status::style_valid(value) {
+                Ok(value.to_string())
+            } else {
+                Err(format!("invalid style: {value}"))
+            }
+        }
+        // A command option: the first word of each command must be one.
+        Kind::String if name == "default-client-command" => {
+            for argv in split_command_string(value).map_err(|e| e.to_string())? {
+                if let Some(verb) = argv.first() {
+                    crate::compat::tmux::resolve(verb).map_err(|e| e.0)?;
+                }
+            }
+            Ok(value.to_string())
+        }
         Kind::String => Ok(value.to_string()),
         Kind::Key => crate::server::input::parse_prefix(value)
             .map(|key| key.map_or_else(|| "None".to_string(), |key| key.to_string())),
+        // The cursor colours default to "no colour" (-1), which tmux shows
+        // as `none` but cannot be set to; `show-config` has to read its own
+        // output back.
+        Kind::Colour
+            if value == "none" && matches!(name, "cursor-colour" | "prompt-cursor-colour") =>
+        {
+            Ok("none".to_string())
+        }
         Kind::Colour => colour_text(value).ok_or_else(|| format!("bad colour: {value}")),
         Kind::Size => size_text(value)
             .then(|| value.to_string())
@@ -1054,7 +1494,7 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
                 IntErrorKind::NegOverflow => too_small(),
                 _ => format!("value is invalid: {value}"),
             })?;
-            if n < i64::from(name == "buffer-limit") {
+            if n < number_minimum(name) {
                 Err(too_small())
             } else if n > max {
                 Err(too_large())
@@ -1062,6 +1502,52 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
                 Ok(n.to_string())
             }
         }
+    }
+}
+
+/// The options tmux checks as styles when they are set (`IS_STYLE`).
+const STYLE_OPTIONS: &[&str] = &[
+    "menu-style",
+    "menu-selected-style",
+    "menu-border-style",
+    "message-command-style",
+    "message-style",
+    "status-left-style",
+    "status-right-style",
+    "status-style",
+    "pane-status-current-style",
+    "pane-status-style",
+    "session-status-current-style",
+    "session-status-style",
+    "copy-mode-match-style",
+    "copy-mode-current-match-style",
+    "copy-mode-mark-style",
+    "copy-mode-position-style",
+    "copy-mode-selection-style",
+    "copy-mode-current-line-number-style",
+    "copy-mode-line-number-style",
+    "mode-style",
+    "pane-active-border-style",
+    "pane-border-style",
+    "pane-scrollbars-style",
+    "popup-style",
+    "popup-border-style",
+    "tree-mode-preview-style",
+    "window-active-style",
+    "window-style",
+    "window-status-activity-style",
+    "window-status-bell-style",
+    "window-status-current-style",
+    "window-status-last-style",
+    "window-status-style",
+];
+
+/// The least a number option takes (tmux's `minimum`; the rest take 0).
+fn number_minimum(name: &str) -> i64 {
+    match name {
+        "buffer-limit" | "display-panes-time" => 1,
+        "input-buffer-size" => 1_048_576,
+        _ => 0,
     }
 }
 
@@ -3869,13 +4355,30 @@ const LISTS: &[ListBuiltin] = &[
         scope: OptionScope::Global,
         default: &["linux*:AX@"],
     },
+    // B2a: tmux 3.7b's arrays with no effect (recorded defaults).
+    ListBuiltin {
+        name: "codepoint-widths",
+        scope: OptionScope::Global,
+        default: &[],
+    },
+    ListBuiltin {
+        name: "pane-colours",
+        scope: OptionScope::Window,
+        default: &[],
+    },
+    ListBuiltin {
+        name: "user-keys",
+        scope: OptionScope::Global,
+        default: &[],
+    },
 ];
 
 /// The separator tmux 3.7b splits a list option's value on when it is set
 /// or appended without an index (recorded); `status-format` has none.
 fn list_separator(name: &str) -> Option<char> {
     match name {
-        "terminal-features" | "terminal-overrides" | "command-alias" => Some(','),
+        "terminal-features" | "terminal-overrides" | "command-alias" | "codepoint-widths"
+        | "pane-colours" | "user-keys" => Some(','),
         "update-environment" => Some(' '),
         _ => None,
     }
@@ -3926,6 +4429,59 @@ const NO_EFFECT: &[&str] = &[
     "terminal-overrides",
     "window-status-activity-style",
     "focus-follows-mouse",
+    "assume-paste-time",
+    "key-table",
+    "lock-after-time",
+    "lock-command",
+    "message-command-style",
+    "message-format",
+    "message-line",
+    "prompt-cursor-colour",
+    "prompt-cursor-style",
+    "prompt-command-cursor-style",
+    "cursor-colour",
+    "cursor-style",
+    "menu-style",
+    "menu-selected-style",
+    "menu-border-style",
+    "menu-border-lines",
+    "pane-status-current-style",
+    "pane-status-style",
+    "session-status-current-style",
+    "session-status-style",
+    "alternate-screen",
+    "copy-mode-mark-style",
+    "copy-mode-position-format",
+    "copy-mode-position-style",
+    "copy-mode-selection-style",
+    "copy-mode-current-line-number-style",
+    "copy-mode-line-number-style",
+    "copy-mode-line-numbers",
+    "fill-character",
+    "other-pane-height",
+    "other-pane-width",
+    "pane-scrollbars",
+    "pane-scrollbars-style",
+    "pane-scrollbars-position",
+    "popup-style",
+    "remain-on-exit-format",
+    "scroll-on-clear",
+    "tree-mode-preview-format",
+    "tree-mode-preview-style",
+    "window-pane-current-status-format",
+    "window-pane-status-format",
+    "xterm-keys",
+    "backspace",
+    "default-client-command",
+    "editor",
+    "get-clipboard",
+    "history-file",
+    "input-buffer-size",
+    "prompt-history-limit",
+    "variation-selector-always-wide",
+    "codepoint-widths",
+    "pane-colours",
+    "user-keys",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.
@@ -4112,6 +4668,17 @@ fn not_a_list(base: &str, full: &str) -> String {
     }
 }
 
+/// The element texts an edit sets.
+fn op_values(op: &ListOp) -> Vec<&str> {
+    match op {
+        ListOp::Set { value, .. } | ListOp::Push(value) | ListOp::Replace(value) => {
+            vec![value.as_str()]
+        }
+        ListOp::Items(items) => items.values().map(String::as_str).collect(),
+        ListOp::Remove(_) | ListOp::Reset => Vec::new(),
+    }
+}
+
 /// `set-option` on a list option, or on any name given an index.
 fn set_list(
     model: &mut Model,
@@ -4159,6 +4726,11 @@ fn set_list(
     // set or appended without an index as one element per piece, empty
     // pieces skipped (`set -as terminal-features ',x:RGB'` adds `x:RGB`).
     let ops = by_separator(op, base);
+    if base == "pane-colours" {
+        for value in ops.iter().flat_map(op_values) {
+            colour_text(value).ok_or_else(|| format!("bad colour: {value}"))?;
+        }
+    }
     let element = index.map(|i| format!("{base}[{i}]"));
     let before = element.as_ref().and_then(|full| {
         let old = model.options.list(owner, base)?.items.get(&index?)?;

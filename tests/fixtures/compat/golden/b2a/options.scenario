@@ -1,0 +1,241 @@
+# B2a: the options tmux has that grofe used to reject. Each shows its
+# default, takes a value of its kind, and fails on a bad one with tmux's
+# words. Colour options are checked against names tmux and grofe share.
+$ new-session -d -s main -x 80 -y 24 cat
+$ show-options -gv assume-paste-time
+$ set-option -g assume-paste-time 42
+$ show-options -gv assume-paste-time
+$ set-option -g assume-paste-time -1
+$ set-option -g assume-paste-time x
+$ show-options -gv destroy-unattached
+$ show-options -gv display-panes-active-colour
+$ set-option -g display-panes-active-colour green
+$ show-options -gv display-panes-active-colour
+$ set-option -g display-panes-active-colour '#0011Zz'
+$ show-options -gv display-panes-colour
+$ set-option -g display-panes-colour green
+$ show-options -gv display-panes-colour
+$ set-option -g display-panes-colour '#0011Zz'
+$ show-options -gv display-panes-time
+$ set-option -g display-panes-time 42
+$ show-options -gv display-panes-time
+$ set-option -g display-panes-time -1
+$ set-option -g display-panes-time x
+$ show-options -gv initial-repeat-time
+$ set-option -g initial-repeat-time 42
+$ show-options -gv initial-repeat-time
+$ set-option -g initial-repeat-time -1
+$ set-option -g initial-repeat-time x
+$ show-options -gv key-table
+$ set-option -g key-table 'x,y z'
+$ show-options -gv key-table
+$ show-options -gv lock-after-time
+$ set-option -g lock-after-time 42
+$ show-options -gv lock-after-time
+$ set-option -g lock-after-time -1
+$ set-option -g lock-after-time x
+$ show-options -gv lock-command
+$ set-option -g lock-command 'x,y z'
+$ show-options -gv lock-command
+$ show-options -gv message-command-style
+$ set-option -g message-command-style 'x,y z'
+$ show-options -gv message-command-style
+$ show-options -gv message-format
+$ set-option -g message-format 'x,y z'
+$ show-options -gv message-format
+$ show-options -gv message-line
+$ set-option -g message-line 1
+$ show-options -gv message-line
+$ set-option -g message-line bogus
+$ show-options -gv prompt-cursor-colour
+$ set-option -g prompt-cursor-colour green
+$ show-options -gv prompt-cursor-colour
+$ set-option -g prompt-cursor-colour '#0011Zz'
+$ show-options -gv prompt-cursor-style
+$ set-option -g prompt-cursor-style blinking-block
+$ show-options -gv prompt-cursor-style
+$ set-option -g prompt-cursor-style bogus
+$ show-options -gv prompt-command-cursor-style
+$ set-option -g prompt-command-cursor-style blinking-block
+$ show-options -gv prompt-command-cursor-style
+$ set-option -g prompt-command-cursor-style bogus
+$ show-options -gwv cursor-colour
+$ set-option -gw cursor-colour green
+$ show-options -gwv cursor-colour
+$ set-option -gw cursor-colour '#0011Zz'
+$ show-options -gwv cursor-style
+$ set-option -gw cursor-style blinking-block
+$ show-options -gwv cursor-style
+$ set-option -gw cursor-style bogus
+$ show-options -gwv menu-style
+$ set-option -gw menu-style 'x,y z'
+$ show-options -gwv menu-style
+$ show-options -gwv menu-selected-style
+$ set-option -gw menu-selected-style 'x,y z'
+$ show-options -gwv menu-selected-style
+$ show-options -gwv menu-border-style
+$ set-option -gw menu-border-style 'x,y z'
+$ show-options -gwv menu-border-style
+$ show-options -gwv menu-border-lines
+$ set-option -gw menu-border-lines double
+$ show-options -gwv menu-border-lines
+$ set-option -gw menu-border-lines bogus
+$ show-options -gwv pane-status-current-style
+$ set-option -gw pane-status-current-style 'x,y z'
+$ show-options -gwv pane-status-current-style
+$ show-options -gwv pane-status-style
+$ set-option -gw pane-status-style 'x,y z'
+$ show-options -gwv pane-status-style
+$ show-options -gwv session-status-current-style
+$ set-option -gw session-status-current-style 'x,y z'
+$ show-options -gwv session-status-current-style
+$ show-options -gwv session-status-style
+$ set-option -gw session-status-style 'x,y z'
+$ show-options -gwv session-status-style
+$ show-options -gwv allow-set-title
+$ set-option -gw allow-set-title off
+$ show-options -gwv allow-set-title
+$ set-option -gw allow-set-title maybe
+$ show-options -gwv alternate-screen
+$ set-option -gw alternate-screen off
+$ show-options -gwv alternate-screen
+$ set-option -gw alternate-screen maybe
+$ show-options -gwv copy-mode-mark-style
+$ set-option -gw copy-mode-mark-style 'x,y z'
+$ show-options -gwv copy-mode-mark-style
+$ show-options -gwv copy-mode-position-format
+$ set-option -gw copy-mode-position-format 'x,y z'
+$ show-options -gwv copy-mode-position-format
+$ show-options -gwv copy-mode-position-style
+$ set-option -gw copy-mode-position-style 'x,y z'
+$ show-options -gwv copy-mode-position-style
+$ show-options -gwv copy-mode-selection-style
+$ set-option -gw copy-mode-selection-style 'x,y z'
+$ show-options -gwv copy-mode-selection-style
+$ show-options -gwv copy-mode-current-line-number-style
+$ set-option -gw copy-mode-current-line-number-style 'x,y z'
+$ show-options -gwv copy-mode-current-line-number-style
+$ show-options -gwv copy-mode-line-number-style
+$ set-option -gw copy-mode-line-number-style 'x,y z'
+$ show-options -gwv copy-mode-line-number-style
+$ show-options -gwv copy-mode-line-numbers
+$ set-option -gw copy-mode-line-numbers default
+$ show-options -gwv copy-mode-line-numbers
+$ set-option -gw copy-mode-line-numbers bogus
+$ show-options -gwv fill-character
+$ set-option -gw fill-character 'x,y z'
+$ show-options -gwv fill-character
+$ show-options -gwv other-pane-height
+$ set-option -gw other-pane-height 'x,y z'
+$ show-options -gwv other-pane-height
+$ show-options -gwv other-pane-width
+$ set-option -gw other-pane-width 'x,y z'
+$ show-options -gwv other-pane-width
+$ show-options -gwv pane-scrollbars
+$ set-option -gw pane-scrollbars modal
+$ show-options -gwv pane-scrollbars
+$ set-option -gw pane-scrollbars bogus
+$ show-options -gwv pane-scrollbars-style
+$ set-option -gw pane-scrollbars-style 'x,y z'
+$ show-options -gwv pane-scrollbars-style
+$ show-options -gwv pane-scrollbars-position
+$ set-option -gw pane-scrollbars-position left
+$ show-options -gwv pane-scrollbars-position
+$ set-option -gw pane-scrollbars-position bogus
+$ show-options -gwv popup-style
+$ set-option -gw popup-style 'x,y z'
+$ show-options -gwv popup-style
+$ show-options -gwv popup-border-style
+$ set-option -gw popup-border-style 'x,y z'
+$ show-options -gwv popup-border-style
+$ show-options -gwv popup-border-lines
+$ set-option -gw popup-border-lines double
+$ show-options -gwv popup-border-lines
+$ set-option -gw popup-border-lines bogus
+$ show-options -gwv remain-on-exit-format
+$ set-option -gw remain-on-exit-format 'x,y z'
+$ show-options -gwv remain-on-exit-format
+$ show-options -gwv scroll-on-clear
+$ set-option -gw scroll-on-clear off
+$ show-options -gwv scroll-on-clear
+$ set-option -gw scroll-on-clear maybe
+$ show-options -gwv tiled-layout-max-columns
+$ set-option -gw tiled-layout-max-columns 42
+$ show-options -gwv tiled-layout-max-columns
+$ set-option -gw tiled-layout-max-columns -1
+$ set-option -gw tiled-layout-max-columns x
+$ show-options -gwv tree-mode-preview-format
+$ set-option -gw tree-mode-preview-format 'x,y z'
+$ show-options -gwv tree-mode-preview-format
+$ show-options -gwv tree-mode-preview-style
+$ set-option -gw tree-mode-preview-style 'x,y z'
+$ show-options -gwv tree-mode-preview-style
+$ show-options -gwv window-pane-current-status-format
+$ set-option -gw window-pane-current-status-format 'x,y z'
+$ show-options -gwv window-pane-current-status-format
+$ show-options -gwv window-pane-status-format
+$ set-option -gw window-pane-status-format 'x,y z'
+$ show-options -gwv window-pane-status-format
+$ show-options -gwv xterm-keys
+$ set-option -gw xterm-keys off
+$ show-options -gwv xterm-keys
+$ set-option -gw xterm-keys maybe
+$ show-options -gsv backspace
+$ set-option -gs backspace C-x
+$ show-options -gsv backspace
+$ show-options -gsv default-client-command
+$ set-option -gs default-client-command 'x,y z'
+$ show-options -gsv default-client-command
+$ show-options -gsv editor
+$ set-option -gs editor 'x,y z'
+$ show-options -gsv editor
+$ show-options -gsv exit-unattached
+$ show-options -gsv get-clipboard
+$ set-option -gs get-clipboard off
+$ show-options -gsv get-clipboard
+$ set-option -gs get-clipboard bogus
+$ show-options -gsv history-file
+$ set-option -gs history-file 'x,y z'
+$ show-options -gsv history-file
+$ show-options -gsv input-buffer-size
+$ set-option -gs input-buffer-size 5000000
+$ show-options -gsv input-buffer-size
+$ set-option -gs input-buffer-size -1
+$ set-option -gs input-buffer-size x
+$ show-options -gsv message-limit
+$ set-option -gs message-limit 42
+$ show-options -gsv message-limit
+$ set-option -gs message-limit -1
+$ set-option -gs message-limit x
+$ show-options -gsv prompt-history-limit
+$ set-option -gs prompt-history-limit 42
+$ show-options -gsv prompt-history-limit
+$ set-option -gs prompt-history-limit -1
+$ set-option -gs prompt-history-limit x
+$ show-options -gsv variation-selector-always-wide
+$ set-option -gs variation-selector-always-wide off
+$ show-options -gsv variation-selector-always-wide
+$ set-option -gs variation-selector-always-wide maybe
+$ show-options -gs codepoint-widths
+$ set-option -gs codepoint-widths 'a,b'
+$ show-options -gs codepoint-widths
+$ set-option -gs codepoint-widths[3] c
+$ show-options -gs codepoint-widths
+$ show-options -gw pane-colours
+$ set-option -gw pane-colours 'a,b'
+$ show-options -gw pane-colours
+$ set-option -gw pane-colours[3] c
+$ show-options -gw pane-colours
+$ show-options -gs user-keys
+$ set-option -gs user-keys 'a,b'
+$ show-options -gs user-keys
+$ set-option -gs user-keys[3] c
+$ show-options -gs user-keys
+$ show-options -gsv prefix-timeout
+$ set-option -gs prefix-timeout 42
+$ show-options -gsv prefix-timeout
+$ set-option -gs prefix-timeout -1
+$ set-option -gs prefix-timeout x
+$ show-options -g
+$ show-options -gs
+$ show-options -gw
