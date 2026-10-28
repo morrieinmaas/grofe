@@ -1440,7 +1440,9 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         return Ok(value.to_string());
     };
     match b.kind {
-        Kind::Bool => match value {
+        // tmux reads on/yes/off/no in any case; `true` and `false` are
+        // grofe's own, which tmux 3.7b refuses.
+        Kind::Bool => match value.to_ascii_lowercase().as_str() {
             "on" | "yes" | "true" | "1" => Ok("on".to_string()),
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
             // tmux's wording for a flag option; choices say `unknown value`.

@@ -326,6 +326,21 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   only for `attach-session`); `hook_arguments` and `hook_flag_*` are not set.
   grofe's own names for the first fifteen (`pane-focused`, ...) still work
   with `set-hook` in its own dialect.
+- **Command flags (B2a)** follow tmux 3.7b (`golden/b2a/flags`):
+  `split-window`, `new-window`, `new-pane` and `new-session` take `-e
+  VAR=value` (repeatable; a word with no `=` is ignored; the variable
+  reaches the new pane after the session's own, `new-session -e` belongs to
+  the session), `split-window -Z` zooms the window on the active pane
+  afterwards (`new-pane -Z` is accepted and does nothing), `new-pane -d`
+  keeps the active pane. `new-window -b` takes the target's index and moves
+  it up, `-k` replaces a window at the index (a current one is replaced
+  even with `-d`), `-S -n name` selects the window of that name instead of
+  making another (`multiple windows named x` for two). `kill-pane -a` keeps
+  only the target (floating panes go too), `kill-session -a` keeps only the
+  target, `-C` clears its alert flags and `-g` kills its whole group.
+  `break-pane -a`/`-b` put the window after or before `-t`'s, `-P -F` print
+  it. Flag options read `on`, `yes`, `off` and `no` in any case, as tmux;
+  grofe still reads `true` and `false`, which tmux 3.7b refuses.
 - **`#{client_pid}` (B1a)** is the pid of the attached client, from the
   socket's peer credentials (`tests/client_pid.rs`); empty with no client.
 - **Linked windows and session groups (B1e)** follow tmux 3.7b

@@ -195,6 +195,18 @@ fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Resu
     }
 }
 
+/// The `VAR=value` words of every `-e`, in order; one with no `=` is
+/// ignored, as tmux's `environ_put` does.
+fn env_values(flags: &ParsedFlags) -> Vec<(String, String)> {
+    flags
+        .repeated
+        .iter()
+        .filter(|(c, _)| *c == 'e')
+        .filter_map(|(_, v)| v.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
 const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('A', FlagKind::Bool),
     ('d', FlagKind::Bool),
@@ -209,6 +221,7 @@ const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('P', FlagKind::Bool),
     ('F', FlagKind::Value),
     ('t', FlagKind::Value),
+    ('e', FlagKind::Value),
 ];
 
 fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
@@ -230,6 +243,7 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         .get(&'y')
         .map(|s| parse_window_size(s, "height"))
         .transpose()?;
+    let env = env_values(&flags);
     Ok(Command::NewSession(NewSession {
         detached: flags.present.contains(&'d'),
         name: flags.values.get(&'s').cloned(),
@@ -242,6 +256,7 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.values.get(&'F').cloned(),
         window_name: flags.values.get(&'n').cloned(),
         group: flags.values.get(&'t').cloned(),
+        env,
     }))
 }
 
@@ -261,8 +276,19 @@ fn parse_target_only(argv: &[String], cmd_name: &str) -> Result<Target, ParseErr
 }
 
 fn parse_kill_session(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('a', FlagKind::Bool),
+        ('C', FlagKind::Bool),
+        ('g', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "kill-session")?;
+    no_extra_positionals(&flags, "kill-session", 0)?;
     Ok(Command::KillSession(KillSession {
-        target: parse_target_only(argv, "kill-session")?,
+        target: target_or_current(&flags.values, 't')?,
+        others: flags.present.contains(&'a'),
+        clear_alerts: flags.present.contains(&'C'),
+        group: flags.present.contains(&'g'),
     }))
 }
 
@@ -295,8 +321,12 @@ fn parse_select_window(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_kill_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('a', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "kill-pane")?;
+    no_extra_positionals(&flags, "kill-pane", 0)?;
     Ok(Command::KillPane(KillPane {
-        target: parse_target_only(argv, "kill-pane")?,
+        target: target_or_current(&flags.values, 't')?,
+        others: flags.present.contains(&'a'),
     }))
 }
 
@@ -378,6 +408,10 @@ const NEW_WINDOW_SHORT: &[(char, FlagKind)] = &[
     ('t', FlagKind::Value),
     ('n', FlagKind::Value),
     ('c', FlagKind::Value),
+    ('e', FlagKind::Value),
+    ('b', FlagKind::Bool),
+    ('k', FlagKind::Bool),
+    ('S', FlagKind::Bool),
 ];
 
 fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
@@ -389,6 +423,7 @@ fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
         },
         "new-window",
     )?;
+    let env = env_values(&flags);
     Ok(Command::NewWindow(NewWindow {
         detached: flags.present.contains(&'d'),
         target: target_or_current(&flags.values, 't')?,
@@ -398,6 +433,10 @@ fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
         after: flags.present.contains(&'a'),
         print: flags.present.contains(&'P'),
         format: flags.values.get(&'F').cloned(),
+        env,
+        before: flags.present.contains(&'b'),
+        kill: flags.present.contains(&'k'),
+        select_existing: flags.present.contains(&'S'),
     }))
 }
 
@@ -413,6 +452,8 @@ const SPLIT_WINDOW_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Value),
     ('l', FlagKind::Value),
     ('t', FlagKind::Value),
+    ('e', FlagKind::Value),
+    ('Z', FlagKind::Bool),
 ];
 
 fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
@@ -466,6 +507,7 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         (None, Some(c), _) => SplitSize::Cells(c),
         (None, None, None) => SplitSize::Half,
     };
+    let env = env_values(&flags);
     Ok(Command::SplitWindow(SplitWindow {
         dir,
         cwd: flags.values.get(&'c').cloned(),
@@ -477,6 +519,8 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         detached: flags.present.contains(&'d'),
         print: flags.present.contains(&'P'),
         format: flags.values.get(&'F').cloned(),
+        env,
+        zoom: flags.present.contains(&'Z'),
     }))
 }
 
@@ -1547,6 +1591,10 @@ fn parse_swap_window(argv: &[String]) -> Result<Command, ParseError> {
 fn parse_break_pane(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('d', FlagKind::Bool),
+        ('a', FlagKind::Bool),
+        ('b', FlagKind::Bool),
+        ('P', FlagKind::Bool),
+        ('F', FlagKind::Value),
         ('n', FlagKind::Value),
         ('s', FlagKind::Value),
         ('t', FlagKind::Value),
@@ -1558,6 +1606,10 @@ fn parse_break_pane(argv: &[String]) -> Result<Command, ParseError> {
         dst: target_if_given(&flags.values, 't')?,
         detach: flags.present.contains(&'d'),
         name: flags.values.get(&'n').cloned(),
+        after: flags.present.contains(&'a'),
+        before: flags.present.contains(&'b'),
+        print: flags.present.contains(&'P'),
+        format: flags.values.get(&'F').cloned(),
     }))
 }
 
@@ -1841,8 +1893,12 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
         ('y', FlagKind::Value),
         ('X', FlagKind::Value),
         ('Y', FlagKind::Value),
+        ('e', FlagKind::Value),
+        ('Z', FlagKind::Bool),
+        ('d', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "new-pane")?;
+    let env = env_values(&flags);
     Ok(Command::NewPane(NewPane {
         print: flags.present.contains(&'P'),
         format: flags.values.get(&'F').cloned(),
@@ -1852,6 +1908,9 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
         height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
         x: offset_value(&flags, 'X')?,
         y: offset_value(&flags, 'Y')?,
+        env,
+        zoom: flags.present.contains(&'Z'),
+        detached: flags.present.contains(&'d'),
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
     }))
 }
@@ -3321,6 +3380,7 @@ mod tests {
             cmd,
             Command::KillSession(KillSession {
                 target: Target::Session(SessionRef::Bare("work".to_string())),
+                ..KillSession::default()
             })
         );
     }
@@ -3388,6 +3448,7 @@ mod tests {
                 after: false,
                 print: false,
                 format: None,
+                ..NewWindow::default()
             })
         );
     }
@@ -3408,6 +3469,7 @@ mod tests {
                 detached: false,
                 print: false,
                 format: None,
+                ..SplitWindow::default()
             })
         );
     }
@@ -3436,6 +3498,7 @@ mod tests {
                 detached: false,
                 print: false,
                 format: None,
+                ..SplitWindow::default()
             })
         );
     }
@@ -3456,6 +3519,7 @@ mod tests {
                 detached: false,
                 print: false,
                 format: None,
+                ..SplitWindow::default()
             })
         );
     }
@@ -3492,6 +3556,7 @@ mod tests {
                 detached: false,
                 print: false,
                 format: None,
+                ..SplitWindow::default()
             })
         );
     }
@@ -3507,6 +3572,7 @@ mod tests {
                     window: WindowRef::Index(1),
                     pane: PanePart::Index(2),
                 }),
+                ..KillPane::default()
             })
         );
     }
@@ -4051,6 +4117,7 @@ mod tests {
                 after: false,
                 print: false,
                 format: None,
+                ..NewWindow::default()
             })
         );
     }

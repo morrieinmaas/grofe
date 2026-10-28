@@ -662,6 +662,41 @@ $ set-option -gs prefix-timeout -1
 $ set-option -gs prefix-timeout x
 ! value is invalid: x
 ? 1
+$ set-option -gw alternate-screen OFF
+? 0
+$ show-options -gwv alternate-screen
+off
+? 0
+$ set-option -gw alternate-screen Yes
+? 0
+$ show-options -gwv alternate-screen
+on
+? 0
+$ set-option -gw alternate-screen NO
+? 0
+$ show-options -gwv alternate-screen
+off
+? 0
+$ set-option -gw alternate-screen On
+? 0
+$ show-options -gwv alternate-screen
+on
+? 0
+$ set-option -g mouse Off
+? 0
+$ show-options -gv mouse
+off
+? 0
+$ set-option -g mouse 1
+? 0
+$ show-options -gv mouse
+on
+? 0
+$ set-option -g mouse 0
+? 0
+$ show-options -gv mouse
+off
+? 0
 $ show-options -g
 activity-action other
 assume-paste-time 42
@@ -686,7 +721,7 @@ message-command-style bg=black,fg=yellow,fill=black
 message-format "x,y z"
 message-line 1
 message-style bg=yellow,fg=black,fill=yellow
-mouse on
+mouse off
 prefix C-b
 prefix2 None
 renumber-windows on
@@ -786,7 +821,7 @@ aggressive-resize off
 allow-passthrough off
 allow-rename off
 allow-set-title off
-alternate-screen off
+alternate-screen on
 automatic-rename on
 automatic-rename-format "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}"
 clock-mode-colour blue

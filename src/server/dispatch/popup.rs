@@ -148,7 +148,8 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         return Err("size or position too small".to_string());
     }
     let s = &model.sessions[&session];
-    let env = s.env.clone();
+    let mut env = s.env.clone();
+    env.extend(c.env);
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
     let cell_px = clients::cell_px(state, session);
     let new = spawn_pane(
@@ -173,7 +174,9 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         rows: height.max(1),
         z,
     });
-    w.set_active(new);
+    if !c.detached {
+        w.set_active(new);
+    }
     if !c.print {
         return Ok(String::new());
     }

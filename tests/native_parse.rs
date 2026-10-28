@@ -158,6 +158,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: Some(t("work:")),
                 detach: true,
                 name: s("logs"),
+                ..BreakPane::default()
             }),
         ),
         (
@@ -167,6 +168,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: None,
                 detach: false,
                 name: None,
+                ..BreakPane::default()
             }),
         ),
         (
@@ -479,6 +481,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 x: Some(Offset::Cells(31)),
                 y: Some(Offset::Cells(9)),
                 command: Some(argv(&["sh", "-c", "fzf"])),
+                ..NewPane::default()
             }),
         ),
         (
@@ -493,6 +496,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 x: None,
                 y: None,
                 command: None,
+                ..NewPane::default()
             }),
         ),
         (
@@ -1223,4 +1227,86 @@ fn m1_short_names_and_scope_merges_still_parse() {
         panic!("show -gw");
     };
     assert_eq!(c.scope, Some(OptionScope::Global));
+}
+
+/// B2a: the flags tmux 3.7b's creating and killing commands take that
+/// grofe used to refuse.
+#[test]
+fn b2a_command_flags_parse() {
+    let env = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        p(&[
+            "split-window",
+            "-e",
+            "A=1",
+            "-e",
+            "B=x=y",
+            "-e",
+            "NOEQ",
+            "-Z"
+        ]),
+        Ok(Command::SplitWindow(SplitWindow {
+            env: env(&[("A", "1"), ("B", "x=y")]),
+            zoom: true,
+            ..SplitWindow::default()
+        }))
+    );
+    assert_eq!(
+        p(&["new-window", "-bkS", "-n", "w", "-e", "A=1"]),
+        Ok(Command::NewWindow(NewWindow {
+            name: s("w"),
+            before: true,
+            kill: true,
+            select_existing: true,
+            env: env(&[("A", "1")]),
+            ..NewWindow::default()
+        }))
+    );
+    assert_eq!(
+        p(&["new-pane", "-d", "-Z", "-e", "A=1"]),
+        Ok(Command::NewPane(NewPane {
+            detached: true,
+            zoom: true,
+            env: env(&[("A", "1")]),
+            ..NewPane::default()
+        }))
+    );
+    assert_eq!(
+        p(&["new-session", "-d", "-e", "A=1"]),
+        Ok(Command::NewSession(NewSession {
+            detached: true,
+            env: env(&[("A", "1")]),
+            ..NewSession::default()
+        }))
+    );
+    assert_eq!(
+        p(&["kill-pane", "-a", "-t", "x:1.2"]),
+        Ok(Command::KillPane(KillPane {
+            target: t("x:1.2"),
+            others: true,
+        }))
+    );
+    assert_eq!(
+        p(&["kill-session", "-a", "-t", "x"]),
+        Ok(Command::KillSession(KillSession {
+            target: t("x"),
+            others: true,
+            ..KillSession::default()
+        }))
+    );
+    assert_eq!(
+        p(&["break-pane", "-a", "-b", "-P", "-F", "#{pane_id}"]),
+        Ok(Command::BreakPane(BreakPane {
+            after: true,
+            before: true,
+            print: true,
+            format: s("#{pane_id}"),
+            ..BreakPane::default()
+        }))
+    );
 }

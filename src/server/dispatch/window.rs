@@ -33,11 +33,40 @@ pub fn default_name(cwd: &Path) -> String {
 pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<String, String> {
     let model = &state.model;
     let target = model.window_index_type(&c.target, ctx)?;
+    // `-S` with `-n` and no index: a window of that name is selected
+    // instead, if the session has one (and two is an error).
+    if c.select_existing
+        && let Some(name) = &c.name
+        && !matches!(target, Target::Window(_, WindowRef::Index(_)))
+    {
+        let session = model.resolve_session(&target, ctx)?;
+        let named: Vec<_> = model.sessions[&session]
+            .windows
+            .iter()
+            .copied()
+            .filter(|w| model.windows.get(w).is_some_and(|w| &w.name == name))
+            .collect();
+        match named[..] {
+            [] => {}
+            [window] => {
+                if !c.detached {
+                    state.model.select_window_in(session, window);
+                }
+                return Ok(String::new());
+            }
+            _ => return Err(format!("multiple windows named {name}")),
+        }
+    }
+    let relative = c.after || c.before;
     let (session, index) = match &target {
-        // -a: after the target window, moving later windows up; a free
-        // index is taken as it is, as tmux 3.7b does.
-        target if c.after => match model.resolve_winlink(target, ctx) {
-            Ok((s, w)) => (s, next_index(model.index_in(s, w).unwrap_or(0))?),
+        // -a, -b: after or before the target window, moving later windows
+        // up; a free index is taken as it is, as tmux 3.7b does. With both,
+        // -b wins.
+        target if relative => match model.resolve_winlink(target, ctx) {
+            Ok((s, w)) => {
+                let at = model.index_in(s, w).unwrap_or(0);
+                (s, if c.before { at } else { next_index(at)? })
+            }
             Err(e) => match target {
                 Target::Window(s, WindowRef::Index(i)) => {
                     (model.resolve_session(&Target::Session(s.clone()), ctx)?, *i)
@@ -47,7 +76,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         },
         Target::Window(s, WindowRef::Index(index)) => {
             let session = model.resolve_session(&Target::Session(s.clone()), ctx)?;
-            if model.window_at_index(session, *index).is_some() {
+            if !c.kill && model.window_at_index(session, *index).is_some() {
                 return Err(format!("create window failed: index {index} in use"));
             }
             (session, *index)
@@ -57,13 +86,27 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
             (session, model.free_window_index(session))
         }
     };
+    // `-k`: a window at the index goes, and a current one is replaced by
+    // the new window even with `-d`.
+    let mut replaced_current = false;
+    if c.kill
+        && !relative
+        && let Some(old) = state.model.window_at_index(session, index)
+    {
+        replaced_current = state.model.sessions[&session].active == old;
+        state.model.remove_link(session, old);
+        let removed = state.model.close_orphans(&[old]);
+        state.events.panes_killed(removed);
+    }
     // As tmux: the windows in the way move up before the pane starts.
-    if c.after {
+    if relative {
         shuffle_up(&mut state.model, session, index)?;
     }
     let model = &state.model;
     let s = &model.sessions[&session];
-    let env = s.env.clone();
+    // `-e` wins over the session's own variables.
+    let mut env = s.env.clone();
+    env.extend(c.env);
     let target = model.windows.get(&s.active).map(|w| w.active);
     let cwd = resolve_cwd(model, ctx, target, c.cwd.as_deref(), &s.cwd);
     let size = (s.cols, s.rows);
@@ -104,7 +147,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     if named {
         stop_automatic_rename(model, window)?;
     }
-    if !c.detached {
+    if !c.detached || replaced_current {
         model.select_window_in(session, window);
     }
     Ok(if c.print {

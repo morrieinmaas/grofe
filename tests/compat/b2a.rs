@@ -53,3 +53,8 @@ fn destroy_unattached_and_exit_unattached_end_what_tmux_ends() {
 fn a_popup_takes_the_border_options() {
     check("b2a", "options-popup", &[]);
 }
+
+#[test]
+fn command_flags_do_what_tmux_does() {
+    check("b2a", "flags", &[]);
+}

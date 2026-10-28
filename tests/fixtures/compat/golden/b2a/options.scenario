@@ -236,6 +236,20 @@ $ set-option -gs prefix-timeout 42
 $ show-options -gsv prefix-timeout
 $ set-option -gs prefix-timeout -1
 $ set-option -gs prefix-timeout x
+$ set-option -gw alternate-screen OFF
+$ show-options -gwv alternate-screen
+$ set-option -gw alternate-screen Yes
+$ show-options -gwv alternate-screen
+$ set-option -gw alternate-screen NO
+$ show-options -gwv alternate-screen
+$ set-option -gw alternate-screen On
+$ show-options -gwv alternate-screen
+$ set-option -g mouse Off
+$ show-options -gv mouse
+$ set-option -g mouse 1
+$ show-options -gv mouse
+$ set-option -g mouse 0
+$ show-options -gv mouse
 $ show-options -g
 $ show-options -gs
 $ show-options -gw
