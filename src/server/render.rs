@@ -449,7 +449,9 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
     let rects: Vec<(PaneId, Rect)> = inputs.panes.iter().map(|(id, r, _)| (*id, *r)).collect();
     let boxes = pane_boxes(looks, &rects);
     let active = boxes.iter().position(|b| b.id == inputs.active);
-    let marked = inputs.marked.and_then(|m| boxes.iter().position(|b| b.id == m));
+    let marked = inputs
+        .marked
+        .and_then(|m| boxes.iter().position(|b| b.id == m));
     let geom = Geometry::new((w, h), looks.status, looks.indicators, &boxes, active);
     let style_of = |id: PaneId, is_active: bool| {
         let look = looks.panes.get(&id);
