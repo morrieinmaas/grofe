@@ -100,6 +100,9 @@ impl Scope {
     /// Whether `event`, which happened at `place`, lies inside the scope.
     fn passes(self, event: &Event, place: Place, model: &Model) -> bool {
         let mut at = event.subject();
+        // An event that names no session of its own is one of the window,
+        // which every session holding it sees.
+        let windowed = at.session.is_none();
         if at.window.is_none() {
             at.window = place
                 .window
@@ -114,7 +117,10 @@ impl Scope {
         match self {
             Scope::Pane(p) => at.pane == Some(p),
             Scope::Window(w) => at.window == Some(w),
-            Scope::Session(s) => at.session == Some(s),
+            Scope::Session(s) => {
+                at.session == Some(s)
+                    || windowed && at.window.is_some_and(|w| model.has_link(s, w))
+            }
         }
     }
 }
@@ -522,6 +528,36 @@ mod tests {
         assert!(!Scope::Session(SessionId(3)).passes(&event, place, &model));
         // Without a place and a model that lacks the pane, it names no window.
         assert!(!Scope::Window(WindowId(4)).passes(&event, Place::default(), &model));
+    }
+
+    /// A window linked into two sessions is in both: an event of the window
+    /// reaches a subscriber scoped to either session, not a third.
+    #[tokio::test]
+    async fn a_session_scope_sees_the_events_of_a_window_it_holds() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let run = |state: &mut State, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(state, &ctx, &argv).expect("command")
+        };
+        for name in ["a", "b", "c"] {
+            run(&mut state, &["new-session", "-d", "-s", name, "sleep 30"]);
+        }
+        let model = &state.model;
+        let id = |name: &str| model.session_by_name(name).expect("session");
+        let (a, b, c) = (id("a"), id("b"), id("c"));
+        let window = model.sessions[&a].active;
+        let src = window.to_string();
+        run(&mut state, &["link-window", "-d", "-s", &src, "-t", "b:7"]);
+        let model = &state.model;
+        let place = Place {
+            window: Some(window),
+            session: Some(a),
+        };
+        let event = exited(9);
+        assert!(Scope::Session(a).passes(&event, place, model));
+        assert!(Scope::Session(b).passes(&event, place, model));
+        assert!(!Scope::Session(c).passes(&event, place, model));
     }
 
     #[test]
