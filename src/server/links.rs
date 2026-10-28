@@ -648,6 +648,21 @@ mod tests {
                 session,
             ],
         };
+        // `-a`/`-b` between two sessions of a group make room and then fail,
+        // as tmux does, leaving the group's lists apart: not for the run
+        // that insists the group never differs.
+        if matches!(argv[0].as_str(), "link-window" | "move-window") {
+            let session = |flag: &str| {
+                let at = argv.iter().position(|a| a == flag)?;
+                let name = argv.get(at + 1)?.split(':').next()?;
+                state.model.session_by_name(name)
+            };
+            if let (Some(s), Some(d)) = (session("-s"), session("-t"))
+                && state.model.group_peers(s).contains(&d)
+            {
+                argv.retain(|a| a != "-a" && a != "-b");
+            }
+        }
         if argv[0] != "kill-pane"
             && argv[0] != "select-window"
             && argv[0].starts_with(['n', 's'])
@@ -708,14 +723,29 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn random_link_unlink_move_swap_kill_and_group_commands_keep_the_invariants() {
-        for seed in [0x9e37_79b9_7f4a_7c15, 7, 0xdead_beef_cafe] {
+        // `LINKS_SEEDS=N` adds N more seeds for a longer hunt.
+        let more = std::env::var("LINKS_SEEDS")
+            .ok()
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0);
+        for seed in [0x9e37_79b9_7f4a_7c15, 7, 0xdead_beef_cafe]
+            .into_iter()
+            .chain((0..more).map(|n| 1000 + n))
+        {
             run_sequence(seed, 300, false);
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_same_with_renumber_windows_on() {
-        for seed in [11, 0x1234_5678_9abc_def1] {
+        let more = std::env::var("LINKS_SEEDS")
+            .ok()
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0);
+        for seed in [11, 0x1234_5678_9abc_def1]
+            .into_iter()
+            .chain((0..more).map(|n| 2000 + n))
+        {
             run_sequence(seed, 300, true);
         }
     }

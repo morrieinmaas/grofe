@@ -2247,16 +2247,16 @@ mod tests {
         let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
-            "new-session -t",
+            "pipe-pane",
             MappingKind::PassThrough,
-            GrofeTarget::Native("new-session"),
+            GrofeTarget::Native("pipe-pane"),
             SEMANTIC,
             "M3.6",
             "",
         );
         let mut rows = vec![map];
         rows.extend(core_rows());
-        let err = translate_with(&args(&["new-session", "-t", "a"]), &ctx(), &rows, &[]);
+        let err = translate_with(&args(&["pipe-pane"]), &ctx(), &rows, &[]);
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));

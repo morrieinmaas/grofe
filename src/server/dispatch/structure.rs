@@ -511,12 +511,14 @@ fn place(
     if slot.shuffle
         && let Some(i) = slot.index
     {
+        // A window the session holds is refused before anything moves, but
+        // two sessions of a group only after the room is made, as in tmux.
+        if !slot.grouped && !slot.within && model.has_link(dst, window) {
+            return Err(ALREADY_IN.to_string());
+        }
         shuffle_up(model, dst, i)?;
         if slot.grouped {
             return Err(GROUPED.to_string());
-        }
-        if !slot.within && model.has_link(dst, window) {
-            return Err(ALREADY_IN.to_string());
         }
         return Ok((i, Vec::new()));
     }
