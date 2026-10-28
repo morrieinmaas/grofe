@@ -8,3 +8,13 @@ use crate::tp::check;
 fn the_marked_pane_matches_its_golden() {
     check("b1d", "marked", &[]);
 }
+
+#[test]
+fn the_stock_menus_open_where_tmux_opens_them() {
+    check("b1d", "stock-menus", &[]);
+}
+
+#[test]
+fn menu_and_popup_positions_match_their_golden() {
+    check("b1d", "menu-positions", &[]);
+}

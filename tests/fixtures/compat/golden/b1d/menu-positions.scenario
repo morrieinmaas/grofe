@@ -1,0 +1,50 @@
+# B1d: display-menu and display-popup -x and -y take the letters W, S, M, P,
+# R and C and formats naming the popup_* variables, as cmd_display_menu_get_pos
+# reads them; M with no mouse event is the top left.
+$ new-session -d -s main -n one -x 80 -y 24 cat
+$ new-window -d -t main:2 -n second cat
+$ new-window -d -t main:3 -n third cat
+$ split-window -h -d -t main:1 cat
+$ set -g status-right ''
+client 80x24 attach -t main
+$& display-menu -x W -y W -T MenuWin A a 'display a' B b 'display b'
+screen MenuWin
+keys q
+$& display-menu -x R -y P -T MenuPane A a 'display a' B b 'display b'
+screen MenuPane
+keys q
+$& display-menu -x P -y S -T MenuStatus A a 'display a' B b 'display b'
+screen MenuStatus
+keys q
+$& display-menu -x M -y M -T MenuMouse A a 'display a' B b 'display b'
+screen MenuMouse
+keys q
+$& display-menu -x '#{popup_window_status_line_x}' -y '#{popup_pane_top}' -T MenuFmt A a 'display a'
+screen MenuFmt
+keys q
+$& display-menu -x '#{e|+:#{popup_centre_x},3}' -y 4 -T MenuCalc A a 'display a'
+screen MenuCalc
+keys q
+$& display-popup -E -x W -y W -w 20 -h 5 -T PopWin 'echo in-popup; exec cat'
+screen in-popup
+keys C-d
+$& display-popup -E -x R -y P -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+keys C-d
+$& display-popup -E -x M -y S -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+keys C-d
+$ select-window -t main:3
+$& display-menu -x W -y W -T MenuThird A a 'display a' B b 'display b'
+screen MenuThird
+keys q
+$ set -g status-position top
+$& display-menu -x W -y W -T MenuTop A a 'display a'
+screen MenuTop
+keys q
+$& display-menu -x R -y S -T MenuTopS A a 'display a'
+screen MenuTopS
+keys q
+$& display-popup -E -x W -y S -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+keys C-d

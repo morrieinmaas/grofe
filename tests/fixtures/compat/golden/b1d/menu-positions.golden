@@ -1,0 +1,366 @@
+$ new-session -d -s main -n one -x 80 -y 24 cat
+? 0
+$ new-window -d -t main:2 -n second cat
+? 0
+$ new-window -d -t main:3 -n third cat
+? 0
+$ split-window -h -d -t main:1 cat
+? 0
+$ set -g status-right ''
+? 0
+client 80x24 attach -t main
+$& display-menu -x W -y W -T MenuWin A a 'display a' B b 'display b'
+screen MenuWin
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|        ┌─MenuWin─┐                      │
+|        │ A   (a) │                      │
+|        │ B   (b) │                      │
+|        └─────────┘                      │
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-menu -x R -y P -T MenuPane A a 'display a' B b 'display b'
+screen MenuPane
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                             ┌─MenuPane─┐│
+|                             │ A    (a) ││
+|                             │ B    (b) ││
+|                             └──────────┘│
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-menu -x P -y S -T MenuStatus A a 'display a' B b 'display b'
+screen MenuStatus
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+| ┌─MenuStatus─┐                          │
+| │ A      (a) │                          │
+| │ B      (b) │                          │
+| └────────────┘                          │
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-menu -x M -y M -T MenuMouse A a 'display a' B b 'display b'
+screen MenuMouse
+| ┌─MenuMouse─┐                           │
+| │ A     (a) │                           │
+| │ B     (b) │                           │
+| └───────────┘                           │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-menu -x '#{popup_window_status_line_x}' -y '#{popup_pane_top}' -T MenuFmt A a 'display a'
+screen MenuFmt
+|        ┌─MenuFmt─┐                      │
+|        │ A   (a) │                      │
+|        └─────────┘                      │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-menu -x '#{e|+:#{popup_centre_x},3}' -y 4 -T MenuCalc A a 'display a'
+screen MenuCalc
+|                                         │
+|                                     ┌─MenuCalc─┐
+|                                     │ A    (a) │
+|                                     └──────────┘
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+| [main] 1:one* 2:second  3:third
+keys q
+$& display-popup -E -x W -y W -w 20 -h 5 -T PopWin 'echo in-popup; exec cat'
+screen in-popup
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|        ┌─PopWin───────────┐             │
+|        │in-popup          │             │
+|        │                  │             │
+|        │                  │             │
+|        └──────────────────┘             │
+| [main] 1:one* 2:second  3:third
+keys C-d
+$& display-popup -E -x R -y P -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                     ┌──────────────────┐│
+|                     │in-popup          ││
+|                     │                  ││
+|                     │                  ││
+|                     └──────────────────┘│
+| [main] 1:one* 2:second  3:third
+keys C-d
+$& display-popup -E -x M -y S -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+|                                         │
+| ┌──────────────────┐                    │
+| │in-popup          │                    │
+| │                  │                    │
+| │                  │                    │
+| └──────────────────┘                    │
+| [main] 1:one* 2:second  3:third
+keys C-d
+$ select-window -t main:3
+? 0
+$& display-menu -x W -y W -T MenuThird A a 'display a' B b 'display b'
+screen MenuThird
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                         ┌─MenuThird─┐
+|                         │ A     (a) │
+|                         │ B     (b) │
+|                         └───────────┘
+| [main] 1:one- 2:second  3:third*
+keys q
+$ set -g status-position top
+? 0
+$& display-menu -x W -y W -T MenuTop A a 'display a'
+screen MenuTop
+| [main] 1:one- 2:second  3:third*
+|                         ┌─MenuTop─┐
+|                         │ A   (a) │
+|                         └─────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$& display-menu -x R -y S -T MenuTopS A a 'display a'
+screen MenuTopS
+| [main] 1:one- 2:second  3:third*
+|                                                                     ┌─MenuTopS─┐
+|                                                                     │ A    (a) │
+|                                                                     └──────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$& display-popup -E -x W -y S -w 20 -h 5 'echo in-popup; exec cat'
+screen in-popup
+| [main] 1:one- 2:second  3:third*
+|                         ┌──────────────────┐
+|                         │in-popup          │
+|                         │                  │
+|                         │                  │
+|                         └──────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys C-d
