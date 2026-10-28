@@ -614,6 +614,10 @@ pub struct SwapPane {
     pub up: bool,
     /// `-D`: with the next pane.
     pub down: bool,
+    /// `-d`: no pane becomes active because of the swap.
+    pub detach: bool,
+    /// `-Z`: a zoomed window stays zoomed.
+    pub keep_zoom: bool,
 }
 
 /// `swap-window` (TC.8).

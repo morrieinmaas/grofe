@@ -98,6 +98,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: Target::Current,
                 up: false,
                 down: true,
+                detach: false,
+                keep_zoom: false,
             }),
         ),
         (
@@ -107,6 +109,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: t("%4"),
                 up: true,
                 down: false,
+                detach: false,
+                keep_zoom: false,
             }),
         ),
         (
@@ -116,6 +120,19 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: t("%2"),
                 up: false,
                 down: false,
+                detach: false,
+                keep_zoom: false,
+            }),
+        ),
+        (
+            vec!["swap-pane", "-d", "-Z", "-s", "%1", "-t", "%2"],
+            Command::SwapPane(SwapPane {
+                src: Some(t("%1")),
+                dst: t("%2"),
+                up: false,
+                down: false,
+                detach: true,
+                keep_zoom: true,
             }),
         ),
         (

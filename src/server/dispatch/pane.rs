@@ -392,7 +392,7 @@ fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<Stri
 
 /// `-Z`: the pane fills the window, or the layout comes back. A window
 /// with one pane never zooms, as in tmux.
-fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
+pub(crate) fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
     let Some(w) = model.windows.get_mut(&window) else {
         return;
     };

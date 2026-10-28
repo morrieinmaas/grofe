@@ -1514,6 +1514,8 @@ fn parse_swap_pane(argv: &[String]) -> Result<Command, ParseError> {
         ('t', FlagKind::Value),
         ('U', FlagKind::Bool),
         ('D', FlagKind::Bool),
+        ('d', FlagKind::Bool),
+        ('Z', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "swap-pane")?;
     no_extra_positionals(&flags, "swap-pane", 0)?;
@@ -1522,6 +1524,8 @@ fn parse_swap_pane(argv: &[String]) -> Result<Command, ParseError> {
         dst: target_or_current(&flags.values, 't')?,
         up: flags.present.contains(&'U'),
         down: flags.present.contains(&'D'),
+        detach: flags.present.contains(&'d'),
+        keep_zoom: flags.present.contains(&'Z'),
     }))
 }
 

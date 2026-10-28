@@ -70,3 +70,8 @@ fn seeded_random_window_commands_end_where_tmux_ends() {
         check("b1e", &format!("rand{seed}"), &[]);
     }
 }
+
+#[test]
+fn swap_pane_d_keeps_the_active_cells_and_z_keeps_the_zoom() {
+    check("b1e", "swapdz", &[]);
+}

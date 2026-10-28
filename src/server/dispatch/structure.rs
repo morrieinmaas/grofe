@@ -15,7 +15,7 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::State;
 use crate::server::dispatch::options::Owner;
-use crate::server::dispatch::pane::{respawn, select_last, unzoom};
+use crate::server::dispatch::pane::{respawn, select_last, toggle_zoom, unzoom};
 use crate::server::dispatch::resolve_cwd;
 use crate::server::dispatch::window::{AUTOMATIC_RENAME, apply_preset, default_name, main_sizes};
 use crate::server::layout::{Insert, LayoutTree, Preset};
@@ -172,7 +172,8 @@ fn finish_leaving(model: &mut Model, from: WindowId, to: WindowId) {
 /// `-U`/`-D` the target and the pane before or after it (wrapping). Each
 /// takes the other's cell and index. As tmux 3.7b: the target pane becomes
 /// active in the window both are in; across windows, each window's
-/// incoming pane becomes its active one.
+/// incoming pane becomes its active one. `-d` leaves the active panes in
+/// their cells; a zoomed window unzooms unless `-Z`.
 pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<String, String> {
     let model = &mut state.model;
     let dst = model.resolve_pane(&c.dst, ctx)?;
@@ -195,24 +196,58 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
         // tmux 3.7b's text, recorded.
         return Err("cannot swap floating panes".to_string());
     }
+    let rezoom: Vec<WindowId> = if c.keep_zoom {
+        let mut zoomed: Vec<WindowId> = [src_w, dst_w]
+            .into_iter()
+            .filter(|w| model.windows[w].zoomed)
+            .collect();
+        zoomed.dedup();
+        zoomed
+    } else {
+        Vec::new()
+    };
     unzoom(model, dst_w);
     unzoom(model, src_w);
-    if src == dst {
-        return Ok(String::new());
+    if src != dst {
+        swap_cells(model, (src_w, src), (dst_w, dst), c.detach);
     }
+    for window in rezoom {
+        if let Some(active) = model.windows.get(&window).map(|w| w.active) {
+            toggle_zoom(model, window, active);
+        }
+    }
+    Ok(String::new())
+}
+
+/// The swap itself. As tmux 3.7b: the incoming pane becomes active, or
+/// with `-d` a window whose active pane was swapped keeps its cell's
+/// pane (in one window, the source pane, whichever of the two was active).
+fn swap_cells(
+    model: &mut Model,
+    (src_w, src): (WindowId, PaneId),
+    (dst_w, dst): (WindowId, PaneId),
+    detach: bool,
+) {
     if src_w == dst_w {
         let Some(w) = model.windows.get_mut(&dst_w) else {
-            return Ok(String::new());
+            return;
         };
         w.layout.swap(src, dst);
-        w.set_active(dst);
+        if !detach {
+            w.set_active(dst);
+        } else if w.active == src || w.active == dst {
+            w.set_active(src);
+        }
         model.relayout(dst_w);
-        return Ok(String::new());
+        return;
     }
     for (window, out, into) in [(src_w, src, dst), (dst_w, dst, src)] {
         if let Some(w) = model.windows.get_mut(&window) {
+            let was_active = w.active == out;
             w.layout.replace(out, into);
-            w.set_active(into);
+            if !detach || was_active {
+                w.set_active(into);
+            }
             // The pane that left is no one's last pane here.
             w.last_panes.retain(|p| *p != out);
         }
@@ -222,7 +257,6 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
     }
     model.relayout(src_w);
     model.relayout(dst_w);
-    Ok(String::new())
 }
 
 /// A window's place in `session`: tmux's winlink.
