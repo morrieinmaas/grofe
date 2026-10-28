@@ -294,6 +294,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             bell_flag: false,
             activity_flag: false,
             silence_flag: false,
+            activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),

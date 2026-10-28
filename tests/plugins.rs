@@ -112,8 +112,19 @@ fn wait_state(srv: &TestServer, name: &str, state: &str) {
     });
 }
 
+/// Whether `pid` is a running process. A zombie is not: in a container whose
+/// init does not reap (act's), a process orphaned by a killed plugin stays a
+/// zombie for good, though it is dead.
 fn alive(pid: i32) -> bool {
-    kill(Pid::from_raw(pid), None).is_ok()
+    if kill(Pid::from_raw(pid), None).is_err() {
+        return false;
+    }
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }
 
 fn sigkill(pid: i32) {
@@ -598,6 +609,37 @@ fn the_plugin_env_is_added_and_cannot_override_grofe() {
     let f: Vec<&str> = text.trim_end().split('|').collect();
     assert_eq!((f[0], f[1]), ("yes", "p"));
     assert_ne!(f[2], "/nope");
+}
+
+#[test]
+fn the_plugin_env_cannot_override_tmux_or_grofe_state() {
+    for (identity, tmux_expected) in [("tmux", true), ("grofe", false)] {
+        let srv = TestServer::unstarted();
+        let out = srv.home.join("env.txt");
+        let p = script(
+            &srv,
+            "p.sh",
+            &format!(
+                "echo \"${{TMUX-unset}}|$GROFE_STATE\" > {}\nexec sleep 600",
+                out.display()
+            ),
+        );
+        let extra = "env = { TMUX = \"/nope,1,0\", GROFE_STATE = \"/nope\" }";
+        let config = format!(
+            "compat-identity = \"{identity}\"\n{}",
+            plugin_table("p", &p, extra)
+        );
+        let srv = start_with(srv, &config, None);
+        running(&srv, "p");
+        let text = read(&out);
+        let (tmux, state) = text.trim_end().split_once('|').expect("two fields");
+        assert_ne!(state, "/nope", "{identity}");
+        if tmux_expected {
+            assert!(tmux.contains(&srv.socket.display().to_string()), "{tmux}");
+        } else {
+            assert_eq!(tmux, "unset", "{identity}");
+        }
+    }
 }
 
 #[test]

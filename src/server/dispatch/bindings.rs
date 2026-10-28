@@ -21,7 +21,9 @@
 //! event, so `mouse_status_range` and a bare `=` target (M36-R3) work in
 //! it, a shell-form branch too.
 
-use crate::cmd::{self, Condition, FormatVars, If, Resolve, Target};
+use crate::cmd::{
+    self, Condition, FormatVars, If, Inner, LoopItem, LoopKind, LoopSort, NameKind, Resolve, Target,
+};
 use crate::protocol::{ClientCtx, Failure};
 use crate::server::clients::{self, ClientVars};
 use crate::server::dispatch::options::{FormatCtx, ServerVars};
@@ -163,13 +165,16 @@ fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, 
 pub(super) fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text: &str) -> String {
     let model = &state.model;
     let with = |inner: &dyn FormatVars| {
-        let vars = MouseVars { state, inner };
+        let vars = MouseVars {
+            state,
+            inner: Inner::Ref(inner),
+        };
         match hooks::current_formats(state) {
             Some(formats) => cmd::expand(
                 text,
                 &hooks::HookVars {
                     formats,
-                    inner: &vars,
+                    inner: Inner::Ref(&vars),
                 },
             ),
             None => cmd::expand(text, &vars),
@@ -193,12 +198,40 @@ pub(super) fn expand(state: &State, ctx: &ClientCtx, pane: Option<PaneId>, text:
 /// The mouse's variables ([`mouse::format_var`]) over `inner`.
 struct MouseVars<'a> {
     state: &'a State,
-    inner: &'a dyn FormatVars,
+    inner: Inner<'a>,
 }
 
 impl FormatVars for MouseVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
-        mouse::format_var(self.state, name).or_else(|| self.inner.get(name))
+        mouse::format_var(self.state, name).or_else(|| self.inner.vars().get(name))
+    }
+
+    fn loop_items(&self, kind: LoopKind, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        let items = self.inner.vars().loop_items(kind, sort)?;
+        Some(
+            items
+                .into_iter()
+                .map(|it| LoopItem {
+                    vars: Box::new(MouseVars {
+                        state: self.state,
+                        inner: Inner::Own(it.vars),
+                    }),
+                    ..it
+                })
+                .collect(),
+        )
+    }
+
+    fn name_exists(&self, kind: NameKind, name: &str) -> Option<bool> {
+        self.inner.vars().name_exists(kind, name)
+    }
+
+    fn pane_search(&self, term: &str, regex: bool, ignore: bool) -> Option<u32> {
+        self.inner.vars().pane_search(term, regex, ignore)
+    }
+
+    fn reexpand(&self, text: &str) -> String {
+        self.inner.vars().reexpand(text)
     }
 }
 

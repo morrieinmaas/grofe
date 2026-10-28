@@ -1612,6 +1612,13 @@ impl Drop for Search {
 #[derive(Debug, Clone)]
 pub struct Remembered(String, bool);
 
+impl Remembered {
+    /// The search string (`wp->searchstr`).
+    pub fn text(&self) -> &str {
+        &self.0
+    }
+}
+
 /// What the pane remembers when its mode ends.
 pub fn remember(mode: &Mode) -> Option<Remembered> {
     let (text, regex) = match &mode.search.flight {

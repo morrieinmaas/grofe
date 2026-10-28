@@ -117,10 +117,18 @@ pub fn output(state: &mut State, panes: &BTreeSet<PaneId>) {
         .filter_map(|p| state.model.panes.get(p).map(|p| p.window))
         .collect();
     for window in windows {
+        touch(state, window);
         if monitored(state, window, Alert::Activity) {
             raise(state, window, Alert::Activity);
         }
         restart_silence(state, window);
+    }
+}
+
+/// The window saw output or was selected: tmux's `window_update_activity`.
+fn touch(state: &mut State, window: WindowId) {
+    if let Some(w) = state.model.windows.get_mut(&window) {
+        w.activity = std::time::SystemTime::now();
     }
 }
 
@@ -130,6 +138,7 @@ pub fn output(state: &mut State, panes: &BTreeSet<PaneId>) {
 pub fn drain(state: &mut State) {
     let selected = std::mem::take(&mut state.model.selected);
     for window in selected {
+        touch(state, window);
         if monitored(state, window, Alert::Activity) {
             raise(state, window, Alert::Activity);
         }

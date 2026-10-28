@@ -698,3 +698,22 @@ fn history_limit_sizes_a_new_panes_scrollback() {
     assert!(lines.len() <= 30, "{} lines:\n{text}", lines.len());
     assert_ne!(lines.first().copied(), Some("1"), "{text}");
 }
+
+/// Lua was dropped (spec §5.1): `source-file` of a `.lua` file is not a
+/// special case, it is read as any other non-tmux file, as TOML, and fails
+/// there. No error promises a Lua loader to come.
+#[test]
+fn source_file_of_a_lua_file_is_not_a_special_case() {
+    let srv = start(&[]);
+    let dir = tempfile::tempdir().expect("dir");
+    let f = dir.path().join("init.lua");
+    fs::write(&f, "vim.opt.mouse = true\n").expect("write");
+    let err = srv
+        .cmd(&["source-file", &f.display().to_string()])
+        .expect_err("lua");
+    assert!(err.contains("init.lua"), "{err}");
+    assert!(
+        !err.contains("M6") && !err.contains("not implemented"),
+        "{err}"
+    );
+}

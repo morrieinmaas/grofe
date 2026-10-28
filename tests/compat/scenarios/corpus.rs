@@ -106,12 +106,6 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
     ("link-window -a -s -t", GROUPS),
     ("unlink-window -k -t", GROUPS),
     ("new-session -d -s -t", GROUPS),
-    // Spec 4.5 out of scope until a ported script needs it: sessionx's
-    // preview sends it, and M3.7 runs sessionx unchanged, so M3.7 needs it.
-    (
-        "format modifier T",
-        "`#{T:}` (spec 4.5 out of scope until needed; tmux-sessionx's preview.sh)",
-    ),
 ];
 
 const MOUSE: &str = "tmux's stock mouse bindings (spec 4.5 out of scope, M36-R7)";

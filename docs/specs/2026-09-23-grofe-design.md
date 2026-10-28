@@ -131,6 +131,15 @@ touches the user's real state.
 
 **Server exit:** when the last session closes, unless configured to stay.
 
+A server started implicitly by a session-creating command (not `start-server`)
+also exits as soon as it has no sessions and no open connection, even if it
+never had a session (the starting command failed). As in tmux, whose server
+exits when no client is attached to a session, a plugin's own `grofe control`
+(its environment carries `GROFE_PLUGIN`) does not count as an open connection:
+the server supervises it, so it must not keep the server up. Every other
+connection counts, a one-shot CLI mid-request and an event subscriber
+included (a subscriber is a client someone is waiting on).
+
 ### 4.2 Object model
 
 ```
@@ -270,7 +279,11 @@ v1: fnmatch patterns, `{mouse}`/`{last}`/`{next}`/`{marked}` tokens, `!`,
 
 **Formats:** M1 supports `#{name}` and `#{?cond,then,else}`; M2 adds
 `#{==:a,b}`, the basename modifier `#{b:var}`, nesting and escaping when the
-status line needs them. Formats in
+status line needs them. B1b adds tmux 3.7b's whole modifier language
+(`;` chains, any delimiter: `=N` `=/N/marker` `p` `n` `w` `s/a/b/` `d` `e|op|`
+`a` `c` `C` `N` `R` `E` `T` `t/p` `t/f` `q/e` `q/h`) and the `#{S:}` `#{W:}`
+`#{P:}` `#{L:}` loops with `loop_last_flag`, so a custom `status-format` can
+loop. Formats in
 flag values (`-c '#{pane_current_path}'`) are expanded at **execution** time
 against the target's context, not at parse time. `#(cmd)` never forks during
 expansion: it reads a cached status source (D8).
@@ -363,7 +376,6 @@ lands in the milestone shown.
 | Marked panes: `select-pane -m`/`-M`, the stock `m` binding | The mark only feeds `{marked}` targets and `-s` defaults, which the owner's scripts never use; `m` stays unbound and TP.9 lists it |
 | Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M`, `display-menu` position letters `M`, `W`, `S` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
 | `pipe-pane`, `lock-server`, `clock-mode`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
-| Format modifiers `#{s/../../:}`, `#{=N:}`, `#{l:}`, `#{E:}`, `#{T:}` and the loops `#{S:}`, `#{W:}`, `#{P:}` | Not in the owner's formats; each is added when a ported script needs it (`#{q:}` was, for claude-session-manager, in M3.7) |
 | Sockets under tmux's own directory, or scripts that build `/tmp/tmux-$UID/...` by hand | grofe keeps its socket directory (§4.1, D12); the owner's scripts use `$TMUX` or `#{socket_path}` |
 
 **Window names:** `automatic-rename` is on by default and names a window
@@ -385,11 +397,14 @@ resolve correctly for a CLI call made from inside a pane:
 ```json
 {"grofe": 1, "mode": "control", "dialect": "grofe", "cwd": "/home/u/src", "pane": "%3", "env": {"SSH_AUTH_SOCK": "..."}}
 {"grofe": 1, "mode": "attach", "dialect": "tmux", "cwd": "...", "pane": null, "env": {...},
- "cols": 200, "rows": 50, "term": "xterm-ghostty", "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true},
- "target": "main", "detach_others": false, "nest": false}
+ "cols": 200, "rows": 50, "term": "xterm-ghostty",
+ "caps": {"truecolor": true, "styled_underline": true, "sync": true, "kitty_keys": true, "kitty_graphics": true, "sixel": false, "cell_px": [9, 18]},
+ "target": "main", "detach_others": false, "nest": false, "tty": "/dev/ttys004"}
 ```
 
-`pane` is `$GROFE_PANE` when set. `dialect` is `tmux` when the CLI was invoked
+`pane` is `$GROFE_PANE` when set; it may be `null` or left out. `cell_px` is
+`null` when the terminal did not report a cell size, and `tty` (the client's
+terminal) is left out when it has none. `dialect` is `tmux` when the CLI was invoked
 as `tmux` (D12), as in the attach example from `tmux attach`, and defaults to
 `grofe`. **Nested attach:** attaching from inside a
 grofe pane or popup is allowed when the target session is a different one;
@@ -1144,7 +1159,9 @@ after the freeze.
   `subscribe` is an error the same way (§7.2). An unknown `mode` in a hello
   is a malformed hello and closes the connection.
 - **Shape.** A reply echoes its request's `id` and carries `ok` with `out`,
-  or `ok: false` with `err`. Replies to one connection's requests come in
+  or `ok: false` with `err` and, only when not empty, `out` (what the command
+  printed before it failed) and `status` (the exit status the one-shot CLI
+  uses, 1 when absent). Replies to one connection's requests come in
   request order; events carry no `id` and interleave between replies.
 - **Attach frames** are the six kinds in §4.6, frozen. An unknown frame
   kind closes the connection.
@@ -1180,8 +1197,9 @@ restart = "always"
   override. On a server with tmux identity (D12) a plugin also gets `TMUX`
   in tmux's format, `<socket path>,<server pid>,-1` (the session field is
   `-1`, as tmux gives a process outside any session), so its `tmux` calls
-  reach this server. A plugin is in no pane, so it gets no `GROFE_PANE` or
-  `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
+  reach this server; `env` cannot override `TMUX` either, and on a server
+  with grofe identity it cannot set it at all. A plugin is in no pane, so
+  it gets no `GROFE_PANE` or `TMUX_PANE`. stdin is `/dev/null`; stdout and stderr go to
   `<state dir>/plugins/<name>.log`, rotated at 1 MiB.
 - **Start and stop.** Enabled plugins start after the config loads (and,
   once M4 lands, after its restore), each spawned off the actor under the

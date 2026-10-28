@@ -37,7 +37,10 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use nix::libc;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::cmd::{self, AttachSession, DetachClient, FormatVars, ListClients, Resolve, Target};
+use crate::cmd::{
+    self, AttachSession, DetachClient, FormatVars, ListClients, LoopItem, LoopKind, LoopSort,
+    NameKind, Resolve, Target,
+};
 use crate::protocol::{Caps, ClientCtx, Dialect, Failure, Frame};
 use crate::server::borders::{Indicators, PaneLines, PaneStatus};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
@@ -2435,6 +2438,19 @@ impl FormatVars for ClientVars<'_> {
                     .map_or(0, |d| d.as_secs())
                     .to_string(),
             ),
+            // The terminal's own answer to XDA is not asked for.
+            "client_termtype" => Some(String::new()),
+            "client_utf8" => Some("1".to_string()),
+            // Only this user's processes can connect to the socket.
+            "client_uid" => Some(nix::unistd::getuid().as_raw().to_string()),
+            "client_user" => Some(
+                nix::unistd::User::from_uid(nix::unistd::getuid())
+                    .ok()
+                    .flatten()
+                    .map(|u| u.name)
+                    .unwrap_or_default(),
+            ),
+            "client_readonly" | "client_control_mode" => Some("0".to_string()),
             "client_session" => Some(self.session_name(c.session)),
             "client_last_session" => Some(
                 self.model
@@ -2444,6 +2460,47 @@ impl FormatVars for ClientVars<'_> {
                     .unwrap_or_default(),
             ),
             _ => self.pane.as_ref()?.get(name),
+        }
+    }
+
+    fn loop_items(&self, kind: LoopKind, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        let pane = self.pane.as_ref()?;
+        let specs = options::loop_specs(
+            self.model,
+            pane.pane_id(),
+            Some(self.client.session),
+            kind,
+            sort,
+        )?;
+        Some(
+            specs
+                .into_iter()
+                .map(|s| LoopItem {
+                    vars: Box::new(ClientVars::new(
+                        self.model,
+                        self.client,
+                        Some(FormatCtx::at(self.model, s.pane, s.level)),
+                    )),
+                    pane: Some(s.pane),
+                    active: s.active,
+                    extras: s.extras,
+                })
+                .collect(),
+        )
+    }
+
+    fn name_exists(&self, kind: NameKind, name: &str) -> Option<bool> {
+        self.pane.as_ref()?.name_exists(kind, name)
+    }
+
+    fn pane_search(&self, term: &str, regex: bool, ignore: bool) -> Option<u32> {
+        self.pane.as_ref()?.pane_search(term, regex, ignore)
+    }
+
+    fn reexpand(&self, text: &str) -> String {
+        match &self.pane {
+            Some(pane) => pane.reexpand(text),
+            None => text.to_string(),
         }
     }
 }

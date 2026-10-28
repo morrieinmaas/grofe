@@ -29,8 +29,8 @@ pub fn load(env: &Env) -> Result<Resolved, Vec<ConfigError>> {
 
 /// As [`load`], with `files` in place of `config.toml` (R5): each `.toml`
 /// is a layer-2 file, loaded in the order given, and `conf.d` and
-/// `user.toml` still load after them. A `.lua` file needs M6; any other
-/// extension is an error.
+/// `user.toml` still load after them. A file that is not `.toml` is an
+/// error.
 pub fn load_with_file(env: &Env, files: &[PathBuf]) -> Result<Resolved, Vec<ConfigError>> {
     load_layers(env, Some(files))
 }
@@ -59,9 +59,6 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
             for f in files {
                 match f.extension().and_then(|e| e.to_str()) {
                     Some("toml") => l.load_path(f, Layer::Config, false),
-                    // ponytail: layer 5 is T6.4's (M6); T6.6 passes its
-                    // example through here.
-                    Some("lua") => l.error(f, 0, "", "Lua config needs M6".to_string()),
                     _ => l.error(
                         f,
                         0,

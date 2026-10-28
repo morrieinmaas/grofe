@@ -40,7 +40,7 @@ use std::sync::OnceLock;
 
 use base64::Engine as _;
 
-use crate::cmd::{FormatVars, expand};
+use crate::cmd::{FormatVars, expand_time};
 use crate::server::dispatch::options::{self, FormatCtx};
 use crate::server::model::Model;
 use crate::server::pane::{PaneEventKind, marks};
@@ -849,7 +849,7 @@ fn outer_title(model: &Model, titles: &BTreeMap<PaneId, String>, pane: PaneId) -
         base: FormatCtx::new(model, pane),
         title: &title,
     };
-    Some(expand(fmt, &vars))
+    Some(expand_time(fmt, &vars))
 }
 
 /// [`FormatVars`] for `set-titles-string`: `pane_title` (`#T`) from the

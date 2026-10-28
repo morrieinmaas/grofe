@@ -41,7 +41,9 @@ use std::sync::{Arc, PoisonError, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
 
-use crate::cmd::{self, Command, FormatVars, Resolve, Target};
+use crate::cmd::{
+    self, Command, FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, Resolve, Target,
+};
 use crate::config::Resolved;
 use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect, Failure};
@@ -1096,12 +1098,42 @@ fn context_pane(state: &State, pane: Option<PaneId>) -> Option<PaneId> {
 /// A hook's own variables over `inner`.
 pub struct HookVars<'a> {
     pub formats: &'a HookFormats,
-    pub inner: &'a dyn FormatVars,
+    pub inner: Inner<'a>,
 }
 
 impl FormatVars for HookVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
-        self.formats.get(name).or_else(|| self.inner.get(name))
+        self.formats
+            .get(name)
+            .or_else(|| self.inner.vars().get(name))
+    }
+
+    fn loop_items(&self, kind: LoopKind, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        let items = self.inner.vars().loop_items(kind, sort)?;
+        Some(
+            items
+                .into_iter()
+                .map(|it| LoopItem {
+                    vars: Box::new(HookVars {
+                        formats: self.formats,
+                        inner: Inner::Own(it.vars),
+                    }),
+                    ..it
+                })
+                .collect(),
+        )
+    }
+
+    fn name_exists(&self, kind: NameKind, name: &str) -> Option<bool> {
+        self.inner.vars().name_exists(kind, name)
+    }
+
+    fn pane_search(&self, term: &str, regex: bool, ignore: bool) -> Option<u32> {
+        self.inner.vars().pane_search(term, regex, ignore)
+    }
+
+    fn reexpand(&self, text: &str) -> String {
+        self.inner.vars().reexpand(text)
     }
 }
 

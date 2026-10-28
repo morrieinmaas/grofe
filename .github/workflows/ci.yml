@@ -60,11 +60,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y neovim fzf htop tmux bats less
+          sudo apt-get install -y neovim fzf htop tmux bats less shellcheck
 
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
-        run: brew install neovim fzf htop tmux bats-core
+        run: brew install neovim fzf htop tmux bats-core shellcheck
 
       - name: Verify tools present
         run: |
@@ -74,6 +74,7 @@ jobs:
           tmux -V
           bats --version
           less --version | head -1
+          shellcheck --version | head -2
 
       # The Linux job runs in a container (act, or a fresh runner), so /tmp
       # is its own: the plugin cases that write fixed /tmp paths run here

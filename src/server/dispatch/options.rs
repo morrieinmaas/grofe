@@ -17,8 +17,9 @@ use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::cmd::{
-    BindKey, Command, DisplayMessage, FormatVars, ListKeys, ListPanes, ListSessions, ListWindows,
-    OptionScope, Reload, Resolve, SetOption, ShowOptions, SourceFile, Target, UnbindKey, expand,
+    BindKey, Command, DisplayMessage, FormatVars, Inner, ListKeys, ListPanes, ListSessions,
+    ListWindows, LoopItem, LoopKind, LoopSort, NameKind, OptionScope, Reload, Resolve, SetOption,
+    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time,
     split_command_string,
 };
 use crate::config::{self, Resolved, provenance::tilde};
@@ -2290,7 +2291,6 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 /// - `*.toml` is grofe's config (spec §5.1), with its includes resolved
 ///   against it. Its values and bindings count as runtime (R10): `reload`
 ///   keeps them. All errors or nothing, as `reload`.
-/// - `*.lua` is M6's.
 /// - Any other file is a tmux config when the request is tmux's (its
 ///   dialect, or a tmux-identity server): tmux's plugins source their own
 ///   `*.tmux` and `*.conf` files through `tmux` ([`source_tmux_file`]). A
@@ -2314,10 +2314,6 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
             return Ok(String::new());
         }
         return Err(format!("No such file or directory: {}", path.display()));
-    }
-    // ponytail: Lua config is layer 5, T6.4's (M6).
-    if path.extension().is_some_and(|e| e == "lua") {
-        return crate::server::dispatch::not_implemented("source-file of a Lua file (M6)");
     }
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
@@ -2553,10 +2549,8 @@ fn check_live_names(tables: &KeyTables, resolved: &Resolved) -> Result<(), Strin
     }
 }
 
-/// tmux's default `display-message` text, minus the clock (strftime is
-/// M2).
-const DEFAULT_MESSAGE: &str =
-    "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index}";
+/// tmux's default `display-message` text.
+const DEFAULT_MESSAGE: &str = "[#{session_name}] #{window_index}:#{window_name}, current pane #{pane_index} - (%H:%M %d-%b-%y)";
 
 /// `display-message`: the text expanded against the target pane and the
 /// current client (the one whose binding ran it, else the most recently
@@ -2602,9 +2596,9 @@ fn display_message(
     let out = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            expand(text, &ServerVars::fresh(state, pane, &client))
+            expand_time(text, &ServerVars::fresh(state, pane, &client))
         }
-        None => expand(text, &ServerVars::fresh(state, pane, &vars)),
+        None => expand_time(text, &ServerVars::fresh(state, pane, &vars)),
     };
     if c.print {
         return Ok(format!("{out}\n"));
@@ -2615,10 +2609,10 @@ fn display_message(
     Ok(String::new())
 }
 
-fn lines(state: &State, fmt: &str, panes: impl Iterator<Item = PaneId>) -> String {
+fn lines(state: &State, fmt: &str, level: Level, panes: impl Iterator<Item = PaneId>) -> String {
     panes
         .map(|p| {
-            let vars = FormatCtx::new(&state.model, p);
+            let vars = FormatCtx::at(&state.model, p, level);
             format!("{}\n", expand(fmt, &ServerVars::fresh(state, p, &vars)))
         })
         .collect()
@@ -2674,7 +2668,7 @@ fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let panes = sessions
         .into_iter()
         .filter_map(|s| session_pane(&state.model, s));
-    Ok(lines(state, &fmt, panes))
+    Ok(lines(state, &fmt, Level::Session, panes))
 }
 
 fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String, String> {
@@ -2686,7 +2680,7 @@ fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<String
     let panes = windows
         .into_iter()
         .filter_map(|w| active_pane(&state.model, w));
-    Ok(lines(state, &fmt, panes))
+    Ok(lines(state, &fmt, Level::Window, panes))
 }
 
 fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, String> {
@@ -2703,16 +2697,16 @@ fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String, St
         format!("{prefix}{TMUX_LIST_PANES}")
     });
     let panes = listed_panes(state, ctx, &c)?;
-    Ok(lines(state, &fmt, panes.into_iter()))
+    Ok(lines(state, &fmt, Level::Pane, panes.into_iter()))
 }
 
 /// Whether a list's `-f` filter keeps the line of `pane` (tmux's
 /// `format_true`: not empty and not `0`); no filter keeps every line.
-fn kept(state: &State, filter: Option<&str>, pane: PaneId) -> bool {
+fn kept(state: &State, filter: Option<&str>, level: Level, pane: PaneId) -> bool {
     let Some(filter) = filter else {
         return true;
     };
-    let vars = FormatCtx::new(&state.model, pane);
+    let vars = FormatCtx::at(&state.model, pane, level);
     let got = expand(filter, &ServerVars::new(state, pane, &vars));
     !got.is_empty() && got != "0"
 }
@@ -2739,7 +2733,8 @@ pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Vec<SessionId>
     sessions_by_name(&state.model)
         .into_iter()
         .filter(|s| {
-            session_pane(&state.model, *s).is_some_and(|p| kept(state, c.filter.as_deref(), p))
+            session_pane(&state.model, *s)
+                .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Session, p))
         })
         .collect()
 }
@@ -2759,7 +2754,10 @@ pub(crate) fn listed_windows(
     Ok(sessions
         .iter()
         .flat_map(|s| model.sessions[s].windows.iter().copied())
-        .filter(|w| active_pane(model, *w).is_some_and(|p| kept(state, c.filter.as_deref(), p)))
+        .filter(|w| {
+            active_pane(model, *w)
+                .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Window, p))
+        })
         .collect())
 }
 
@@ -2787,7 +2785,7 @@ pub(crate) fn listed_panes(
         .iter()
         .filter_map(|w| model.windows.get(w))
         .flat_map(|w| w.pane_ids())
-        .filter(|p| kept(state, c.filter.as_deref(), *p))
+        .filter(|p| kept(state, c.filter.as_deref(), Level::Pane, *p))
         .collect())
 }
 
@@ -2795,11 +2793,163 @@ pub(crate) fn listed_panes(
 pub struct FormatCtx<'a> {
     model: &'a Model,
     pane: PaneId,
+    level: Level,
+}
+
+/// What a format is expanded for, as tmux's `format_tree` type: the
+/// `pane_format`, `window_format` and `session_format` variables say which
+/// (a `list-windows -F` is for windows, even though its variables read the
+/// window's active pane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    Session,
+    Window,
+    Pane,
 }
 
 impl<'a> FormatCtx<'a> {
     pub fn new(model: &'a Model, pane: PaneId) -> FormatCtx<'a> {
-        FormatCtx { model, pane }
+        FormatCtx::at(model, pane, Level::Pane)
+    }
+
+    pub fn at(model: &'a Model, pane: PaneId, level: Level) -> FormatCtx<'a> {
+        FormatCtx { model, pane, level }
+    }
+
+    pub fn pane_id(&self) -> PaneId {
+        self.pane
+    }
+}
+
+/// One thing a session, window or pane loop visits.
+pub(crate) struct LoopSpec {
+    /// The pane its formats read: the active pane of a session's current
+    /// window or of a window, else the pane itself.
+    pub pane: PaneId,
+    pub level: Level,
+    pub active: bool,
+    pub extras: Vec<(String, String)>,
+}
+
+/// What `#{S:}`, `#{W:}` and `#{P:}` visit from `pane`'s point of view,
+/// sorted as tmux sorts them (`sort.c`): every session; the windows of
+/// `pane`'s session; the panes of its window. `client_session` is the
+/// session of the client the formats are for, which `#{S:}`'s second
+/// branch is for. `None` for the clients loop (the server's) and a pane
+/// that is gone.
+pub(crate) fn loop_specs(
+    model: &Model,
+    pane: PaneId,
+    client_session: Option<SessionId>,
+    kind: LoopKind,
+    sort: LoopSort,
+) -> Option<Vec<LoopSpec>> {
+    let p = model.panes.get(&pane)?;
+    let w = model.windows.get(&p.window)?;
+    let s = model.sessions.get(&w.session)?;
+    let by_name = |a: &str, b: &str| a.as_bytes().cmp(b.as_bytes());
+    match kind {
+        LoopKind::Sessions => {
+            // tmux keeps its sessions in a tree by name.
+            let mut all: Vec<&crate::server::model::Session> = model.sessions.values().collect();
+            all.sort_by(|a, b| by_name(&a.name, &b.name));
+            sort.apply(&mut all, |order, a, b| {
+                let first = match order {
+                    SortOrder::Index => a.id.cmp(&b.id),
+                    SortOrder::Activity => b.activity.cmp(&a.activity),
+                    SortOrder::Name => by_name(&a.name, &b.name),
+                    _ => std::cmp::Ordering::Equal,
+                };
+                first.then_with(|| by_name(&a.name, &b.name))
+            });
+            Some(
+                all.into_iter()
+                    .filter_map(|o| {
+                        let pane = model.windows.get(&o.active)?.active;
+                        Some(LoopSpec {
+                            pane,
+                            level: Level::Session,
+                            active: client_session == Some(o.id),
+                            extras: Vec::new(),
+                        })
+                    })
+                    .collect(),
+            )
+        }
+        LoopKind::Windows => {
+            let mut all: Vec<&crate::server::model::Window> = s
+                .windows
+                .iter()
+                .filter_map(|id| model.windows.get(id))
+                .collect();
+            sort.apply(&mut all, |order, a, b| {
+                let first = match order {
+                    SortOrder::Name => by_name(&a.name, &b.name),
+                    SortOrder::Activity => b.activity.cmp(&a.activity),
+                    _ => std::cmp::Ordering::Equal,
+                };
+                first.then_with(|| by_name(&a.name, &b.name))
+            });
+            let n = all.len();
+            let flag = |on: bool| if on { "1" } else { "0" }.to_string();
+            Some(
+                (0..n)
+                    .map(|i| {
+                        let this = all[i];
+                        let mut extras = vec![
+                            (
+                                "window_after_active".to_string(),
+                                flag(i > 0 && all[i - 1].id == s.active),
+                            ),
+                            (
+                                "window_before_active".to_string(),
+                                flag(i + 1 < n && all[i + 1].id == s.active),
+                            ),
+                        ];
+                        for (prefix, other) in [
+                            ("next", all.get(i + 1)),
+                            ("prev", i.checked_sub(1).and_then(|j| all.get(j))),
+                        ] {
+                            let Some(other) = other else { continue };
+                            extras
+                                .push((format!("{prefix}_window_index"), other.index.to_string()));
+                            extras.push((
+                                format!("{prefix}_window_active"),
+                                flag(other.id == s.active),
+                            ));
+                            for (name, entry) in model.options.at(Owner::Window(other.id)) {
+                                if name.starts_with('@') {
+                                    extras.push((format!("{prefix}_{name}"), entry.value.clone()));
+                                }
+                            }
+                        }
+                        LoopSpec {
+                            pane: this.active,
+                            level: Level::Window,
+                            active: this.id == s.active,
+                            extras,
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        LoopKind::Panes => {
+            // The sort is by pane id, whatever flags a `P` modifier has;
+            // `r` reverses it.
+            let mut all = w.pane_ids();
+            sort.apply(&mut all, |_, a, b| a.cmp(b));
+            Some(
+                all.into_iter()
+                    .map(|id| LoopSpec {
+                        pane: id,
+                        level: Level::Pane,
+                        active: id == w.active,
+                        extras: Vec::new(),
+                    })
+                    .collect(),
+            )
+        }
+        LoopKind::Clients => None,
     }
 }
 
@@ -2816,7 +2966,7 @@ fn flag(b: bool) -> String {
 pub struct ServerVars<'a> {
     state: &'a State,
     pane: PaneId,
-    inner: &'a dyn FormatVars,
+    inner: Inner<'a>,
     /// Read the foreground process now, not from the last sample.
     fresh: bool,
     /// What a fresh expansion has read so far: each is read at most once
@@ -2833,7 +2983,7 @@ impl<'a> ServerVars<'a> {
         ServerVars {
             state,
             pane,
-            inner,
+            inner: Inner::Ref(inner),
             fresh: false,
             group: OnceCell::new(),
             leader: OnceCell::new(),
@@ -2917,10 +3067,104 @@ impl FormatVars for ServerVars<'_> {
                 Some(p.handle.tty_path()?.display().to_string())
             }
             "pane_current_command" | "pane_current_argv" | "pane_foreground_argv" if self.fresh => {
-                self.foreground(name).or_else(|| self.inner.get(name))
+                self.foreground(name)
+                    .or_else(|| self.inner.vars().get(name))
             }
-            _ => self.inner.get(name),
+            "session_attached_list" => self.attached_list(),
+            _ => self.inner.vars().get(name),
         }
+    }
+
+    fn loop_items(&self, kind: LoopKind, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        if kind == LoopKind::Clients {
+            return self.client_items(sort);
+        }
+        let items = self.inner.vars().loop_items(kind, sort)?;
+        Some(
+            items
+                .into_iter()
+                .map(|it| {
+                    let pane = it.pane.unwrap_or(self.pane);
+                    LoopItem {
+                        vars: Box::new(self.rebuild(Inner::Own(it.vars), pane)),
+                        pane: Some(pane),
+                        active: it.active,
+                        extras: it.extras,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    fn name_exists(&self, kind: NameKind, name: &str) -> Option<bool> {
+        self.inner.vars().name_exists(kind, name)
+    }
+
+    fn pane_search(&self, term: &str, regex: bool, ignore: bool) -> Option<u32> {
+        self.inner.vars().pane_search(term, regex, ignore)
+    }
+
+    fn reexpand(&self, text: &str) -> String {
+        self.inner.vars().reexpand(text)
+    }
+}
+
+impl<'a> ServerVars<'a> {
+    /// This layer over other variables and the pane they read: what a
+    /// loop's item sees.
+    fn rebuild<'x>(&'x self, inner: Inner<'x>, pane: PaneId) -> ServerVars<'x> {
+        ServerVars {
+            state: self.state,
+            pane,
+            inner,
+            fresh: self.fresh,
+            group: OnceCell::new(),
+            leader: OnceCell::new(),
+            members: OnceCell::new(),
+        }
+    }
+
+    /// `#{session_attached_list}`: the names of the clients showing the
+    /// pane's session, comma-joined.
+    fn attached_list(&self) -> Option<String> {
+        let m = &self.state.model;
+        let session = m.windows.get(&m.panes.get(&self.pane)?.window)?.session;
+        let names: Vec<&str> = self
+            .state
+            .clients
+            .values()
+            .filter(|c| c.session == session)
+            .map(|c| c.name.as_str())
+            .collect();
+        Some(names.join(","))
+    }
+
+    /// `#{L:}`: every client, each over the pane this layer reads.
+    fn client_items(&self, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        let model = &self.state.model;
+        let mut all: Vec<&clients::ClientEntry> = self.state.clients.values().collect();
+        sort.apply(&mut all, |order, a, b| {
+            let first = match order {
+                SortOrder::Name => a.name.as_bytes().cmp(b.name.as_bytes()),
+                SortOrder::Activity => b.activity_time.cmp(&a.activity_time),
+                _ => std::cmp::Ordering::Equal,
+            };
+            first.then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
+        });
+        Some(
+            all.into_iter()
+                .map(|c| {
+                    let client =
+                        clients::ClientVars::new(model, c, Some(FormatCtx::new(model, self.pane)));
+                    LoopItem {
+                        vars: Box::new(self.rebuild(Inner::Own(Box::new(client)), self.pane)),
+                        pane: Some(self.pane),
+                        active: false,
+                        extras: Vec::new(),
+                    }
+                })
+                .collect(),
+        )
     }
 }
 
@@ -2954,6 +3198,13 @@ impl FormatVars for FormatCtx<'_> {
                 );
             }
             "grofe_version" => return Some(env!("CARGO_PKG_VERSION").to_string()),
+            // Outside a loop; the loop's items say otherwise.
+            "loop_last_flag" => return Some("0".to_string()),
+            "server_sessions" => return Some(m.sessions.len().to_string()),
+            "uid" => return Some(nix::unistd::getuid().as_raw().to_string()),
+            "tree_mode_format" => return Some(TREE_MODE_FORMAT.to_string()),
+            "buffer_mode_format" => return Some(BUFFER_MODE_FORMAT.to_string()),
+            "client_mode_format" => return Some(CLIENT_MODE_FORMAT.to_string()),
             "pid" => return Some(std::process::id().to_string()),
             "start_time" => {
                 let since = m.started?.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -2969,6 +3220,12 @@ impl FormatVars for FormatCtx<'_> {
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "session_group"
             | "client_tty" | "client_pid" => return Some(String::new()),
             "pane_in_mode" => return Some("0".to_string()),
+            // Marked panes are not kept (spec 4.5): nothing is marked.
+            "pane_marked" | "pane_marked_set" | "window_marked_flag" => {
+                return Some("0".to_string());
+            }
+            // The search string of a copy mode, which answers first.
+            "pane_search_string" => return Some(String::new()),
             _ => {}
         }
         let p = m.panes.get(&self.pane)?;
@@ -3094,13 +3351,200 @@ impl FormatVars for FormatCtx<'_> {
             // allocated, which depends on how its grid grew; left out.
             "history_bytes" => ((p.handle.history_size() + usize::from(p.rows)) * 40).to_string(),
             "window_flags" => window_flags(s, w),
+            "pane_format" => flag(self.level == Level::Pane),
+            "window_format" => flag(self.level == Level::Window),
+            "session_format" => flag(self.level == Level::Session),
+            "window_last_flag" => flag(s.last_windows.last() == Some(&w.id)),
+            "pane_last" => flag(w.last_pane() == Some(p.id)),
+            // tmux's `window_pane_printable_flags`.
+            "pane_flags" => [
+                (w.active == p.id, '*'),
+                (w.last_pane() == Some(p.id), '-'),
+                (w.zoomed && w.active == p.id, 'Z'),
+                (w.floating(p.id).is_some(), 'F'),
+            ]
+            .into_iter()
+            .filter_map(|(on, c)| on.then_some(c))
+            .collect(),
+            "window_start_flag" => flag(s.windows.first() == Some(&w.id)),
+            "window_end_flag" => flag(s.windows.last() == Some(&w.id)),
+            "window_activity" => epoch_secs(w.activity),
+            "session_activity" => epoch_secs(std::time::SystemTime::now() - s.activity.elapsed()),
+            "active_window_index" => m.windows.get(&s.active)?.index.to_string(),
+            "last_window_index" => s
+                .windows
+                .iter()
+                .filter_map(|id| m.windows.get(id))
+                .map(|w| w.index)
+                .max()?
+                .to_string(),
+            "session_many_attached" => flag(s.attached > 1),
+            "pane_zoomed_flag" => flag(w.zoomed && w.active == p.id),
+            // No linked windows (spec 4.5): the window's only session.
+            "window_active_sessions" => flag(s.active == w.id),
+            "window_active_sessions_list" => {
+                if s.active == w.id {
+                    s.name.clone()
+                } else {
+                    String::new()
+                }
+            }
+            "window_linked_sessions_list" => s.name.clone(),
+            // Each kind of alert once, windows in index order.
+            "session_alert" => {
+                let windows: Vec<_> = s
+                    .windows
+                    .iter()
+                    .filter_map(|id| m.windows.get(id))
+                    .collect();
+                [
+                    ('#', windows.iter().any(|w| w.activity_flag)),
+                    ('!', windows.iter().any(|w| w.bell_flag)),
+                    ('~', windows.iter().any(|w| w.silence_flag)),
+                ]
+                .into_iter()
+                .filter_map(|(c, on)| on.then_some(c))
+                .collect()
+            }
+            // `idx` and its alerts, for each window that has any.
+            "session_alerts" => s
+                .windows
+                .iter()
+                .filter_map(|id| m.windows.get(id))
+                .filter(|w| w.activity_flag || w.bell_flag || w.silence_flag)
+                .map(|w| {
+                    format!(
+                        "{}{}{}{}",
+                        w.index,
+                        if w.activity_flag { "#" } else { "" },
+                        if w.bell_flag { "!" } else { "" },
+                        if w.silence_flag { "~" } else { "" },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+            // The windows before this one, most recent first.
+            "session_stack" => std::iter::once(m.windows.get(&s.active)?.index)
+                .chain(
+                    s.last_windows
+                        .iter()
+                        .rev()
+                        .filter_map(|id| m.windows.get(id).map(|w| w.index)),
+                )
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            "window_stack_index" => s
+                .last_windows
+                .iter()
+                .rev()
+                .position(|id| *id == w.id)
+                .map_or(0, |at| at + 1)
+                .to_string(),
+            "pane_synchronized" => {
+                flag(m.options.lookup("synchronize-panes", &chain(m, self.pane)) == Some("on"))
+            }
+            "pane_start_path" => p.cwd.display().to_string(),
+            // No linked windows (spec 4.5): a window is in its session only.
+            "window_linked" => "0".to_string(),
+            "window_linked_sessions" => "1".to_string(),
             // ponytail: `client_width`/`client_height` need clients (M2);
             // `host` and `host_short` are `ServerVars`' (TC.11).
             // The emulator's screen state (`cursor_x`, `wrap_flag`, ...).
             _ => return p.handle.term_var(name),
         })
     }
+
+    fn loop_items(&self, kind: LoopKind, sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        let specs = loop_specs(self.model, self.pane, None, kind, sort)?;
+        Some(
+            specs
+                .into_iter()
+                .map(|s| LoopItem {
+                    vars: Box::new(FormatCtx::at(self.model, s.pane, s.level)),
+                    pane: Some(s.pane),
+                    active: s.active,
+                    extras: s.extras,
+                })
+                .collect(),
+        )
+    }
+
+    fn name_exists(&self, kind: NameKind, name: &str) -> Option<bool> {
+        let m = self.model;
+        match kind {
+            NameKind::Session => Some(m.sessions.values().any(|s| s.name == name)),
+            NameKind::Window => {
+                let p = m.panes.get(&self.pane)?;
+                let s = m.sessions.get(&m.windows.get(&p.window)?.session)?;
+                Some(
+                    s.windows
+                        .iter()
+                        .filter_map(|id| m.windows.get(id))
+                        .any(|w| w.name == name),
+                )
+            }
+        }
+    }
+
+    fn pane_search(&self, term: &str, regex: bool, ignore: bool) -> Option<u32> {
+        let p = self.model.panes.get(&self.pane)?;
+        let visible = crate::types::CaptureOpts {
+            start: None,
+            end: None,
+            escapes: false,
+        };
+        let text = p.handle.capture(&visible);
+        Some(crate::cmd::format::search_lines(
+            text.lines(),
+            term,
+            regex,
+            ignore,
+        ))
+    }
+
+    fn reexpand(&self, text: &str) -> String {
+        use crate::compat::Identity;
+        match self.model.identity {
+            Identity::Tmux => {
+                crate::compat::tmux::formats::to_native(
+                    text,
+                    crate::compat::tmux::formats::Jobs::Empty,
+                )
+                .value
+            }
+            Identity::Grofe => text.to_string(),
+        }
+    }
 }
+
+/// Seconds since the epoch, as tmux prints a time variable.
+fn epoch_secs(t: std::time::SystemTime) -> String {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+        .to_string()
+}
+
+/// tmux 3.7b's `window_tree_mode.default_format`, `window_buffer_mode`'s and
+/// `window_client_mode`'s (`window-tree.c`, `window-buffer.c`,
+/// `window-client.c`): what `#{tree_mode_format}` and the like are.
+const TREE_MODE_FORMAT: &str = concat!(
+    "#{?pane_format,",
+    "#{?pane_marked,#[reverse],}#{?pane_floating_flag,#[italics],}",
+    "#{pane_current_command}#{pane_flags}",
+    "#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",}",
+    ",window_format,",
+    "#{?window_marked_flag,#[reverse],}",
+    "#{window_name}#{window_flags}",
+    "#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",}",
+    ",",
+    "#{session_windows} windows",
+    "#{?session_grouped, (group #{session_group}: #{session_group_list}),}",
+    "#{?session_attached, (attached),}",
+    "}"
+);
+const BUFFER_MODE_FORMAT: &str = "#{t/p:buffer_created}: #{buffer_sample}";
+const CLIENT_MODE_FORMAT: &str = "#{t/p:client_activity}: session #{session_name}";
 
 /// tmux's `window_layout`: the layout string of the window's tiled and
 /// floating panes (`layout::tmux_layout`).
@@ -3139,63 +3583,7 @@ fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Win
     format!("{activity}{rest}")
 }
 
-/// One word of `pane_start_command`, quoted as tmux's `args_escape`
-/// quotes it (checked against tmux 3.7b): double quotes around a word
-/// with any of ` #';${}%`, else single quotes around one with a space or
-/// `"`; a lone special character, or a leading `~`, gets a backslash;
-/// control characters and backslashes are escaped C-style.
-pub(crate) fn escape_arg(s: &str) -> String {
-    const DQUOTED: &str = " #';${}%";
-    const SQUOTED: &str = " \"";
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let quote = if s.contains(|c| DQUOTED.contains(c)) {
-        Some('"')
-    } else if s.contains(|c| SQUOTED.contains(c)) {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = s.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quote.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let bytes = s.as_bytes();
-    let mut body = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        match c {
-            '\\' => body.push_str("\\\\"),
-            '\n' => body.push_str("\\n"),
-            '\t' => body.push_str("\\t"),
-            '\r' => body.push_str("\\r"),
-            '\x07' => body.push_str("\\a"),
-            '\x08' => body.push_str("\\b"),
-            '\x0b' => body.push_str("\\v"),
-            '\x0c' => body.push_str("\\f"),
-            c if c.is_ascii_control() => body.push_str(&format!("\\{:03o}", c as u32)),
-            '"' if quote == Some('"') => body.push_str("\\\""),
-            // `$` only where a shell would start a variable after it.
-            '$' if quote == Some('"')
-                && bytes.get(i + 1).is_some_and(|&n| {
-                    n == b'_' || n == b'{' || n.is_ascii_alphabetic() || n >= 0x80
-                }) =>
-            {
-                body.push_str("\\$")
-            }
-            c => body.push(c),
-        }
-    }
-    let tilde = if body.starts_with('~') { "\\" } else { "" };
-    match quote {
-        Some('\'') => format!("'{body}'"),
-        Some(q) => format!("{q}{tilde}{body}{q}"),
-        None => format!("{tilde}{body}"),
-    }
-}
+pub(crate) use crate::cmd::format::escape_arg;
 
 /// A pane's top-left cell in its window: the layout's, or the window's
 /// origin for a zoomed window's active pane.

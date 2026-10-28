@@ -8,11 +8,123 @@
 
 use std::cell::Cell;
 
+mod modify;
+mod x11;
+
+pub use modify::escape_arg;
+
 /// Supplies named values to [`expand`]. Implemented by whatever holds the
 /// pane/window/session/client state a format string reaches for
 /// (`server/model.rs`, from T1.5c onward).
 pub trait FormatVars {
     fn get(&self, name: &str) -> Option<String>;
+
+    /// What `#{S:}`, `#{W:}`, `#{P:}` and `#{L:}` visit, already in `sort`'s
+    /// order, each with the variables of its own context. `None` when this
+    /// context has no session (or window) to loop over: tmux fails the
+    /// whole `#{...}` then, and the rest of the format with it.
+    fn loop_items(&self, _kind: LoopKind, _sort: LoopSort) -> Option<Vec<LoopItem<'_>>> {
+        None
+    }
+
+    /// Whether the context's session has a window called `name` (for
+    /// [`NameKind::Window`], `None` without a session) or a session of that
+    /// name exists (`#{N:}`).
+    fn name_exists(&self, _kind: NameKind, _name: &str) -> Option<bool> {
+        None
+    }
+
+    /// `text`, a format that something read back out of a variable and is
+    /// about to be expanded again (`#{E:}`, `#{T:}`), in the language the
+    /// expander reads: a tmux server stores formats as tmux wrote them.
+    fn reexpand(&self, text: &str) -> String {
+        text.to_string()
+    }
+
+    /// The first screen line of the context's pane that matches `term`
+    /// (`#{C:}`), 1-based, 0 for none; `None` with no pane.
+    fn pane_search(&self, _term: &str, _regex: bool, _ignore: bool) -> Option<u32> {
+        None
+    }
+}
+
+/// What a loop modifier visits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopKind {
+    Sessions,
+    Windows,
+    Panes,
+    Clients,
+}
+
+/// What `#{N:}` asks about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameKind {
+    Session,
+    Window,
+}
+
+/// tmux 3.7b's `enum sort_order`, the part a loop reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    /// The list as tmux keeps it.
+    Order,
+    Index,
+    Name,
+    Activity,
+    Creation,
+}
+
+/// A loop's sort: `#{W/nr:}` is [`SortOrder::Name`], reversed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopSort {
+    pub order: SortOrder,
+    pub reversed: bool,
+}
+
+impl LoopSort {
+    /// Sorts `items` as tmux's `sort_qsort` does: [`SortOrder::Order`] keeps
+    /// the list (or reverses it); any other order sorts by `cmp`, whose
+    /// result is negated when reversed.
+    pub fn apply<T>(self, items: &mut [T], cmp: impl Fn(SortOrder, &T, &T) -> std::cmp::Ordering) {
+        if self.order == SortOrder::Order {
+            if self.reversed {
+                items.reverse();
+            }
+            return;
+        }
+        items.sort_by(|a, b| {
+            let r = cmp(self.order, a, b);
+            if self.reversed { r.reverse() } else { r }
+        });
+    }
+}
+
+/// One thing a loop visits: its variables, the pane they are read for
+/// (what a layer over them needs to know to be rebuilt for the item),
+/// whether it takes the second (`active`) branch, and variables that exist
+/// only inside this loop.
+pub struct LoopItem<'a> {
+    pub vars: Box<dyn FormatVars + 'a>,
+    pub pane: Option<crate::types::PaneId>,
+    pub active: bool,
+    pub extras: Vec<(String, String)>,
+}
+
+/// The variables a layer sits over: borrowed from where the layer was
+/// built, or owned when the layer was rebuilt for a loop's item.
+pub enum Inner<'a> {
+    Ref(&'a dyn FormatVars),
+    Own(Box<dyn FormatVars + 'a>),
+}
+
+impl Inner<'_> {
+    pub fn vars(&self) -> &dyn FormatVars {
+        match self {
+            Inner::Ref(v) => *v,
+            Inner::Own(v) => v.as_ref(),
+        }
+    }
 }
 
 /// tmux 3.7b's `FORMAT_LOOP_LIMIT`: an expansion nested this deep gives
@@ -36,50 +148,84 @@ pub const LOOP_LIMIT: usize = 100;
 /// [`LOOP_LIMIT`], and every `#{` is matched to its `}` once, up front, so
 /// no level rescans the text of the levels inside it.
 pub fn expand(fmt: &str, vars: &dyn FormatVars) -> String {
-    Expander::new(fmt, vars).expand(fmt)
+    let closers = scan_closers(fmt);
+    let shared = Shared::default();
+    Expander {
+        src: fmt,
+        vars,
+        closers: &closers,
+        shared: &shared,
+    }
+    .expand(fmt)
 }
 
-/// One [`expand`] call: the whole format, where each `#{` closes, and how
-/// deep the expansion is. Every `&str` its methods take is a slice of
-/// `src`, so a slice's offset finds its braces in `closers`.
+/// tmux's `format_expand_time`: `fmt` through strftime at the current local
+/// time, then expanded. `display-message` and `set-titles-string` use it;
+/// `list-*` formats and names do not. A format too long for strftime's
+/// 8 KiB buffer gives nothing.
+pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
+    if !fmt.contains('%') {
+        return expand(fmt, vars);
+    }
+    match modify::strftime_now(fmt, 8192) {
+        Some(timed) => expand(&timed, vars),
+        None => String::new(),
+    }
+}
+
+/// The state every level of one [`expand`] call shares.
+#[derive(Default)]
+struct Shared {
+    depth: Cell<usize>,
+    /// Inside `#{T:}`: a `%` in a format goes through strftime first.
+    expand_time: Cell<bool>,
+}
+
+/// Each `#{` in `src` (its offset) and the offset of its `}`, if it has
+/// one, in order: the `}` that [`Expander::find_unnested`] would find by
+/// counting nested pairs from just after the `#{`.
+type Closers = Vec<(usize, Option<usize>)>;
+
+fn scan_closers(src: &str) -> Closers {
+    let b = src.as_bytes();
+    let mut closers = Vec::new();
+    let mut open = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'#' && b.get(i + 1) == Some(&b'{') {
+            open.push(closers.len());
+            closers.push((i, None));
+            i += 2;
+            continue;
+        }
+        if b[i] == b'}'
+            && let Some(at) = open.pop()
+        {
+            closers[at].1 = Some(i);
+        }
+        i += 1;
+    }
+    closers
+}
+
+/// A failed `#{...}`: tmux stops expanding the format there, and what came
+/// before it is the result (a loop with no session to loop over, a `#{R:}`
+/// with no comma).
+struct Fail;
+
+/// One level of an [`expand`] call: the format it reads, where each `#{`
+/// closes, the variables it reads and how deep the expansion is. Every
+/// `&str` its methods take is a slice of `src`, so a slice's offset finds
+/// its braces in `closers`; text from anywhere else goes through
+/// [`Expander::expand_owned`].
 struct Expander<'a> {
     src: &'a str,
     vars: &'a dyn FormatVars,
-    /// Each `#{` in `src` (its offset) and the offset of its `}`, if it
-    /// has one, in order: the `}` that [`Expander::find_unnested`] would
-    /// find by counting nested pairs from just after the `#{`.
-    closers: Vec<(usize, Option<usize>)>,
-    depth: Cell<usize>,
+    closers: &'a [(usize, Option<usize>)],
+    shared: &'a Shared,
 }
 
 impl<'a> Expander<'a> {
-    fn new(src: &'a str, vars: &'a dyn FormatVars) -> Self {
-        let b = src.as_bytes();
-        let mut closers = Vec::new();
-        let mut open = Vec::new();
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] == b'#' && b.get(i + 1) == Some(&b'{') {
-                open.push(closers.len());
-                closers.push((i, None));
-                i += 2;
-                continue;
-            }
-            if b[i] == b'}'
-                && let Some(at) = open.pop()
-            {
-                closers[at].1 = Some(i);
-            }
-            i += 1;
-        }
-        Expander {
-            src,
-            vars,
-            closers,
-            depth: Cell::new(0),
-        }
-    }
-
     /// Where `s`, a slice of `src`, starts in it.
     fn offset(&self, s: &str) -> usize {
         let at = (s.as_ptr() as usize).wrapping_sub(self.src.as_ptr() as usize);
@@ -98,18 +244,62 @@ impl<'a> Expander<'a> {
         (close < s.len()).then_some(close)
     }
 
+    /// `fmt`, which is not a slice of `src` (a variable's value, a result),
+    /// expanded as a format of its own.
+    fn expand_owned(&self, fmt: &str) -> String {
+        let closers = scan_closers(fmt);
+        Expander {
+            src: fmt,
+            vars: self.vars,
+            closers: &closers,
+            shared: self.shared,
+        }
+        .expand(fmt)
+    }
+
+    /// `fmt`, a slice of `src`, expanded against other variables: what a
+    /// loop does for each of its items.
+    fn expand_with(&self, vars: &dyn FormatVars, fmt: &str) -> String {
+        Expander {
+            src: self.src,
+            vars,
+            closers: self.closers,
+            shared: self.shared,
+        }
+        .expand(fmt)
+    }
+
     fn expand(&self, fmt: &str) -> String {
-        let depth = self.depth.get();
+        let depth = self.shared.depth.get();
         if depth == LOOP_LIMIT {
             return String::new();
         }
-        self.depth.set(depth + 1);
+        self.shared.depth.set(depth + 1);
         let out = self.expand_text(fmt);
-        self.depth.set(depth);
+        self.shared.depth.set(depth);
         out
     }
 
     fn expand_text(&self, fmt: &str) -> String {
+        if self.shared.expand_time.get() && fmt.contains('%') {
+            // tmux 3.7b: a format too long for strftime's 8 KiB buffer gives
+            // nothing.
+            let Some(timed) = modify::strftime_now(fmt, 8192) else {
+                return String::new();
+            };
+            let closers = scan_closers(&timed);
+            return Expander {
+                src: &timed,
+                vars: self.vars,
+                closers: &closers,
+                shared: self.shared,
+            }
+            .expand_pieces(&timed);
+        }
+        self.expand_pieces(fmt)
+    }
+
+    fn expand_pieces(&self, fmt: &str) -> String {
         let mut out = String::with_capacity(fmt.len());
         let mut i = 0;
         while i < fmt.len() {
@@ -121,7 +311,11 @@ impl<'a> Expander<'a> {
             if fmt[i..].starts_with("#{")
                 && let Some(end) = self.closer(fmt, i)
             {
-                out.push_str(&self.expand_body(&fmt[i + 2..end]));
+                match self.expand_body(&fmt[i + 2..end]) {
+                    Ok(piece) => out.push_str(&piece),
+                    // tmux stops there and keeps what it has.
+                    Err(Fail) => return out,
+                }
                 i = end + 1;
                 continue;
             }
@@ -129,6 +323,14 @@ impl<'a> Expander<'a> {
                 .chars()
                 .next()
                 .expect("i is a char boundary within fmt");
+            // tmux's `format_expand1` drops a `#` that ends its text. The
+            // front end drops one at the end of a whole format; this is the
+            // same on a modifier's argument or a re-expanded value
+            // (`#{s/#/x/:v}` has an empty pattern in tmux), which is every
+            // expansion nested inside the outermost one.
+            if ch == '#' && i + 1 == fmt.len() && self.shared.depth.get() > 1 {
+                break;
+            }
             out.push(ch);
             i += ch.len_utf8();
         }
@@ -160,31 +362,35 @@ impl<'a> Expander<'a> {
     /// from [`COMPARISONS`], `&&:`/`||:` over any number of operands, a
     /// match (`m:`, `m/r:`, `m/i:`, `m/ri:`), `!:text`, `!!:text`,
     /// `b:var`, `t:var`, `q:var`, or a bare variable name.
-    fn expand_body(&self, body: &str) -> String {
+    fn expand_simple(&self, body: &str) -> Option<String> {
         if let Some(rest) = body.strip_prefix('?') {
-            return self.expand_ternary(rest, body);
+            return Some(self.expand_ternary(rest, body));
         }
         for (prefix, op) in COMPARISONS {
             if let Some(rest) = body.strip_prefix(prefix) {
-                return self.expand_comparison(rest, body, prefix == "==:", op);
+                return Some(self.expand_comparison(rest, body, prefix == "==:", op));
             }
         }
         // `&&:`/`||:` fold over every operand, as in tmux 3.7b; one operand
         // is its own truth, and no operand at all is false.
         if let Some(rest) = body.strip_prefix("&&:") {
-            return flag(self.operands(rest).all(|o| is_truthy(&self.expand(o))));
+            return Some(flag(
+                self.operands(rest).all(|o| is_truthy(&self.expand(o))),
+            ));
         }
         if let Some(rest) = body.strip_prefix("||:") {
-            return flag(self.operands(rest).any(|o| is_truthy(&self.expand(o))));
+            return Some(flag(
+                self.operands(rest).any(|o| is_truthy(&self.expand(o))),
+            ));
         }
         if let Some((flags, rest)) = match_modifier(body) {
             let Some(c) = self.find_unnested(rest, b',') else {
-                return String::new();
+                return Some(String::new());
             };
             let pattern = self.expand(&rest[..c]);
             let s = self.expand(&rest[c + 1..]);
             let icase = flags.contains('i');
-            return flag(if flags.contains('r') {
+            return Some(flag(if flags.contains('r') {
                 regex_match(&pattern, &s, icase)
             } else if icase {
                 fnmatch(
@@ -193,26 +399,38 @@ impl<'a> Expander<'a> {
                 )
             } else {
                 fnmatch(pattern.as_bytes(), s.as_bytes())
-            });
+            }));
         }
         // `#{!:text}` is `1` when the expanded text is false, `#{!!:text}`
         // when it is true (tmux 3.7b).
         if let Some(rest) = body.strip_prefix("!!:") {
-            return flag(is_truthy(&self.expand(rest)));
+            return Some(flag(is_truthy(&self.expand(rest))));
         }
         if let Some(rest) = body.strip_prefix("!:") {
-            return flag(!is_truthy(&self.expand(rest)));
+            return Some(flag(!is_truthy(&self.expand(rest))));
         }
         if let Some(rest) = body.strip_prefix("b:") {
-            return self.expand_basename(rest);
+            return Some(self.expand_basename(rest));
         }
         if let Some(rest) = body.strip_prefix("t:") {
-            return self.expand_time(rest);
+            return Some(self.expand_time(rest));
         }
         if let Some(rest) = body.strip_prefix("q:") {
-            return self.expand_quoted(rest);
+            return Some(self.expand_quoted(rest));
         }
-        self.resolve(body)
+        None
+    }
+
+    /// One `#{...}`: the plain forms above, else tmux's modifier list
+    /// (`format_build_modifiers`) and what it asks for, else a variable.
+    fn expand_body(&self, body: &str) -> Result<String, Fail> {
+        if let Some(done) = self.expand_simple(body) {
+            return Ok(done);
+        }
+        if let Some((list, rest)) = self.build_modifiers(body) {
+            return self.replace(&list, &body[rest..]);
+        }
+        Ok(self.resolve(body))
     }
 
     /// `#{q:var}`: the variable's value with a backslash before each
@@ -281,7 +499,10 @@ impl<'a> Expander<'a> {
         if arg.contains("#{") {
             self.expand(arg)
         } else {
-            basename(&self.vars.get(arg).unwrap_or_default())
+            self.vars
+                .get(arg)
+                .map(|v| posix_basename(&v))
+                .unwrap_or_default()
         }
     }
 
@@ -557,15 +778,47 @@ fn bracket(p: &[u8]) -> Option<(Bracket<'_>, &[u8])> {
     ))
 }
 
-/// tmux's basename modifier: the last `/`-separated component, with any
-/// trailing slashes stripped first. Basename of an empty string is empty,
-/// not `.` as POSIX `basename(1)` would give.
-fn basename(s: &str) -> String {
-    s.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
+/// tmux's `window_pane_search`: the 1-based number of the first of `lines`
+/// that has `term` in it (a glob pattern as `*term*`, or with `regex` a
+/// regular expression), 0 for none. Trailing blanks of a line do not count.
+pub fn search_lines<'l>(
+    lines: impl Iterator<Item = &'l str>,
+    term: &str,
+    regex: bool,
+    ignore: bool,
+) -> u32 {
+    let glob = format!("*{term}*");
+    let glob = if ignore {
+        glob.to_ascii_lowercase()
+    } else {
+        glob
+    };
+    for (i, line) in lines.enumerate() {
+        let line = line.trim_end_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b');
+        let found = if regex {
+            regex_match(term, line, ignore)
+        } else if ignore {
+            fnmatch(glob.as_bytes(), line.to_ascii_lowercase().as_bytes())
+        } else {
+            fnmatch(glob.as_bytes(), line.as_bytes())
+        };
+        if found {
+            return i as u32 + 1;
+        }
+    }
+    0
+}
+
+/// POSIX `basename(3)`, which `#{b:}` calls: trailing slashes go first,
+/// and nothing left is `.` (or `/`, if there were slashes).
+fn posix_basename(s: &str) -> String {
+    if s.is_empty() {
+        return ".".to_string();
+    }
+    match s.trim_end_matches('/') {
+        "" => "/".to_string(),
+        t => t.rsplit('/').next().unwrap_or(t).to_string(),
+    }
 }
 
 /// tmux's truthiness for a format value: present, non-empty and not `"0"`.

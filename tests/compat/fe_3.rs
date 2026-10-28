@@ -150,31 +150,27 @@ fn formats_match_their_golden() {
     check("formats", FORMAT_GAPS, realpath);
 }
 
-const FORMAT_GAPS: &[(&str, &str)] = &[
-    (
-        "$ display -p -t main:1.1 '#{log_info}'",
-        "native: tmux formats fall back to the session, then the global, \
+const FORMAT_GAPS: &[(&str, &str)] = &[(
+    "$ display -p -t main:1.1 '#{log_info}'",
+    "native: tmux formats fall back to the session, then the global, \
          environment; grofe's FormatVars do not",
-    ),
-    (
-        "$ display -p -t main:1.1 '#{pane_marked_set}'",
-        "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
-    ),
-    (
-        "$ display -p -t main:1.1 '#{pane_marked}'",
-        "marked panes are out of scope (spec 4.5); tmux answers 0, grofe nothing",
-    ),
-    (
-        "$ display -p -t main:1 'X#{p5:session_name}X#{p-5:session_name}X'",
-        "native: grofe's format language has no p: padding (TC.3); left for \
-         the expander, which gives nothing",
-    ),
-    (
-        "$ display -p -t main:1 '#{q:session_name}|#{E:@opt}|#{T:@opt}|#{=3:session_name}|#{s/a/A/:session_name}|#{n:session_name}'",
-        "native: grofe's format language has no q:, E:, T:, =N:, s///: or n: \
-         (TC.3); the front end leaves them, and notes them in compat-miss.log",
-    ),
-];
+)];
+
+/// B1b: the modifier list (`;` chains, any delimiter, the error forms) and
+/// the modifiers on top of the comparisons: `=N` `p` `n` `w` `s` `b` `d`
+/// `e|op|` `a` `c` `C` `N` `R` `E` `T` `t/p` `t/f` `q/e` `q/h` `q/a`.
+#[test]
+fn format_modifiers_match_their_golden() {
+    check("format-modifiers", &[], realpath);
+}
+
+/// B1b: `#{S:}` `#{W:}` `#{P:}` `#{L:}` with their sort flags,
+/// `loop_last_flag`, the `*_mode_format` defaults expanded with `T:`, the
+/// variables the loops read, and a custom `status-format` that loops.
+#[test]
+fn format_loops_match_their_golden() {
+    check("format-loops", &[], realpath);
+}
 
 /// Case 2: canopy's two-row status theme, rendered on a pty-attached
 /// client, cell for cell, with its `#()` aggregator fixed.
