@@ -85,8 +85,11 @@ Hooks run with the user's shell the same way `run-shell` does (the server's
 name. A failing `before` stops `up` before anything is created; a failing
 `on_start`, `after` or `on_stop` is reported and does not undo the session.
 `on_stop` is run by a small background `grofe layout __watch` process that
-`up` starts, which waits for the session to end (killed, last window closed,
-or the server gone).
+`up` starts as soon as the session exists. It subscribes to the server's
+`session-closed` event and runs the hook when the session ends (killed, last
+window closed, removed by a failed `up`, or the server gone: the subscription
+ends with the server, so the helper never outlives it). A session already
+running gets no second helper.
 
 ### Windows and panes
 
@@ -110,7 +113,7 @@ the pane ends with it (`exec` needs `cmd`).
 `wait` pauses the build after that pane has been started and before the next
 pane (or window) is made. It holds exactly one of `regex` (matched against the
 pane's visible screen, polled) or `path` (a file that must exist; relative
-paths are relative to the pane's cwd), and `timeout` in seconds (default 30).
+paths are relative to the pane's cwd), and `timeout` in seconds (default 30, at most 86400).
 The screen includes the command line you typed, so a regex that the `cmd`
 text itself matches is satisfied at once. A timeout is an error: `up` stops, removes the session it created and exits
 non-zero.
@@ -141,8 +144,12 @@ grofe layout pick
 
 **up.** For each session in the file: if a session of that name is already
 running, nothing is built (idempotent). Otherwise it is built, in order:
-`before`, create, `on_start`, windows and panes, layouts, floats, focus,
-`after`, then the `on_stop` watcher. Then the first session whose `attach` is
+`before`, create (the session directory is `root`), the `on_stop` watcher,
+the session `env`, `on_start`, windows and panes, layouts, floats, focus,
+then `after`. Every window is made by `new-window`, so each pane starts once,
+with its environment in place: `new-session`'s own window only holds a
+placeholder process until the real ones exist, and is then removed and the
+windows renumbered from `base-index`. Then the first session whose `attach` is
 not false is attached, unless `-d` is given. Run inside a pane of this
 server's client, `up` switches that client (`switch-client`) instead of
 nesting. With no terminal and no client, `up` builds and does not attach.
@@ -154,10 +161,14 @@ sessions created by this call are removed.
 (its directory), each window's `name`, `layout` (the layout string of its
 tiled panes) and `focus` for the active one, each pane's `cwd` (absolute),
 `cmd` when the foreground process is not a shell (its name only, not its
-arguments), `focus` for the active pane, and each floating pane's geometry
+arguments, and only a plain name of letters, digits and `._+-`: a process
+names itself, and `up` types `cmd` into a shell), `focus` for the active pane, and each floating pane's geometry
 (`x`, `y`, `width`, `height` in cells), `cwd`, `cmd`, `title`, `border` and
-`focus`. The target defaults to `<session>` in the layouts directory. An
-existing file is only replaced with `--force`. Saving then running `up` in a
+`focus`. The target defaults to `<session>` in the layouts directory (as a name
+only: a session called `~/x` is not a path, and needs a target given). An
+existing file is only replaced with `--force`; the file is written beside the
+target and renamed over it, so a symlink there is replaced, not written
+through. Saving then running `up` in a
 fresh server gives the same window names, pane count, layout string and cwds.
 Env, hooks, `wait` and `size` are not recoverable from a running session and
 are not written.

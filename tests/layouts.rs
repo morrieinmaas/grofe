@@ -805,3 +805,205 @@ fn the_tmux_identity_does_not_know_the_verb() {
             || !srv.cmd(&["list-sessions"]).unwrap().contains("dev")
     );
 }
+
+/// The pids of this server's `layout __watch` helpers still running.
+fn watchers(srv: &TestServer) -> Vec<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-Ao", "pid=,args="])
+        .output()
+        .unwrap();
+    let socket = srv.socket.display().to_string();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains("__watch") && l.contains(&socket))
+        .map(|l| l.split_whitespace().next().unwrap_or_default().to_string())
+        .collect()
+}
+
+#[test]
+fn save_by_session_name_never_resolves_a_path() {
+    let srv = TestServer::unstarted();
+    write_layout(&srv, "seed", "name = \"seed\"\n");
+    up_ok(&srv, "seed");
+    // tmux session names may hold `/` and `~`; as a default file name such a
+    // name must not turn into a path outside the layouts directory.
+    for name in ["~/evil", "/evil-abs"] {
+        srv.cmd(&["new-session", "-d", "-s", name]).unwrap();
+        let out = run(&srv, &["layout", "save", name, "--force"]);
+        assert!(
+            !out.status.success(),
+            "save {name:?} worked: {}",
+            out.stdout
+        );
+        assert!(out.stderr.contains("not a layout name"), "{}", out.stderr);
+    }
+    assert!(!srv.home.join("evil").exists());
+    assert!(!Path::new("/evil-abs").exists());
+}
+
+#[test]
+fn save_force_replaces_a_symlink_and_not_what_it_points_to() {
+    use std::os::unix::fs::symlink;
+    let srv = TestServer::unstarted();
+    write_layout(&srv, "s", "name = \"s\"\n");
+    up_ok(&srv, "s");
+    let target = srv.home.join("precious");
+    fs::write(&target, "keep").unwrap();
+    let link = layouts_dir(&srv).join("x.toml");
+    symlink(&target, &link).unwrap();
+    let refused = run(&srv, &["layout", "save", "s", "x"]);
+    assert!(
+        !refused.status.success(),
+        "an existing link without --force"
+    );
+    let out = run(&srv, &["layout", "save", "s", "x", "--force"]);
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+    assert!(
+        !fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(fs::read_to_string(&link).unwrap().contains("name = \"s\""));
+}
+
+#[test]
+fn hashes_in_cwds_and_titles_are_not_formats() {
+    let srv = TestServer::unstarted();
+    let odd = dir(&srv, "a#{session_name}b");
+    write_layout(
+        &srv,
+        "hash",
+        &format!(
+            r#"
+name = "hash"
+root = "{odd}"
+[[window]]
+name = "w"
+[[window.pane]]
+[[window.pane]]
+[[window.float]]
+title = "t#{{session_name}}#S"
+"#,
+            odd = odd.display()
+        ),
+    );
+    up_ok(&srv, "hash");
+    let p = panes(&srv, "hash:w");
+    assert_eq!(Path::new(&p[0][3]), odd, "{p:?}");
+    assert_eq!(Path::new(&p[1][3]), odd, "{p:?}");
+    assert_eq!(Path::new(&p[2][3]), odd, "{p:?}");
+    assert_eq!(p[2][6], "t#{session_name}#S", "{p:?}");
+    let root = srv
+        .cmd(&["display-message", "-p", "-t", "hash", "#{session_path}"])
+        .unwrap();
+    assert_eq!(Path::new(root.trim()), odd);
+}
+
+#[test]
+fn the_first_pane_starts_once_with_its_env_and_the_session_dir_is_root() {
+    let srv = TestServer::unstarted();
+    let root = dir(&srv, "root");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    let count = root.join("count");
+    write_layout(
+        &srv,
+        "once",
+        &format!(
+            r#"
+name = "once"
+root = "{root}"
+env = {{ S = "s" }}
+[[window]]
+name = "first"
+cwd = "sub"
+env = {{ W = "w" }}
+[[window.pane]]
+cmd = "echo \"$S$W\" >> {count}; exec sleep 60"
+exec = true
+"#,
+            root = root.display(),
+            count = count.display()
+        ),
+    );
+    up_ok(&srv, "once");
+    wait_until(|| count.exists(), WAIT).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(fs::read_to_string(&count).unwrap(), "sw\n", "started once");
+    let w = windows(&srv, "once");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].starts_with("first|1|"), "{w:?}");
+    let index = srv
+        .cmd(&[
+            "display-message",
+            "-p",
+            "-t",
+            "once:first",
+            "#{window_index}",
+        ])
+        .unwrap();
+    let base = srv.cmd(&["show-options", "-gv", "base-index"]).unwrap();
+    assert_eq!(
+        index.trim(),
+        base.trim(),
+        "the first window has the base index"
+    );
+    let p = panes(&srv, "once:first");
+    assert_eq!(Path::new(&p[0][3]), root.join("sub"));
+    let path = srv
+        .cmd(&["display-message", "-p", "-t", "once", "#{session_path}"])
+        .unwrap();
+    assert_eq!(Path::new(path.trim()), root, "session directory is root");
+    // The window's variable is the window's: not left in the session.
+    let env = srv.cmd(&["show-environment", "-t", "once"]).unwrap();
+    assert!(env.contains("S=s") && !env.contains("W=w"), "{env}");
+}
+
+#[test]
+fn on_stop_runs_once_when_the_server_goes_and_no_watcher_outlives_it() {
+    let srv = TestServer::unstarted();
+    let d = dir(&srv, "stop");
+    write_layout(
+        &srv,
+        "st",
+        &format!(
+            "name = \"st\"\nroot = \"{}\"\non_stop = \"echo stop >> log\"\n",
+            d.display()
+        ),
+    );
+    up_ok(&srv, "st");
+    // Running already: no second watcher.
+    up_ok(&srv, "st");
+    wait_until(|| watchers(&srv).len() == 1, WAIT).unwrap_or_else(|e| {
+        panic!("{e}: {:?}", watchers(&srv));
+    });
+    srv.cmd(&["kill-server"]).unwrap();
+    wait_until(|| d.join("log").exists(), WAIT).expect("on_stop ran");
+    wait_until(|| watchers(&srv).is_empty(), WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", watchers(&srv)));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(fs::read_to_string(d.join("log")).unwrap(), "stop\n");
+}
+
+#[test]
+fn a_failed_build_still_runs_on_stop_for_the_session_it_removed() {
+    let srv = TestServer::unstarted();
+    let d = dir(&srv, "fail");
+    write_layout(
+        &srv,
+        "bad",
+        &format!(
+            "name = \"bad\"\nroot = \"{}\"\nbefore = \"echo before >> log\"\non_stop = \"echo stop >> log\"\n[[window]]\n[[window.float]]\nwidth = 500\n",
+            d.display()
+        ),
+    );
+    let out = run(&srv, &["layout", "up", "bad", "-d"]);
+    assert!(!out.status.success());
+    wait_until(
+        || fs::read_to_string(d.join("log")).is_ok_and(|l| l.contains("stop")),
+        WAIT,
+    )
+    .expect("on_stop undid what before did");
+    assert_eq!(fs::read_to_string(d.join("log")).unwrap(), "before\nstop\n");
+}

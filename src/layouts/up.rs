@@ -91,36 +91,39 @@ fn build(
             .host_shell(cmd, &s.root, &s.name)
             .map_err(|e| format!("before hook of {}: {e}", s.name))?;
     }
-    let first = &s.windows[0];
-    let first_pane = &first.panes[0];
-    let mut env = s.env.clone();
-    env.extend(first.env.iter().cloned());
-    env.extend(first_pane.env.iter().cloned());
-    let cwd = first_pane.cwd.display().to_string();
-    let mut argv = words(&[
+    // The session's environment can only be set once the session exists,
+    // too late for a first pane started by new-session. So new-session's
+    // window only holds a placeholder process (exec'd directly, no shell,
+    // printing nothing) until every real window exists, made by new-window
+    // like the others; then it goes and the windows are renumbered.
+    let root = format_literal(&s.root.display().to_string());
+    let argv = words(&[
         "new-session",
         "-d",
         "-P",
         "-F",
-        "#{session_id} #{window_id} #{pane_id}",
+        "#{session_id} #{window_id}",
         "-s",
         &s.name,
         "-c",
-        &cwd,
+        &root,
+        "--",
+        "sleep",
+        "2147483647",
     ]);
-    if let Some(n) = &first.name {
-        argv.extend(["-n".to_string(), n.clone()]);
-    }
-    if let Run::Exec(c) = &first_pane.run {
-        argv.extend(["--".to_string(), c.clone()]);
-    }
     let out = server.create_session(&argv)?;
     let ids: Vec<&str> = out.split_whitespace().collect();
-    let [sid, wid, pid] = ids.as_slice() else {
+    let [sid, placeholder] = ids.as_slice() else {
         return Err(format!("new-session printed {out:?}"));
     };
     let sid = sid.to_string();
-    match populate(server, s, &sid, (wid, pid), report) {
+    // From here on the session has existed, so whatever ends it, a failed
+    // build included, runs `on_stop`.
+    let watched = match &s.on_stop {
+        Some(cmd) => server.spawn_watch(&sid, &s.name, &s.root, cmd),
+        None => Ok(()),
+    };
+    match watched.and_then(|()| populate(server, s, &sid, placeholder, report)) {
         Ok(()) => Ok(sid),
         Err(e) => {
             let _ = server.run(&words(&["kill-session", "-t", &sid]));
@@ -129,36 +132,22 @@ fn build(
     }
 }
 
+/// `s` as a format that expands to itself: `-c` and `select-pane -T`
+/// expand their argument, and a `#` in a path or title is not a format.
+fn format_literal(s: &str) -> String {
+    s.replace('#', "##")
+}
+
 fn populate(
     server: &mut dyn Server,
     s: &SessionPlan,
     sid: &str,
-    (wid, pid): (&str, &str),
+    placeholder: &str,
     report: &mut UpReport,
 ) -> Result<(), String> {
-    // The session's environment is set after the session exists, which is
-    // too late for the first pane: it is started again with the environment
-    // in place, only when there is one. What only the first window or pane
-    // should see is taken back out afterwards.
-    let first = &s.windows[0];
-    let mut env = s.env.clone();
-    env.extend(first.env.iter().cloned());
-    env.extend(first.panes[0].env.iter().cloned());
-    for (k, v) in &env {
+    for (k, v) in &s.env {
         server.run(&words(&["set-environment", "-t", sid, k, v]))?;
     }
-    if !env.is_empty() {
-        let cwd = first.panes[0].cwd.display().to_string();
-        let mut argv = words(&["respawn-pane", "-k", "-t", pid, "-c", &cwd]);
-        if let Run::Exec(c) = &first.panes[0].run {
-            argv.extend(["--".to_string(), c.clone()]);
-        }
-        server.run(&argv)?;
-    }
-    let mut leaked: Vec<&String> = first.env.iter().map(|(k, _)| k).collect();
-    leaked.extend(first.panes[0].env.iter().map(|(k, _)| k));
-    restore_env(server, s, sid, &leaked)?;
-
     if let Some(cmd) = &s.on_start
         && let Err(e) = server.host_shell(cmd, &s.root, &s.name)
     {
@@ -168,12 +157,8 @@ fn populate(
     }
     let mut focus_window = None;
     let mut first_window = None;
-    for (i, w) in s.windows.iter().enumerate() {
-        let (win, first_pane) = if i == 0 {
-            (wid.to_string(), pid.to_string())
-        } else {
-            new_window(server, s, sid, w)?
-        };
+    for w in &s.windows {
+        let (win, first_pane) = new_window(server, s, sid, w)?;
         start_pane(server, &first_pane, &w.panes[0])?;
         let mut panes = vec![first_pane];
         for p in &w.panes[1..] {
@@ -208,6 +193,8 @@ fn populate(
         }
         first_window.get_or_insert(win);
     }
+    server.run(&words(&["kill-window", "-t", placeholder]))?;
+    server.run(&words(&["move-window", "-r", "-t", sid]))?;
     if let Some(win) = focus_window.or(first_window) {
         server.run(&words(&["select-window", "-t", &win]))?;
     }
@@ -217,9 +204,6 @@ fn populate(
         report
             .warnings
             .push(format!("after hook of {}: {e}", s.name));
-    }
-    if let Some(cmd) = &s.on_stop {
-        server.spawn_watch(sid, &s.name, &s.root, cmd)?;
     }
     Ok(())
 }
@@ -275,7 +259,7 @@ fn new_window(
     let mut env = w.env.clone();
     env.extend(p.env.iter().cloned());
     let target = format!("{sid}:");
-    let cwd = p.cwd.display().to_string();
+    let cwd = format_literal(&p.cwd.display().to_string());
     let mut argv = words(&[
         "new-window",
         "-d",
@@ -311,7 +295,7 @@ fn split(
 ) -> Result<String, String> {
     let mut env = w.env.clone();
     env.extend(p.env.iter().cloned());
-    let cwd = p.cwd.display().to_string();
+    let cwd = format_literal(&p.cwd.display().to_string());
     let mut argv = words(&[
         "split-window",
         "-d",
@@ -341,7 +325,7 @@ fn float(
     after: &str,
     f: &FloatPlan,
 ) -> Result<String, String> {
-    let cwd = f.cwd.display().to_string();
+    let cwd = format_literal(&f.cwd.display().to_string());
     let mut argv = words(&[
         "new-pane",
         "-P",
@@ -381,7 +365,13 @@ fn float(
         ]))?;
     }
     if let Some(t) = &f.title {
-        server.run(&words(&["select-pane", "-t", &id, "-T", t]))?;
+        server.run(&words(&[
+            "select-pane",
+            "-t",
+            &id,
+            "-T",
+            &format_literal(t),
+        ]))?;
     }
     Ok(id)
 }
@@ -444,11 +434,6 @@ pub fn watch(
     root: &Path,
     command: &str,
 ) -> Result<(), String> {
-    loop {
-        match server.sessions() {
-            Ok(list) if list.iter().any(|(i, _)| i == id) => sleep(Duration::from_millis(500)),
-            _ => break,
-        }
-    }
+    server.wait_closed(id);
     server.host_shell(command, root, name)
 }

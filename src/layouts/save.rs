@@ -93,7 +93,7 @@ pub fn tiled_layout(layout: &str, floats: &[String]) -> Option<String> {
 }
 
 fn fields(line: &str, n: usize) -> Result<Vec<String>, String> {
-    let f: Vec<String> = line.split('\t').map(str::to_string).collect();
+    let f: Vec<String> = line.splitn(n, '\t').map(str::to_string).collect();
     if f.len() == n {
         Ok(f)
     } else {
@@ -115,7 +115,8 @@ pub fn save(
         .ok_or_else(|| format!("can't find session: {session}"))?;
     let path = match dest {
         Some(d) => dirs.resolve(d)?,
-        None => dirs.resolve(&name).map_err(|_| {
+        // A session name may look like a path (`~/x`); it is only a name here.
+        None => dirs.resolve_name(&name).map_err(|_| {
             format!("session name {name:?} is not a layout name: give one to save as")
         })?,
     };
@@ -148,11 +149,11 @@ pub fn save(
         "-t",
         &sid,
         "-F",
-        "#{window_id}\t#{window_name}\t#{window_active}\t#{window_layout}",
+        "#{window_id}\t#{window_active}\t#{window_layout}\t#{window_name}",
     ]))?;
     let mut windows = Vec::new();
     for line in wins.lines().filter(|l| !l.is_empty()) {
-        let [wid, wname, wactive, wlayout] = fields(line, 4)?.try_into().unwrap_or_default();
+        let [wid, wactive, wlayout, wname] = fields(line, 4)?.try_into().unwrap_or_default();
         let panes = server.run(&words(&[
             "list-panes",
             "-t",
@@ -216,31 +217,44 @@ pub fn save(
     Ok(path)
 }
 
-/// The command to save for a pane: the foreground program unless it is a shell.
+/// The command to save for a pane: the foreground program unless it is a
+/// shell. `up` types it into a shell, and a process picks its own name, so
+/// only a plain program name is kept: nothing a shell would read as more.
 fn foreground(command: &str, default_shell: &str) -> Option<String> {
     let command = command.trim_start_matches('-');
     let default = default_shell.rsplit('/').next().unwrap_or("");
-    (!command.is_empty() && command != default && !SHELLS.contains(&command))
+    let plain = command
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'));
+    (plain && !command.is_empty() && command != default && !SHELLS.contains(&command))
         .then(|| command.to_string())
 }
 
 /// Creates the file (and its directory); without `force` it must not exist.
+/// The text goes to a temporary file beside it first, which then takes the
+/// name: whatever is at `path` (a symlink too) is replaced, never written
+/// through, and a failed write leaves no half file.
 fn write_file(path: &std::path::Path, text: &str, force: bool) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let mut open = fs::OpenOptions::new();
-    open.write(true);
-    if force {
-        open.create(true).truncate(true);
-    } else {
-        open.create_new(true);
-    }
-    let mut f = open
-        .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    f.write_all(text.as_bytes())
-        .map_err(|e| format!("{}: {e}", path.display()))
+    let at = |e: std::io::Error| format!("{}: {e}", path.display());
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let file = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{file}.{}.tmp", std::process::id()));
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()));
+    let placed = written.and_then(|()| {
+        if force {
+            fs::rename(&tmp, path)
+        } else {
+            // A link fails if the name exists, as `create_new` would.
+            fs::hard_link(&tmp, path)
+        }
+    });
+    let _ = fs::remove_file(&tmp);
+    placed.map_err(at)
 }
 
 #[cfg(test)]
@@ -281,5 +295,14 @@ mod tests {
         assert_eq!(foreground("zsh", "/bin/zsh"), None);
         assert_eq!(foreground("-bash", "/bin/sh"), None);
         assert_eq!(foreground("nvim", "/bin/zsh"), Some("nvim".into()));
+    }
+
+    #[test]
+    fn a_process_name_a_shell_would_read_as_code_is_not_saved() {
+        for name in ["rm -rf ~", "a;b", "$(x)", "`x`", "a|b", "x\ny", "a&", ">f"] {
+            assert_eq!(foreground(name, "/bin/zsh"), None, "{name:?}");
+        }
+        assert_eq!(foreground("node.js", "/bin/sh"), Some("node.js".into()));
+        assert_eq!(foreground("g++", "/bin/sh"), Some("g++".into()));
     }
 }

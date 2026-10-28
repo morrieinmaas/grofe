@@ -196,6 +196,9 @@ const BORDERS: [&str; 6] = ["single", "double", "heavy", "simple", "number", "sp
 /// The default wait timeout, in seconds.
 pub const DEFAULT_WAIT_SECS: u64 = 30;
 
+/// The longest wait timeout: a day, far below what would overflow a deadline.
+pub const MAX_WAIT_SECS: u64 = 86_400;
+
 struct Ctx<'a> {
     text: &'a str,
     file: &'a Path,
@@ -564,7 +567,14 @@ fn size(ctx: &Ctx, s: &Spanned<toml::Value>) -> Result<String, LayoutError> {
 }
 
 fn wait(ctx: &Ctx, w: &Spanned<RawWait>, pane_cwd: &Path) -> Result<Wait, LayoutError> {
-    let timeout = Duration::from_secs(w.get_ref().timeout.unwrap_or(DEFAULT_WAIT_SECS));
+    let secs = w.get_ref().timeout.unwrap_or(DEFAULT_WAIT_SECS);
+    if secs > MAX_WAIT_SECS {
+        return Err(ctx.err(
+            w.span(),
+            format!("wait.timeout: at most {MAX_WAIT_SECS} seconds"),
+        ));
+    }
+    let timeout = Duration::from_secs(secs);
     let what = match (&w.get_ref().regex, &w.get_ref().path) {
         (Some(re), None) => {
             regex::Regex::new(re).map_err(|e| {
@@ -697,6 +707,19 @@ mod tests {
         let w = plan.sessions[0].windows[0].panes[0].wait.as_ref().unwrap();
         assert_eq!(w.timeout, Duration::from_secs(30));
         assert_eq!(w.what, WaitFor::Path(PathBuf::from("/work/f")));
+    }
+
+    #[test]
+    fn a_wait_timeout_that_would_overflow_the_deadline_is_refused() {
+        let t = format!(
+            "[[window]]\n[[window.pane]]\nwait = {{ path = \"f\", timeout = {} }}\n",
+            i64::MAX
+        );
+        let e = parse_str(&t).unwrap_err();
+        assert!(e.message.contains("at most 86400"), "{e}");
+        assert_eq!(e.line, 3);
+        let t = "[[window]]\n[[window.pane]]\nwait = { path = \"f\", timeout = 86400 }\n";
+        assert!(parse_str(t).is_ok());
     }
 
     #[test]

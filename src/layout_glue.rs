@@ -1,13 +1,14 @@
 //! `grofe layout`: the binary's side of `grofe::layouts`, which sends its
 //! work to the server as ordinary commands.
 
-use std::io::{self, IsTerminal};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+use grofe::event::Event;
 use grofe::layouts::{self, Dirs};
-use grofe::protocol::Reply;
+use grofe::protocol::{Reply, Request};
 
 use super::{
     Globals, attach_to, connect, connect_or_start, control_hello, fail, hello_for, no_server,
@@ -109,6 +110,49 @@ impl layouts::Server for Host {
         let reason = attach_to(&self.socket, &argv)?;
         println!("[{reason}]");
         Ok(())
+    }
+
+    fn wait_closed(&mut self, id: &str) {
+        // A subscription, not polling: the event comes as the session closes,
+        // and the connection ends with the server, so this never outlives it.
+        let Ok(hello) = hello_for(&self.socket, false) else {
+            return;
+        };
+        let Ok(stream) = connect(&self.socket) else {
+            return;
+        };
+        let req = Request {
+            id: 1,
+            argv: ["subscribe", "session-closed"].map(String::from).to_vec(),
+            stdin: None,
+            umask: None,
+        };
+        let Ok(req) = serde_json::to_string(&req) else {
+            return;
+        };
+        let mut writer = &stream;
+        if writeln!(writer, "{hello}\n{req}").is_err() {
+            return;
+        }
+        let mut lines = BufReader::new(&stream).lines();
+        while let Some(Ok(line)) = lines.next() {
+            match serde_json::from_str::<Reply>(&line) {
+                // Subscribed: a session that ended before this is gone now.
+                Ok(Reply::Ok { .. }) => {
+                    let ask = ["has-session", "-t", id].map(String::from);
+                    if self.run(&ask).is_err() {
+                        return;
+                    }
+                }
+                Ok(Reply::Event(Event::SessionClosed { session, .. }))
+                    if session.to_string() == id =>
+                {
+                    return;
+                }
+                Ok(Reply::Err { .. }) => return,
+                _ => {}
+            }
+        }
     }
 
     fn spawn_watch(

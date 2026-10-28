@@ -28,6 +28,8 @@ pub trait Server {
     /// Attaches this terminal to the session, or switches the client this
     /// command runs in. Returns a line to print.
     fn attach(&mut self, session_id: &str) -> Result<(), String>;
+    /// Blocks until session `id` has ended: closed, or its server gone.
+    fn wait_closed(&mut self, id: &str);
     /// Starts the detached `layout __watch` helper for `on_stop`.
     fn spawn_watch(
         &mut self,
@@ -77,6 +79,11 @@ impl Dirs {
         if arg.starts_with('/') || arg.starts_with("./") {
             return Ok(self.cwd.join(arg));
         }
+        self.resolve_name(arg)
+    }
+
+    /// The file a layout name names: inside the layouts directory only.
+    pub fn resolve_name(&self, arg: &str) -> Result<PathBuf, String> {
         let name = arg.strip_suffix(".toml").unwrap_or(arg);
         if !valid_name(name) {
             return Err(format!("invalid layout name: {arg:?}"));
