@@ -52,8 +52,8 @@ const TABLE: [[&str; 5]; 14] = [
 pub struct Clocks {
     /// Each pane in the mode, with the text last drawn for it.
     active: BTreeMap<PaneId, String>,
-    /// Whether a timer is waiting for the next second.
-    ticking: bool,
+    /// The timer waiting for the next second, if one is.
+    timer: Option<tokio::task::AbortHandle>,
 }
 
 impl Clocks {
@@ -64,6 +64,22 @@ impl Clocks {
     /// Drops the panes that are gone.
     pub fn retain(&mut self, live: impl Fn(PaneId) -> bool) {
         self.active.retain(|p, _| live(*p));
+        self.stop_if_idle();
+    }
+
+    /// Whether a timer is waiting; there is at most one.
+    pub fn is_timing(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// With no clock left, cancels the timer: nothing wakes for an idle
+    /// server.
+    fn stop_if_idle(&mut self) {
+        if self.active.is_empty()
+            && let Some(timer) = self.timer.take()
+        {
+            timer.abort();
+        }
     }
 }
 
@@ -132,38 +148,49 @@ pub fn enter(state: &mut State, pane: PaneId) {
 /// Takes `pane` out of clock mode; whether it was in it.
 pub fn leave(state: &mut State, pane: PaneId) -> bool {
     let was = state.clocks.active.remove(&pane).is_some();
+    state.clocks.stop_if_idle();
     if was {
         clients::mark_all_dirty(state);
     }
     was
 }
 
+/// Drops the clocks of panes that no longer exist (after a command that may
+/// have killed one) and, with none left, the timer.
+pub fn sweep(state: &mut State) {
+    if state.clocks.active.is_empty() {
+        return;
+    }
+    let model = &state.model;
+    state.clocks.retain(|p| model.panes.contains_key(&p));
+}
+
 /// Waits for the next second boundary, as `window_clock_start_timer`, then
 /// redraws the clocks whose text changed and waits again. One timer serves
 /// every clock, and none runs without one.
 fn arm(state: &mut State) {
-    if state.clocks.ticking || state.clocks.active.is_empty() {
+    if state.clocks.timer.is_some() || state.clocks.active.is_empty() {
         return;
     }
     // Without a runtime (unit tests) nothing ticks.
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
         return;
     };
-    state.clocks.ticking = true;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     let delay = Duration::from_nanos(1_000_000_000 - u64::from(nanos));
     let jobs = state.jobs.clone();
-    rt.spawn(async move {
+    let timer = rt.spawn(async move {
         tokio::time::sleep(delay).await;
         let job: crate::server::Job = Box::new(tick);
         let _ = jobs.send(job).await;
     });
+    state.clocks.timer = Some(timer.abort_handle());
 }
 
 fn tick(state: &mut State) {
-    state.clocks.ticking = false;
+    state.clocks.timer = None;
     let model = &state.model;
     state.clocks.retain(|p| model.panes.contains_key(&p));
     let panes: Vec<PaneId> = state.clocks.active.keys().copied().collect();
@@ -396,6 +423,29 @@ mod tests {
                 .replace("%M", &min)
                 .replace("%S", &sec)
         }
+    }
+
+    /// One timer serves every clock, none runs without a clock, and the
+    /// last clock to go (left, or its pane killed) takes the timer with it.
+    #[tokio::test]
+    async fn one_timer_for_all_clocks_and_none_when_idle() {
+        let mut state = crate::server::test_state();
+        assert!(!state.clocks.is_timing());
+        enter(&mut state, PaneId(100));
+        assert!(state.clocks.is_timing());
+        let first = state.clocks.timer.as_ref().map(|t| t.id());
+        enter(&mut state, PaneId(101));
+        assert_eq!(state.clocks.timer.as_ref().map(|t| t.id()), first);
+        assert!(leave(&mut state, PaneId(100)));
+        assert!(state.clocks.is_timing(), "a clock is left");
+        assert!(leave(&mut state, PaneId(101)));
+        assert!(!state.clocks.is_timing(), "no clock, no timer");
+        // Panes that no longer exist (killed) end their clocks too.
+        enter(&mut state, PaneId(102));
+        assert!(state.clocks.is_timing());
+        sweep(&mut state);
+        assert!(!state.clocks.is_active(PaneId(102)));
+        assert!(!state.clocks.is_timing(), "the killed pane's clock is gone");
     }
 
     #[test]

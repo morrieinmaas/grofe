@@ -174,6 +174,7 @@ pub(crate) fn run_commands(
                 break;
             }
         }
+        crate::server::clock::sweep(state);
         // A command that answers later (a blocked `wait-for`, `run-shell`)
         // holds the rest of the request until it answers, as tmux 3.7b's
         // command queue waits (TC.9), and so does a hook waiting on its
