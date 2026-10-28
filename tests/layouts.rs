@@ -231,7 +231,10 @@ exec = true
     // (the harness keeps it dead).
     let typed = screen(&p[0][0]);
     assert!(
-        typed.contains("echo typed-marker") && typed.lines().any(|l| l == "typed-marker"),
+        typed.contains("echo typed-marker")
+            && typed
+                .lines()
+                .any(|l| l.ends_with("typed-marker") && !l.contains("echo")),
         "{typed}"
     );
     assert_eq!(p[0][4], "0", "typed pane alive: {p:?}");
