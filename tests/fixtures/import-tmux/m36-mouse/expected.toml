@@ -6,3 +6,5 @@
 MouseDown1Status = """if-shell -F '#{m:*net*,#{mouse_status_range}}' 'display-popup -E "net.sh #{mouse_status_range}"' 'switch-client -t ='"""
 # ~/.tmux.conf:9
 DoubleClick1Pane = "resize-pane -Z"
+# ~/.tmux.conf:11
+MouseDown3Pane = "display-menu -x M -y M Split s split-window"

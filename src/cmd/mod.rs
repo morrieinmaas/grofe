@@ -864,6 +864,9 @@ pub struct DisplayMenu {
     pub x: Option<String>,
     /// `-y`, raw.
     pub y: Option<String>,
+    /// `-t`: the pane the formats expand against, the menu is placed
+    /// against and the items run for; the current one when not given.
+    pub target: Option<Target>,
     /// Required (at least one); empty only for a bare `display-menu`.
     pub items: Vec<MenuEntry>,
 }

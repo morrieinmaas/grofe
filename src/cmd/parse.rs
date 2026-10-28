@@ -1837,6 +1837,7 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         ('T', FlagKind::Value),
         ('x', FlagKind::Value),
         ('y', FlagKind::Value),
+        ('t', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "display-menu")?;
     needs_positionals(argv, &flags, "display-menu", 1)?;
@@ -1844,6 +1845,7 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         title: flags.values.get(&'T').cloned(),
         x: flags.values.get(&'x').cloned(),
         y: flags.values.get(&'y').cloned(),
+        target: target_if_given(&flags.values, 't')?,
         items: menu_entries(&flags.positionals)?,
     }))
 }

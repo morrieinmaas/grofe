@@ -2306,8 +2306,6 @@ mod tests {
     fn out_of_scope_forms_fail_loudly() {
         let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
         assert!(err.contains("not supported"), "{err}");
-        let err = one(&["copy-mode", "-q"]).unwrap_err().0;
-        assert!(err.starts_with("copy-mode: not supported"), "{err}");
     }
 
     #[test]

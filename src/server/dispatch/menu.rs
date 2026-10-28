@@ -2,7 +2,7 @@
 //! `confirm-before`, drawn by `server::menu` and `server::prompt`, and
 //! grofe aliases, expanded before a request is parsed ([`expand_aliases`]).
 
-use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry};
+use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry, Resolve};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::input::parse_key;
 use crate::server::menu::{self, Menu, MenuItem, Position};
@@ -24,6 +24,18 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         return Err(too_few_arguments("display-menu"));
     }
     let id = clients::current_client(state, ctx).ok_or("no current client")?;
+    // `-t`: the pane the menu is for, as the current one.
+    let at;
+    let ctx = match &c.target {
+        Some(target) => {
+            at = ClientCtx {
+                pane: Some(state.model.resolve_pane(target, ctx)?),
+                ..ctx.clone()
+            };
+            &at
+        }
+        None => ctx,
+    };
     // tmux 3.7b (recorded) does nothing while the client shows a popup.
     if state.popups.is_open(id) {
         return Ok(String::new());

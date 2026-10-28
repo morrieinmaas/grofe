@@ -2,4 +2,3 @@
 ~/.tmux.conf:4: note: keys.root.MouseDown1Pane is tmux's stock mouse binding, replaced by the built-in mouse model: nothing to convert
 ~/.tmux.conf:5: note: keys.root.WheelUpStatus is tmux's stock mouse binding, replaced by the built-in mouse model: nothing to convert
 ~/.tmux.conf:6: note: keys.root.MouseDrag1Border is tmux's stock mouse binding, replaced by the built-in mouse model: nothing to convert
-~/.tmux.conf:11: display-menu: not supported (a mouse position (M, W or S); grofe's built-in mouse model opens a mouse key's menu at the pointer when no position is given (spec 4.5, M36-R5)): bind -n MouseDown3Pane display-menu -x M -y M Split s split-window
