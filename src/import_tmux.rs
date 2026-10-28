@@ -1921,6 +1921,24 @@ impl Importer {
         let Some(set) = set else {
             return self.report(file, line, "command not converted", text);
         };
+        // `[hooks]` holds one global command per event.
+        let why = if set.hook.as_deref().is_some_and(|h| h.contains('[')) || set.append {
+            Some("hook arrays; `[hooks]` holds one command per event")
+        } else if set.run {
+            Some("running a hook by hand")
+        } else if !set.global {
+            Some("session, window and pane hooks; `[hooks]` holds the global ones (set-hook -g)")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return self.report(
+                file,
+                line,
+                &format!("set-hook: not supported ({why})"),
+                text,
+            );
+        }
         let Some(event) = set
             .hook
             .as_deref()

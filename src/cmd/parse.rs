@@ -1936,7 +1936,15 @@ fn parse_if_shell(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('g', FlagKind::Bool), ('u', FlagKind::Bool)];
+    const SHORT: &[(char, FlagKind)] = &[
+        ('g', FlagKind::Bool),
+        ('u', FlagKind::Bool),
+        ('a', FlagKind::Bool),
+        ('p', FlagKind::Bool),
+        ('w', FlagKind::Bool),
+        ('R', FlagKind::Bool),
+        ('t', FlagKind::Value),
+    ];
     let flags = flags_for(argv, SHORT, "set-hook")?;
     needs_positionals(argv, &flags, "set-hook", 1)?;
     no_extra_positionals(&flags, "set-hook", 2)?;
@@ -1944,6 +1952,12 @@ fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::SetHook(SetHook {
         global: flags.present.contains(&'g'),
         unset: flags.present.contains(&'u'),
+        append: flags.present.contains(&'a'),
+        pane: flags.present.contains(&'p'),
+        window: flags.present.contains(&'w'),
+        run: flags.present.contains(&'R'),
+        target: target_or_current(&flags.values, 't')?,
+        target_text: flags.values.get(&'t').cloned(),
         hook: positionals.next(),
         command: positionals.next(),
     }))
@@ -1952,13 +1966,21 @@ fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
 fn parse_show_hooks(argv: &[String]) -> Result<Command, ParseError> {
     let flags = flags_for(
         argv,
-        &[('g', FlagKind::Bool), ('w', FlagKind::Bool)],
+        &[
+            ('g', FlagKind::Bool),
+            ('w', FlagKind::Bool),
+            ('p', FlagKind::Bool),
+            ('t', FlagKind::Value),
+        ],
         "show-hooks",
     )?;
     no_extra_positionals(&flags, "show-hooks", 1)?;
     Ok(Command::ShowHooks(ShowHooks {
         global: flags.present.contains(&'g'),
         window: flags.present.contains(&'w'),
+        pane: flags.present.contains(&'p'),
+        target: target_or_current(&flags.values, 't')?,
+        target_text: flags.values.get(&'t').cloned(),
         hook: flags.positionals.first().cloned(),
     }))
 }

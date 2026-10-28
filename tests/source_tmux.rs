@@ -119,8 +119,7 @@ fn a_parse_error_runs_nothing_and_names_its_line() {
     assert!(!out.stdout.contains("one"), "{}", out.stdout);
 }
 
-/// Valid tmux that grofe cannot do (a hook it lacks, `set-hook` without
-/// `-g`) fails its own command and the rest of its line; the other lines
+/// Valid tmux that grofe cannot do (`lock-server`) fails its own command and the rest of its line; the other lines
 /// run, and the request fails with each error named by file and line.
 #[test]
 fn a_command_grofe_lacks_fails_only_its_own_line() {
@@ -129,9 +128,9 @@ fn a_command_grofe_lacks_fails_only_its_own_line() {
         &srv,
         "lack.conf",
         "set -g @a 1\n\
-         set-hook client-attached 'display x'\n\
+         lock-server\n\
          set -g @b 2\n\
-         set -g @before 1 ; set-hook -g client-attached 'display y' ; set -g @skipped 1\n\
+         set -g @before 1 ; lock-server ; set -g @skipped 1\n\
          set -g @c 3\n",
     );
     let out = tmux_run(&srv, &["source-file", &file]);
@@ -166,7 +165,7 @@ fn a_nested_file_fails_alone() {
     let lack = write(
         &srv,
         "lack-inner.conf",
-        "set -g @i1 1\nset-hook client-attached x\nset -g @i2 2\n",
+        "set -g @i1 1\nlock-server\nset -g @i2 2\n",
     );
     let outer = write(
         &srv,

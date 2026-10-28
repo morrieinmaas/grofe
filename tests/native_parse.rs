@@ -588,9 +588,9 @@ fn every_new_verb_parses_with_its_rows_flags() {
             vec!["set-hook", "-g", "pane-focused", "run-shell -b 'true'"],
             Command::SetHook(SetHook {
                 global: true,
-                unset: false,
                 hook: s("pane-focused"),
                 command: s("run-shell -b 'true'"),
+                ..SetHook::default()
             }),
         ),
         (
@@ -599,15 +599,34 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 global: true,
                 unset: true,
                 hook: s("pane-focused"),
-                command: None,
+                ..SetHook::default()
+            }),
+        ),
+        (
+            vec!["set-hook", "-ap", "-t", "work:1.0", "pane-focus-in[2]", "x"],
+            Command::SetHook(SetHook {
+                append: true,
+                pane: true,
+                target: parse_target("work:1.0").unwrap(),
+                target_text: s("work:1.0"),
+                hook: s("pane-focus-in[2]"),
+                command: s("x"),
+                ..SetHook::default()
+            }),
+        ),
+        (
+            vec!["set-hook", "-R", "after-new-window"],
+            Command::SetHook(SetHook {
+                run: true,
+                hook: s("after-new-window"),
+                ..SetHook::default()
             }),
         ),
         (
             vec!["show-hooks", "-g"],
             Command::ShowHooks(ShowHooks {
                 global: true,
-                window: false,
-                hook: None,
+                ..ShowHooks::default()
             }),
         ),
         (

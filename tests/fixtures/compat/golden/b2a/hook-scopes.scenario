@@ -1,0 +1,69 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-window -d -t main -n second cat
+$ split-window -d -t main:1 cat
+$ new-session -d -s other cat
+$ set-hook after-select-pane 'display -p "s-main"'
+$ show-hooks
+$ show-hooks -t other
+$ show-hooks -g after-select-pane
+$ set-hook -t other after-select-pane 'display -p "s-other"'
+$ show-hooks -t other after-select-pane
+$ show-hooks -t main
+$ set-hook -a after-select-pane 'display -p "second"'
+$ set-hook after-select-pane[5] 'display -p "five"'
+$ set-hook after-select-pane[1] 'display -p "one"'
+$ show-hooks after-select-pane
+$ show-hooks -t main:1
+$ show-hooks -w
+$ show-hooks -p
+$ show-hooks -w -t main:1 pane-focus-in
+$ set-hook -w pane-focus-in 'display -p "wf"'
+$ set-hook -p pane-focus-in 'display -p "pf"'
+$ set-hook -p -t main:1.2 pane-focus-in 'display -p "pf2"'
+$ show-hooks -w pane-focus-in
+$ show-hooks -p pane-focus-in
+$ show-hooks -p -t main:1.2 pane-focus-in
+$ show-hooks -w -t main:1
+$ show-hooks -p -t main:1.2
+$ set-hook -w after-select-pane 'display -p x'
+$ set-hook -p after-select-pane 'display -p x'
+$ set-hook -t main:1 after-select-pane 'display -p x'
+$ set-hook -t main:1 pane-focus-in 'display -p wt'
+$ show-hooks -t main:1 pane-focus-in
+$ show-hooks pane-focus-in
+$ set-hook -g pane-focus-in 'display -p g'
+$ show-hooks -g pane-focus-in
+$ show-hooks -gw pane-focus-in
+$ show-hooks -gp pane-focus-in
+$ set-hook -gw window-renamed 'display -p ren'
+$ show-hooks -gw window-renamed
+$ set-hook -u after-select-pane[1]
+$ show-hooks after-select-pane
+$ set-hook -u after-select-pane
+$ show-hooks after-select-pane
+$ set-hook -gu pane-focus-in
+$ show-hooks -g pane-focus-in
+$ set-hook -R after-select-pane
+$ set-hook -R nope
+$ set-hook -g after-select-pane 'display -p "g1"'
+$ set-hook -R after-select-pane
+$ set-hook -gR after-select-pane
+$ set-hook -t other -R after-select-pane
+$ set-hook -a -g after-select-pane 'display -p "g2"'
+$ set-hook -a -g after-select-pane
+$ set-hook -g after-select-pane[0] 'display -p "g0"'
+$ show-hooks -g after-select-pane
+$ set-hook -g after-select-pane[x] 'display -p g'
+$ set-hook -g 'after-select-pane[]' 'display -p g'
+$ set-hook -g
+$ set-hook
+$ set-hook -g after-select-pane 'display -p a' extra
+$ set-hook -g after-select-pane ''
+$ show-hooks -g after-select-pane
+$ set-hook -g after-select-pane 'nope'
+$ set-hook -g after-select-pane '   '
+$ set-hook -gu nope
+$ set-hook -gu after-select-pane[3]
+$ show-hooks -g after-select-pane
+$ show-hooks -g nope
+$ show-hooks -t nope

@@ -1,0 +1,32 @@
+# A firing hook runs the commands of the nearest scope that has any: the
+# session's own, else the global ones; a session's empty array hides them.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ split-window -d -t main:1 cat
+$ new-session -d -s other -x 80 -y 24 cat
+$ split-window -d -t other:1 cat
+$ set-hook -g after-select-pane 'display -p "global"'
+$ set-hook -t other after-select-pane 'display -p "other-local"'
+$ set-hook -a -t other after-select-pane 'display -p "other-second"'
+$ select-pane -t main:1.2
+$ select-pane -t main:1.1
+$ select-pane -t other:1.2
+$ set-hook -t other after-select-pane ''
+$ show-hooks -t other
+$ select-pane -t other:1.1
+$ set-hook -u -t other after-select-pane
+$ select-pane -t other:1.2
+$ set-hook -g after-select-pane[2] 'display -p "global-2"'
+$ select-pane -t main:1.2
+$ set-hook -g after-select-pane[0] 'display -p "g0 #{hook} #{session_name}"'
+$ select-pane -t main:1.1
+$ set-hook -R after-select-pane
+$ set-hook -R -t other:1.1 after-select-pane
+$ set-hook -g after-select-pane 'display -p "only"'
+$ show-hooks -g after-select-pane
+$ set-hook -g after-set-hook 'display -p "set-hook ran"'
+$ set-hook -g after-new-window 'display -p "new #{window_name}"'
+$ set-hook -t other after-new-window 'display -p "other new #{window_name}"'
+$ new-window -d -t main -n w1 cat
+$ new-window -d -t other -n w2 cat
+$ set-hook -gu after-set-hook
+$ set-hook -gu after-set-hook

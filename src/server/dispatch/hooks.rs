@@ -10,34 +10,66 @@ fn too_few(verb: &str) -> String {
     ParseError::TooFewArguments(verb.to_string(), 1).to_string()
 }
 
-/// `set-hook -g <event> <command>`: binds a command string to one of
-/// grofe's events (`server::hooks::EVENTS`), replacing what was bound;
-/// `-gu <event>` removes it.
-// ponytail: global hooks only; tmux's session, window and pane hooks
-// (`set-hook` without `-g`, `-t`, `-w`, `-p`) and arrays (`-a`, `[N]`) are
-// not kept.
+/// A hook name as tmux's `options_match` reads it: the name and an
+/// optional `[N]` array index. Anything else after the name is the text
+/// tmux calls `ambiguous option`.
+fn split_index(name: &str) -> Result<(&str, Option<u32>), String> {
+    let Some((base, rest)) = name.split_once('[') else {
+        return Ok((name, None));
+    };
+    rest.strip_suffix(']')
+        .and_then(|n| n.parse::<u32>().ok())
+        .map(|n| (base, Some(n)))
+        .ok_or_else(|| format!("ambiguous option: {name}"))
+}
+
+/// `set-hook [-agpRu] [-t target] <event>[N] [command]`: tmux's hooks are
+/// array options. `-g` sets the global commands, else the target's own
+/// session, window (`-w` is implied for the window hooks) or, with `-p`,
+/// pane; a firing hook runs the nearest scope that has any. `-a` adds a
+/// command, `[N]` sets one element, `-u` removes a hook or an element, and
+/// `-R` runs the hook now.
 pub fn set_hook(state: &mut State, ctx: &ClientCtx, c: SetHook) -> Result<String, String> {
-    let name = c.hook.ok_or_else(|| too_few("set-hook"))?;
-    let event = hooks::event(&name).ok_or_else(|| format!("unknown hook: {name}"))?;
-    if !c.global {
-        return Err("only global hooks are supported (set-hook -g)".to_string());
+    let name = c.hook.clone().ok_or_else(|| too_few("set-hook"))?;
+    if c.run {
+        // tmux runs whatever the name finds and says nothing of the rest.
+        let Some(spec) = hooks::event(&name) else {
+            return Ok(String::new());
+        };
+        let pane = state.model.resolve_pane(&c.target, ctx).ok();
+        return Ok(hooks::run_now(state, ctx, spec, pane));
     }
+    let (base, index) = split_index(&name)?;
+    let spec = hooks::event(base).ok_or_else(|| format!("unknown hook: {name}"))?;
+    let table = hooks::table_of(spec, c.pane);
+    let text = c.target_text.as_deref();
+    let scope = hooks::scope_in(state, ctx, table, c.global, &c.target, text)?;
     if c.unset {
-        hooks::unbind(state, event);
+        hooks::unbind(state, scope, spec, index);
         return Ok(String::new());
     }
     let command = c.command.ok_or_else(|| "empty value".to_string())?;
-    hooks::bind(state, ctx, event, &command)?;
+    hooks::assign(state, ctx, scope, spec, index, c.append, &command)?;
     Ok(String::new())
 }
 
-/// `show-hooks -g [event]`: `<event> <command>` for each bound hook.
-/// Without `-g` it shows the session's hooks, of which there are none.
+/// `show-hooks [-gpw] [-t target] [event]`: the hooks of a table, in the
+/// scope the flags pick, or one hook by name (`<event>[N]` for one
+/// element).
 pub fn show_hooks(state: &mut State, ctx: &ClientCtx, c: ShowHooks) -> Result<String, String> {
-    if !c.global {
-        return Ok(String::new());
-    }
-    hooks::show(state, c.hook.as_deref(), ctx.dialect, c.window)
+    let named = match &c.hook {
+        Some(name) => {
+            let (base, index) = split_index(name)?;
+            let spec = hooks::event(base).ok_or_else(|| format!("unknown hook: {name}"))?;
+            Some((spec, index))
+        }
+        None => None,
+    };
+    let (spec, index) = match named {
+        Some((spec, index)) => (Some(spec), index),
+        None => (None, None),
+    };
+    hooks::show(state, ctx, &c, index, spec)
 }
 
 /// `set-environment [-g] [-h] [-t session] name value`, or `-u name`: the
@@ -133,7 +165,10 @@ mod tests {
             run(&mut state, &["set-environment"]),
             Err("command set-environment: too few arguments (need at least 1)".to_string())
         );
-        assert_eq!(run(&mut state, &["show-hooks"]), Ok(String::new()));
+        assert_eq!(
+            run(&mut state, &["show-hooks"]),
+            Err("no current session".to_string())
+        );
         assert_eq!(
             run(&mut state, &["show-environment", "-g"]),
             Ok(String::new())
@@ -149,7 +184,14 @@ mod tests {
         );
         assert_eq!(
             run(&mut state, &["set-hook", "pane-focused", "list-sessions"]),
-            Err("only global hooks are supported (set-hook -g)".to_string())
+            Err("no current session".to_string())
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &["set-hook", "-g", "pane-focused[x]", "list-sessions"]
+            ),
+            Err("ambiguous option: pane-focused[x]".to_string())
         );
         assert_eq!(
             run(&mut state, &["set-hook", "-g", "pane-focused"]),

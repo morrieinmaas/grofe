@@ -951,13 +951,28 @@ pub struct If {
 }
 
 /// `set-hook` (TC.5): bind a command to one of grofe's events (the event
-/// names are TC.5's; FE.3 maps tmux's hook names onto them).
+/// names are TC.5's; FE.3 maps tmux's hook names onto them). The flags are
+/// tmux's: `-g` the global hooks, `-p`/`-w`/`-t` a pane's, window's or
+/// session's own, `-a` append, `-u` remove, `-R` run now; a hook is an
+/// array, so the name may end in `[N]`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SetHook {
     /// `-g`.
     pub global: bool,
     /// `-u`: remove the hook.
     pub unset: bool,
+    /// `-a`: add the command after the others.
+    pub append: bool,
+    /// `-p`: a pane's hook (a window's hook that panes may override).
+    pub pane: bool,
+    /// `-w`: a window's hook.
+    pub window: bool,
+    /// `-R`: run the hook now instead of setting it.
+    pub run: bool,
+    /// `-t`: where the hook is set or run.
+    pub target: Target,
+    /// The `-t` text, for the errors that name it.
+    pub target_text: Option<String>,
     /// Required; `None` only for a bare `set-hook`.
     pub hook: Option<String>,
     /// A stored command string.
@@ -971,6 +986,12 @@ pub struct ShowHooks {
     pub global: bool,
     /// `-w`: tmux's window and pane hooks, listed apart from the rest.
     pub window: bool,
+    /// `-p`: a pane's own hooks.
+    pub pane: bool,
+    /// `-t`: whose hooks.
+    pub target: Target,
+    /// The `-t` text, for the errors that name it.
+    pub target_text: Option<String>,
     pub hook: Option<String>,
 }
 

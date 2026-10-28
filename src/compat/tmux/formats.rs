@@ -620,44 +620,71 @@ pub(crate) fn tmux_hook_names(window: bool) -> &'static [&'static str] {
 }
 
 /// The grofe event a tmux hook name fires on (TC.5's `EVENTS`, each of
-/// which names its tmux hook), or tmux's error for a name that is no
-/// hook, or grofe's refusal for a tmux hook with no grofe event.
+/// which names its tmux hook, or tmux's error for a name that is no hook.
 pub fn hook_event(tmux: &str) -> Result<&'static str, TmuxError> {
-    if let Some(e) = crate::server::hooks::EVENTS.iter().find(|e| e.tmux == tmux) {
-        return Ok(e.name);
-    }
-    let base = tmux.split('[').next().unwrap_or(tmux);
-    if TMUX_HOOKS.contains(&base) {
-        let why = if base == tmux {
-            "grofe has no event for this hook (spec 4.5)"
-        } else {
-            "hook arrays; a hook holds one command in grofe"
-        };
-        return Err(TmuxError(format!("set-hook: not supported ({why})")));
-    }
-    Err(TmuxError(format!("invalid option: {tmux}")))
+    crate::server::hooks::EVENTS
+        .iter()
+        .find(|e| e.tmux == tmux)
+        .map(|e| e.name)
+        .ok_or_else(|| TmuxError(format!("invalid option: {tmux}")))
 }
 
 /// The native `set-hook`/`show-hooks` argv for a tmux one: the same flags,
-/// the hook named by its grofe event.
+/// the hook named by its grofe event (and its `[N]` index kept). `set-hook
+/// -R` runs whatever name it is given and says nothing of an unknown one,
+/// so the name goes through as it is.
 fn hook_args(inv: &Invocation<'_>) -> Result<Vec<String>, TmuxError> {
     let got = inv.getopt();
-    let mut args: Vec<String> = got.flags.iter().map(|(f, _)| format!("-{f}")).collect();
+    let mut args = Vec::new();
+    for (flag, value) in &got.flags {
+        args.push(format!("-{flag}"));
+        args.extend(value.map(str::to_string));
+    }
     let mut positionals = inv.positionals().iter();
     if let Some(name) = positionals.next() {
         args.push("--".to_string());
-        args.push(hook_event(name)?.to_string());
+        let (base, index) = match name.split_once('[') {
+            Some((base, rest)) => (base, Some(rest)),
+            None => (name.as_str(), None),
+        };
+        // tmux reads `name[N]` and calls anything else after the name
+        // ambiguous.
+        let well_formed = |rest: &str| {
+            rest.strip_suffix(']')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        };
+        if index.is_some_and(|rest| !well_formed(rest)) && !got.has('R') {
+            return Err(TmuxError(format!("ambiguous option: {name}")));
+        }
+        match hook_event(base) {
+            Ok(event) => args.push(match index {
+                Some(rest) => format!("{event}[{rest}"),
+                None => event.to_string(),
+            }),
+            Err(_) if got.has('R') => args.push(name.clone()),
+            Err(e) => {
+                return Err(match index {
+                    Some(_) => TmuxError(format!("invalid option: {name}")),
+                    None => e,
+                });
+            }
+        }
     }
     args.extend(positionals.cloned());
     Ok(args)
 }
 
-/// `set-hook -g[u] <tmux hook> [command]`: onto grofe's event. The
-/// command is stored as written, tagged tmux dialect, and translated
-/// through this front end each time it fires (FE.1's stored strings).
+/// `set-hook` and `show-hooks`: onto grofe's event and scopes. The command
+/// is stored as written, tagged tmux dialect, and translated through this
+/// front end each time it fires (FE.1's stored strings).
 fn set_hook(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     let args = hook_args(inv)?;
     inv.native("set-hook", &args)
+}
+
+fn show_hooks(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    let args = hook_args(inv)?;
+    inv.native("show-hooks", &args)
 }
 
 // ---- tmux's option tables ------------------------------------------------------
@@ -737,20 +764,7 @@ pub fn unquote(text: &str) -> String {
 
 // ---- Rows --------------------------------------------------------------------
 
-const HOOK_SCOPES: &str = "session, window and pane hooks; grofe's hooks are global (set-hook -g)";
 const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
-
-/// A form grofe refuses for good, whatever else the command names.
-const fn refuse(tmux_form: &'static str, reason: &'static str) -> Row {
-    row(
-        tmux_form,
-        MappingKind::Behaviour,
-        GrofeTarget::Unsupported(reason),
-        SEMANTIC,
-        "",
-        "",
-    )
-}
 
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
@@ -790,44 +804,20 @@ pub(crate) fn rows() -> Vec<Row> {
             "fe_3/show",
         ),
         row(
-            "set-hook -g",
+            "set-hook",
             Behaviour,
             Translate(set_hook),
             SEMANTIC,
-            "M3.6",
-            "fe_3/hooks",
-        ),
-        row(
-            "set-hook",
-            Behaviour,
-            Unsupported(HOOK_SCOPES),
-            &[],
-            "M3.6",
-            "",
-        ),
-        refuse(
-            "set-hook -a",
-            "hook arrays; a hook holds one command in grofe",
-        ),
-        refuse("set-hook -R", "running a hook by hand"),
-        refuse("set-hook -p", HOOK_SCOPES),
-        refuse("set-hook -w", HOOK_SCOPES),
-        refuse("set-hook -t", HOOK_SCOPES),
-        row(
-            "show-hooks -g",
-            Behaviour,
-            Native("show-hooks"),
-            SEMANTIC,
-            "M3.6",
-            "fe_3/hooks",
+            "B2a",
+            "b2a/hook-scopes",
         ),
         row(
             "show-hooks",
             Behaviour,
-            Native("show-hooks"),
-            &[],
-            "M3.6",
-            "",
+            Translate(show_hooks),
+            SEMANTIC,
+            "B2a",
+            "b2a/hook-scopes",
         ),
         row(
             "set-environment",
@@ -1057,11 +1047,7 @@ mod tests {
             assert!(crate::server::hooks::event(event).is_some(), "{tmux}");
         }
         assert_eq!(hook_event("nope").unwrap_err().0, "invalid option: nope");
-        assert!(
-            hook_event("client-focus-in")
-                .unwrap_err()
-                .0
-                .contains("not supported")
-        );
+        assert_eq!(hook_event("client-focus-in"), Ok("client-focus-in"));
+        assert_eq!(hook_event("window-resized"), Ok("window-size-changed"));
     }
 }
