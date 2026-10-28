@@ -106,6 +106,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status.keys", "status-keys"),
     ("compat-identity", "compat-identity"),
     ("graphics", "graphics"),
+    ("floating-pane-mouse", "floating-pane-mouse"),
     ("allow-passthrough", "allow-passthrough"),
     // Window alerts (TP.10), by tmux's names.
     ("monitor-bell", "monitor-bell"),
@@ -176,6 +177,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "monitor-activity"
         | "wrap-search"
         | "graphics"
+        | "floating-pane-mouse"
         | "focus-follows-mouse"
         | "exit-empty" => Ty::Bool,
         "base-index"

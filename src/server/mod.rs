@@ -18,6 +18,7 @@ pub mod clock;
 pub mod copy;
 pub mod dispatch;
 pub mod events;
+pub mod floating;
 pub mod graphics;
 pub mod hooks;
 pub mod imgstore;

@@ -512,6 +512,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
+    // grofe's own: drag a floating pane's border with the mouse to move or
+    // resize it (`src/server/floating.rs`). tmux 3.7b has no such option and
+    // takes no mouse key on that border; off, the border is inert as there.
+    Builtin {
+        name: "floating-pane-mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
     // M3.6 (the stub edit): the server's identity override (spec D12).
     // TC.1 reads it once at start; until then nothing does.
     Builtin {
