@@ -27,3 +27,23 @@ fn a_client_sees_a_linked_window_under_its_own_session_index() {
 fn a_group_counts_the_clients_of_all_its_members() {
     check("b1e", "group-clients", &[]);
 }
+
+#[test]
+fn kills_reach_every_session_holding_the_window() {
+    check("b1e", "kills", &[]);
+}
+
+#[test]
+fn link_and_move_allocate_indexes_as_tmux_does() {
+    check("b1e", "index", &[]);
+}
+
+#[test]
+fn a_pane_in_a_linked_window_answers_for_the_session_in_play() {
+    check("b1e", "panes", &[]);
+}
+
+#[test]
+fn swap_window_d_keeps_the_current_windows() {
+    check("b1e", "swapd", &[]);
+}

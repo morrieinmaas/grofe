@@ -1,0 +1,28 @@
+# B1e review: index allocation for link-window and move-window.
+$ set -g base-index 1
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-window -d -t a: -n a3 cat
+$ new-window -d -t a: -n a4 cat
+$ new-window -d -t a: -n a5 cat
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+$ new-window -d -t b:5 -n b5 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ link-window -d -s a:1 -t b:
+$ link-window -d -a -s a:2 -t b:
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ link-window -d -b -s a:3 -t b:5
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ set -t b renumber-windows on
+$ unlink-window -t b:2
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ link-window -a -s a:2 -t b:1
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ move-window -r -t b
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ link-window -d -s a:4 -t b:99
+$ link-window -d -s a:5 -t b:100
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ move-window -d -s b:99 -t b:50
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ set -t b renumber-windows off

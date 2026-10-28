@@ -1,0 +1,31 @@
+# B1e review: formats of a pane in a linked window, targets by id.
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+$ link-window -d -s a:2 -t b:7
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} #{window_id}'
+$ list-panes -s -t b -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} #{window_name}'
+$ display -p -t b:7 '#{session_name} #{window_index} #{pane_id} #{session_id}'
+$ display -p -t a:2 '#{session_name} #{window_index} #{pane_id} #{session_id}'
+$ display -p -t %2 '#{session_name} #{window_index} #{pane_id}'
+$ display -p -t @1 '#{session_name} #{window_index} #{pane_id}'
+$ set -t a status-left 'A'
+$ set -t b status-left 'B'
+$ display -p -t b:7 '#{status-left}'
+$ show -v -t %1 status-left
+$ show -v -t b:7 status-left
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_panes} #{window_linked}'
+$ rename-window -t b:7 newname
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_name}'
+$ split-window -d -t b:7 cat
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ select-window -t a:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_active} #{window_last_flag} #{window_flags}'
+$ select-window -t a:1
+$ last-window -t b
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_active} #{window_last_flag} #{window_flags}'
+$ link-window -d -s a:1 -t b:2
+$ set -wt b:7 synchronize-panes on
+$ show -wv -t a:2 synchronize-panes
+$ respawn-window -k -t b:7 cat
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'

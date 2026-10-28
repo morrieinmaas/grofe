@@ -1,0 +1,42 @@
+# B1e review: kill semantics with windows in several sessions.
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-window -d -t a: -n a3 cat
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+$ link-window -d -s a:2 -t b:
+$ link-window -d -s a:3 -t b:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+# kill-window -a keeps the target, and kills the others everywhere.
+$ select-window -t b:2
+$ kill-window -a -t b:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ list-sessions -F '#{session_name} #{session_windows}'
+# killing the current window of b: it wraps to the last window.
+$ new-window -d -t a: -n a4 cat
+$ new-window -d -t a: -n a5 cat
+$ link-window -d -s a:3 -t b:
+$ link-window -d -s a:4 -t b:
+$ select-window -t b:1
+$ select-window -t b:3
+$ select-window -t b:2
+$ kill-window -t b:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ kill-window -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+# kill-pane in a shared window: the last pane closes the window everywhere.
+$ split-window -d -t a:3 cat
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ kill-pane -t a:3.1
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ kill-pane -t a:3.0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+# the only link of a window needs -k
+$ unlink-window -t a:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+# kill-session -a, kill-window in a one-window session removes the session
+$ new-session -d -s c -n c1 -x 80 -y 24 cat
+$ link-window -d -s a:1 -t c:
+$ kill-window -t c:1
+$ list-sessions -F '#{session_name} #{session_windows}'
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'

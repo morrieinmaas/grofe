@@ -623,6 +623,9 @@ pub struct SwapWindow {
     pub src: Option<Target>,
     /// `-t`.
     pub dst: Target,
+    /// `-d`: in tmux 3.7b the destination place becomes its session's
+    /// current window (the flag is the opposite of what its manual says).
+    pub select: bool,
 }
 
 /// `break-pane` (TC.8): move pane `-s` into a window of its own.

@@ -123,6 +123,15 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::SwapWindow(SwapWindow {
                 src: Some(t("work:1")),
                 dst: t("work:3"),
+                select: false,
+            }),
+        ),
+        (
+            vec!["swap-window", "-d", "-s", "work:1", "-t", "work:3"],
+            Command::SwapWindow(SwapWindow {
+                src: Some(t("work:1")),
+                dst: t("work:3"),
+                select: true,
             }),
         ),
         (

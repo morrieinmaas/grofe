@@ -1,0 +1,34 @@
+# B1e review: swap-window -d keeps the current windows; sessions of one group refuse.
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-window -d -t a: -n a3 cat
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+$ new-window -d -t b: -n b2 cat
+$ select-window -t b:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ swap-window -d -s a:1 -t b:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ swap-window -s a:1 -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ swap-window -d -s a:2 -t a:3
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ select-window -t a:3
+$ swap-window -d -s a:3 -t a:1
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ swap-window -s a:3 -t a:2
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ new-session -d -s g -t a
+$ swap-window -s a:1 -t g:2
+$ swap-window -s a:1 -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+$ link-window -s a:1 -t g:9
+$ link-window -k -s a:1 -t g:1
+$ move-window -s a:1 -t g:9
+$ move-window -s a:1 -t a:9
+$ unlink-window -t g:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id}'
+$ kill-session -t g
+$ new-session -d -s h -t a
+$ new-session -d -s i -t a
+$ kill-session -t h
+$ list-sessions -F '#{session_name} #{session_group} #{session_windows}'

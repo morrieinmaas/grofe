@@ -1,0 +1,114 @@
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t a: -n a2 cat
+? 0
+$ new-window -d -t a: -n a3 cat
+? 0
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t b: -n b2 cat
+? 0
+$ select-window -t b:2
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @0 a1 act=1
+a:2 @1 a2 act=0
+a:3 @2 a3 act=0
+b:1 @3 b1 act=0
+b:2 @4 b2 act=1
+? 0
+$ swap-window -d -s a:1 -t b:2
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @4 b2 act=1
+a:2 @1 a2 act=0
+a:3 @2 a3 act=0
+b:1 @3 b1 act=0
+b:2 @0 a1 act=1
+? 0
+$ swap-window -s a:1 -t b:1
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @3 b1 act=1
+a:2 @1 a2 act=0
+a:3 @2 a3 act=0
+b:1 @4 b2 act=0
+b:2 @0 a1 act=1
+? 0
+$ swap-window -d -s a:2 -t a:3
+? 0
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @3 b1 act=0
+a:2 @2 a3 act=0
+a:3 @1 a2 act=1
+? 0
+$ select-window -t a:3
+? 0
+$ swap-window -d -s a:3 -t a:1
+? 0
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @1 a2 act=1
+a:2 @2 a3 act=0
+a:3 @3 b1 act=0
+? 0
+$ swap-window -s a:3 -t a:2
+? 0
+$ list-windows -t a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @1 a2 act=1
+a:2 @3 b1 act=0
+a:3 @2 a3 act=0
+? 0
+$ new-session -d -s g -t a
+? 0
+$ swap-window -s a:1 -t g:2
+! can't move window, sessions are grouped
+? 1
+$ swap-window -s a:1 -t b:1
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active}'
+a:1 @4 b2 act=1
+a:2 @3 b1 act=0
+a:3 @2 a3 act=0
+b:1 @1 a2 act=0
+b:2 @0 a1 act=1
+g:1 @4 b2 act=1
+g:2 @3 b1 act=0
+g:3 @2 a3 act=0
+? 0
+$ link-window -s a:1 -t g:9
+! sessions are grouped
+? 1
+$ link-window -k -s a:1 -t g:1
+! sessions are grouped
+? 1
+$ move-window -s a:1 -t g:9
+! sessions are grouped
+? 1
+$ move-window -s a:1 -t a:9
+? 0
+$ unlink-window -t g:1
+! can't find window: 1
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id}'
+a:2 @3
+a:3 @2
+a:9 @4
+b:1 @1
+b:2 @0
+g:2 @3
+g:3 @2
+g:9 @4
+? 0
+$ kill-session -t g
+? 0
+$ new-session -d -s h -t a
+? 0
+$ new-session -d -s i -t a
+? 0
+$ kill-session -t h
+? 0
+$ list-sessions -F '#{session_name} #{session_group} #{session_windows}'
+a a 3
+b  2
+i a 3
+? 0

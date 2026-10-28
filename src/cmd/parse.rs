@@ -1526,12 +1526,17 @@ fn parse_swap_pane(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_swap_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('s', FlagKind::Value), ('t', FlagKind::Value)];
+    const SHORT: &[(char, FlagKind)] = &[
+        ('d', FlagKind::Bool),
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+    ];
     let flags = flags_for(argv, SHORT, "swap-window")?;
     no_extra_positionals(&flags, "swap-window", 0)?;
     Ok(Command::SwapWindow(SwapWindow {
         src: target_if_given(&flags.values, 's')?,
         dst: target_or_current(&flags.values, 't')?,
+        select: flags.present.contains(&'d'),
     }))
 }
 

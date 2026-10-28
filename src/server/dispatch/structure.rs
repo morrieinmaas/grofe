@@ -239,6 +239,9 @@ pub fn swap_window(state: &mut State, ctx: &ClientCtx, c: SwapWindow) -> Result<
     if src == dst {
         return Ok(String::new());
     }
+    if grouped(model, src_s, dst_s) {
+        return Err(format!("can't move window, {GROUPED}"));
+    }
     // A window is in a session once, so a swap cannot put one in twice.
     if src_s != dst_s && (model.has_link(dst_s, src) || model.has_link(src_s, dst)) {
         return Err(ALREADY_IN.to_string());
@@ -272,9 +275,21 @@ pub fn swap_window(state: &mut State, ctx: &ClientCtx, c: SwapWindow) -> Result<
         }
         model.refresh_primary(window);
     }
+    if c.select {
+        model.select_window_in(dst_s, src);
+    }
     model.sync_group(src_s);
     model.sync_group(dst_s);
     Ok(String::new())
+}
+
+/// What a link, move or swap between two sessions of one group says: they
+/// share their windows already.
+const GROUPED: &str = "sessions are grouped";
+
+/// Whether `a` and `b` are different sessions of one group.
+fn grouped(model: &Model, a: SessionId, b: SessionId) -> bool {
+    a != b && model.group_of(a).is_some_and(|g| g.members.contains(&b))
 }
 
 /// What a link into a session that already has the window says (tmux
@@ -405,6 +420,9 @@ pub fn move_window(state: &mut State, ctx: &ClientCtx, c: MoveWindow) -> Result<
     }
     let (src_s, window) = model.resolve_winlink(&c.src, ctx)?;
     let (dst_s, index) = destination(model, ctx, c.dst.as_ref(), c.after)?;
+    if grouped(model, src_s, dst_s) {
+        return Err(GROUPED.to_string());
+    }
     let slot = Slot {
         index,
         shuffle: c.after || c.before,
@@ -483,8 +501,11 @@ fn place(
 /// window at the index; the one replaced closes if that was its last link.
 pub fn link_window(state: &mut State, ctx: &ClientCtx, c: LinkWindow) -> Result<String, String> {
     let model = &mut state.model;
-    let (_, window) = model.resolve_winlink(&c.src, ctx)?;
+    let (src_s, window) = model.resolve_winlink(&c.src, ctx)?;
     let (dst, index) = destination(model, ctx, c.dst.as_ref(), c.after)?;
+    if grouped(model, src_s, dst) {
+        return Err(GROUPED.to_string());
+    }
     let slot = Slot {
         index,
         shuffle: c.after || c.before,

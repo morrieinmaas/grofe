@@ -2920,6 +2920,23 @@ impl<'a> FormatCtx<'a> {
     pub fn pane_id(&self) -> PaneId {
         self.pane
     }
+
+    /// The options a variable reads: the pane's chain, with the session the
+    /// window is seen in (`status-left` of `b:7`, not of the window's first
+    /// link).
+    fn option_chain(&self) -> Vec<Owner> {
+        let mut chain = chain(self.model, self.pane);
+        if let Some(w) = self
+            .model
+            .panes
+            .get(&self.pane)
+            .and_then(|p| self.model.windows.get(&p.window))
+            && let Some(Owner::Session(s)) = chain.last_mut()
+        {
+            *s = self.session_for(w);
+        }
+        chain
+    }
 }
 
 /// One thing a session, window or pane loop visits.
@@ -3328,7 +3345,7 @@ impl FormatVars for FormatCtx<'_> {
         use crate::types::MouseMode;
         let m = self.model;
         if name.starts_with('@') || builtin(name).is_some() {
-            let value = m.options.lookup(name, &chain(m, self.pane))?;
+            let value = m.options.lookup(name, &self.option_chain())?;
             // A flag is 1 or 0 in a format (tmux's `options_to_string`
             // with `numeric`), so `#{?synchronize-panes,...}` is false off.
             return Some(match (builtin(name).map(|b| b.kind), value) {
@@ -3602,7 +3619,7 @@ impl FormatVars for FormatCtx<'_> {
                 .map_or(0, |at| at + 1)
                 .to_string(),
             "pane_synchronized" => {
-                flag(m.options.lookup("synchronize-panes", &chain(m, self.pane)) == Some("on"))
+                flag(m.options.lookup("synchronize-panes", &self.option_chain()) == Some("on"))
             }
             "pane_start_path" => p.cwd.display().to_string(),
             "window_linked" => flag(w.links.len() > 1),

@@ -1,0 +1,99 @@
+$ set -g base-index 1
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t a: -n a2 cat
+? 0
+$ new-window -d -t a: -n a3 cat
+? 0
+$ new-window -d -t a: -n a4 cat
+? 0
+$ new-window -d -t a: -n a5 cat
+? 0
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t b:5 -n b5 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+a:1 @0 a1 linked=0 act=1
+a:2 @1 a2 linked=0 act=0
+a:3 @2 a3 linked=0 act=0
+a:4 @3 a4 linked=0 act=0
+a:5 @4 a5 linked=0 act=0
+b:1 @5 b1 linked=0 act=1
+b:5 @6 b5 linked=0 act=0
+? 0
+$ link-window -d -s a:1 -t b:
+? 0
+$ link-window -d -a -s a:2 -t b:
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=1
+b:2 @1 a2 linked=1 act=0
+b:3 @0 a1 linked=1 act=0
+b:5 @6 b5 linked=0 act=0
+? 0
+$ link-window -d -b -s a:3 -t b:5
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=1
+b:2 @1 a2 linked=1 act=0
+b:3 @0 a1 linked=1 act=0
+b:5 @2 a3 linked=1 act=0
+b:6 @6 b5 linked=0 act=0
+? 0
+$ set -t b renumber-windows on
+? 0
+$ unlink-window -t b:2
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=1
+b:3 @0 a1 linked=1 act=0
+b:5 @2 a3 linked=1 act=0
+b:6 @6 b5 linked=0 act=0
+? 0
+$ link-window -a -s a:2 -t b:1
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @1 a2 linked=1 act=1
+b:3 @0 a1 linked=1 act=0
+b:5 @2 a3 linked=1 act=0
+b:6 @6 b5 linked=0 act=0
+? 0
+$ move-window -r -t b
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @1 a2 linked=1 act=1
+b:3 @0 a1 linked=1 act=0
+b:4 @2 a3 linked=1 act=0
+b:5 @6 b5 linked=0 act=0
+? 0
+$ link-window -d -s a:4 -t b:99
+? 0
+$ link-window -d -s a:5 -t b:100
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @1 a2 linked=1 act=1
+b:3 @0 a1 linked=1 act=0
+b:4 @2 a3 linked=1 act=0
+b:5 @6 b5 linked=0 act=0
+b:99 @3 a4 linked=1 act=0
+b:100 @4 a5 linked=1 act=0
+? 0
+$ move-window -d -s b:99 -t b:50
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @1 a2 linked=1 act=1
+b:3 @0 a1 linked=1 act=0
+b:4 @2 a3 linked=1 act=0
+b:5 @6 b5 linked=0 act=0
+b:50 @3 a4 linked=1 act=0
+b:100 @4 a5 linked=1 act=0
+? 0
+$ set -t b renumber-windows off
+? 0

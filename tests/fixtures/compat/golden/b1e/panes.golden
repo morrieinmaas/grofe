@@ -1,0 +1,102 @@
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t a: -n a2 cat
+? 0
+$ new-session -d -s b -n b1 -x 80 -y 24 cat
+? 0
+$ link-window -d -s a:2 -t b:7
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} #{window_id}'
+a:1.1 %0 @0
+a:2.1 %1 @1
+b:1.1 %2 @2
+b:7.1 %1 @1
+? 0
+$ list-panes -s -t b -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} #{window_name}'
+b:1.1 %2 b1
+b:7.1 %1 a2
+? 0
+$ display -p -t b:7 '#{session_name} #{window_index} #{pane_id} #{session_id}'
+b 7 %1 $1
+? 0
+$ display -p -t a:2 '#{session_name} #{window_index} #{pane_id} #{session_id}'
+a 2 %1 $0
+? 0
+$ display -p -t %2 '#{session_name} #{window_index} #{pane_id}'
+b 1 %2
+? 0
+$ display -p -t @1 '#{session_name} #{window_index} #{pane_id}'
+b 7 %1
+? 0
+$ set -t a status-left 'A'
+? 0
+$ set -t b status-left 'B'
+? 0
+$ display -p -t b:7 '#{status-left}'
+B
+? 0
+$ show -v -t %1 status-left
+B
+? 0
+$ show -v -t b:7 status-left
+B
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_panes} #{window_linked}'
+a:1 @0 1 0
+a:2 @1 1 1
+b:1 @2 1 0
+b:7 @1 1 1
+? 0
+$ rename-window -t b:7 newname
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_name}'
+a:1 a1
+a:2 newname
+b:1 b1
+b:7 newname
+? 0
+$ split-window -d -t b:7 cat
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+a:1.1 %0
+a:2.1 %1
+a:2.2 %3
+b:1.1 %2
+b:7.1 %1
+b:7.2 %3
+? 0
+$ select-window -t a:2
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_active} #{window_last_flag} #{window_flags}'
+a:1 0 1 -
+a:2 1 0 *
+b:1 1 0 *
+b:7 0 0 
+? 0
+$ select-window -t a:1
+? 0
+$ last-window -t b
+! no last window
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_active} #{window_last_flag} #{window_flags}'
+a:1 1 0 *
+a:2 0 1 -
+b:1 1 0 *
+b:7 0 0 
+? 0
+$ link-window -d -s a:1 -t b:2
+? 0
+$ set -wt b:7 synchronize-panes on
+? 0
+$ show -wv -t a:2 synchronize-panes
+on
+? 0
+$ respawn-window -k -t b:7 cat
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+a:1.1 %0
+a:2.1 %1
+b:1.1 %2
+b:2.1 %0
+b:7.1 %1
+? 0
