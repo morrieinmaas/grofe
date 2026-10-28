@@ -35,3 +35,12 @@ $ new-session -d -s d -c /usr -x 80 -y 24 cat
 $ link-window -d -s c:1 -t d:5
 $ respawn-pane -t d:5.1
 $ respawn-pane -t c:1.1
+# join-pane without -d selects the window in the session the target names.
+$ new-session -d -s e -n e1 -x 80 -y 24 cat
+$ new-session -d -s f -n f1 -x 80 -y 24 cat
+$ new-window -d -t e: -n e2 cat
+$ link-window -d -s e:2 -t f:7
+$ split-window -d -t f:1 cat
+$ join-pane -s f:1.2 -t f:7
+$ list-windows -t e -F '#{session_name}:#{window_index} #{window_name} act=#{window_active} p=#{window_panes}'
+$ list-windows -t f -F '#{session_name}:#{window_index} #{window_name} act=#{window_active} p=#{window_panes}'

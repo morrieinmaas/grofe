@@ -74,3 +74,40 @@ fn a_shared_window_is_sized_for_the_client_that_was_active_last() {
     b.send("y");
     wait_size(&srv, "50x11");
 }
+
+/// A command run from a pane in a window linked into a and b, with the
+/// only client on b, finds that client (`refresh-client` needs one), though
+/// the window's first link is a.
+#[test]
+fn a_command_from_a_linked_pane_finds_the_client_of_the_other_session() {
+    let srv = TestServer::start();
+    for name in ["a", "b"] {
+        srv.cmd(&[
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-x",
+            "80",
+            "-y",
+            "23",
+            "sleep 600",
+        ])
+        .unwrap_or_else(|e| panic!("new-session {name}: {e}"));
+    }
+    srv.cmd(&["link-window", "-d", "-s", "a:1", "-t", "b:5"])
+        .expect("link-window");
+    let pane = srv
+        .cmd(&["display-message", "-p", "-t", "a:1", "#{pane_id}"])
+        .expect("pane id")
+        .trim_end()
+        .to_string();
+    let mut b = Harness::spawn(attach(&srv, "b"), 80, 24);
+    b.wait_for("[b]");
+    let mut cmd = srv.command();
+    cmd.args(["refresh-client", "-S"])
+        .env("GROFE", &srv.socket)
+        .env("GROFE_PANE", &pane);
+    let out = common::run_bounded(cmd, WAIT);
+    assert!(out.status.success(), "{}", out.stderr);
+}

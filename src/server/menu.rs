@@ -538,8 +538,11 @@ fn popup_vars(
             .model
             .resolve_window(&cmd::Target::Current, ctx)
             .ok()
-            .and_then(|w| state.model.windows.get(&w))
-            .map(|w| w.index);
+            .and_then(|w| {
+                // The index under the client's session, not the first link's.
+                let session = state.clients.get(&id)?.session;
+                state.model.index_in(session, w)
+            });
         let found = spot
             .windows
             .iter()

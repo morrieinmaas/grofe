@@ -512,7 +512,7 @@ fn check_target(
     if !nest
         && let Some(pane) = ctx.pane
         && let Some(p) = model.panes.get(&pane)
-        && model.windows.get(&p.window).map(|w| w.session) == Some(session)
+        && model.has_link(session, p.window)
     {
         return Err(format!(
             "refusing to attach session {} from inside itself (use --nest to force)",
@@ -3021,11 +3021,11 @@ pub(crate) fn current_client(state: &State, ctx: &ClientCtx) -> Option<ClientId>
     if let Some(id) = ctx.client.filter(|id| state.clients.contains_key(id)) {
         return Some(id);
     }
+    // The session tmux picks for a pane in a window linked into several.
     let session = ctx
         .pane
         .and_then(|p| state.model.panes.get(&p))
-        .and_then(|p| state.model.windows.get(&p.window))
-        .map(|w| w.session);
+        .and_then(|p| state.model.link_session(p.window, None));
     state
         .clients
         .iter()

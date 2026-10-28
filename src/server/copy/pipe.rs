@@ -151,8 +151,7 @@ fn job_env(state: &State, pane: PaneId) -> Vec<(String, String)> {
         .model
         .panes
         .get(&pane)
-        .and_then(|p| state.model.windows.get(&p.window))
-        .map(|w| w.session);
+        .and_then(|p| state.model.link_session(p.window, None));
     let mut env = hooks::shell_env(state, session);
     env.retain(|(k, _)| !matches!(k.as_str(), "TMUX_PANE" | "GROFE" | "GROFE_PANE"));
     // As a pane: a `grofe` run inside talks to this server.

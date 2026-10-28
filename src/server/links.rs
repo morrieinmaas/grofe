@@ -54,6 +54,15 @@ impl Model {
             .or_else(|| w.links.first().map(|(s, _)| *s))
     }
 
+    /// Whether `window` is linked outside `session` and its group, as tmux's
+    /// `session_is_linked`: its links are not just the session's, or one per
+    /// member of its group.
+    pub fn is_linked_outside(&self, session: SessionId, window: WindowId) -> bool {
+        let links = self.windows.get(&window).map_or(0, |w| w.links.len());
+        let own = self.group_of(session).map_or(1, |g| g.members.len());
+        links != own
+    }
+
     /// The group `session` is in.
     pub fn group_of(&self, session: SessionId) -> Option<&Group> {
         self.groups.iter().find(|g| g.members.contains(&session))

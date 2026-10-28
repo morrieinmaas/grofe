@@ -112,3 +112,23 @@ $ respawn-pane -t d:5.1
 $ respawn-pane -t c:1.1
 ! respawn pane failed: pane c:1.1 still active
 ? 1
+$ new-session -d -s e -n e1 -x 80 -y 24 cat
+? 0
+$ new-session -d -s f -n f1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t e: -n e2 cat
+? 0
+$ link-window -d -s e:2 -t f:7
+? 0
+$ split-window -d -t f:1 cat
+? 0
+$ join-pane -s f:1.2 -t f:7
+? 0
+$ list-windows -t e -F '#{session_name}:#{window_index} #{window_name} act=#{window_active} p=#{window_panes}'
+e:1 e1 act=1 p=1
+e:2 e2 act=0 p=2
+? 0
+$ list-windows -t f -F '#{session_name}:#{window_index} #{window_name} act=#{window_active} p=#{window_panes}'
+f:1 f1 act=0 p=1
+f:7 e2 act=1 p=2
+? 0

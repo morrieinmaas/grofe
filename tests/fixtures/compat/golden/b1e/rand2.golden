@@ -1,0 +1,1108 @@
+$ new-session -d -s s0 -n w0 -x 80 -y 24 cat
+? 0
+$ new-window -d -a -t s0:3 -n w2 cat
+? 0
+$ unlink-window  -t s0:5
+! can't find window: 5
+? 1
+$ new-window -d -t s0: -n w3 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=1 last=0 l=0
+s0:2 @2 w3 act=0 last=0 l=0
+s0:3 @1 w2 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g= n=3
+? 0
+$ rename-window -t s0:5 r3
+! can't find window: 5
+? 1
+$ unlink-window  -t s0:3
+! window only linked to one session
+? 1
+$ rename-window -t s0:4 r5
+! can't find window: 4
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=1 last=0 l=0
+s0:2 @2 w3 act=0 last=0 l=0
+s0:3 @1 w2 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g= n=3
+? 0
+$ new-session -d -s g1 -t s0
+? 0
+$ rename-window -t s0:2 r7
+? 0
+$ link-window -b -s s0:2 -t g1:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g1:2 @0 w0 act=1 last=0 l=1
+g1:3 @2 r7 act=0 last=0 l=1
+g1:4 @1 w2 act=0 last=0 l=1
+s0:1 @0 w0 act=1 last=0 l=1
+s0:2 @2 r7 act=0 last=0 l=1
+s0:3 @1 w2 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g1 g=s0 n=3
+s0 g=s0 n=3
+? 0
+$ kill-session -t =g1
+? 0
+$ next-window -t s0:
+? 0
+$ new-window -d -t s0: -n w4 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=0 last=1 l=0
+s0:2 @2 r7 act=1 last=0 l=0
+s0:3 @1 w2 act=0 last=0 l=0
+s0:4 @4 w4 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g=s0 n=4
+? 0
+$ kill-window  -t s0:5
+! can't find window: 5
+? 1
+$ new-window -d -t s0: -n w5 cat
+? 0
+$ rename-window -t s0:3 r14
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=0 last=1 l=0
+s0:2 @2 r7 act=1 last=0 l=0
+s0:3 @1 r14 act=0 last=0 l=0
+s0:4 @4 w4 act=0 last=0 l=0
+s0:5 @5 w5 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g=s0 n=5
+? 0
+$ rename-window -t s0:4 r15
+? 0
+$ new-window -d -t s0: -n w6 cat
+? 0
+$ unlink-window  -t s0:3
+! window only linked to one session
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=0 last=1 l=0
+s0:2 @2 r7 act=1 last=0 l=0
+s0:3 @1 r14 act=0 last=0 l=0
+s0:4 @4 r15 act=0 last=0 l=0
+s0:5 @5 w5 act=0 last=0 l=0
+s0:6 @6 w6 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g=s0 n=6
+? 0
+$ new-window -d -t s0: -n w7 cat
+? 0
+$ new-window -d -t s0: -n w8 cat
+? 0
+$ new-window -d -t s0:2 -n w9 cat
+! create window failed: index 2 in use
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:1 @0 w0 act=0 last=1 l=0
+s0:2 @2 r7 act=1 last=0 l=0
+s0:3 @1 r14 act=0 last=0 l=0
+s0:4 @4 r15 act=0 last=0 l=0
+s0:5 @5 w5 act=0 last=0 l=0
+s0:6 @6 w6 act=0 last=0 l=0
+s0:7 @7 w7 act=0 last=0 l=0
+s0:8 @8 w8 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g=s0 n=8
+? 0
+$ new-window -d -a -t s0: -n w10 cat
+? 0
+$ new-window -d -t s0: -n w11 cat
+? 0
+$ unlink-window -k -t s0:1
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+s0:2 @2 r7 act=1 last=0 l=0
+s0:3 @9 w10 act=0 last=0 l=0
+s0:4 @1 r14 act=0 last=0 l=0
+s0:5 @4 r15 act=0 last=0 l=0
+s0:6 @5 w5 act=0 last=0 l=0
+s0:7 @6 w6 act=0 last=0 l=0
+s0:8 @7 w7 act=0 last=0 l=0
+s0:9 @8 w8 act=0 last=0 l=0
+s0:10 @10 w11 act=0 last=0 l=0
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+s0 g=s0 n=9
+? 0
+$ new-session -d -s g2 -t s0
+? 0
+$ new-window -d -t s0:1 -n w12 cat
+? 0
+$ new-window -d -t s0:3 -n w13 cat
+! create window failed: index 3 in use
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=0 last=0 l=1
+g2:2 @2 r7 act=1 last=0 l=1
+g2:3 @9 w10 act=0 last=0 l=1
+g2:4 @1 r14 act=0 last=0 l=1
+g2:5 @4 r15 act=0 last=0 l=1
+g2:6 @5 w5 act=0 last=0 l=1
+g2:7 @6 w6 act=0 last=0 l=1
+g2:8 @7 w7 act=0 last=0 l=1
+g2:9 @8 w8 act=0 last=0 l=1
+g2:10 @10 w11 act=0 last=0 l=1
+s0:1 @12 w12 act=0 last=0 l=1
+s0:2 @2 r7 act=1 last=0 l=1
+s0:3 @9 w10 act=0 last=0 l=1
+s0:4 @1 r14 act=0 last=0 l=1
+s0:5 @4 r15 act=0 last=0 l=1
+s0:6 @5 w5 act=0 last=0 l=1
+s0:7 @6 w6 act=0 last=0 l=1
+s0:8 @7 w7 act=0 last=0 l=1
+s0:9 @8 w8 act=0 last=0 l=1
+s0:10 @10 w11 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=10
+s0 g=s0 n=10
+? 0
+$ unlink-window -k -t s0:2
+? 0
+$ previous-window -t s0:
+? 0
+$ kill-window  -t s0:2
+! can't find window: 2
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=1 last=0 l=1
+g2:3 @9 w10 act=0 last=0 l=1
+g2:4 @1 r14 act=0 last=0 l=1
+g2:5 @4 r15 act=0 last=0 l=1
+g2:6 @5 w5 act=0 last=0 l=1
+g2:7 @6 w6 act=0 last=0 l=1
+g2:8 @7 w7 act=0 last=0 l=1
+g2:9 @8 w8 act=0 last=0 l=1
+g2:10 @10 w11 act=0 last=0 l=1
+s0:1 @12 w12 act=0 last=1 l=1
+s0:3 @9 w10 act=0 last=0 l=1
+s0:4 @1 r14 act=0 last=0 l=1
+s0:5 @4 r15 act=0 last=0 l=1
+s0:6 @5 w5 act=0 last=0 l=1
+s0:7 @6 w6 act=0 last=0 l=1
+s0:8 @7 w7 act=0 last=0 l=1
+s0:9 @8 w8 act=0 last=0 l=1
+s0:10 @10 w11 act=1 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=9
+s0 g=s0 n=9
+? 0
+$ new-window -d -a -t s0: -n w14 cat
+? 0
+$ move-window -a -s g2:4 -t s0:
+! sessions are grouped
+? 1
+$ link-window -a -k -s g2:2 -t s0:
+! can't find window: 2
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=1 last=0 l=1
+g2:3 @9 w10 act=0 last=0 l=1
+g2:4 @1 r14 act=0 last=0 l=1
+g2:5 @4 r15 act=0 last=0 l=1
+g2:6 @5 w5 act=0 last=0 l=1
+g2:7 @6 w6 act=0 last=0 l=1
+g2:8 @7 w7 act=0 last=0 l=1
+g2:9 @8 w8 act=0 last=0 l=1
+g2:10 @10 w11 act=0 last=0 l=1
+g2:11 @13 w14 act=0 last=0 l=1
+s0:1 @12 w12 act=0 last=1 l=1
+s0:3 @9 w10 act=0 last=0 l=1
+s0:4 @1 r14 act=0 last=0 l=1
+s0:5 @4 r15 act=0 last=0 l=1
+s0:6 @5 w5 act=0 last=0 l=1
+s0:7 @6 w6 act=0 last=0 l=1
+s0:8 @7 w7 act=0 last=0 l=1
+s0:9 @8 w8 act=0 last=0 l=1
+s0:10 @10 w11 act=1 last=0 l=1
+s0:12 @13 w14 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=10
+s0 g=s0 n=10
+? 0
+$ previous-window -t g2:
+? 0
+$ select-window -t g2:2
+! can't find window: 2
+? 1
+$ move-window -d -s g2:3 -t s0:3
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=0 last=1 l=1
+g2:3 @9 w10 act=0 last=0 l=1
+g2:4 @1 r14 act=0 last=0 l=1
+g2:5 @4 r15 act=0 last=0 l=1
+g2:6 @5 w5 act=0 last=0 l=1
+g2:7 @6 w6 act=0 last=0 l=1
+g2:8 @7 w7 act=0 last=0 l=1
+g2:9 @8 w8 act=0 last=0 l=1
+g2:10 @10 w11 act=0 last=0 l=1
+g2:11 @13 w14 act=1 last=0 l=1
+s0:1 @12 w12 act=0 last=1 l=1
+s0:3 @9 w10 act=0 last=0 l=1
+s0:4 @1 r14 act=0 last=0 l=1
+s0:5 @4 r15 act=0 last=0 l=1
+s0:6 @5 w5 act=0 last=0 l=1
+s0:7 @6 w6 act=0 last=0 l=1
+s0:8 @7 w7 act=0 last=0 l=1
+s0:9 @8 w8 act=0 last=0 l=1
+s0:10 @10 w11 act=1 last=0 l=1
+s0:12 @13 w14 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=10
+s0 g=s0 n=10
+? 0
+$ new-window -d -a -t g2:2 -n w15 cat
+? 0
+$ previous-window -t s0:
+? 0
+$ link-window -a -b -d -s s0:4 -t g2:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=0 last=1 l=1
+g2:2 @14 w15 act=0 last=0 l=1
+g2:3 @9 w10 act=0 last=0 l=1
+g2:4 @1 r14 act=0 last=0 l=1
+g2:5 @4 r15 act=0 last=0 l=1
+g2:6 @5 w5 act=0 last=0 l=1
+g2:7 @6 w6 act=0 last=0 l=1
+g2:8 @7 w7 act=0 last=0 l=1
+g2:9 @8 w8 act=0 last=0 l=1
+g2:10 @10 w11 act=0 last=0 l=1
+g2:12 @13 w14 act=1 last=0 l=1
+s0:1 @12 w12 act=0 last=0 l=1
+s0:2 @14 w15 act=0 last=0 l=1
+s0:3 @9 w10 act=0 last=0 l=1
+s0:4 @1 r14 act=0 last=0 l=1
+s0:5 @4 r15 act=0 last=0 l=1
+s0:6 @5 w5 act=0 last=0 l=1
+s0:7 @6 w6 act=0 last=0 l=1
+s0:8 @7 w7 act=0 last=0 l=1
+s0:9 @8 w8 act=1 last=0 l=1
+s0:10 @10 w11 act=0 last=1 l=1
+s0:11 @13 w14 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=11
+s0 g=s0 n=11
+? 0
+$ unlink-window  -t g2:5
+! window only linked to one session
+? 1
+$ new-window -d -a -t s0:1 -n w16 cat
+? 0
+$ previous-window -t s0:
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=0 last=1 l=1
+g2:2 @15 w16 act=0 last=0 l=1
+g2:3 @14 w15 act=0 last=0 l=1
+g2:4 @9 w10 act=0 last=0 l=1
+g2:5 @1 r14 act=0 last=0 l=1
+g2:6 @4 r15 act=0 last=0 l=1
+g2:7 @5 w5 act=0 last=0 l=1
+g2:8 @6 w6 act=0 last=0 l=1
+g2:9 @7 w7 act=0 last=0 l=1
+g2:10 @8 w8 act=0 last=0 l=1
+g2:11 @10 w11 act=0 last=0 l=1
+g2:12 @13 w14 act=1 last=0 l=1
+s0:1 @12 w12 act=0 last=0 l=1
+s0:2 @15 w16 act=0 last=0 l=1
+s0:3 @14 w15 act=0 last=0 l=1
+s0:4 @9 w10 act=0 last=0 l=1
+s0:5 @1 r14 act=0 last=0 l=1
+s0:6 @4 r15 act=0 last=0 l=1
+s0:7 @5 w5 act=0 last=0 l=1
+s0:8 @6 w6 act=0 last=0 l=1
+s0:9 @7 w7 act=1 last=0 l=1
+s0:10 @8 w8 act=0 last=1 l=1
+s0:11 @10 w11 act=0 last=0 l=1
+s0:12 @13 w14 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=12
+s0 g=s0 n=12
+? 0
+$ link-window -a -d -k -s s0:1 -t g2:
+! sessions are grouped
+? 1
+$ move-window -d -s g2:2 -t s0:5
+! sessions are grouped
+? 1
+$ new-window -d -t s0: -n w17 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=0 last=1 l=1
+g2:2 @15 w16 act=0 last=0 l=1
+g2:3 @14 w15 act=0 last=0 l=1
+g2:4 @9 w10 act=0 last=0 l=1
+g2:5 @1 r14 act=0 last=0 l=1
+g2:6 @4 r15 act=0 last=0 l=1
+g2:7 @5 w5 act=0 last=0 l=1
+g2:8 @6 w6 act=0 last=0 l=1
+g2:9 @7 w7 act=0 last=0 l=1
+g2:10 @8 w8 act=0 last=0 l=1
+g2:11 @10 w11 act=0 last=0 l=1
+g2:12 @13 w14 act=1 last=0 l=1
+g2:13 @16 w17 act=0 last=0 l=1
+s0:1 @12 w12 act=0 last=0 l=1
+s0:2 @15 w16 act=0 last=0 l=1
+s0:3 @14 w15 act=0 last=0 l=1
+s0:4 @9 w10 act=0 last=0 l=1
+s0:5 @1 r14 act=0 last=0 l=1
+s0:6 @4 r15 act=0 last=0 l=1
+s0:7 @5 w5 act=0 last=0 l=1
+s0:8 @6 w6 act=0 last=0 l=1
+s0:9 @7 w7 act=1 last=0 l=1
+s0:10 @8 w8 act=0 last=1 l=1
+s0:11 @10 w11 act=0 last=0 l=1
+s0:12 @13 w14 act=0 last=0 l=1
+s0:13 @16 w17 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=13
+s0 g=s0 n=13
+? 0
+$ new-window -d -t s0: -n w18 cat
+? 0
+$ last-window -t g2:
+? 0
+$ move-window -a -d -s g2:3 -t s0:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=1 last=0 l=1
+g2:2 @15 w16 act=0 last=0 l=1
+g2:3 @14 w15 act=0 last=0 l=1
+g2:4 @9 w10 act=0 last=0 l=1
+g2:5 @1 r14 act=0 last=0 l=1
+g2:6 @4 r15 act=0 last=0 l=1
+g2:7 @5 w5 act=0 last=0 l=1
+g2:8 @6 w6 act=0 last=0 l=1
+g2:9 @7 w7 act=0 last=0 l=1
+g2:10 @8 w8 act=0 last=0 l=1
+g2:11 @10 w11 act=0 last=0 l=1
+g2:12 @13 w14 act=0 last=1 l=1
+g2:13 @16 w17 act=0 last=0 l=1
+g2:14 @17 w18 act=0 last=0 l=1
+s0:1 @12 w12 act=0 last=0 l=1
+s0:2 @15 w16 act=0 last=0 l=1
+s0:3 @14 w15 act=0 last=0 l=1
+s0:4 @9 w10 act=0 last=0 l=1
+s0:5 @1 r14 act=0 last=0 l=1
+s0:6 @4 r15 act=0 last=0 l=1
+s0:7 @5 w5 act=0 last=0 l=1
+s0:8 @6 w6 act=0 last=0 l=1
+s0:9 @7 w7 act=1 last=0 l=1
+s0:11 @8 w8 act=0 last=1 l=1
+s0:12 @10 w11 act=0 last=0 l=1
+s0:13 @13 w14 act=0 last=0 l=1
+s0:14 @16 w17 act=0 last=0 l=1
+s0:15 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=14
+s0 g=s0 n=14
+? 0
+$ kill-session -t =s0
+? 0
+$ new-session -d -s g3 -t g2
+? 0
+$ link-window -a -k -s g2:1 -t g3:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @12 w12 act=1 last=0 l=1
+g2:2 @15 w16 act=0 last=0 l=1
+g2:3 @14 w15 act=0 last=0 l=1
+g2:4 @9 w10 act=0 last=0 l=1
+g2:5 @1 r14 act=0 last=0 l=1
+g2:6 @4 r15 act=0 last=0 l=1
+g2:7 @5 w5 act=0 last=0 l=1
+g2:8 @6 w6 act=0 last=0 l=1
+g2:9 @7 w7 act=0 last=0 l=1
+g2:10 @8 w8 act=0 last=0 l=1
+g2:11 @10 w11 act=0 last=0 l=1
+g2:12 @13 w14 act=0 last=1 l=1
+g2:13 @16 w17 act=0 last=0 l=1
+g2:14 @17 w18 act=0 last=0 l=1
+g3:1 @12 w12 act=1 last=0 l=1
+g3:3 @15 w16 act=0 last=0 l=1
+g3:4 @14 w15 act=0 last=0 l=1
+g3:5 @9 w10 act=0 last=0 l=1
+g3:6 @1 r14 act=0 last=0 l=1
+g3:7 @4 r15 act=0 last=0 l=1
+g3:8 @5 w5 act=0 last=0 l=1
+g3:9 @6 w6 act=0 last=0 l=1
+g3:10 @7 w7 act=0 last=0 l=1
+g3:11 @8 w8 act=0 last=0 l=1
+g3:12 @10 w11 act=0 last=0 l=1
+g3:13 @13 w14 act=0 last=0 l=1
+g3:14 @16 w17 act=0 last=0 l=1
+g3:15 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=14
+g3 g=s0 n=14
+? 0
+$ new-window -d -t g3:2 -n w19 cat
+? 0
+$ swap-window -d -s g3:1 -t g2:1
+! can't move window, sessions are grouped
+? 1
+$ move-window -b -s g3:2 -t g2:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:2 @12 w12 act=1 last=0 l=1
+g2:3 @19 w19 act=0 last=0 l=1
+g2:4 @15 w16 act=0 last=0 l=1
+g2:5 @14 w15 act=0 last=0 l=1
+g2:6 @9 w10 act=0 last=0 l=1
+g2:7 @1 r14 act=0 last=0 l=1
+g2:8 @4 r15 act=0 last=0 l=1
+g2:9 @5 w5 act=0 last=0 l=1
+g2:10 @6 w6 act=0 last=0 l=1
+g2:11 @7 w7 act=0 last=0 l=1
+g2:12 @8 w8 act=0 last=0 l=1
+g2:13 @10 w11 act=0 last=1 l=1
+g2:14 @13 w14 act=0 last=0 l=1
+g2:15 @16 w17 act=0 last=0 l=1
+g2:16 @17 w18 act=0 last=0 l=1
+g3:1 @12 w12 act=1 last=0 l=1
+g3:2 @19 w19 act=0 last=0 l=1
+g3:3 @15 w16 act=0 last=0 l=1
+g3:4 @14 w15 act=0 last=0 l=1
+g3:5 @9 w10 act=0 last=0 l=1
+g3:6 @1 r14 act=0 last=0 l=1
+g3:7 @4 r15 act=0 last=0 l=1
+g3:8 @5 w5 act=0 last=0 l=1
+g3:9 @6 w6 act=0 last=0 l=1
+g3:10 @7 w7 act=0 last=0 l=1
+g3:11 @8 w8 act=0 last=0 l=1
+g3:12 @10 w11 act=0 last=0 l=1
+g3:13 @13 w14 act=0 last=0 l=1
+g3:14 @16 w17 act=0 last=0 l=1
+g3:15 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=15
+g3 g=s0 n=15
+? 0
+$ move-window -a -s g3:4 -t g2:
+! sessions are grouped
+? 1
+$ select-window -t g3:4
+? 0
+$ link-window  -s g2:4 -t g3:1
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:2 @12 w12 act=1 last=0 l=1
+g2:4 @19 w19 act=0 last=0 l=1
+g2:5 @15 w16 act=0 last=0 l=1
+g2:6 @14 w15 act=0 last=0 l=1
+g2:7 @9 w10 act=0 last=0 l=1
+g2:8 @1 r14 act=0 last=0 l=1
+g2:9 @4 r15 act=0 last=0 l=1
+g2:10 @5 w5 act=0 last=0 l=1
+g2:11 @6 w6 act=0 last=0 l=1
+g2:12 @7 w7 act=0 last=0 l=1
+g2:13 @8 w8 act=0 last=0 l=1
+g2:14 @10 w11 act=0 last=1 l=1
+g2:15 @13 w14 act=0 last=0 l=1
+g2:16 @16 w17 act=0 last=0 l=1
+g2:17 @17 w18 act=0 last=0 l=1
+g3:1 @12 w12 act=0 last=1 l=1
+g3:2 @19 w19 act=0 last=0 l=1
+g3:3 @15 w16 act=0 last=0 l=1
+g3:4 @14 w15 act=1 last=0 l=1
+g3:5 @9 w10 act=0 last=0 l=1
+g3:6 @1 r14 act=0 last=0 l=1
+g3:7 @4 r15 act=0 last=0 l=1
+g3:8 @5 w5 act=0 last=0 l=1
+g3:9 @6 w6 act=0 last=0 l=1
+g3:10 @7 w7 act=0 last=0 l=1
+g3:11 @8 w8 act=0 last=0 l=1
+g3:12 @10 w11 act=0 last=0 l=1
+g3:13 @13 w14 act=0 last=0 l=1
+g3:14 @16 w17 act=0 last=0 l=1
+g3:15 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=15
+g3 g=s0 n=15
+? 0
+$ swap-window -d -s g2:5 -t g3:1
+! can't move window, sessions are grouped
+? 1
+$ new-window -d -t g2: -n w20 cat
+? 0
+$ link-window -a -s g3:4 -t g2:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:4 @19 w19 act=0 last=0 l=1
+g2:5 @15 w16 act=0 last=0 l=1
+g2:6 @14 w15 act=0 last=0 l=1
+g2:7 @9 w10 act=0 last=0 l=1
+g2:8 @1 r14 act=0 last=0 l=1
+g2:9 @4 r15 act=0 last=0 l=1
+g2:10 @5 w5 act=0 last=0 l=1
+g2:11 @6 w6 act=0 last=0 l=1
+g2:12 @7 w7 act=0 last=0 l=1
+g2:13 @8 w8 act=0 last=0 l=1
+g2:14 @10 w11 act=0 last=1 l=1
+g2:15 @13 w14 act=0 last=0 l=1
+g2:16 @16 w17 act=0 last=0 l=1
+g2:17 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=0 last=1 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:4 @19 w19 act=1 last=0 l=1
+g3:5 @15 w16 act=0 last=0 l=1
+g3:6 @14 w15 act=0 last=0 l=1
+g3:7 @9 w10 act=0 last=0 l=1
+g3:8 @1 r14 act=0 last=0 l=1
+g3:9 @4 r15 act=0 last=0 l=1
+g3:10 @5 w5 act=0 last=0 l=1
+g3:11 @6 w6 act=0 last=0 l=1
+g3:12 @7 w7 act=0 last=0 l=1
+g3:13 @8 w8 act=0 last=0 l=1
+g3:14 @10 w11 act=0 last=0 l=1
+g3:15 @13 w14 act=0 last=0 l=1
+g3:16 @16 w17 act=0 last=0 l=1
+g3:17 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ link-window -b -k -s g3:1 -t g2:4
+! sessions are grouped
+? 1
+$ swap-window  -s g2:4 -t g3:5
+! can't find window: 4
+? 1
+$ kill-window  -t g2:4
+! can't find window: 4
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=1 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=0 last=1 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:4 @19 w19 act=1 last=0 l=1
+g3:5 @15 w16 act=0 last=0 l=1
+g3:6 @14 w15 act=0 last=0 l=1
+g3:7 @9 w10 act=0 last=0 l=1
+g3:8 @1 r14 act=0 last=0 l=1
+g3:9 @4 r15 act=0 last=0 l=1
+g3:10 @5 w5 act=0 last=0 l=1
+g3:11 @6 w6 act=0 last=0 l=1
+g3:12 @7 w7 act=0 last=0 l=1
+g3:13 @8 w8 act=0 last=0 l=1
+g3:14 @10 w11 act=0 last=0 l=1
+g3:15 @13 w14 act=0 last=0 l=1
+g3:16 @16 w17 act=0 last=0 l=1
+g3:17 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ last-window -t g3:
+? 0
+$ unlink-window  -t g3:4
+! window only linked to one session
+? 1
+$ swap-window  -s g3:1 -t g2:5
+! can't move window, sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=1 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:4 @19 w19 act=0 last=1 l=1
+g3:5 @15 w16 act=0 last=0 l=1
+g3:6 @14 w15 act=0 last=0 l=1
+g3:7 @9 w10 act=0 last=0 l=1
+g3:8 @1 r14 act=0 last=0 l=1
+g3:9 @4 r15 act=0 last=0 l=1
+g3:10 @5 w5 act=0 last=0 l=1
+g3:11 @6 w6 act=0 last=0 l=1
+g3:12 @7 w7 act=0 last=0 l=1
+g3:13 @8 w8 act=0 last=0 l=1
+g3:14 @10 w11 act=0 last=0 l=1
+g3:15 @13 w14 act=0 last=0 l=1
+g3:16 @16 w17 act=0 last=0 l=1
+g3:17 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ link-window -d -s g3:4 -t g2:
+! sessions are grouped
+? 1
+$ link-window -b -s g2:1 -t g3:4
+! sessions are grouped
+? 1
+$ rename-window -t g2:3 r68
+! can't find window: 3
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=1 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ link-window -a -k -s g3:5 -t g2:
+! sessions are grouped
+? 1
+$ link-window -a -s g2:3 -t g3:
+! can't find window: 3
+? 1
+$ move-window  -s g3:3 -t g2:3
+! can't find window: 3
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=1 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ link-window -k -s g2:2 -t g3:1
+! sessions are grouped
+? 1
+$ swap-window  -s g2:5 -t g3:2
+! can't move window, sessions are grouped
+? 1
+$ move-window -k -s g3:2 -t g2:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=0 last=0 l=1
+g2:2 @12 w12 act=1 last=0 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=1 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ move-window -k -s g3:4 -t g2:
+! can't find window: 4
+? 1
+$ previous-window -t g2:
+? 0
+$ move-window -k -s g2:2 -t g3:3
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=1 last=0 l=1
+g2:2 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ link-window -a -d -s g3:3 -t g2:4
+! can't find window: 3
+? 1
+$ link-window -a -s g3:3 -t g2:
+! can't find window: 3
+? 1
+$ swap-window -d -s g2:2 -t g3:4
+! can't find window: 4
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=1 last=0 l=1
+g2:2 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ move-window  -s g3:5 -t g2:
+! sessions are grouped
+? 1
+$ rename-window -t g2:3 r82
+! can't find window: 3
+? 1
+$ move-window -a -s g3:4 -t g2:
+! can't find window: 4
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:1 @20 w20 act=1 last=0 l=1
+g2:2 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ move-window -b -d -k -s g3:2 -t g2:
+! sessions are grouped
+? 1
+$ new-window -d -t g3:5 -n w21 cat
+! create window failed: index 5 in use
+? 1
+$ move-window -b -s g3:2 -t g2:
+! sessions are grouped
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:3 @20 w20 act=1 last=0 l=1
+g2:4 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:1 @20 w20 act=1 last=0 l=1
+g3:2 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=0 last=1 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=16
+g3 g=s0 n=16
+? 0
+$ unlink-window -k -t g3:3
+! can't find window: 3
+? 1
+$ new-window -d -t g2:5 -n w22 cat
+! create window failed: index 5 in use
+? 1
+$ new-window -d -t g2:2 -n w23 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:2 @21 w23 act=0 last=0 l=1
+g2:3 @20 w20 act=1 last=0 l=1
+g2:4 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:2 @21 w23 act=0 last=0 l=1
+g3:3 @20 w20 act=0 last=0 l=1
+g3:4 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=1 last=0 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+g2 g=s0 n=17
+g3 g=s0 n=17
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+g2:2 @21 w23 act=0 last=0 l=1
+g2:3 @20 w20 act=1 last=0 l=1
+g2:4 @12 w12 act=0 last=1 l=1
+g2:5 @19 w19 act=0 last=0 l=1
+g2:6 @15 w16 act=0 last=0 l=1
+g2:7 @14 w15 act=0 last=0 l=1
+g2:8 @9 w10 act=0 last=0 l=1
+g2:9 @1 r14 act=0 last=0 l=1
+g2:10 @4 r15 act=0 last=0 l=1
+g2:11 @5 w5 act=0 last=0 l=1
+g2:12 @6 w6 act=0 last=0 l=1
+g2:13 @7 w7 act=0 last=0 l=1
+g2:14 @8 w8 act=0 last=0 l=1
+g2:15 @10 w11 act=0 last=0 l=1
+g2:16 @13 w14 act=0 last=0 l=1
+g2:17 @16 w17 act=0 last=0 l=1
+g2:18 @17 w18 act=0 last=0 l=1
+g3:2 @21 w23 act=0 last=0 l=1
+g3:3 @20 w20 act=0 last=0 l=1
+g3:4 @12 w12 act=0 last=0 l=1
+g3:5 @19 w19 act=1 last=0 l=1
+g3:6 @15 w16 act=0 last=0 l=1
+g3:7 @14 w15 act=0 last=0 l=1
+g3:8 @9 w10 act=0 last=0 l=1
+g3:9 @1 r14 act=0 last=0 l=1
+g3:10 @4 r15 act=0 last=0 l=1
+g3:11 @5 w5 act=0 last=0 l=1
+g3:12 @6 w6 act=0 last=0 l=1
+g3:13 @7 w7 act=0 last=0 l=1
+g3:14 @8 w8 act=0 last=0 l=1
+g3:15 @10 w11 act=0 last=0 l=1
+g3:16 @13 w14 act=0 last=0 l=1
+g3:17 @16 w17 act=0 last=0 l=1
+g3:18 @17 w18 act=0 last=0 l=1
+? 0
