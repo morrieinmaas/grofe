@@ -29,8 +29,9 @@ Links change only through `add_link`, `remove_link`, `set_index` and
 and the first-link mirror together. `sync_group` is tmux's
 `session_group_synchronize1`: after a change in one member, the others drop their
 links and take the source's in its order (so `window_linked_sessions_list`
-reorders as tmux's does), keeping current/last windows by index, else the lowest
-index is current. A command's target resolves to a (session, window) pair
+reorders as tmux's does), keeping current/last windows by index; a member whose
+current index is gone first moves to its last window, else the one before it (the
+last of all from the first), as `session_detach` would. A command's target resolves to a (session, window) pair
 (`Model::resolve_winlink`), because `b:3` and `a:1` can be one window.
 
 ## Commands (all recorded in `golden/b1e`)
@@ -52,8 +53,23 @@ index is current. A command's target resolves to a (session, window) pair
   `-n` or a command with `-t` is `command or window name given with target`; T no
   session: a plain session in a new group named T. `-x`/`-y` are ignored.
 - `move-window` links into the new place then unlinks the old (`-abdk`; `-r` numbers
-  one session). `swap-window` swaps the places. Both sync the group. `new-window`
-  in a member shows in all.
+  one session). `swap-window` swaps the places (`-d` makes the destination place
+  current, 3.7b's reading of the flag). Both sync the group. `new-window` and
+  `respawn-window` in a member show in all.
+- Between two sessions of one group `link-window`, `move-window` and `swap-window`
+  say `sessions are grouped` (`can't move window, ...` for swap), after `-a`/`-b`
+  have made room, as tmux does. `-a`/`-b` against an index with no window use the
+  session's current window; with both, `-b` wins.
+- `renumber-windows` after a kill numbers every member of the group from its own
+  `base-index` (`server_renumber_session`); after `move-window` (without `-s`) it
+  numbers the source session alone, and `move-window -r` the target alone, neither
+  syncing the group. A group then differs until the next change syncs it from one
+  member, as in tmux (the seeded goldens `rand*` record it).
+- A mark (`select-pane -m`) names the session and window it was made in; it holds
+  while that session has the window, and `M`, the reversed border and the toggle
+  follow that link only.
+- `unlink-window` without `-k` needs a link outside the session's group
+  (`session_is_linked`); `kill-window` renumbers per session as tmux does.
 
 ## Formats
 
@@ -78,7 +94,13 @@ session, `display-message -t` the target's.
 
 ## Deferred
 
-Same window twice in a session; per-link alert flags (bell and activity live on the
-window); session options from the session in play for a pane (the first link's);
-`window-linked`/`-unlinked` hooks; choose-tree shows a shared window under both
-sessions with one tag.
+Same window twice in a session (tmux allows it: `link-window` or `move-window` of a
+window the session holds, `swap-window` across sessions; tmux-fzf's link action
+excludes the current session's windows by name, so only a window already linked
+there under another session's name reaches it; a refactor of `Session.windows` and
+`active` to winlink identity would be needed, so grofe refuses it); per-link alert
+flags (bell and activity live on the window, so a window current in one session
+and not in another shows its flag in both); `window-linked`/`-unlinked` hooks;
+choose-tree shows a shared window under both sessions with one tag; a pane's
+spawn environment and cwd come from the session the target names, the rest of its
+session options from the first link.
