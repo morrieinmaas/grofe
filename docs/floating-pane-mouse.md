@@ -2,8 +2,7 @@
 
 tmux 3.7b's floating panes (`new-pane`) take the mouse on their border through
 tmux's stock rows, and grofe does what tmux does there (recorded on tmux 3.7b:
-`tests/fixtures/compat/golden/tc_6/float-border-mouse`). grofe adds a window
-option and two verbs of its own on top; none of them changes what tmux 3.7b does.
+`tests/fixtures/compat/golden/tc_6/float-border-mouse`). grofe adds two verbs of its own on top; neither changes what tmux 3.7b does.
 
 ## The border (needs `mouse on`)
 
@@ -35,22 +34,19 @@ nothing for a click on its border.
 
 ## Which binding wins
 
-As in tmux, a root binding of `MouseDown1Border` or `MouseDrag1Border` of your own
-runs instead, with the floating pane as its target, and the pane does not move. A
-binding that is tmux's stock row itself (`select-pane -M` for the press,
-`resize-pane -M` for the drag, or one with no command) is the built-in behaviour
-above, on tiled and floating borders alike, so a config copied from tmux's defaults
-behaves as tmux does.
+As in tmux, the border does what the root table says and nothing else. The default
+table binds tmux's stock rows, `MouseDown1Border` `select-pane -M` and
+`MouseDrag1Border` `resize-pane -M` (`list-keys -T root` shows them), and they run
+the built-in behaviour above, on tiled and floating borders alike.
 
-Known difference: unbinding `MouseDown1Border` or `MouseDrag1Border` does not stop
-the built-in behaviour, where in tmux the border then does nothing. The same holds
-for tiled borders.
-
-## `floating-pane-mouse`
-
-Window option, `on` or `off`, default `on` (grofe's own; tmux 3.7b has no such
-option). Off, a floating pane's border runs bindings of your own only: no focus,
-move or resize from the built-in behaviour.
+- A root binding of one of those keys of your own runs instead, with the floating pane
+  as its target, and the pane does not move.
+- A binding that is tmux's stock row itself (`select-pane -M` for the press,
+  `resize-pane -M` for the drag, or one with no command) is the built-in behaviour,
+  so a config copied from tmux's defaults behaves as tmux does.
+- `unbind -n MouseDown1Border` or `unbind -n MouseDrag1Border` removes the row: that
+  press or drag then does nothing, as in tmux.
+- Modifier variants (`M-MouseDrag1Border`, `C-`, `S-`) act only if you bind them.
 
 ## Commands
 

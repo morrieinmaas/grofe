@@ -293,3 +293,64 @@ $ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pan
 %0 0 0 35 14 0
 %13 36 0 24 14 0
 ? 0
+$ unbind -n MouseDrag1Border
+? 0
+$ unbind -n MouseDown1Border
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<0;36;11M'
+keys Escape '[<32;31;11M'
+keys Escape '[<0;31;11m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+%0 0 0 35 14 0
+%13 36 0 24 14 0
+? 0
+$ bind -n MouseDrag1Border resize-pane -M
+? 0
+$ bind -n MouseDown1Border select-pane -M
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+$ select-pane -t main:1.1
+? 0
+keys Escape '[<8;16;4M'
+keys Escape '[<40;20;6M'
+keys Escape '[<8;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+%0 0 0 60 14 1
+%14 10 4 20 5 0
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<16;16;4M'
+keys Escape '[<48;20;6M'
+keys Escape '[<16;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+%0 0 0 60 14 1
+%14 10 4 20 5 0
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<4;16;4M'
+keys Escape '[<36;20;6M'
+keys Escape '[<4;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+%0 0 0 60 14 1
+%14 10 4 20 5 0
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ bind -n M-MouseDrag1Border resize-pane -M
+? 0
+keys Escape '[<8;16;4M'
+keys Escape '[<40;20;6M'
+keys Escape '[<8;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+%0 0 0 60 14 0
+%14 14 6 20 5 1
+? 0

@@ -54,12 +54,14 @@
 //!   raises the pane, as tmux's `select-pane -M` does for a floating pane,
 //!   and `MouseDrag1Border` moves it by its top edge and resizes it by the
 //!   others until the release, as tmux's `resize-pane -M` does
-//!   (`floating.rs`). Window option `floating-pane-mouse` (grofe's own,
-//!   default on) off leaves a floating border to bindings only;
-//! - a root binding of `MouseDown1Border` or `MouseDrag1Border` that is
-//!   tmux's stock row itself (`select-pane -M`, `resize-pane -M`, or no
-//!   command) is the built-in model, as tmux would run that row; any other
-//!   binding runs instead of it;
+//!   (`floating.rs`);
+//! - both border behaviours run only through the key table, as in tmux:
+//!   the default `root` table binds tmux's stock rows `MouseDown1Border`
+//!   (`select-pane -M`) and `MouseDrag1Border` (`resize-pane -M`), and a
+//!   binding that is such a row (any modifiers, or no command) is the
+//!   built-in model, as tmux would run that row; any other binding runs
+//!   instead of it; with no binding for the key (unbound, or a modifier
+//!   variant never bound) a border does nothing;
 //! - with `pane-border-status` on, a pane's title line is its border, and
 //!   `MouseDown1Control8` and `Control9`, where the default
 //!   `pane-border-format` puts its `[z]` and `[x]` buttons, zoom the pane
@@ -302,12 +304,6 @@ enum Hit {
     /// The status row's index among the status rows, and the range.
     Status(u16, Option<RangeKind>),
     Nothing,
-}
-
-/// Whether window `w` takes the mouse on its floating panes' borders.
-fn float_mouse(state: &State, w: &Window) -> bool {
-    let chain = crate::server::dispatch::options::chain(&state.model, w.active);
-    state.model.options.lookup("floating-pane-mouse", &chain) != Some("off")
 }
 
 fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
@@ -655,13 +651,14 @@ fn fire(
         }),
         m.mods,
     );
-    if let Some((cmds, dialect)) = binding(state, client, &key, &target)
-        && !is_stock_border_row(&key, &cmds)
-    {
-        run_mouse_binding(state, &target, &cmds, dialect);
-        return;
+    match binding(state, client, &key, &target) {
+        Some((cmds, dialect)) if !is_stock_border_row(&key, &cmds) => {
+            run_mouse_binding(state, &target, &cmds, dialect);
+        }
+        // A border is only what its bindings make it: no row, no behaviour.
+        None if place == MousePlace::Border => {}
+        _ => builtin(state, client, m, &key, &target),
     }
-    builtin(state, client, m, &key, &target, &hit);
 }
 
 /// The binding of mouse key `key` in client `client`'s table, else in
@@ -725,21 +722,7 @@ fn is_stock_border_row(key: &Key, cmds: &[Vec<String>]) -> bool {
 }
 
 /// grofe's built-in model for an unbound mouse key (the module docs).
-fn builtin(
-    state: &mut State,
-    client: ClientId,
-    m: &Mouse,
-    key: &Key,
-    target: &MouseTarget,
-    hit: &Hit,
-) {
-    // A floating pane's border with `floating-pane-mouse` off: bindings only.
-    if let Hit::Border(pane) = *hit
-        && client_window(state, client)
-            .is_some_and(|w| w.floating(pane).is_some() && !float_mouse(state, w))
-    {
-        return;
-    }
+fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &MouseTarget) {
     let KeyCode::Mouse(mk) = key.code else {
         return;
     };

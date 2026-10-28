@@ -1,7 +1,7 @@
 //! A floating pane's border and the mouse (`docs/floating-pane-mouse.md`):
 //! tmux 3.7b's stock rows there (the full recorded set is the golden
-//! `tc_6/float-border-mouse`), the drag's lifetime, grofe's option
-//! `floating-pane-mouse`, and its verbs `float-pane` and `place-pane`.
+//! `tc_6/float-border-mouse`), the drag's lifetime, and grofe's verbs
+//! `float-pane` and `place-pane`.
 
 #[allow(clippy::duplicate_mod)]
 #[path = "../common/mod.rs"]
@@ -9,7 +9,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, run_bounded, wait_until};
 
 use crate::harness::Harness;
 
@@ -131,18 +131,34 @@ fn user_option(srv: &TestServer, name: &str) -> Option<String> {
         .map(|v| v.trim().to_string())
 }
 
+/// `tmux <args>` against `srv`: grofe through a `tmux` symlink, so the
+/// request is in tmux's dialect, where `resize-pane -M` is spelled.
+fn tmux(srv: &TestServer, args: &[&str]) {
+    let link = srv.home.join("tmux-link/tmux");
+    if !link.exists() {
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grofe"), &link).unwrap();
+    }
+    let mut cmd = std::process::Command::new(&link);
+    for (k, v) in srv.command().get_envs() {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
+    cmd.current_dir(&srv.home)
+        .arg("-S")
+        .arg(&srv.socket)
+        .args(args);
+    let out = run_bounded(cmd, Duration::from_secs(20));
+    assert!(out.status.success(), "tmux {args:?}: {}", out.stderr);
+}
+
 fn alive(srv: &TestServer) {
     assert_eq!(
         srv.cmd(&["display-message", "-p", "ok"]).as_deref(),
         Ok("ok\n")
     );
-}
-
-#[test]
-fn the_option_defaults_on() {
-    let (srv, _) = start();
-    let on = srv.cmd(&["show-options", "-gv", "floating-pane-mouse"]);
-    assert_eq!(on.as_deref(), Ok("on\n"));
 }
 
 /// As tmux's `resize-pane -M`: the top edge moves the pane, the left edge
@@ -266,27 +282,6 @@ fn two_clients_drag_one_pane_in_turn() {
     alive(&srv);
 }
 
-/// The option is read when the drag starts: a drag under way goes on to
-/// its release, and the next one does nothing.
-#[test]
-fn the_option_turned_off_mid_drag_holds_until_the_release() {
-    let (srv, float) = start();
-    let mut a = attach(&srv);
-    press(&mut a, (15, 4));
-    drag(&mut a, (17, 4));
-    wait_rect(&srv, &float, (12, 5, 20, 4));
-    srv.cmd(&["set-option", "-g", "floating-pane-mouse", "off"])
-        .expect("set");
-    drag(&mut a, (19, 4));
-    wait_rect(&srv, &float, (14, 5, 20, 4));
-    release(&mut a, (19, 4));
-    std::thread::sleep(CLICK_GAP);
-    press(&mut a, (20, 4));
-    drag(&mut a, (25, 8));
-    release(&mut a, (25, 8));
-    stays(&srv, &float, (14, 5, 20, 4));
-}
-
 /// A press while a drag is under way (its release was lost, say with the
 /// mouse turned off meanwhile) ends the drag, as tmux's "stop dragging"
 /// does: it fires the drag's end, not a press, and the pane stays.
@@ -381,13 +376,15 @@ fn a_plain_click_on_the_border_clears_the_mark_and_raises() {
     assert_eq!(rect(&srv, &low), (10, 5, 20, 4));
 }
 
-/// Off, the built-in rows leave a floating border alone; a binding of
-/// the user's own still runs there.
+/// Unbinding the stock rows makes the border do nothing, as in tmux; a
+/// binding of the user's own still runs there.
 #[test]
-fn the_option_off_leaves_the_border_to_bindings() {
+fn unbinding_the_stock_rows_leaves_a_floating_border_to_bindings() {
     let (srv, float) = start();
-    srv.cmd(&["set-option", "-g", "floating-pane-mouse", "off"])
-        .expect("set");
+    srv.cmd(&["unbind-key", "-n", "MouseDown1Border"])
+        .expect("unbind");
+    srv.cmd(&["unbind-key", "-n", "MouseDrag1Border"])
+        .expect("unbind");
     let mut a = attach(&srv);
     press(&mut a, (15, 4));
     drag(&mut a, (25, 10));
@@ -423,24 +420,84 @@ fn the_option_off_leaves_the_border_to_bindings() {
     assert!(ran.is_ok(), "the user's binding did not run");
 }
 
+/// The stock rows are in the root table, as tmux lists them.
 #[test]
-fn the_option_is_per_window() {
-    let (srv, float) = start();
-    let window = var(&srv, "%0", "#{window_id}");
+fn the_stock_border_rows_are_bound_by_default() {
+    let (srv, _) = start();
+    let keys = srv.cmd(&["list-keys", "-T", "root"]).expect("list-keys");
+    assert!(keys.contains("MouseDown1Border"), "{keys}");
+    assert!(keys.contains("MouseDrag1Border"), "{keys}");
+}
+
+/// A tiled border does nothing either once its stock row is unbound.
+#[test]
+fn unbinding_the_drag_row_leaves_a_tiled_border_alone() {
+    let srv = TestServer::start();
     srv.cmd(&[
-        "set-option",
-        "-w",
-        "-t",
-        &window,
-        "floating-pane-mouse",
-        "off",
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "23",
+        "cat",
     ])
-    .expect("set");
+    .expect("new-session");
+    let right = srv
+        .cmd(&["split-window", "-h", "-P", "-F", "#{pane_id}", "cat"])
+        .expect("split")
+        .trim()
+        .to_string();
+    let before = rect(&srv, &right);
+    let border = before.0 - 1;
+    srv.cmd(&["unbind-key", "-n", "MouseDrag1Border"])
+        .expect("unbind");
     let mut a = attach(&srv);
-    press(&mut a, (15, 4));
-    drag(&mut a, (25, 10));
-    release(&mut a, (25, 10));
-    stays(&srv, &float, (10, 5, 20, 4));
+    press(&mut a, (border, 5));
+    drag(&mut a, (border - 8, 5));
+    release(&mut a, (border - 8, 5));
+    stays(&srv, &right, before);
+    tmux(
+        &srv,
+        &["bind", "-n", "MouseDrag1Border", "resize-pane", "-M"],
+    );
+    std::thread::sleep(CLICK_GAP);
+    press(&mut a, (border, 5));
+    drag(&mut a, (border - 8, 5));
+    release(&mut a, (border - 8, 5));
+    wait_rect(
+        &srv,
+        &right,
+        (before.0 - 8, before.1, before.2 + 8, before.3),
+    );
+}
+
+/// Meta, Control and Shift variants of the border keys act only if they are
+/// bound themselves, as in tmux; a stock row bound to the variant is the
+/// drag.
+#[test]
+fn a_modifier_variant_of_the_border_keys_acts_only_if_bound() {
+    let (srv, float) = start();
+    let mut a = attach(&srv);
+    // Meta 8, Control 16, Shift 4 added to the button numbers.
+    for mods in [8, 16, 4] {
+        a.send(sgr(mods, (15, 4), false));
+        a.send(sgr(32 + mods, (19, 7), false));
+        a.send(sgr(mods, (19, 7), true));
+        stays(&srv, &float, (10, 5, 20, 4));
+        std::thread::sleep(CLICK_GAP);
+    }
+    assert_eq!(var(&srv, "%0", "#{pane_active}"), "0");
+    tmux(
+        &srv,
+        &["bind", "-n", "M-MouseDrag1Border", "resize-pane", "-M"],
+    );
+    a.send(sgr(8, (15, 4), false));
+    a.send(sgr(40, (19, 7), false));
+    a.send(sgr(8, (19, 7), true));
+    wait_rect(&srv, &float, (14, 8, 20, 4));
 }
 
 /// A root binding of the border key runs there instead of the drag, with

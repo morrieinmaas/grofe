@@ -964,7 +964,6 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("extended-keys", "extended-keys"),
     ("extended-keys-format", "extended-keys-format"),
     ("focus-events", "focus-events"),
-    ("floating-pane-mouse", "floating-pane-mouse"),
     ("focus-follows-mouse", "focus-follows-mouse"),
     ("graphics", "graphics"),
     ("history-limit", "history-limit"),

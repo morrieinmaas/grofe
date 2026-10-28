@@ -159,3 +159,40 @@ keys Escape '[<0;31;11M'
 keys Escape '[<32;36;11M'
 keys Escape '[<0;36;11m'
 $ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+# The stock rows unbound again: a tiled border does nothing either.
+$ unbind -n MouseDrag1Border
+$ unbind -n MouseDown1Border
+$ run-shell 'sleep 0.5'
+keys Escape '[<0;36;11M'
+keys Escape '[<32;31;11M'
+keys Escape '[<0;31;11m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+# A modifier variant of the border keys acts only if it is bound itself:
+# with the stock rows back, Meta, Control and Shift on a floating border do
+# nothing, until M-MouseDrag1Border is bound.
+$ bind -n MouseDrag1Border resize-pane -M
+$ bind -n MouseDown1Border select-pane -M
+$ run-shell 'sleep 0.5'
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+$ select-pane -t main:1.1
+keys Escape '[<8;16;4M'
+keys Escape '[<40;20;6M'
+keys Escape '[<8;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+$ run-shell 'sleep 0.5'
+keys Escape '[<16;16;4M'
+keys Escape '[<48;20;6M'
+keys Escape '[<16;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+$ run-shell 'sleep 0.5'
+keys Escape '[<4;16;4M'
+keys Escape '[<36;20;6M'
+keys Escape '[<4;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+$ run-shell 'sleep 0.5'
+$ bind -n M-MouseDrag1Border resize-pane -M
+keys Escape '[<8;16;4M'
+keys Escape '[<40;20;6M'
+keys Escape '[<8;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
