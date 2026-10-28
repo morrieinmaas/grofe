@@ -219,8 +219,30 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `select-pane -P bg=colour238`. The usage no longer lists `-P`, but tmux
   3.7b still takes it (recorded by FE.1): it selects the pane and sets the
   pane's `window-style` and `window-active-style`, with no check on the
-  style. The front end does the same; grofe draws no pane background, so
-  the two options have no effect.
+  style. The front end does the same, and `-g` (also hidden) prints the
+  pane's `window-style` without selecting. Both styles are drawn (B1c).
+- **Pane styles and border titles (B1c).** `window-style` and
+  `window-active-style` set the colours of a pane's cells that are in the
+  default colours (a program's own colours stay); the active pane takes
+  `window-active-style`'s foreground or background where that sets one,
+  else `window-style`'s; `#{...}` in a style expands for the pane. OSC 10
+  and OSC 11 queries are answered with the style's colour when it sets one.
+  `pane-border-status` `top` or `bottom` draws each pane's
+  `pane-border-format` over its border line and takes that row from the
+  panes along that edge of the window (so `pane_top`, `pane_at_top`,
+  `resize-pane -y` and the even-vertical layout count it as tmux does);
+  `pane-border-lines` (`single`, `double`, `heavy`, `simple`, `number`,
+  `spaces`) picks the glyphs and `pane-border-indicators` `colour` (the
+  default: half of the border two panes share is the active pane's),
+  `arrows`, `both` or `off` marks the active pane. The default
+  `pane-active-border-style` is tmux's: yellow in a mode, red while
+  `synchronize-panes` is on. A flag option is `1` or `0` in a format, as in
+  tmux. The default format's `[z]` and `[x]` buttons zoom and offer to kill
+  the pane (`MouseDown1Control8` and `Control9`). In a floating pane the
+  border lines and the title are drawn the same way. Goldens `b1c/*`. Not
+  done: `select-pane` direction wrapping at the edges with a border status
+  (tmux's `window_pane_find_*` count the title row), `new-pane` and
+  `split-window` `-s`/`-S`/`-R`, and window style in the copy-mode overlay.
 - **A sourced tmux file (B1a).** It reads as tmux's `cmd-parse.y` does
   (goldens `fe_3/config-if` and friends). `%if`/`%elif`/`%else`/`%endif`
   take a format expanded for the requester's pane (`#{...}` after the

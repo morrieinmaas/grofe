@@ -1,7 +1,7 @@
 //! reader + writer tasks, EventListener.
 
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -144,6 +144,24 @@ pub(crate) struct Reader {
     pub(crate) graphics_ok: Arc<AtomicBool>,
     /// See `PaneHandle::set_images`.
     pub(crate) images_on: Arc<AtomicBool>,
+    /// See `PaneHandle::set_default_colours`.
+    pub(crate) default_colours: Arc<[AtomicU32; 2]>,
+}
+
+/// A colour as the reader's atomics hold it: `0` for none, else the RGB
+/// with a marker bit.
+pub(crate) fn pack_colour(c: Option<Rgb>) -> u32 {
+    c.map_or(0, |c| {
+        0x0100_0000 | u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b)
+    })
+}
+
+fn unpack_colour(v: u32) -> Option<Rgb> {
+    (v != 0).then_some(Rgb {
+        r: (v >> 16) as u8,
+        g: (v >> 8) as u8,
+        b: v as u8,
+    })
 }
 
 /// Reader task: parse output, answer the emulator's queries, drive the sync
@@ -398,13 +416,21 @@ impl Reader {
                 Event::ColorRequest(index, format) => {
                     // ponytail: answers fg/bg/cursor from a fixed palette until
                     // the configured palette exists (M3).
+                    let styled =
+                        |i: usize| unpack_colour(self.default_colours[i].load(Ordering::Relaxed));
                     let rgb = match index {
-                        256 | 258 => Rgb {
+                        256 => styled(0),
+                        257 => styled(1),
+                        _ => None,
+                    };
+                    let rgb = match (rgb, index) {
+                        (Some(rgb), _) => rgb,
+                        (None, 256 | 258) => Rgb {
                             r: 0xd0,
                             g: 0xd0,
                             b: 0xd0,
                         },
-                        257 => Rgb { r: 0, g: 0, b: 0 },
+                        (None, 257) => Rgb { r: 0, g: 0, b: 0 },
                         _ => continue,
                     };
                     self.reply(format(rgb));

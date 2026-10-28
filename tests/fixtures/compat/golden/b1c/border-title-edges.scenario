@@ -1,0 +1,18 @@
+# B1c: a pane-border-format with wide characters cut at the title's edge,
+# styles inside it, and pane-border-lines number under pane-base-index.
+$ new-session -d -s main -n w -x 40 -y 8 cat
+$ set -g status off
+$ set -g pane-base-index 3
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.3 cat
+client 40x8 attach -t main
+$ set -g pane-border-status top
+$ set -g pane-border-format '#[fg=red]abcdefghijklmnop宽字#[bg=blue]xyz#[default]end'
+screen 宽
+styles 0-0 abc
+$ set -g pane-border-format '#[fg=red]abcdefghijklmnopq宽字#[bg=blue]xyz'
+screen abc
+styles 0-0 abc
+$ set -g pane-border-lines number
+screen
+styles 0-7

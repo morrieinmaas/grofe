@@ -43,6 +43,7 @@
 //! `area` through explicitly, and rebasing onto it, means the tree never
 //! mutates from sizes that belong to some older window size.
 
+use crate::server::borders::PaneStatus;
 use crate::types::{Dir, Edge, PaneId, Rect, SplitSize};
 
 /// Error returned when a split can't be applied.
@@ -530,6 +531,20 @@ impl LayoutTree {
     /// window too small for the preset and clips it; a tree exact on its
     /// area cannot, so the old layout stays.
     pub fn preset(&mut self, area: Rect, preset: Preset, panes: &[PaneId]) -> bool {
+        self.preset_bordered(area, preset, panes, PaneStatus::Off)
+    }
+
+    /// [`Self::preset`] in a window with a `pane-border-status`. The even
+    /// vertical preset spreads the rows left after the title row
+    /// (tmux's `layout_spread_cell`), which the pane along that edge then
+    /// gets back, so the extra rows go to the first panes whichever edge.
+    pub fn preset_bordered(
+        &mut self,
+        area: Rect,
+        preset: Preset,
+        panes: &[PaneId],
+        status: PaneStatus,
+    ) -> bool {
         self.last_preset = Some(preset.index());
         if panes.len() < 2 {
             return false;
@@ -537,6 +552,20 @@ impl LayoutTree {
         let (h, v) = (Dir::Horizontal, Dir::Vertical);
         let root = match preset {
             Preset::EvenHorizontal => even(h, area.cols, panes),
+            Preset::EvenVertical if status != PaneStatus::Off => {
+                even(v, area.rows.saturating_sub(1), panes).map(|mut node| {
+                    if let Node::Split { children, .. } = &mut node {
+                        let edge = match status {
+                            PaneStatus::Top => children.first_mut(),
+                            _ => children.last_mut(),
+                        };
+                        if let Some(edge) = edge {
+                            edge.weight += 1;
+                        }
+                    }
+                    node
+                })
+            }
             Preset::EvenVertical => even(v, area.rows, panes),
             Preset::MainHorizontal { main } => main_split(area, v, main, panes, false),
             Preset::MainHorizontalMirrored { main } => main_split(area, v, main, panes, true),

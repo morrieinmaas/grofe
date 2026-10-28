@@ -337,7 +337,7 @@ pub fn base_style(value: &str, vars: &dyn FormatVars) -> Style {
 
 /// strftime over the raw template, then `#{...}` (tmux's
 /// `format_expand_time`).
-fn expand_time(fmt: &str, vars: &dyn FormatVars, now: &libc::tm) -> String {
+pub fn expand_time(fmt: &str, vars: &dyn FormatVars, now: &libc::tm) -> String {
     expand(&apply_strftime(fmt, now), vars)
 }
 
@@ -1017,9 +1017,37 @@ fn push_char(screen: &mut Vec<Cell>, ch: char, style: Style) {
 /// directives do; a `#[` with no closing `]` leaves the row blank, as in
 /// tmux.
 pub fn draw(expanded: &str, base: Style, width: u16) -> StatusRow {
-    let available = usize::from(width);
+    draw_on(
+        expanded,
+        base,
+        vec![Cell::blank(base); usize::from(width)],
+        false,
+    )
+}
+
+/// [`draw`] onto cells that already hold something (a pane border's line
+/// glyphs): columns the format writes nothing to keep what they had, as
+/// tmux's pane status line draws over its border.
+pub fn draw_over(expanded: &str, base: Style, under: &[(char, Style)]) -> StatusRow {
+    let row = under
+        .iter()
+        .map(|(c, style)| Cell {
+            text: c.to_string(),
+            width: 1,
+            style: *style,
+        })
+        .collect();
+    draw_on(expanded, base, row, true)
+}
+
+/// `keep_cut`: a wide character the width cuts in two (or a right half left
+/// without its character) is not drawn, and what was under it shows, as
+/// tmux's pane status line leaves it.
+fn draw_on(expanded: &str, base: Style, row: Vec<Cell>, keep_cut: bool) -> StatusRow {
+    let available = row.len();
+    let under = keep_cut.then(|| row.clone());
     let mut cv = Canvas {
-        row: vec![Cell::blank(base); available],
+        row,
         screens: Default::default(),
         ranges: Vec::new(),
         blank: Style {
@@ -1195,6 +1223,20 @@ pub fn draw(expanded: &str, base: Style, width: u16) -> StatusRow {
         Align::Centre => cv.draw_centre(available, focus),
         Align::Right => cv.draw_right(available, focus),
         Align::AbsoluteCentre => cv.draw_absolute_centre(available, focus),
+    }
+    if let Some(under) = under {
+        #[allow(clippy::needless_range_loop)]
+        for x in 0..available {
+            let w = cv.row[x].width;
+            let whole = if w == 2 {
+                cv.row.get(x + 1).is_some_and(|n| n.width == 0)
+            } else {
+                w != 0 || (x > 0 && cv.row[x - 1].width == 2)
+            };
+            if !whole {
+                cv.row[x] = under[x].clone();
+            }
+        }
     }
     let ranges = cv
         .ranges

@@ -1,0 +1,130 @@
+$ new-session -d -s main -n one -x 30 -y 10 cat
+? 0
+$ new-window -d -t main:2 -n second cat
+? 0
+$ set -g status-right ''
+? 0
+client 30x10 attach -t main
+$& display-menu -x 28 -y 9 -T Corner A a 'display a' B b 'display b'
+screen Corner
+|
+|
+|
+|
+|
+|                     ┌─Corner─┐
+|                     │ A  (a) │
+|                     │ B  (b) │
+|                     └────────┘
+| [main] 1:one* 2:second
+keys q
+$& display-menu -x -5 -y -5 -T Negative A a 'display a'
+screen Negative
+| ┌─Negative─┐
+| │ A    (a) │
+| └──────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:one* 2:second
+keys q
+$& display-menu -x 1000 -y 1000 -T Huge A a 'display a'
+screen Huge
+|
+|
+|
+|
+|
+|
+|
+|                      ┌─Huge──┐
+|                      │ A (a) │
+| [main] 1:one* 2:secon└───────┘
+keys q
+$& display-menu -T Wide 'a label far wider than the thirty cell client can ever hold' a 'display a'
+screen Wide
+|
+|
+| ┌─Wide───────────────────────┐
+| │  client can ever hold> (a) │
+| └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:one* 2:second
+keys q
+$& display-popup -E -x 28 -y 9 -w 10 -h 4 'echo in-popup; exec cat'
+screen in-popup
+|
+|
+|
+|
+|
+|                     ┌────────┐
+|                     │in-popup│
+|                     │        │
+|                     └────────┘
+| [main] 1:one* 2:second
+keys C-d
+$ set -g status 2
+? 0
+$ set -g status-format[1] ''
+? 0
+$& display-menu -x W -y W -T Two A a 'display a'
+screen Two
+|
+|
+|
+|
+|
+|        ┌─Two───┐
+|        │ A (a) │
+|        └───────┘
+| [main] 1:one* 2:second
+|
+keys q
+$& display-menu -x W -y S -T TwoS A a 'display a'
+screen TwoS
+|
+|
+|
+|
+|
+|        ┌─TwoS──┐
+|        │ A (a) │
+|        └───────┘
+| [main] 1:one* 2:second
+|
+keys q
+$ set -g status-position top
+? 0
+$& display-menu -x W -y W -T TwoTop A a 'display a'
+screen TwoTop
+| [main] 1:one* 2:second
+|        ┌─TwoTop─┐
+|        │ A  (a) │
+|        └────────┘
+|
+|
+|
+|
+|
+|
+keys q
+$& display-menu -x W -y S -T TwoTopS A a 'display a'
+screen TwoTopS
+| [main] 1:one* 2:second
+|
+|        ┌─TwoTopS─┐
+|        │ A   (a) │
+|        └─────────┘
+|
+|
+|
+|
+|
+keys q

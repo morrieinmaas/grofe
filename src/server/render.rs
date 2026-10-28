@@ -11,16 +11,19 @@
 //! ([`FrameInputs::area`]). A [`Screen`] is in client coordinates: the
 //! client's terminal, `client.0` columns by `client.1` rows.
 
+use std::collections::HashMap;
+
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use unicode_width::UnicodeWidthChar;
 
 use crate::protocol::Caps;
 use crate::server::State;
+use crate::server::borders::{self, Geometry, Indicators, PaneBox, PaneLines, PaneStatus};
 use crate::server::graphics;
 use crate::server::layout::BorderSegment;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, Hyperlink, RowsSnapshot, SnapCell};
 use crate::server::screenimg::{self, ImageCaps, Place, ScreenImage};
-use crate::server::status::{Style, StyledLine};
+use crate::server::status::{StatusRow, Style, StyledLine};
 use crate::types::{ClientId, PaneId, Rect};
 
 /// One client's composed frame: a cell buffer the size of its terminal.
@@ -77,6 +80,9 @@ pub struct FrameInputs<'a> {
     /// Each visible pane's id, rect (window coordinates, borders excluded)
     /// and rows, top row first.
     pub panes: Vec<(PaneId, Rect, RowsSnapshot)>,
+    /// The layout's border segments. The borders drawn come from the pane
+    /// boxes, as tmux works them out; a segment no pane owns there is
+    /// drawn from these.
     pub borders: Vec<BorderSegment>,
     /// Border cells away from the active pane (`pane-border-style`).
     pub border_style: Style,
@@ -99,6 +105,37 @@ pub struct FrameInputs<'a> {
     /// What the client can show of the panes' images (G3); `None` shows
     /// none.
     pub images: Option<ImageCaps>,
+    /// How the panes and their borders look beyond the plain defaults:
+    /// `window-style`, the `pane-border-*` options.
+    pub look: PaneLooks,
+}
+
+/// One pane's look: the colours its default-colour cells take and the
+/// styles of its borders.
+#[derive(Debug, Clone)]
+pub struct PaneLook {
+    /// What a cell in the default foreground shows (`window-style`,
+    /// `window-active-style`); the terminal's default when unset.
+    pub fg: Color,
+    /// As `fg`, for the background.
+    pub bg: Color,
+    /// The pane's `pane-border-style` and `pane-active-border-style`.
+    pub border: Style,
+    pub active_border: Style,
+    /// The pane's `pane-border-format`, expanded; drawn on its border
+    /// line while `pane-border-status` is on.
+    pub title: String,
+    /// The pane's index (`pane-border-lines number` shows it).
+    pub index: usize,
+}
+
+/// The window's border options and each pane's [`PaneLook`].
+#[derive(Debug, Clone, Default)]
+pub struct PaneLooks {
+    pub status: PaneStatus,
+    pub lines: PaneLines,
+    pub indicators: Indicators,
+    pub panes: HashMap<PaneId, PaneLook>,
 }
 
 /// Where things are on one client's screen, for an [`Overlay`] (and for
@@ -323,6 +360,20 @@ fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
     let mut win = Screen::new(area.cols, area.rows);
     let width = area.cols as usize;
     for (id, rect, snap) in &inputs.panes {
+        let look = inputs.look.panes.get(id);
+        if let Some(look) = look {
+            let blank = SnapCell {
+                fg: look.fg,
+                bg: look.bg,
+                ..Screen::new(1, 1).cells[0].clone()
+            };
+            let left = (rect.x as usize).min(width);
+            let right = (rect.x as usize + rect.cols as usize).min(width);
+            let bottom = (rect.y as usize + rect.rows as usize).min(area.rows as usize);
+            for wy in rect.y as usize..bottom {
+                win.cells[wy * width + left..wy * width + right].fill(blank.clone());
+            }
+        }
         for (ry, row) in snap.rows.iter().take(rect.rows as usize).enumerate() {
             let wy = rect.y as usize + ry;
             if wy >= area.rows as usize {
@@ -335,6 +386,15 @@ fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
                     break;
                 }
                 let mut cell = src.clone();
+                if let Some(look) = look {
+                    // Only cells in the default colours take the style's.
+                    if cell.fg == Color::Named(NamedColor::Foreground) {
+                        cell.fg = look.fg;
+                    }
+                    if cell.bg == Color::Named(NamedColor::Background) {
+                        cell.bg = look.bg;
+                    }
+                }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
                     cell = blank_like(&cell);
                 }
@@ -376,72 +436,205 @@ fn glyph(up: bool, down: bool, left: bool, right: bool) -> char {
     }
 }
 
-/// Border cells as box drawing, each glyph picked from which neighbours
-/// are border too; cells around the active pane in
-/// `pane-active-border-style`, the rest in `pane-border-style`.
-// ponytail: tmux's two-pane half-colouring (pane-border-indicators) is not
-// drawn: with two panes the whole shared border is active.
+/// The pane borders and their titles, drawn as tmux 3.7b's
+/// `screen-redraw.c` does ([`crate::server::borders`]): each cell that is
+/// not a pane's content gets the glyph its neighbours call for in
+/// `pane-border-lines`, in the style of the pane it belongs to: its
+/// `pane-active-border-style` where it is on the active pane's border,
+/// else `pane-border-style`. Returns which cells are border.
 fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
     let (w, h) = (win.cols as i32, win.rows as i32);
     let mut mask = vec![false; win.cells.len()];
-    let mut mark = |x: i32, y: i32| {
-        if (0..w).contains(&x) && (0..h).contains(&y) {
-            mask[(y * w + x) as usize] = true;
+    let looks = &inputs.look;
+    let rects: Vec<(PaneId, Rect)> = inputs.panes.iter().map(|(id, r, _)| (*id, *r)).collect();
+    let boxes = pane_boxes(looks, &rects);
+    let active = boxes.iter().position(|b| b.id == inputs.active);
+    let marked = inputs.marked.and_then(|m| boxes.iter().position(|b| b.id == m));
+    let geom = Geometry::new((w, h), looks.status, looks.indicators, &boxes, active);
+    let style_of = |id: PaneId, is_active: bool| {
+        let look = looks.panes.get(&id);
+        match (is_active, look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => inputs.active_border_style,
+            (false, None) => inputs.border_style,
         }
     };
-    for seg in &inputs.borders {
-        match *seg {
-            BorderSegment::Vertical { col, row, len } => {
-                (0..len).for_each(|i| mark(col as i32, row as i32 + i as i32))
-            }
-            BorderSegment::Horizontal { row, col, len } => {
-                (0..len).for_each(|i| mark(col as i32 + i as i32, row as i32))
-            }
-        }
-    }
-    let at =
-        |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y) && mask[(y * w + x) as usize];
-    let active = inputs
-        .panes
-        .iter()
-        .find(|(id, _, _)| *id == inputs.active)
-        .map(|(_, r, _)| *r);
-    let marked = inputs
-        .marked
-        .and_then(|m| inputs.panes.iter().find(|(id, _, _)| *id == m))
-        .map(|(_, r, _)| *r);
-    let ring = |pane: Option<Rect>, x: i32, y: i32| {
-        pane.is_some_and(|r| {
-            let (rx, ry) = (r.x as i32, r.y as i32);
-            (rx - 1..=rx + r.cols as i32).contains(&x) && (ry - 1..=ry + r.rows as i32).contains(&y)
-        })
-    };
-    let on_ring = |x: i32, y: i32| ring(active, x, y);
     for y in 0..h {
         for x in 0..w {
-            if !at(x, y) {
+            if boxes
+                .iter()
+                .any(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
+            {
                 continue;
             }
-            let glyph = glyph(at(x, y - 1), at(x, y + 1), at(x - 1, y), at(x + 1, y));
-            let style = if on_ring(x, y) {
-                &inputs.active_border_style
-            } else {
-                &inputs.border_style
+            let (cell, owner) = geom.check_cell(x, y);
+            let Some(owner) = owner.map(|i| &boxes[i]) else {
+                continue;
             };
-            let mut cell = styled(glyph, style);
-            if ring(marked, x, y) {
-                cell.flags ^= CellFlags::INVERSE;
+            if cell == borders::CELL_INSIDE || cell == borders::CELL_OUTSIDE {
+                continue;
             }
-            win.cells[(y * w + x) as usize] = cell;
+            let on_active = active.is_some_and(|a| geom.is_border_of(&boxes[a], x, y));
+            let ch = geom
+                .arrow(x, y, cell, owner)
+                .unwrap_or_else(|| borders::glyph(looks.lines, cell, Some(owner)));
+            let i = (y * w + x) as usize;
+            let mut drawn = styled(ch, &style_of(owner.id, on_active));
+            // `screen_redraw_draw_borders_cell`: the marked pane's border
+            // is drawn in reverse.
+            if marked.is_some_and(|m| geom.is_border_of(&boxes[m], x, y)) {
+                drawn.flags ^= CellFlags::INVERSE;
+            }
+            win.cells[i] = drawn;
+            mask[i] = true;
+        }
+    }
+    draw_unowned_segments(win, inputs, &mut mask, &boxes);
+    let titles = border_titles(
+        looks,
+        (w, h),
+        &rects,
+        inputs.active,
+        (inputs.border_style, inputs.active_border_style),
+    );
+    for t in titles {
+        draw_line_at(win, t.row as u16, t.x as usize, &t.drawn.line);
+        for i in 0..t.width {
+            mask[(t.row * w + t.x + i) as usize] = true;
         }
     }
     mask
+}
+
+/// `rects` as the boxes the border geometry works on.
+fn pane_boxes(looks: &PaneLooks, rects: &[(PaneId, Rect)]) -> Vec<PaneBox> {
+    rects
+        .iter()
+        .enumerate()
+        .map(|(i, (id, r))| PaneBox {
+            id: *id,
+            x: i32::from(r.x),
+            y: i32::from(r.y),
+            w: i32::from(r.cols),
+            h: i32::from(r.rows),
+            index: looks.panes.get(id).map_or(i, |l| l.index),
+        })
+        .collect()
+}
+
+/// One pane's border title, drawn.
+pub struct Title {
+    pub pane: PaneId,
+    /// The window row it is on and the column it starts at.
+    pub row: i32,
+    pub x: i32,
+    /// How many columns it covers.
+    pub width: i32,
+    /// The title over the border glyphs it replaces, with the click ranges
+    /// of its `#[range=...]` parts (columns from `x`).
+    pub drawn: StatusRow,
+}
+
+/// The titles `pane-border-status` draws on `rects`' panes' border lines in
+/// a window `size` cells big (`fallback` styles for a pane `looks` has none
+/// for): the pane's `pane-border-format` over its border, in its border
+/// style (the active one for `active`).
+pub fn border_titles(
+    looks: &PaneLooks,
+    size: (i32, i32),
+    rects: &[(PaneId, Rect)],
+    active: PaneId,
+    fallback: (Style, Style),
+) -> Vec<Title> {
+    if looks.status == PaneStatus::Off {
+        return Vec::new();
+    }
+    let boxes = pane_boxes(looks, rects);
+    let active_index = boxes.iter().position(|b| b.id == active);
+    let geom = Geometry::new(size, looks.status, looks.indicators, &boxes, active_index);
+    let mut out = Vec::new();
+    for (n, b) in boxes.iter().enumerate() {
+        let width = geom.title_width(b);
+        let row = geom.title_row(b);
+        if width <= 0 || !(0..size.1).contains(&row) {
+            continue;
+        }
+        let look = looks.panes.get(&b.id);
+        let style = match (active_index == Some(n), look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => fallback.1,
+            (false, None) => fallback.0,
+        };
+        let under: Vec<(char, Style)> = (0..width)
+            .map(|i| {
+                let cell = geom.type_of_cell(b.x + 2 + i, row);
+                (borders::glyph(looks.lines, cell, Some(b)), style)
+            })
+            .collect();
+        let title = look.map_or("", |l| l.title.as_str());
+        out.push(Title {
+            pane: b.id,
+            row,
+            x: b.x + 2,
+            width,
+            drawn: crate::server::status::draw_over(title, style, &under),
+        });
+    }
+    out
+}
+
+/// Layout border segments no pane owns in tmux's geometry (a window too
+/// small for its panes, a hand-built layout) still get a line, its glyph
+/// picked from which neighbours are border, in `pane-border-style`.
+fn draw_unowned_segments(
+    win: &mut Screen,
+    inputs: &FrameInputs,
+    mask: &mut [bool],
+    boxes: &[PaneBox],
+) {
+    let (w, h) = (win.cols as i32, win.rows as i32);
+    let mut seg = vec![false; mask.len()];
+    let mut mark = |x: i32, y: i32| {
+        if (0..w).contains(&x) && (0..h).contains(&y) {
+            seg[(y * w + x) as usize] = true;
+        }
+    };
+    for s in &inputs.borders {
+        match *s {
+            BorderSegment::Vertical { col, row, len } => {
+                (0..len).for_each(|i| mark(i32::from(col), i32::from(row) + i32::from(i)))
+            }
+            BorderSegment::Horizontal { row, col, len } => {
+                (0..len).for_each(|i| mark(i32::from(col) + i32::from(i), i32::from(row)))
+            }
+        }
+    }
+    let joined: Vec<bool> = mask.iter().zip(&seg).map(|(a, b)| *a || *b).collect();
+    let at =
+        |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y) && joined[(y * w + x) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let inside = boxes
+                .iter()
+                .any(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+            if !seg[i] || mask[i] || inside {
+                continue;
+            }
+            let ch = glyph(at(x, y - 1), at(x, y + 1), at(x - 1, y), at(x + 1, y));
+            win.cells[i] = styled(ch, &inputs.border_style);
+            mask[i] = true;
+        }
+    }
 }
 
 /// A floating pane to draw over a window (tmux 3.7's `new-pane`, TC.6):
 /// its top-left content cell in window coordinates, its size and rows,
 /// and whether it is the window's active pane.
 pub struct FloatingPane {
+    pub id: PaneId,
     pub at: (i32, i32),
     pub size: (u16, u16),
     pub snap: RowsSnapshot,
@@ -450,16 +643,20 @@ pub struct FloatingPane {
 
 /// Draws `panes` (lowest first) over a window's composed `screen`, seen
 /// through `viewport`, as tmux 3.7b draws floating panes (recorded): each
-/// is a box of single lines around its content, in `active_style` for the
-/// active pane and `style` for the others, over the tiled panes and any
-/// lower floating pane. The cursor is the active floating pane's; the
-/// active tiled pane's is hidden when a floating pane covers it.
+/// is a box of `pane-border-lines` around its content, in the pane's
+/// active border style for the active pane and its border style for the
+/// others (`style` and `active_style` where `looks` has none for it), over
+/// the tiled panes and any lower floating pane, with the pane's border
+/// title on its top (or bottom) line while `pane-border-status` is on. The
+/// cursor is the active floating pane's; the active tiled pane's is hidden
+/// when a floating pane covers it.
 pub fn draw_floating(
     screen: &mut Screen,
     panes: &[FloatingPane],
     viewport: (u16, u16),
     style: &Style,
     active_style: &Style,
+    looks: &PaneLooks,
 ) {
     let (cols, rows) = (i32::from(screen.cols), i32::from(screen.rows));
     let put = |screen: &mut Screen, x: i32, y: i32, cell: SnapCell| {
@@ -471,23 +668,76 @@ pub fn draw_floating(
         let x = pane.at.0 - i32::from(viewport.0);
         let y = pane.at.1 - i32::from(viewport.1);
         let (w, h) = (i32::from(pane.size.0), i32::from(pane.size.1));
-        let border = if pane.active { active_style } else { style };
+        let look = looks.panes.get(&pane.id);
+        let border = match (pane.active, look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => *active_style,
+            (false, None) => *style,
+        };
+        let index = look.map(|l| l.index);
+        let shown = PaneBox {
+            id: pane.id,
+            x: pane.at.0,
+            y: pane.at.1,
+            w,
+            h,
+            index: index.unwrap_or(0),
+        };
+        let g = |cell| borders::glyph(looks.lines, cell, Some(&shown));
         for i in -1..=w {
             let (top, bottom) = match i {
-                -1 => ('┌', '└'),
-                i if i == w => ('┐', '┘'),
-                _ => ('─', '─'),
+                -1 => (borders::CELL_TOPLEFT, borders::CELL_BOTTOMLEFT),
+                i if i == w => (borders::CELL_TOPRIGHT, borders::CELL_BOTTOMRIGHT),
+                _ => (borders::CELL_LEFTRIGHT, borders::CELL_LEFTRIGHT),
             };
-            put(screen, x + i, y - 1, styled(top, border));
-            put(screen, x + i, y + h, styled(bottom, border));
+            put(screen, x + i, y - 1, styled(g(top), &border));
+            put(screen, x + i, y + h, styled(g(bottom), &border));
         }
         for j in 0..h {
-            put(screen, x - 1, y + j, styled('│', border));
-            put(screen, x + w, y + j, styled('│', border));
+            put(
+                screen,
+                x - 1,
+                y + j,
+                styled(g(borders::CELL_TOPBOTTOM), &border),
+            );
+            put(
+                screen,
+                x + w,
+                y + j,
+                styled(g(borders::CELL_TOPBOTTOM), &border),
+            );
         }
         for (r, row) in pane.snap.rows.iter().enumerate() {
             for (c, cell) in row.iter().take(pane.size.0 as usize).enumerate() {
-                put(screen, x + c as i32, y + r as i32, cell.clone());
+                let mut cell = cell.clone();
+                if let Some(l) = look {
+                    if cell.fg == Color::Named(NamedColor::Foreground) {
+                        cell.fg = l.fg;
+                    }
+                    if cell.bg == Color::Named(NamedColor::Background) {
+                        cell.bg = l.bg;
+                    }
+                }
+                put(screen, x + c as i32, y + r as i32, cell);
+            }
+        }
+        if let (Some(l), true) = (look, looks.status != PaneStatus::Off) {
+            // The title runs from two cells in, the pane's width less two,
+            // and not past the window's right edge.
+            let width = if w < 4 { 0 } else { w - 2 };
+            let width = width.min((cols - (x + 2)).max(0)).min(cols);
+            let row = if looks.status == PaneStatus::Top {
+                y - 1
+            } else {
+                y + h
+            };
+            if width > 0 && x + 2 >= 0 && (0..rows).contains(&row) {
+                let under: Vec<(char, Style)> = (0..width)
+                    .map(|_| (g(borders::CELL_LEFTRIGHT), border))
+                    .collect();
+                let line = crate::server::status::draw_over(&l.title, border, &under).line;
+                draw_line_at(screen, row as u16, (x + 2) as usize, &line);
             }
         }
         let covers =
@@ -544,9 +794,14 @@ pub fn draw_row(screen: &mut Screen, row: u16, line: &StyledLine) {
 /// width characters join the cell before them; a wide char that does not
 /// fit is a space.
 fn draw_line(screen: &mut Screen, row: u16, line: &StyledLine) {
+    draw_line_at(screen, row, 0, line);
+}
+
+/// [`draw_line`] from column `x0`.
+fn draw_line_at(screen: &mut Screen, row: u16, x0: usize, line: &StyledLine) {
     let cols = screen.cols as usize;
     let base = row as usize * cols;
-    let mut x = 0usize;
+    let mut x = x0;
     let mut last: Option<usize> = None;
     for span in &line.spans {
         for ch in span.text.chars() {
@@ -973,6 +1228,7 @@ mod tests {
             cursor: None,
             graphics: None,
             images: None,
+            look: Default::default(),
         });
         // What an overlay might do: overwrite the spacer of the first pair
         // and the wide char of the second.

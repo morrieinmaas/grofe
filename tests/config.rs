@@ -189,6 +189,32 @@ fn values_map_to_tmux_names_and_forms() {
     assert_eq!(tmux.get("status"), Some(&"off"));
 }
 
+#[test]
+fn pane_border_titles_and_pane_styles_have_native_names() {
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "window-style = \"bg=colour17\"\nwindow-active-style = \"bg=colour52\"\n\
+         [pane-border]\nstatus = \"top\"\nlines = \"heavy\"\nindicators = \"both\"\n\
+         format = \" #{pane_index} \"\n",
+    );
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("window-style"), Some(&"bg=colour17"));
+    assert_eq!(tmux.get("window-active-style"), Some(&"bg=colour52"));
+    assert_eq!(tmux.get("pane-border-status"), Some(&"top"));
+    assert_eq!(tmux.get("pane-border-lines"), Some(&"heavy"));
+    assert_eq!(tmux.get("pane-border-indicators"), Some(&"both"));
+    assert_eq!(tmux.get("pane-border-format"), Some(&" #{pane_index} "));
+
+    let s = Setup::new();
+    s.write("config.toml", "[pane-border]\nstatus = \"left\"\n");
+    assert!(
+        !errors(s.load()).is_empty(),
+        "a status the option store refuses is an error"
+    );
+}
+
 // ---- errors (cases 2 and 3) ----
 
 #[test]

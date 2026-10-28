@@ -1,0 +1,21 @@
+# B1c: pane-border-format expands per pane (with that pane as context); a
+# narrow pane shows no title (under 4 columns); long titles are cut at the
+# pane's width less 2; alignment and styles inside the format.
+$ new-session -d -s main -n w -x 40 -y 8 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ select-pane -t main:.1 -T left
+$ select-pane -t main:.2 -T right
+client 40x8 attach -t main
+$ set -g pane-border-status top
+$ set -g pane-border-format ' #{pane_index}:#{pane_title}:#{pane_width} '
+screen 2:right
+$ set -g pane-border-format '#{?pane_active,ACTIVE,idle}#[align=right]#{pane_index}'
+screen idle
+styles 0-0 idle
+$ set -g pane-border-format 'a very long title that cannot fit in the pane at all'
+screen very
+$ resize-pane -t main:.1 -x 3
+screen very
+$ set -g pane-border-format ''
+screen

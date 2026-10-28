@@ -1,0 +1,11 @@
+# B1c: the window style shows in copy mode too; the mode's own styles (the
+# position indicator) are drawn over it.
+$ new-session -d -s main -n w -x 30 -y 4 sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+$ set -g status off
+$ set -g window-style bg=colour17
+$ set -g window-active-style fg=colour231,bg=colour52
+client 30x4 attach -t main
+screen plain
+styles 0-1 plain
+$ copy-mode -t main
+styles 0-1 plain

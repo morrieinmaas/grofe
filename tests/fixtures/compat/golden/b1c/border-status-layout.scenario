@@ -1,0 +1,43 @@
+# B1c: how a border status changes what layouts give the panes: even
+# spreads, presets, resizes by size and by step, splits and kills. The cells
+# of the layout stay the same; the panes along the edge give up the row.
+$ new-session -d -s main -n w -x 40 -y 20 cat
+$ set -g status off
+$ set -g pane-border-status top
+$ split-window -d -v -t main cat
+$ split-window -d -v -t main cat
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ select-layout -t main even-vertical
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ select-layout -t main tiled
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ select-layout -t main main-horizontal
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ select-layout -t main even-vertical
+$ resize-pane -t main:.1 -y 4
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ resize-pane -t main:.3 -y 4
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ resize-pane -t main:.2 -D 2
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ kill-pane -t main:.2
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ set -g pane-border-status bottom
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ split-window -d -h -t main:.1 cat
+$ split-window -d -v -t main:.2 -l 3 cat
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ resize-pane -t main:.3 -y 5
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ select-layout -t main even-horizontal
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ display-message -p -t main '#{window_layout}'
+$ set -g pane-border-status off
+$ list-panes -t main -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ display-message -p -t main '#{window_layout}'
+$ set -g pane-border-status top
+$ new-window -d -n second cat
+$ split-window -d -t main:second cat
+$ list-panes -t main:second -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'
+$ new-window -d -n third cat
+$ list-panes -t main:third -F '#{pane_index} #{pane_width}x#{pane_height} at #{pane_left},#{pane_top}'

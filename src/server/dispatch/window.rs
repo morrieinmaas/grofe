@@ -100,6 +100,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         activity: std::time::SystemTime::now(),
         last_panes: Vec::new(),
         floating: Vec::new(),
+        pane_status: Default::default(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
@@ -411,7 +412,9 @@ pub(crate) fn apply_preset(model: &mut Model, window: WindowId, preset: Preset) 
         && !w.tiled_ids().is_empty()
     {
         let (area, panes) = (w.area(), w.pane_ids());
-        if w.layout.preset(area, preset, &panes) {
+        if w.layout
+            .preset_bordered(area, preset, &panes, w.pane_status)
+        {
             w.floating.clear();
         }
     }

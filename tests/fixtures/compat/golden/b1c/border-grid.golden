@@ -1,0 +1,149 @@
+$ new-session -d -s main -n w -x 41 -y 13 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ split-window -d -v -t main:.1 cat
+? 0
+$ split-window -d -v -t main:.3 cat
+? 0
+$ select-pane -t main:.1 -T a
+? 0
+$ select-pane -t main:.2 -T b
+? 0
+$ select-pane -t main:.3 -T c
+? 0
+$ select-pane -t main:.4 -T d
+? 0
+client 41x13 attach -t main
+$ set -g pane-border-indicators both
+? 0
+$ set -g pane-border-lines double
+? 0
+screen
+|                     ║
+|                     ←
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+| ═↑══════════════════╬════════════════════
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+styles 0-12
+~ 0 20-20 fg=green bg=default
+~ 1 20-20 fg=green bg=default
+~ 2 20-20 fg=green bg=default
+~ 3 20-20 fg=green bg=default
+~ 4 20-20 fg=green bg=default
+~ 5 20-20 fg=green bg=default
+~ 6 0-20 fg=green bg=default
+$ select-pane -t main:.4
+? 0
+styles 0-12
+~ 6 20-40 fg=green bg=default
+~ 7 20-20 fg=green bg=default
+~ 8 20-20 fg=green bg=default
+~ 9 20-20 fg=green bg=default
+~ 10 20-20 fg=green bg=default
+~ 11 20-20 fg=green bg=default
+~ 12 20-20 fg=green bg=default
+$ set -g pane-border-status top
+? 0
+screen
+| ══1 "a"═══════[z][x]╦══3 "c"═══════[z][x]
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+| ══2 "b"═══════[z][x]╬═↓4 "d"═══════[z][x]
+|                     ║
+|                     →
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+styles 0-12
+~ 6 20-22 fg=green bg=default
+~ 6 23-23 fg=green bg=default reverse
+~ 6 25-40 fg=green bg=default
+~ 7 20-20 fg=green bg=default
+~ 8 20-20 fg=green bg=default
+~ 9 20-20 fg=green bg=default
+~ 10 20-20 fg=green bg=default
+~ 11 20-20 fg=green bg=default
+~ 12 20-20 fg=green bg=default
+$ set -g pane-border-status bottom
+? 0
+$ select-pane -t main:.2
+? 0
+screen
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+|                     ║
+| ══1 "a"═══════[z][x]╬══3 "c"═══════[z][x]
+|                     ║
+|                     ←
+|                     ║
+|                     ║
+|                     ║
+| ═↑2 "b"═══════[z][x]╩══4 "d"═══════[z][x]
+styles 0-12
+~ 6 20-20 fg=green bg=default
+~ 7 20-20 fg=green bg=default
+~ 8 20-20 fg=green bg=default
+~ 9 20-20 fg=green bg=default
+~ 10 20-20 fg=green bg=default
+~ 11 20-20 fg=green bg=default
+~ 12 0-1 fg=green bg=default
+~ 12 2-2 fg=green bg=default reverse
+~ 12 4-20 fg=green bg=default
+$ set -g pane-border-indicators arrows
+? 0
+$ set -g pane-border-lines number
+? 0
+screen
+|                     1
+|                     1
+|                     1
+|                     1
+|                     1
+|                     1
+| 111 "a"1111111[z][x]1333 "c"3333333[z][x]
+|                     2
+|                     ←
+|                     2
+|                     2
+|                     2
+| 2↑2 "b"2222222[z][x]2444 "d"4444444[z][x]
+$ set -g pane-border-indicators off
+? 0
+$ resize-pane -Z -t main:.3
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 333 "c"3333333333333333333333333333[u][x]
+styles 0-12
+~ 12 0-1 fg=green bg=default
+~ 12 2-2 fg=green bg=default reverse
+~ 12 4-40 fg=green bg=default

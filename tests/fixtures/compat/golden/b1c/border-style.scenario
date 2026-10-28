@@ -1,0 +1,18 @@
+# B1c: pane-border-style and pane-active-border-style, global, per pane and
+# with formats; the border status line takes the style too.
+$ new-session -d -s main -n w -x 30 -y 9 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.2 cat
+client 30x9 attach -t main
+$ set -g pane-border-style fg=colour244
+$ set -g pane-active-border-style fg=colour196,bg=colour17
+styles 0-8
+$ set -g pane-border-status top
+styles 0-8
+$ select-pane -t main:.3
+styles 0-8
+$ set -p -t main:.2 pane-border-style fg=colour33
+styles 0-8
+$ set -g pane-active-border-style 'fg=#{?pane_active,colour46,colour196}'
+styles 0-8

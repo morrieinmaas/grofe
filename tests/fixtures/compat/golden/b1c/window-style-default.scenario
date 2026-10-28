@@ -1,0 +1,17 @@
+# B1c: a window-active-style that sets only a foreground leaves the
+# background to window-style, and the other way round; fg=default and
+# bg=default fall back to window-style.
+$ new-session -d -s main -n w -x 40 -y 4 sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+$ set -g status off
+$ split-window -d -h -t main sh -c 'printf "\033[31mred\033[0m plain\n"; exec cat'
+$ set -g window-style fg=colour244,bg=colour17
+$ set -g window-active-style fg=colour231
+client 40x4 attach -t main
+screen plain
+styles 0-1 plain
+$ set -g window-active-style bg=colour52
+styles 0-1 plain
+$ set -g window-active-style default
+styles 0-1 plain
+$ set -g window-style 'fg=#{?pane_active,colour2,colour3},bg=colour17'
+styles 0-1 plain

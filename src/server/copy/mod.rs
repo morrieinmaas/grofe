@@ -2320,11 +2320,7 @@ impl Overlay for CopyOverlay {
         let Some(w) = client_window(state, client) else {
             return;
         };
-        let rects: Vec<(PaneId, Rect)> = if w.zoomed {
-            vec![(w.active, w.area())]
-        } else {
-            w.layout.compute(w.area())
-        };
+        let rects: Vec<(PaneId, Rect)> = w.pane_rects();
         for (pane, rect) in rects {
             let Some(mode) = state.copy.get(pane) else {
                 continue;
@@ -2361,10 +2357,18 @@ impl Overlay for CopyOverlay {
             let selected = style("mode-style", MODE_STYLE);
             let (cols, rows) = (usize::from(rect.cols), usize::from(rect.rows));
             let top = mode.grid.hsize - mode.oy;
+            let (default_fg, default_bg) = clients::pane_defaults(&state.model, pane);
             for y in 0..rows.min(mode.grid.sy) {
                 let fy = top + y;
                 for x in 0..cols {
                     let mut cell = mode.grid.snap(x, fy);
+                    // The pane's `window-style` shows in the default colours.
+                    if cell.fg == Color::Named(NamedColor::Foreground) {
+                        cell.fg = default_fg;
+                    }
+                    if cell.bg == Color::Named(NamedColor::Background) {
+                        cell.bg = default_bg;
+                    }
                     if mode.showmark && fy == mode.my {
                         let (fg, bg) = if x == mode.mx {
                             (mark.bg, mark.fg)

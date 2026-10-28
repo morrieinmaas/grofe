@@ -21,6 +21,7 @@ use std::time::Instant;
 use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::event::Place;
 use crate::protocol::ClientCtx;
+use crate::server::borders::PaneStatus;
 use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
@@ -95,6 +96,9 @@ pub struct Window {
     /// Floating panes (tmux 3.7's `new-pane`, TC.6), in creation order:
     /// panes of the window outside its layout, drawn over it.
     pub floating: Vec<Floating>,
+    /// `pane-border-status` as last applied (`clients::sync_pane_status`):
+    /// the panes along the top or bottom edge give up a row to their title.
+    pub pane_status: PaneStatus,
 }
 
 /// Where a floating pane is: the window cell of its top-left content
@@ -158,6 +162,48 @@ impl Window {
         if let Some(next) = next {
             self.active = next;
             self.last_panes.retain(|p| *p != next);
+        }
+    }
+
+    /// `r`, a layout cell's rect, less the row a border status takes from
+    /// the panes along the top (or bottom) edge, as tmux's
+    /// `layout_fix_panes` does.
+    fn edge_adjusted(&self, mut r: Rect) -> Rect {
+        let area = self.area();
+        match self.pane_status {
+            PaneStatus::Top if r.y == 0 => {
+                r.y = 1;
+                r.rows = r.rows.saturating_sub(1);
+            }
+            PaneStatus::Bottom if r.y + r.rows == area.rows => {
+                r.rows = r.rows.saturating_sub(1);
+            }
+            _ => {}
+        }
+        r
+    }
+
+    /// The tiled panes and their content rects in the layout.
+    pub fn tiled_rects(&self) -> Vec<(PaneId, Rect)> {
+        self.layout
+            .compute(self.area())
+            .into_iter()
+            .map(|(id, r)| (id, self.edge_adjusted(r)))
+            .collect()
+    }
+
+    /// The rect the zoomed pane fills.
+    pub fn zoom_rect(&self) -> Rect {
+        self.edge_adjusted(self.area())
+    }
+
+    /// The panes on show and their content rects: the layout's, or only
+    /// the active pane over the whole window when zoomed.
+    pub fn pane_rects(&self) -> Vec<(PaneId, Rect)> {
+        if self.zoomed {
+            vec![(self.active, self.zoom_rect())]
+        } else {
+            self.tiled_rects()
         }
     }
 
@@ -638,7 +684,7 @@ impl Model {
             };
             (f.pane, rect)
         });
-        for (id, rect) in w.layout.compute(w.area()).into_iter().chain(floating) {
+        for (id, rect) in w.tiled_rects().into_iter().chain(floating) {
             let Some(p) = self.panes.get_mut(&id) else {
                 continue;
             };
@@ -1112,6 +1158,7 @@ mod tests {
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         });
         model.insert_window(Window {
             id: w2,
@@ -1129,6 +1176,7 @@ mod tests {
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         });
 
         // A second session, owning nothing of "a"'s.
@@ -1180,6 +1228,7 @@ mod tests {
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         };
         assert_eq!(w.last_pane(), None);
         w.set_active(b);
@@ -1227,6 +1276,7 @@ mod tests {
                 activity: std::time::SystemTime::now(),
                 last_panes: Vec::new(),
                 floating: Vec::new(),
+                pane_status: Default::default(),
             });
         }
         let flag = |m: &Model, w| m.windows[&w].bell_flag;
@@ -1319,6 +1369,7 @@ mod tests {
                 activity: t0 - Duration::from_secs(age),
                 last_panes: Vec::new(),
                 floating: Vec::new(),
+                pane_status: Default::default(),
             });
         }
         let wb = model.alloc_window_id();
@@ -1340,6 +1391,7 @@ mod tests {
             activity: t0,
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         });
         // `add_session` leaves the window list to the caller.
         model.sessions.get_mut(&a).unwrap().windows = vec![w1, w2, w3];

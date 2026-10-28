@@ -1,0 +1,78 @@
+$ new-session -d -s main -n w -x 30 -y 9 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ split-window -d -v -t main:.2 cat
+? 0
+client 30x9 attach -t main
+$ set -g pane-border-style fg=colour244
+? 0
+$ set -g pane-active-border-style fg=colour196
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=default
+~ 1 15-15 fg=idx:196 bg=default
+~ 2 15-15 fg=idx:196 bg=default
+~ 3 15-15 fg=idx:196 bg=default
+~ 4 15-15 fg=idx:196 bg=default
+~ 4 16-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=default
+~ 6 15-15 fg=idx:196 bg=default
+~ 7 15-15 fg=idx:196 bg=default
+~ 8 15-15 fg=idx:196 bg=default
+$ select-pane -m -t main:.1
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=default reverse
+~ 1 15-15 fg=idx:196 bg=default reverse
+~ 2 15-15 fg=idx:196 bg=default reverse
+~ 3 15-15 fg=idx:196 bg=default reverse
+~ 4 15-15 fg=idx:196 bg=default reverse
+~ 4 16-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=default reverse
+~ 6 15-15 fg=idx:196 bg=default reverse
+~ 7 15-15 fg=idx:196 bg=default reverse
+~ 8 15-15 fg=idx:196 bg=default reverse
+$ select-pane -m -t main:.3
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=default
+~ 1 15-15 fg=idx:196 bg=default
+~ 2 15-15 fg=idx:196 bg=default
+~ 3 15-15 fg=idx:196 bg=default
+~ 4 15-15 fg=idx:196 bg=default reverse
+~ 4 16-29 fg=idx:244 bg=default reverse
+~ 5 15-15 fg=idx:196 bg=default reverse
+~ 6 15-15 fg=idx:196 bg=default reverse
+~ 7 15-15 fg=idx:196 bg=default reverse
+~ 8 15-15 fg=idx:196 bg=default reverse
+$ select-pane -m -t main:.3
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=default
+~ 1 15-15 fg=idx:196 bg=default
+~ 2 15-15 fg=idx:196 bg=default
+~ 3 15-15 fg=idx:196 bg=default
+~ 4 15-15 fg=idx:196 bg=default
+~ 4 16-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=default
+~ 6 15-15 fg=idx:196 bg=default
+~ 7 15-15 fg=idx:196 bg=default
+~ 8 15-15 fg=idx:196 bg=default
+$ select-pane -m -t main:.2
+? 0
+$ select-pane -M
+? 0
+styles 0-8
+~ 0 15-15 fg=idx:196 bg=default
+~ 1 15-15 fg=idx:196 bg=default
+~ 2 15-15 fg=idx:196 bg=default
+~ 3 15-15 fg=idx:196 bg=default
+~ 4 15-15 fg=idx:196 bg=default
+~ 4 16-29 fg=idx:244 bg=default
+~ 5 15-15 fg=idx:196 bg=default
+~ 6 15-15 fg=idx:196 bg=default
+~ 7 15-15 fg=idx:196 bg=default
+~ 8 15-15 fg=idx:196 bg=default

@@ -1,0 +1,66 @@
+$ new-session -d -s main -n w -x 40 -y 8 cat
+? 0
+$ set -g status off
+? 0
+$ set -g pane-base-index 3
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ split-window -d -v -t main:.3 cat
+? 0
+client 40x8 attach -t main
+$ set -g pane-border-status top
+? 0
+$ set -g pane-border-format '#[fg=red]abcdefghijklmnop宽字#[bg=blue]xyz#[default]end'
+? 0
+screen 宽
+| ──abcdefghijklmnop宽 ┬──abcdefghijklmnop─
+|                     │
+|                     │
+|                     │
+| ──abcdefghijklmnop宽 ┤
+|                     │
+|                     │
+|                     │
+styles 0-0 abc
+~ 0 0-1 fg=green bg=default
+~ 0 2-18 fg=red bg=default
+~ 0 20-20 fg=green bg=default
+~ 0 23-38 fg=red bg=default
+$ set -g pane-border-format '#[fg=red]abcdefghijklmnopq宽字#[bg=blue]xyz'
+? 0
+screen abc
+| ──abcdefghijklmnopq─┬──abcdefghijklmnopq
+|                     │
+|                     │
+|                     │
+| ──abcdefghijklmnopq─┤
+|                     │
+|                     │
+|                     │
+styles 0-0 abc
+~ 0 0-1 fg=green bg=default
+~ 0 2-18 fg=red bg=default
+~ 0 19-20 fg=green bg=default
+~ 0 23-39 fg=red bg=default
+$ set -g pane-border-lines number
+? 0
+screen
+| 33abcdefghijklmnopq3355abcdefghijklmnopq
+|                     3
+|                     3
+|                     3
+| 44abcdefghijklmnopq43
+|                     5
+|                     5
+|                     5
+styles 0-7
+~ 0 0-1 fg=green bg=default
+~ 0 2-18 fg=red bg=default
+~ 0 19-20 fg=green bg=default
+~ 0 23-39 fg=red bg=default
+~ 1 20-20 fg=green bg=default
+~ 2 20-20 fg=green bg=default
+~ 3 20-20 fg=green bg=default
+~ 4 2-18 fg=red bg=default
+~ 4 20-20 fg=green bg=default

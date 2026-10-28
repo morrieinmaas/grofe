@@ -1,0 +1,26 @@
+# B1c: pane-border-indicators. Colour (the default) colours half of the
+# border shared by two panes; arrows mark the active pane's border.
+$ new-session -d -s main -n w -x 30 -y 9 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+client 30x9 attach -t main
+screen
+styles 0-8
+$ select-pane -t main:.2
+styles 0-8
+$ set -g pane-border-indicators arrows
+screen
+styles 0-8
+$ set -g pane-border-indicators both
+screen
+styles 0-8
+$ set -g pane-border-indicators off
+styles 0-8
+$ set -g pane-border-indicators colour
+$ kill-pane -t main:.1
+$ split-window -d -v -t main cat
+styles 0-8
+$ select-pane -t main:.2
+styles 0-8
+$ set -g pane-border-indicators arrows
+screen

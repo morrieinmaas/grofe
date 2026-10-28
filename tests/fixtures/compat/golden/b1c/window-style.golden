@@ -1,0 +1,89 @@
+$ new-session -d -s main -n w -x 40 -y 6 sh -c 'printf "\033[31mred\033[0m plain \033[44mblue\033[0m\n"; exec cat'
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main sh -c 'printf "\033[31mred\033[0m plain \033[44mblue\033[0m\n"; exec cat'
+? 0
+$ set -g window-style bg=colour17
+? 0
+$ set -g window-active-style fg=colour231,bg=colour52
+? 0
+client 40x6 attach -t main
+screen blue
+| red plain blue      │red plain blue
+|                     │
+|                     │
+|                     │
+|                     │
+|                     │
+styles 0-1 blue
+~ 0 0-2 fg=red bg=idx:52
+~ 0 3-3 fg=default bg=idx:52
+~ 0 4-8 fg=idx:231 bg=idx:52
+~ 0 9-9 fg=default bg=idx:52
+~ 0 10-13 fg=idx:231 bg=blue
+~ 0 14-19 fg=default bg=idx:52
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-30 fg=default bg=idx:17
+~ 0 31-34 fg=default bg=blue
+~ 0 35-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:52
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17
+$ select-pane -t main:.2
+? 0
+styles 0-1 blue
+~ 0 0-2 fg=red bg=idx:17
+~ 0 3-9 fg=default bg=idx:17
+~ 0 10-13 fg=default bg=blue
+~ 0 14-19 fg=default bg=idx:17
+~ 0 21-23 fg=red bg=idx:52
+~ 0 24-24 fg=default bg=idx:52
+~ 0 25-29 fg=idx:231 bg=idx:52
+~ 0 30-30 fg=default bg=idx:52
+~ 0 31-34 fg=idx:231 bg=blue
+~ 0 35-39 fg=default bg=idx:52
+~ 1 0-19 fg=default bg=idx:17
+~ 1 21-39 fg=default bg=idx:52
+$ select-pane -t main:.1 -P bg=colour22
+? 0
+styles 0-1 blue
+~ 0 0-2 fg=red bg=idx:22
+~ 0 3-9 fg=default bg=idx:22
+~ 0 10-13 fg=default bg=blue
+~ 0 14-19 fg=default bg=idx:22
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=idx:17
+~ 0 24-30 fg=default bg=idx:17
+~ 0 31-34 fg=default bg=blue
+~ 0 35-39 fg=default bg=idx:17
+~ 1 0-19 fg=default bg=idx:22
+~ 1 20-20 fg=green bg=default
+~ 1 21-39 fg=default bg=idx:17
+$ select-pane -t main:.1 -g
+bg=colour22
+? 0
+$ show -p -t main:.1 window-style
+window-style bg=colour22
+? 0
+$ show -p -t main:.1 window-active-style
+window-active-style bg=colour22
+? 0
+$ set -p -t main:.2 window-style fg=colour196
+? 0
+$ set -pu -t main:.1 window-active-style
+? 0
+styles 0-1 blue
+~ 0 0-2 fg=red bg=idx:52
+~ 0 3-3 fg=default bg=idx:52
+~ 0 4-8 fg=idx:231 bg=idx:52
+~ 0 9-9 fg=default bg=idx:52
+~ 0 10-13 fg=idx:231 bg=blue
+~ 0 14-19 fg=default bg=idx:52
+~ 0 20-20 fg=green bg=default
+~ 0 21-23 fg=red bg=default
+~ 0 25-29 fg=idx:196 bg=default
+~ 0 31-34 fg=idx:196 bg=blue
+~ 1 0-19 fg=default bg=idx:52
+~ 1 20-20 fg=green bg=default

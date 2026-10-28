@@ -7,6 +7,7 @@ use crate::cmd::{
     SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
+use crate::server::borders::PaneStatus;
 use crate::server::dispatch::options;
 use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
@@ -349,7 +350,20 @@ fn resize_pane(state: &mut State, ctx: &ClientCtx, c: ResizePane) -> Result<Stri
         w.layout.resize_to(area, pane, Dir::Horizontal, cells);
     }
     if let Some(height) = c.height {
-        let cells = cells(height, area.rows);
+        let mut cells = cells(height, area.rows);
+        // The title row of a pane along the edge is not part of its size
+        // (tmux's `cmd_resize_pane_exec`).
+        let at_edge = w.tiled_rects().iter().any(|(id, r)| {
+            *id == pane
+                && match w.pane_status {
+                    PaneStatus::Top => r.y == 1,
+                    PaneStatus::Bottom => r.y + r.rows + 1 == area.rows,
+                    PaneStatus::Off => false,
+                }
+        });
+        if at_edge {
+            cells = cells.saturating_add(1);
+        }
         w.layout.resize_to(area, pane, Dir::Vertical, cells);
     }
     for edge in edges {
@@ -386,7 +400,8 @@ fn toggle_zoom(model: &mut Model, window: WindowId, pane: PaneId) {
     }
     w.zoomed = true;
     w.set_active(pane);
-    let (cols, rows) = (w.cols, w.rows);
+    let zoom = w.zoom_rect();
+    let (cols, rows) = (zoom.cols, zoom.rows);
     if let Some(p) = model.panes.get_mut(&pane) {
         p.cols = cols;
         p.rows = rows;
@@ -500,6 +515,11 @@ pub(crate) fn respawn(
         &state.model.panes[&pane].handle,
     )
     .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
+    clients::seed_defaults(
+        &state.model,
+        (session, state.model.panes[&pane].window),
+        &handle,
+    );
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
         // process (`-k`), and stops its tasks. An `Exited` its reader had

@@ -57,3 +57,18 @@ screen pane-text
     assert!(!screens[1].contains("pane-text"), "{got}");
     assert!(!screens[2].contains('#'), "{got}");
 }
+
+#[test]
+fn the_marked_pane_border_is_reversed() {
+    check("b1d", "marked-border", &[]);
+}
+
+#[test]
+fn the_mark_survives_or_drops_as_tmux_checks_it() {
+    check("b1d", "marked-lifecycle", &[]);
+}
+
+#[test]
+fn menus_and_popups_clamp_at_the_screen_edges() {
+    check("b1d", "menu-edges", &[]);
+}

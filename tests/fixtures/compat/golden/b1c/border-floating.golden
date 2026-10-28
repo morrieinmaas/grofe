@@ -1,0 +1,52 @@
+$ new-session -d -s main -n w -x 40 -y 10 cat
+? 0
+$ set -g status off
+? 0
+$ split-window -d -h -t main cat
+? 0
+$ new-pane -t main -x 12 -y 3 -X 8 -Y 3 cat
+? 0
+$ select-pane -t main:.1 -T one
+? 0
+$ select-pane -t main:.2 -T two
+? 0
+$ select-pane -t main:.3 -T three
+? 0
+client 40x10 attach -t main
+screen
+|                     │
+|                     │
+|        ┌────────────┐
+|        │            │
+|        │            │
+|        │            │
+|        └────────────┘
+|                     │
+|                     │
+|                     │
+$ set -g pane-border-lines heavy
+? 0
+screen
+|                     ┃
+|                     ┃
+|        ┏━━━━━━━━━━━━┓
+|        ┃            ┃
+|        ┃            ┃
+|        ┃            ┃
+|        ┗━━━━━━━━━━━━┛
+|                     ┃
+|                     ┃
+|                     ┃
+$ set -g pane-border-status top
+? 0
+screen
+| ━━1 "one"━━━━━[z][x]┳━━2 "two"━━━━[z][x]
+|                     ┃
+|        ┏━━3 "three"]┓
+|        ┃            ┃
+|        ┃            ┃
+|        ┃            ┃
+|        ┗━━━━━━━━━━━━┛
+|                     ┃
+|                     ┃
+|                     ┃

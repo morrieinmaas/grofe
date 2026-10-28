@@ -1,0 +1,23 @@
+# B1c: window-style and window-active-style as tmux 3.7b draws them. Only
+# cells in the default colours take the style's colours (a program's own
+# red text and blue background keep theirs); the active pane uses
+# window-active-style where it sets a colour, the others window-style;
+# select-pane -P sets both on one pane.
+$ new-session -d -s main -n w -x 40 -y 6 sh -c 'printf "\033[31mred\033[0m plain \033[44mblue\033[0m\n"; exec cat'
+$ set -g status off
+$ split-window -d -h -t main sh -c 'printf "\033[31mred\033[0m plain \033[44mblue\033[0m\n"; exec cat'
+$ set -g window-style bg=colour17
+$ set -g window-active-style fg=colour231,bg=colour52
+client 40x6 attach -t main
+screen blue
+styles 0-1 blue
+$ select-pane -t main:.2
+styles 0-1 blue
+$ select-pane -t main:.1 -P bg=colour22
+styles 0-1 blue
+$ select-pane -t main:.1 -g
+$ show -p -t main:.1 window-style
+$ show -p -t main:.1 window-active-style
+$ set -p -t main:.2 window-style fg=colour196
+$ set -pu -t main:.1 window-active-style
+styles 0-1 blue

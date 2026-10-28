@@ -1,0 +1,8 @@
+# B1c: what a program asking for the default colours (OSC 10, OSC 11) is
+# told in a pane with a window-style.
+$ new-session -d -s main -n w -x 60 -y 8 cat
+$ set -g status off
+$ set -g window-style fg=#102030,bg=#405060
+$ respawn-pane -k -t main sh -c 'stty raw -echo; printf "\033]10;?\033\\"; dd bs=1 count=25 2>/dev/null | tr -d "\033"; echo; printf "\033]11;?\033\\"; dd bs=1 count=25 2>/dev/null | tr -d "\033"; echo; sleep 30'
+client 60x8 attach -t main
+screen 6060

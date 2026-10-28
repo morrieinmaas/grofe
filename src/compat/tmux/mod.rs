@@ -448,7 +448,7 @@ const HIDDEN_VALUE_FLAGS: &[(&str, char)] = &[("select-pane", 'P')];
 
 /// Flags with no value tmux 3.7b accepts but its usage leaves out
 /// (recorded: `load-buffer -w path` loads and exits 0).
-const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[("load-buffer", 'w')];
+const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[("load-buffer", 'w'), ("select-pane", 'g')];
 
 fn parse_spec(line: &'static str, hidden: bool) -> Spec {
     let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
@@ -979,6 +979,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-active-border-style", "pane-active-border-style"),
     ("pane-base-index", "pane-base-index"),
     ("pane-border-format", "pane-border-format"),
+    ("pane-border-indicators", "pane-border-indicators"),
+    ("pane-border-lines", "pane-border-lines"),
+    ("pane-border-status", "pane-border-status"),
     ("pane-border-style", "pane-border-style"),
     ("prefix", "prefix"),
     ("prefix2", "prefix2"),
@@ -1273,24 +1276,33 @@ fn mouse_no_op(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 
 /// `select-pane -P <style>` (opensessions' pane flash), as tmux 3.7b runs
 /// the undocumented `-P` (recorded): it selects the pane and sets the
-/// pane's `window-style` and `window-active-style` to the style, unchecked.
-/// grofe stores both pane options (so `show -p` answers as tmux's does)
-/// but draws no pane background, so they have no effect.
-// ponytail: no pane background styles; the flash is invisible until the
-// renderer reads `window-style`.
+/// pane's `window-style` and `window-active-style` to the style, unchecked;
+/// the renderer draws them (B1c). `-g` (recorded) prints the pane's
+/// `window-style` and selects nothing.
 fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     let got = inv.getopt();
-    let Some(style) = got.value('P') else {
-        return Err(ParseError::MissingValue("select-pane".to_string(), 'P').into());
-    };
-    let mut out = inv.native("select-pane", &without(inv, &got, 'P'))?;
-    for name in ["window-style", "window-active-style"] {
-        let mut args = vec!["-p".to_string()];
+    let print = got.has('g');
+    let mut out = Vec::new();
+    if !print {
+        out = inv.native("select-pane", &without(inv, &got, 'P'))?;
+    }
+    let target = |mut args: Vec<String>| {
         if let Some(target) = got.value('t') {
             args.extend(["-t".to_string(), target.to_string()]);
         }
-        args.extend([name.to_string(), style.to_string()]);
-        out.extend(inv.native("set-option", &args)?);
+        args
+    };
+    if let Some(style) = got.value('P') {
+        for name in ["window-style", "window-active-style"] {
+            let mut args = target(vec!["-p".to_string()]);
+            args.extend([name.to_string(), style.to_string()]);
+            out.extend(inv.native("set-option", &args)?);
+        }
+    }
+    if print {
+        let mut args = target(vec!["-pv".to_string()]);
+        args.push("window-style".to_string());
+        out.extend(inv.native("show-options", &args)?);
     }
     Ok(out)
 }
@@ -1489,6 +1501,14 @@ fn core_rows() -> Vec<Row> {
             &[Cosmetic],
             "M3.6",
             "fe_1/errors",
+        ),
+        row(
+            "select-pane -g",
+            FlagRename,
+            Translate(select_pane_style),
+            SEMANTIC,
+            "B1c",
+            "b1c/window-style",
         ),
         row(
             "set-option",
