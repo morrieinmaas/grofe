@@ -1017,7 +1017,12 @@ fn push_char(screen: &mut Vec<Cell>, ch: char, style: Style) {
 /// directives do; a `#[` with no closing `]` leaves the row blank, as in
 /// tmux.
 pub fn draw(expanded: &str, base: Style, width: u16) -> StatusRow {
-    draw_on(expanded, base, vec![Cell::blank(base); usize::from(width)])
+    draw_on(
+        expanded,
+        base,
+        vec![Cell::blank(base); usize::from(width)],
+        false,
+    )
 }
 
 /// [`draw`] onto cells that already hold something (a pane border's line
@@ -1032,11 +1037,15 @@ pub fn draw_over(expanded: &str, base: Style, under: &[(char, Style)]) -> Status
             style: *style,
         })
         .collect();
-    draw_on(expanded, base, row)
+    draw_on(expanded, base, row, true)
 }
 
-fn draw_on(expanded: &str, base: Style, row: Vec<Cell>) -> StatusRow {
+/// `keep_cut`: a wide character the width cuts in two (or a right half left
+/// without its character) is not drawn, and what was under it shows, as
+/// tmux's pane status line leaves it.
+fn draw_on(expanded: &str, base: Style, row: Vec<Cell>, keep_cut: bool) -> StatusRow {
     let available = row.len();
+    let under = keep_cut.then(|| row.clone());
     let mut cv = Canvas {
         row,
         screens: Default::default(),
@@ -1214,6 +1223,19 @@ fn draw_on(expanded: &str, base: Style, row: Vec<Cell>) -> StatusRow {
         Align::Centre => cv.draw_centre(available, focus),
         Align::Right => cv.draw_right(available, focus),
         Align::AbsoluteCentre => cv.draw_absolute_centre(available, focus),
+    }
+    if let Some(under) = under {
+        for x in 0..available {
+            let w = cv.row[x].width;
+            let whole = if w == 2 {
+                cv.row.get(x + 1).is_some_and(|n| n.width == 0)
+            } else {
+                w != 0 || (x > 0 && cv.row[x - 1].width == 2)
+            };
+            if !whole {
+                cv.row[x] = under[x].clone();
+            }
+        }
     }
     let ranges = cv
         .ranges

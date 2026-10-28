@@ -1,0 +1,17 @@
+# B1c: which pane owns a border cell two panes claim (the pane made first,
+# whatever the pane list or the active pane says), shown by number lines.
+$ new-session -d -s main -n w -x 30 -y 9 cat
+$ set -g status off
+$ set -g pane-border-lines number
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.1 cat
+client 30x9 attach -t main
+$ select-pane -t main:.2
+screen
+$ select-pane -t main:.3
+screen
+$ select-pane -t main:.1 -T a
+$ select-pane -t main:.2 -T b
+$ select-pane -t main:.3 -T c
+$ set -g pane-border-status top
+screen

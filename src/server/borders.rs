@@ -84,7 +84,7 @@ pub struct PaneBox {
     pub w: i32,
     pub h: i32,
     /// The pane's place in the window's pane list (`pane-border-lines
-    /// number` shows it, unadjusted by `pane-base-index`).
+    /// number` shows it, as `pane-base-index` numbers it).
     pub index: usize,
 }
 
@@ -156,9 +156,33 @@ pub struct Geometry<'a> {
     pub panes: &'a [PaneBox],
     /// The window's active pane, an index into `panes`.
     pub active: Option<usize>,
+    /// `panes` indexes in tmux's z_index order, which for tiled panes is the
+    /// order they were made in (a pane's id grows with each), not the order
+    /// of the pane list: it decides which pane owns a cell two panes claim.
+    z: Vec<usize>,
 }
 
-impl Geometry<'_> {
+impl<'a> Geometry<'a> {
+    pub fn new(
+        (cols, rows): (i32, i32),
+        status: PaneStatus,
+        indicators: Indicators,
+        panes: &'a [PaneBox],
+        active: Option<usize>,
+    ) -> Self {
+        let mut z: Vec<usize> = (0..panes.len()).collect();
+        z.sort_by_key(|&i| panes[i].id);
+        Geometry {
+            cols,
+            rows,
+            status,
+            indicators,
+            panes,
+            active,
+            z,
+        }
+    }
+
     /// `Some(side by side)` when the window has exactly two panes
     /// (tmux's `screen_redraw_two_panes`).
     fn two_panes(&self) -> Option<bool> {
@@ -340,21 +364,23 @@ impl Geometry<'_> {
             px >= wp.x - 1 && px <= wp.x + wp.w && py >= wp.y - 1 && py <= wp.y + wp.h
         };
         let start = self
-            .panes
+            .z
             .iter()
-            .position(near)
-            .or(self.active)
-            .filter(|i| *i < self.panes.len());
+            .position(|&i| near(&self.panes[i]))
+            .or_else(|| {
+                self.active
+                    .and_then(|a| self.z.iter().position(|&i| i == a))
+            });
         let Some(start) = start else {
             return (CELL_OUTSIDE, None);
         };
         if px == self.cols || py == self.rows {
-            return (self.type_of_cell(px, py), Some(start));
+            return (self.type_of_cell(px, py), Some(self.z[start]));
         }
         let n = self.panes.len();
         let mut owner = None;
         for k in 0..n {
-            let i = (start + k) % n;
+            let i = self.z[(start + k) % n];
             let wp = &self.panes[i];
             owner = Some(i);
             if (px < wp.x - 1 || px > wp.x + wp.w) && (py < wp.y - 1 || py > wp.y + wp.h) {
@@ -474,14 +500,7 @@ mod tests {
         active: usize,
         status: PaneStatus,
     ) -> Geometry<'a> {
-        Geometry {
-            cols: 21,
-            rows: 6,
-            status,
-            indicators,
-            panes,
-            active: Some(active),
-        }
+        Geometry::new((21, 6), status, indicators, panes, Some(active))
     }
 
     #[test]
@@ -516,6 +535,28 @@ mod tests {
         assert!(g.is_border_of(&panes[1], 10, 4));
         let g = geometry(&panes, Indicators::Off, 0, PaneStatus::Off);
         assert!(g.is_border_of(&panes[0], 10, 5));
+    }
+
+    #[test]
+    fn a_cell_two_panes_claim_is_owned_by_the_pane_made_first() {
+        // Left column top (made first), bottom (made last), right (second).
+        let panes = [
+            boxed(0, 0, 0, 15, 4, 1),
+            boxed(2, 0, 5, 15, 4, 2),
+            boxed(1, 16, 0, 14, 9, 3),
+        ];
+        let g = Geometry::new(
+            (30, 9),
+            PaneStatus::Off,
+            Indicators::Colour,
+            &panes,
+            Some(0),
+        );
+        let owner = |x, y| g.check_cell(x, y).1.map(|i| panes[i].index);
+        assert_eq!(owner(15, 4), Some(1));
+        assert_eq!(owner(15, 5), Some(3));
+        assert_eq!(owner(15, 8), Some(3));
+        assert_eq!(owner(3, 4), Some(1));
     }
 
     #[test]

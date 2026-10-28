@@ -73,3 +73,13 @@ fn a_grid_of_panes_joins_borders_and_marks_the_active_pane() {
 fn copy_mode_shows_the_window_style() {
     check("b1c", "window-style-copy-mode", &[]);
 }
+
+#[test]
+fn a_wide_character_at_the_title_edge_and_number_lines_with_a_pane_base_index() {
+    check("b1c", "border-title-edges", &[]);
+}
+
+#[test]
+fn a_border_cell_two_panes_claim_belongs_to_the_pane_made_first() {
+    check("b1c", "border-owners", &[]);
+}
