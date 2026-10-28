@@ -4395,4 +4395,74 @@ mod tests {
         // A key that does not repeat ends the repeat and goes to the pane.
         assert_eq!(c.send(b"x", t), vec![pane(b"x")]);
     }
+
+    /// Every command a stock binding runs, the menu items and prompt
+    /// templates inside it too, is one the tmux front end maps: pressing
+    /// the key fails at nothing but a missing target or state (B1d).
+    fn unmapped(text: &str, out: &mut Vec<String>) {
+        use crate::protocol::{ClientCtx, Dialect};
+        let ctx = ClientCtx {
+            cwd: std::path::PathBuf::from("/"),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+            dialect: Dialect::Tmux,
+        };
+        let Ok(cmds) = crate::cmd::split_command_string(text) else {
+            out.push(format!("does not split: {text}"));
+            return;
+        };
+        for argv in cmds {
+            if let Err(e) = crate::compat::parse_split(&ctx, &argv) {
+                out.push(format!("{}: {e}", argv.join(" ")));
+            }
+            // The commands a verb holds as arguments.
+            let inner: Vec<&String> = match argv.first().map(String::as_str) {
+                Some("display-menu") => {
+                    let mut words = argv[1..].iter().peekable();
+                    while let Some(&w) = words.peek() {
+                        if !w.starts_with('-') || w.len() < 2 {
+                            break;
+                        }
+                        let takes = "TxytbsSHC".contains(w.chars().nth(1).unwrap_or(' '));
+                        words.next();
+                        if takes && w.len() == 2 {
+                            words.next();
+                        }
+                    }
+                    let rest: Vec<&String> = words.collect();
+                    let mut commands = Vec::new();
+                    let mut i = 0;
+                    while i < rest.len() {
+                        if rest[i].is_empty() {
+                            i += 1;
+                        } else {
+                            commands.extend(rest.get(i + 2).copied());
+                            i += 3;
+                        }
+                    }
+                    commands
+                }
+                Some("command-prompt" | "confirm-before") => argv.last().into_iter().collect(),
+                Some("if-shell") => argv.iter().skip(2).collect(),
+                _ => Vec::new(),
+            };
+            for text in inner {
+                if text.contains(' ') || crate::cmd::parse::canonical_name(text) != text {
+                    unmapped(&text.replace("%%", "x"), out);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_stock_prefix_binding_maps() {
+        let mut bad = Vec::new();
+        for (key, _, _, text) in TMUX_STOCK {
+            let mut errors = Vec::new();
+            unmapped(text, &mut errors);
+            bad.extend(errors.into_iter().map(|e| format!("prefix {key}: {e}")));
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
 }
