@@ -10,17 +10,17 @@ use super::keys;
 use super::target::parse_target;
 use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
-    ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
-    DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
-    If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers,
-    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer, Mark,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
-    ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource, Reload, Rename,
-    ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer,
-    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
-    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
-    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode,
+    DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup,
+    FindWindow, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane,
+    ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows,
+    LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset,
+    OptionScope, Pan, ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource,
+    Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
+    SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix,
+    SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks,
+    ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
+    SwapWindow, SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -2942,6 +2942,9 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "swap-window" => parse_swap_window(rest),
         "break-pane" => parse_break_pane(rest),
         "resize-window" => parse_resize_window(rest),
+        "clock-mode" => Ok(Command::ClockMode(ClockMode {
+            target: parse_target_only(rest, "clock-mode")?,
+        })),
         "last-pane" => Ok(Command::LastPane(LastPane {
             target: parse_target_only(rest, "last-pane")?,
         })),

@@ -20,6 +20,7 @@ pub fn copy_mode(state: &mut State, ctx: &ClientCtx, c: CopyMode) -> Result<Stri
     };
     // `-q` leaves every mode of the pane (`window_pane_reset_mode_all`).
     if c.cancel {
+        crate::server::clock::leave(state, pane);
         state.copy.remove(pane);
         crate::server::tree::close_over(state, pane);
         crate::server::clients::mark_all_dirty(state);

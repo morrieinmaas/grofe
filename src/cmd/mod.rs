@@ -655,6 +655,12 @@ pub struct LastPane {
     pub target: Target,
 }
 
+/// `clock-mode [-t pane]` (B1d): the pane shows a clock until a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClockMode {
+    pub target: Target,
+}
+
 /// `rotate-window` (TC.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotateWindow {
@@ -1122,6 +1128,7 @@ pub enum Command {
     BreakPane(BreakPane),
     ResizeWindow(ResizeWindow),
     LastPane(LastPane),
+    ClockMode(ClockMode),
     RotateWindow(RotateWindow),
     MoveWindow(MoveWindow),
     MovePane(MovePane),

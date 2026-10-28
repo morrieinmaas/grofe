@@ -355,6 +355,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // M3.6: stubs until each owning task lands (the stub edit).
         Command::JoinPane(c) => structure::join_pane(state, ctx, c),
+        Command::ClockMode(c) => crate::server::clock::clock_mode(state, ctx, c),
         Command::SwapPane(c) => structure::swap_pane(state, ctx, c),
         Command::SwapWindow(c) => structure::swap_window(state, ctx, c),
         Command::BreakPane(c) => structure::break_pane(state, ctx, c),

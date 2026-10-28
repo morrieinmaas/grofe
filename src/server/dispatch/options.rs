@@ -445,6 +445,20 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "on",
     },
+    // B1d: clock mode's colour and time format, tmux 3.7b's names, choices
+    // and defaults (`4` is blue; `show` prints it so).
+    Builtin {
+        name: "clock-mode-colour",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "blue",
+    },
+    Builtin {
+        name: "clock-mode-style",
+        kind: Kind::Choice(&["12", "24", "12-with-seconds", "24-with-seconds"]),
+        scope: OptionScope::Window,
+        default: "24",
+    },
     Builtin {
         name: "pane-border-style",
         kind: Kind::String,
@@ -3013,6 +3027,10 @@ impl<'a> ServerVars<'a> {
 
 impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        // The clock is the newest mode of a pane showing it.
+        if let Some(v) = crate::server::clock::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
         // Copy mode's variables while the pane is in it (TM.1).
         if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
             return Some(v);
@@ -3024,8 +3042,10 @@ impl FormatVars for ServerVars<'_> {
         // tmux 3.7b reads it from the screen on view, so a pane in any mode
         // (whatever answers `pane_in_mode`) is 0 (TM.7).
         if name == "bracket_paste_flag"
-            && (crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
-                == Some("1")
+            && (crate::server::clock::format_var(self.state, self.pane, "pane_in_mode").is_some()
+                || crate::server::copy::format_var(self.state, self.pane, "pane_in_mode")
+                    .as_deref()
+                    == Some("1")
                 || crate::server::tree::format_var(self.state, self.pane, "pane_in_mode").is_some())
         {
             return Some("0".to_string());

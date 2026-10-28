@@ -568,6 +568,14 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     if c.items.is_empty() {
         return Ok(String::new());
     }
+    // A pane showing the clock takes no keys: with a client to type them,
+    // any key ends the mode (tmux's `window_pane_key`).
+    if state.clocks.is_active(pane) {
+        if clients::current_client(state, ctx).is_some() {
+            crate::server::clock::leave(state, pane);
+        }
+        return Ok(String::new());
+    }
     if in_mode {
         // Each key runs its binding in the mode's table; others are dropped.
         let at = ClientCtx {
