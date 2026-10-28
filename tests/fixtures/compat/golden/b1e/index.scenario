@@ -26,3 +26,9 @@ $ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_na
 $ move-window -d -s b:99 -t b:50
 $ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
 $ set -t b renumber-windows off
+# move-window without -s numbers the source session again; with -s it does not.
+$ set -t b renumber-windows on
+$ move-window -t b:60
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+$ move-window -s b:3 -t b:70
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'

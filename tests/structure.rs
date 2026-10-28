@@ -518,11 +518,23 @@ fn move_window_matches_tmux() {
     assert_eq!(windows(&srv, "o"), ["0 @0", "1 @2 *"]);
     assert_eq!(windows(&srv, "s"), ["0 @1 *", "5 @3"]);
 
-    // No -s: the current window; no -t: the first free index.
+    // No -s: the current window; no -t: the first free index. With
+    // `renumber-windows` the source session is numbered again then, and
+    // not when `-s` names the window (cmd-move-window.c).
     let srv = three_windows();
+    ok(&srv, &["set", "-g", "renumber-windows", "off"]);
     ok(&srv, &["move-window", "-t", "s:8"]);
     assert_eq!(windows(&srv, "s"), ["0 @1", "5 @3", "8 @2 *"]);
     let srv = three_windows();
+    ok(&srv, &["set", "-g", "renumber-windows", "on"]);
+    ok(&srv, &["move-window", "-t", "s:8"]);
+    assert_eq!(windows(&srv, "s"), ["0 @1", "1 @3", "2 @2 *"]);
+    let srv = three_windows();
+    ok(&srv, &["set", "-g", "renumber-windows", "on"]);
+    ok(&srv, &["move-window", "-s", "s:3", "-t", "s:8"]);
+    assert_eq!(windows(&srv, "s"), ["0 @1", "5 @3", "8 @2 *"]);
+    let srv = three_windows();
+    ok(&srv, &["set", "-g", "renumber-windows", "off"]);
     ok(&srv, &["move-window", "-s", "s:5"]);
     assert_eq!(windows(&srv, "s"), ["0 @1", "1 @3 *", "3 @2"]);
 

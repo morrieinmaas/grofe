@@ -97,3 +97,27 @@ b:100 @4 a5 linked=1 act=0
 ? 0
 $ set -t b renumber-windows off
 ? 0
+$ set -t b renumber-windows on
+? 0
+$ move-window -t b:60
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @0 a1 linked=1 act=0
+b:3 @2 a3 linked=1 act=0
+b:4 @6 b5 linked=0 act=0
+b:5 @3 a4 linked=1 act=0
+b:6 @1 a2 linked=1 act=1
+b:7 @4 a5 linked=1 act=0
+? 0
+$ move-window -s b:3 -t b:70
+? 0
+$ list-windows -t b -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} act=#{window_active}'
+b:1 @5 b1 linked=0 act=0
+b:2 @0 a1 linked=1 act=0
+b:4 @6 b5 linked=0 act=0
+b:5 @3 a4 linked=1 act=0
+b:6 @1 a2 linked=1 act=0
+b:7 @4 a5 linked=1 act=0
+b:70 @2 a3 linked=1 act=1
+? 0
