@@ -43,7 +43,7 @@ fn is_end(c: u8) -> bool {
 /// tmux's `format_skip1`: the index of the first byte of `end` in `s` that
 /// is not inside a nested `#{...}` and not escaped (`#,` `##` `#{` `#}`
 /// `#:`).
-fn skip1(s: &str, end: &[u8]) -> Option<usize> {
+pub(super) fn skip1(s: &str, end: &[u8]) -> Option<usize> {
     let b = s.as_bytes();
     let mut brackets = 0i32;
     let mut i = 0;

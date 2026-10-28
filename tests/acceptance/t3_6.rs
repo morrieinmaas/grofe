@@ -284,9 +284,20 @@ fn neovim_alt_screen_true_colour_and_cursor_shape() {
     });
     a.send(":q\r");
     a.wait_for("after-nvim");
-    let text = a.text();
-    assert!(text.contains("before-nvim"), "primary screen:\n{text}");
-    assert!(!text.contains('~'), "nvim left on screen:\n{text}");
+    // The primary screen comes back over more than one read under load:
+    // wait for the whole of it, not the first line that reaches the client.
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        let text = a.text();
+        if text.contains("before-nvim") && !text.contains('~') {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "nvim left on screen:\n{text}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Focus events reach Neovim: its `FocusGained` autocommand fires.

@@ -2410,4 +2410,48 @@ mod tests {
             [PathBuf::from("/a.toml")]
         );
     }
+
+    /// B2b: `pipe-pane`'s command and a copy-mode pipe's are tmux formats, so
+    /// the short forms reach the native expander as names.
+    #[test]
+    fn pipe_commands_are_rewritten_as_formats() {
+        let Ok(Command::PipePane(p)) = one(&["pipe-pane", "-o", "cat >>out.#I-#P"]) else {
+            panic!("pipe-pane")
+        };
+        assert_eq!(
+            p.command.as_deref(),
+            Some("cat >>out.#{window_index}-#{pane_index}")
+        );
+        let words = |c: Command| match c {
+            Command::SendKeys(k) => k
+                .items
+                .iter()
+                .map(|i| match i {
+                    crate::cmd::SendKeysItem::Key(s) | crate::cmd::SendKeysItem::Literal(s) => {
+                        s.clone()
+                    }
+                    crate::cmd::SendKeysItem::Hex(b) => b.to_string(),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        for (sent, want) in [
+            (
+                &["copy-pipe", "x #S"][..],
+                &["copy-pipe", "x #{session_name}"][..],
+            ),
+            (
+                &["copy-pipe", "-C", "x #S", "#S"],
+                &["copy-pipe", "-C", "x #{session_name}", "#S"],
+            ),
+            (&["pipe", "--", "#S"], &["pipe", "--", "#{session_name}"]),
+            (&["search-forward", "#S"], &["search-forward", "#S"]),
+        ] {
+            let mut argv = vec!["send-keys", "-X"];
+            argv.extend_from_slice(sent);
+            assert_eq!(words(one(&argv).unwrap()), want, "{sent:?}");
+        }
+        let plain = one(&["send-keys", "copy-pipe", "#S"]).unwrap();
+        assert_eq!(words(plain), ["copy-pipe", "#S"], "no -X");
+    }
 }

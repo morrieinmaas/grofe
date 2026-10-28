@@ -38,8 +38,9 @@
 //! **Where formats are.** Every argument tmux expands as a format gets
 //! [`to_native`]: `display-message`'s message and `-F`; `list-*`'s `-F`
 //! and `-f`; `-P -F` of the creating verbs; `-c`/`-d` start directories;
-//! `if-shell`'s condition and `run-shell`'s command; prompt, popup and
-//! menu texts; `select-pane -T`; `rename-window`/`rename-session`; and
+//! `if-shell`'s condition and `run-shell`'s command; `pipe-pane`'s command
+//! and a copy-mode pipe's (`send-keys -X copy-pipe` and the rest); prompt,
+//! popup and menu texts; `select-pane -T`; `rename-window`/`rename-session`; and
 //! the value of `set` for the options tmux reads as formats, or for any
 //! option with `-F`. `set` keeps the value as sent (`SetOption::shown`),
 //! which a tmux-dialect `show` prints; with no option name, `show` names
@@ -52,6 +53,7 @@ use super::{
     Arg, FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Rewritten, Row, SEMANTIC,
     TmuxError, row,
 };
+use crate::cmd::format::SHORT_FORMS;
 use crate::cmd::{Command, RegisterSource};
 
 // ---- Format rewriting ------------------------------------------------------
@@ -65,19 +67,6 @@ pub enum Jobs {
     /// Nothing: a format expanded once, for a CLI reply or a condition.
     Empty,
 }
-
-/// tmux 3.7b's one-letter short forms (`format_upper`, `format_lower`).
-const SHORT_FORMS: &[(char, &str)] = &[
-    ('D', "pane_id"),
-    ('F', "window_flags"),
-    ('H', "host"),
-    ('I', "window_index"),
-    ('P', "pane_index"),
-    ('S', "session_name"),
-    ('T', "pane_title"),
-    ('W', "window_name"),
-    ('h', "host_short"),
-];
 
 /// The modifier prefixes grofe's expander knows (TC.3), longest first.
 const NATIVE_MODIFIERS: &[&str] = &[
@@ -411,10 +400,59 @@ fn option_value(inv: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxErro
     }
 }
 
+/// The copy-mode commands whose command (the first word after the name and
+/// its flags) tmux expands as a format before it runs it.
+const COPY_PIPES: &[&str] = &[
+    "copy-pipe",
+    "copy-pipe-and-cancel",
+    "copy-pipe-end-of-line",
+    "copy-pipe-end-of-line-and-cancel",
+    "copy-pipe-line",
+    "copy-pipe-line-and-cancel",
+    "copy-pipe-no-clear",
+    "pipe",
+    "pipe-and-cancel",
+    "pipe-no-clear",
+];
+
+/// `send-keys -X <pipe> [flags] [--] command`: positional `AT` is rewritten
+/// when it is the command, as the copy mode reads it (`select::parse`).
+fn copy_pipe_arg<const AT: usize>(
+    inv: &Invocation<'_>,
+    value: &str,
+) -> Result<Rewritten, TmuxError> {
+    let words = inv.positionals();
+    let piped = inv.getopt().has('X')
+        && words
+            .first()
+            .is_some_and(|name| COPY_PIPES.contains(&name.as_str()));
+    if !piped {
+        return Ok(Rewritten::value(value));
+    }
+    let mut at = 1;
+    while let Some(word) = words.get(at) {
+        if word == "--" {
+            at += 1;
+            break;
+        }
+        if !word.starts_with('-') || word.len() == 1 {
+            break;
+        }
+        at += 1;
+    }
+    if at == AT {
+        format_arg(inv, value)
+    } else {
+        Ok(Rewritten::value(value))
+    }
+}
+
 /// `display-message`'s text: tmux's format language into grofe's, unless
-/// `-l` shows it as it is.
+/// `-l` shows it as it is, or `-v` traces it, which the expander does in
+/// tmux's language (`cmd::expand_traced`) so the trace shows tmux's steps.
 fn display_arg(inv: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxError> {
-    if inv.getopt().has('l') {
+    let opts = inv.getopt();
+    if opts.has('l') || opts.has('v') {
         return Ok(Rewritten::value(value));
     }
     format_arg(inv, value)
@@ -442,6 +480,7 @@ pub(crate) fn rewrites() -> Vec<Rewrite> {
         },
         rewrite("if-shell", Positional(0)),
         rewrite("run-shell", Positional(0)),
+        rewrite("pipe-pane", Positional(0)),
         rewrite("list-commands", Flag('F')),
         rewrite("select-pane", Flag('T')),
         rewrite("confirm-before", Flag('p')),
@@ -474,6 +513,24 @@ pub(crate) fn rewrites() -> Vec<Rewrite> {
     }
     out.push(rewrite("rename-window", Positional(0)));
     out.push(rewrite("rename-session", Positional(0)));
+    out.extend([
+        Rewrite {
+            rewrite: copy_pipe_arg::<1>,
+            ..rewrite("send-keys", Positional(1))
+        },
+        Rewrite {
+            rewrite: copy_pipe_arg::<2>,
+            ..rewrite("send-keys", Positional(2))
+        },
+        Rewrite {
+            rewrite: copy_pipe_arg::<3>,
+            ..rewrite("send-keys", Positional(3))
+        },
+        Rewrite {
+            rewrite: copy_pipe_arg::<4>,
+            ..rewrite("send-keys", Positional(4))
+        },
+    ]);
     out
 }
 

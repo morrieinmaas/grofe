@@ -2602,12 +2602,14 @@ fn display_message(
     };
     let model = &state.model;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
+    // A tmux client's `-v` text is left in tmux's language by the front end.
+    let tmux = ctx.dialect == crate::protocol::Dialect::Tmux;
     // tmux's target here can fail (`CMD_FIND_CANFAIL`): a `~` with nothing
     // marked is quietly no pane, and every variable expands to nothing.
     let pane = match model.resolve_pane(&c.target, ctx) {
         Ok(pane) => pane,
         Err(_) if c.target == Target::Session(SessionRef::Marked) => {
-            let (out, trace) = render_message(&c, text, &NoVars);
+            let (out, trace) = render_message(&c, tmux, text, &NoVars);
             return Ok(if c.all {
                 out
             } else if c.print {
@@ -2644,9 +2646,9 @@ fn display_message(
     let (out, trace) = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            render_message(&c, text, &ServerVars::fresh(state, pane, &client))
+            render_message(&c, tmux, text, &ServerVars::fresh(state, pane, &client))
         }
-        None => render_message(&c, text, &ServerVars::fresh(state, pane, &vars)),
+        None => render_message(&c, tmux, text, &ServerVars::fresh(state, pane, &vars)),
     };
     // `-a` lists the variables and shows no message.
     if c.all {
@@ -2664,7 +2666,12 @@ fn display_message(
 /// What `display-message` shows for `text`, and the lines `-v` prints
 /// before it: `-a` lists every variable instead, and `-l` shows the text
 /// as it is.
-fn render_message(c: &DisplayMessage, text: &str, vars: &dyn FormatVars) -> (String, String) {
+fn render_message(
+    c: &DisplayMessage,
+    tmux: bool,
+    text: &str,
+    vars: &dyn FormatVars,
+) -> (String, String) {
     if c.all {
         return (crate::cmd::all_variables(vars), String::new());
     }
@@ -2672,7 +2679,7 @@ fn render_message(c: &DisplayMessage, text: &str, vars: &dyn FormatVars) -> (Str
         return (text.to_string(), String::new());
     }
     if c.verbose {
-        let (out, trace) = crate::cmd::expand_traced(text, vars, true);
+        let (out, trace) = crate::cmd::expand_traced(text, vars, true, tmux);
         let lines: String = trace.iter().map(|l| format!("{l}\n")).collect();
         return (out, lines);
     }

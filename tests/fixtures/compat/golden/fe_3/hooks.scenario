@@ -37,6 +37,8 @@ $ resize-window -t main:1 -x 70
 $ new-session -d -s other cat
 $ kill-session -t other
 $ new-window -d -t main -n brief true
+# brief's true has exited, a pane-exited, before remain-on-exit turns on.
+$ run-shell 'sleep 1'
 $ set -g remain-on-exit on
 $ new-window -d -t main -n dies true
 $ run-shell 'sleep 1'

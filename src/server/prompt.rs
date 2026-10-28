@@ -255,9 +255,25 @@ impl Prompt {
             };
             return (Edit::Keep, Some(prefix));
         }
+        // tmux runs the template again for C-u and C-w, and for a history
+        // step that found an entry, even when the text stays the same (a
+        // search for the same text steps on to its next match).
+        let ctrl = |c: char| {
+            m.ctrl
+                && !m.alt
+                && !m.super_
+                && matches!(key.code, KeyCode::Char(k) if k.eq_ignore_ascii_case(&c))
+        };
+        let up = key.code == KeyCode::Up || ctrl('p');
+        let down = key.code == KeyCode::Down || ctrl('n');
+        let at_oldest = self.back == Some(history.len().saturating_sub(1));
+        let always = ctrl('u')
+            || ctrl('w')
+            || (up && !history.is_empty() && !at_oldest)
+            || (down && self.back.is_some());
         let before = self.line();
         let edit = self.key(key, history);
-        let changed = edit == Edit::Keep && self.line() != before;
+        let changed = edit == Edit::Keep && (always || self.line() != before);
         (edit, changed.then_some('='))
     }
 
@@ -1033,6 +1049,44 @@ mod tests {
 
     fn prompt(initial: &str) -> Prompt {
         Prompt::new(":".to_string(), initial, "%1".to_string())
+    }
+
+    /// tmux 3.7b's `status_prompt_key` for an incremental prompt: what
+    /// runs the template again, and with which prefix.
+    #[test]
+    fn incremental_keys_run_the_template_as_tmux_does() {
+        let mut p = prompt("");
+        p.incremental = true;
+        p.last = "prev".to_string();
+        let history = ["old".to_string(), "new".to_string()];
+        let mut press = |p: &mut Prompt, k: Key| p.incremental_key(&k, &history).1;
+        assert_eq!(press(&mut p, ctrl('u')), Some('='), "C-u on an empty line");
+        assert_eq!(
+            press(&mut p, ctrl('w')),
+            Some('='),
+            "C-w with nothing to cut"
+        );
+        assert_eq!(press(&mut p, key(KeyCode::Backspace)), None);
+        assert_eq!(press(&mut p, ctrl('r')), Some('='), "brings back -I");
+        assert_eq!(p.line(), "prev");
+        assert_eq!(press(&mut p, ctrl('r')), Some('-'));
+        assert_eq!(press(&mut p, ctrl('s')), Some('+'));
+        assert_eq!(press(&mut p, key(KeyCode::Left)), None, "a move only");
+        assert_eq!(press(&mut p, key(KeyCode::Char('x'))), Some('='));
+        assert_eq!(
+            press(&mut p, key(KeyCode::Down)),
+            None,
+            "no entry to step to"
+        );
+        assert_eq!(press(&mut p, key(KeyCode::Up)), Some('='));
+        assert_eq!(press(&mut p, key(KeyCode::Up)), Some('='));
+        assert_eq!(p.line(), "old");
+        assert_eq!(press(&mut p, key(KeyCode::Up)), None, "already the oldest");
+        assert_eq!(press(&mut p, ctrl('n')), Some('='));
+        assert_eq!(p.line(), "new");
+        let mut p = prompt("");
+        p.incremental = true;
+        assert_eq!(p.incremental_key(&key(KeyCode::Up), &[]).1, None);
     }
 
     #[test]

@@ -1,0 +1,34 @@
+# B2b: an incremental prompt searches again on C-w and C-u even when they cut nothing, and on Up when it brings back an entry, even the text already there: the same text steps on to its next match (tmux's status_prompt_key goes to its changed label for them).
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ set-window-option -g mode-keys emacs
+$ set-option -g status off
+client 80x24 attach -t main
+$ copy-mode -H -t main
+keys Escape <
+keys C-s
+keys f
+keys o
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys f
+keys o
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys Up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-a
+keys C-w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-u
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-u
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'

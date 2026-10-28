@@ -113,3 +113,18 @@ fn display_message_v_traces_the_expansion_and_l_shows_the_text_as_it_is() {
 fn display_message_v_traces_modifiers_too() {
     check("b2b", "display-v2", &[]);
 }
+
+#[test]
+fn display_message_v_traces_tmux_s_own_format_language() {
+    check("b2b", "display-v3", &[]);
+}
+
+#[test]
+fn an_incremental_prompt_searches_again_on_the_keys_tmux_does() {
+    check("b2b", "emacs-isearch-keys", &[]);
+}
+
+#[test]
+fn pipe_commands_expand_tmux_s_short_forms() {
+    check("b2b", "pipe-forms", &[]);
+}

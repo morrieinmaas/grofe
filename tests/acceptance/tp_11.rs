@@ -56,9 +56,11 @@ const CLIPBOARD: &[&str] = &[
     "tmux",
 ];
 
-/// A clipboard stub: one line of argv per call, stdin appended to `clip`.
+/// A clipboard stub: stdin appended to `clip`, then one line of argv per
+/// call. The line comes last, so a test that waits for it reads all of
+/// `clip`.
 const STUB: &str =
-    "#!/bin/sh\nprintf '%s\\n' \"@NAME@ $*\" >>'@ROOT@/calls'\ncat >>'@ROOT@/clip'\n";
+    "#!/bin/sh\ncat >>'@ROOT@/clip'\nprintf '%s\\n' \"@NAME@ $*\" >>'@ROOT@/calls'\n";
 
 const TEXT: &str = "printf 'alpha line\\nbravo two\\n'; exec sleep 100000";
 

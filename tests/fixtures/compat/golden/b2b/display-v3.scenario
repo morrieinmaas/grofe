@@ -1,0 +1,14 @@
+# B2b: display-message -v traces tmux's own format language as tmux reads it: the short forms, #, and #}, #{l:}, a #{?} chain of several conditions and one with no else, an unterminated #{, styles (no short form inside one), a #() job and a trailing #.
+$ new-session -d -s main -x 80 -y 24 cat
+$ display-message -p -v '#S:#I.#P'
+$ display-message -p -v 'a#,b#}c'
+$ display-message -p -v '#{l:#{session_name}#,x}'
+$ display-message -p -v '#{?pane_dead,dead,window_zoomed_flag,zoomed,pane_active,active,none}'
+$ display-message -p -v '#{?pane_dead,dead,nosuch,no}'
+$ display-message -p -v '#{?pane_dead,dead}'
+$ display-message -p -v '#{?#{==:#S,main},yes,no}'
+$ display-message -p -v '#[fg=#F]#S#[default] ##[x] #x'
+$ display-message -p -v 'x#{session_name'
+$ display-message -p -v '#(echo #S)'
+$ display-message -p -v 'a #'
+$ display-message -p -v '#{=3:#{l:abcdef}}'

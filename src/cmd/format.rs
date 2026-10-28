@@ -134,6 +134,20 @@ impl Inner<'_> {
 /// parity).
 pub const LOOP_LIMIT: usize = 100;
 
+/// tmux 3.7b's one-letter short forms (`format_upper`, `format_lower`):
+/// `#S` is `#{session_name}`.
+pub const SHORT_FORMS: &[(char, &str)] = &[
+    ('D', "pane_id"),
+    ('F', "window_flags"),
+    ('H', "host"),
+    ('I', "window_index"),
+    ('P', "pane_index"),
+    ('S', "session_name"),
+    ('T', "pane_title"),
+    ('W', "window_name"),
+    ('h', "host_short"),
+];
+
 /// Expands every `#{...}` in `fmt` against `vars`, and `##` to a literal
 /// `#`.
 ///
@@ -198,12 +212,24 @@ pub fn all_variables(vars: &dyn FormatVars) -> String {
 
 /// [`expand`] (with `time`, [`expand_time`]) that also returns what tmux's
 /// `display-message -v` prints for it: one `# ...` line for each step of
-/// the expansion, each nested level one space further in.
-pub fn expand_traced(fmt: &str, vars: &dyn FormatVars, time: bool) -> (String, Vec<String>) {
+/// the expansion, each nested level one space further in. With `tmux`,
+/// `fmt` is in tmux's own format language, as a tmux client sent it, and
+/// is read as tmux's `format_expand1` reads it (the short forms, `#,`,
+/// `#}`, `#()`, a `#{?}` chain, styles), so the trace shows tmux's steps;
+/// without, it is grofe's.
+// ponytail: tmux starts a `#()` job, whose output a CLI reply never shows;
+// the trace shows the step, and the command does not run.
+pub fn expand_traced(
+    fmt: &str,
+    vars: &dyn FormatVars,
+    time: bool,
+    tmux: bool,
+) -> (String, Vec<String>) {
     let closers = scan_closers(fmt);
     let shared = Shared::default();
     *shared.trace.borrow_mut() = Some(Vec::new());
     shared.expand_time.set(time);
+    shared.tmux.set(tmux);
     let out = Expander {
         src: fmt,
         vars,
@@ -223,6 +249,10 @@ struct Shared {
     /// `display-message -v`: the lines tmux's `format_log` prints, kept as
     /// the expansion goes (`None` when nothing is asked for).
     trace: RefCell<Option<Vec<String>>>,
+    /// The format is in tmux's language ([`expand_traced`]).
+    tmux: Cell<bool>,
+    /// Inside a `#()` command's own expansion, where tmux runs no job.
+    nojobs: Cell<bool>,
 }
 
 /// Each `#{` in `src` (its offset) and the offset of its `}`, if it has
@@ -279,6 +309,9 @@ impl<'a> Expander<'a> {
 
     /// The `}` closing the `#{` at `s[at..]`, as an index into `s`.
     fn closer(&self, s: &str, at: usize) -> Option<usize> {
+        if self.shared.tmux.get() {
+            return modify::skip1(&s[at..], b"}").map(|end| at + end);
+        }
         let base = self.offset(s);
         let i = self
             .closers
@@ -367,6 +400,9 @@ impl<'a> Expander<'a> {
     }
 
     fn expand_pieces(&self, fmt: &str) -> String {
+        if self.shared.tmux.get() {
+            return self.expand_pieces_tmux(fmt);
+        }
         let mut out = String::with_capacity(fmt.len());
         let mut i = 0;
         while i < fmt.len() {
@@ -406,12 +442,143 @@ impl<'a> Expander<'a> {
         out
     }
 
+    /// [`Self::expand_pieces`] for a format in tmux's language: tmux's
+    /// `format_expand1` loop, logging as it does.
+    fn expand_pieces_tmux(&self, fmt: &str) -> String {
+        let b = fmt.as_bytes();
+        let mut out = String::with_capacity(fmt.len());
+        // The `]` of the last style found: no short form inside it.
+        let mut style_end: Option<usize> = None;
+        let mut i = 0;
+        while let Some(ch) = fmt[i..].chars().next() {
+            if ch != '#' {
+                out.push(ch);
+                i += ch.len_utf8();
+                continue;
+            }
+            // A `#` that ends the text is dropped.
+            let Some(c) = fmt[i + 1..].chars().next() else {
+                break;
+            };
+            let after = i + 1 + c.len_utf8();
+            match c {
+                '(' => {
+                    let mut depth = 1;
+                    let end = fmt[after..].bytes().position(|b| {
+                        depth += i32::from(b == b'(') - i32::from(b == b')');
+                        depth == 0
+                    });
+                    let Some(end) = end.map(|e| after + e) else {
+                        break;
+                    };
+                    let cmd = &fmt[after..end];
+                    self.log(|| format!("found #(): {cmd}"));
+                    if self.shared.nojobs.get() {
+                        self.log(|| "#() is disabled".to_string());
+                    } else {
+                        // tmux expands the command with no jobs and no
+                        // strftime; a job started for a CLI reply has no
+                        // output yet.
+                        let time = self.shared.expand_time.replace(false);
+                        self.shared.nojobs.set(true);
+                        self.expand(cmd);
+                        self.shared.nojobs.set(false);
+                        self.shared.expand_time.set(time);
+                        self.log(|| "#() result: ".to_string());
+                    }
+                    i = end + 1;
+                }
+                '{' => {
+                    let Some(end) = self.closer(fmt, i) else {
+                        break;
+                    };
+                    self.log(|| format!("found #{{}}: {}", &fmt[i + 2..end]));
+                    match self.expand_body(&fmt[i + 2..end]) {
+                        Ok(piece) => out.push_str(&piece),
+                        Err(Fail) => return out,
+                    }
+                    i = end + 1;
+                }
+                '[' | '#' => {
+                    // `#[`, and `##[` with any number of `#`, start a style,
+                    // kept as it is for the drawing.
+                    let (mut p, mut n) = if c == '[' { (i + 1, 1) } else { (after, 2) };
+                    while b.get(p) == Some(&b'#') {
+                        p += 1;
+                        n += 1;
+                    }
+                    if b.get(p) == Some(&b'[') {
+                        style_end = modify::skip1(&fmt[i..], b"]").map(|e| i + e);
+                        self.log(|| format!("found #*{n}["));
+                        out.push_str(&fmt[i..i + n + 1]);
+                        i = p + 1;
+                        continue;
+                    }
+                    self.log(|| "found ##".to_string());
+                    out.push('#');
+                    i = after;
+                }
+                '}' | ',' => {
+                    self.log(|| format!("found #{c}"));
+                    out.push(c);
+                    i = after;
+                }
+                _ => {
+                    let short = SHORT_FORMS
+                        .iter()
+                        .find(|(f, _)| *f == c)
+                        .filter(|_| style_end.is_none_or(|e| after > e));
+                    let Some((_, name)) = short else {
+                        out.push('#');
+                        out.push(c);
+                        i = after;
+                        continue;
+                    };
+                    self.log(|| format!("found #{c}: {name}"));
+                    match self.expand_body(name) {
+                        Ok(piece) => out.push_str(&piece),
+                        Err(Fail) => return out,
+                    }
+                    i = after;
+                }
+            }
+        }
+        out
+    }
+
+    /// tmux's `#{?c1,v1,c2,v2,...[,else]}` in tmux's language: the value of
+    /// the first true condition, else the last part when it is unpaired,
+    /// else nothing, logged as `format_replace` logs it.
+    fn conditional_tmux(&self, rest: &str) -> String {
+        let mut cp = rest;
+        loop {
+            let Some(c) = self.find_unnested(cp, b',') else {
+                self.log(|| format!("no condition matched in '{rest}'; using last arg"));
+                return self.expand(cp);
+            };
+            let truthy = self.condition(&cp[..c]);
+            cp = &cp[c + 1..];
+            let next = self.find_unnested(cp, b',');
+            if truthy {
+                return self.expand(next.map_or(cp, |n| &cp[..n]));
+            }
+            let Some(next) = next else {
+                self.log(|| format!("no condition matched in '{rest}'; using empty string"));
+                return String::new();
+            };
+            cp = &cp[next + 1..];
+        }
+    }
+
     /// Finds the first `target` byte in `s` that isn't inside a nested
     /// `#{...}`, so callers can split a body on its own top-level `}` or
     /// `,` without being confused by commas or braces belonging to a
     /// nested format. A nested `#{...}` is stepped over whole; one that
     /// never closes hides everything after it.
     fn find_unnested(&self, s: &str, target: u8) -> Option<usize> {
+        if self.shared.tmux.get() {
+            return modify::skip1(s, &[target]);
+        }
         let b = s.as_bytes();
         let mut i = 0;
         while i < b.len() {
@@ -433,6 +600,9 @@ impl<'a> Expander<'a> {
     /// `b:var`, `t:var`, `q:var`, or a bare variable name.
     fn expand_simple(&self, body: &str) -> Option<String> {
         if let Some(rest) = body.strip_prefix('?') {
+            if self.shared.tmux.get() {
+                return Some(self.conditional_tmux(rest));
+            }
             return Some(self.expand_ternary(rest, body));
         }
         for (prefix, op) in COMPARISONS {

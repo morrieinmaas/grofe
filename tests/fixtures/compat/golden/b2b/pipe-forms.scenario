@@ -1,0 +1,13 @@
+# B2b: pipe-pane's command and a copy-mode pipe's are tmux formats, so tmux's short forms name the session, window and pane in them.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ pipe-pane -t main 'cat > "$HOME/pf.#S.#I.#P"'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ copy-mode -t main
+$ send-keys -t main -X history-top
+$ send-keys -t main -X select-line
+$ send-keys -t main -X copy-pipe-no-clear 'cat > "$HOME/cp.#S.#I"'
+$ send-keys -t main -X pipe-no-clear 'cat > "$HOME/pl.#S.#P"'
+$ send-keys -t main -X copy-pipe -- 'cat > "$HOME/cq.#S"'
+$ run-shell 'sleep 1; cd "$HOME" && ls pf.* cp.* pl.* cq.*'
+$ pipe-pane -t main

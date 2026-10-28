@@ -31,7 +31,10 @@ pub use common::wait_until;
 use crate::harness::Harness;
 
 pub const WAIT: Duration = Duration::from_secs(20);
-const CMD: Duration = Duration::from_secs(10);
+/// How long one command may take. A `run-shell` of a plugin's script makes
+/// a few hundred calls, each a fresh debug-build client, and has taken over
+/// 10 s on a loaded machine; a hang still fails, only later.
+const CMD: Duration = Duration::from_secs(30);
 pub const PREFIX: &str = "\x02";
 pub const COLS: u16 = 120;
 pub const ROWS: u16 = 41;

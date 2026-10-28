@@ -93,7 +93,7 @@ impl InputQueue {
         }
     }
 
-    fn written(&self, len: usize) {
+    pub(super) fn written(&self, len: usize) {
         self.queued.fetch_sub(len, Ordering::AcqRel);
     }
 }
