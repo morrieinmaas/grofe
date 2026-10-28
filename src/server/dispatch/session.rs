@@ -200,7 +200,7 @@ fn new_grouped(
         .map(|w| w.active)
         .ok_or("session has no windows")?;
     let format = format.unwrap_or(NEW_SESSION_TEMPLATE);
-    let vars = FormatCtx::new(model, pane);
+    let vars = FormatCtx::new(model, pane).in_session(id);
     Ok(format!(
         "{}\n",
         cmd::expand(format, &ServerVars::new(state, pane, &vars))

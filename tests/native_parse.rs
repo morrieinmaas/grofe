@@ -200,6 +200,9 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: Some(t("b:2")),
                 after: true,
                 renumber: false,
+                before: false,
+                detach: false,
+                kill: false,
             }),
         ),
         (
@@ -209,6 +212,58 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 dst: Some(t("a:")),
                 after: false,
                 renumber: true,
+                before: false,
+                detach: false,
+                kill: false,
+            }),
+        ),
+        (
+            vec!["move-window", "-b", "-d", "-k", "-s", "a:1", "-t", "b:2"],
+            Command::MoveWindow(MoveWindow {
+                src: t("a:1"),
+                dst: Some(t("b:2")),
+                after: false,
+                renumber: false,
+                before: true,
+                detach: true,
+                kill: true,
+            }),
+        ),
+        (
+            vec!["link-window", "-a", "-d", "-k", "-s", "a:1", "-t", "b:2"],
+            Command::LinkWindow(LinkWindow {
+                src: t("a:1"),
+                dst: Some(t("b:2")),
+                after: true,
+                before: false,
+                detach: true,
+                kill: true,
+            }),
+        ),
+        (
+            vec!["link-window", "-b", "-s", "a:1"],
+            Command::LinkWindow(LinkWindow {
+                src: t("a:1"),
+                dst: None,
+                after: false,
+                before: true,
+                detach: false,
+                kill: false,
+            }),
+        ),
+        (
+            vec!["unlink-window", "-k", "-t", "b:2"],
+            Command::UnlinkWindow(UnlinkWindow {
+                target: t("b:2"),
+                kill: true,
+            }),
+        ),
+        (
+            vec!["new-session", "-d", "-t", "main"],
+            Command::NewSession(NewSession {
+                detached: true,
+                group: Some("main".to_string()),
+                ..NewSession::default()
             }),
         ),
         (

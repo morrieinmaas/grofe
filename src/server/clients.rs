@@ -1722,17 +1722,36 @@ pub(crate) fn cell_px(state: &State, session: SessionId) -> Option<(u16, u16)> {
 /// in cells and, where the owner said its cell size, in pixels. A session
 /// no client shows keeps what it had (0 pixels until a client says).
 fn apply_sizes(state: &mut State) {
-    let sizes: Vec<(SessionId, (u16, u16))> = state
+    let sizes: Vec<(SessionId, (u16, u16), Instant)> = state
         .registry
         .owners
         .iter()
         .filter_map(|(s, o)| {
             let c = state.clients.get(&o.client)?;
-            Some((*s, window_size(&state.model, *s, c.size)))
+            Some((*s, window_size(&state.model, *s, c.size), c.activity))
         })
         .collect();
-    for (session, size) in sizes {
-        resize_session(&mut state.model, session, size);
+    for &(session, size, activity) in &sizes {
+        // A window shown to several sessions with a client follows the
+        // client that was active last (`window-size latest`), so two
+        // clients of different sizes do not make it flap.
+        let newer =
+            |other: &&(SessionId, (u16, u16), Instant)| (other.2, other.0) > (activity, session);
+        let yielded: Vec<WindowId> = state
+            .model
+            .sessions
+            .get(&session)
+            .map(|s| s.windows.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|w| {
+                sizes
+                    .iter()
+                    .filter(|o| newer(o))
+                    .any(|o| state.model.has_link(o.0, *w))
+            })
+            .collect();
+        resize_session(&mut state.model, session, size, &yielded);
         let cell_px = cell_px(state, session);
         let model = &state.model;
         let windows = model.sessions.get(&session).map(|s| &s.windows);
@@ -1749,13 +1768,21 @@ fn apply_sizes(state: &mut State) {
 
 /// Gives `session` and all its windows `(cols, rows)`, laying out again
 /// (a zoomed window's active pane keeps filling it).
-fn resize_session(model: &mut Model, session: SessionId, (cols, rows): (u16, u16)) {
+fn resize_session(
+    model: &mut Model,
+    session: SessionId,
+    (cols, rows): (u16, u16),
+    yielded: &[WindowId],
+) {
     let Some(s) = model.sessions.get_mut(&session) else {
         return;
     };
     s.cols = cols;
     s.rows = rows;
     for id in s.windows.clone() {
+        if yielded.contains(&id) {
+            continue;
+        }
         // A window `resize-window` sized (`window-size manual`) keeps it.
         let manual = model.windows.get(&id).is_some_and(|w| {
             model
