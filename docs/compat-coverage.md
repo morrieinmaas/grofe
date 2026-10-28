@@ -199,7 +199,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   and its flags, `send-keys -X`, `delete-buffer`, `list-buffers`,
   `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all,
   `load-buffer` included, and `save-buffer`, which the corpus does not
-  send, and refuses `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
+  send, and B1d adds `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
 - **`clear-history` and the screen-state formats (F1).** `clear-history`
   (`clearhist`, `-H`, `-t`) is a native row with a golden
   (`golden/f1/clear-history`): the pane leaves its modes, the scrollback and
@@ -733,7 +733,7 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `escape-time` | 3 | yes |
 | `extended-keys` | 2 | yes |
 | `extended-keys-format` | 1 | yes |
-| `focus-events` | 3 | no |
+| `focus-events` | 3 | yes |
 | `history-limit` | 3 | yes |
 | `main-pane-width` | 1 | yes |
 | `mode-keys` | 3 | yes |
@@ -865,7 +865,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `modifier b:` | 1 | yes |
 | `modifier m/r:` | 10 | yes |
 | `modifier m:` | 2 | yes |
-| `modifier q:` | 18 | yes |
+| `modifier q:` | 18 | no |
 | `modifier \|\|:` | 6 | yes |
 | `short #F` | 1 | no |
 | `short #I` | 6 | yes |

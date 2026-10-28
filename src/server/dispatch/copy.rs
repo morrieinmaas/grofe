@@ -9,7 +9,7 @@ use crate::protocol::ClientCtx;
 use crate::server::{State, copy, mouse};
 
 pub fn copy_mode(state: &mut State, ctx: &ClientCtx, c: CopyMode) -> Result<String, String> {
-    let pane = if c.mouse {
+    let pane = if c.mouse && !c.cancel {
         // As tmux: no mouse key, or none over a pane, does nothing.
         let Some(pane) = mouse::event_pane(state) else {
             return Ok(String::new());
@@ -18,7 +18,18 @@ pub fn copy_mode(state: &mut State, ctx: &ClientCtx, c: CopyMode) -> Result<Stri
     } else {
         state.model.resolve_pane(&c.target, ctx)?
     };
-    if copy::enter(state, pane, c.scroll_exit) {
+    // `-q` leaves every mode of the pane (`window_pane_reset_mode_all`).
+    if c.cancel {
+        state.copy.remove(pane);
+        crate::server::tree::close_over(state, pane);
+        crate::server::clients::mark_all_dirty(state);
+        return Ok(String::new());
+    }
+    let source = match &c.source {
+        Some(t) => state.model.resolve_pane(t, ctx)?,
+        None => pane,
+    };
+    if copy::enter(state, pane, source, c.scroll_exit) {
         if let Some(mode) = state.copy.get_mut(pane) {
             mode.hide_position = c.hide_position;
         }
@@ -28,6 +39,23 @@ pub fn copy_mode(state: &mut State, ctx: &ClientCtx, c: CopyMode) -> Result<Stri
     }
     if c.page_up {
         copy::page_up(state, pane);
+    }
+    if c.page_down {
+        copy::page_down(state, pane, c.scroll_exit);
+    }
+    // `-S` drags a pane scrollbar's slider to the pointer's row. grofe
+    // draws no scrollbar, so no mouse key sends it; run from the CLI, tmux
+    // 3.7b has the slider at the top (recorded): the view goes to the top
+    // of the history and the pane becomes the window's active one.
+    // ponytail: no pointer position, so no other place for the slider.
+    if c.slider && state.copy.is_active(pane) {
+        if let Some(mode) = state.copy.get_mut(pane) {
+            mode.oy = mode.grid.hsize;
+        }
+        let window = state.model.panes.get(&pane).map(|p| p.window);
+        if let Some(w) = window.and_then(|w| state.model.windows.get_mut(&w)) {
+            w.set_active(pane);
+        }
     }
     Ok(String::new())
 }

@@ -1035,7 +1035,8 @@ pub struct PasteBuffer {
     pub target: Target,
 }
 
-/// `copy-mode [-eHMu] [-t pane]` (M5, TM.1; `-H` and `-M` TM.6).
+/// `copy-mode [-deHMqSu] [-s src-pane] [-t pane]` (M5, TM.1; `-H` and `-M`
+/// TM.6; `-d -q -s -S` B1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyMode {
     /// `-u`: start a page up.
@@ -1047,6 +1048,14 @@ pub struct CopyMode {
     /// `-M`: in the pane under the running mouse key, starting a drag
     /// there; nothing outside a mouse key.
     pub mouse: bool,
+    /// `-q`: leave every mode of the pane instead of entering one.
+    pub cancel: bool,
+    /// `-d`: start a page down (with `-e`, leaving the mode at the bottom).
+    pub page_down: bool,
+    /// `-S`: a scrollbar slider drag.
+    pub slider: bool,
+    /// `-s`: show this pane's screen instead of the target's.
+    pub source: Option<Target>,
     pub target: Target,
 }
 

@@ -18,15 +18,6 @@ use super::{FlagMark, GrofeTarget, MappingKind, Row};
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 const SEMANTIC_2: &[FlagMark] = &[FlagMark::Semantic, FlagMark::Semantic];
 
-/// `copy-mode -d` (a page down) and `-q` (cancel the mode, and any other
-/// mode): tmux's stock rows use them only from the scrollbar and the pane
-/// menu, which are out of scope (docs/copy-mode.md), so they stay refused.
-const STOCK_ONLY: &str = "copy-mode -d and -q are used only by tmux's scrollbar and pane menu \
-                          rows, out of scope (docs/copy-mode.md)";
-/// `copy-mode -s` (copy another pane) and `-S` (a scrollbar drag).
-const OUT_OF_SCOPE: &str = "copy-mode -s and -S are out of scope (docs/copy-mode.md): \
-                            no source pane, no scrollbar";
-
 const fn pass(
     tmux_form: &'static str,
     verb: &'static str,
@@ -43,33 +34,22 @@ const fn pass(
     }
 }
 
-/// Refused for good: [`super::Row::refuses`] is true with no milestone.
-const fn refuse(tmux_form: &'static str, reason: &'static str, flags: &'static [FlagMark]) -> Row {
-    Row {
-        tmux_form,
-        kind: MappingKind::Behaviour,
-        target: GrofeTarget::Unsupported(reason),
-        flags,
-        milestone: "",
-        golden_id: "tm_7/forms",
-    }
-}
-
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
     vec![
-        // Copy mode (TM.1, TM.6): `-u` a page up, `-e` leave at the bottom,
-        // `-H` no position indicator, `-M` a drag from a mouse key (and
-        // nothing outside one, as tmux).
+        // Copy mode (TM.1, TM.6, B1d): `-u` a page up, `-d` a page down,
+        // `-e` leave at the bottom, `-H` no position indicator, `-M` a drag
+        // from a mouse key (and nothing outside one, as tmux), `-q` leave
+        // every mode, `-s` copy another pane, `-S` a scrollbar drag.
         pass("copy-mode", "copy-mode", &[], "tm_7/forms"),
         pass("copy-mode -u", "copy-mode", SEMANTIC, "tm_7/forms"),
         pass("copy-mode -e", "copy-mode", SEMANTIC, "tm_7/forms"),
         pass("copy-mode -H", "copy-mode", SEMANTIC, "tm_7/forms"),
         pass("copy-mode -M", "copy-mode", SEMANTIC, "tm_7/forms"),
-        refuse("copy-mode -d", STOCK_ONLY, SEMANTIC),
-        refuse("copy-mode -q", STOCK_ONLY, SEMANTIC),
-        refuse("copy-mode -s", OUT_OF_SCOPE, SEMANTIC),
-        refuse("copy-mode -S", OUT_OF_SCOPE, SEMANTIC),
+        pass("copy-mode -d", "copy-mode", SEMANTIC, "b1d/copy-flags"),
+        pass("copy-mode -q", "copy-mode", SEMANTIC, "b1d/copy-flags"),
+        pass("copy-mode -s", "copy-mode", SEMANTIC, "b1d/copy-flags"),
+        pass("copy-mode -S", "copy-mode", SEMANTIC, "b1d/copy-flags"),
         // Copy-mode commands (TM.1 to TM.5): `-F` expands a search's
         // string, `-N` repeats.
         pass("send-keys -X", "send-keys", SEMANTIC, "tm_7/forms"),
@@ -136,6 +116,10 @@ mod tests {
             &["copy-mode", "-e", "-t", "%0"],
             &["copy-mode", "-H"],
             &["copy-mode", "-M"],
+            &["copy-mode", "-d", "-e"],
+            &["copy-mode", "-q", "-t", "%0"],
+            &["copy-mode", "-s", "%1", "-t", "%0"],
+            &["copy-mode", "-S"],
             &[
                 "command-prompt",
                 "-T",
@@ -157,22 +141,6 @@ mod tests {
             assert_eq!(got.len(), 1, "{words:?}");
             let row = row_for(&argv(words)).unwrap();
             assert_eq!(row.milestone, "M5", "{words:?}: {}", row.tmux_form);
-        }
-    }
-
-    /// The forms docs/copy-mode.md leaves out fail loudly, for good.
-    #[test]
-    fn the_out_of_scope_forms_are_refused() {
-        for words in [
-            &["copy-mode", "-q"][..],
-            &["copy-mode", "-d"],
-            &["copy-mode", "-S"],
-            &["copy-mode", "-s", "%1"],
-            &["copy-mode", "-u", "-q"],
-        ] {
-            let err = one(words).unwrap_err();
-            assert!(err.contains("not supported"), "{words:?}: {err}");
-            assert!(row_for(&argv(words)).unwrap().refuses(), "{words:?}");
         }
     }
 

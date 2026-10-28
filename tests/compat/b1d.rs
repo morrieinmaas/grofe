@@ -18,3 +18,8 @@ fn the_stock_menus_open_where_tmux_opens_them() {
 fn menu_and_popup_positions_match_their_golden() {
     check("b1d", "menu-positions", &[]);
 }
+
+#[test]
+fn copy_mode_flags_match_their_golden() {
+    check("b1d", "copy-flags", &[]);
+}

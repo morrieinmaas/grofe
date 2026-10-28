@@ -3038,6 +3038,10 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 ('H', FlagKind::Bool),
                 ('M', FlagKind::Bool),
                 ('u', FlagKind::Bool),
+                ('d', FlagKind::Bool),
+                ('q', FlagKind::Bool),
+                ('S', FlagKind::Bool),
+                ('s', FlagKind::Value),
                 ('t', FlagKind::Value),
             ];
             let flags = flags_for(rest, SHORT, "copy-mode")?;
@@ -3047,6 +3051,10 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 scroll_exit: flags.present.contains(&'e'),
                 hide_position: flags.present.contains(&'H'),
                 mouse: flags.present.contains(&'M'),
+                cancel: flags.present.contains(&'q'),
+                page_down: flags.present.contains(&'d'),
+                slider: flags.present.contains(&'S'),
+                source: target_if_given(&flags.values, 's')?,
                 target: target_or_current(&flags.values, 't')?,
             }))
         }
