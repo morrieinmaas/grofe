@@ -1,0 +1,76 @@
+# B2b: scroll-exit-on, scroll-exit-off and scroll-exit-toggle set whether scrolling to the bottom leaves the mode (copy-mode -e), for page-down, halfpage-down and scroll-down.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ set-window-option -g mode-keys vi
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 30 page-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X page-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 5 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X page-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X page-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X page-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 30 page-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-off
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 100 page-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-toggle
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 100 scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 20 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-toggle
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-toggle
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 100 scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 20 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 100 halfpage-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on extra
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 20 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 30 halfpage-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 8 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-exit-on
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 3 scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 8 scroll-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'

@@ -27,7 +27,10 @@ use unicode_width::UnicodeWidthChar;
 use crate::cmd::{self, CommandPrompt, Resolve, RunShell};
 use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::clients::{self, ClientVars};
-use crate::server::dispatch::{self, options::FormatCtx};
+use crate::server::dispatch::{
+    self,
+    options::{FormatCtx, ServerVars},
+};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
@@ -119,6 +122,12 @@ struct Prompt {
     read: Read,
     /// `command-prompt -N`: only digits are typed.
     numeric: bool,
+    /// `command-prompt -i`: the template runs with every change of the
+    /// text, prefixed `=`, `+` or `-`, and Enter runs nothing.
+    incremental: bool,
+    /// An incremental prompt's `-I` text, which C-r and C-s on an empty
+    /// line bring back (tmux's `prompt_last`).
+    last: String,
 }
 
 /// What a key did to a prompt.
@@ -141,6 +150,8 @@ impl Prompt {
             dialect: Dialect::Grofe,
             read: Read::Line,
             numeric: false,
+            incremental: false,
+            last: String::new(),
         }
     }
 
@@ -207,6 +218,36 @@ impl Prompt {
             _ => {}
         }
         Edit::Keep
+    }
+
+    /// [`Prompt::key`] for an incremental prompt, and the prefix its
+    /// template runs with if the key changed what is searched for: `=`,
+    /// or with C-r and C-s `-` and `+` (on an empty line they bring back
+    /// the `-I` text, with `=`), as tmux's `status_prompt_key`.
+    fn incremental_key(&mut self, key: &Key, history: &[String]) -> (Edit, Option<char>) {
+        let m = key.mods;
+        if let KeyCode::Char(c) = key.code
+            && m.ctrl
+            && !m.alt
+            && !m.super_
+            && matches!(c.to_ascii_lowercase(), 'r' | 's')
+        {
+            if self.text.is_empty() {
+                let last = self.last.clone();
+                self.set_line(&last);
+                return (Edit::Keep, Some('='));
+            }
+            let prefix = if c.eq_ignore_ascii_case(&'r') {
+                '-'
+            } else {
+                '+'
+            };
+            return (Edit::Keep, Some(prefix));
+        }
+        let before = self.line();
+        let edit = self.key(key, history);
+        let changed = edit == Edit::Keep && self.line() != before;
+        (edit, changed.then_some('='))
     }
 
     fn left(&mut self) {
@@ -442,10 +483,20 @@ impl InputHook for PromptHook {
                 return clients::hold_behind(state, client, input).then_some(Routed::Consumed);
             }
         }
+        // An incremental prompt's template runs again with every change.
+        let mut callback: Option<(char, String)> = None;
         let edit = match (prompt.read, input) {
+            (Read::Line, Input::Key(key)) if prompt.incremental => {
+                let (edit, prefix) = prompt.incremental_key(key, history);
+                callback = prefix.map(|p| (p, prompt.line()));
+                edit
+            }
             (Read::Line, Input::Key(key)) => prompt.key(key, history),
             (Read::Line, Input::Paste { data, .. }) => {
                 prompt.insert(&String::from_utf8_lossy(data));
+                if prompt.incremental {
+                    callback = Some(('=', prompt.line()));
+                }
                 Edit::Keep
             }
             (Read::Key, Input::Key(key)) => {
@@ -483,6 +534,14 @@ impl InputHook for PromptHook {
                 state.prompts.close_with(client, Err(cancelled()));
                 Routed::Consumed
             }
+            // Enter keeps the position the last change found and runs
+            // nothing more.
+            Edit::Enter if prompt.incremental => {
+                let line = prompt.line();
+                state.prompts.close(client);
+                state.prompts.remember(&line);
+                Routed::Consumed
+            }
             Edit::Enter => {
                 let prompt = state.prompts.close(client)?;
                 let line = prompt.line();
@@ -504,6 +563,9 @@ impl InputHook for PromptHook {
                 }
             }
         };
+        if let Some((prefix, line)) = callback {
+            run_incremental(state, client, prefix, &line);
+        }
         clients::mark_dirty(state, client);
         Some(routed)
     }
@@ -579,21 +641,46 @@ pub fn command_prompt(
         Some(t) => t,
         None => "%1".to_string(),
     };
-    // ponytail: `-i` (tmux's incremental prompt, only copy-mode search in
-    // the corpus) runs its template on Enter only, until M5's copy mode.
-    let read = match (c.key, c.single) {
+    // As tmux: `-1` wins over `-N`, which wins over `-i`, then `-k`.
+    let incremental = c.incremental && !c.single && !c.numeric;
+    let read = match (c.key && !incremental, c.single) {
         (true, _) => Read::Key,
         (false, true) => Read::Single,
         (false, false) => Read::Line,
     };
-    let prompt = Prompt {
+    let mut prompt = Prompt {
         dialect,
         read,
-        numeric: c.numeric,
+        numeric: c.numeric && !c.single,
+        incremental,
         ..Prompt::new(label, &initial, template)
     };
-    open(state, id, prompt, !c.background);
+    if incremental {
+        prompt.last = initial;
+        prompt.set_line("");
+    }
+    // An incremental prompt never holds its caller, and starts by running
+    // its template with a bare `=`.
+    open(state, id, prompt, !c.background && !incremental);
+    if incremental {
+        run_incremental(state, id, '=', "");
+    }
     Ok(String::new())
+}
+
+/// An incremental prompt's callback (tmux's `cmd_command_prompt_callback`
+/// with `done` 0): its template runs with `prefix` and `line` at `%%`.
+fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str) {
+    let Some(prompt) = state.prompts.open.get(&client) else {
+        return;
+    };
+    let command = replace_template(&prompt.template, &format!("{prefix}{line}"));
+    let dialect = prompt.dialect;
+    match cmd::split_command_string(&command) {
+        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect),
+        Ok(_) => {}
+        Err(e) => clients::show_message(state, client, &e.to_string()),
+    }
 }
 
 /// `confirm-before`'s prompt on the current client: `-p` (a format,
@@ -645,12 +732,18 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
         return text.to_string();
     };
     let model = &state.model;
-    let pane = model
+    let active = model
         .sessions
         .get(&client.session)
         .and_then(|s| model.windows.get(&s.active))
-        .map(|w| FormatCtx::new(model, w.active));
-    cmd::expand(&long_aliases(text), &ClientVars::new(model, client, pane))
+        .map(|w| w.active);
+    let vars = ClientVars::new(model, client, active.map(|p| FormatCtx::new(model, p)));
+    let text = long_aliases(text);
+    // The pane's mode answers its own variables (`pane_search_string`).
+    match active {
+        Some(pane) => cmd::expand(&text, &ServerVars::new(state, pane, &vars)),
+        None => cmd::expand(&text, &vars),
+    }
 }
 
 /// Opens `prompt` on client `id`; with `wait` set its caller waits for it

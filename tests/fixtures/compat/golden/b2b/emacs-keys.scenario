@@ -1,0 +1,6 @@
+# B2b: tmux 3.7b's stock emacs copy-mode table, as list-keys prints it.
+$ new-session -d -s main -x 80 -y 24 cat
+$ set-window-option -g mode-keys emacs
+$ list-keys -T copy-mode
+$ list-keys -N -T copy-mode
+$ show-options -wg mode-keys

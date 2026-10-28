@@ -1,0 +1,212 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys emacs
+? 0
+$ set-option -g status off
+? 0
+client 80x24 attach -t main
+$ copy-mode -H -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,23,0 sel=0 search=0,0
+? 0
+keys Escape <
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,500 sel=0 search=0,0
+? 0
+keys g
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,500 sel=0 search=0,0
+? 0
+screen (goto line)
+| line 1: foo.bar(baz) qux-quux, path/to/file_name.rs:3 end
+| line 2: foo.bar(baz) qux-quux, path/to/file_name.rs:6 end
+| line 3: foo.bar(baz) qux-quux, path/to/file_name.rs:9 end
+| line 4: foo.bar(baz) qux-quux, path/to/file_name.rs:12 end
+| line 5: foo.bar(baz) qux-quux, path/to/file_name.rs:15 end
+| line 6: foo.bar(baz) qux-quux, path/to/file_name.rs:18 end
+|     indented line 7 with (round [square {curly}]) brackets
+| line 8: foo.bar(baz) qux-quux, path/to/file_name.rs:24 end
+| line 9: foo.bar(baz) qux-quux, path/to/file_name.rs:27 end
+| line 10: foo.bar(baz) qux-quux, path/to/file_name.rs:30 end
+| line 11: foo.bar(baz) qux-quux, path/to/file_name.rs:33 end
+| line 12: foo.bar(baz) qux-quux, path/to/file_name.rs:36 end
+| line 13 is long: alpha beta gamma delta epsilon zeta eta theta iota kappa lambda
+|  mu nu xi omicron pi rho sigma tau upsilon
+| line 14: foo.bar(baz) qux-quux, path/to/file_name.rs:42 end
+| line 15: foo.bar(baz) qux-quux, path/to/file_name.rs:45 end
+| line 16: foo.bar(baz) qux-quux, path/to/file_name.rs:48 end
+| line 17: foo.bar(baz) qux-quux, path/to/file_name.rs:51 end
+| line 18: foo.bar(baz) qux-quux, path/to/file_name.rs:54 end
+| line 19: foo.bar(baz) qux-quux, path/to/file_name.rs:57 end
+|
+| line 21: foo.bar(baz) qux-quux, path/to/file_name.rs:63 end
+| line 22: foo.bar(baz) qux-quux, path/to/file_name.rs:66 end
+| (goto line)
+keys 2
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,500 sel=0 search=0,0
+? 0
+keys 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,500 sel=0 search=0,0
+? 0
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,20 sel=0 search=0,0
+? 0
+keys g
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,20 sel=0 search=0,0
+? 0
+keys 1
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,20 sel=0 search=0,0
+? 0
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,0,20 sel=0 search=0,0
+? 0
+keys C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,1,20 sel=0 search=0,0
+? 0
+keys f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,1,20 sel=0 search=0,0
+? 0
+keys b
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 14,1,20 sel=0 search=0,0
+? 0
+keys f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 14,1,20 sel=0 search=0,0
+? 0
+keys f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 41,1,20 sel=0 search=0,0
+? 0
+keys e
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 41,1,20 sel=0 search=0,0
+? 0
+keys F
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 41,1,20 sel=0 search=0,0
+? 0
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 39,1,20 sel=0 search=0,0
+? 0
+keys t
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 39,1,20 sel=0 search=0,0
+? 0
+keys x
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 39,1,20 sel=0 search=0,0
+? 0
+keys T
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 39,1,20 sel=0 search=0,0
+? 0
+keys e
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 4,1,20 sel=0 search=0,0
+? 0
+keys ,
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,1,20 sel=0 search=0,0
+? 0
+keys ;
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 4,1,20 sel=0 search=0,0
+? 0
+keys ;
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 4,1,20 sel=0 search=0,0
+? 0
+keys ,
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,1,20 sel=0 search=0,0
+? 0
+keys Escape 5
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,1,20 sel=0 search=0,0
+? 0
+screen
+| line 458: foo.bar(baz) qux-quux, path/to/file_name.rs:1374 end
+| line 459: foo.bar(baz) qux-quux, path/to/file_name.rs:1377 end
+|
+| line 461: foo.bar(baz) qux-quux, path/to/file_name.rs:1383 end
+| line 462: foo.bar(baz) qux-quux, path/to/file_name.rs:1386 end
+| line 463: foo.bar(baz) qux-quux, path/to/file_name.rs:1389 end
+| line 464: foo.bar(baz) qux-quux, path/to/file_name.rs:1392 end
+| line 465: foo.bar(baz) qux-quux, path/to/file_name.rs:1395 end
+| line 466: foo.bar(baz) qux-quux, path/to/file_name.rs:1398 end
+|     indented line 467 with (round [square {curly}]) brackets
+| line 468: foo.bar(baz) qux-quux, path/to/file_name.rs:1404 end
+| line 469: foo.bar(baz) qux-quux, path/to/file_name.rs:1407 end
+| line 470: foo.bar(baz) qux-quux, path/to/file_name.rs:1410 end
+| line 471: foo.bar(baz) qux-quux, path/to/file_name.rs:1413 end
+| line 472: foo.bar(baz) qux-quux, path/to/file_name.rs:1416 end
+| line 473 is long: alpha beta gamma delta epsilon zeta eta theta iota kappa lambd
+| a mu nu xi omicron pi rho sigma tau upsilon
+| line 474: foo.bar(baz) qux-quux, path/to/file_name.rs:1422 end
+| line 475: foo.bar(baz) qux-quux, path/to/file_name.rs:1425 end
+| the last screen starts here
+|     four spaces of indent, then words
+|   two spaces: alpha-beta gamma.delta (epsilon) [zeta] {eta}
+| nested (one (two [three {four} three] two) one) done
+| (repeat) 5
+keys C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,6,20 sel=0 search=0,0
+? 0
+keys Escape 1
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,6,20 sel=0 search=0,0
+? 0
+keys 2
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,6,20 sel=0 search=0,0
+? 0
+keys C-p
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,0,26 sel=0 search=0,0
+? 0
+keys Escape 3
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,0,26 sel=0 search=0,0
+? 0
+keys C-f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 46,0,26 sel=0 search=0,0
+? 0
+keys C-p
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 46,0,27 sel=0 search=0,0
+? 0
+keys Escape 2
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 46,0,27 sel=0 search=0,0
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 46,0,27 sel=0 search=0,0
+? 0
+keys C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,2,27 sel=0 search=0,0
+? 0
+keys Escape 4
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 43,2,27 sel=0 search=0,0
+? 0
+keys Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+1 0,23,0 sel=0 search=0,0
+? 0

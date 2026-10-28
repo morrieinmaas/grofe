@@ -130,6 +130,7 @@ const CLEAR_ALWAYS: &[&str] = &[
     "scroll-top",
     "select-line",
     "select-word",
+    "selection-mode",
     "set-mark",
     "stop-selection",
 ];
@@ -957,6 +958,7 @@ struct Request {
     down: bool,
     regex: bool,
     times: u32,
+    incremental: bool,
 }
 
 /// What it found.
@@ -1511,8 +1513,13 @@ fn scan(req: Request) -> Outcome {
     if let Some(pat) = run.kept.marks.clone() {
         run.marks = Some(view_marks_of(&mut run.scan, &pat, run.view.oy));
     }
+    let mut found = true;
     for _ in 0..req.times {
-        run.search(&req.text, req.down, req.regex);
+        found = run.search(&req.text, req.down, req.regex);
+    }
+    // An incremental search that finds nothing shows no marks.
+    if req.incremental && !found {
+        run.clear_marks();
     }
     let (view, kept) = (run.view, run.kept);
     Outcome {
@@ -1559,6 +1566,8 @@ struct Pending {
     down: bool,
     regex: bool,
     times: u32,
+    /// An incremental search: finding nothing drops the marks.
+    incremental: bool,
 }
 
 /// What [`view_marks`] keeps its marks by: the copy, the offset and the
@@ -1581,6 +1590,10 @@ pub struct Search {
     /// `jumptype`, `jumpchar`.
     jump: Option<(Jump, String)>,
     pending: Option<Pending>,
+    /// Where an incremental search began: the cursor's column and row and
+    /// the view's offset (tmux's `searchx`, `searchy`, `searcho`). Every
+    /// change of its string searches again from here.
+    pub(super) start: Option<(usize, usize, usize)>,
     /// The copy a search in flight reads; commands wait until it ends.
     busy: Option<Arc<Grid>>,
     held: VecDeque<Vec<String>>,
@@ -1660,6 +1673,7 @@ pub fn after_command(mode: &mut Mode, name: &str, ran: bool) {
     };
     if clear {
         clear_marks(mode);
+        mode.search.start = None;
     }
 }
 
@@ -1681,7 +1695,16 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], _ctx: &Ctx<'_>) -> 
                 down,
                 regex,
                 times: np,
+                incremental: false,
             });
+        }
+        "search-forward-incremental" | "search-backward-incremental" => {
+            let arg = positionals(args, 1, 1)?[0].clone();
+            return Some(incremental(
+                mode,
+                name == "search-forward-incremental",
+                &arg,
+            ));
         }
         "search-again" | "search-reverse" => {
             positionals(args, 0, 0)?;
@@ -1696,6 +1719,7 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], _ctx: &Ctx<'_>) -> 
                     down,
                     regex: mode.search.regex,
                     times: np,
+                    incremental: false,
                 });
             }
         }
@@ -1736,6 +1760,49 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], _ctx: &Ctx<'_>) -> 
         _ => return None,
     }
     Some(Action::Nothing)
+}
+
+/// tmux's `window_copy_cmd_search_forward_incremental` and `_backward_`:
+/// `arg` is a direction (`=` for the command's own, `+` down, `-` up) and
+/// the string. The first call remembers where the cursor was; a later one
+/// with a different string starts from there again, at the end of its
+/// line. An empty string only drops the marks.
+fn incremental(mode: &mut Mode, forward: bool, arg: &str) -> Action {
+    let mut action = Action::Nothing;
+    mode.search.kept.timeout = false;
+    let mut chars = arg.chars();
+    let prefix = chars.next().unwrap_or('\0');
+    let text = chars.as_str();
+    match mode.search.start {
+        None => mode.search.start = Some((mode.cx, mode.cy, mode.oy)),
+        Some((_, y, oy)) if mode.search_str.as_deref().is_some_and(|ss| ss != text) => {
+            mode.cy = y;
+            mode.oy = oy;
+            mode.cx = mode.cursor_limit(mode.grid.hsize + y - oy, false);
+            action = Action::Redraw;
+        }
+        Some(_) => {}
+    }
+    if text.is_empty() {
+        clear_marks(mode);
+        return Action::Redraw;
+    }
+    let down = match (prefix, forward) {
+        ('=', _) => forward,
+        ('+', _) => true,
+        ('-', _) => false,
+        _ => return action,
+    };
+    mode.search.kind = if down { Kind::Down } else { Kind::Up };
+    mode.search.regex = false;
+    mode.search_str = Some(text.to_string());
+    mode.search.pending = Some(Pending {
+        down,
+        regex: false,
+        times: 1,
+        incremental: true,
+    });
+    action
 }
 
 /// Whether `pane`'s mode has a search in flight.
@@ -1829,6 +1896,7 @@ fn new_request(mode: &Mode, p: Pending, wrap: bool) -> Request {
         down: p.down,
         regex: p.regex,
         times: p.times,
+        incremental: p.incremental,
     }
 }
 
@@ -2179,6 +2247,69 @@ mod tests {
         x(&mut m, &["top-line"]);
         x(&mut m, &["search-forward", pattern]);
         (format_var(&m, "search_present").as_deref() == Some("1")).then(|| found(&m))
+    }
+
+    /// A mode with `mode-keys emacs`, as the stock `C-s` prompt drives it.
+    fn emacs(rows: &[&str]) -> Mode {
+        Mode::new(Grid::from_text(20, 0, rows), (0, rows.len() - 1), false)
+    }
+
+    #[test]
+    fn an_incremental_search_starts_again_from_where_it_began() {
+        let rows = ["ab", "fa fb", "fab", ""];
+        let mut m = emacs(&rows);
+        x(&mut m, &["top-line"]);
+        x(&mut m, &["search-forward-incremental", "="]);
+        assert_eq!(at(&m), (0, 0, 0), "an empty string searches for nothing");
+        x(&mut m, &["search-forward-incremental", "=f"]);
+        // Emacs puts the cursor after the match, which is on the second row.
+        assert_eq!((at(&m), found(&m)), ((1, 1, 0), "f".into()));
+        x(&mut m, &["search-forward-incremental", "=fa"]);
+        assert_eq!(found(&m), "fa");
+        // A longer string restarts at the end of the row it began on, so
+        // the match in the row itself is behind it.
+        assert_eq!(at(&m), (2, 1, 0));
+        x(&mut m, &["search-forward-incremental", "+fa"]);
+        assert_eq!(at(&m), (2, 2, 0), "the same string steps on");
+    }
+
+    #[test]
+    fn a_missed_incremental_search_drops_the_marks_and_keeps_the_start() {
+        let rows = ["ab", "fa fb", ""];
+        let mut m = emacs(&rows);
+        x(&mut m, &["top-line"]);
+        x(&mut m, &["search-forward-incremental", "=f"]);
+        assert_eq!(format_var(&m, "search_present").as_deref(), Some("1"));
+        x(&mut m, &["search-forward-incremental", "=fz"]);
+        assert_eq!(format_var(&m, "search_present").as_deref(), Some("0"));
+        // The cursor went back to the end of the row it began on.
+        assert_eq!(at(&m), (2, 0, 0));
+        x(&mut m, &["search-forward-incremental", "="]);
+        assert_eq!(format_var(&m, "search_present").as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn incremental_commands_need_their_one_argument() {
+        let rows = ["ab", "fa fb", ""];
+        let mut m = emacs(&rows);
+        x(&mut m, &["top-line"]);
+        x(&mut m, &["search-forward-incremental"]);
+        x(&mut m, &["search-forward-incremental", "=a", "b"]);
+        assert_eq!((m.search.start, m.search.pending.is_none()), (None, true));
+        x(&mut m, &["search-backward-incremental", "?a"]);
+        assert_eq!(at(&m), (0, 0, 0), "an unknown direction searches nothing");
+        assert_eq!(m.search.start, Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn a_command_that_clears_the_marks_forgets_where_the_search_began() {
+        let rows = ["ab", "fa fb", ""];
+        let mut m = emacs(&rows);
+        x(&mut m, &["top-line"]);
+        x(&mut m, &["search-forward-incremental", "=f"]);
+        assert!(m.search.start.is_some());
+        x(&mut m, &["cursor-down"]);
+        assert_eq!(m.search.start, None);
     }
 
     #[test]

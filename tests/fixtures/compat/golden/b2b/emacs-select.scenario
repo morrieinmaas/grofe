@@ -1,0 +1,68 @@
+# B2b: selection and copying with the emacs table: C-Space begins, C-g clears, R toggles a rectangle, C-w, M-w and C-k copy and leave, C-c and q leave.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ set-window-option -g mode-keys emacs
+client 80x25 attach -t main
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-f C-f C-f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-g
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n C-n C-f C-f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys R
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+$ show-buffer
+$ list-buffers -F "#{buffer_name} #{buffer_size}"
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-a
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n C-n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n C-n C-e
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys Escape w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+$ show-buffer
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-n C-n C-n C-f C-f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-k
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+$ show-buffer
+$ list-buffers -F "#{buffer_name} #{buffer_size}"
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys q
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'
+keys C-b [
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count}'

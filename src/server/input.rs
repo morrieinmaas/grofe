@@ -1225,8 +1225,14 @@ impl KeyTables {
         }
         // The stock copy-mode-vi rows run as they are; those whose `{ }`
         // template `cmds` holds as a string show as tmux prints them.
-        if let Some(t) = self.tables.get_mut(COPY_MODE_VI_TABLE) {
-            for (name, text) in TMUX_COPY_MODE_VI_SHOWN {
+        for (table, rows) in [
+            (COPY_MODE_VI_TABLE, TMUX_COPY_MODE_VI_SHOWN),
+            (COPY_MODE_TABLE, TMUX_COPY_MODE_EMACS_SHOWN),
+        ] {
+            let Some(t) = self.tables.get_mut(table) else {
+                continue;
+            };
+            for (name, text) in rows {
                 if let Ok(key) = parse_key(name)
                     && let Some(b) = t.get_mut(&key)
                     && b.source == BindingSource::Default
@@ -1581,13 +1587,18 @@ pub fn default_bindings() -> KeyTables {
         false,
         "Enter copy mode and scroll up",
     );
-    for (key, text) in COPY_MODE_VI {
-        if let (Ok(key), Ok(cmds)) = (parse_key(key), crate::cmd::split_command_string(text)) {
-            t.insert(
-                COPY_MODE_VI_TABLE,
-                key,
-                Binding::new(cmds, false, BindingSource::Default),
-            );
+    for (table, rows) in [
+        (COPY_MODE_VI_TABLE, COPY_MODE_VI),
+        (COPY_MODE_TABLE, COPY_MODE_EMACS),
+    ] {
+        for (key, text) in rows {
+            if let (Ok(key), Ok(cmds)) = (parse_key(key), crate::cmd::split_command_string(text)) {
+                t.insert(
+                    table,
+                    key,
+                    Binding::new(cmds, false, BindingSource::Default),
+                );
+            }
         }
     }
     // FE.1: stock `o`. Its `:.+` offset has no native spelling, so the
@@ -1771,6 +1782,225 @@ pub const COPY_MODE_VI: &[(&str, &str)] = &[
     (r#"M-x"#, r#"send-keys -X jump-to-mark"#),
     (r#"C-Up"#, r#"send-keys -X scroll-up"#),
     (r#"C-Down"#, r#"send-keys -X scroll-down"#),
+];
+
+/// The copy-mode key table with `mode-keys emacs`.
+pub const COPY_MODE_TABLE: &str = "copy-mode";
+
+/// tmux 3.7b's 75 stock `copy-mode` (emacs) bindings (`key-bindings.c`), in
+/// native spelling like [`COPY_MODE_VI`].
+pub const COPY_MODE_EMACS: &[(&str, &str)] = &[
+    (r#"Escape"#, r#"send-keys -X cancel"#),
+    (r#"Space"#, r#"send-keys -X page-down"#),
+    (r#","#, r#"send-keys -X jump-reverse"#),
+    (r#";"#, r#"send-keys -X jump-again"#),
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p '(jump backward)' { send-keys -X jump-backward -- '%%' }"#,
+    ),
+    (r#"N"#, r#"send-keys -X search-reverse"#),
+    (r#"P"#, r#"send-keys -X toggle-position"#),
+    (r#"R"#, r#"send-keys -X rectangle-toggle"#),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p '(jump to backward)' { send-keys -X jump-to-backward -- '%%' }"#,
+    ),
+    (r#"X"#, r#"send-keys -X set-mark"#),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p '(jump forward)' { send-keys -X jump-forward -- '%%' }"#,
+    ),
+    (
+        r#"g"#,
+        r#"command-prompt -p '(goto line)' { send-keys -X goto-line -- '%%' }"#,
+    ),
+    (r#"n"#, r#"send-keys -X search-again"#),
+    (r#"q"#, r#"send-keys -X cancel"#),
+    (r#"r"#, r#"send-keys -X refresh-from-pane"#),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p '(jump to forward)' { send-keys -X jump-to-forward -- '%%' }"#,
+    ),
+    (r#"Home"#, r#"send-keys -X start-of-line"#),
+    (r#"End"#, r#"send-keys -X end-of-line"#),
+    (r#"NPage"#, r#"send-keys -X page-down"#),
+    (r#"PPage"#, r#"send-keys -X page-up"#),
+    (r#"Up"#, r#"send-keys -X cursor-up"#),
+    (r#"Down"#, r#"send-keys -X cursor-down"#),
+    (r#"Left"#, r#"send-keys -X cursor-left"#),
+    (r#"Right"#, r#"send-keys -X cursor-right"#),
+    (r#"MouseDown1Pane"#, r#"select-pane"#),
+    (
+        r#"MouseDrag1Pane"#,
+        r#"select-pane; send-keys -X begin-selection"#,
+    ),
+    (
+        r#"MouseDragEnd1Pane"#,
+        r#"send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"WheelDownPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-down"#,
+    ),
+    (
+        r#"WheelUpPane"#,
+        r#"select-pane; send-keys -N 5 -X scroll-up"#,
+    ),
+    (
+        r#"DoubleClick1Pane"#,
+        r#"select-pane; send-keys -X select-word; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"TripleClick1Pane"#,
+        r#"select-pane; send-keys -X select-line; run-shell -d 0.3; send-keys -X copy-pipe-and-cancel"#,
+    ),
+    (
+        r#"M-1"#,
+        r#"command-prompt -N -p '(repeat)' -I 1 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-2"#,
+        r#"command-prompt -N -p '(repeat)' -I 2 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-3"#,
+        r#"command-prompt -N -p '(repeat)' -I 3 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-4"#,
+        r#"command-prompt -N -p '(repeat)' -I 4 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-5"#,
+        r#"command-prompt -N -p '(repeat)' -I 5 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-6"#,
+        r#"command-prompt -N -p '(repeat)' -I 6 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-7"#,
+        r#"command-prompt -N -p '(repeat)' -I 7 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-8"#,
+        r#"command-prompt -N -p '(repeat)' -I 8 { send-keys -N '%%' }"#,
+    ),
+    (
+        r#"M-9"#,
+        r#"command-prompt -N -p '(repeat)' -I 9 { send-keys -N '%%' }"#,
+    ),
+    (r#"M-<"#, r#"send-keys -X history-top"#),
+    (r#"M->"#, r#"send-keys -X history-bottom"#),
+    (r#"M-R"#, r#"send-keys -X top-line"#),
+    (r#"M-b"#, r#"send-keys -X previous-word"#),
+    (r#"M-f"#, r#"send-keys -X next-word-end"#),
+    (r#"M-l"#, r#"send-keys -X cursor-centre-horizontal"#),
+    (r#"M-m"#, r#"send-keys -X back-to-indentation"#),
+    (r#"M-r"#, r#"send-keys -X middle-line"#),
+    (r#"M-v"#, r#"send-keys -X page-up"#),
+    (r#"M-w"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"M-x"#, r#"send-keys -X jump-to-mark"#),
+    (r#"M-{"#, r#"send-keys -X previous-paragraph"#),
+    (r#"M-}"#, r#"send-keys -X next-paragraph"#),
+    (r#"M-Up"#, r#"send-keys -X halfpage-up"#),
+    (r#"M-Down"#, r#"send-keys -X halfpage-down"#),
+    (r#"C-Space"#, r#"send-keys -X begin-selection"#),
+    (r#"C-["#, r#"send-keys -X cancel"#),
+    (r#"C-a"#, r#"send-keys -X start-of-line"#),
+    (r#"C-b"#, r#"send-keys -X cursor-left"#),
+    (r#"C-c"#, r#"send-keys -X cancel"#),
+    (r#"C-e"#, r#"send-keys -X end-of-line"#),
+    (r#"C-f"#, r#"send-keys -X cursor-right"#),
+    (r#"C-g"#, r#"send-keys -X clear-selection"#),
+    (r#"C-k"#, r#"send-keys -X copy-pipe-end-of-line-and-cancel"#),
+    (r#"C-l"#, r#"send-keys -X recentre-top-bottom"#),
+    (r#"C-n"#, r#"send-keys -X cursor-down"#),
+    (r#"C-p"#, r#"send-keys -X cursor-up"#),
+    (
+        r#"C-r"#,
+        r#"command-prompt -T search -i -I '#{pane_search_string}' -p '(search up)' { send-keys -X search-backward-incremental -- '%%' }"#,
+    ),
+    (
+        r#"C-s"#,
+        r#"command-prompt -T search -i -I '#{pane_search_string}' -p '(search down)' { send-keys -X search-forward-incremental -- '%%' }"#,
+    ),
+    (r#"C-v"#, r#"send-keys -X page-down"#),
+    (r#"C-w"#, r#"send-keys -X copy-pipe-and-cancel"#),
+    (r#"C-Up"#, r#"send-keys -X scroll-up"#),
+    (r#"C-Down"#, r#"send-keys -X scroll-down"#),
+    (r#"C-M-b"#, r#"send-keys -X previous-matching-bracket"#),
+    (r#"C-M-f"#, r#"send-keys -X next-matching-bracket"#),
+];
+
+/// How tmux 3.7b's `list-keys -T copy-mode` prints the stock emacs rows
+/// whose template is a `{ }` list (the `b2b/emacs-keys` golden), for a
+/// server with tmux identity ([`KeyTables::use_tmux_stock`]).
+pub const TMUX_COPY_MODE_EMACS_SHOWN: &[(&str, &str)] = &[
+    (
+        r#"F"#,
+        r#"command-prompt -1 -p "(jump backward)" { send-keys -X jump-backward -- "%%" }"#,
+    ),
+    (
+        r#"T"#,
+        r#"command-prompt -1 -p "(jump to backward)" { send-keys -X jump-to-backward -- "%%" }"#,
+    ),
+    (
+        r#"f"#,
+        r#"command-prompt -1 -p "(jump forward)" { send-keys -X jump-forward -- "%%" }"#,
+    ),
+    (
+        r#"g"#,
+        r#"command-prompt -p "(goto line)" { send-keys -X goto-line -- "%%" }"#,
+    ),
+    (
+        r#"t"#,
+        r#"command-prompt -1 -p "(jump to forward)" { send-keys -X jump-to-forward -- "%%" }"#,
+    ),
+    (
+        r#"M-1"#,
+        r#"command-prompt -N -I 1 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-2"#,
+        r#"command-prompt -N -I 2 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-3"#,
+        r#"command-prompt -N -I 3 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-4"#,
+        r#"command-prompt -N -I 4 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-5"#,
+        r#"command-prompt -N -I 5 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-6"#,
+        r#"command-prompt -N -I 6 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-7"#,
+        r#"command-prompt -N -I 7 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-8"#,
+        r#"command-prompt -N -I 8 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"M-9"#,
+        r#"command-prompt -N -I 9 -p (repeat) { send-keys -N "%%" }"#,
+    ),
+    (
+        r#"C-r"#,
+        r##"command-prompt -i -I "#{pane_search_string}" -T search -p "(search up)" { send-keys -X search-backward-incremental -- "%%" }"##,
+    ),
+    (
+        r#"C-s"#,
+        r##"command-prompt -i -I "#{pane_search_string}" -T search -p "(search down)" { send-keys -X search-forward-incremental -- "%%" }"##,
+    ),
 ];
 
 /// How tmux 3.7b's `list-keys -T copy-mode-vi` prints the stock rows whose

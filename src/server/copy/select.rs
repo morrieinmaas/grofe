@@ -649,6 +649,19 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
             rectangle_set(mode, rect);
             Nothing
         }
+        "selection-mode" => {
+            let (_, rest) = parse(args, "", 1)?;
+            match rest.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+                None | Some("char" | "c") => mode.sel.unit = Unit::Char,
+                Some("word" | "w") => {
+                    mode.sel.separators = ctx.separators.to_string();
+                    mode.sel.unit = Unit::Word;
+                }
+                Some("line" | "l") => mode.sel.unit = Unit::Line,
+                Some(_) => {}
+            }
+            Nothing
+        }
         "stop-selection" => {
             none()?;
             mode.sel.drag = Drag::None;

@@ -1,0 +1,207 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys vi
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,0,500 sel=0 char
+? 0
+$ send-keys -t main -X cursor-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,1,500 sel=0 char
+? 0
+$ send-keys -t main -X -N 3 cursor-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,4,500 sel=0 char
+? 0
+$ send-keys -t main -X scroll-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,4,499 sel=0 char
+? 0
+$ send-keys -t main -X halfpage-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,4,487 sel=0 char
+? 0
+$ send-keys -t main -X page-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,4,465 sel=0 char
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,22,0 sel=0 char
+? 0
+$ send-keys -t main -X cursor-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X cursor-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 16,22,0 sel=0 char
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 2,21,0 sel=0 char
+? 0
+$ send-keys -t main -X scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 2,21,1 sel=0 char
+? 0
+$ send-keys -t main -X scroll-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ send-keys -t main -X scroll-down-and-cancel
+! not in a mode
+? 1
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 40 page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X page-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,478 sel=0 char
+? 0
+$ send-keys -t main -X page-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,456 sel=0 char
+? 0
+$ send-keys -t main -X page-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,434 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,434 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X halfpage-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,488 sel=0 char
+? 0
+$ send-keys -t main -X -N 2 halfpage-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,464 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,464 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,494 sel=0 char
+? 0
+$ send-keys -t main -X -N 100 scroll-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,394 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,394 sel=0 char
+? 0
+$ send-keys -t main -X -N 5 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,399 sel=0 char
+? 0
+$ send-keys -t main -X -N 3 cursor-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,3,399 sel=0 char
+? 0
+$ send-keys -t main -X -N 3 page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,3,333 sel=0 char
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,3,311 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,3,311 sel=0 char
+? 0
+$ send-keys -t main -X page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,3,333 sel=0 char
+? 0
+$ send-keys -t main -X -N 2 page-down-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,3,289 sel=0 char
+? 0

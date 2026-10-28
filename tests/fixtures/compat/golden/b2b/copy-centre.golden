@@ -1,0 +1,156 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys emacs
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,0,500 sel=0 char
+? 0
+$ send-keys -t main -X cursor-centre-vertical
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,12,500 sel=0 char
+? 0
+$ send-keys -t main -X cursor-centre-horizontal
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,12,500 sel=0 char
+? 0
+$ send-keys -t main -X -N 7 cursor-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,19,500 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,492 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,0,481 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,19,500 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,492 sel=0 char
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,12,492 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,11,491 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,0,480 sel=0 char
+? 0
+$ send-keys -t main -X cursor-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,0,481 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,492 sel=0 char
+? 0
+$ send-keys -t main -X history-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,23,30 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,18 sel=0 char
+? 0
+$ send-keys -t main -X cursor-centre-vertical
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,12,18 sel=0 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,17 sel=0 char
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,17 sel=0 char
+? 0
+$ send-keys -t main -X cursor-centre-horizontal
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,17 sel=0 char
+? 0
+$ send-keys -t main -X cursor-centre-vertical
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,12,17 sel=1 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,11,16 sel=1 char
+? 0
+$ send-keys -t main -X recentre-top-bottom
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,0,5 sel=1 char
+? 0
+$ send-keys -t main -X rectangle-toggle
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,0,5 sel=1 char
+? 0
+$ send-keys -t main -X cursor-centre-horizontal
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,0,5 sel=1 char
+? 0
+$ send-keys -t main -X cursor-centre-vertical
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 40,12,5 sel=1 char
+? 0

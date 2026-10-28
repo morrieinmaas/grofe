@@ -45,6 +45,10 @@ const PIPES: &[(&str, &str)] = &[
     ("copy-pipe-line-and-cancel", "copy-line-and-cancel"),
 ];
 
+/// The pipes that only run a command with the selection on stdin: no
+/// buffer, no clipboard and no flags (tmux's `window_copy_cmd_pipe*`).
+const PLAIN_PIPES: &[&str] = &["pipe", "pipe-no-clear", "pipe-and-cancel"];
+
 /// How long a pipe command may run before its process group is killed.
 // ponytail: tmux never kills a copy-pipe job. A clipboard tool that stays
 // to serve the selection (`xclip`, `wl-copy`) forks and lets the shell
@@ -55,6 +59,9 @@ pub const PIPE_TIMEOUT: Duration = Duration::from_secs(60);
 /// not fit, which tmux ignores). The copy is queued with its command for
 /// [`run_pipes`]; an empty selection queues the command alone.
 pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> Option<Action> {
+    if PLAIN_PIPES.contains(&name) {
+        return plain(mode, name, args);
+    }
     let copy = PIPES.iter().find(|(pipe, _)| *pipe == name)?.1;
     let (flags, rest) = select::parse(args, "CP", 2)?;
     let mut copy_args = Vec::new();
@@ -83,6 +90,34 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
     Some(action)
 }
 
+/// `pipe`, `pipe-no-clear` and `pipe-and-cancel`: the selection (or the
+/// search match under the cursor) goes to the command, or to `copy-command`
+/// when it is empty; nothing is stored. An empty selection still runs it.
+fn plain(mode: &mut Mode, name: &str, args: &[String]) -> Option<Action> {
+    let (_, rest) = select::parse(args, "", 1)?;
+    match select::get_selection(mode) {
+        Ok(data) => mode.sel.copied.push(Copied {
+            data: data.unwrap_or_default(),
+            append: false,
+            set_paste: false,
+            set_clip: false,
+            pipe: Some(rest.first().cloned().unwrap_or_default()),
+        }),
+        Err(e) => mode.sel.error = Some(e),
+    }
+    Some(match name {
+        "pipe-no-clear" => Action::Nothing,
+        "pipe" => {
+            select::clear_selection(mode);
+            Action::Redraw
+        }
+        _ => {
+            select::clear_selection(mode);
+            Action::Cancel
+        }
+    })
+}
+
 /// `args` with a pipe command's command expanded against `pane`, as tmux
 /// expands it before copying (so `#{selection_present}` still reads 1);
 /// any other command's `args` unchanged. A `--` goes before the expanded
@@ -90,10 +125,9 @@ pub fn command(mode: &mut Mode, name: &str, args: &[String], ctx: &Ctx<'_>) -> O
 /// command, as tmux expands after parsing.
 pub fn expand(state: &State, pane: PaneId, args: &[String]) -> Vec<String> {
     let mut args = args.to_vec();
-    if !args
-        .first()
-        .is_some_and(|name| PIPES.iter().any(|(pipe, _)| pipe == name))
-    {
+    if !args.first().is_some_and(|name| {
+        PLAIN_PIPES.contains(&name.as_str()) || PIPES.iter().any(|(pipe, _)| pipe == name)
+    }) {
         return args;
     }
     let mut at = 1;
@@ -254,6 +288,36 @@ mod tests {
         assert_eq!(copied.len(), 1);
         assert!(copied[0].data.is_empty() && !copied[0].set_paste && !copied[0].set_clip);
         assert_eq!(copied[0].pipe.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn plain_pipes_queue_the_selection_for_a_command_and_store_nothing() {
+        let mut m = mode(&["abc", "def"]);
+        x(&mut m, &["select-line"]);
+        assert_eq!(x(&mut m, &["pipe-no-clear", "cmd"]), Action::Nothing);
+        assert!(m.selecting, "kept");
+        assert_eq!(x(&mut m, &["pipe", "cmd2"]), Action::Redraw);
+        assert!(!m.selecting, "cleared");
+        x(&mut m, &["select-line"]);
+        assert_eq!(x(&mut m, &["pipe-and-cancel"]), Action::Cancel);
+        let copied = std::mem::take(&mut m.sel.copied);
+        assert_eq!(copied.len(), 3);
+        for (c, pipe) in copied.iter().zip(["cmd", "cmd2", ""]) {
+            assert_eq!(c.data, b"abc\n");
+            assert!(!c.set_paste && !c.set_clip && !c.append);
+            assert_eq!(c.pipe.as_deref(), Some(pipe));
+        }
+    }
+
+    #[test]
+    fn plain_pipes_take_no_flags_and_one_word() {
+        let mut m = mode(&["abc"]);
+        x(&mut m, &["select-line"]);
+        assert_eq!(x(&mut m, &["pipe", "-C", "cmd"]), Action::Nothing);
+        assert_eq!(x(&mut m, &["pipe", "a", "b"]), Action::Nothing);
+        assert!(m.sel.copied.is_empty() && m.selecting);
+        assert_eq!(x(&mut m, &["pipe", "--", "-C"]), Action::Redraw);
+        assert_eq!(m.sel.copied[0].pipe.as_deref(), Some("-C"));
     }
 
     #[test]

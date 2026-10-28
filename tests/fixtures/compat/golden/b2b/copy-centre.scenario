@@ -1,0 +1,64 @@
+# B2b: cursor-centre-vertical, cursor-centre-horizontal and recentre-top-bottom, which cycles the cursor's line through the middle, top and bottom of the view and starts again when the cursor moves to another line.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ set-window-option -g mode-keys emacs
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X history-top
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-vertical
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-horizontal
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 7 cursor-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X history-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X -N 30 scroll-up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-vertical
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X begin-selection
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-horizontal
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-vertical
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X recentre-top-bottom
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X rectangle-toggle
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-horizontal
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+$ send-keys -t main -X cursor-centre-vertical
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'

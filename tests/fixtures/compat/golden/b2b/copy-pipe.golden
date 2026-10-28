@@ -1,0 +1,118 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X pipe 'cat > "$HOME/p1"'
+? 0
+$ display -p -t main '#{pane_in_mode} sel=#{selection_present}'
+1 sel=0
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X pipe-no-clear 'cat > "$HOME/p2.#{pane_index}"'
+? 0
+$ display -p -t main '#{pane_in_mode} sel=#{selection_present}'
+1 sel=1
+? 0
+$ send-keys -t main -X pipe-and-cancel 'cat > "$HOME/p3"'
+? 0
+$ display -p -t main '#{pane_in_mode} sel=#{selection_present}'
+0 sel=
+? 0
+$ run-shell 'sleep 1; for f in p1 p2.1 p3; do echo "== $f"; cat "$HOME/$f"; done'
+== p1
+line 1: foo.bar(baz) qux-quux, path/to/file_name.rs:3 end
+== p2.1
+line 2: foo.bar(baz) qux-quux, path/to/file_name.rs:6 end
+== p3
+line 2: foo.bar(baz) qux-quux, path/to/file_name.rs:6 end
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X pipe 'cat > "$HOME/p4"'
+? 0
+$ send-keys -t main -X pipe-no-clear 'cat > "$HOME/p5"'
+? 0
+$ send-keys -t main -X pipe-and-cancel 'cat > "$HOME/p6"'
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ run-shell 'sleep 1; for f in p4 p5 p6; do echo "== $f"; wc -c < "$HOME/$f" | tr -d " "; done'
+== p4
+0
+== p5
+0
+== p6
+0
+? 0
+$ set-option -g copy-command 'cat > "$HOME/cc"'
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 5 cursor-right
+? 0
+$ send-keys -t main -X pipe
+? 0
+$ run-shell 'sleep 1; echo "cc:"; cat "$HOME/cc"; rm "$HOME/cc"'
+cc:
+line 1
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X pipe ''
+? 0
+$ run-shell 'sleep 1; echo "cc2:"; cat "$HOME/cc"; rm "$HOME/cc"'
+cc2:
+1: f
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ send-keys -t main -X -N 3 cursor-right
+? 0
+$ send-keys -t main -X pipe-no-clear 'cat > "$HOME/p7"'
+? 0
+$ run-shell 'sleep 1; echo "p7:"; cat "$HOME/p7"; [ -e "$HOME/cc" ] && echo cc exists || echo no cc'
+p7:
+foo.no cc
+? 0
+$ send-keys -t main -X pipe -C 'cat > "$HOME/p8"'
+? 0
+$ send-keys -t main -X pipe 'cat > "$HOME/p9"' extra
+? 0
+$ send-keys -t main -X pipe -- 'cat > "$HOME/p10"'
+? 0
+$ display -p -t main '#{pane_in_mode} sel=#{selection_present}'
+1 sel=0
+? 0
+$ run-shell 'sleep 1; for f in p8 p9 p10; do [ -e "$HOME/$f" ] && echo "$f yes" || echo "$f no"; done'
+p8 no
+p9 no
+p10 yes
+? 0
+$ send-keys -t main -X pipe-and-cancel
+? 0
+$ display -p -t main '#{pane_in_mode}'
+0
+? 0
+$ run-shell 'sleep 1; echo "cc3:"; cat "$HOME/cc"; rm "$HOME/cc"'
+cc3:
+? 0

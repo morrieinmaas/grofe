@@ -32,8 +32,9 @@
 //!   the pid rule to read. A blank's foreground, bold, dim and italic are
 //!   left out, since they draw nothing.
 //! - `keys <key>...`: type keys on the client's pty, as a person would, by
-//!   tmux key name: `C-<c>`, `Space`, `Escape`, `Enter`, `Tab`, `BSpace`,
-//!   or a word typed as it is, then wait a moment, so an `Escape` is not
+//!   tmux key name: `C-<c>`, `C-Space`, `Space`, `Escape`, `Enter`, `Tab`,
+//!   `BSpace`, the arrows (also `C-` and `M-`), `Home`, `End`, `PPage`, `NPage`, or a word typed
+//!   as it is, then wait a moment, so an `Escape` is not
 //!   read as Meta with the next step's key. Recorded as the `keys` line
 //!   only; follow it with `screen <text>` to see what the keys did, and
 //!   before typing into a menu a key opened.
@@ -355,6 +356,19 @@ fn key_bytes(words: &[String]) -> Result<Vec<u8>, String> {
             "Enter" => out.push(b'\r'),
             "Tab" => out.push(b'\t'),
             "BSpace" => out.push(0x7f),
+            "C-Space" => out.push(0),
+            "Up" => out.extend_from_slice(b"\x1b[A"),
+            "Down" => out.extend_from_slice(b"\x1b[B"),
+            "Right" => out.extend_from_slice(b"\x1b[C"),
+            "Left" => out.extend_from_slice(b"\x1b[D"),
+            "C-Up" => out.extend_from_slice(b"\x1b[1;5A"),
+            "C-Down" => out.extend_from_slice(b"\x1b[1;5B"),
+            "M-Up" => out.extend_from_slice(b"\x1b[1;3A"),
+            "M-Down" => out.extend_from_slice(b"\x1b[1;3B"),
+            "Home" => out.extend_from_slice(b"\x1bOH"),
+            "End" => out.extend_from_slice(b"\x1bOF"),
+            "PPage" => out.extend_from_slice(b"\x1b[5~"),
+            "NPage" => out.extend_from_slice(b"\x1b[6~"),
             w => match w.strip_prefix("C-").map(str::as_bytes) {
                 Some([c]) if c.is_ascii_alphabetic() => out.push(c.to_ascii_lowercase() - b'a' + 1),
                 Some(_) => return Err(format!("no control key {w:?}")),

@@ -892,6 +892,9 @@ pub struct Mode {
     pub source: Option<PaneId>,
     /// `toggle-position`: the indicator is hidden.
     pub hide_position: bool,
+    /// `recentre-top-bottom`'s next stop, and the row of the copy it was
+    /// last used on (`recentre_state`, `recentre_line`).
+    recentre: (Recentre, usize),
     /// The count the next command runs with (`send-keys -N`, `wme->prefix`).
     pub prefix: u32,
     /// `mode-keys` is `vi`, read before each command.
@@ -913,6 +916,14 @@ pub struct Mode {
     pub search_str: Option<String>,
     /// The search's and the jumps' own state (TM.3).
     pub search: search::Search,
+}
+
+/// Where `recentre-top-bottom` puts the cursor's line next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recentre {
+    Middle,
+    Top,
+    Bottom,
 }
 
 /// What a command asks of the mode afterwards (tmux's
@@ -951,6 +962,7 @@ impl Mode {
             scroll_exit: false,
             source: None,
             hide_position: false,
+            recentre: (Recentre::Middle, 0),
             prefix: 1,
             vi,
             selecting: false,
@@ -1311,6 +1323,47 @@ impl Mode {
         self.update_selection();
     }
 
+    /// tmux's `window_copy_cmd_recentre_top_bottom`: the cursor's line goes
+    /// to the middle, then the top, then the bottom of the view.
+    fn recentre_top_bottom(&mut self) {
+        let cy = self.cy;
+        let sy = self.sy() - 1;
+        let sm = sy / 2;
+        let backing_row = self.grid.hsize + cy - self.oy;
+        if self.recentre.1 != backing_row {
+            self.recentre = (Recentre::Middle, backing_row);
+        }
+        let (next, target) = match self.recentre.0 {
+            Recentre::Middle => (Recentre::Top, Recentre::Middle),
+            Recentre::Top => (Recentre::Bottom, Recentre::Top),
+            Recentre::Bottom => (Recentre::Middle, Recentre::Bottom),
+        };
+        self.recentre.0 = next;
+        let oy = self.oy;
+        let moved = |now: usize| (cy + now).wrapping_sub(oy);
+        match target {
+            Recentre::Middle => {
+                if cy < sm {
+                    self.scroll_down(sm - cy);
+                } else if cy > sm {
+                    self.scroll_up(cy - sm);
+                }
+                if self.oy != oy {
+                    self.cy = moved(self.oy);
+                }
+            }
+            Recentre::Top => {
+                self.scroll_up(cy);
+                self.cy = cy - (oy - self.oy);
+            }
+            Recentre::Bottom => {
+                self.scroll_down(sy - cy);
+                self.cy = moved(self.oy);
+            }
+        }
+        self.update_selection();
+    }
+
     fn scroll_cursor_to(&mut self, to: usize) {
         let up = self.cy as isize - to as isize;
         let delta = up.unsigned_abs();
@@ -1619,6 +1672,7 @@ impl Mode {
     fn size_changed(&mut self) {
         select::clear_selection(self);
         search::clear_marks(self);
+        self.search.start = Some((self.cx, self.cy, self.oy));
     }
 
     /// `#{copy_cursor_word}`: the word under the cursor, by `separators`
@@ -1816,6 +1870,47 @@ fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Optio
                 Nothing
             }
         }
+        "scroll-down-and-cancel" => {
+            none(rest)?;
+            (0..np).for_each(|_| mode.cursor_down(true));
+            if mode.oy == 0 { Cancel } else { Nothing }
+        }
+        "scroll-exit-on" | "scroll-exit-off" | "scroll-exit-toggle" => {
+            none(rest)?;
+            mode.scroll_exit = match name {
+                "scroll-exit-on" => true,
+                "scroll-exit-off" => false,
+                _ => !mode.scroll_exit,
+            };
+            Nothing
+        }
+        "cursor-down-and-cancel" => {
+            none(rest)?;
+            let cy = mode.cy;
+            (0..np).for_each(|_| mode.cursor_down(false));
+            if cy == mode.cy && mode.oy == 0 {
+                Cancel
+            } else {
+                Nothing
+            }
+        }
+        "cursor-centre-vertical" => {
+            none(rest)?;
+            mode.update_cursor(mode.cx, mode.sy() / 2);
+            mode.update_selection();
+            Redraw
+        }
+        "cursor-centre-horizontal" => {
+            none(rest)?;
+            mode.update_cursor(mode.grid.sx / 2, mode.cy);
+            mode.update_selection();
+            Redraw
+        }
+        "recentre-top-bottom" => {
+            none(rest)?;
+            mode.recentre_top_bottom();
+            Redraw
+        }
         "scroll-middle" => {
             none(rest)?;
             mode.scroll_cursor_to((mode.sy() - 1) / 2);
@@ -1837,10 +1932,10 @@ fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Optio
             (0..np).for_each(|_| mode.pageup(half));
             Nothing
         }
-        "page-down" | "halfpage-down" => {
+        "page-down" | "halfpage-down" | "page-down-and-cancel" | "halfpage-down-and-cancel" => {
             none(rest)?;
-            let half = name == "halfpage-down";
-            let exit = mode.scroll_exit;
+            let half = name.starts_with("halfpage");
+            let exit = mode.scroll_exit || name.ends_with("-and-cancel");
             if (0..np).any(|_| mode.pagedown(half, exit)) {
                 Cancel
             } else {
@@ -2517,6 +2612,99 @@ mod tests {
         }
         assert_eq!(seen.len(), NOTED_MAX);
         assert!(!remember(&mut seen, "fresh"));
+    }
+
+    #[test]
+    fn the_and_cancel_variants_cancel_only_at_the_bottom() {
+        let rows: Vec<String> = (0..8).map(|i| format!("row {i}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        // Four rows of history over a four-row view.
+        let mut m = mode(&rows, 4, (0, 3));
+        m.oy = 4;
+        m.cy = 0;
+        assert_eq!(x(&mut m, &["cursor-down-and-cancel"]), Action::Nothing);
+        assert_eq!(x(&mut m, &["scroll-down-and-cancel"]), Action::Nothing);
+        assert_eq!(m.oy, 3);
+        assert_eq!(x(&mut m, &["page-down-and-cancel"]), Action::Nothing);
+        assert!(m.oy > 0, "{:?}", at(&m));
+        m.oy = 0;
+        assert_eq!(x(&mut m, &["halfpage-down-and-cancel"]), Action::Cancel);
+        assert_eq!(x(&mut m, &["page-down-and-cancel"]), Action::Cancel);
+        m.cy = m.sy() - 1;
+        assert_eq!(x(&mut m, &["cursor-down-and-cancel"]), Action::Cancel);
+        assert_eq!(x(&mut m, &["scroll-down-and-cancel"]), Action::Cancel);
+        assert_eq!(x(&mut m, &["scroll-down-and-cancel", "x"]), Action::Nothing);
+    }
+
+    #[test]
+    fn scroll_exit_commands_set_and_flip_the_flag() {
+        let mut m = mode(&["a", "b"], 0, (0, 1));
+        x(&mut m, &["scroll-exit-on"]);
+        assert!(m.scroll_exit);
+        x(&mut m, &["scroll-exit-toggle"]);
+        assert!(!m.scroll_exit);
+        x(&mut m, &["scroll-exit-toggle"]);
+        x(&mut m, &["scroll-exit-off"]);
+        assert!(!m.scroll_exit);
+        x(&mut m, &["scroll-exit-on", "extra"]);
+        assert!(!m.scroll_exit, "an argument it does not take: nothing");
+    }
+
+    #[test]
+    fn cursor_centring_goes_to_the_middle_of_the_view() {
+        let rows: Vec<String> = (0..12).map(|i| format!("row number {i}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let mut m = Mode::new(Grid::from_text(20, 4, &rows), (0, 0), true);
+        x(&mut m, &["cursor-centre-vertical"]);
+        assert_eq!(m.cy, 4);
+        x(&mut m, &["cursor-centre-horizontal"]);
+        assert_eq!(m.cx, 10, "half the pane's width");
+        let mut short = mode(&["ab", "c", "d", "e"], 0, (0, 0));
+        x(&mut short, &["cursor-centre-horizontal"]);
+        assert_eq!(short.cx, 1, "no further than the line goes (vi: last cell)");
+    }
+
+    #[test]
+    fn recentre_top_bottom_cycles_and_starts_over_on_another_line() {
+        let rows: Vec<String> = (0..20).map(|i| format!("row {i}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        // Twelve rows of history over an eight-row view, viewed from the
+        // top of the history with the cursor on its fourth row.
+        let mut m = Mode::new(Grid::from_text(20, 12, &rows), (0, 7), false);
+        m.oy = 12;
+        m.cy = 5;
+        let row = |m: &Mode| m.py();
+        x(&mut m, &["recentre-top-bottom"]);
+        assert_eq!((row(&m), m.cy), (5, 3), "first the middle");
+        x(&mut m, &["recentre-top-bottom"]);
+        assert_eq!((row(&m), m.cy), (5, 0), "then the top");
+        x(&mut m, &["recentre-top-bottom"]);
+        // The history ends there: the view cannot go further.
+        assert_eq!((row(&m), m.cy), (5, 5), "then the bottom");
+        x(&mut m, &["cursor-down"]);
+        x(&mut m, &["recentre-top-bottom"]);
+        assert_eq!(m.cy, 3, "another line begins with the middle again");
+    }
+
+    #[test]
+    fn selection_mode_reads_a_name_in_any_case() {
+        let mut m = mode(&["a b"], 0, (0, 0));
+        for (arg, want) in [
+            ("word", select::Unit::Word),
+            ("L", select::Unit::Line),
+            ("c", select::Unit::Char),
+            ("W", select::Unit::Word),
+            ("bogus", select::Unit::Word),
+            ("Char", select::Unit::Char),
+        ] {
+            x(&mut m, &["selection-mode", arg]);
+            assert_eq!(m.sel.unit, want, "{arg}");
+        }
+        x(&mut m, &["selection-mode", "line"]);
+        x(&mut m, &["selection-mode"]);
+        assert_eq!(m.sel.unit, select::Unit::Char, "no argument: char");
+        x(&mut m, &["selection-mode", "line", "extra"]);
+        assert_eq!(m.sel.unit, select::Unit::Char, "two words: nothing");
     }
 
     #[test]

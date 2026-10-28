@@ -1,0 +1,50 @@
+# B2b: search-forward-incremental and search-backward-incremental called directly: the first character is the direction ('=' as the prompt opens, '+' down, '-' up), the rest the string; a changed string restarts from where the first call began.
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+$ wait-for ready
+$ set-window-option -g mode-keys emacs
+$ copy-mode -t main
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X history-top
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- =
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- =fil
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- =filler
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- +filler
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- +filler
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- -filler
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- "-line 4"
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- =nomatch
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-forward-incremental -- +path
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- =path
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- -path
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- +path
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- =
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- xpath
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- =line
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-again
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-reverse
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X cursor-down
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- =line
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+$ send-keys -t main -X search-backward-incremental -- =lines
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'

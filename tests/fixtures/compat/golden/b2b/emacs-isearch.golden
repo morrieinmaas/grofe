@@ -1,0 +1,206 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys emacs
+? 0
+$ set-option -g status off
+? 0
+client 80x24 attach -t main
+$ copy-mode -H -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,23,0 sel=0 search=0,0,
+? 0
+keys Escape <
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=0,0,
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=0,,
+? 0
+keys f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 9,0,500 sel=0 search=1,816,f
+? 0
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 10,1,500 sel=0 search=1,406,fo
+? 0
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 11,1,500 sel=0 search=1,404,foo
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 11,2,500 sel=0 search=1,404,foo
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 11,3,500 sel=0 search=1,404,foo
+? 0
+keys C-r
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 8,3,500 sel=0 search=1,404,foo
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 10,1,500 sel=0 search=1,406,fo
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 9,1,500 sel=0 search=1,816,f
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys f
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 9,1,500 sel=0 search=1,,f
+? 0
+keys i
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 41,1,500 sel=0 search=1,406,fi
+? 0
+keys l
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 42,1,500 sel=0 search=1,405,fil
+? 0
+keys l
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys e
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys r
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys 1
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys N
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys C-r
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys l
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 41,0,500 sel=0 search=1,1043,l
+? 0
+keys i
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=1,456,li
+? 0
+keys n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=1,456,lin
+? 0
+keys e
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=1,456,line
+? 0
+keys Space
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=1,456,line 
+? 0
+keys 4
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,18,20 sel=0 search=1,82,line 4
+? 0
+keys C-r
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,17,20 sel=0 search=1,82,line 4
+? 0
+keys C-r
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,15,20 sel=0 search=1,82,line 4
+? 0
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,15,20 sel=0 search=1,82,line 4
+? 0
+keys n
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,14,20 sel=0 search=1,82,line 4
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 6,3,500 sel=0 search=1,,line 4
+? 0
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 6,3,500 sel=0 search=1,,line 4
+? 0
+keys Escape <
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=0,,
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 0,0,500 sel=0 search=0,,
+? 0
+keys z
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 19,1,500 sel=0 search=1,429,z
+? 0
+keys z
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys z
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 19,1,500 sel=0 search=1,429,z
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys BSpace
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0
+keys C-g
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 sel=0 search=0,,
+? 0

@@ -1,0 +1,186 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys vi
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,478 sel=0 char
+? 0
+$ send-keys -t main -X -N 5 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,483 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,483 sel=0 char
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,461 sel=0 char
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,439 sel=0 char
+? 0
+$ send-keys -t main -X page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,0,417 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,0,417 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 page-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-off
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 42,0,500 sel=0 char
+? 0
+$ send-keys -t main -X -N 100 page-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-toggle
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 100 scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 20 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-toggle
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-toggle
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,19 sel=0 char
+? 0
+$ send-keys -t main -X -N 100 scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 20 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X -N 100 halfpage-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on extra
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 20 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,20 sel=0 char
+? 0
+$ send-keys -t main -X -N 30 halfpage-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 8 scroll-up
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,8 sel=0 char
+? 0
+$ send-keys -t main -X scroll-exit-on
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,8 sel=0 char
+? 0
+$ send-keys -t main -X scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,7 sel=0 char
+? 0
+$ send-keys -t main -X -N 3 scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,4 sel=0 char
+? 0
+$ send-keys -t main -X -N 8 scroll-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+0 ,, sel= 
+? 0

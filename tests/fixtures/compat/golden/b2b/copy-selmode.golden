@@ -1,0 +1,126 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys vi
+? 0
+$ copy-mode -t main
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X selection-mode word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X selection-mode Line
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 line
+? 0
+$ send-keys -t main -X selection-mode WORD
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode l
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 line
+? 0
+$ send-keys -t main -X selection-mode c
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X selection-mode w
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode bogus
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode char word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode -- word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X selection-mode -x
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X select-word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 16,22,0 sel=1 word
+? 0
+$ send-keys -t main -X selection-mode char
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 16,22,0 sel=1 char
+? 0
+$ send-keys -t main -X selection-mode line
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 16,22,0 sel=1 line
+? 0
+$ send-keys -t main -X cursor-right
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=1 line
+? 0
+$ send-keys -t main -X cursor-down
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=1 line
+? 0
+$ send-keys -t main -X clear-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X selection-mode word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 word
+? 0
+$ send-keys -t main -X begin-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X -N 3 next-word
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X stop-selection
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
+$ send-keys -t main -X selection-mode
+? 0
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} sel=#{selection_present} #{selection_mode}'
+1 0,23,0 sel=0 char
+? 0
