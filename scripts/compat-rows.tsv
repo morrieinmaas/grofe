@@ -22,14 +22,8 @@ display-menu -t[=]	oos:Mouse argv forms
 switch-client -t[=]	oos:Mouse argv forms
 send-keys -M	oos:Mouse argv forms
 resize-pane -M	oos:Mouse argv forms
-display-menu -x[M]	oos:Mouse argv forms
-display-menu -y[M]	oos:Mouse argv forms
-display-menu -x[W]	oos:Mouse argv forms
-display-menu -y[W]	oos:Mouse argv forms
-display-menu -x[S]	oos:Mouse argv forms
-display-menu -y[S]	oos:Mouse argv forms
-select-pane -m	oos:Marked panes
-select-pane -M	oos:Marked panes
+select-pane -m	area:Windows and panes
+select-pane -M	area:Windows and panes
 link-window	oos:`link-window`
 unlink-window	oos:`link-window`
 new-session -t	oos:`link-window`
