@@ -128,3 +128,43 @@ fn the_close_buttons_menu_kills_the_pane_it_was_clicked_on() {
     );
     assert!(got.is_ok(), "the pane is still there");
 }
+
+#[test]
+fn a_new_pane_asking_for_the_background_at_once_is_told_the_window_style() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "60",
+        "-y",
+        "8",
+        "sleep 60",
+    ])
+    .expect("new-session");
+    srv.cmd(&["set", "-g", "window-style", "fg=#102030,bg=#405060"])
+        .expect("set");
+    // The query goes out the moment the pane starts, before the server's
+    // next sync of the pane colours.
+    srv.cmd(&[
+        "new-window",
+        "-t",
+        "main",
+        "sh -c 'stty raw -echo; printf \"\\033]11;?\\033\\\\\"; \
+         dd bs=1 count=25 2>/dev/null | tr -d \"\\033\"; echo; sleep 30'",
+    ])
+    .expect("new-window");
+    let want = "]11;rgb:4040/5050/6060";
+    srv.wait_for(|| srv.capture("main:2").contains(want), WAIT)
+        .unwrap_or_else(|e| {
+            let all = srv.cmd(&[
+                "list-panes",
+                "-a",
+                "-F",
+                "#{window_index}.#{pane_index} #{pane_dead} #{pane_current_command}",
+            ]);
+            panic!("{e}: {all:?} {:?}", srv.capture("main:2"))
+        });
+}

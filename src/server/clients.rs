@@ -1947,6 +1947,30 @@ fn sync_pane_defaults(model: &Model) {
     }
 }
 
+struct NoVars;
+
+impl FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Hands a pane that was just spawned the colours its window and session
+/// give it, before anything can be read from it: a program that asks for
+/// OSC 10 or 11 at once is answered with the style, not the fixed palette.
+/// The window may not be in the model yet, so the styles are read as the
+/// window's active pane would see them, without formats.
+pub(crate) fn seed_defaults(
+    model: &Model,
+    (session, window): (SessionId, WindowId),
+    handle: &crate::server::pane::PaneHandle,
+) {
+    let chain = [Owner::Window(window), Owner::Session(session)];
+    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+    let (fg, bg) = window_style_colours(&opt, &NoVars, true);
+    handle.set_default_colours(colour_rgb(fg), colour_rgb(bg));
+}
+
 /// The colours the default-colour cells of `pane` show (`window-style`,
 /// `window-active-style`), the terminal's own where they set none.
 pub(crate) fn pane_defaults(model: &Model, pane: PaneId) -> (Color, Color) {

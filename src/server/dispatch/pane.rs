@@ -485,6 +485,11 @@ pub(crate) fn respawn(
         &state.model.panes[&pane].handle,
     )
     .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
+    clients::seed_defaults(
+        &state.model,
+        (session, state.model.panes[&pane].window),
+        &handle,
+    );
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
         // process (`-k`), and stops its tasks. An `Exited` its reader had

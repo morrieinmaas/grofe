@@ -493,6 +493,7 @@ pub(crate) fn spawn_pane(
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
+    clients::seed_defaults(&state.model, (session, window), &handle);
     state.model.panes.insert(
         id,
         Pane {
