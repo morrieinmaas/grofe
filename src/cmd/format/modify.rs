@@ -876,6 +876,11 @@ impl Expander<'_> {
         let (mut limit, mut width) = (0i64, 0i64);
         let mut marker: Option<&str> = None;
         let mut time_format: Option<String> = None;
+        let logged: Vec<(&str, &[String])> = list
+            .iter()
+            .map(|m| (m.name.as_str(), m.args.as_slice()))
+            .collect();
+        self.log_modifiers(&logged);
         for fm in list {
             let arg = |i: usize| fm.args.get(i).map(String::as_str);
             let has = |c: char| arg(0).is_some_and(|a| a.contains(c));
@@ -982,6 +987,7 @@ impl Expander<'_> {
         }
 
         let mut value = if f.literal {
+            self.log(|| format!("literal string is '{copy}'"));
             unescape(copy)
         } else if f.character {
             let new = self.expand(copy);
@@ -1012,6 +1018,10 @@ impl Expander<'_> {
             )
         } else if let Some(fm) = search {
             let term = self.expand(copy);
+            match self.vars.get("pane_id") {
+                Some(pane) => self.log(|| format!("search '{term}' pane {pane}")),
+                None => self.log(|| format!("search '{term}' but no pane")),
+            }
             let (regex, ignore) = (
                 fm.args.first().is_some_and(|a| a.contains('r')),
                 fm.args.first().is_some_and(|a| a.contains('i')),
@@ -1021,7 +1031,10 @@ impl Expander<'_> {
                 .unwrap_or(0)
                 .to_string()
         } else if f.repeat {
-            let (left, right) = self.choose(copy).ok_or(Fail)?;
+            let Some((left, right)) = self.choose(copy) else {
+                self.log(|| format!("repeat syntax error: {copy}"));
+                return Err(Fail);
+            };
             match strtonum(&right, 1, MAX_REPEAT) {
                 Some(n) if left.len().saturating_mul(n as usize) <= REPEAT_BYTES => {
                     left.repeat(n as usize)
@@ -1035,7 +1048,12 @@ impl Expander<'_> {
         } else if let Some(fm) = bool_op {
             self.bool_op_n(copy, fm.name == "&&")
         } else if let Some(fm) = cmp {
-            let (left, right) = self.choose(copy).ok_or(Fail)?;
+            let Some((left, right)) = self.choose(copy) else {
+                self.log(|| format!("compare {} syntax error: {copy}", fm.name));
+                return Err(Fail);
+            };
+            self.log(|| format!("compare {} left is: {left}", fm.name));
+            self.log(|| format!("compare {} right is: {right}", fm.name));
             flag(match fm.name.as_str() {
                 "==" => left == right,
                 "!=" => left != right,
@@ -1063,10 +1081,12 @@ impl Expander<'_> {
         } else if let Some(fm) = mexp {
             self.expression(fm, copy).unwrap_or_default()
         } else if copy.contains("#{") {
+            self.log(|| format!("expanding inner format '{copy}'"));
             self.expand(copy)
         } else {
-            self.find(copy, &f, time_format.as_deref())
-                .unwrap_or_default()
+            let found = self.find(copy, &f, time_format.as_deref());
+            self.log_found(copy, found.as_deref());
+            found.unwrap_or_default()
         };
 
         // Expand again.
@@ -1084,6 +1104,7 @@ impl Expander<'_> {
             let with = self.expand_owned(&sub.args[1]);
             let icase = sub.args.get(2).is_some_and(|a| a.contains('i'));
             value = regsub(&pattern, &with, &value, icase).unwrap_or(value);
+            self.log(|| format!("substitute '{pattern}' to '{with}': {value}"));
         }
 
         // Truncate.
@@ -1104,21 +1125,26 @@ impl Expander<'_> {
                 }
                 _ => new,
             };
+            self.log(|| format!("applied length limit {limit}: {value}"));
         }
 
         // Pad.
         if width > 0 {
             value = pad_right(&value, width as usize);
+            self.log(|| format!("applied padding width {width}: {value}"));
         } else if width < 0 {
             value = pad_left(&value, width.unsigned_abs() as usize);
+            self.log(|| format!("applied padding width {width}: {value}"));
         }
 
         // Replace with the length or the width.
         if f.length {
             value = value.len().to_string();
+            self.log(|| format!("replacing with length: {value}"));
         }
         if f.width {
             value = style_width(&value).to_string();
+            self.log(|| format!("replacing with width: {value}"));
         }
         Ok(value)
     }
@@ -1133,7 +1159,14 @@ impl Expander<'_> {
                 Some(c) => (&rest[..c], Some(&rest[c + 1..])),
                 None => (rest, None),
             };
-            let truthy = is_truthy(&self.expand(operand));
+            let expanded = self.expand(operand);
+            self.log(|| {
+                format!(
+                    "operator {} has operand: {expanded}",
+                    if and { "&&" } else { "||" }
+                )
+            });
+            let truthy = is_truthy(&expanded);
             result = if and {
                 result && truthy
             } else {
@@ -1155,6 +1188,7 @@ impl Expander<'_> {
         ]
         .contains(&op)
         {
+            self.log(|| format!("expression has no valid operator: '{op}'"));
             return None;
         }
         let (mut use_fp, mut prec) = (false, 0i64);
@@ -1163,14 +1197,31 @@ impl Expander<'_> {
             prec = 2;
         }
         if fm.args.len() >= 3 {
-            prec = strtonum(&fm.args[2], -MAX_PRECISION, MAX_PRECISION)?;
+            let Some(p) = strtonum(&fm.args[2], -MAX_PRECISION, MAX_PRECISION) else {
+                self.log(|| format!("expression precision invalid: {}", fm.args[2]));
+                return None;
+            };
+            prec = p;
         }
-        let (left, right) = self.choose(copy)?;
-        let (mut l, mut r) = (strtod(&left)?, strtod(&right)?);
+        let Some((left, right)) = self.choose(copy) else {
+            self.log(|| "expression syntax error".to_string());
+            return None;
+        };
+        let Some(mut l) = strtod(&left) else {
+            self.log(|| format!("expression left side is invalid: {left}"));
+            return None;
+        };
+        let Some(mut r) = strtod(&right) else {
+            self.log(|| format!("expression right side is invalid: {right}"));
+            return None;
+        };
         if !use_fp {
             l = l as i64 as f64;
             r = r as i64 as f64;
         }
+        let shown = |v: f64| format_float(v, prec);
+        self.log(|| format!("expression left side is: {}", shown(l)));
+        self.log(|| format!("expression right side is: {}", shown(r)));
         let result = match op {
             "+" => l + r,
             "-" => l - r,
@@ -1184,11 +1235,13 @@ impl Expander<'_> {
             "<" => f64::from(l < r),
             _ => f64::from(l <= r),
         };
-        Some(if use_fp {
+        let value = if use_fp {
             format_float(result, prec)
         } else {
             format_float(result as i64 as f64, prec)
-        })
+        };
+        self.log(|| format!("expression result is {value}"));
+        Some(value)
     }
 
     /// `#{S:}`, `#{W:}`, `#{P:}` and `#{L:}`: `copy` once for each item, or,
@@ -1210,6 +1263,23 @@ impl Expander<'_> {
                 Some(a) if item.active => a,
                 _ => all,
             };
+            let log_name = |name: &str| item.vars.get(name).unwrap_or_default();
+            match kind {
+                LoopKind::Sessions => {
+                    self.log(|| format!("session loop: {}", log_name("session_id")))
+                }
+                LoopKind::Windows => self.log(|| {
+                    format!(
+                        "window loop: {} {}",
+                        log_name("window_index"),
+                        log_name("window_id")
+                    )
+                }),
+                LoopKind::Panes => self.log(|| format!("pane loop: {}", log_name("pane_id"))),
+                LoopKind::Clients => {
+                    self.log(|| format!("client loop: {}", log_name("client_name")))
+                }
+            }
             let overlay = Overlay {
                 inner: item.vars,
                 extras: item.extras,

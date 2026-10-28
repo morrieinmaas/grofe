@@ -549,6 +549,18 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::ConfirmBefore(ConfirmBefore {
                 prompt: s("kill-pane #P? (y/n)"),
                 command: s("kill-pane"),
+                ..Default::default()
+            }),
+        ),
+        (
+            vec!["confirm-before", "-by", "-c", "x", "-t", "c1", "cmd"],
+            Command::ConfirmBefore(ConfirmBefore {
+                command: s("cmd"),
+                default_yes: true,
+                confirm_key: s("x"),
+                background: true,
+                client: s("c1"),
+                ..Default::default()
             }),
         ),
         (

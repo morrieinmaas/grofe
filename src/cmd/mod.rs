@@ -13,7 +13,8 @@ pub mod parse;
 pub mod target;
 
 pub use format::{
-    FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, expand, expand_time,
+    FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, all_variables, expand,
+    expand_time, expand_traced,
 };
 pub use keys::{is_key_name, key_bytes};
 pub use parse::{
@@ -297,6 +298,11 @@ pub struct CapturePane {
     pub opts: CaptureOpts,
     /// `-J` (M3.6): join wrapped lines and keep trailing spaces.
     pub join: bool,
+    /// `-N` (B2b): keep each line's trailing spaces, up to the cells the
+    /// line has allocated.
+    pub keep_blanks: bool,
+    /// `-T` (B2b): stop each line at the last cell the program wrote.
+    pub written_only: bool,
 }
 
 /// `set-option`/`show-options` scope flags (`-g -s -w -p`).
@@ -365,6 +371,12 @@ pub struct DisplayMessage {
     /// `-d` (TC.9): how long the message shows, in milliseconds, raw
     /// (checked at dispatch time, as tmux does); 0 means until a key.
     pub delay: Option<String>,
+    /// `-a` (B2b): print every format variable as `name=value`.
+    pub all: bool,
+    /// `-l` (B2b): the text is shown as it is, not expanded.
+    pub literal: bool,
+    /// `-v` (B2b): print how the format expanded, step by step.
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -467,13 +479,16 @@ pub struct BindKey {
     pub command: Vec<String>,
 }
 
-/// `unbind-key` (`-n -T -a`, then a key unless `-a`).
+/// `unbind-key` (`-n -T -a -q`, then a key unless `-a`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnbindKey {
     pub table: String,
     /// `-a`: every binding in the table.
     pub all: bool,
     pub key: Option<String>,
+    /// `-q`: an unknown key or table is no error. (A missing key, or a key
+    /// with `-a`, parse as neither `all` nor a `key`: nothing to do.)
+    pub quiet: bool,
 }
 
 /// `list-keys` (`-T`, and from M3.6 `-1 -N` with a key).
@@ -669,6 +684,21 @@ pub struct LastPane {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClockMode {
     pub target: Target,
+}
+
+/// `pipe-pane [-IOo] [-t pane] [command]` (B2b): the pane's output goes to
+/// a shell command, or what it prints goes into the pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipePane {
+    pub target: Target,
+    /// `-I`: the command's output is typed into the pane.
+    pub input: bool,
+    /// `-O`: the pane's output goes to the command (so does no `-I`).
+    pub output: bool,
+    /// `-o`: only open a pipe if there was none.
+    pub toggle: bool,
+    /// None or empty: only close the pane's pipe.
+    pub command: Option<String>,
 }
 
 /// `rotate-window` (TC.8).
@@ -921,6 +951,14 @@ pub struct DisplayPanes {}
 pub struct ConfirmBefore {
     /// `-p`, raw.
     pub prompt: Option<String>,
+    /// `-y`: Enter confirms too.
+    pub default_yes: bool,
+    /// `-c`: the key that confirms (default `y`), raw.
+    pub confirm_key: Option<String>,
+    /// `-b`: the caller does not wait for the answer.
+    pub background: bool,
+    /// `-t`: the client that is asked, by name or tty.
+    pub client: Option<String>,
     /// The stored command string run on `y`; required, `None` only for a
     /// bare `confirm-before`.
     pub command: Option<String>,
@@ -1173,6 +1211,7 @@ pub enum Command {
     ResizeWindow(ResizeWindow),
     LastPane(LastPane),
     ClockMode(ClockMode),
+    PipePane(PipePane),
     RotateWindow(RotateWindow),
     MoveWindow(MoveWindow),
     LinkWindow(LinkWindow),

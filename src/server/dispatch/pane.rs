@@ -735,7 +735,53 @@ pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<
 // before M2, so the text is printed either way.
 fn capture_pane(state: &mut State, ctx: &ClientCtx, c: CapturePane) -> Result<String, String> {
     let pane = state.model.resolve_pane(&c.target, ctx)?;
-    Ok(state.model.panes[&pane]
-        .handle
-        .capture_lines(&c.opts, c.join))
+    Ok(state.model.panes[&pane].handle.capture_blanks(
+        &c.opts,
+        c.join,
+        c.keep_blanks,
+        c.written_only,
+    ))
+}
+
+/// `pipe-pane`, as tmux 3.7b: a pane that has exited refuses; the old
+/// pipe closes first (and with no command that is all); `-o` opens a new
+/// one only if there was none. The command is a format, strftime first.
+pub(super) fn pipe_pane(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: cmd::PipePane,
+) -> Result<String, String> {
+    let pane = state.model.resolve_pane(&c.target, ctx)?;
+    let Some(p) = state.model.panes.get(&pane) else {
+        return Err(format!("can't find pane: {pane}"));
+    };
+    if p.dead.is_some() {
+        return Err("target pane has exited".to_string());
+    }
+    let had = p.handle.pipe_open();
+    p.handle.pipe_close();
+    let Some(command) = c.command.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(String::new());
+    };
+    if c.toggle && had {
+        return Ok(String::new());
+    }
+    let model = &state.model;
+    let vars = match model.resolve_winlink(&c.target, ctx) {
+        Ok((session, _)) => options::FormatCtx::new(model, pane).in_session(session),
+        Err(_) => options::FormatCtx::new(model, pane),
+    };
+    let client = clients::current_client(state, ctx).and_then(|id| state.clients.get(&id));
+    let command = match client {
+        Some(client) => {
+            let client = clients::ClientVars::new(model, client, Some(vars));
+            cmd::expand_time(command, &options::ServerVars::fresh(state, pane, &client))
+        }
+        None => cmd::expand_time(command, &options::ServerVars::fresh(state, pane, &vars)),
+    };
+    let handle = &state.model.panes[&pane].handle;
+    handle
+        .pipe_start(&command, c.input, c.output)
+        .map_err(|e| format!("fork error: {e}"))?;
+    Ok(String::new())
 }

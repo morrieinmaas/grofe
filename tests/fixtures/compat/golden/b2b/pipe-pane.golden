@@ -1,0 +1,113 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ pipe-pane -t main 'cat > "$HOME/pp1.#{pane_index}"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe} pid=#{?pane_pipe_pid,set,none}'
+pipe=1 pid=set
+? 0
+$ send-keys -t main abc Enter
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/pp1.1"'
+abc^M
+abc^M
+? 0
+$ pipe-pane -t main
+? 0
+$ display -p -t main 'pipe=#{pane_pipe} pid=#{?pane_pipe_pid,set,none}'
+pipe=0 pid=none
+? 0
+$ send-keys -t main later Enter
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/pp1.1"'
+abc^M
+abc^M
+? 0
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ send-keys -t main one Enter
+? 0
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ send-keys -t main two Enter
+? 0
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ send-keys -t main three Enter
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/pp2"'
+one^M
+one^M
+three^M
+three^M
+? 0
+$ pipe-pane -t main 'cat > "$HOME/pp3"'
+? 0
+$ send-keys -t main first Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ pipe-pane -t main 'cat > "$HOME/pp4"'
+? 0
+$ send-keys -t main second Enter
+? 0
+$ run-shell 'sleep 1; echo pp3; cat -v "$HOME/pp3"; echo pp4; cat -v "$HOME/pp4"'
+pp3
+first^M
+first^M
+pp4
+second^M
+second^M
+? 0
+$ pipe-pane -t main ''
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ pipe-pane -O -t main 'cat > "$HOME/pp5"'
+? 0
+$ send-keys -t main five Enter
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/pp5"'
+five^M
+five^M
+? 0
+$ pipe-pane -t nosuch 'cat'
+! can't find pane: nosuch
+? 1
+$ pipe-pane -Z 'cat'
+! command pipe-pane: unknown flag -Z
+? 1
+$ pipe-pane -t main 'a' 'b'
+! command pipe-pane: too many arguments (need at most 1)
+? 1
+$ pipe-pane -t main 'true'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ send-keys -t main six Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ send-keys -t main seven Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0

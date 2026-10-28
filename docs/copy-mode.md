@@ -325,8 +325,8 @@ That copy is kept as one string of about a byte a cell for the mode's next
 search, so the rows with no match cost no search of their own. A
 100 000-line search takes a few milliseconds in a release build.
 
-The incremental searches (`search-forward-incremental`, emacs `C-s`) are
-out of scope, as is the timestamp `copy-mode-position-format` can show.
+The timestamp `copy-mode-position-format` can show is out of scope. The
+incremental searches are in "The emacs table" below.
 
 ## Buffers
 
@@ -547,17 +547,48 @@ the other clipboard tools are stubs, so the suite never reaches the
 machine's clipboard; the container has none of them, which the
 scenarios do not depend on.
 
+## The emacs table (B2b)
+
+With `mode-keys emacs`, copy mode reads tmux 3.7b's stock `copy-mode`
+table: its 75 bindings, listed by `list-keys -T copy-mode` as tmux prints
+them (`golden/b2b/emacs-keys`), and the keys they bind are checked through
+an attached client (`golden/b2b/emacs-move`, `-scroll`, `-keypad`,
+`-select`, `-marks`, `-prompts`). A lone Escape is not typed in these
+goldens: the recording container's tmux holds it back.
+
+**Incremental search.** `C-s` and `C-r` open `command-prompt -i`. An
+incremental prompt does not wait for Enter: its template runs with every
+change of the text, with `=` in front of the text (`-` for `C-r` and `+`
+for `C-s` pressed again; on an empty line they bring back the `-I` text),
+so `search-forward-incremental` and `search-backward-incremental` search
+again each time. The first call remembers where the cursor was; a changed
+string starts again from that place, at the end of its line (so a match
+on that line is behind it), and a search that finds nothing drops the
+marks. Enter keeps the position and runs nothing; Escape and `C-c` leave
+it where the last change put it. `golden/b2b/emacs-isearch` types through
+the prompt, `emacs-isearch-cmd` calls the commands.
+
+**Other commands.** `cursor-down-and-cancel`, `scroll-down-and-cancel`,
+`page-down-and-cancel` and `halfpage-down-and-cancel` leave the mode when
+the view is at the bottom; `cursor-centre-vertical`,
+`cursor-centre-horizontal` and `recentre-top-bottom` (middle, top, bottom
+of the view, starting over when the cursor's line changes);
+`scroll-exit-on`, `-off` and `-toggle`; `selection-mode` (`char`, `word`,
+`line` or their first letters, any case); and `pipe`, `pipe-no-clear` and
+`pipe-and-cancel`, which send the selection to a command (or
+`copy-command`) and store nothing. Goldens: `b2b/copy-cancels`,
+`copy-centre`, `copy-exit`, `copy-selmode`, `copy-pipe`.
+
 ## Out of scope
 
-- **The emacs table** (`copy-mode`). `mode-keys` stays `vi`. yank also binds
-  its keys in `copy-mode`; those rows land in a table grofe never enters.
-- **`copy-mode -M` and `-H` beyond the stock mouse rows' meaning**, and
-  `-d`, `-q`, `-s`, `-S`,
-  the scrollbar rows of the stock `root` table (grofe draws no pane
+- **`copy-mode -M` and `-H` beyond the stock mouse rows' meaning**, and the
+  scrollbar rows of the stock `root` table (grofe draws no pane
   scrollbar) and view mode.
-- **`-X` commands no row or plan task names**, such as the incremental
-  search commands and `scroll-to-mouse`. TM.2 also routes `copy-line`,
-  `rectangle-on`, `rectangle-off` and `stop-selection` as tmux does.
+- **`scroll-to-mouse`**, which moves the view to the scrollbar slider's
+  pointer row; grofe has no scrollbar.
+- **`-X` commands no row or plan task names.** TM.2 also routes
+  `copy-line`, `rectangle-on`, `rectangle-off` and `stop-selection` as
+  tmux does.
 
 ## Decisions for the owner
 

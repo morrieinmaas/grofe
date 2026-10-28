@@ -1894,11 +1894,23 @@ pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String
 /// unknown key or table is an error, an unbound key is not.
 pub fn unbind_key(state: &mut State, _ctx: &ClientCtx, c: UnbindKey) -> Result<String, String> {
     let tables = &mut state.registry.key_tables;
+    // `-q`: a failure with nothing said, which tmux's exit status shows as
+    // success.
+    if c.quiet && !c.all && c.key.is_none() {
+        return Ok(String::new());
+    }
     let key = match &c.key {
-        Some(name) => Some(parse_key(name).map_err(|_| format!("unknown key: {name}"))?),
+        Some(name) => match parse_key(name) {
+            Ok(key) => Some(key),
+            Err(_) if c.quiet => return Ok(String::new()),
+            Err(_) => return Err(format!("unknown key: {name}")),
+        },
         None => None,
     };
     if !tables.exists(&c.table) {
+        if c.quiet {
+            return Ok(String::new());
+        }
         return Err(format!("table {} doesn't exist", c.table));
     }
     let keys = match key {
@@ -2595,11 +2607,13 @@ fn display_message(
     let pane = match model.resolve_pane(&c.target, ctx) {
         Ok(pane) => pane,
         Err(_) if c.target == Target::Session(SessionRef::Marked) => {
-            let out = expand_time(text, &NoVars);
-            return Ok(if c.print {
-                format!("{out}\n")
+            let (out, trace) = render_message(&c, text, &NoVars);
+            return Ok(if c.all {
+                out
+            } else if c.print {
+                format!("{trace}{out}\n")
             } else {
-                String::new()
+                trace
             });
         }
         Err(e) => return Err(e),
@@ -2627,20 +2641,42 @@ fn display_message(
     let for_formats = current
         .filter(|id| state.clients.get(id).map(|e| e.session) == session)
         .or_else(|| clients::current_client(state, ctx));
-    let out = match for_formats.and_then(|id| state.clients.get(&id)) {
+    let (out, trace) = match for_formats.and_then(|id| state.clients.get(&id)) {
         Some(client) => {
             let client = clients::ClientVars::new(model, client, Some(vars));
-            expand_time(text, &ServerVars::fresh(state, pane, &client))
+            render_message(&c, text, &ServerVars::fresh(state, pane, &client))
         }
-        None => expand_time(text, &ServerVars::fresh(state, pane, &vars)),
+        None => render_message(&c, text, &ServerVars::fresh(state, pane, &vars)),
     };
+    // `-a` lists the variables and shows no message.
+    if c.all {
+        return Ok(out);
+    }
     if c.print {
-        return Ok(format!("{out}\n"));
+        return Ok(format!("{trace}{out}\n"));
     }
     if let Some(id) = current {
         clients::display_message(state, id, &out, delay);
     }
-    Ok(String::new())
+    Ok(trace)
+}
+
+/// What `display-message` shows for `text`, and the lines `-v` prints
+/// before it: `-a` lists every variable instead, and `-l` shows the text
+/// as it is.
+fn render_message(c: &DisplayMessage, text: &str, vars: &dyn FormatVars) -> (String, String) {
+    if c.all {
+        return (crate::cmd::all_variables(vars), String::new());
+    }
+    if c.literal {
+        return (text.to_string(), String::new());
+    }
+    if c.verbose {
+        let (out, trace) = crate::cmd::expand_traced(text, vars, true);
+        let lines: String = trace.iter().map(|l| format!("{l}\n")).collect();
+        return (out, lines);
+    }
+    (expand_time(text, vars), String::new())
 }
 
 fn lines(
@@ -3505,6 +3541,8 @@ impl FormatVars for FormatCtx<'_> {
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
+            "pane_pipe" => flag(p.handle.pipe_open()),
+            "pane_pipe_pid" => p.handle.pipe_pid()?.to_string(),
             // Empty for a live pane and for one a signal killed, as tmux.
             "pane_dead_status" => p.dead.flatten()?.to_string(),
             "pane_start_command" => p

@@ -1,0 +1,14 @@
+# B2b: capture-pane -N keeps each line's trailing spaces, -T leaves out the positions the program never wrote, -J (which implies both) joins wrapped lines, and -q is quiet. The pane has trailing blanks the program wrote, a cursor jump, an erase, and a wide wrapped line.
+$ new-session -d -s main -x 20 -y 12 'printf "ab  \ncd\033[5Cef\nxx    yy\033[3D\033[K\nzz  \n\033[2K  trail  \nfull line of twenty!\nlong line that wraps around twice here\n\033[31mred  \033[39m\n\ttab\n\n"; sleep 100000'
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main
+$ capture-pane -pN -t main
+$ capture-pane -pT -t main
+$ capture-pane -pNT -t main
+$ capture-pane -pTN -t main
+$ capture-pane -pJ -t main
+$ capture-pane -pJN -t main
+$ capture-pane -pJT -t main
+$ capture-pane -pq -t main
+$ capture-pane -pNq -S 0 -E 5 -t main
+$ capture-pane -pT -S -3 -E 2 -t main

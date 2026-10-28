@@ -462,3 +462,45 @@ fn deep_nesting_answers_at_once_and_the_server_keeps_serving() {
     assert!(took < Duration::from_secs(1), "{took:?}");
     assert_eq!(display(&srv, "alpha", "#{session_name}"), "alpha");
 }
+
+/// B2b: `display-message -a` lists the variables grofe answers as
+/// `name=value`, in tmux's order (the sorted format table, then what a
+/// mode adds), and `-l` shows its text as it is.
+#[test]
+fn display_message_a_lists_the_variables_and_l_leaves_the_text_alone() {
+    let srv = scripted();
+    let out = srv
+        .cmd(&["display-message", "-a", "-t", "alpha:2"])
+        .expect("display-message -a");
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines.contains(&"session_name=alpha"), "{out}");
+    assert!(lines.contains(&"window_index=2"), "{out}");
+    assert!(
+        lines.iter().all(|l| l.split_once('=').is_some()),
+        "every line is name=value: {out}"
+    );
+    let names: Vec<&str> = lines.iter().filter_map(|l| l.split('=').next()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "outside a mode the table's order is sorted");
+    assert!(
+        !names.contains(&"copy_cursor_x"),
+        "mode variables only inside the mode"
+    );
+    srv.cmd(&["copy-mode", "-t", "alpha:2"]).expect("copy-mode");
+    let in_mode = srv
+        .cmd(&["display-message", "-a", "-t", "alpha:2"])
+        .expect("display-message -a in copy mode");
+    assert!(in_mode.contains("\ncopy_cursor_x=0\n"), "{in_mode}");
+    assert_eq!(
+        display_literal(&srv, "#{session_name} %H ##"),
+        "#{session_name} %H ##"
+    );
+}
+
+fn display_literal(srv: &TestServer, text: &str) -> String {
+    let out = srv
+        .cmd(&["display-message", "-lp", "-t", "alpha:2", text])
+        .expect("display-message -l");
+    out.strip_suffix('\n').unwrap_or(&out).to_string()
+}

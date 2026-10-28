@@ -15,10 +15,10 @@ use super::{
     FindWindow, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane,
     LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
     ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PluginRestart, RefreshClient,
-    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
-    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
-    SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
+    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane, PluginRestart,
+    RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow,
+    RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow,
+    SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
     ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
     SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor,
     WindowStep,
@@ -678,6 +678,10 @@ const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('e', FlagKind::Bool),
     ('J', FlagKind::Bool),
+    ('N', FlagKind::Bool),
+    ('T', FlagKind::Bool),
+    // Only for `-a`, which says "no alternate screen" without it.
+    ('q', FlagKind::Bool),
     ('S', FlagKind::Value),
     ('E', FlagKind::Value),
     ('t', FlagKind::Value),
@@ -718,6 +722,8 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
             escapes: flags.present.contains(&'e'),
         },
         join: flags.present.contains(&'J'),
+        keep_blanks: flags.present.contains(&'N'),
+        written_only: flags.present.contains(&'T'),
     }))
 }
 
@@ -851,6 +857,9 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
 
 const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
+    ('a', FlagKind::Bool),
+    ('l', FlagKind::Bool),
+    ('v', FlagKind::Bool),
     ('t', FlagKind::Value),
     ('c', FlagKind::Value),
     ('d', FlagKind::Value),
@@ -883,6 +892,9 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         text,
         client: flags.values.get(&'c').cloned(),
         delay: flags.values.get(&'d').cloned(),
+        all: flags.present.contains(&'a'),
+        literal: flags.present.contains(&'l'),
+        verbose: flags.present.contains(&'v'),
     }))
 }
 
@@ -1144,6 +1156,7 @@ fn parse_bind_key(argv: &[String]) -> Result<Command, ParseError> {
 const UNBIND_KEY_SHORT: &[(char, FlagKind)] = &[
     ('n', FlagKind::Bool),
     ('a', FlagKind::Bool),
+    ('q', FlagKind::Bool),
     ('T', FlagKind::Value),
 ];
 
@@ -1157,10 +1170,12 @@ fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
         "unbind-key",
     )?;
     no_extra_positionals(&flags, "unbind-key", 1)?;
-    let all = flags.present.contains(&'a');
-    let key = flags.positionals.first().cloned();
-    // tmux's wording.
+    let mut all = flags.present.contains(&'a');
+    let mut key = flags.positionals.first().cloned();
+    let quiet = flags.present.contains(&'q');
+    // tmux's wording; `-q` keeps it quiet and does nothing.
     match (all, &key) {
+        (true, Some(_)) | (false, None) if quiet => (all, key) = (false, None),
         (true, Some(_)) => return Err(ParseError::Other("key given with -a".to_string())),
         (false, None) => return Err(ParseError::Other("missing key".to_string())),
         _ => {}
@@ -1169,6 +1184,7 @@ fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
         table: key_table(&flags),
         all,
         key,
+        quiet,
     }))
 }
 
@@ -1268,6 +1284,32 @@ fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
         numeric: flags.present.contains(&'N'),
         incremental: flags.present.contains(&'i'),
         expand: flags.present.contains(&'F'),
+    }))
+}
+
+fn parse_pipe_pane(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[
+                ('I', FlagKind::Bool),
+                ('O', FlagKind::Bool),
+                ('o', FlagKind::Bool),
+                ('t', FlagKind::Value),
+            ],
+            long: &[],
+        },
+        "pipe-pane",
+    )?;
+    no_extra_positionals(&flags, "pipe-pane", 1)?;
+    let input = flags.present.contains(&'I');
+    Ok(Command::PipePane(PipePane {
+        target: target_or_current(&flags.values, 't')?,
+        input,
+        // Neither -I nor -O is -O.
+        output: flags.present.contains(&'O') || !input,
+        toggle: flags.present.contains(&'o'),
+        command: flags.positionals.first().cloned(),
     }))
 }
 
@@ -1900,11 +1942,22 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_confirm_before(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('p', FlagKind::Value)], "confirm-before")?;
+    const SHORT: &[(char, FlagKind)] = &[
+        ('b', FlagKind::Bool),
+        ('c', FlagKind::Value),
+        ('p', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('y', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "confirm-before")?;
     needs_positionals(argv, &flags, "confirm-before", 1)?;
     no_extra_positionals(&flags, "confirm-before", 1)?;
     Ok(Command::ConfirmBefore(ConfirmBefore {
         prompt: flags.values.get(&'p').cloned(),
+        default_yes: flags.present.contains(&'y'),
+        confirm_key: flags.values.get(&'c').cloned(),
+        background: flags.present.contains(&'b'),
+        client: flags.values.get(&'t').cloned(),
         command: flags.positionals.first().cloned(),
     }))
 }
@@ -2996,6 +3049,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "clock-mode" => Ok(Command::ClockMode(ClockMode {
             target: parse_target_only(rest, "clock-mode")?,
         })),
+        "pipe-pane" => parse_pipe_pane(rest),
         "last-pane" => Ok(Command::LastPane(LastPane {
             target: parse_target_only(rest, "last-pane")?,
         })),
@@ -3269,6 +3323,9 @@ mod tests {
                 text: Some("#{pane_id}".to_string()),
                 client: Some("c1".to_string()),
                 delay: Some("5".to_string()),
+                all: false,
+                literal: false,
+                verbose: false,
             })
         );
         assert_eq!(
@@ -3738,6 +3795,8 @@ mod tests {
                     escapes: false,
                 },
                 join: false,
+                keep_blanks: false,
+                written_only: false,
             })
         );
     }
@@ -3756,6 +3815,8 @@ mod tests {
                     escapes: false,
                 },
                 join: false,
+                keep_blanks: false,
+                written_only: false,
             })
         );
     }
@@ -3774,6 +3835,8 @@ mod tests {
                     escapes: false,
                 },
                 join: false,
+                keep_blanks: false,
+                written_only: false,
             })
         );
     }
@@ -3960,6 +4023,9 @@ mod tests {
                 text: Some("#{pane_uid}".to_string()),
                 client: None,
                 delay: None,
+                all: false,
+                literal: false,
+                verbose: false,
             })
         );
     }
@@ -4551,6 +4617,7 @@ mod tests {
                 table: "root".to_string(),
                 all: false,
                 key: Some("M-h".to_string()),
+                quiet: false,
             }))
         );
         assert_eq!(
@@ -4559,10 +4626,18 @@ mod tests {
                 table: "copy".to_string(),
                 all: true,
                 key: None,
+                quiet: false,
             }))
         );
         assert!(parse(&argv(&["unbind-key"])).is_err());
         assert!(parse(&argv(&["unbind-key", "-a", "x"])).is_err());
+        // `-q` makes both a command that does nothing.
+        for words in [&["unbind-key", "-q"][..], &["unbind-key", "-aq", "x"]] {
+            let Ok(Command::UnbindKey(c)) = parse(&argv(words)) else {
+                panic!("{words:?}");
+            };
+            assert!(c.quiet && !c.all && c.key.is_none(), "{words:?}");
+        }
     }
 
     #[test]

@@ -298,6 +298,23 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `set-titles-string`, the status line and `T:` run strftime first (tmux's
   `format_expand_time`), while `list-* -F`, names and `E:` do not.
 
+- **Pipes and small flags (B2b)** are recorded in `golden/b2b/`.
+  `pipe-pane` (`-I -O -o`) runs the command under `/bin/sh` with the
+  server's environment; its pipe ends when the command's end of the socket
+  does, as tmux sees it, and survives `respawn-pane`; a command that
+  reads more slowly than the pane writes loses what does not fit in 1024
+  reads. `capture-pane -N` pads a line to the cells tmux
+  allocated for it, which grofe works out from the width written, so a line
+  that was written in several pieces can differ; `-q` is accepted for `-a`,
+  which is not built. `display-message -a` lists the variables grofe
+  answers (about 115 of tmux's 195), and `-v` traces the expansion as
+  tmux's `format_log` does for variables, `#{?}`, comparisons, boolean
+  operators, `m`, `s`, `=`, `p`, `n`, `w`, `e`, `E`, `T`, `b`, `t`, `q` and
+  the loops; it traces the text after the front end rewrote it, so `#S`
+  and the other one-letter aliases, `#{l:}`, a `#{?}` chain and `#()`
+  show as their rewrites or not at all. `confirm-before -t` takes a client by name
+  or tty, and `-y`, `-c` and `-b` as tmux.
+
 ## Key parity
 
 `scripts/key-parity.sh` (plan M3.7, TP.9a and TP.9b) loads the owner's
@@ -398,7 +415,6 @@ read back what tmux did.
 | `prefix` | `*` | gap | grofe | a gap, not a choice: grofe's own default table leaves out tmux 3.7's stock `* new-pane`, though the verb exists (TC.6, built to fzf's recorded form). Under the tmux name the stock binding is there; what a bare `new-pane` does on grofe is not checked here |
 | `prefix` | `<` | oos | grofe | out of scope: tmux's window menu opens at `-x W -y W`, a mouse position form (spec §4.5, mouse argv forms), so grofe's own default table leaves it unbound |
 | `prefix` | `>` | oos | grofe | out of scope: tmux's pane menu opens at `-x P -y P`, but its items are mouse argv forms (`copy-mode -t=`, `send-keys -X -t =`, `#{mouse_word}`; spec §4.5), so grofe's own default table leaves it unbound |
-| `copy-mode` | `(all)` | oos | both | the emacs table: `mode-keys` stays `vi` and grofe ships no emacs table (copy-mode.md, out of scope). tmux-yank's five rows there match |
 | `copy-mode-vi` | `C-h` | gap | both | vim-tmux-navigator's copy-mode-vi rows (`select-pane -L`, and `-D -U -R -l` below): canopy's `40-canopy-nav.toml` still defers them to M5, so grofe keeps the stock row. A canopy change, outside grofe |
 | `copy-mode-vi` | `C-j` | gap | both | the same (`select-pane -D`; grofe keeps the stock `copy-pipe-and-cancel`) |
 | `copy-mode-vi` | `C-k` | gap | both | the same (`select-pane -U`; unbound on grofe) |

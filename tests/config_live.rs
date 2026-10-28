@@ -366,7 +366,16 @@ fn bind_and_unbind_key_edges() {
         .expect_err("bad");
     assert!(err.contains("unknown command: splat-window"), "{err}");
     srv.cmd(&["unbind-key", "-a", "-T", "mine"]).expect("-a");
-    assert_eq!(keys(&srv, "mine"), "");
+    // Recorded on tmux 3.7b (golden/b2b/unbind-q): the table goes with its
+    // last binding.
+    let err = srv
+        .cmd(&["list-keys", "-T", "mine"])
+        .expect_err("an emptied table is gone");
+    assert!(err.contains("table mine doesn't exist"), "{err}");
+    // `-q` keeps the failures quiet.
+    srv.cmd(&["unbind-key", "-q", "-T", "mine", "h"])
+        .expect("-q table");
+    srv.cmd(&["unbind-key", "-q", "NotAKey"]).expect("-q key");
 }
 
 /// Case 5: a `split-window ; select-pane -L` binding runs both.

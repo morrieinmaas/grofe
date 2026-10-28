@@ -1,0 +1,130 @@
+$ new-session -d -s main -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+client 60x15 attach -t main
+$ confirm-before -b -y -t {client} -p 'sure?' 'set -g @a1 yes'
+? 0
+keys Enter
+$ show-options -gv @a1
+yes
+? 0
+$ confirm-before -b -t {client} 'set -g @a2 yes'
+? 0
+keys Enter
+$ show-options -gv @a2
+! invalid option: @a2
+? 1
+$ confirm-before -b -y -t {client} 'set -g @a3 yes'
+? 0
+keys y
+$ show-options -gv @a3
+yes
+? 0
+$ confirm-before -b -y -t {client} 'set -g @a4 yes'
+? 0
+keys n
+$ show-options -gv @a4
+! invalid option: @a4
+? 1
+$ confirm-before -b -y -t {client} 'set -g @a5 yes'
+? 0
+keys Y
+$ show-options -gv @a5
+! invalid option: @a5
+? 1
+$ confirm-before -b -y -t {client} 'set -g @a6 yes'
+? 0
+keys Space
+$ show-options -gv @a6
+! invalid option: @a6
+? 1
+$ confirm-before -b -c x -t {client} 'set -g @a7 yes'
+? 0
+keys y
+$ show-options -gv @a7
+! invalid option: @a7
+? 1
+$ confirm-before -b -c x -t {client} 'set -g @a8 yes'
+? 0
+keys x
+$ show-options -gv @a8
+yes
+? 0
+$ confirm-before -b -c x -y -t {client} 'set -g @a9 yes'
+? 0
+keys Enter
+$ show-options -gv @a9
+yes
+? 0
+$ confirm-before -b -c x -t {client} 'set -g @a10 yes'
+? 0
+screen Confirm 'set-option'? (x/n)
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Confirm 'set-option'? (x/n)
+keys n
+$ confirm-before -c xy -t {client} 'set -g @a11 yes'
+! invalid confirm key
+? 1
+$ confirm-before -c '' -t {client} 'set -g @a12 yes'
+! invalid confirm key
+? 1
+$ confirm-before -c ' ' -b -y -t {client} 'set -g @a13 yes'
+? 0
+keys Space
+$ show-options -gv @a13
+yes
+? 0
+$ confirm-before -b -yc q -t {client} 'set -g @a14 yes'
+? 0
+keys q
+$ show-options -gv @a14
+yes
+? 0
+$ confirm-before -b -y -t {client} 'bogus-command'
+! unknown command: bogus-command
+? 1
+$ confirm-before -b -y -t {client} 'set -g @a15 one ; set -g @a16 two'
+? 0
+keys Enter
+$ show-options -gv @a15
+one
+? 0
+$ show-options -gv @a16
+two
+? 0
+$ confirm-before -b -y -t {client} -p 'go?' 'set -g @a17 yes'
+? 0
+screen go?
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| go?
+keys C-c
+$ show-options -gv @a17
+! invalid option: @a17
+? 1

@@ -158,7 +158,7 @@ pub fn confirm_before(
     ctx: &ClientCtx,
     c: ConfirmBefore,
 ) -> Result<String, String> {
-    let Some(command) = c.command else {
+    let Some(command) = c.command.clone() else {
         return Err(too_few_arguments("confirm-before"));
     };
     let cmds = cmd::split_command_string(&command).map_err(|e| e.to_string())?;
@@ -169,7 +169,7 @@ pub fn confirm_before(
         .first()
         .and_then(|argv| argv.first())
         .map_or("", |v| cmd::parse::canonical_name(v));
-    prompt::confirm(state, ctx, c.prompt.as_deref(), verb, command)
+    prompt::confirm(state, ctx, &c, verb, command)
 }
 
 /// The request's argv with grofe aliases expanded, or `None` to run it as

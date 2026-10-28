@@ -1,0 +1,51 @@
+# B2b: confirm-before -y also runs the command on Enter; -c names another confirm key (printable, one character); -b does not wait for the answer. The prompt names the command and the confirm key.
+$ new-session -d -s main -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x15 attach -t main
+$ confirm-before -b -y -t {client} -p 'sure?' 'set -g @a1 yes'
+keys Enter
+$ show-options -gv @a1
+$ confirm-before -b -t {client} 'set -g @a2 yes'
+keys Enter
+$ show-options -gv @a2
+$ confirm-before -b -y -t {client} 'set -g @a3 yes'
+keys y
+$ show-options -gv @a3
+$ confirm-before -b -y -t {client} 'set -g @a4 yes'
+keys n
+$ show-options -gv @a4
+$ confirm-before -b -y -t {client} 'set -g @a5 yes'
+keys Y
+$ show-options -gv @a5
+$ confirm-before -b -y -t {client} 'set -g @a6 yes'
+keys Space
+$ show-options -gv @a6
+$ confirm-before -b -c x -t {client} 'set -g @a7 yes'
+keys y
+$ show-options -gv @a7
+$ confirm-before -b -c x -t {client} 'set -g @a8 yes'
+keys x
+$ show-options -gv @a8
+$ confirm-before -b -c x -y -t {client} 'set -g @a9 yes'
+keys Enter
+$ show-options -gv @a9
+$ confirm-before -b -c x -t {client} 'set -g @a10 yes'
+screen Confirm 'set-option'? (x/n)
+keys n
+$ confirm-before -c xy -t {client} 'set -g @a11 yes'
+$ confirm-before -c '' -t {client} 'set -g @a12 yes'
+$ confirm-before -c ' ' -b -y -t {client} 'set -g @a13 yes'
+keys Space
+$ show-options -gv @a13
+$ confirm-before -b -yc q -t {client} 'set -g @a14 yes'
+keys q
+$ show-options -gv @a14
+$ confirm-before -b -y -t {client} 'bogus-command'
+$ confirm-before -b -y -t {client} 'set -g @a15 one ; set -g @a16 two'
+keys Enter
+$ show-options -gv @a15
+$ show-options -gv @a16
+$ confirm-before -b -y -t {client} -p 'go?' 'set -g @a17 yes'
+screen go?
+keys C-c
+$ show-options -gv @a17

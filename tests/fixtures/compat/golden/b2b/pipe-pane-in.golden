@@ -1,0 +1,92 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ pipe-pane -I -t main 'echo injected; sleep 1'
+? 0
+$ run-shell 'sleep 2'
+? 0
+$ capture-pane -p -t main
+injected
+injected
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ pipe-pane -I -t main 'cat > "$HOME/in1"; echo done >> "$HOME/in1"'
+? 0
+$ send-keys -t main typed Enter
+? 0
+$ run-shell 'sleep 1; echo in1:; cat -v "$HOME/in1"'
+in1:
+done
+? 0
+$ pipe-pane -t main
+? 0
+$ pipe-pane -IO -t main 'while read l; do case "$l" in ping*) echo pong;; esac; done'
+? 0
+$ send-keys -t main ping Enter
+? 0
+$ run-shell 'sleep 2'
+? 0
+$ capture-pane -p -t main
+injected
+injected
+typed
+typed
+ping
+ping
+pong
+pong
+pong
+pong
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ pipe-pane -t main
+? 0
+$ pipe-pane -I -O -o -t main 'cat >> "$HOME/in2"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ send-keys -t main x Enter
+? 0
+$ pipe-pane -I -o -t main 'echo never'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/in2"'
+x^M
+x^M
+? 0

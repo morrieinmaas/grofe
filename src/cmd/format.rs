@@ -6,9 +6,10 @@
 //! raw strings on the parsed `Command`; dispatch calls [`expand`] against
 //! the target's context at execution time, not at parse time.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 mod modify;
+mod names;
 mod x11;
 
 pub use modify::escape_arg;
@@ -173,12 +174,55 @@ pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
     }
 }
 
+/// `display-message -a`: every variable `vars` answers as `name=value`
+/// lines, in the order tmux lists them (a name `vars` has no value for is
+/// left out, as tmux leaves out one whose callback has none).
+// ponytail: grofe answers about 115 of tmux's 195 table entries; the rest
+// are absent from the list rather than empty.
+pub fn all_variables(vars: &dyn FormatVars) -> String {
+    let mut out = String::new();
+    // A pane in a mode adds its own variables (grofe has a stub for some
+    // outside the mode, which tmux does not list).
+    let modes: &[&str] = if vars.get("pane_in_mode").as_deref() == Some("1") {
+        names::COPY_MODE
+    } else {
+        &[]
+    };
+    for name in names::TABLE.iter().chain(modes) {
+        if let Some(value) = vars.get(name) {
+            out.push_str(&format!("{name}={value}\n"));
+        }
+    }
+    out
+}
+
+/// [`expand`] (with `time`, [`expand_time`]) that also returns what tmux's
+/// `display-message -v` prints for it: one `# ...` line for each step of
+/// the expansion, each nested level one space further in.
+pub fn expand_traced(fmt: &str, vars: &dyn FormatVars, time: bool) -> (String, Vec<String>) {
+    let closers = scan_closers(fmt);
+    let shared = Shared::default();
+    *shared.trace.borrow_mut() = Some(Vec::new());
+    shared.expand_time.set(time);
+    let out = Expander {
+        src: fmt,
+        vars,
+        closers: &closers,
+        shared: &shared,
+    }
+    .expand(fmt);
+    (out, shared.trace.take().unwrap_or_default())
+}
+
 /// The state every level of one [`expand`] call shares.
 #[derive(Default)]
 struct Shared {
     depth: Cell<usize>,
     /// Inside `#{T:}`: a `%` in a format goes through strftime first.
     expand_time: Cell<bool>,
+    /// `display-message -v`: the lines tmux's `format_log` prints, kept as
+    /// the expansion goes (`None` when nothing is asked for).
+    trace: RefCell<Option<Vec<String>>>,
 }
 
 /// Each `#{` in `src` (its offset) and the offset of its `}`, if it has
@@ -269,13 +313,32 @@ impl<'a> Expander<'a> {
         .expand(fmt)
     }
 
+    fn tracing(&self) -> bool {
+        self.shared.trace.borrow().is_some()
+    }
+
+    /// tmux's `format_log`, when a trace is asked for: the message behind a
+    /// `#` and as many spaces as the expansion is deep (at most ten).
+    fn log(&self, message: impl FnOnce() -> String) {
+        if let Some(lines) = self.shared.trace.borrow_mut().as_mut() {
+            let spaces = self.shared.depth.get().min(10);
+            lines.push(format!("#{}{}", " ".repeat(spaces), message()));
+        }
+    }
+
     fn expand(&self, fmt: &str) -> String {
+        if fmt.is_empty() {
+            return String::new();
+        }
         let depth = self.shared.depth.get();
         if depth == LOOP_LIMIT {
+            self.log(|| format!("reached loop limit ({LOOP_LIMIT})"));
             return String::new();
         }
         self.shared.depth.set(depth + 1);
+        self.log(|| format!("expanding format: {fmt}"));
         let out = self.expand_text(fmt);
+        self.log(|| format!("result is: {out}"));
         self.shared.depth.set(depth);
         out
     }
@@ -285,8 +348,12 @@ impl<'a> Expander<'a> {
             // tmux 3.7b: a format too long for strftime's 8 KiB buffer gives
             // nothing.
             let Some(timed) = modify::strftime_now(fmt, 8192) else {
+                self.log(|| "format is too long".to_string());
                 return String::new();
             };
+            if timed != fmt {
+                self.log(|| format!("after time expanded: {timed}"));
+            }
             let closers = scan_closers(&timed);
             return Expander {
                 src: &timed,
@@ -304,6 +371,7 @@ impl<'a> Expander<'a> {
         let mut i = 0;
         while i < fmt.len() {
             if fmt[i..].starts_with("##") {
+                self.log(|| "found ##".to_string());
                 out.push('#');
                 i += 2;
                 continue;
@@ -311,6 +379,7 @@ impl<'a> Expander<'a> {
             if fmt[i..].starts_with("#{")
                 && let Some(end) = self.closer(fmt, i)
             {
+                self.log(|| format!("found #{{}}: {}", &fmt[i + 2..end]));
                 match self.expand_body(&fmt[i + 2..end]) {
                     Ok(piece) => out.push_str(&piece),
                     // tmux stops there and keeps what it has.
@@ -368,27 +437,39 @@ impl<'a> Expander<'a> {
         }
         for (prefix, op) in COMPARISONS {
             if let Some(rest) = body.strip_prefix(prefix) {
-                return Some(self.expand_comparison(rest, body, prefix == "==:", op));
+                let name = &prefix[..prefix.len() - 1];
+                self.log_modifiers(&[(name, &[])]);
+                return Some(self.expand_comparison(rest, body, name, op));
             }
         }
         // `&&:`/`||:` fold over every operand, as in tmux 3.7b; one operand
         // is its own truth, and no operand at all is false.
         if let Some(rest) = body.strip_prefix("&&:") {
-            return Some(flag(
-                self.operands(rest).all(|o| is_truthy(&self.expand(o))),
-            ));
+            self.log_modifiers(&[("&&", &[])]);
+            return Some(flag(self.operands(rest).all(|o| self.operand(o, "&&"))));
         }
         if let Some(rest) = body.strip_prefix("||:") {
-            return Some(flag(
-                self.operands(rest).any(|o| is_truthy(&self.expand(o))),
-            ));
+            self.log_modifiers(&[("||", &[])]);
+            return Some(flag(self.operands(rest).any(|o| self.operand(o, "||"))));
         }
         if let Some((flags, rest)) = match_modifier(body) {
+            if flags.is_empty() {
+                self.log_modifiers(&[("m", &[])]);
+            } else {
+                // The flags are an argument, which tmux expands.
+                if self.tracing() {
+                    self.expand(flags);
+                }
+                self.log_modifiers(&[("m", &[flags.to_string()])]);
+            }
             let Some(c) = self.find_unnested(rest, b',') else {
+                self.log(|| format!("compare m syntax error: {rest}"));
                 return Some(String::new());
             };
             let pattern = self.expand(&rest[..c]);
             let s = self.expand(&rest[c + 1..]);
+            self.log(|| format!("compare m left is: {pattern}"));
+            self.log(|| format!("compare m right is: {s}"));
             let icase = flags.contains('i');
             return Some(flag(if flags.contains('r') {
                 regex_match(&pattern, &s, icase)
@@ -404,18 +485,23 @@ impl<'a> Expander<'a> {
         // `#{!:text}` is `1` when the expanded text is false, `#{!!:text}`
         // when it is true (tmux 3.7b).
         if let Some(rest) = body.strip_prefix("!!:") {
+            self.log_modifiers(&[("!!", &[])]);
             return Some(flag(is_truthy(&self.expand(rest))));
         }
         if let Some(rest) = body.strip_prefix("!:") {
+            self.log_modifiers(&[("!", &[])]);
             return Some(flag(!is_truthy(&self.expand(rest))));
         }
         if let Some(rest) = body.strip_prefix("b:") {
+            self.log_modifiers(&[("b", &[])]);
             return Some(self.expand_basename(rest));
         }
         if let Some(rest) = body.strip_prefix("t:") {
+            self.log_modifiers(&[("t", &[])]);
             return Some(self.expand_time(rest));
         }
         if let Some(rest) = body.strip_prefix("q:") {
+            self.log_modifiers(&[("q", &[])]);
             return Some(self.expand_quoted(rest));
         }
         None
@@ -424,13 +510,41 @@ impl<'a> Expander<'a> {
     /// One `#{...}`: the plain forms above, else tmux's modifier list
     /// (`format_build_modifiers`) and what it asks for, else a variable.
     fn expand_body(&self, body: &str) -> Result<String, Fail> {
+        let out = self.expand_body_inner(body);
+        match &out {
+            Ok(value) => self.log(|| format!("replaced '{body}' with '{value}'")),
+            Err(Fail) => self.log(|| format!("failed {body}")),
+        }
+        out
+    }
+
+    fn expand_body_inner(&self, body: &str) -> Result<String, Fail> {
         if let Some(done) = self.expand_simple(body) {
             return Ok(done);
         }
         if let Some((list, rest)) = self.build_modifiers(body) {
             return self.replace(&list, &body[rest..]);
         }
-        Ok(self.resolve(body))
+        Ok(self.lookup(body))
+    }
+
+    /// A variable named by a whole `#{...}`, as `format_replace` looks it
+    /// up last: a name, or text with a format in it, expanded.
+    fn lookup(&self, name: &str) -> String {
+        if name.contains("#{") {
+            self.log(|| format!("expanding inner format '{name}'"));
+            return self.expand(name);
+        }
+        match self.vars.get(name) {
+            Some(value) => {
+                self.log(|| format!("format '{name}' found: {value}"));
+                value
+            }
+            None => {
+                self.log(|| format!("format '{name}' not found"));
+                String::new()
+            }
+        }
     }
 
     /// `#{q:var}`: the variable's value with a backslash before each
@@ -439,16 +553,18 @@ impl<'a> Expander<'a> {
     /// is expanded and returned unquoted.
     fn expand_quoted(&self, arg: &str) -> String {
         if arg.contains("#{") {
+            self.log(|| format!("expanding inner format '{arg}'"));
             return self.expand(arg);
         }
-        let value = self.vars.get(arg).unwrap_or_default();
-        let mut out = String::with_capacity(value.len());
-        for c in value.chars() {
+        let value = self.vars.get(arg);
+        let mut out = String::new();
+        for c in value.iter().flat_map(|v| v.chars()) {
             if "|&;<>()$`\\\"'*?[# =%".contains(c) {
                 out.push('\\');
             }
             out.push(c);
         }
+        self.log_found(arg, value.as_ref().map(|_| out.as_str()));
         out
     }
 
@@ -480,14 +596,18 @@ impl<'a> Expander<'a> {
     /// 3.7b).
     fn expand_time(&self, arg: &str) -> String {
         if arg.contains("#{") {
+            self.log(|| format!("expanding inner format '{arg}'"));
             return self.expand(arg);
         }
-        self.vars
-            .get(arg)
-            .and_then(|v| v.parse::<i64>().ok())
-            .filter(|t| *t > 0)
-            .and_then(ctime)
-            .unwrap_or_default()
+        let found = self.vars.get(arg).map(|v| {
+            v.parse::<i64>()
+                .ok()
+                .filter(|t| *t > 0)
+                .and_then(ctime)
+                .unwrap_or_default()
+        });
+        self.log_found(arg, found.as_deref());
+        found.unwrap_or_default()
     }
 
     /// `#{b:var}`: tmux only applies the basename transform to a bare
@@ -497,26 +617,38 @@ impl<'a> Expander<'a> {
     /// only `#{b:pane_current_path}` (a bare name) is basenamed.
     fn expand_basename(&self, arg: &str) -> String {
         if arg.contains("#{") {
+            self.log(|| format!("expanding inner format '{arg}'"));
             self.expand(arg)
         } else {
-            self.vars
-                .get(arg)
-                .map(|v| posix_basename(&v))
-                .unwrap_or_default()
+            let found = self.vars.get(arg).map(|v| posix_basename(&v));
+            self.log_found(arg, found.as_deref());
+            found.unwrap_or_default()
         }
     }
 
-    /// Resolves a ternary condition: a bare token (no nested `#{...}`) is
-    /// looked up directly as a variable name, exactly as if it had been
-    /// written `#{token}`; a token that itself contains `#{...}` is
-    /// expanded first and its result used as-is. `expand_basename` uses
-    /// the same bare-vs-nested split for `#{b:var}`'s argument, but only
-    /// applies its own basename transform on the bare branch.
-    fn resolve(&self, s: &str) -> String {
-        if s.contains("#{") {
-            self.expand(s)
-        } else {
-            self.vars.get(s).unwrap_or_default()
+    /// One operand of `&&` or `||`: expanded, and whether it is true.
+    fn operand(&self, operand: &str, op: &str) -> bool {
+        let expanded = self.expand(operand);
+        self.log(|| format!("operator {op} has operand: {expanded}"));
+        is_truthy(&expanded)
+    }
+
+    /// The `format_find` line `format_replace` logs for `name`.
+    fn log_found(&self, name: &str, value: Option<&str>) {
+        match value {
+            Some(v) => self.log(|| format!("format '{name}' found: {v}")),
+            None => self.log(|| format!("format '{name}' not found")),
+        }
+    }
+
+    /// The `modifier N is X` lines, with their arguments, that
+    /// `format_replace` logs for a modifier list.
+    fn log_modifiers(&self, list: &[(&str, &[String])]) {
+        for (i, (name, args)) in list.iter().enumerate() {
+            self.log(|| format!("modifier {i} is {name}"));
+            for (j, arg) in args.iter().enumerate() {
+                self.log(|| format!("modifier {i} argument {j}: {arg}"));
+            }
         }
     }
 
@@ -525,6 +657,7 @@ impl<'a> Expander<'a> {
     /// end's `#{?c1,v1,c2,v2,...}`) costs no depth and no stack, as
     /// tmux's flat form costs none.
     fn expand_ternary<'s>(&self, mut rest: &'s str, mut original_body: &'s str) -> String {
+        let first = rest;
         loop {
             let malformed = || format!("#{{{original_body}}}");
             let Some(c1) = self.find_unnested(rest, b',') else {
@@ -535,18 +668,58 @@ impl<'a> Expander<'a> {
             let Some(c2) = self.find_unnested(after, b',') else {
                 return malformed();
             };
-            let branch = if is_truthy(&self.resolve(cond)) {
+            let truthy = self.condition(cond);
+            let branch = if truthy {
                 &after[..c2]
             } else {
                 &after[c2 + 1..]
             };
-            if branch.starts_with("#{?") && self.closer(branch, 0) == Some(branch.len() - 1) {
+            if !self.tracing()
+                && branch.starts_with("#{?")
+                && self.closer(branch, 0) == Some(branch.len() - 1)
+            {
                 original_body = &branch[2..branch.len() - 1];
                 rest = &branch[3..branch.len() - 1];
                 continue;
             }
+            if !truthy {
+                self.log(|| format!("no condition matched in '{first}'; using last arg"));
+            }
             return self.expand(branch);
         }
+    }
+
+    /// Resolves a ternary condition as tmux's `format_replace` does, logging
+    /// each step: a name is looked up; anything else, or a name that is no
+    /// variable, is expanded, and text that expands to itself is false.
+    fn condition(&self, cond: &str) -> bool {
+        self.log(|| format!("condition is: {cond}"));
+        let looked_up = if cond.contains("#{") {
+            None
+        } else {
+            self.vars.get(cond)
+        };
+        let found = match looked_up {
+            Some(v) => {
+                self.log(|| format!("condition '{cond}' found: {v}"));
+                v
+            }
+            None => {
+                let expanded = self.expand(cond);
+                if expanded == cond {
+                    self.log(|| format!("condition '{cond}' not found; assuming false"));
+                    String::new()
+                } else {
+                    expanded
+                }
+            }
+        };
+        let truthy = is_truthy(&found);
+        self.log(|| {
+            let is = if truthy { "true" } else { "false" };
+            format!("condition '{cond}' is {is}")
+        });
+        truthy
     }
 
     /// `#{==:a,b}` and the other [`COMPARISONS`]: both sides are literal
@@ -561,11 +734,12 @@ impl<'a> Expander<'a> {
         &self,
         rest: &str,
         original_body: &str,
-        pass_through: bool,
+        name: &str,
         op: Comparison,
     ) -> String {
         let Some(c) = self.find_unnested(rest, b',') else {
-            return if pass_through {
+            self.log(|| format!("compare {name} syntax error: {rest}"));
+            return if name == "==" {
                 format!("#{{{original_body}}}")
             } else {
                 String::new()
@@ -573,6 +747,8 @@ impl<'a> Expander<'a> {
         };
         let a = self.expand(&rest[..c]);
         let b = self.expand(&rest[c + 1..]);
+        self.log(|| format!("compare {name} left is: {a}"));
+        self.log(|| format!("compare {name} right is: {b}"));
         flag(op(&a, &b))
     }
 }

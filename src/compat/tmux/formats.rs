@@ -411,6 +411,15 @@ fn option_value(inv: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxErro
     }
 }
 
+/// `display-message`'s text: tmux's format language into grofe's, unless
+/// `-l` shows it as it is.
+fn display_arg(inv: &Invocation<'_>, value: &str) -> Result<Rewritten, TmuxError> {
+    if inv.getopt().has('l') {
+        return Ok(Rewritten::value(value));
+    }
+    format_arg(inv, value)
+}
+
 const fn rewrite(verb: &'static str, arg: Arg) -> Rewrite {
     Rewrite {
         verb,
@@ -423,8 +432,14 @@ const fn rewrite(verb: &'static str, arg: Arg) -> Rewrite {
 pub(crate) fn rewrites() -> Vec<Rewrite> {
     use Arg::{Flag, Positional};
     let mut out = vec![
-        rewrite("display-message", Positional(0)),
-        rewrite("display-message", Flag('F')),
+        Rewrite {
+            rewrite: display_arg,
+            ..rewrite("display-message", Positional(0))
+        },
+        Rewrite {
+            rewrite: display_arg,
+            ..rewrite("display-message", Flag('F'))
+        },
         rewrite("if-shell", Positional(0)),
         rewrite("run-shell", Positional(0)),
         rewrite("list-commands", Flag('F')),

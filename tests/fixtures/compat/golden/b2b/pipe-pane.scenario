@@ -1,0 +1,43 @@
+# B2b: pipe-pane sends the pane's output to a shell command's stdin (-O, the default), the command's stdout into the pane as if typed (-I), or both. A new pipe closes the old one; no command only closes it; -o opens a pipe only when there was none, so one key toggles it. The command is a format; #{pane_pipe} says whether a pipe is open.
+$ new-session -d -s main -x 80 -y 24 cat
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ pipe-pane -t main 'cat > "$HOME/pp1.#{pane_index}"'
+$ display -p -t main 'pipe=#{pane_pipe} pid=#{?pane_pipe_pid,set,none}'
+$ send-keys -t main abc Enter
+$ run-shell 'sleep 1; cat -v "$HOME/pp1.1"'
+$ pipe-pane -t main
+$ display -p -t main 'pipe=#{pane_pipe} pid=#{?pane_pipe_pid,set,none}'
+$ send-keys -t main later Enter
+$ run-shell 'sleep 1; cat -v "$HOME/pp1.1"'
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main one Enter
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main two Enter
+$ pipe-pane -o -t main 'cat >> "$HOME/pp2"'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main three Enter
+$ run-shell 'sleep 1; cat -v "$HOME/pp2"'
+$ pipe-pane -t main 'cat > "$HOME/pp3"'
+$ send-keys -t main first Enter
+$ run-shell 'sleep 1'
+$ pipe-pane -t main 'cat > "$HOME/pp4"'
+$ send-keys -t main second Enter
+$ run-shell 'sleep 1; echo pp3; cat -v "$HOME/pp3"; echo pp4; cat -v "$HOME/pp4"'
+$ pipe-pane -t main ''
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ pipe-pane -O -t main 'cat > "$HOME/pp5"'
+$ send-keys -t main five Enter
+$ run-shell 'sleep 1; cat -v "$HOME/pp5"'
+$ pipe-pane -t nosuch 'cat'
+$ pipe-pane -Z 'cat'
+$ pipe-pane -t main 'a' 'b'
+$ pipe-pane -t main 'true'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main six Enter
+$ run-shell 'sleep 1'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main seven Enter
+$ run-shell 'sleep 1'
+$ display -p -t main 'pipe=#{pane_pipe}'

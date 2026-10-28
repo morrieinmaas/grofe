@@ -1,0 +1,20 @@
+# B2b: pipe-pane -I writes the command's output into the pane as if it were typed, so the pane's cat echoes and prints it; -I alone gives the command no stdin (/dev/null), -I -O reads the pane's output as well and can answer it.
+$ new-session -d -s main -x 80 -y 24 cat
+$ pipe-pane -I -t main 'echo injected; sleep 1'
+$ run-shell 'sleep 2'
+$ capture-pane -p -t main
+$ pipe-pane -I -t main 'cat > "$HOME/in1"; echo done >> "$HOME/in1"'
+$ send-keys -t main typed Enter
+$ run-shell 'sleep 1; echo in1:; cat -v "$HOME/in1"'
+$ pipe-pane -t main
+$ pipe-pane -IO -t main 'while read l; do case "$l" in ping*) echo pong;; esac; done'
+$ send-keys -t main ping Enter
+$ run-shell 'sleep 2'
+$ capture-pane -p -t main
+$ pipe-pane -t main
+$ pipe-pane -I -O -o -t main 'cat >> "$HOME/in2"'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ send-keys -t main x Enter
+$ pipe-pane -I -o -t main 'echo never'
+$ display -p -t main 'pipe=#{pane_pipe}'
+$ run-shell 'sleep 1; cat -v "$HOME/in2"'

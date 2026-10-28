@@ -1,0 +1,172 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ display-message -p -v 'hello'
+# expanding format: hello
+# result is: hello
+hello
+? 0
+$ display-message -p -v ''
+
+? 0
+$ display-message -p -v '#{session_name}'
+# expanding format: #{session_name}
+# found #{}: session_name
+# format 'session_name' found: main
+# replaced 'session_name' with 'main'
+# result is: main
+main
+? 0
+$ display-message -p -v '##'
+# expanding format: ##
+# found ##
+# result is: #
+#
+? 0
+$ display-message -p -v 'a#{session_name}b#{window_index}c'
+# expanding format: a#{session_name}b#{window_index}c
+# found #{}: session_name
+# format 'session_name' found: main
+# replaced 'session_name' with 'main'
+# found #{}: window_index
+# format 'window_index' found: 1
+# replaced 'window_index' with '1'
+# result is: amainb1c
+amainb1c
+? 0
+$ display-message -p -v '#{nosuchvar}'
+# expanding format: #{nosuchvar}
+# found #{}: nosuchvar
+# format 'nosuchvar' not found
+# replaced 'nosuchvar' with ''
+# result is: 
+
+? 0
+$ display-message -p -v '#{?pane_active,yes,no}'
+# expanding format: #{?pane_active,yes,no}
+# found #{}: ?pane_active,yes,no
+# condition is: pane_active
+# condition 'pane_active' found: 1
+# condition 'pane_active' is true
+#  expanding format: yes
+#  result is: yes
+# replaced '?pane_active,yes,no' with 'yes'
+# result is: yes
+yes
+? 0
+$ display-message -p -v '#{?nosuch,yes,no}'
+# expanding format: #{?nosuch,yes,no}
+# found #{}: ?nosuch,yes,no
+# condition is: nosuch
+#  expanding format: nosuch
+#  result is: nosuch
+# condition 'nosuch' not found; assuming false
+# condition 'nosuch' is false
+# no condition matched in 'nosuch,yes,no'; using last arg
+#  expanding format: no
+#  result is: no
+# replaced '?nosuch,yes,no' with 'no'
+# result is: no
+no
+? 0
+$ display-message -p -v '#{==:#{session_name},main}'
+# expanding format: #{==:#{session_name},main}
+# found #{}: ==:#{session_name},main
+# modifier 0 is ==
+#  expanding format: #{session_name}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  result is: main
+#  expanding format: main
+#  result is: main
+# compare == left is: main
+# compare == right is: main
+# replaced '==:#{session_name},main' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{window_index}#{?window_zoomed_flag, Z,}'
+# expanding format: #{window_index}#{?window_zoomed_flag, Z,}
+# found #{}: window_index
+# format 'window_index' found: 1
+# replaced 'window_index' with '1'
+# found #{}: ?window_zoomed_flag, Z,
+# condition is: window_zoomed_flag
+# condition 'window_zoomed_flag' found: 0
+# condition 'window_zoomed_flag' is false
+# no condition matched in 'window_zoomed_flag, Z,'; using last arg
+# replaced '?window_zoomed_flag, Z,' with ''
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{s/a/b/:session_name}'
+# expanding format: #{s/a/b/:session_name}
+# found #{}: s/a/b/:session_name
+#  expanding format: a
+#  result is: a
+#  expanding format: b
+#  result is: b
+# modifier 0 is s
+# modifier 0 argument 0: a
+# modifier 0 argument 1: b
+# format 'session_name' found: main
+#  expanding format: a
+#  result is: a
+#  expanding format: b
+#  result is: b
+# substitute 'a' to 'b': mbin
+# replaced 's/a/b/:session_name' with 'mbin'
+# result is: mbin
+mbin
+? 0
+$ display-message -p -v '#{=2:session_name}'
+# expanding format: #{=2:session_name}
+# found #{}: =2:session_name
+#  expanding format: 2
+#  result is: 2
+# modifier 0 is =
+# modifier 0 argument 0: 2
+# format 'session_name' found: main
+# applied length limit 2: ma
+# replaced '=2:session_name' with 'ma'
+# result is: ma
+ma
+? 0
+$ display-message -p -v '#{@x}'
+# expanding format: #{@x}
+# found #{}: @x
+# format '@x' not found
+# replaced '@x' with ''
+# result is: 
+
+? 0
+$ display-message -p -v -F '#{session_name}'
+# expanding format: #{session_name}
+# found #{}: session_name
+# format 'session_name' found: main
+# replaced 'session_name' with 'main'
+# result is: main
+main
+? 0
+$ display-message -pl '#{session_name} #S ##'
+#{session_name} #S ##
+? 0
+$ display-message -p -l '#{session_name}'
+#{session_name}
+? 0
+$ display-message -lv -p '#{session_name}'
+#{session_name}
+? 0
+$ display-message -p 'literal'
+literal
+? 0
+$ display-message -l 'not printed'
+? 0
+$ display-message -p -v -t main:1.1 '#{pane_index}'
+# expanding format: #{pane_index}
+# found #{}: pane_index
+# format 'pane_index' found: 1
+# replaced 'pane_index' with '1'
+# result is: 1
+1
+? 0

@@ -128,6 +128,9 @@ struct Prompt {
     /// An incremental prompt's `-I` text, which C-r and C-s on an empty
     /// line bring back (tmux's `prompt_last`).
     last: String,
+    /// `confirm-before`: the key that confirms, and whether Enter does.
+    confirm_key: char,
+    default_yes: bool,
 }
 
 /// What a key did to a prompt.
@@ -152,7 +155,15 @@ impl Prompt {
             numeric: false,
             incremental: false,
             last: String::new(),
+            confirm_key: 'y',
+            default_yes: false,
         }
+    }
+
+    /// Whether the key a `confirm-before` prompt got confirms.
+    fn confirmed(&self) -> bool {
+        let key = self.text.first();
+        key == Some(&self.confirm_key) || (self.default_yes && key == Some(&'\r'))
     }
 
     fn line(&self) -> String {
@@ -530,7 +541,7 @@ impl InputHook for PromptHook {
                 state.prompts.close(client);
                 Routed::Consumed
             }
-            Edit::Enter if prompt.read == Read::Confirm && prompt.line() != "y" => {
+            Edit::Enter if prompt.read == Read::Confirm && !prompt.confirmed() => {
                 state.prompts.close_with(client, Err(cancelled()));
                 Routed::Consumed
             }
@@ -551,7 +562,7 @@ impl InputHook for PromptHook {
                         Some(replace_template(&prompt.template, &line))
                     }
                     Read::Single | Read::Key => Some(replace_template(&prompt.template, &line)),
-                    Read::Confirm => (line == "y").then_some(prompt.template),
+                    Read::Confirm => prompt.confirmed().then_some(prompt.template),
                 };
                 match command.map(|c| cmd::split_command_string(&c)) {
                     Some(Ok(cmds)) if !cmds.is_empty() => Routed::Command(cmds, prompt.dialect),
@@ -685,33 +696,45 @@ fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str
 
 /// `confirm-before`'s prompt on the current client: `-p` (a format,
 /// expanded as `command-prompt`'s, then a blank) or `Confirm '<verb>'?
-/// (y/n) `, then one keystroke; `command` runs only on `y`, as tmux
-/// 3.7b's default `confirm-key` (recorded: `n`, `Y` and Enter all cancel).
+/// (y/n) `, then one keystroke; `command` runs only on the confirm key
+/// (`-c`, default `y`; recorded: `n`, `Y` and Enter all cancel), or on
+/// Enter with `-y`.
 /// From the CLI the reply waits until the prompt closes; a cancelled
 /// prompt exits 1 with no message, as tmux's does (recorded).
 pub fn confirm(
     state: &mut State,
     ctx: &ClientCtx,
-    prompt: Option<&str>,
+    c: &cmd::ConfirmBefore,
     verb: &str,
     command: String,
 ) -> Result<String, String> {
-    let Some(id) = clients::current_client(state, ctx) else {
-        return Err("no current client".to_string());
+    // tmux checks `-c` before it looks for a client.
+    let key = match c.confirm_key.as_deref() {
+        None => 'y',
+        Some(k) => match k.chars().collect::<Vec<_>>()[..] {
+            [key] if key.is_ascii() && ('\u{20}'..'\u{7f}').contains(&key) => key,
+            _ => return Err("invalid confirm key".to_string()),
+        },
+    };
+    let id = match &c.client {
+        Some(name) => clients::client_by_name(state, name)?,
+        None => clients::current_client(state, ctx).ok_or("no current client")?,
     };
     if state.prompts.is_open(id) {
         return Ok(String::new());
     }
-    let label = match prompt {
+    let label = match &c.prompt {
         Some(p) => format!("{} ", expand_for(state, id, p)),
-        None => format!("Confirm '{verb}'? (y/n) "),
+        None => format!("Confirm '{verb}'? ({key}/n) "),
     };
     let prompt = Prompt {
         dialect: ctx.dialect,
         read: Read::Confirm,
+        confirm_key: key,
+        default_yes: c.default_yes,
         ..Prompt::new(label, "", command)
     };
-    open(state, id, prompt, true);
+    open(state, id, prompt, !c.background);
     Ok(String::new())
 }
 

@@ -1,0 +1,140 @@
+$ new-session -d -s main -x 20 -y 12 'printf "ab  \ncd\033[5Cef\nxx    yy\033[3D\033[K\nzz  \n\033[2K  trail  \nfull line of twenty!\nlong line that wraps around twice here\n\033[31mred  \033[39m\n\ttab\n\n"; sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main
+ab
+cd     ef
+xx
+zz
+  trail
+full line of twenty!
+long line that wraps
+ around twice here
+red
+	tab
+
+
+? 0
+$ capture-pane -pN -t main
+ab   
+cd     ef 
+xx        
+zz   
+  trail   
+full line of twenty!
+long line that wraps
+ around twice here  
+red       
+	tab         
+
+
+? 0
+$ capture-pane -pT -t main
+ab
+cd     ef
+xx
+zz
+  trail
+full line of twenty!
+long line that wraps
+ around twice here
+red
+	tab
+
+
+? 0
+$ capture-pane -pNT -t main
+ab  
+cd     ef
+xx      
+zz  
+  trail  
+full line of twenty!
+long line that wraps
+ around twice here
+red  
+	tab
+
+
+? 0
+$ capture-pane -pTN -t main
+ab  
+cd     ef
+xx      
+zz  
+  trail  
+full line of twenty!
+long line that wraps
+ around twice here
+red  
+	tab
+
+
+? 0
+$ capture-pane -pJ -t main
+ab  
+cd     ef
+xx      
+zz  
+  trail  
+full line of twenty!
+long line that wraps around twice here
+red  
+	tab
+
+
+? 0
+$ capture-pane -pJN -t main
+ab  
+cd     ef
+xx      
+zz  
+  trail  
+full line of twenty!
+long line that wraps around twice here
+red  
+	tab
+
+
+? 0
+$ capture-pane -pJT -t main
+ab  
+cd     ef
+xx      
+zz  
+  trail  
+full line of twenty!
+long line that wraps around twice here
+red  
+	tab
+
+
+? 0
+$ capture-pane -pq -t main
+ab
+cd     ef
+xx
+zz
+  trail
+full line of twenty!
+long line that wraps
+ around twice here
+red
+	tab
+
+
+? 0
+$ capture-pane -pNq -S 0 -E 5 -t main
+ab   
+cd     ef 
+xx        
+zz   
+  trail   
+full line of twenty!
+? 0
+$ capture-pane -pT -S -3 -E 2 -t main
+ab
+cd     ef
+xx
+? 0

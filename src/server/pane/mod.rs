@@ -8,6 +8,7 @@
 
 pub mod io;
 pub mod marks;
+mod pipe;
 pub mod procinfo;
 mod written;
 
@@ -45,6 +46,7 @@ use crate::types::{
 };
 use io::{InputQueue, Listener};
 use marks::{HISTORY_SLACK, Marks};
+use pipe::Pipe;
 
 /// Events a pane reports to the server actor. Contract stub landed before M1
 /// Wave A so the actor (T1.1b) and the pane (T1.4) can be built in parallel.
@@ -389,6 +391,8 @@ pub struct PaneHandle {
     /// What the emulator's listener has queued for the reader.
     events: io::EventBuf,
     input: Arc<InputQueue>,
+    /// The pane's `pipe-pane` command, if any; it survives a respawn.
+    pipe: Arc<Pipe>,
     dirty: Arc<AtomicBool>,
     /// Set from the server when an attached client has kitty graphics;
     /// the reader answers the pane's graphics queries from it (T3.8).
@@ -413,6 +417,7 @@ impl Drop for PaneHandle {
         for task in &self.tasks {
             task.abort();
         }
+        self.pipe.close_for(self.generation);
     }
 }
 
@@ -508,6 +513,13 @@ impl PaneHandle {
         let default_colours = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
+        let pipe = match over {
+            Some(old) => {
+                old.pipe.adopt(Arc::clone(&input), generation);
+                Arc::clone(&old.pipe)
+            }
+            None => Pipe::new(Arc::clone(&input), generation),
+        };
 
         let reader = tokio::spawn(io::reader(io::Reader {
             id: spec.id,
@@ -517,6 +529,7 @@ impl PaneHandle {
             emu: Arc::clone(&emu),
             events: Arc::clone(&events),
             input: Arc::clone(&input),
+            pipe: Arc::clone(&pipe),
             dirty: Arc::clone(&dirty),
             wake,
             to_actor,
@@ -538,6 +551,7 @@ impl PaneHandle {
             emu,
             events,
             input,
+            pipe,
             dirty,
             sample,
             graphics_ok,
@@ -549,6 +563,28 @@ impl PaneHandle {
             tty,
             tasks: vec![reader, writer],
         })
+    }
+
+    /// Whether a `pipe-pane` command is tied to the pane (`#{pane_pipe}`).
+    pub fn pipe_open(&self) -> bool {
+        self.pipe.is_open()
+    }
+
+    /// The pid of the pane's `pipe-pane` command (`#{pane_pipe_pid}`).
+    pub fn pipe_pid(&self) -> Option<u32> {
+        self.pipe.pid()
+    }
+
+    /// Closes the pane's `pipe-pane` command's pipe, if any.
+    pub fn pipe_close(&self) {
+        self.pipe.close();
+    }
+
+    /// Ties `command` to the pane: `output` feeds it what the pane's program
+    /// writes, `input` types what it writes into the pane. Needs a tokio
+    /// runtime; closes nothing, so [`Self::pipe_close`] first.
+    pub fn pipe_start(&self, command: &str, input: bool, output: bool) -> stdio::Result<()> {
+        self.pipe.start(command, input, output)
     }
 
     /// Queue bytes for the pane's writer. Never blocks.
@@ -679,6 +715,24 @@ impl PaneHandle {
     /// onto the next one is joined to it, and a row that does not ends at
     /// its used width ([`written`]), the blanks the program wrote kept.
     pub fn capture_lines(&self, opts: &CaptureOpts, join: bool) -> String {
+        self.capture_blanks(opts, join, false, false)
+    }
+
+    /// [`Self::capture_lines`] with `-N` (`keep_blanks`: the blanks a line
+    /// has, up to the cells tmux allocated for it, are kept) and `-T`
+    /// (`written_only`: a line ends at its last written cell). Both
+    /// together are `-J` without the joining; `join` overrides both.
+    // ponytail: tmux allocates a line's cells in steps of a quarter, a half
+    // and the whole width as its writes reach them, so a line written in
+    // several runs can have more or fewer than the step its used width
+    // alone gives, which is what `-N` pads to here.
+    pub fn capture_blanks(
+        &self,
+        opts: &CaptureOpts,
+        join: bool,
+        keep_blanks: bool,
+        written_only: bool,
+    ) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
         let sgr_flags = CellFlags::BOLD
@@ -716,7 +770,7 @@ impl PaneHandle {
             // cell the program did not write (`DECALN`) still counts.
             let cols = grid.columns();
             let tab_stop = |col: usize| ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
-            let end = if join && !wraps {
+            let used = || {
                 // A tab counts as far as the stop it moved to (tmux's
                 // `cellused`), a blank or not.
                 (0..cols)
@@ -728,8 +782,19 @@ impl PaneHandle {
                     .max()
                     .unwrap_or(0)
                     .max(written::used(row))
+            };
+            // `-J` leaves out the empty cells and the trimming; so do `-T`
+            // and `-N` for their half.
+            let empty_cells = !join && !written_only;
+            let trim = !join && !keep_blanks;
+            let end = if join && wraps {
+                cols
+            } else if !empty_cells {
+                used()
+            } else if trim {
+                cols
             } else {
-                grid.columns()
+                allocated(used(), cols)
             };
             let mut text = String::new();
             // A tab is its `\t` alone, as tmux captures it: the blank cells
@@ -785,10 +850,10 @@ impl PaneHandle {
                 out.push_str(&text);
                 continue;
             }
-            if join {
-                out.push_str(&text);
-            } else {
+            if trim {
                 out.push_str(text.trim_end_matches(' '));
+            } else {
+                out.push_str(&text);
             }
             out.push('\n');
         }
@@ -1010,6 +1075,21 @@ impl PaneHandle {
 }
 
 /// The mouse reporting `mode` asks for: the widest of 1000, 1002, 1003.
+/// How many cells tmux's `grid_expand_line` has allocated for a line
+/// written up to cell `used` of a `cols` wide grid: a quarter, a half or
+/// all of the width.
+fn allocated(used: usize, cols: usize) -> usize {
+    if used == 0 {
+        0
+    } else if used < cols / 4 {
+        cols / 4
+    } else if used < cols / 2 {
+        cols / 2
+    } else {
+        cols.max(used)
+    }
+}
+
 fn mouse_mode(mode: TermMode) -> MouseMode {
     if mode.contains(TermMode::MOUSE_MOTION) {
         MouseMode::Motion

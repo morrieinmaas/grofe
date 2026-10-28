@@ -1,0 +1,358 @@
+$ new-session -d -s main -x 80 -y 24 -c /tmp cat
+? 0
+$ set-option -g @opt 'a b'
+? 0
+$ set-option -g @fmt '#{session_name}-#{window_index}'
+? 0
+$ display-message -p -v '#{&&:#{pane_active},#{window_active}}'
+# expanding format: #{&&:#{pane_active},#{window_active}}
+# found #{}: &&:#{pane_active},#{window_active}
+# modifier 0 is &&
+#  expanding format: #{pane_active}
+#  found #{}: pane_active
+#  format 'pane_active' found: 1
+#  replaced 'pane_active' with '1'
+#  result is: 1
+# operator && has operand: 1
+#  expanding format: #{window_active}
+#  found #{}: window_active
+#  format 'window_active' found: 1
+#  replaced 'window_active' with '1'
+#  result is: 1
+# operator && has operand: 1
+# replaced '&&:#{pane_active},#{window_active}' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{||:0,1,0}'
+# expanding format: #{||:0,1,0}
+# found #{}: ||:0,1,0
+# modifier 0 is ||
+#  expanding format: 0
+#  result is: 0
+# operator || has operand: 0
+#  expanding format: 1
+#  result is: 1
+# operator || has operand: 1
+# replaced '||:0,1,0' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{!:#{pane_active}}'
+# expanding format: #{!:#{pane_active}}
+# found #{}: !:#{pane_active}
+# modifier 0 is !
+#  expanding format: #{pane_active}
+#  found #{}: pane_active
+#  format 'pane_active' found: 1
+#  replaced 'pane_active' with '1'
+#  result is: 1
+# replaced '!:#{pane_active}' with '0'
+# result is: 0
+0
+? 0
+$ display-message -p -v '#{!!:#{pane_active}}'
+# expanding format: #{!!:#{pane_active}}
+# found #{}: !!:#{pane_active}
+# modifier 0 is !!
+#  expanding format: #{pane_active}
+#  found #{}: pane_active
+#  format 'pane_active' found: 1
+#  replaced 'pane_active' with '1'
+#  result is: 1
+# replaced '!!:#{pane_active}' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{m:ma*,#{session_name}}'
+# expanding format: #{m:ma*,#{session_name}}
+# found #{}: m:ma*,#{session_name}
+# modifier 0 is m
+#  expanding format: ma*
+#  result is: ma*
+#  expanding format: #{session_name}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  result is: main
+# compare m left is: ma*
+# compare m right is: main
+# replaced 'm:ma*,#{session_name}' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{m/r:^m.i,#{session_name}}'
+# expanding format: #{m/r:^m.i,#{session_name}}
+# found #{}: m/r:^m.i,#{session_name}
+#  expanding format: r
+#  result is: r
+# modifier 0 is m
+# modifier 0 argument 0: r
+#  expanding format: ^m.i
+#  result is: ^m.i
+#  expanding format: #{session_name}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  result is: main
+# compare m left is: ^m.i
+# compare m right is: main
+# replaced 'm/r:^m.i,#{session_name}' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{b:pane_current_path}'
+# expanding format: #{b:pane_current_path}
+# found #{}: b:pane_current_path
+# modifier 0 is b
+# format 'pane_current_path' found: tmp
+# replaced 'b:pane_current_path' with 'tmp'
+# result is: tmp
+tmp
+? 0
+$ display-message -p -v '#{p8:session_name}|'
+# expanding format: #{p8:session_name}|
+# found #{}: p8:session_name
+#  expanding format: 8
+#  result is: 8
+# modifier 0 is p
+# modifier 0 argument 0: 8
+# format 'session_name' found: main
+# applied padding width 8: main    
+# replaced 'p8:session_name' with 'main    '
+# result is: main    |
+main    |
+? 0
+$ display-message -p -v '#{n:session_name}'
+# expanding format: #{n:session_name}
+# found #{}: n:session_name
+# modifier 0 is n
+# format 'session_name' found: main
+# replacing with length: 4
+# replaced 'n:session_name' with '4'
+# result is: 4
+4
+? 0
+$ display-message -p -v '#{w:session_name}'
+# expanding format: #{w:session_name}
+# found #{}: w:session_name
+# modifier 0 is w
+# format 'session_name' found: main
+# replacing with width: 4
+# replaced 'w:session_name' with '4'
+# result is: 4
+4
+? 0
+$ display-message -p -v '#{e|+:1,2}'
+# expanding format: #{e|+:1,2}
+# found #{}: e|+:1,2
+#  expanding format: +
+#  result is: +
+# modifier 0 is e
+# modifier 0 argument 0: +
+#  expanding format: 1
+#  result is: 1
+#  expanding format: 2
+#  result is: 2
+# expression left side is: 1
+# expression right side is: 2
+# expression result is 3
+# replaced 'e|+:1,2' with '3'
+# result is: 3
+3
+? 0
+$ display-message -p -v '#{E:@fmt}'
+# expanding format: #{E:@fmt}
+# found #{}: E:@fmt
+# modifier 0 is E
+# format '@fmt' found: #{session_name}-#{window_index}
+#  expanding format: #{session_name}-#{window_index}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  found #{}: window_index
+#  format 'window_index' found: 1
+#  replaced 'window_index' with '1'
+#  result is: main-1
+# replaced 'E:@fmt' with 'main-1'
+# result is: main-1
+main-1
+? 0
+$ display-message -p -v '#{T:@fmt}'
+# expanding format: #{T:@fmt}
+# found #{}: T:@fmt
+# modifier 0 is T
+# format '@fmt' found: #{session_name}-#{window_index}
+#  expanding format: #{session_name}-#{window_index}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  found #{}: window_index
+#  format 'window_index' found: 1
+#  replaced 'window_index' with '1'
+#  result is: main-1
+# replaced 'T:@fmt' with 'main-1'
+# result is: main-1
+main-1
+? 0
+$ display-message -p -v '#{@opt}'
+# expanding format: #{@opt}
+# found #{}: @opt
+# format '@opt' found: a b
+# replaced '@opt' with 'a b'
+# result is: a b
+a b
+? 0
+$ display-message -p -v '#{q:@opt}'
+# expanding format: #{q:@opt}
+# found #{}: q:@opt
+# modifier 0 is q
+# format '@opt' found: a\ b
+# replaced 'q:@opt' with 'a\ b'
+# result is: a\ b
+a\ b
+? 0
+$ display-message -p -v '#{?pane_active,#{?window_active,both,pane},none}'
+# expanding format: #{?pane_active,#{?window_active,both,pane},none}
+# found #{}: ?pane_active,#{?window_active,both,pane},none
+# condition is: pane_active
+# condition 'pane_active' found: 1
+# condition 'pane_active' is true
+#  expanding format: #{?window_active,both,pane}
+#  found #{}: ?window_active,both,pane
+#  condition is: window_active
+#  condition 'window_active' found: 1
+#  condition 'window_active' is true
+#   expanding format: both
+#   result is: both
+#  replaced '?window_active,both,pane' with 'both'
+#  result is: both
+# replaced '?pane_active,#{?window_active,both,pane},none' with 'both'
+# result is: both
+both
+? 0
+$ display-message -p -v '#{W:#{window_index} }'
+# expanding format: #{W:#{window_index} }
+# found #{}: W:#{window_index} 
+# modifier 0 is W
+# window loop: 1 @0
+#  expanding format: #{window_index} 
+#  found #{}: window_index
+#  format 'window_index' found: 1
+#  replaced 'window_index' with '1'
+#  result is: 1 
+# replaced 'W:#{window_index} ' with '1 '
+# result is: 1 
+1 
+? 0
+$ display-message -p -v '#{=3:#{session_name}}'
+# expanding format: #{=3:#{session_name}}
+# found #{}: =3:#{session_name}
+#  expanding format: 3
+#  result is: 3
+# modifier 0 is =
+# modifier 0 argument 0: 3
+# expanding inner format '#{session_name}'
+#  expanding format: #{session_name}
+#  found #{}: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  result is: main
+# applied length limit 3: mai
+# replaced '=3:#{session_name}' with 'mai'
+# result is: mai
+mai
+? 0
+$ display-message -p -v '#{=/-2/~:session_name}'
+# expanding format: #{=/-2/~:session_name}
+# found #{}: =/-2/~:session_name
+#  expanding format: -2
+#  result is: -2
+#  expanding format: ~
+#  result is: ~
+# modifier 0 is =
+# modifier 0 argument 0: -2
+# modifier 0 argument 1: ~
+# format 'session_name' found: main
+# applied length limit -2: ~in
+# replaced '=/-2/~:session_name' with '~in'
+# result is: ~in
+~in
+? 0
+$ display-message -p -v '#{s/a/X/g:session_name}'
+# expanding format: #{s/a/X/g:session_name}
+# found #{}: s/a/X/g:session_name
+#  expanding format: a
+#  result is: a
+#  expanding format: X
+#  result is: X
+#  expanding format: g
+#  result is: g
+# modifier 0 is s
+# modifier 0 argument 0: a
+# modifier 0 argument 1: X
+# modifier 0 argument 2: g
+# format 'session_name' found: main
+#  expanding format: a
+#  result is: a
+#  expanding format: X
+#  result is: X
+# substitute 'a' to 'X': mXin
+# replaced 's/a/X/g:session_name' with 'mXin'
+# result is: mXin
+mXin
+? 0
+$ display-message -p -v '#{t:session_created}'
+# expanding format: #{t:session_created}
+# found #{}: t:session_created
+# modifier 0 is t
+# format 'session_created' found: <TIME>
+# replaced 't:session_created' with '<TIME>'
+# result is: <TIME>
+<TIME>
+? 0
+$ display-message -p -v '#{>=:#{window_index},1}'
+# expanding format: #{>=:#{window_index},1}
+# found #{}: >=:#{window_index},1
+# modifier 0 is >=
+#  expanding format: #{window_index}
+#  found #{}: window_index
+#  format 'window_index' found: 1
+#  replaced 'window_index' with '1'
+#  result is: 1
+#  expanding format: 1
+#  result is: 1
+# compare >= left is: 1
+# compare >= right is: 1
+# replaced '>=:#{window_index},1' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{!=:a,b}'
+# expanding format: #{!=:a,b}
+# found #{}: !=:a,b
+# modifier 0 is !=
+#  expanding format: a
+#  result is: a
+#  expanding format: b
+#  result is: b
+# compare != left is: a
+# compare != right is: b
+# replaced '!=:a,b' with '1'
+# result is: 1
+1
+? 0
+$ display-message -p -v '#{<:9,10}'
+# expanding format: #{<:9,10}
+# found #{}: <:9,10
+# modifier 0 is <
+#  expanding format: 9
+#  result is: 9
+#  expanding format: 10
+#  result is: 10
+# compare < left is: 9
+# compare < right is: 10
+# replaced '<:9,10' with '0'
+# result is: 0
+0
+? 0

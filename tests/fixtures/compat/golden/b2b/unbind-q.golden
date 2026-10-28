@@ -1,0 +1,84 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ unbind-key nosuchkey
+! unknown key: nosuchkey
+? 1
+$ unbind-key -q nosuchkey
+? 0
+$ unbind-key -q -T nosuchtable x
+? 0
+$ unbind-key -T nosuchtable x
+! table nosuchtable doesn't exist
+? 1
+$ unbind-key
+! missing key
+? 1
+$ unbind-key -q
+? 0
+$ unbind-key -a x
+! key given with -a
+? 1
+$ unbind-key -aq x
+? 0
+$ unbind-key -a -T nosuchtable
+! table nosuchtable doesn't exist
+? 1
+$ unbind-key -aq -T nosuchtable
+? 0
+$ unbind-key x
+? 0
+$ unbind-key -n x
+? 0
+$ unbind-key -q -n x
+? 0
+$ bind-key -T mytab x display one
+? 0
+$ bind-key -T mytab y display two
+? 0
+$ list-keys -T mytab
+bind-key  -T mytab x display-message one
+bind-key  -T mytab y display-message two
+? 0
+$ unbind-key -T mytab x
+? 0
+$ list-keys -T mytab
+? 0
+$ unbind-key -T mytab y
+? 0
+$ list-keys -T mytab
+! table mytab doesn't exist
+? 1
+$ bind-key -T mytab x display one
+? 0
+$ bind-key -T mytab y display two
+? 0
+$ unbind-key -a -T mytab
+? 0
+$ list-keys -T mytab
+! table mytab doesn't exist
+? 1
+$ bind-key z display root-z
+? 0
+$ bind-key -n w display w
+? 0
+$ unbind-key -a
+? 0
+$ list-keys -T prefix
+! table prefix doesn't exist
+? 1
+$ list-keys -T root w
+? 0
+$ unbind-key -a -n
+? 0
+$ list-keys -T root
+? 0
+$ unbind-key -qT mytab -n
+? 0
+$ unbind-key -q -T copy-mode-vi Space
+? 0
+$ list-keys -T copy-mode-vi Space
+? 0
+$ unbind-key -T copy-mode Space
+? 0
+$ list-keys -T copy-mode Space
+? 0

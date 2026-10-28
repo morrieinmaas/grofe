@@ -1,0 +1,17 @@
+# B2b: pipe-pane on a pane whose program has exited fails; killing the pane closes its pipe and ends the command (its stdin reaches end of file); respawning a pane keeps its pipe open.
+$ new-session -d -s main -x 80 -y 24 -n w1 'sleep 100'
+$ set-option -g remain-on-exit on
+$ new-window -d -t main -n w2 'sleep 1; echo hello; sleep 100'
+$ pipe-pane -t main:w2 'cat > "$HOME/dead1"; echo eof >> "$HOME/dead1"'
+$ run-shell 'sleep 2'
+$ kill-window -t main:w2
+$ run-shell 'sleep 1; cat -v "$HOME/dead1"'
+$ new-window -d -t main -n w3 'true'
+$ run-shell 'sleep 1'
+$ display -p -t main:w3 '#{pane_dead} pipe=#{pane_pipe}'
+$ pipe-pane -t main:w3 'cat'
+$ display -p -t main:w3 'pipe=#{pane_pipe}'
+$ pipe-pane -t main:w1 'cat > "$HOME/dead2"'
+$ display -p -t main:w1 'pipe=#{pane_pipe}'
+$ respawn-pane -k -t main:w1 'sleep 100'
+$ display -p -t main:w1 'pipe=#{pane_pipe}'

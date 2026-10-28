@@ -73,3 +73,43 @@ fn selection_mode_matches() {
 fn pipe_commands_feed_the_selection_to_a_command() {
     check("b2b", "copy-pipe", &[]);
 }
+
+#[test]
+fn pipe_pane_sends_the_panes_output_to_a_command() {
+    check("b2b", "pipe-pane", &[]);
+}
+
+#[test]
+fn pipe_pane_input_types_into_the_pane() {
+    check("b2b", "pipe-pane-in", &[]);
+}
+
+#[test]
+fn pipe_pane_refuses_a_dead_pane_and_survives_a_respawn() {
+    check("b2b", "pipe-pane-dead", &[]);
+}
+
+#[test]
+fn unbind_key_q_stays_quiet_and_a_drops_the_table() {
+    check("b2b", "unbind-q", &[]);
+}
+
+#[test]
+fn confirm_before_y_c_and_b_match() {
+    check("b2b", "confirm-y", &[]);
+}
+
+#[test]
+fn capture_pane_n_and_t_keep_and_drop_blanks_as_tmux_does() {
+    check("b2b", "capture-flags", &[]);
+}
+
+#[test]
+fn display_message_v_traces_the_expansion_and_l_shows_the_text_as_it_is() {
+    check("b2b", "display-v", &[]);
+}
+
+#[test]
+fn display_message_v_traces_modifiers_too() {
+    check("b2b", "display-v2", &[]);
+}

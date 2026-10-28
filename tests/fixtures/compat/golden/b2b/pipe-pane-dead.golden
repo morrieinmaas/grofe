@@ -1,0 +1,39 @@
+$ new-session -d -s main -x 80 -y 24 -n w1 'sleep 100'
+? 0
+$ set-option -g remain-on-exit on
+? 0
+$ new-window -d -t main -n w2 'sleep 1; echo hello; sleep 100'
+? 0
+$ pipe-pane -t main:w2 'cat > "$HOME/dead1"; echo eof >> "$HOME/dead1"'
+? 0
+$ run-shell 'sleep 2'
+? 0
+$ kill-window -t main:w2
+? 0
+$ run-shell 'sleep 1; cat -v "$HOME/dead1"'
+hello^M
+eof
+? 0
+$ new-window -d -t main -n w3 'true'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display -p -t main:w3 '#{pane_dead} pipe=#{pane_pipe}'
+1 pipe=0
+? 0
+$ pipe-pane -t main:w3 'cat'
+! target pane has exited
+? 1
+$ display -p -t main:w3 'pipe=#{pane_pipe}'
+pipe=0
+? 0
+$ pipe-pane -t main:w1 'cat > "$HOME/dead2"'
+? 0
+$ display -p -t main:w1 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ respawn-pane -k -t main:w1 'sleep 100'
+? 0
+$ display -p -t main:w1 'pipe=#{pane_pipe}'
+pipe=1
+? 0

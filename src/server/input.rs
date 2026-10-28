@@ -1244,9 +1244,10 @@ impl KeyTables {
     }
 
     /// Whether `table` exists: `root` always does, as in tmux; any other
-    /// once something was bound in it.
+    /// while something is bound in it (tmux drops a table whose last
+    /// binding goes).
     pub fn exists(&self, table: &str) -> bool {
-        table == ROOT_TABLE || self.tables.contains_key(table)
+        table == ROOT_TABLE || self.tables.get(table).is_some_and(|t| !t.is_empty())
     }
 
     /// The binding for `key`: the one spelled exactly as `key`, else the

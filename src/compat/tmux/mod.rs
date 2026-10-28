@@ -1207,6 +1207,9 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         text: Some(lines.join("\n")),
         client: None,
         delay: None,
+        all: false,
+        literal: false,
+        verbose: false,
     })])
 }
 
@@ -1477,7 +1480,6 @@ fn core_rows() -> Vec<Row> {
             "M3.6",
             "fe_4/mouse-forms",
         ),
-        unsupported("pipe-pane", UNUSED, &[]),
         unsupported("lock-server", UNUSED, &[]),
         unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
@@ -1578,6 +1580,14 @@ fn core_rows() -> Vec<Row> {
         pass("select-window", "M1"),
         pass("list-windows", "M1"),
         pass("send-keys", "M1"),
+        row(
+            "pipe-pane",
+            PassThrough,
+            GrofeTarget::Native("pipe-pane"),
+            &[],
+            "B2b",
+            "b2b/pipe-pane",
+        ),
         pass("capture-pane", "M1"),
         pass("display-message", "M1"),
         pass("kill-server", "M1"),
@@ -2247,16 +2257,16 @@ mod tests {
         let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
-            "pipe-pane",
+            "lock-server",
             MappingKind::PassThrough,
-            GrofeTarget::Native("pipe-pane"),
+            GrofeTarget::Native("lock-server"),
             SEMANTIC,
             "M3.6",
             "",
         );
         let mut rows = vec![map];
         rows.extend(core_rows());
-        let err = translate_with(&args(&["pipe-pane"]), &ctx(), &rows, &[]);
+        let err = translate_with(&args(&["lock-server"]), &ctx(), &rows, &[]);
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));

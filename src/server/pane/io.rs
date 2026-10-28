@@ -135,6 +135,8 @@ pub(crate) struct Reader {
     pub(crate) emu: Arc<Mutex<Emu>>,
     pub(crate) events: EventBuf,
     pub(crate) input: Arc<InputQueue>,
+    /// `pipe-pane`: gets every byte read, before the emulator does.
+    pub(crate) pipe: Arc<super::pipe::Pipe>,
     pub(crate) dirty: Arc<AtomicBool>,
     pub(crate) wake: Arc<Notify>,
     pub(crate) to_actor: mpsc::Sender<PaneEvent>,
@@ -194,6 +196,7 @@ pub(crate) async fn reader(mut r: Reader) {
                 }) {
                     Ok(Ok(0)) => drained = true,
                     Ok(Ok(n)) => {
+                        r.pipe.tee(&buf[..n]);
                         found = r.feed(&buf[..n]);
                         quiet_since = Instant::now();
                         if OUTPUT_TAP.load(Ordering::Relaxed) {

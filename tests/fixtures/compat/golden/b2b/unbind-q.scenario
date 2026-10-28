@@ -1,0 +1,38 @@
+# B2b: unbind-key -q keeps its errors quiet (still failing); -a drops a whole table, and a key with -a is refused; a table left with no bindings is gone.
+$ new-session -d -s main -x 80 -y 24 cat
+$ unbind-key nosuchkey
+$ unbind-key -q nosuchkey
+$ unbind-key -q -T nosuchtable x
+$ unbind-key -T nosuchtable x
+$ unbind-key
+$ unbind-key -q
+$ unbind-key -a x
+$ unbind-key -aq x
+$ unbind-key -a -T nosuchtable
+$ unbind-key -aq -T nosuchtable
+$ unbind-key x
+$ unbind-key -n x
+$ unbind-key -q -n x
+$ bind-key -T mytab x display one
+$ bind-key -T mytab y display two
+$ list-keys -T mytab
+$ unbind-key -T mytab x
+$ list-keys -T mytab
+$ unbind-key -T mytab y
+$ list-keys -T mytab
+$ bind-key -T mytab x display one
+$ bind-key -T mytab y display two
+$ unbind-key -a -T mytab
+$ list-keys -T mytab
+$ bind-key z display root-z
+$ bind-key -n w display w
+$ unbind-key -a
+$ list-keys -T prefix
+$ list-keys -T root w
+$ unbind-key -a -n
+$ list-keys -T root
+$ unbind-key -qT mytab -n
+$ unbind-key -q -T copy-mode-vi Space
+$ list-keys -T copy-mode-vi Space
+$ unbind-key -T copy-mode Space
+$ list-keys -T copy-mode Space
