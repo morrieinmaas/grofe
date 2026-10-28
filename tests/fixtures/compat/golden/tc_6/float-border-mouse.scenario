@@ -1,0 +1,161 @@
+# TC.6: what tmux 3.7b's stock mouse rows do on a floating pane's border.
+# The pane's content is columns 10..29 and rows 4..8 of a 60x14 window, so
+# its border is column 9 and 30, row 3 and 9. MouseDown1Border is
+# select-pane -M, which clears the mark and focuses a floating pane;
+# MouseDrag1Border is resize-pane -M, which moves the pane by its top edge
+# and resizes it by the others (cmd_resize_pane_mouse_update_floating).
+# Each gesture starts from a fresh pane of the same place and size, and
+# waits out the last press's click timer.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ set -g status-right ''
+client 60x15 attach -t main
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+$ select-pane -t main:1.1
+$ select-pane -m -t main:1.1
+$ display -p -t main '#{pane_id} #{pane_marked_set}'
+# A click on the top edge.
+keys Escape '[<0;16;4M'
+keys Escape '[<0;16;4m'
+$ display -p -t main '#{pane_id} #{pane_marked_set}'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+$ run-shell 'sleep 0.5'
+# The top edge, dragged twice: it moves.
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+keys Escape '[<32;18;5M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+keys Escape '[<0;18;5m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+screen
+$ run-shell 'sleep 0.5'
+# The right edge.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;31;7M'
+keys Escape '[<32;35;7M'
+keys Escape '[<0;35;7m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The bottom edge.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;16;10M'
+keys Escape '[<32;16;12M'
+keys Escape '[<0;16;12m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The left edge.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;10;7M'
+keys Escape '[<32;6;7M'
+keys Escape '[<0;6;7m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The bottom right corner.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;31;10M'
+keys Escape '[<32;34;12M'
+keys Escape '[<0;34;12m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The top left corner.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;10;4M'
+keys Escape '[<32;8;3M'
+keys Escape '[<0;8;3m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The top edge dragged to the window's top right, then onto the status line.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;16;4M'
+keys Escape '[<32;59;1M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+keys Escape '[<32;59;15M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+keys Escape '[<0;59;15m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# The keys a drag's release and a plain release fire.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+$ bind -n MouseDragEnd1Border set -g @end border
+$ bind -n MouseDragEnd1Pane set -g @end pane
+$ bind -n MouseUp1Border set -g @up border
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ show -gv @end
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;31;7M'
+keys Escape '[<32;35;7M'
+keys Escape '[<0;20;7m'
+$ show -gv @end
+$ run-shell 'sleep 0.5'
+keys Escape '[<0;16;4M'
+keys Escape '[<0;16;4m'
+$ show -gv @up
+$ unbind -n MouseDragEnd1Border
+$ unbind -n MouseDragEnd1Pane
+$ unbind -n MouseUp1Border
+$ run-shell 'sleep 0.5'
+# A binding of the user's own runs instead, with the floating pane as its
+# target, and the pane does not move.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+$ bind -n MouseDown1Border set -gF @down '#{pane_id}'
+$ bind -n MouseDrag1Border set -gF @drag '#{pane_id}'
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ show -gv @down
+$ show -gv @drag
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+$ run-shell 'sleep 0.5'
+# With neither key bound the border does nothing.
+$ unbind -n MouseDown1Border
+$ unbind -n MouseDrag1Border
+$ select-pane -t main:1.1
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ display -p -t main 'unbound: #{pane_id}'
+$ display -p -t main:1.2 'unbound: #{pane_left} #{pane_top} #{pane_width} #{pane_height}'
+$ run-shell 'sleep 0.5'
+# A floating pane that asked for the mouse gets a click inside it, in its
+# own cells, and nothing for a click on its border.
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 'stty raw -echo; printf "\033[?1000h\033[?1006h"; exec cat -v'
+$ run-shell 'sleep 0.5'
+keys Escape '[<0;31;7M'
+keys Escape '[<0;31;7m'
+$ run-shell 'sleep 0.5'
+keys Escape '[<0;13;6M'
+keys Escape '[<0;13;6m'
+screen
+# tmux's stock rows bound again, as a config copied from tmux's defaults
+# binds them: a floating border and a tiled one drag as the stock rows do.
+$ bind -n MouseDrag1Border resize-pane -M
+$ bind -n MouseDown1Border select-pane -M
+$ run-shell 'sleep 0.5'
+$ kill-pane -t main:1.2
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+$ run-shell 'sleep 0.5'
+$ kill-pane -t main:1.2
+$ split-window -h -t main:1.1 cat
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+keys Escape '[<0;31;11M'
+keys Escape '[<32;36;11M'
+keys Escape '[<0;36;11m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"

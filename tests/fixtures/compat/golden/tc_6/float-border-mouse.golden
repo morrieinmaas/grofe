@@ -1,0 +1,295 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ set -g status-right ''
+? 0
+client 60x15 attach -t main
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+$ select-pane -t main:1.1
+? 0
+$ select-pane -m -t main:1.1
+? 0
+$ display -p -t main '#{pane_id} #{pane_marked_set}'
+%0 1
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<0;16;4m'
+$ display -p -t main '#{pane_id} #{pane_marked_set}'
+%1 0
+? 0
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}"
+%0 0 0 60 14 0
+%1 10 4 20 5 1
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%1 14 6 20 5
+? 0
+keys Escape '[<32;18;5M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%1 12 5 20 5
+? 0
+keys Escape '[<0;18;5m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%1 12 5 20 5
+? 0
+screen
+|
+|
+|
+|
+|            ┌────────────────────┐
+|            │                    │
+|            │                    │
+|            │                    │
+|            │                    │
+|            │                    │
+|            └────────────────────┘
+|
+|
+|
+| [main] 1:first*
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;31;7M'
+keys Escape '[<32;35;7M'
+keys Escape '[<0;35;7m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%2 10 4 24 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;16;10M'
+keys Escape '[<32;16;12M'
+keys Escape '[<0;16;12m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%3 10 4 20 7
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;10;7M'
+keys Escape '[<32;6;7M'
+keys Escape '[<0;6;7m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%4 6 4 24 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;31;10M'
+keys Escape '[<32;34;12M'
+keys Escape '[<0;34;12m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%5 10 4 23 7
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;10;4M'
+keys Escape '[<32;8;3M'
+keys Escape '[<0;8;3m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%6 8 3 22 6
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;59;1M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%7 53 1 20 5
+? 0
+keys Escape '[<32;59;15M'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%7 53 14 20 5
+? 0
+keys Escape '[<0;59;15m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%7 53 14 20 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+$ bind -n MouseDragEnd1Border set -g @end border
+? 0
+$ bind -n MouseDragEnd1Pane set -g @end pane
+? 0
+$ bind -n MouseUp1Border set -g @up border
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ show -gv @end
+border
+? 0
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%8 14 6 20 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;31;7M'
+keys Escape '[<32;35;7M'
+keys Escape '[<0;20;7m'
+$ show -gv @end
+pane
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<0;16;4m'
+$ show -gv @up
+border
+? 0
+$ unbind -n MouseDragEnd1Border
+? 0
+$ unbind -n MouseDragEnd1Pane
+? 0
+$ unbind -n MouseUp1Border
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+$ bind -n MouseDown1Border set -gF @down '#{pane_id}'
+? 0
+$ bind -n MouseDrag1Border set -gF @drag '#{pane_id}'
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ show -gv @down
+%10
+? 0
+$ show -gv @drag
+%10
+? 0
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+%0 0 0 60 14
+%10 10 4 20 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ unbind -n MouseDown1Border
+? 0
+$ unbind -n MouseDrag1Border
+? 0
+$ select-pane -t main:1.1
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ display -p -t main 'unbound: #{pane_id}'
+unbound: %0
+? 0
+$ display -p -t main:1.2 'unbound: #{pane_left} #{pane_top} #{pane_width} #{pane_height}'
+unbound: 10 4 20 5
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 'stty raw -echo; printf "\033[?1000h\033[?1006h"; exec cat -v'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<0;31;7M'
+keys Escape '[<0;31;7m'
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[<0;13;6M'
+keys Escape '[<0;13;6m'
+screen
+|
+|
+|
+|          ┌────────────────────┐
+|          │^[[<0;3;2M^[[<0;3;2m│
+|          │                    │
+|          │                    │
+|          │                    │
+|          │                    │
+|          └────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+$ bind -n MouseDrag1Border resize-pane -M
+? 0
+$ bind -n MouseDown1Border select-pane -M
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ new-pane -t main:1.1 -x 20 -y 5 -X 10 -Y 4 cat
+? 0
+keys Escape '[<0;16;4M'
+keys Escape '[<32;20;6M'
+keys Escape '[<0;20;6m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+%0 0 0 60 14 0
+%12 14 6 20 5 1
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ kill-pane -t main:1.2
+? 0
+$ split-window -h -t main:1.1 cat
+? 0
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+%0 0 0 30 14 0
+%13 31 0 29 14 0
+? 0
+keys Escape '[<0;31;11M'
+keys Escape '[<32;36;11M'
+keys Escape '[<0;36;11m'
+$ list-panes -t main -F "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}"
+%0 0 0 35 14 0
+%13 36 0 24 14 0
+? 0

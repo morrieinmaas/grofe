@@ -121,7 +121,6 @@ pub fn display_popup(
 /// is listed and counted with the window's panes, and closes as a pane
 /// does. `-P` prints it (`-F`, else tmux's `session:window.pane`).
 // ponytail: a floating pane does not move when its window is resized.
-// Its border drags with the mouse (`floating-pane-mouse`, grofe's own).
 pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String, String> {
     let model = &state.model;
     let target = model.resolve_pane(&c.target, ctx)?;
@@ -203,11 +202,9 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };
-    let order = w.pane_ids();
-    let was_active = w.active == pane;
+    // The pane stays the window's, so the active and last panes stand.
     w.zoomed = false;
     w.layout.remove(pane);
-    w.lose_pane(&order, pane);
     let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
     w.floating.push(Floating {
         pane,
@@ -217,9 +214,6 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
         rows,
         z,
     });
-    if was_active {
-        w.set_active(pane);
-    }
     model.relayout(window);
     Ok(String::new())
 }

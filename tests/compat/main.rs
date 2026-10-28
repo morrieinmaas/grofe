@@ -21,6 +21,7 @@ mod normalize;
 mod record;
 mod replay;
 mod scenarios;
+mod tc_6;
 mod tp;
 mod tp_1;
 mod tp_10;
