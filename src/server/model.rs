@@ -1340,6 +1340,7 @@ mod tests {
                 activity: t0 - Duration::from_secs(age),
                 last_panes: Vec::new(),
                 floating: Vec::new(),
+                pane_status: Default::default(),
             });
         }
         let wb = model.alloc_window_id();
@@ -1361,6 +1362,7 @@ mod tests {
             activity: t0,
             last_panes: Vec::new(),
             floating: Vec::new(),
+            pane_status: Default::default(),
         });
         // `add_session` leaves the window list to the caller.
         model.sessions.get_mut(&a).unwrap().windows = vec![w1, w2, w3];
