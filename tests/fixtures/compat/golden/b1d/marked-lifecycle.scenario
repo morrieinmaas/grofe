@@ -1,0 +1,31 @@
+# B1d: the mark across break-pane, move-pane, kill-window and respawn; ~ when stale.
+$ new-session -d -s main -n one -x 80 -y 24 cat
+$ split-window -d -t main:1 cat
+$ split-window -d -t main:1 cat
+$ new-window -d -t main:2 -n two cat
+$ split-window -d -t main:2 cat
+$ select-pane -m -t main:1.2
+$ break-pane -d -s main:1.2
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ display -p 'after break: #{pane_marked_set}'
+$ display -p -t '~' '#{pane_id}'
+$ select-pane -m -t main:2.1
+$ move-pane -d -t main:1.1
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ display -p 'after move: #{pane_marked_set}'
+$ select-pane -m -t main:1.1
+$ respawn-pane -k -t main:1.1 cat
+$ display -p 'after respawn: #{pane_marked_set} #{pane_marked}'
+$ swap-pane -t main:1.2
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ select-pane -m -t main:1.2
+$ kill-window -t main:1
+$ display -p 'after kill-window: #{pane_marked_set}'
+$ display -p -t '~' '#{pane_id}'
+$ list-windows -F '#{window_index} #{window_marked_flag}'
+$ new-session -d -s other -x 80 -y 24 cat
+$ select-pane -m -t other:1.1
+$ display -p -t main:1 '#{window_marked_flag} #{session_marked}'
+$ display -p -t other:1 '#{window_marked_flag} #{session_marked}'
+$ kill-session -t other
+$ display -p 'after kill-session: #{pane_marked_set}'

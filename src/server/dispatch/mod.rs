@@ -174,6 +174,7 @@ pub(crate) fn run_commands(
                 break;
             }
         }
+        crate::server::clock::sweep(state);
         // A command that answers later (a blocked `wait-for`, `run-shell`)
         // holds the rest of the request until it answers, as tmux 3.7b's
         // command queue waits (TC.9), and so does a hook waiting on its
@@ -355,6 +356,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
 
         // M3.6: stubs until each owning task lands (the stub edit).
         Command::JoinPane(c) => structure::join_pane(state, ctx, c),
+        Command::ClockMode(c) => crate::server::clock::clock_mode(state, ctx, c),
         Command::SwapPane(c) => structure::swap_pane(state, ctx, c),
         Command::SwapWindow(c) => structure::swap_window(state, ctx, c),
         Command::BreakPane(c) => structure::break_pane(state, ctx, c),

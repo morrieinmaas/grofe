@@ -1,0 +1,38 @@
+# B1d: copy-mode -q leaves every mode (and does nothing outside one), -d is
+# a page down (with -e it leaves the mode at the bottom), -u a page up, -s
+# shows another pane's screen, and -S from the CLI puts the view at the top
+# of the history.
+$ new-session -d -s main -n one -x 80 -y 24 'for i in $(seq 1 60); do echo line$i; done; echo AAA-pane; exec cat'
+$ split-window -d -t main:1 -v -l 6 'echo BBB-pane; exec cat'
+$ set -g status-right ''
+$ run-shell 'sleep 0.5'
+$ display -p -t main:1.1 'start: [#{pane_in_mode}] [#{pane_mode}]'
+$ copy-mode -q -t main:1.1
+$ display -p -t main:1.1 'quit outside: [#{pane_in_mode}]'
+$ copy-mode -t main:1.1
+$ display -p -t main:1.1 'entered: [#{pane_in_mode}] [#{pane_mode}] #{scroll_position}'
+$ copy-mode -q -t main:1.1
+$ display -p -t main:1.1 'quit: [#{pane_in_mode}] [#{pane_mode}]'
+$ copy-mode -u -t main:1.1
+$ display -p -t main:1.1 'page up: [#{pane_in_mode}] #{scroll_position}'
+$ copy-mode -u -t main:1.1
+$ display -p -t main:1.1 'page up again: #{scroll_position}'
+$ copy-mode -d -t main:1.1
+$ display -p -t main:1.1 'page down: [#{pane_in_mode}] #{scroll_position}'
+$ copy-mode -d -e -t main:1.1
+$ display -p -t main:1.1 'page down -e: [#{pane_in_mode}] #{scroll_position}'
+$ copy-mode -d -t main:1.1
+$ display -p -t main:1.1 'fresh page down: [#{pane_in_mode}] #{scroll_position}'
+$ copy-mode -q -t main:1.1
+$ copy-mode -S -t main:1.1
+$ display -p -t main:1.1 'slider: [#{pane_in_mode}] #{scroll_position}'
+$ copy-mode -q -t main:1.1
+$ copy-mode -qu -t main:1.1
+$ display -p -t main:1.1 'q wins: [#{pane_in_mode}]'
+client 80x24 attach -t main
+screen AAA-pane
+$ copy-mode -s main:1.2 -t main:1.1
+$ display -p -t main:1.1 'from another pane: [#{pane_in_mode}]'
+screen BBB-pane
+$ copy-mode -q -t main:1.1
+screen AAA-pane

@@ -128,7 +128,9 @@ fn off_actor<T: Send + 'static>(
                 Ok(Ok(Err(e))) => Err(e.into()),
                 Ok(Err(e)) => Err(e.to_string().into()),
                 Err(_) => {
-                    unstick();
+                    // Off the runtime: unsticking may wait for the thread
+                    // to reach its open.
+                    std::thread::spawn(unstick);
                     Err(format!("timed out after {timeout:?}").into())
                 }
             };
@@ -138,7 +140,10 @@ fn off_actor<T: Send + 'static>(
 }
 
 /// Frees a thread blocked opening a FIFO (`read`: for reading) by opening
-/// its other end for a moment; anything else is left alone.
+/// its other end for a moment; anything else is left alone. The thread may
+/// not have reached its `open` yet (a busy pool starts it late), and then
+/// there is no one to meet: the other end is tried again until it is met,
+/// or [`UNSTICK_FOR`] passes, so the thread is never left blocked for good.
 fn unstick_fifo(path: &Path, read: bool) {
     use std::os::unix::fs::FileTypeExt;
     if !std::fs::metadata(path).is_ok_and(|m| m.file_type().is_fifo()) {
@@ -151,8 +156,15 @@ fn unstick_fifo(path: &Path, read: bool) {
     } else {
         options.read(true);
     }
-    drop(options.open(path));
+    let until = Instant::now() + UNSTICK_FOR;
+    // A non-blocking open for writing fails (ENXIO) while no reader waits.
+    while options.open(path).is_err() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
+
+/// How long [`unstick_fifo`] waits for the blocked thread to arrive.
+const UNSTICK_FOR: Duration = Duration::from_secs(10);
 
 const O_NONBLOCK: i32 = nix::fcntl::OFlag::O_NONBLOCK.bits();
 
@@ -421,6 +433,42 @@ mod tests {
             .await
             .unwrap()
             .expect("the blocked open returned");
+    }
+
+    /// The thread may reach its open only after the bound has passed (a busy
+    /// pool starts it late): unsticking still frees it, where one try on an
+    /// FIFO with no reader yet left it blocked for good and the runtime
+    /// waiting for it forever.
+    #[tokio::test]
+    async fn a_fifo_open_that_starts_after_the_bound_is_still_freed() {
+        let (_dir, path) = fifo();
+        let mut state = test_state();
+        let (freed, was_freed) = std::sync::mpsc::channel();
+        let stuck = path.clone();
+        let io = move || {
+            std::thread::sleep(Duration::from_millis(400));
+            let read = read_file(&path);
+            let _ = freed.send(());
+            read
+        };
+        off_actor(
+            &mut state,
+            Duration::from_millis(100),
+            io,
+            move || unstick_fifo(&stuck, true),
+            |_, _| Ok(String::new()),
+        )
+        .unwrap();
+        let answer = state.deferred_reply.take().expect("the answer comes later");
+        let answer = tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .expect("answered within the bound")
+            .unwrap();
+        assert_eq!(answer.unwrap_err().err, "timed out after 100ms");
+        tokio::task::spawn_blocking(move || was_freed.recv_timeout(Duration::from_secs(8)))
+            .await
+            .unwrap()
+            .expect("the late open was freed");
     }
 
     /// A reader that never reads stops a write at the bound.

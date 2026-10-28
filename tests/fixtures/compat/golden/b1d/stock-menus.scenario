@@ -1,0 +1,33 @@
+# B1d: tmux's stock prefix < (window menu, -x W -y W) and prefix > (pane
+# menu, -x P -y P) open where tmux opens them, and prefix m marks the pane
+# the menus then offer to unmark.
+$ new-session -d -s main -n one -x 80 -y 24 cat
+$ new-window -d -t main:2 -n two cat
+$ new-window -d -t main:3 -n three cat
+$ split-window -d -t main:1 cat
+$ set -g status-right ''
+client 80x24 attach -t main
+keys C-b <
+screen New At End
+keys q
+keys C-b >
+screen Vertical Split
+keys q
+keys C-b m
+keys C-b <
+screen New At End
+keys q
+keys C-b >
+screen Unmark
+keys q
+$ select-window -t main:2
+keys C-b <
+screen New At End
+keys q
+$ set -g status-position top
+keys C-b <
+screen New At End
+keys q
+keys C-b >
+screen Vertical Split
+keys q

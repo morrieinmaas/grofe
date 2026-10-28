@@ -1,0 +1,51 @@
+# B1d: clock-mode puts the pane in the clock mode (pane_mode clock-mode)
+# until any key not bound in the root table is typed or send-keys sends one;
+# the prefix keeps working over it, a second clock-mode changes nothing, and
+# copy-mode -q ends it. clock-mode-style and clock-mode-colour are window
+# options. The digits themselves change with the time, so they are checked
+# in src/server/clock.rs.
+$ new-session -d -s main -x 80 -y 24 cat
+$ show -wv clock-mode-style
+$ show -wv clock-mode-colour
+$ set -w clock-mode-style 12-with-seconds
+$ show -wv clock-mode-style
+$ set -w clock-mode-style 24-with-seconds
+$ show -wv clock-mode-style
+$ set -w clock-mode-style bogus
+$ set -w clock-mode-style 12
+$ show -w clock-mode-style
+$ set -w clock-mode-colour red
+$ show -w clock-mode-colour
+$ set -w clock-mode-style 24
+$ set -w clock-mode-colour blue
+client 80x24 attach -t main
+$ display -p 'start [#{pane_in_mode}] [#{pane_mode}]'
+$ clock-mode
+$ display -p 'clock [#{pane_in_mode}] [#{pane_mode}]'
+$ clock-mode
+$ display -p 'twice [#{pane_in_mode}] [#{pane_mode}]'
+$ send-keys x
+$ display -p 'send-keys [#{pane_in_mode}] [#{pane_mode}]'
+$ clock-mode -t main:1.1
+$ display -p 'target [#{pane_in_mode}] [#{pane_mode}]'
+keys z
+$ display -p 'key [#{pane_in_mode}] [#{pane_mode}]'
+$ clock-mode
+keys C-b t
+$ display -p 'prefix t [#{pane_in_mode}] [#{pane_mode}]'
+keys C-b ?
+keys q
+keys C-b t
+$ display -p 'prefix t again [#{pane_in_mode}] [#{pane_mode}]'
+keys q
+$ display -p 'q [#{pane_in_mode}] [#{pane_mode}]'
+$ clock-mode
+$ copy-mode -q
+$ display -p 'copy-mode -q [#{pane_in_mode}] [#{pane_mode}]'
+$ copy-mode
+$ clock-mode
+$ display -p 'over copy [#{pane_in_mode}] [#{pane_mode}]'
+keys z
+$ display -p 'back to copy [#{pane_in_mode}] [#{pane_mode}]'
+$ copy-mode -q
+$ clock-mode -t nosuch

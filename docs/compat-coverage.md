@@ -199,7 +199,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   and its flags, `send-keys -X`, `delete-buffer`, `list-buffers`,
   `load-buffer`, `show-buffer`) belong to M5 (M36-R8). TM.7 maps them all,
   `load-buffer` included, and `save-buffer`, which the corpus does not
-  send, and refuses `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
+  send, and B1d adds `copy-mode -d -q -s -S` (`docs/copy-mode.md`).
 - **`clear-history` and the screen-state formats (F1).** `clear-history`
   (`clearhist`, `-H`, `-t`) is a native row with a golden
   (`golden/f1/clear-history`): the pane leaves its modes, the scrollback and
@@ -496,7 +496,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `display-menu -O -t[=] -T -x[M] -y[M]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -T -x[P] -y[P]` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
 | `display-menu -T -x[R] -y[P]` | 1 | 0 | sc1 | area:Overlays | yes |  | plugin:tmux-which-key/which-key.sh |
-| `display-menu -T -x[W] -y[W]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
+| `display-menu -T -x[W] -y[W]` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
 | `display-menu -t[=] -T -x[M] -y[M]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[M] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[W] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
@@ -631,14 +631,14 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `select-pane -L` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
 | `select-pane -L -t` | 2 | 1 | sc2 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -L -t -Z` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -M` | 1 | 1 | cs1 | oos:Marked panes |  |  | container:list-keys |
+| `select-pane -M` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `select-pane -P! -t` | 2 | 0 | sc2 | cmd:M1 | yes | `-P!` | plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `select-pane -R` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
 | `select-pane -R -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -U` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
 | `select-pane -l` | 4 | 4 | cj2 cs2 | cmd:M1 | yes |  | container:job, container:list-keys |
 | `select-pane -l -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -m` | 7 | 7 | cs7 | oos:Marked panes |  |  | container:list-keys |
+| `select-pane -m` | 7 | 7 | cs7 | area:Windows and panes | yes |  | container:list-keys |
 | `select-pane -t` | 14 | 0 | cj2 cp1 cs1 sc9 sf1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh, canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:tmux/keys.tsv (+10) |
 | `select-pane -t -T` | 13 | 0 | cc1 cj9 sc3 | cmd:M1 | yes | `-T` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
 | `select-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
@@ -847,8 +847,8 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{pane_in_mode}` | 14 | yes |
 | `#{pane_index}` | 24 | yes |
 | `#{pane_left}` | 10 | yes |
-| `#{pane_marked_set}` | 6 | no |
-| `#{pane_marked}` | 6 | no |
+| `#{pane_marked_set}` | 6 | yes |
+| `#{pane_marked}` | 6 | yes |
 | `#{pane_mode}` | 10 | yes |
 | `#{pane_pid}` | 15 | yes |
 | `#{pane_right}` | 10 | no |

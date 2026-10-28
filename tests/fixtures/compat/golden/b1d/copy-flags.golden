@@ -1,0 +1,148 @@
+$ new-session -d -s main -n one -x 80 -y 24 'for i in $(seq 1 60); do echo line$i; done; echo AAA-pane; exec cat'
+? 0
+$ split-window -d -t main:1 -v -l 6 'echo BBB-pane; exec cat'
+? 0
+$ set -g status-right ''
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ display -p -t main:1.1 'start: [#{pane_in_mode}] [#{pane_mode}]'
+start: [0] []
+? 0
+$ copy-mode -q -t main:1.1
+? 0
+$ display -p -t main:1.1 'quit outside: [#{pane_in_mode}]'
+quit outside: [0]
+? 0
+$ copy-mode -t main:1.1
+? 0
+$ display -p -t main:1.1 'entered: [#{pane_in_mode}] [#{pane_mode}] #{scroll_position}'
+entered: [1] [copy-mode] 0
+? 0
+$ copy-mode -q -t main:1.1
+? 0
+$ display -p -t main:1.1 'quit: [#{pane_in_mode}] [#{pane_mode}]'
+quit: [0] []
+? 0
+$ copy-mode -u -t main:1.1
+? 0
+$ display -p -t main:1.1 'page up: [#{pane_in_mode}] #{scroll_position}'
+page up: [1] 15
+? 0
+$ copy-mode -u -t main:1.1
+? 0
+$ display -p -t main:1.1 'page up again: #{scroll_position}'
+page up again: 30
+? 0
+$ copy-mode -d -t main:1.1
+? 0
+$ display -p -t main:1.1 'page down: [#{pane_in_mode}] #{scroll_position}'
+page down: [1] 15
+? 0
+$ copy-mode -d -e -t main:1.1
+? 0
+$ display -p -t main:1.1 'page down -e: [#{pane_in_mode}] #{scroll_position}'
+page down -e: [0] 
+? 0
+$ copy-mode -d -t main:1.1
+? 0
+$ display -p -t main:1.1 'fresh page down: [#{pane_in_mode}] #{scroll_position}'
+fresh page down: [1] 0
+? 0
+$ copy-mode -q -t main:1.1
+? 0
+$ copy-mode -S -t main:1.1
+? 0
+$ display -p -t main:1.1 'slider: [#{pane_in_mode}] #{scroll_position}'
+slider: [1] 45
+? 0
+$ copy-mode -q -t main:1.1
+? 0
+$ copy-mode -qu -t main:1.1
+? 0
+$ display -p -t main:1.1 'q wins: [#{pane_in_mode}]'
+q wins: [0]
+? 0
+client 80x24 attach -t main
+screen AAA-pane
+| line47
+| line48
+| line49
+| line50
+| line51
+| line52
+| line53
+| line54
+| line55
+| line56
+| line57
+| line58
+| line59
+| line60
+| AAA-pane
+|
+| ────────────────────────────────────────────────────────────────────────────────
+| BBB-pane
+|
+|
+|
+|
+|
+| [main] 1:one*
+$ copy-mode -s main:1.2 -t main:1.1
+? 0
+$ display -p -t main:1.1 'from another pane: [#{pane_in_mode}]'
+from another pane: [1]
+? 0
+screen BBB-pane
+| BBB-pane                                                                   [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ────────────────────────────────────────────────────────────────────────────────
+| BBB-pane
+|
+|
+|
+|
+|
+| [main] 1:one*
+$ copy-mode -q -t main:1.1
+? 0
+screen AAA-pane
+| line47
+| line48
+| line49
+| line50
+| line51
+| line52
+| line53
+| line54
+| line55
+| line56
+| line57
+| line58
+| line59
+| line60
+| AAA-pane
+|
+| ────────────────────────────────────────────────────────────────────────────────
+| BBB-pane
+|
+|
+|
+|
+|
+| [main] 1:one*

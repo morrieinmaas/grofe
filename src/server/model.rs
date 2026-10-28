@@ -301,6 +301,10 @@ pub struct Model {
     pub selected: Vec<WindowId>,
     /// Session groups (`new-session -t`), see `server::links`.
     pub groups: Vec<crate::server::links::Group>,
+    /// The server's marked pane (tmux's `marked_pane`), with the window it
+    /// was marked in. Read it through [`Model::marked_pane`], which checks
+    /// it is still there.
+    pub marked: Option<(SessionId, WindowId, PaneId)>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -314,6 +318,19 @@ impl Model {
             started: Some(std::time::SystemTime::now()),
             ..Model::default()
         }
+    }
+
+    /// The marked pane while it is valid, as tmux's `server_check_marked`:
+    /// the pane exists and is still in the window it was marked in (a pane
+    /// that moved to another window is no longer marked, killed panes and
+    /// windows are gone; ids are never reused). The mark also names the
+    /// session it was made in, and holds only while that session still has
+    /// the window (a winlink in tmux): unlinking the window from it clears it
+    /// even if another session keeps the window.
+    pub fn marked_pane(&self) -> Option<PaneId> {
+        let (session, window, pane) = self.marked?;
+        let p = self.panes.get(&pane)?;
+        (p.window == window && self.has_link(session, window)).then_some(pane)
     }
 
     pub fn alloc_session_id(&mut self) -> SessionId {
@@ -706,7 +723,21 @@ impl Model {
                 .session_by_name(name)
                 .ok_or_else(|| format!("can't find session: {name}")),
             SessionRef::Mouse => Err(crate::cmd::target::NO_MOUSE_TARGET.to_string()),
+            SessionRef::Marked => {
+                let (session, ..) = self.marked_target()?;
+                Ok(session)
+            }
         }
+    }
+
+    /// tmux's `~` / `{marked}`: the marked pane and its window, or tmux's
+    /// `no marked target`.
+    fn marked_target(&self) -> Result<(SessionId, WindowId, PaneId), String> {
+        let pane = self
+            .marked_pane()
+            .ok_or_else(|| "no marked target".to_string())?;
+        let (session, window, _) = self.marked.ok_or_else(|| "no marked target".to_string())?;
+        Ok((session, window, pane))
     }
 
     fn window_ref(
@@ -949,6 +980,7 @@ impl Resolve for Model {
             Target::Current => self.current_pane(ctx),
             Target::Pane(r) => self.pane_ref(r, ctx),
             Target::Session(SessionRef::Bare(word)) => self.bare_pane(word, ctx),
+            Target::Session(SessionRef::Marked) => self.marked_target().map(|(.., pane)| pane),
             Target::Session(_) | Target::Window(..) => {
                 let w = self.resolve_window(target, ctx)?;
                 Ok(self.windows[&w].active)
@@ -960,6 +992,9 @@ impl Resolve for Model {
         match target {
             Target::Current => self.current_window(ctx),
             Target::Session(SessionRef::Bare(word)) => self.bare_window(word, ctx),
+            Target::Session(SessionRef::Marked) => {
+                self.marked_target().map(|(_, window, _)| window)
+            }
             Target::Session(s) => {
                 let sid = self.session_ref(s, ctx)?;
                 Ok(self.sessions[&sid].active)

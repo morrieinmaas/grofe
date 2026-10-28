@@ -94,15 +94,10 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
     ),
     // tmux's stock mouse bindings, which grofe's built-in mouse model
     // replaces (spec 4.5 out of scope, "Mouse argv forms"; M36-R7).
-    ("display-menu -O -T -t -x -y", MOUSE),
-    ("display-menu -T -t -x -y", MOUSE),
-    ("display-menu -T -x -y", MOUSE),
+    ("display-menu -O: cosmetic, ignored", MOUSE),
     ("resize-pane -M: cosmetic, ignored", MOUSE),
-    ("select-pane -M", MOUSE),
     ("send-keys -M", MOUSE),
-    // Spec 4.5 out of scope: marks, linked windows and session groups
-    // (M36-R9).
-    ("select-pane -m", "marked panes (spec 4.5 out of scope)"),
+    // Spec 4.5 out of scope: linked windows and session groups (M36-R9).
     ("link-window -a -s -t", GROUPS),
     ("unlink-window -k -t", GROUPS),
     ("new-session -d -s -t", GROUPS),

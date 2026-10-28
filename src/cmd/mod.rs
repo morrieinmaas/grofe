@@ -193,6 +193,20 @@ pub struct SelectPane {
     /// `-T` (M3.6, TC.11): sets the pane's title (expanded as a format)
     /// instead of selecting it, as tmux does.
     pub title: Option<String>,
+    /// `-m` / `-M`: toggle or clear the server's marked pane instead of
+    /// selecting.
+    pub mark: Mark,
+}
+
+/// `select-pane -m` / `-M`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mark {
+    #[default]
+    No,
+    /// `-m`: mark the target pane, or unmark it if it is the marked pane.
+    Toggle,
+    /// `-M`: clear the marked pane.
+    Clear,
 }
 
 /// What `resize-pane` does: move one or more borders by a shared cell
@@ -644,6 +658,12 @@ pub struct LastPane {
     pub target: Target,
 }
 
+/// `clock-mode [-t pane]` (B1d): the pane shows a clock until a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClockMode {
+    pub target: Target,
+}
+
 /// `rotate-window` (TC.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotateWindow {
@@ -878,6 +898,9 @@ pub struct DisplayMenu {
     pub x: Option<String>,
     /// `-y`, raw.
     pub y: Option<String>,
+    /// `-t`: the pane the formats expand against, the menu is placed
+    /// against and the items run for; the current one when not given.
+    pub target: Option<Target>,
     /// Required (at least one); empty only for a bare `display-menu`.
     pub items: Vec<MenuEntry>,
 }
@@ -1055,7 +1078,8 @@ pub struct PasteBuffer {
     pub target: Target,
 }
 
-/// `copy-mode [-eHMu] [-t pane]` (M5, TM.1; `-H` and `-M` TM.6).
+/// `copy-mode [-deHMqSu] [-s src-pane] [-t pane]` (M5, TM.1; `-H` and `-M`
+/// TM.6; `-d -q -s -S` B1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyMode {
     /// `-u`: start a page up.
@@ -1067,6 +1091,14 @@ pub struct CopyMode {
     /// `-M`: in the pane under the running mouse key, starting a drag
     /// there; nothing outside a mouse key.
     pub mouse: bool,
+    /// `-q`: leave every mode of the pane instead of entering one.
+    pub cancel: bool,
+    /// `-d`: start a page down (with `-e`, leaving the mode at the bottom).
+    pub page_down: bool,
+    /// `-S`: a scrollbar slider drag.
+    pub slider: bool,
+    /// `-s`: show this pane's screen instead of the target's.
+    pub source: Option<Target>,
     pub target: Target,
 }
 
@@ -1133,6 +1165,7 @@ pub enum Command {
     BreakPane(BreakPane),
     ResizeWindow(ResizeWindow),
     LastPane(LastPane),
+    ClockMode(ClockMode),
     RotateWindow(RotateWindow),
     MoveWindow(MoveWindow),
     LinkWindow(LinkWindow),

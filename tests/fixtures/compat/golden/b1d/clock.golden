@@ -1,0 +1,100 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ show -wv clock-mode-style
+? 0
+$ show -wv clock-mode-colour
+? 0
+$ set -w clock-mode-style 12-with-seconds
+? 0
+$ show -wv clock-mode-style
+12-with-seconds
+? 0
+$ set -w clock-mode-style 24-with-seconds
+? 0
+$ show -wv clock-mode-style
+24-with-seconds
+? 0
+$ set -w clock-mode-style bogus
+! unknown value: bogus
+? 1
+$ set -w clock-mode-style 12
+? 0
+$ show -w clock-mode-style
+clock-mode-style 12
+? 0
+$ set -w clock-mode-colour red
+? 0
+$ show -w clock-mode-colour
+clock-mode-colour red
+? 0
+$ set -w clock-mode-style 24
+? 0
+$ set -w clock-mode-colour blue
+? 0
+client 80x24 attach -t main
+$ display -p 'start [#{pane_in_mode}] [#{pane_mode}]'
+start [0] []
+? 0
+$ clock-mode
+? 0
+$ display -p 'clock [#{pane_in_mode}] [#{pane_mode}]'
+clock [1] [clock-mode]
+? 0
+$ clock-mode
+? 0
+$ display -p 'twice [#{pane_in_mode}] [#{pane_mode}]'
+twice [1] [clock-mode]
+? 0
+$ send-keys x
+? 0
+$ display -p 'send-keys [#{pane_in_mode}] [#{pane_mode}]'
+send-keys [0] []
+? 0
+$ clock-mode -t main:1.1
+? 0
+$ display -p 'target [#{pane_in_mode}] [#{pane_mode}]'
+target [1] [clock-mode]
+? 0
+keys z
+$ display -p 'key [#{pane_in_mode}] [#{pane_mode}]'
+key [0] []
+? 0
+$ clock-mode
+? 0
+keys C-b t
+$ display -p 'prefix t [#{pane_in_mode}] [#{pane_mode}]'
+prefix t [1] [clock-mode]
+? 0
+keys C-b ?
+keys q
+keys C-b t
+$ display -p 'prefix t again [#{pane_in_mode}] [#{pane_mode}]'
+prefix t again [1] [clock-mode]
+? 0
+keys q
+$ display -p 'q [#{pane_in_mode}] [#{pane_mode}]'
+q [0] []
+? 0
+$ clock-mode
+? 0
+$ copy-mode -q
+? 0
+$ display -p 'copy-mode -q [#{pane_in_mode}] [#{pane_mode}]'
+copy-mode -q [0] []
+? 0
+$ copy-mode
+? 0
+$ clock-mode
+? 0
+$ display -p 'over copy [#{pane_in_mode}] [#{pane_mode}]'
+over copy [2] [clock-mode]
+? 0
+keys z
+$ display -p 'back to copy [#{pane_in_mode}] [#{pane_mode}]'
+back to copy [1] [copy-mode]
+? 0
+$ copy-mode -q
+? 0
+$ clock-mode -t nosuch
+! can't find pane: nosuch
+? 1

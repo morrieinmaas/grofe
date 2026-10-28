@@ -984,6 +984,43 @@ pub fn status_at(
     Some((line, drawn.range_at(col).map(|r| r.kind.clone())))
 }
 
+/// Client `id`'s status line as last drawn, for a menu or popup placed by
+/// `-x W` / `-y W` / `-y S` (tmux's `cmd_display_menu_get_pos`).
+pub struct StatusSpot {
+    /// How many rows the status line takes.
+    pub lines: u16,
+    /// `status-position top`.
+    pub top: bool,
+    /// Each window range: the status row it is on (0 is the first), its
+    /// first column, and the window index it names, in drawing order.
+    pub windows: Vec<(u16, u16, u32)>,
+}
+
+/// Client `id`'s [`StatusSpot`]; `None` with the status line off.
+pub fn status_spot(state: &State, id: ClientId) -> Option<StatusSpot> {
+    let c = state.clients.get(&id)?;
+    let geom = status_geometry(&state.model, c.session, c.size.1);
+    if geom.lines == 0 {
+        return None;
+    }
+    let windows = c
+        .status_rows
+        .iter()
+        .enumerate()
+        .flat_map(|(line, row)| {
+            row.ranges.iter().filter_map(move |r| match r.kind {
+                RangeKind::Window(index) => Some((line as u16, r.start, index)),
+                _ => None,
+            })
+        })
+        .collect();
+    Some(StatusSpot {
+        lines: geom.lines,
+        top: geom.top,
+        windows,
+    })
+}
+
 /// The range under a click at client cell `(col, row)` on client `id`'s
 /// status line as last drawn ([`status_at`]).
 pub fn status_range_at(state: &State, id: ClientId, col: u16, row: u16) -> Option<RangeKind> {
@@ -2187,6 +2224,9 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         border_style: window_style(model, w, "pane-border-style"),
         active_border_style: window_style(model, w, "pane-active-border-style"),
         active: w.active,
+        marked: model
+            .marked_pane()
+            .filter(|p| model.panes.get(p).is_some_and(|p| p.window == w.id)),
         status: None,
         cursor,
         graphics: state.graphics.remap(),
@@ -3661,9 +3701,9 @@ mod tests {
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 6);
+        assert_eq!(state.registry.input_hooks.len(), 7);
         // TM.6 removed the mouse's scrollback view overlay.
-        assert_eq!(state.registry.overlays.len(), 5);
+        assert_eq!(state.registry.overlays.len(), 6);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),

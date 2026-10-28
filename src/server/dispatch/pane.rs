@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::cmd::{
-    self, CapturePane, Command, KillPane, ResizeAction, ResizePane, Resolve, RespawnPane,
+    self, CapturePane, Command, KillPane, Mark, ResizeAction, ResizePane, Resolve, RespawnPane,
     SelectPane, SendKeys, SendKeysItem, SendPrefix, SplitWindow,
 };
 use crate::protocol::ClientCtx;
@@ -132,6 +132,9 @@ fn kill_pane(state: &mut State, ctx: &ClientCtx, c: KillPane) -> Result<String, 
 /// does. Changing the active pane leaves zoom, unless `-Z` keeps the
 /// window zoomed on the new one.
 fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<String, String> {
+    if !c.last && c.mark != Mark::No {
+        return mark_pane(state, ctx, &c);
+    }
     let model = &mut state.model;
     if c.last {
         let window = model.resolve_window(&c.target, ctx)?;
@@ -163,6 +166,34 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
         (Some(next), None) => switch_active(model, window, next, c.keep_zoom),
         (None, None) => unzoom(model, window),
     }
+    Ok(String::new())
+}
+
+/// `select-pane -m` / `-M`, as tmux 3.7b: `-m` marks the target pane (or
+/// clears the mark if it is the marked one) unless a zoomed window hides it;
+/// `-M` clears the mark. Marking a floating pane also makes it the active
+/// pane.
+fn mark_pane(state: &mut State, ctx: &ClientCtx, c: &SelectPane) -> Result<String, String> {
+    let model = &mut state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let (session, _) = model.resolve_winlink(&c.target, ctx)?;
+    let window = model.panes[&pane].window;
+    let Some(w) = model.windows.get(&window) else {
+        return Ok(String::new());
+    };
+    if c.mark == Mark::Toggle && w.zoomed && w.active != pane {
+        return Ok(String::new());
+    }
+    let floating = w.floating(pane).is_some();
+    model.marked = if c.mark == Mark::Clear || model.marked_pane() == Some(pane) {
+        None
+    } else {
+        Some((session, window, pane))
+    };
+    if floating && let Some(w) = model.windows.get_mut(&window) {
+        w.set_active(pane);
+    }
+    clients::mark_all_dirty(state);
     Ok(String::new())
 }
 
@@ -556,6 +587,14 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         return Ok(String::new());
     }
     if c.items.is_empty() {
+        return Ok(String::new());
+    }
+    // A pane showing the clock takes no keys: with a client to type them,
+    // any key ends the mode (tmux's `window_pane_key`).
+    if state.clocks.is_active(pane) {
+        if clients::current_client(state, ctx).is_some() {
+            crate::server::clock::leave(state, pane);
+        }
         return Ok(String::new());
     }
     if in_mode {

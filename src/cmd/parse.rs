@@ -10,17 +10,18 @@ use super::keys;
 use super::target::parse_target;
 use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
-    ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
-    DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
-    If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, LinkWindow, ListBuffers,
-    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer,
-    MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
-    ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource, Reload, Rename,
-    ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer,
-    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
-    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
-    SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor, WindowStep,
+    ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode,
+    DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup,
+    FindWindow, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane,
+    LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
+    ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
+    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PluginRestart, RefreshClient,
+    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
+    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
+    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor,
+    WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -487,6 +488,8 @@ const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
     ('R', FlagKind::Bool),
     ('U', FlagKind::Bool),
     ('D', FlagKind::Bool),
+    ('m', FlagKind::Bool),
+    ('M', FlagKind::Bool),
     ('t', FlagKind::Value),
 ];
 
@@ -521,6 +524,14 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
         last: flags.present.contains(&'l'),
         keep_zoom: flags.present.contains(&'Z'),
         title: flags.values.get(&'T').cloned(),
+        // tmux acts on -m and -M before anything else; -M wins.
+        mark: if flags.present.contains(&'M') {
+            Mark::Clear
+        } else if flags.present.contains(&'m') {
+            Mark::Toggle
+        } else {
+            Mark::No
+        },
     }))
 }
 
@@ -1866,6 +1877,7 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         ('T', FlagKind::Value),
         ('x', FlagKind::Value),
         ('y', FlagKind::Value),
+        ('t', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "display-menu")?;
     needs_positionals(argv, &flags, "display-menu", 1)?;
@@ -1873,6 +1885,7 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         title: flags.values.get(&'T').cloned(),
         x: flags.values.get(&'x').cloned(),
         y: flags.values.get(&'y').cloned(),
+        target: target_if_given(&flags.values, 't')?,
         items: menu_entries(&flags.positionals)?,
     }))
 }
@@ -2971,6 +2984,9 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "swap-window" => parse_swap_window(rest),
         "break-pane" => parse_break_pane(rest),
         "resize-window" => parse_resize_window(rest),
+        "clock-mode" => Ok(Command::ClockMode(ClockMode {
+            target: parse_target_only(rest, "clock-mode")?,
+        })),
         "last-pane" => Ok(Command::LastPane(LastPane {
             target: parse_target_only(rest, "last-pane")?,
         })),
@@ -3069,6 +3085,10 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 ('H', FlagKind::Bool),
                 ('M', FlagKind::Bool),
                 ('u', FlagKind::Bool),
+                ('d', FlagKind::Bool),
+                ('q', FlagKind::Bool),
+                ('S', FlagKind::Bool),
+                ('s', FlagKind::Value),
                 ('t', FlagKind::Value),
             ];
             let flags = flags_for(rest, SHORT, "copy-mode")?;
@@ -3078,6 +3098,10 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 scroll_exit: flags.present.contains(&'e'),
                 hide_position: flags.present.contains(&'H'),
                 mouse: flags.present.contains(&'M'),
+                cancel: flags.present.contains(&'q'),
+                page_down: flags.present.contains(&'d'),
+                slider: flags.present.contains(&'S'),
+                source: target_if_given(&flags.values, 's')?,
                 target: target_or_current(&flags.values, 't')?,
             }))
         }
@@ -3479,6 +3503,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: Mark::No,
             })
         );
     }
@@ -3498,6 +3523,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: Mark::No,
             })
         );
     }

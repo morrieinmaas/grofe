@@ -90,6 +90,9 @@ pub struct FrameInputs<'a> {
     pub active_border_style: Style,
     /// The pane whose borders are drawn active.
     pub active: PaneId,
+    /// The marked pane when it is in this window: its border cells are
+    /// drawn with reverse toggled, as tmux's `screen_redraw_draw_borders`.
+    pub marked: Option<PaneId>,
     /// The status row, drawn on the client's last row; the window then has
     /// the rows above it. `None` when `status` is off.
     pub status: Option<StyledLine>,
@@ -446,6 +449,9 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
     let rects: Vec<(PaneId, Rect)> = inputs.panes.iter().map(|(id, r, _)| (*id, *r)).collect();
     let boxes = pane_boxes(looks, &rects);
     let active = boxes.iter().position(|b| b.id == inputs.active);
+    let marked = inputs
+        .marked
+        .and_then(|m| boxes.iter().position(|b| b.id == m));
     let geom = Geometry::new((w, h), looks.status, looks.indicators, &boxes, active);
     let style_of = |id: PaneId, is_active: bool| {
         let look = looks.panes.get(&id);
@@ -476,7 +482,13 @@ fn draw_borders(win: &mut Screen, inputs: &FrameInputs) -> Vec<bool> {
                 .arrow(x, y, cell, owner)
                 .unwrap_or_else(|| borders::glyph(looks.lines, cell, Some(owner)));
             let i = (y * w + x) as usize;
-            win.cells[i] = styled(ch, &style_of(owner.id, on_active));
+            let mut drawn = styled(ch, &style_of(owner.id, on_active));
+            // `screen_redraw_draw_borders_cell`: the marked pane's border
+            // is drawn in reverse.
+            if marked.is_some_and(|m| geom.is_border_of(&boxes[m], x, y)) {
+                drawn.flags ^= CellFlags::INVERSE;
+            }
+            win.cells[i] = drawn;
             mask[i] = true;
         }
     }
@@ -1213,6 +1225,7 @@ mod tests {
             border_style: Style::default(),
             active_border_style: Style::default(),
             active: PaneId(1),
+            marked: None,
             status: None,
             cursor: None,
             graphics: None,

@@ -119,6 +119,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("visual-silence", "visual-silence"),
     // Paste buffers (TM.4).
     ("buffer-limit", "buffer-limit"),
+    // Clock mode (B1d), by tmux's names.
+    ("clock-mode-colour", "clock-mode-colour"),
+    ("clock-mode-style", "clock-mode-style"),
     // Copy mode (M5 stub).
     ("word-separators", "word-separators"),
     ("wrap-search", "wrap-search"),

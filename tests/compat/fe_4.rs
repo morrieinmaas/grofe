@@ -137,18 +137,11 @@ fn if_format_matches_its_golden() {
 fn mouse_forms_match_their_golden() {
     check(
         "mouse-forms",
-        &[
-            (
-                "$ display-menu -x M -y M A a 'display hi'",
-                "refused on purpose (M36-R5): tmux says `no current client` only because no \
-                 client is attached; with one it draws the menu at the top left",
-            ),
-            (
-                "$ if -F -t = 1 'display -p yes'",
-                "a bare `=` outside a mouse key is `no mouse target` (M36-R3); tmux falls back \
+        &[(
+            "$ if -F -t = 1 'display -p yes'",
+            "a bare `=` outside a mouse key is `no mouse target` (M36-R3); tmux falls back \
                  to the current pane",
-            ),
-        ],
+        )],
     );
 }
 
@@ -1232,8 +1225,8 @@ fn every_fe4_corpus_form_maps_or_is_refused_with_a_reason() {
     assert!(stale.is_empty(), "PENDING forms that map now: {stale:?}");
 }
 
-/// The mouse position letters are refused however the menu or popup
-/// otherwise looks, and the ordinary letters (`C`, `P`, `R`) map.
+/// Every position letter (`C`, `P`, `R`, and the mouse ones `M`, `W`, `S`,
+/// B1d) maps.
 #[test]
 fn mouse_positions_are_semantic_and_the_other_letters_map() {
     let run = |w: &[&str]| tmux::dispatch_command(&words(w), &ctx()).map(|_| ());
@@ -1245,11 +1238,8 @@ fn mouse_positions_are_semantic_and_the_other_letters_map() {
         ("-y", "S"),
     ] {
         for verb in ["display-menu", "display-popup"] {
-            let err = run(&[verb, "-T", "t", flag, letter, "A", "a", "x"]).unwrap_err();
-            assert!(
-                err.0.contains("mouse position"),
-                "{verb} {flag} {letter}: {err}"
-            );
+            let got = run(&[verb, "-T", "t", flag, letter, "A", "a", "x"]);
+            assert!(got.is_ok(), "{verb} {flag} {letter}: {got:?}");
         }
     }
     for (x, y) in [("C", "C"), ("P", "P"), ("R", "P")] {

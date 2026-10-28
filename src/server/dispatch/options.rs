@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cmd::{
     BindKey, Command, DisplayMessage, FormatVars, Inner, ListKeys, ListPanes, ListSessions,
-    ListWindows, LoopItem, LoopKind, LoopSort, NameKind, OptionScope, Reload, Resolve, SetOption,
-    ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time,
+    ListWindows, LoopItem, LoopKind, LoopSort, NameKind, OptionScope, Reload, Resolve, SessionRef,
+    SetOption, ShowOptions, SortOrder, SourceFile, Target, UnbindKey, expand, expand_time,
     split_command_string,
 };
 use crate::config::{self, Resolved, provenance::tilde};
@@ -445,6 +445,20 @@ const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
+    },
+    // B1d: clock mode's colour and time format, tmux 3.7b's names, choices
+    // and defaults (`4` is blue; `show` prints it so).
+    Builtin {
+        name: "clock-mode-colour",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "blue",
+    },
+    Builtin {
+        name: "clock-mode-style",
+        kind: Kind::Choice(&["12", "24", "12-with-seconds", "24-with-seconds"]),
+        scope: OptionScope::Window,
+        default: "24",
     },
     Builtin {
         name: "pane-border-style",
@@ -2575,8 +2589,21 @@ fn display_message(
         Some(Err(_)) => return Err("delay invalid".to_string()),
     };
     let model = &state.model;
-    let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
+    // tmux's target here can fail (`CMD_FIND_CANFAIL`): a `~` with nothing
+    // marked is quietly no pane, and every variable expands to nothing.
+    let pane = match model.resolve_pane(&c.target, ctx) {
+        Ok(pane) => pane,
+        Err(_) if c.target == Target::Session(SessionRef::Marked) => {
+            let out = expand_time(text, &NoVars);
+            return Ok(if c.print {
+                format!("{out}\n")
+            } else {
+                String::new()
+            });
+        }
+        Err(e) => return Err(e),
+    };
     // The session the target names, for a window linked into several.
     let vars = match model.resolve_winlink(&c.target, ctx) {
         Ok((session, _)) => FormatCtx::new(model, pane).in_session(session),
@@ -3106,6 +3133,10 @@ impl<'a> ServerVars<'a> {
 
 impl FormatVars for ServerVars<'_> {
     fn get(&self, name: &str) -> Option<String> {
+        // The clock is the newest mode of a pane showing it.
+        if let Some(v) = crate::server::clock::format_var(self.state, self.pane, name) {
+            return Some(v);
+        }
         // Copy mode's variables while the pane is in it (TM.1).
         if let Some(v) = crate::server::copy::format_var(self.state, self.pane, name) {
             return Some(v);
@@ -3117,8 +3148,10 @@ impl FormatVars for ServerVars<'_> {
         // tmux 3.7b reads it from the screen on view, so a pane in any mode
         // (whatever answers `pane_in_mode`) is 0 (TM.7).
         if name == "bracket_paste_flag"
-            && (crate::server::copy::format_var(self.state, self.pane, "pane_in_mode").as_deref()
-                == Some("1")
+            && (crate::server::clock::format_var(self.state, self.pane, "pane_in_mode").is_some()
+                || crate::server::copy::format_var(self.state, self.pane, "pane_in_mode")
+                    .as_deref()
+                    == Some("1")
                 || crate::server::tree::format_var(self.state, self.pane, "pane_in_mode").is_some())
         {
             return Some("0".to_string());
@@ -3334,9 +3367,20 @@ impl FormatVars for FormatCtx<'_> {
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "client_tty"
             | "client_pid" => return Some(String::new()),
             "pane_in_mode" => return Some("0".to_string()),
-            // Marked panes are not kept (spec 4.5): nothing is marked.
-            "pane_marked" | "pane_marked_set" | "window_marked_flag" => {
-                return Some("0".to_string());
+            "pane_marked" => return Some(flag(m.marked_pane() == Some(self.pane))),
+            "pane_marked_set" => return Some(flag(m.marked_pane().is_some())),
+            "window_marked_flag" | "session_marked" => {
+                let here = m.panes.get(&self.pane)?.window;
+                let there = m
+                    .marked_pane()
+                    .and_then(|p| m.panes.get(&p))
+                    .map(|p| p.window);
+                let same = if name == "session_marked" {
+                    there.is_some_and(|t| m.windows[&t].session == m.windows[&here].session)
+                } else {
+                    there == Some(here)
+                };
+                return Some(flag(same));
             }
             // The search string of a copy mode, which answers first.
             "pane_search_string" => return Some(String::new()),
@@ -3373,7 +3417,7 @@ impl FormatVars for FormatCtx<'_> {
             "session_attached" => s.attached.to_string(),
             "session_path" => s.cwd.display().to_string(),
             "window_layout" => window_layout(w),
-            "window_raw_flags" => window_flags(s, w),
+            "window_raw_flags" => window_flags(m, s, w),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
             "pane_index" => {
@@ -3468,7 +3512,7 @@ impl FormatVars for FormatCtx<'_> {
             // ponytail: tmux adds 5 bytes for each cell a line has
             // allocated, which depends on how its grid grew; left out.
             "history_bytes" => ((p.handle.history_size() + usize::from(p.rows)) * 40).to_string(),
-            "window_flags" => window_flags(s, w),
+            "window_flags" => window_flags(m, s, w),
             "pane_format" => flag(self.level == Level::Pane),
             "window_format" => flag(self.level == Level::Window),
             "session_format" => flag(self.level == Level::Session),
@@ -3684,15 +3728,24 @@ fn window_layout(w: &crate::server::model::Window) -> String {
 }
 
 /// tmux's `window_flags`: `#` activity (written `##`, as tmux escapes it
-/// there), `!` bell, `~` silence, `*` current, `-` last, `Z` zoomed, in
-/// tmux's order. grofe has no marked pane, so `M` never shows.
-fn window_flags(s: &crate::server::model::Session, w: &crate::server::model::Window) -> String {
+/// there), `!` bell, `~` silence, `*` current, `-` last, `M` holds the
+/// marked pane, `Z` zoomed, in tmux's order.
+fn window_flags(
+    m: &Model,
+    s: &crate::server::model::Session,
+    w: &crate::server::model::Window,
+) -> String {
+    let marked = m
+        .marked_pane()
+        .and_then(|p| m.panes.get(&p))
+        .is_some_and(|p| p.window == w.id);
     let activity = if w.activity_flag { "##" } else { "" };
     let rest: String = [
         (w.bell_flag, '!'),
         (w.silence_flag, '~'),
         (s.active == w.id, '*'),
         (s.last_windows.last() == Some(&w.id), '-'),
+        (marked, 'M'),
         (w.zoomed, 'Z'),
     ]
     .into_iter()

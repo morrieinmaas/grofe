@@ -243,6 +243,26 @@ impl Grid {
         (grid, (usize::from(cursor.col), usize::from(cursor.row)))
     }
 
+    /// This copy as another pane's mode shows it (`copy-mode -s`, tmux's
+    /// `window_copy_clone_screen` with `trim`): the screen's trailing blank
+    /// lines go, then it is made `rows` high, blank lines added below or
+    /// the top ones pushed into the history.
+    fn fit_to(&mut self, rows: usize) {
+        while self.rows.len() > self.hsize && self.line_length(self.rows.len() - 1) == 0 {
+            self.rows.pop();
+        }
+        self.sy = self.rows.len() - self.hsize;
+        while self.sy < rows {
+            let mut blanks = vec![blank(); self.sx];
+            self.push_row(&mut blanks, &vec![false; self.sx]);
+            self.sy += 1;
+        }
+        if self.sy > rows {
+            self.hsize += self.sy - rows;
+            self.sy = rows;
+        }
+    }
+
     /// A grid of plain text rows, for tests: `hsize` of them history.
     #[cfg(test)]
     pub fn from_text(sx: usize, hsize: usize, rows: &[&str]) -> Grid {
@@ -867,6 +887,9 @@ pub struct Mode {
     pub showmark: bool,
     /// `-e`: scrolling to the bottom leaves the mode.
     pub scroll_exit: bool,
+    /// `-s`: the pane whose screen this copy was taken from, when it is not
+    /// the pane in the mode; a refresh reads that one again.
+    pub source: Option<PaneId>,
     /// `toggle-position`: the indicator is hidden.
     pub hide_position: bool,
     /// The count the next command runs with (`send-keys -N`, `wme->prefix`).
@@ -926,6 +949,7 @@ impl Mode {
             my,
             showmark: false,
             scroll_exit: false,
+            source: None,
             hide_position: false,
             prefix: 1,
             vi,
@@ -1926,20 +1950,29 @@ pub fn separators(state: &State, pane: PaneId) -> String {
 
 /// Enters copy mode in `pane` with a fresh copy of it, unless it is
 /// already in it; whether it entered.
-pub fn enter(state: &mut State, pane: PaneId, scroll_exit: bool) -> bool {
+pub fn enter(state: &mut State, pane: PaneId, source: PaneId, scroll_exit: bool) -> bool {
     if state.copy.is_active(pane) {
         return false;
     }
     let vi = vi_keys(state, pane);
-    let Some(p) = state.model.panes.get(&pane) else {
+    let Some(p) = state.model.panes.get(&source) else {
         return false;
     };
-    let (grid, cursor) = Grid::from_pane(&p.handle);
+    let (mut grid, cursor) = Grid::from_pane(&p.handle);
+    if source != pane {
+        let rows = state
+            .model
+            .panes
+            .get(&pane)
+            .map_or(grid.sy, |t| usize::from(t.rows));
+        grid.fit_to(rows);
+    }
     if grid.sy == 0 {
         return false;
     }
     let mut mode = Mode::new(grid, cursor, vi);
     mode.scroll_exit = scroll_exit;
+    mode.source = (source != pane).then_some(source);
     if let Some(last) = state.copy.searches.get(&pane) {
         search::restore(&mut mode, last);
     }
@@ -1954,12 +1987,33 @@ pub fn page_up(state: &mut State, pane: PaneId) {
     }
 }
 
+/// `copy-mode -d`: a page down; with `scroll_exit` reaching the bottom
+/// leaves the mode, as tmux's `window_copy_pagedown`.
+pub fn page_down(state: &mut State, pane: PaneId, scroll_exit: bool) {
+    if state
+        .copy
+        .get_mut(pane)
+        .is_some_and(|mode| mode.pagedown(false, scroll_exit))
+    {
+        state.copy.remove(pane);
+    }
+}
+
 /// A fresh copy of `pane` for its mode (`refresh-from-pane`).
 pub fn refresh(state: &mut State, pane: PaneId) {
-    let Some(p) = state.model.panes.get(&pane) else {
+    let source = state.copy.get(pane).and_then(|m| m.source).unwrap_or(pane);
+    let Some(p) = state.model.panes.get(&source) else {
         return;
     };
-    let (grid, _) = Grid::from_pane(&p.handle);
+    let (mut grid, _) = Grid::from_pane(&p.handle);
+    if source != pane {
+        let rows = state
+            .model
+            .panes
+            .get(&pane)
+            .map_or(grid.sy, |t| usize::from(t.rows));
+        grid.fit_to(rows);
+    }
     if grid.sy == 0 {
         return;
     }

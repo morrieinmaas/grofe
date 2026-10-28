@@ -1,0 +1,52 @@
+# B1d: the marked pane. select-pane -m toggles it and -M clears it, it is
+# server-wide, #{pane_marked}, #{pane_marked_set}, #{window_marked_flag} and
+# the M window flag follow it, ~ and {marked} name it, and swap-pane,
+# join-pane and swap-window take it as their source when -s is not given.
+$ new-session -d -s main -n one -x 80 -y 24 cat
+$ split-window -d -t main:1 cat
+$ new-window -d -t main:2 -n two cat
+$ split-window -d -t main:2 cat
+$ display -p -t main:1.1 'unmarked: #{pane_marked} #{pane_marked_set} #{window_marked_flag} [#{window_flags}]'
+$ display -p -t '~' '#{pane_id}'
+$ display -p -t '{marked}' '#{pane_id}'
+$ select-pane -m -t main:1.1
+$ display -p -t main:1.1 'marked: #{pane_marked} #{pane_marked_set} #{window_marked_flag} [#{window_flags}]'
+$ display -p -t main:1.2 'sibling: #{pane_marked} #{pane_marked_set} #{window_marked_flag}'
+$ display -p -t main:2.1 'other window: #{pane_marked} #{pane_marked_set} #{window_marked_flag} [#{window_flags}]'
+$ display -p -t '~' '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ display -p -t '{marked}' '#{pane_id}'
+$ list-windows -t main -F '#{window_index} [#{window_flags}] #{window_marked_flag}'
+$ select-pane -m -t main:1.1
+$ display -p -t main:1.1 'toggled off: #{pane_marked} #{pane_marked_set} [#{window_flags}]'
+$ select-pane -m -t main:1.1
+$ select-pane -m -t main:1.2
+$ display -p -t main:1.1 'moved: #{pane_marked} #{pane_marked_set}'
+$ display -p -t main:1.2 'moved: #{pane_marked} #{pane_marked_set}'
+$ select-pane -M
+$ display -p -t main:1.2 'cleared: #{pane_marked} #{pane_marked_set}'
+$ select-pane -M -t main:2.1
+$ select-pane -m -t main:1.1
+$ swap-pane -t main:2.2
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ display -p -t '~' '#{window_index}.#{pane_index} #{pane_id}'
+$ swap-pane -s '~' -t main:1.2
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ select-pane -M
+$ select-pane -m -t main:1.2
+$ join-pane -d -t main:2.1
+$ list-panes -a -F '#{window_index}.#{pane_index} #{pane_id} #{pane_marked}'
+$ display -p 'after join: #{pane_marked_set}'
+$ select-pane -m -t main:2.1
+$ swap-window -t main:1
+$ list-windows -F '#{window_index} #{window_name} [#{window_flags}]'
+$ display -p -t '~' '#{window_name}'
+$ select-pane -m -t main:1.3
+$ kill-pane -t main:1.3
+$ display -p -t main:1.1 'killed: #{pane_marked} #{pane_marked_set} [#{window_flags}]'
+$ display -p -t '~' '#{pane_id}'
+$ select-pane -m -t main:1.1
+$ resize-pane -Z -t main:1.1
+$ select-pane -m -t main:1.2
+$ display -p -t main:1.1 'zoomed: #{pane_marked} #{pane_marked_set}'
+$ select-pane -m -t main:1.1
+$ display -p -t main:1.1 'zoomed again: #{pane_marked} #{pane_marked_set}'

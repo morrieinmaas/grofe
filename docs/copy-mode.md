@@ -517,14 +517,16 @@ tmux. The ways out:
 ## The tmux front end
 
 Run as `tmux`, grofe reads tmux's copy-mode and buffer forms through the
-rows in `src/compat/tmux/copy.rs` (TM.7): `copy-mode` with `-u`, `-e`, `-H`
-and `-M`, `send-keys -X` with `-F` and `-N`, `command-prompt -T`, and
+rows in `src/compat/tmux/copy.rs` (TM.7, B1d): `copy-mode` with `-u`, `-d`,
+`-e`, `-H`, `-M`, `-q`, `-s` and `-S`, `send-keys -X` with `-F` and `-N`, `command-prompt -T`, and
 `set-buffer`, `show-buffer`, `list-buffers`, `delete-buffer`,
 `paste-buffer`, `choose-buffer`, `load-buffer` and `save-buffer`, each
-passed to the native command of the same name. `copy-mode -d` (a page
-down) and `-q` (leave every mode) are refused: tmux's stock rows use them
-only from the pane scrollbar and the pane menu, which grofe does not
-have. So are `-s` and `-S`. The copy options keep their tmux names (`mode-keys`,
+passed to the native command of the same name. `-d` is a page down (with
+`-e` it leaves the mode at the bottom), `-q` leaves every mode of the pane
+and does nothing outside one, and `-s` shows another pane's screen, its
+trailing blank lines trimmed, as tmux does. `-S` drags a pane scrollbar's
+slider; grofe draws no scrollbar, so only the CLI sends it, and it puts the
+view at the top of the history, as tmux 3.7b does with no pointer. The copy options keep their tmux names (`mode-keys`,
 `set-clipboard`, `copy-command`, `word-separators`, `wrap-search`,
 `buffer-limit`). A `copy-pipe*` string bound with `bind -T copy-mode-vi`
 keeps tmux's dialect and runs through the `send-keys -X` row, so

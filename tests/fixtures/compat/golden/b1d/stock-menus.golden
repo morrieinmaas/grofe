@@ -1,0 +1,205 @@
+$ new-session -d -s main -n one -x 80 -y 24 cat
+? 0
+$ new-window -d -t main:2 -n two cat
+? 0
+$ new-window -d -t main:3 -n three cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ set -g status-right ''
+? 0
+client 80x24 attach -t main
+keys C-b <
+screen New At End
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|        ┌──────1:one─────┐
+| ───────│ Swap Left  (l) │───────────────────────────────────────────────────────
+|        │ Swap Right (r) │
+|        │ Swap Marked    │
+|        ├────────────────┤
+|        │ Kill       (X) │
+|        │ Respawn    (R) │
+|        │ Mark       (m) │
+|        │ Rename     (n) │
+|        ├────────────────┤
+|        │ New After  (w) │
+|        │ New At End (W) │
+|        └────────────────┘
+| [main] 1:one* 2:two  3:three
+keys q
+keys C-b >
+screen Vertical Split
+| ┌────────1 (%0)────────┐
+| │ Horizontal Split (h) │
+| │ Vertical Split   (v) │
+| ├──────────────────────┤
+| │ Swap Up          (u) │
+| │ Swap Down        (d) │
+| │ Swap Marked          │
+| ├──────────────────────┤
+| │ Kill             (X) │
+| │ Respawn          (R) │
+| │ Mark             (m) │
+| │ Zoom             (z) │────────────────────────────────────────────────────────
+| └──────────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:one* 2:two  3:three
+keys q
+keys C-b m
+keys C-b <
+screen New At End
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|        ┌──────1:one──────┐
+| ───────│ Swap Left   (l) │──────────────────────────────────────────────────────
+|        │ Swap Right  (r) │
+|        │ Swap Marked (s) │
+|        ├─────────────────┤
+|        │ Kill        (X) │
+|        │ Respawn     (R) │
+|        │ Unmark      (m) │
+|        │ Rename      (n) │
+|        ├─────────────────┤
+|        │ New After   (w) │
+|        │ New At End  (W) │
+|        └─────────────────┘
+| [main] 1:one*M 2:two  3:three
+keys q
+keys C-b >
+screen Unmark
+| ┌────────1 (%0)────────┐
+| │ Horizontal Split (h) │
+| │ Vertical Split   (v) │
+| ├──────────────────────┤
+| │ Swap Up          (u) │
+| │ Swap Down        (d) │
+| │ Swap Marked      (s) │
+| ├──────────────────────┤
+| │ Kill             (X) │
+| │ Respawn          (R) │
+| │ Unmark           (m) │
+| │ Zoom             (z) │────────────────────────────────────────────────────────
+| └──────────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:one*M 2:two  3:three
+keys q
+$ select-window -t main:2
+? 0
+keys C-b <
+screen New At End
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                ┌──────2:two──────┐
+|                │ Swap Left   (l) │
+|                │ Swap Right  (r) │
+|                │ Swap Marked (s) │
+|                ├─────────────────┤
+|                │ Kill        (X) │
+|                │ Respawn     (R) │
+|                │ Mark        (m) │
+|                │ Rename      (n) │
+|                ├─────────────────┤
+|                │ New After   (w) │
+|                │ New At End  (W) │
+|                └─────────────────┘
+| [main] 1:one-M 2:two* 3:three
+keys q
+$ set -g status-position top
+? 0
+keys C-b <
+screen New At End
+| [main] 1:one-M 2:two* 3:three
+|                ┌──────2:two──────┐
+|                │ Swap Left   (l) │
+|                │ Swap Right  (r) │
+|                │ Swap Marked (s) │
+|                ├─────────────────┤
+|                │ Kill        (X) │
+|                │ Respawn     (R) │
+|                │ Mark        (m) │
+|                │ Rename      (n) │
+|                ├─────────────────┤
+|                │ New After   (w) │
+|                │ New At End  (W) │
+|                └─────────────────┘
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+keys C-b >
+screen Vertical Split
+| [main] 1:one-M 2:two* 3:three
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌────────1 (%1)────────┐
+| │ Horizontal Split (h) │
+| │ Vertical Split   (v) │
+| ├──────────────────────┤
+| │ Swap Marked      (s) │
+| ├──────────────────────┤
+| │ Kill             (X) │
+| │ Respawn          (R) │
+| │ Mark             (m) │
+| │ Zoom                 │
+| └──────────────────────┘
+keys q

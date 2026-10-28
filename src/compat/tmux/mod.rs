@@ -943,6 +943,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("base-index", "base-index"),
     ("bell-action", "bell-action"),
     ("buffer-limit", "buffer-limit"),
+    ("clock-mode-colour", "clock-mode-colour"),
+    ("clock-mode-style", "clock-mode-style"),
     ("command-alias", "command-alias"),
     ("compat-identity", "compat-identity"),
     ("copy-command", "copy-command"),
@@ -1307,7 +1309,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 
 // ---- The core rows -------------------------------------------------------
 
-const MARKED: &str = "marked panes (spec 4.5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
 
 const fn row(
@@ -1455,8 +1456,6 @@ fn core_rows() -> Vec<Row> {
             "fe_1/targets",
         ),
         // Out of scope (spec §4.5), before the verbs they would match.
-        unsupported("select-pane -m", MARKED, SEMANTIC),
-        unsupported("select-pane -M", MARKED, SEMANTIC),
         // tmux 3.7b's own text for a `send -M` with no mouse event
         // (recorded).
         row(
@@ -1480,7 +1479,6 @@ fn core_rows() -> Vec<Row> {
         ),
         unsupported("pipe-pane", UNUSED, &[]),
         unsupported("lock-server", UNUSED, &[]),
-        unsupported("clock-mode", UNUSED, &[]),
         unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
         // Front-end rows.
@@ -1564,6 +1562,14 @@ fn core_rows() -> Vec<Row> {
         pass("split-window", "M1"),
         pass("kill-pane", "M1"),
         pass("select-pane", "M1"),
+        row(
+            "clock-mode",
+            PassThrough,
+            GrofeTarget::Native("clock-mode"),
+            &[],
+            "B1d",
+            "b1d/clock",
+        ),
         pass("resize-pane", "M1"),
         pass("respawn-pane", "M1"),
         pass("list-panes", "M1"),
@@ -2241,16 +2247,16 @@ mod tests {
         let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
-            "select-pane -m",
+            "new-session -t",
             MappingKind::PassThrough,
-            GrofeTarget::Native("select-pane"),
+            GrofeTarget::Native("new-session"),
             SEMANTIC,
             "M3.6",
             "",
         );
         let mut rows = vec![map];
         rows.extend(core_rows());
-        let err = translate_with(&args(&["select-pane", "-m"]), &ctx(), &rows, &[]);
+        let err = translate_with(&args(&["new-session", "-t", "a"]), &ctx(), &rows, &[]);
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));
@@ -2310,17 +2316,6 @@ mod tests {
         let err = cli(&args(&["-L", "a/b", "ls"])).unwrap_err();
         assert!(err.contains("refusing -L a/b"), "{err}");
         assert!(cli(&args(&["-L../x", "ls"])).is_err());
-    }
-
-    #[test]
-    fn out_of_scope_forms_fail_loudly() {
-        let err = one(&["select-pane", "-m"]).unwrap_err().0;
-        assert!(
-            err.starts_with("select-pane: not supported (marked panes"),
-            "{err}"
-        );
-        let err = one(&["copy-mode", "-q"]).unwrap_err().0;
-        assert!(err.starts_with("copy-mode: not supported"), "{err}");
     }
 
     #[test]

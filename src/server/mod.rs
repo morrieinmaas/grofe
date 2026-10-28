@@ -14,6 +14,7 @@ pub mod alerts;
 pub mod borders;
 pub mod buffers;
 pub mod clients;
+pub mod clock;
 pub mod copy;
 pub mod dispatch;
 pub mod events;
@@ -221,6 +222,8 @@ pub struct State {
     pub buffers: buffers::Buffers,
     /// The panes in copy mode (TM.1).
     pub copy: copy::Copies,
+    /// The panes showing the clock (`clock-mode`).
+    pub clocks: clock::Clocks,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
@@ -306,6 +309,7 @@ fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
+    clock::register(state);
     copy::register(state);
 }
 
@@ -523,6 +527,7 @@ async fn serve(
         trees: tree::Trees::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
+        clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
         jobs: jobs_tx,
         deferred_reply: None,
@@ -1200,6 +1205,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         trees: tree::Trees::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
+        clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
         jobs,
         deferred_reply: None,

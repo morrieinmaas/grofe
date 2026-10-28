@@ -44,6 +44,9 @@ pub enum SessionRef {
     /// never resolves, and says so as tmux does ([`NO_MOUSE_TARGET`]).
     /// Built only by the tmux front end.
     Mouse,
+    /// tmux's `~` or `{marked}`: the server's marked pane, as a pane, its
+    /// window or its session. Built only by the tmux front end.
+    Marked,
     /// A bare word with no `:` or `.`, read as tmux's `cmd-find.c` reads it:
     /// what it names depends on the kind of target the verb wants. As a
     /// pane, a number is a pane index in the current window, then a window
@@ -167,6 +170,9 @@ fn tmux_offset(s: &str) -> Option<i32> {
 pub fn parse_target(s: &str) -> Result<Target, ParseError> {
     if s == "=" && tmux_targets() {
         return Ok(Target::Session(SessionRef::Mouse));
+    }
+    if (s == "~" || s == "{marked}") && tmux_targets() {
+        return Ok(Target::Session(SessionRef::Marked));
     }
     // `=word` with no `:` or `.`: left for the resolver, which strips the
     // `=` from a session or window but not from a pane (cmd-find.c).

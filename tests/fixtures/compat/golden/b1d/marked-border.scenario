@@ -1,0 +1,19 @@
+# B1d: the marked pane's border is drawn in reverse (screen_redraw_draw_borders_cell),
+# over pane-border-style and pane-active-border-style, and it follows the mark.
+$ new-session -d -s main -n w -x 30 -y 9 cat
+$ set -g status off
+$ split-window -d -h -t main cat
+$ split-window -d -v -t main:.2 cat
+client 30x9 attach -t main
+$ set -g pane-border-style fg=colour244
+$ set -g pane-active-border-style fg=colour196
+styles 0-8
+$ select-pane -m -t main:.1
+styles 0-8
+$ select-pane -m -t main:.3
+styles 0-8
+$ select-pane -m -t main:.3
+styles 0-8
+$ select-pane -m -t main:.2
+$ select-pane -M
+styles 0-8

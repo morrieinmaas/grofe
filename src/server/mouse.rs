@@ -42,6 +42,12 @@
 //!   =`), and the wheel on the status line goes to the previous or next
 //!   window;
 //! - `MouseDrag1Border` moves the border under the pointer with it until
+//!   the release (`resize-pane -M`), and `MouseDown1Border` clears the
+//!   marked pane (`select-pane -M`);
+//! - with tmux identity, the stock right-click menus (`MouseDown3Status`,
+//!   `MouseDown3StatusLeft`, `MouseDown3Pane`, [`stock_menu`]) and
+//!   `C-MouseDown1Pane` and `C-MouseDown1Status`, which swap the clicked
+//!   pane or window with the client's active one (`swap-pane -s@`);
 //!   the release (`resize-pane -M`);
 //! - with `pane-border-status` on, a pane's title line is its border, and
 //!   `MouseDown1Control8` and `Control9`, where the default
@@ -666,7 +672,9 @@ fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &M
         run_mouse_binding(state, target, &cmds, Dialect::Grofe);
     };
     match (mk.place, mk.action, mk.button) {
-        (MousePlace::Status, MouseAction::Down, 1) => run(state, &["switch-client", "-t", "="]),
+        (MousePlace::Status, MouseAction::Down, 1) if !ctrl_click(state, key) => {
+            run(state, &["switch-client", "-t", "="]);
+        }
         (MousePlace::Status, MouseAction::WheelUp, _) => run(state, &["previous-window"]),
         (MousePlace::Status, MouseAction::WheelDown, _) => run(state, &["next-window"]),
         (MousePlace::Border, MouseAction::Drag, 1) => {
@@ -680,6 +688,19 @@ fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &M
             let from = target.cell;
             drag_border(state, client, from, (m.col, m.row));
         }
+        // tmux's `MouseDown1Border`: a click on a border clears the mark.
+        (MousePlace::Border, MouseAction::Down, 1) => run(state, &["select-pane", "-M"]),
+        // tmux's `C-MouseDown1Pane` and `C-MouseDown1Status`: swap the
+        // clicked pane or window with the client's active one.
+        (MousePlace::Pane, MouseAction::Down, 1) if ctrl_click(state, key) => {
+            run(state, &["swap-pane", "-s", "@"]);
+        }
+        (MousePlace::Status, MouseAction::Down, 1) if ctrl_click(state, key) => {
+            run(state, &["swap-window", "-t", "@"]);
+        }
+        (MousePlace::Status, MouseAction::Down, 3) if stock_menu(state, key, target, None) => {}
+        (MousePlace::StatusLeft, MouseAction::Down, 3) if stock_menu(state, key, target, None) => {}
+        (MousePlace::Pane, MouseAction::Down, 3) if stock_menu(state, key, target, Some(m)) => {}
         // The default `pane-border-format`'s buttons, tmux's stock
         // `MouseDown1Control8` and `MouseDown1Control9`.
         (MousePlace::Control(8), MouseAction::Down, 1) => {
@@ -707,6 +728,67 @@ fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &M
         (MousePlace::Pane, _, _) => in_pane(state, client, m, mk, target),
         _ => {}
     }
+}
+
+/// Whether `key` is the press with Control alone that tmux 3.7b's stock
+/// `C-MouseDown1Pane` and `C-MouseDown1Status` rows take, on a server with
+/// tmux identity.
+fn ctrl_click(state: &State, key: &Key) -> bool {
+    let m = key.mods;
+    state.model.identity == crate::compat::Identity::Tmux && m.ctrl && !m.alt && !m.shift
+}
+
+/// tmux's `DEFAULT_SESSION_MENU`, as `list-keys` prints the stock
+/// `MouseDown3StatusLeft` row's items.
+const SESSION_MENU: &str = r##"display-menu -T "#[align=centre]#{session_name}" -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session -- '%%' } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }"##;
+
+/// tmux 3.7b's stock right-click menus, for a server with tmux identity:
+/// `MouseDown3Status` (the window menu, the prefix `<` one), `MouseDown3StatusLeft`
+/// (the session menu) and `MouseDown3Pane` (the prefix `>` menu at the
+/// pointer), each also with Meta (`M-MouseDown3Pane` opens the menu even
+/// where the pane asked for the mouse). `pane` is the report for a pane
+/// click, whose plain right button goes to the application instead when it
+/// asked for the mouse or is in a mode but copy mode, as the stock row's
+/// condition says. Returns whether a menu was opened.
+// ponytail: these stand in for tmux's root-table rows, so `unbind -n
+// MouseDown3Pane` does not remove them and `list-keys -T root` does not
+// list them.
+fn stock_menu(state: &mut State, key: &Key, target: &MouseTarget, pane: Option<&Mouse>) -> bool {
+    use crate::compat::Identity;
+    let m = key.mods;
+    if state.model.identity != Identity::Tmux || m.ctrl || m.shift || m.super_ {
+        return false;
+    }
+    let stock = |name: &str| {
+        crate::server::input::TMUX_STOCK
+            .iter()
+            .find(|(k, ..)| *k == name)
+            .map(|(.., text)| *text)
+    };
+    let KeyCode::Mouse(mk) = key.code else {
+        return false;
+    };
+    let text = match (mk.place, pane) {
+        (MousePlace::Status, _) => stock("<").map(str::to_string),
+        (MousePlace::StatusLeft, _) => Some(SESSION_MENU.to_string()),
+        (_, Some(_)) => {
+            let taken = state.model.panes.get(&target.pane).is_none_or(|p| {
+                p.handle.modes().mouse != MouseMode::Off
+                    || state.clocks.is_active(target.pane)
+                    || crate::server::tree::is_over(state, target.pane)
+            });
+            if taken && !m.alt {
+                return false;
+            }
+            stock(">").map(|t| t.replacen("-x P -y P", "-x M -y M", 1))
+        }
+        _ => None,
+    };
+    let Some(cmds) = text.and_then(|t| crate::cmd::split_command_string(&t).ok()) else {
+        return false;
+    };
+    run_mouse_binding(state, target, &cmds, Dialect::Tmux);
+    true
 }
 
 /// The built-in model for key `mk` in a pane, as tmux 3.7b's stock `root`
@@ -883,12 +965,20 @@ pub fn resolve_targets(state: &State, argv: &[String]) -> Vec<String> {
     let Some(m) = &state.mouse.current else {
         return argv.to_vec();
     };
+    // tmux's `@`: the client's own current pane, not the pointer's.
+    let active = || {
+        active_pane(state, m.client)
+            .map(|p| p.to_string())
+            .unwrap_or_default()
+    };
     let mut out = Vec::with_capacity(argv.len());
     let mut after_flag = false;
     for word in argv {
         let replaced = match word.as_str() {
             "=" if after_flag => m.target.clone(),
+            "@" | "{active}" | "{current}" if after_flag => active(),
             "-t=" | "-s=" => format!("{}{}", &word[..2], m.target),
+            "-t@" | "-s@" => format!("{}{}", &word[..2], active()),
             _ => word.clone(),
         };
         after_flag = matches!(word.as_str(), "-t" | "-s");

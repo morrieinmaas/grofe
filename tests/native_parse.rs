@@ -493,6 +493,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 title: s("#[align=centre]menu"),
                 x: s("R"),
                 y: s("P"),
+                target: None,
                 items: vec![
                     MenuEntry::Item {
                         name: "Split".to_string(),
@@ -1026,6 +1027,7 @@ fn equals_targets_are_bare_words() {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                mark: grofe::cmd::Mark::No,
             })),
             "{given}"
         );
