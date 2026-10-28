@@ -176,6 +176,7 @@ copy_tree() {
   shift 2
   local args=(--exclude .git)
   for x in "$@"; do args+=(--exclude "$x"); done
+  if [ -e "$dest" ] || [ -L "$dest" ]; then guard_dir "$dest"; fi
   rm -rf "$dest"
   mkdir -p "$dest"
   guard_dir "$dest"
