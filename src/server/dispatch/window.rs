@@ -36,11 +36,8 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
     let (session, index) = match &target {
         // -a: after the target window, moving later windows up; a free
         // index is taken as it is, as tmux 3.7b does.
-        target if c.after => match model.resolve_window(target, ctx) {
-            Ok(w) => (
-                model.windows[&w].session,
-                next_index(model.windows[&w].index)?,
-            ),
+        target if c.after => match model.resolve_winlink(target, ctx) {
+            Ok((s, w)) => (s, next_index(model.index_in(s, w).unwrap_or(0))?),
             Err(e) => match target {
                 Target::Window(s, WindowRef::Index(i)) => {
                     (model.resolve_session(&Target::Session(s.clone()), ctx)?, *i)
@@ -101,13 +98,14 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         last_panes: Vec::new(),
         floating: Vec::new(),
         pane_status: Default::default(),
+        links: Vec::new(),
     });
     // As tmux: a window named by `-n` keeps that name.
     if named {
         stop_automatic_rename(model, window)?;
     }
     if !c.detached {
-        model.select_window(window);
+        model.select_window_in(session, window);
     }
     Ok(if c.print {
         print_pane(model, pane, c.format.as_deref())
@@ -228,7 +226,7 @@ pub fn step_window(
     } else {
         s.windows[at(1)]
     };
-    model.select_window(window);
+    model.select_window_in(session, window);
     Ok(String::new())
 }
 
@@ -241,18 +239,17 @@ pub fn last_window(state: &mut State, ctx: &ClientCtx, c: WindowStep) -> Result<
         .last_windows
         .last()
         .ok_or_else(|| "no last window".to_string())?;
-    model.select_window(last);
+    model.select_window_in(session, last);
     Ok(String::new())
 }
 
 /// `kill-window`; with `-a` every other window of the target's session,
 /// the target becoming current (recorded on tmux 3.7b).
 pub fn kill_window(state: &mut State, ctx: &ClientCtx, c: KillWindow) -> Result<String, String> {
-    let window = state.model.resolve_window(&c.target, ctx)?;
+    let (session, window) = state.model.resolve_winlink(&c.target, ctx)?;
     let doomed = match c.all {
         true => {
-            let session = state.model.windows[&window].session;
-            state.model.select_window(window);
+            state.model.select_window_in(session, window);
             state.model.sessions[&session]
                 .windows
                 .iter()
@@ -275,8 +272,8 @@ pub fn select_window(
     c: SelectWindow,
 ) -> Result<String, String> {
     let model = &mut state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
-    model.select_window(window);
+    let (session, window) = model.resolve_winlink(&c.target, ctx)?;
+    model.select_window_in(session, window);
     Ok(String::new())
 }
 
@@ -285,8 +282,7 @@ pub fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<St
     let model = &state.model;
     Ok(options::listed_windows(state, ctx, &c)?
         .iter()
-        .filter_map(|id| model.windows.get(id))
-        .filter_map(|w| Some((model.sessions.get(&w.session)?, w)))
+        .filter_map(|(s, id)| Some((model.sessions.get(s)?, model.windows.get(id)?)))
         .map(|(s, w)| {
             let active = w.id == s.active;
             // With `-a`, each line says its session, as tmux's does.
@@ -297,7 +293,7 @@ pub fn list_windows(state: &State, ctx: &ClientCtx, c: ListWindows) -> Result<St
             };
             format!(
                 "{session}{}: {}{} ({} panes) [{}x{}] {}{}\n",
-                w.index,
+                model.index_in(s.id, w.id).unwrap_or(w.index),
                 w.name,
                 if active { "*" } else { "" },
                 w.pane_ids().len(),
@@ -316,19 +312,20 @@ pub fn list_panes(state: &State, ctx: &ClientCtx, c: ListPanes) -> Result<String
     let listed = options::listed_panes(state, ctx, &c)?;
     Ok(listed
         .iter()
-        .filter_map(|id| model.panes.get(id))
-        .filter_map(|p| {
+        .filter_map(|(s, id)| Some((*s, model.panes.get(id)?)))
+        .filter_map(|(s, p)| {
             let w = model.windows.get(&p.window)?;
-            let s = model.sessions.get(&w.session)?;
+            let s = model.sessions.get(&s)?;
             let at = w.pane_ids().iter().position(|id| *id == p.id)? as u32;
             Some((s, w, at + model.pane_base_index(w.id), p))
         })
         .map(|(s, w, index, p)| {
+            let window_index = model.index_in(s.id, w.id).unwrap_or(w.index);
             // With `-s` each line says its window, with `-a` its session
             // too, as tmux's do.
             let index = match (c.all, c.session) {
-                (true, _) => format!("{}:{}.{index}", s.name, w.index),
-                (false, true) => format!("{}.{index}", w.index),
+                (true, _) => format!("{}:{}.{index}", s.name, window_index),
+                (false, true) => format!("{}.{index}", window_index),
                 _ => index.to_string(),
             };
             format!(
@@ -378,7 +375,9 @@ pub fn select_layout(
         // pane, floating ones too, into its cells, as tmux 3.7b does. tmux
         // also resizes the window to the layout's size; a client showing
         // the session sizes it back, and with none it keeps that size.
-        let session = model.windows[&window].session;
+        let session = model
+            .link_session(window, None)
+            .unwrap_or(model.windows[&window].session);
         let shown = state.clients.values().any(|cl| cl.session == session);
         let model = &mut state.model;
         let applied = model.windows.get_mut(&window).map(|w| {

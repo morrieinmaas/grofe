@@ -1308,7 +1308,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 // ---- The core rows -------------------------------------------------------
 
 const MARKED: &str = "marked panes (spec 4.5)";
-const LINKED: &str = "a window belongs to one session in grofe (spec 4.5)";
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
 
 const fn row(
@@ -1458,9 +1457,6 @@ fn core_rows() -> Vec<Row> {
         // Out of scope (spec §4.5), before the verbs they would match.
         unsupported("select-pane -m", MARKED, SEMANTIC),
         unsupported("select-pane -M", MARKED, SEMANTIC),
-        unsupported("new-session -t", LINKED, SEMANTIC),
-        unsupported("link-window", LINKED, &[]),
-        unsupported("unlink-window", LINKED, &[]),
         // tmux 3.7b's own text for a `send -M` with no mouse event
         // (recorded).
         row(
@@ -2045,7 +2041,7 @@ mod tests {
     #[test]
     fn the_most_specific_row_decides() {
         let mut rows = vec![pass("new-session", "M1")];
-        rows.extend(core_rows());
+        rows.push(unsupported("new-session -t", "test", SEMANTIC));
         let got = translate_with(&args(&["new-session", "-t", "x"]), &ctx(), &rows, &[]);
         assert!(got.unwrap_err().0.contains("not supported"));
         assert!(translate_with(&args(&["new-session", "-d"]), &ctx(), &rows, &[]).is_ok());
@@ -2323,8 +2319,6 @@ mod tests {
             err.starts_with("select-pane: not supported (marked panes"),
             "{err}"
         );
-        let err = one(&["link-window", "-s", "a", "-t", "b"]).unwrap_err().0;
-        assert!(err.contains("not supported"), "{err}");
         let err = one(&["copy-mode", "-q"]).unwrap_err().0;
         assert!(err.starts_with("copy-mode: not supported"), "{err}");
     }

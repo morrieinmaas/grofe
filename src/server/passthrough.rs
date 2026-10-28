@@ -669,7 +669,7 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         return;
     };
     let window = p.window;
-    let Some(session) = state.model.windows.get(&window).map(|w| w.session) else {
+    let Some(session) = state.model.link_session(window, None) else {
         return;
     };
     match kind {

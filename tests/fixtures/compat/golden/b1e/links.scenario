@@ -1,0 +1,41 @@
+# B1e: link-window and unlink-window. A window linked into two sessions
+# keeps one id and one name, and has an index in each.
+$ new-session -d -s a -n aone -x 80 -y 24
+$ new-window -d -t a: -n w2
+$ new-window -d -t a: -n w3
+$ new-session -d -s b -n bone -x 80 -y 24
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# No index: the first free one, and the window becomes current in b.
+$ link-window -s a:2 -t b:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# -d keeps b's current window.
+$ link-window -d -s a:3 -t b:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# An index in use needs -k; the window it held stays in a.
+$ link-window -s a:1 -t b:5
+$ link-window -d -k -s a:1 -t b:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# The same window at the same index.
+$ link-window -s a:1 -t b:5
+# -a and -b make room by moving later windows up.
+$ link-window -a -s a:3 -t b:1
+$ new-window -d -t a: -n w4
+$ link-window -d -b -s a:4 -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# unlink-window: a linked window goes from one session only.
+$ unlink-window -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# The last link needs -k, which closes the window.
+$ unlink-window -t b:2
+$ unlink-window -k -t b:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+# kill-window closes a linked window in every session.
+$ new-window -d -t a: -n w5
+$ link-window -d -s a:4 -t b:9
+$ kill-window -t b:9
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked}'
+# Killing a session keeps the windows linked elsewhere.
+$ kill-session -t b
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}]'
+$ list-sessions -F '#{session_name} #{session_windows} grouped=#{session_grouped}'

@@ -9,6 +9,7 @@
 //! shows the pattern; TC.13's scenarios live in `scenarios`.
 
 mod b1c;
+mod b1e;
 mod fe_1;
 mod fe_2;
 mod fe_3;

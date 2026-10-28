@@ -70,8 +70,13 @@ pub struct Session {
 
 pub struct Window {
     pub id: WindowId,
+    /// The first link's session and index (`links[0]`), for code with no
+    /// session of its own; see `server::links`.
     pub session: SessionId,
     pub index: u32,
+    /// Every link of the window, session and index, in tmux's order.
+    /// `insert_window` fills it from `session` and `index` when empty.
+    pub links: Vec<(SessionId, u32)>,
     pub name: String,
     pub layout: LayoutTree,
     pub active: PaneId,
@@ -294,6 +299,8 @@ pub struct Model {
     /// `server::alerts::drain` last took them: tmux counts that as
     /// activity in the window (`session_set_current`).
     pub selected: Vec<WindowId>,
+    /// Session groups (`new-session -t`), see `server::links`.
+    pub groups: Vec<crate::server::links::Group>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -332,17 +339,14 @@ impl Model {
         self.sessions.insert(session.id, session);
     }
 
-    /// Inserts a window and adds it to its session's ordered window list.
-    pub fn insert_window(&mut self, window: Window) {
-        if let Some(session) = self.sessions.get_mut(&window.session) {
-            let pos = session
-                .windows
-                .iter()
-                .position(|w| self.windows.get(w).is_some_and(|w| w.index > window.index))
-                .unwrap_or(session.windows.len());
-            session.windows.insert(pos, window.id);
-        }
-        self.windows.insert(window.id, window);
+    /// Inserts a window and adds it to its session's ordered window list
+    /// (and, in a session group, to its peers').
+    pub fn insert_window(&mut self, mut window: Window) {
+        let (id, session, index) = (window.id, window.session, window.index);
+        window.links.clear();
+        self.windows.insert(id, window);
+        self.add_link(session, id, index);
+        self.sync_group(session);
     }
 
     /// Makes `window` its session's active window; the one it replaces
@@ -353,6 +357,14 @@ impl Model {
         let Some(session) = self.windows.get(&window).map(|w| w.session) else {
             return;
         };
+        self.select_window_in(session, window);
+    }
+
+    /// [`Model::select_window`] in `session`, which holds `window`.
+    pub fn select_window_in(&mut self, session: SessionId, window: WindowId) {
+        if !self.has_link(session, window) {
+            return;
+        }
         if let Some(s) = self.sessions.get_mut(&session)
             && s.active != window
         {
@@ -406,7 +418,7 @@ impl Model {
             .map(|s| {
                 s.windows
                     .iter()
-                    .filter_map(|w| self.windows.get(w).map(|w| w.index))
+                    .filter_map(|w| self.index_in(session, *w))
                     .collect()
             })
             .unwrap_or_default();
@@ -470,7 +482,7 @@ impl Model {
         s.windows
             .iter()
             .copied()
-            .find(|w| self.windows.get(w).is_some_and(|w| w.index == index))
+            .find(|w| self.index_in(session, *w) == Some(index))
     }
 
     /// Records that `pane`'s child exited and the master drained. Removes
@@ -523,93 +535,19 @@ impl Model {
         removed
     }
 
-    /// Removes a window and its panes. Its session closes if this was its
-    /// last window. Returns the removed panes still live.
-    pub fn remove_window(&mut self, window: WindowId) -> Removed {
-        let Some(w) = self.windows.remove(&window) else {
-            return Vec::new();
-        };
-        let ids: Vec<PaneId> = self.panes_in(|p| p.window == window);
-        let removed = self.take_panes(&ids, Some(w.session));
-        self.unlink_window(w.session, window);
-        self.renumber_after_removal(w.session);
-        removed
-    }
-
-    /// With `renumber-windows` on, `session`'s windows are numbered again
-    /// from `base-index` in order, as tmux 3.7b does when one of them is
-    /// destroyed (recorded; not when one moves to another session).
-    fn renumber_after_removal(&mut self, session: SessionId) {
-        let on = self
-            .options
-            .lookup("renumber-windows", &[options::Owner::Session(session)])
-            == Some("on");
-        let Some(s) = self.sessions.get(&session).filter(|_| on) else {
-            return;
-        };
-        let base = self.base_index(session);
-        for (i, id) in s.windows.clone().iter().enumerate() {
-            if let Some(w) = self.windows.get_mut(id) {
-                w.index = base + i as u32;
-            }
-        }
-    }
-
-    /// Takes `window` out of `session`'s window list and last-window
-    /// stack, as tmux's `session_detach` unlinks a winlink: if it was the
-    /// current window, the last window takes over, else the one before
-    /// it, else the one after. A session left with no windows goes. The
-    /// window itself (if still in the model) and its panes are untouched.
-    pub fn unlink_window(&mut self, session: SessionId, window: WindowId) {
-        let Some(s) = self.sessions.get_mut(&session) else {
-            return;
-        };
-        let pos = s.windows.iter().position(|id| *id == window);
-        s.windows.retain(|id| *id != window);
-        s.last_windows.retain(|id| *id != window);
-        if s.windows.is_empty() {
-            let name = std::mem::take(&mut s.name);
-            let mode = self
-                .options
-                .lookup("detach-on-destroy", &[options::Owner::Session(session)])
-                .unwrap_or("on")
-                .to_string();
-            self.destroyed_sessions
-                .insert(session, (name.clone(), mode));
-            self.closed_sessions.push((session, name));
-            self.sessions.remove(&session);
-            self.client_last_session.retain(|_, last| *last != session);
-            return;
-        }
-        if s.active == window {
-            let pos = pos.unwrap_or(0);
-            s.active = match s.last_windows.pop() {
-                Some(last) => last,
-                None => s.windows[pos.saturating_sub(1).min(s.windows.len() - 1)],
-            };
-        }
-    }
-
-    /// Removes a session with all its windows and panes. Returns the
+    /// Removes a window and its panes, from every session it is linked
+    /// into. A session closes if this was its last window. Returns the
     /// removed panes still live.
+    pub fn remove_window(&mut self, window: WindowId) -> Removed {
+        self.kill_window_everywhere(window, true)
+    }
+
+    /// Removes a session. Its windows go with it unless another session (a
+    /// link elsewhere, a group member) holds them. Returns the removed panes
+    /// still live.
     pub fn remove_session(&mut self, session: SessionId) -> Removed {
-        let Some(s) = self.sessions.remove(&session) else {
-            return Vec::new();
-        };
-        let mode = self
-            .options
-            .lookup("detach-on-destroy", &[options::Owner::Session(session)])
-            .unwrap_or("on")
-            .to_string();
-        self.destroyed_sessions
-            .insert(session, (s.name.clone(), mode));
-        self.closed_sessions.push((session, s.name.clone()));
-        self.client_last_session.retain(|_, last| *last != session);
-        for w in &s.windows {
-            self.windows.remove(w);
-        }
-        let ids = self.panes_in(|p| s.windows.contains(&p.window));
-        self.take_panes(&ids, Some(session))
+        let orphans = self.destroy_session(session);
+        self.close_orphans(&orphans)
     }
 
     /// The live panes, as removing them all (server exit) would return.
@@ -629,7 +567,7 @@ impl Model {
         }
     }
 
-    fn panes_in(&self, keep: impl Fn(&Pane) -> bool) -> Vec<PaneId> {
+    pub(crate) fn panes_in(&self, keep: impl Fn(&Pane) -> bool) -> Vec<PaneId> {
         self.panes
             .values()
             .filter(|p| keep(p))
@@ -640,7 +578,7 @@ impl Model {
     /// Drops `ids` from the pane map, returning those whose exit was not
     /// reported yet (a dead pane kept by `remain-on-exit` already was).
     /// `session` is the panes' session when their window is already gone.
-    fn take_panes(&mut self, ids: &[PaneId], session: Option<SessionId>) -> Removed {
+    pub(crate) fn take_panes(&mut self, ids: &[PaneId], session: Option<SessionId>) -> Removed {
         let taken: Vec<Pane> = ids.iter().filter_map(|id| self.panes.remove(id)).collect();
         taken
             .into_iter()
@@ -730,7 +668,9 @@ impl Model {
     /// Only for a pane known to be in the model (the maps are kept
     /// consistent by the insert and remove methods above).
     fn session_of_pane(&self, pane: PaneId) -> SessionId {
-        self.windows[&self.panes[&pane].window].session
+        let window = self.panes[&pane].window;
+        self.link_session(window, None)
+            .unwrap_or(self.windows[&window].session)
     }
 
     fn session_ref(&self, r: &SessionRef, ctx: &ClientCtx) -> Result<SessionId, String> {
@@ -777,11 +717,10 @@ impl Model {
     ) -> Result<WindowId, String> {
         match (s, w) {
             (_, WindowRef::Id(id)) => {
-                let window = self
-                    .windows
-                    .get(id)
-                    .ok_or_else(|| format!("can't find window: {id}"))?;
-                if *s != SessionRef::Current && window.session != self.session_ref(s, ctx)? {
+                if !self.windows.contains_key(id) {
+                    return Err(format!("can't find window: {id}"));
+                }
+                if *s != SessionRef::Current && !self.has_link(self.session_ref(s, ctx)?, *id) {
                     return Err(format!("can't find window: {id}"));
                 }
                 Ok(*id)
@@ -799,11 +738,12 @@ impl Model {
             // tmux's `+N`/`-N` (FE.1): from the session's current window,
             // by index order, wrapping (recorded on tmux 3.7b).
             (s, WindowRef::Offset(n)) => {
+                let sid = self.session_ref(s, ctx)?;
                 let current = match s {
                     SessionRef::Current => self.current_window(ctx)?,
-                    s => self.sessions[&self.session_ref(s, ctx)?].active,
+                    _ => self.sessions[&sid].active,
                 };
-                let windows = &self.sessions[&self.windows[&current].session].windows;
+                let windows = &self.sessions[&sid].windows;
                 Ok(step(windows, current, *n))
             }
             (s, WindowRef::Name(name)) => {
@@ -918,6 +858,33 @@ impl Model {
             .map_err(|_| format!("can't find pane: {word}"))
     }
 
+    /// `target` as the window it names and the session it was found in
+    /// (`b:3` and `a:1` can be one window): the session the target names,
+    /// else the current one if it holds the window, else the most recently
+    /// active session that does.
+    pub fn resolve_winlink(
+        &self,
+        target: &Target,
+        ctx: &ClientCtx,
+    ) -> Result<(SessionId, WindowId), String> {
+        let window = self.resolve_window(target, ctx)?;
+        let named = match target {
+            Target::Window(s, _) if *s != SessionRef::Current => Some(self.session_ref(s, ctx)?),
+            Target::Session(s) if !matches!(s, SessionRef::Bare(_) | SessionRef::Current) => {
+                Some(self.session_ref(s, ctx)?)
+            }
+            Target::Pane(r) if r.session != SessionRef::Current => {
+                Some(self.session_ref(&r.session, ctx)?)
+            }
+            _ => None,
+        };
+        let prefer = named.or_else(|| self.current_session(ctx).ok());
+        let session = self
+            .link_session(window, prefer)
+            .ok_or_else(|| format!("can't find window: {window}"))?;
+        Ok((session, window))
+    }
+
     /// `target` read as tmux reads a pane target, for a verb whose `-t` is
     /// a pane in tmux but whose grofe handler resolves it as a window or a
     /// session (`set-option`, `set-hook`, `select-layout`): a bare word
@@ -946,14 +913,16 @@ impl Model {
             Some(name) if !name.is_empty() => name,
             _ => word,
         };
-        let session = SessionRef::Id(self.current_session(ctx)?);
+        let current = self.current_session(ctx)?;
+        let session = SessionRef::Id(current);
         if let Ok(index) = word.parse::<u32>() {
             return Ok(Target::Window(session, WindowRef::Index(index)));
         }
         let name = WindowRef::Name(word.to_string());
-        if let Ok(w) = self.window_ref(&SessionRef::Current, &name, ctx) {
-            let index = WindowRef::Index(self.windows[&w].index);
-            return Ok(Target::Window(session, index));
+        if let Ok(w) = self.window_ref(&SessionRef::Current, &name, ctx)
+            && let Some(index) = self.index_in(current, w)
+        {
+            return Ok(Target::Window(session, WindowRef::Index(index)));
         }
         match self.session_ref(&SessionRef::Name(word.to_string()), ctx) {
             Ok(sid) => Ok(Target::Session(SessionRef::Id(sid))),
@@ -1007,14 +976,10 @@ impl Resolve for Model {
         match target {
             Target::Current => self.current_session(ctx),
             Target::Session(s) => self.session_ref(s, ctx),
-            Target::Window(..) => {
-                let w = self.resolve_window(target, ctx)?;
-                Ok(self.windows[&w].session)
-            }
-            Target::Pane(r) => {
-                let p = self.pane_ref(r, ctx)?;
-                Ok(self.session_of_pane(p))
-            }
+            // The session the target names, which a window linked into
+            // several sessions needs.
+            Target::Window(..) => Ok(self.resolve_winlink(target, ctx)?.0),
+            Target::Pane(_) => Ok(self.resolve_winlink(target, ctx)?.0),
         }
     }
 }
@@ -1130,6 +1095,7 @@ mod tests {
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            links: Vec::new(),
         });
         model.insert_window(Window {
             id: w2,
@@ -1148,6 +1114,7 @@ mod tests {
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            links: Vec::new(),
         });
 
         // A second session, owning nothing of "a"'s.
@@ -1200,6 +1167,7 @@ mod tests {
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            links: Vec::new(),
         };
         assert_eq!(w.last_pane(), None);
         w.set_active(b);
@@ -1248,6 +1216,7 @@ mod tests {
                 last_panes: Vec::new(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
+                links: Vec::new(),
             });
         }
         let flag = |m: &Model, w| m.windows[&w].bell_flag;
@@ -1341,6 +1310,7 @@ mod tests {
                 last_panes: Vec::new(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
+                links: Vec::new(),
             });
         }
         let wb = model.alloc_window_id();
@@ -1363,6 +1333,7 @@ mod tests {
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            links: Vec::new(),
         });
         // `add_session` leaves the window list to the caller.
         model.sessions.get_mut(&a).unwrap().windows = vec![w1, w2, w3];

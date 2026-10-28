@@ -362,6 +362,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::LastPane(c) => structure::last_pane(state, ctx, c),
         Command::RotateWindow(c) => structure::rotate_window(state, ctx, c),
         Command::MoveWindow(c) => structure::move_window(state, ctx, c),
+        Command::LinkWindow(c) => structure::link_window(state, ctx, c),
+        Command::UnlinkWindow(c) => structure::unlink_window(state, ctx, c),
         Command::MovePane(c) => structure::move_pane(state, ctx, c),
         Command::NextLayout(c) => structure::next_layout(state, ctx, c),
         Command::RespawnWindow(c) => structure::respawn_window(state, ctx, c),

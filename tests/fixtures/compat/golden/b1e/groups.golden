@@ -1,0 +1,124 @@
+$ new-session -d -s a -n aone -x 80 -y 24
+? 0
+$ new-window -d -t a: -n w2
+? 0
+$ new-window -d -t a: -n w3
+? 0
+$ select-window -t a:2
+? 0
+$ new-session -d -s c -t a
+? 0
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} size=#{session_group_size} [#{session_group_list}] windows=#{session_windows} att=#{session_group_attached}'
+a grouped=1 group=a size=2 [a,c] windows=3 att=0
+c grouped=1 group=a size=2 [a,c] windows=3 att=0
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+a:1 @0 aone linked=1 n=1 [a,c] active=0
+a:2 @1 w2 linked=1 n=1 [a,c] active=1
+a:3 @2 w3 linked=1 n=1 [a,c] active=0
+c:1 @0 aone linked=1 n=1 [a,c] active=1
+c:2 @1 w2 linked=1 n=1 [a,c] active=0
+c:3 @2 w3 linked=1 n=1 [a,c] active=0
+? 0
+$ select-window -t c:3
+? 0
+$ new-window -t c: -n fromc
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+a:1 @0 aone linked=1 n=1 [c,a] active=0
+a:2 @1 w2 linked=1 n=1 [c,a] active=1
+a:3 @2 w3 linked=1 n=1 [c,a] active=0
+a:4 @4 fromc linked=1 n=1 [c,a] active=0
+c:1 @0 aone linked=1 n=1 [c,a] active=0
+c:2 @1 w2 linked=1 n=1 [c,a] active=0
+c:3 @2 w3 linked=1 n=1 [c,a] active=0
+c:4 @4 fromc linked=1 n=1 [c,a] active=1
+? 0
+$ rename-window -t c:2 renamed
+? 0
+$ move-window -s c:1 -t c:7
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} active=#{window_active}'
+a:2 @1 renamed active=1
+a:3 @2 w3 active=0
+a:4 @4 fromc active=0
+a:7 @0 aone active=0
+c:2 @1 renamed active=0
+c:3 @2 w3 active=0
+c:4 @4 fromc active=0
+c:7 @0 aone active=1
+? 0
+$ kill-window -t a:2
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} active=#{window_active}'
+a:1 @2 w3 active=0
+a:2 @4 fromc active=0
+a:3 @0 aone active=1
+c:1 @2 w3 active=0
+c:2 @4 fromc active=0
+c:3 @0 aone active=1
+? 0
+$ new-session -d -t c
+? 0
+$ list-sessions -F '#{session_name} group=#{session_group} [#{session_group_list}]'
+a group=a [a,c,a-2]
+a-2 group=a [a,c,a-2]
+c group=a [a,c,a-2]
+? 0
+$ new-session -d -t a -n foo
+! command or window name given with target
+? 1
+$ new-session -d -t a ls
+! command or window name given with target
+? 1
+$ new-session -d -s a -t c
+! duplicate session: a
+? 1
+$ new-session -d -s solo -t nobody
+? 0
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} [#{session_group_list}]'
+a grouped=1 group=a [a,c,a-2]
+a-2 grouped=1 group=a [a,c,a-2]
+c grouped=1 group=a [a,c,a-2]
+solo grouped=1 group=nobody [solo]
+? 0
+$ kill-session -t solo
+? 0
+$ kill-session -t a
+? 0
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} size=#{session_group_size} windows=#{session_windows}'
+a-2 grouped=1 group=a size=2 windows=3
+c grouped=1 group=a size=2 windows=3
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked}'
+a-2:1 @2 w3 linked=1
+a-2:2 @4 fromc linked=1
+a-2:3 @0 aone linked=1
+c:1 @2 w3 linked=1
+c:2 @4 fromc linked=1
+c:3 @0 aone linked=1
+? 0
+$ new-session -d -s z -n zone
+? 0
+$ link-window -d -s c:3 -t z:4
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}]'
+a-2:1 @2 linked=1 n=1 [c,a-2]
+a-2:2 @4 linked=1 n=1 [c,a-2]
+a-2:3 @0 linked=1 n=2 [c,a-2,z]
+c:1 @2 linked=1 n=1 [c,a-2]
+c:2 @4 linked=1 n=1 [c,a-2]
+c:3 @0 linked=1 n=2 [c,a-2,z]
+z:1 @7 linked=0 n=1 [z]
+z:4 @0 linked=1 n=2 [c,a-2,z]
+? 0
+$ unlink-window -k -t c:3
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id}'
+a-2:1 @2
+a-2:2 @4
+c:1 @2
+c:2 @4
+z:1 @7
+z:4 @0
+? 0

@@ -8,8 +8,8 @@
 //! index, as tmux's winlinks are.
 
 use crate::cmd::{
-    BreakPane, JoinPane, LastPane, MovePane, MoveWindow, NextLayout, ResizeWindow, Resolve,
-    RespawnPane, RotateWindow, SwapPane, SwapWindow, Target, WindowRef,
+    BreakPane, JoinPane, LastPane, LinkWindow, MovePane, MoveWindow, NextLayout, ResizeWindow,
+    Resolve, RespawnPane, RotateWindow, SwapPane, SwapWindow, Target, UnlinkWindow, WindowRef,
 };
 use crate::protocol::ClientCtx;
 use crate::server::State;
@@ -210,10 +210,9 @@ pub fn swap_pane(state: &mut State, ctx: &ClientCtx, c: SwapPane) -> Result<Stri
     Ok(String::new())
 }
 
-/// A window's place: its session and index (tmux's winlink).
-fn slot(model: &Model, window: WindowId) -> (SessionId, u32) {
-    let w = &model.windows[&window];
-    (w.session, w.index)
+/// A window's place in `session`: tmux's winlink.
+fn slot(model: &Model, session: SessionId, window: WindowId) -> (SessionId, u32) {
+    (session, model.index_in(session, window).unwrap_or(0))
 }
 
 /// `swap-window`: windows `-s` (the current one) and `-t` trade places,
@@ -222,12 +221,16 @@ fn slot(model: &Model, window: WindowId) -> (SessionId, u32) {
 /// current.
 pub fn swap_window(state: &mut State, ctx: &ClientCtx, c: SwapWindow) -> Result<String, String> {
     let model = &mut state.model;
-    let dst = model.resolve_window(&c.dst, ctx)?;
-    let src = model.resolve_window(c.src.as_ref().unwrap_or(&Target::Current), ctx)?;
+    let (dst_s, dst) = model.resolve_winlink(&c.dst, ctx)?;
+    let (src_s, src) = model.resolve_winlink(c.src.as_ref().unwrap_or(&Target::Current), ctx)?;
     if src == dst {
         return Ok(String::new());
     }
-    let ((src_s, src_i), (dst_s, dst_i)) = (slot(model, src), slot(model, dst));
+    // A window is in a session once, so a swap cannot put one in twice.
+    if src_s != dst_s && (model.has_link(dst_s, src) || model.has_link(src_s, dst)) {
+        return Err(ALREADY_IN.to_string());
+    }
+    let ((src_s, src_i), (dst_s, dst_i)) = (slot(model, src_s, src), slot(model, dst_s, dst));
     let swap = |id: &mut WindowId| {
         if *id == src {
             *id = dst;
@@ -245,14 +248,25 @@ pub fn swap_window(state: &mut State, ctx: &ClientCtx, c: SwapWindow) -> Result<
             }
         }
     }
-    if let Some(w) = model.windows.get_mut(&src) {
-        (w.session, w.index) = (dst_s, dst_i);
+    for (window, from, to) in [
+        (src, (src_s, src_i), (dst_s, dst_i)),
+        (dst, (dst_s, dst_i), (src_s, src_i)),
+    ] {
+        if let Some(w) = model.windows.get_mut(&window)
+            && let Some(link) = w.links.iter_mut().find(|l| **l == from)
+        {
+            *link = to;
+        }
+        model.refresh_primary(window);
     }
-    if let Some(w) = model.windows.get_mut(&dst) {
-        (w.session, w.index) = (src_s, src_i);
-    }
+    model.sync_group(src_s);
+    model.sync_group(dst_s);
     Ok(String::new())
 }
+
+/// What a link into a session that already has the window says (tmux
+/// links it twice; grofe keys a session's windows by window).
+const ALREADY_IN: &str = "window is already in that session";
 
 /// `break-pane`: pane `-s` moves into a new window of its own, at `-t`'s
 /// index or the session's first free one, named `-n` (which turns
@@ -274,7 +288,8 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
         None => model.free_window_index(session),
     };
     let window = if alone {
-        relink(model, from, session, index);
+        let src_s = model.link_session(from, None).unwrap_or(session);
+        relink(model, from, src_s, session, index)?;
         from
     } else {
         let (cols, rows) = (model.windows[&from].cols, model.windows[&from].rows);
@@ -298,6 +313,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             last_panes: Vec::new(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            links: Vec::new(),
         });
         if let Some(p) = model.panes.get_mut(&pane) {
             p.window = id;
@@ -314,7 +330,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
         }
     }
     if !c.detach {
-        model.select_window(window);
+        model.select_window_in(session, window);
     }
     Ok(String::new())
 }
@@ -332,7 +348,8 @@ fn destination(
         let session = model.resolve_session(&Target::Current, ctx)?;
         if after {
             let current = model.sessions[&session].active;
-            return Ok((session, Some(next_index(model.windows[&current].index)?)));
+            let at = model.index_in(session, current).unwrap_or(0);
+            return Ok((session, Some(next_index(at)?)));
         }
         return Ok((session, None));
     };
@@ -346,8 +363,8 @@ fn destination(
             (model.resolve_session(dst, ctx)?, None)
         }
         _ => {
-            let window = model.resolve_window(dst, ctx)?;
-            let (session, index) = slot(model, window);
+            let (session, window) = model.resolve_winlink(dst, ctx)?;
+            let (session, index) = slot(model, session, window);
             (session, Some(index))
         }
     };
@@ -360,68 +377,166 @@ fn destination(
 
 /// `move-window`: window `-s` (the current one) moves to `-t`'s index, or
 /// the first free index of `-t`'s session, and becomes current there. With
-/// `-a`, to the index after `-t`'s window, moving later windows up to make
-/// room. With `-r`, the windows of session `-t` are renumbered from
-/// `base-index` in order instead. As tmux 3.7b.
+/// `-a` or `-b`, to the index after or before `-t`'s window, moving later
+/// windows up to make room. With `-r`, the windows of session `-t` are
+/// renumbered from `base-index` in order instead. `-d` keeps it from
+/// becoming current, `-k` replaces a window at the index. As tmux 3.7b: a
+/// link into the new place, then the old link goes, so a window linked
+/// elsewhere stays there.
 pub fn move_window(state: &mut State, ctx: &ClientCtx, c: MoveWindow) -> Result<String, String> {
     let model = &mut state.model;
     if c.renumber {
         let session = model.resolve_session(c.dst.as_ref().unwrap_or(&Target::Current), ctx)?;
-        let base = model.base_index(session);
-        for (i, id) in model.sessions[&session].windows.clone().iter().enumerate() {
-            if let Some(w) = model.windows.get_mut(id) {
-                w.index = base + i as u32;
-            }
-        }
+        model.renumber_from_base(session);
         return Ok(String::new());
     }
-    let window = model.resolve_window(&c.src, ctx)?;
-    let (session, index) = destination(model, ctx, c.dst.as_ref(), c.after)?;
-    let index = match index {
-        None => model.free_window_index(session),
-        Some(i) if c.after => {
-            shuffle_up(model, session, i)?;
-            i
-        }
-        Some(i) => match model.window_at_index(session, i) {
-            Some(w) if w == window => return Err(format!("same index: {i}")),
-            Some(_) => return Err(format!("index in use: {i}")),
-            None => i,
-        },
+    let (src_s, window) = model.resolve_winlink(&c.src, ctx)?;
+    let (dst_s, index) = destination(model, ctx, c.dst.as_ref(), c.after)?;
+    let slot = Slot {
+        index,
+        shuffle: c.after || c.before,
+        kill: c.kill,
+        within: src_s == dst_s,
     };
-    relink(model, window, session, index);
-    model.select_window(window);
+    let (index, killed) = place(model, dst_s, window, slot)?;
+    let current = model.sessions[&dst_s].active;
+    // Replacing the current window selects the new one even with `-d`.
+    let select = !c.detach || killed.contains(&current);
+    relink(model, window, src_s, dst_s, index)?;
+    if select {
+        model.select_window_in(dst_s, window);
+    }
+    let removed = model.close_orphans(&killed);
+    state.events.panes_killed(removed);
     Ok(String::new())
 }
 
-/// Moves `window` to `index` of `session` (which is free there): out of
-/// its session's window list ([`unlink`]) and into the new one's.
-fn relink(model: &mut Model, window: WindowId, session: SessionId, index: u32) {
-    let Some(w) = model.windows.get(&window) else {
-        return;
+/// Where a window goes in a session's list.
+struct Slot {
+    /// `None`: the first free index.
+    index: Option<u32>,
+    /// Windows in the way move up (`-a`, `-b`).
+    shuffle: bool,
+    /// `-k`: a window at the index is taken out.
+    kill: bool,
+    /// The window is already in that session and only changes index.
+    within: bool,
+}
+
+/// The index a window goes to in `dst`: the slot's, or the first free one;
+/// with `shuffle`, the windows in the way move up first. A window already
+/// there is an error, unless `kill` takes it out: the windows that leaves
+/// with no link are returned, for [`Model::close_orphans`].
+fn place(
+    model: &mut Model,
+    dst: SessionId,
+    window: WindowId,
+    slot: Slot,
+) -> Result<(u32, Vec<WindowId>), String> {
+    if let Some(i) = slot.index
+        && model.window_at_index(dst, i) == Some(window)
+    {
+        return Err(format!("same index: {i}"));
+    }
+    if !slot.within && model.has_link(dst, window) {
+        return Err(ALREADY_IN.to_string());
+    }
+    let Some(i) = slot.index else {
+        return Ok((model.free_window_index(dst), Vec::new()));
     };
-    if w.session == session {
+    if slot.shuffle {
+        shuffle_up(model, dst, i)?;
+        return Ok((i, Vec::new()));
+    }
+    match model.window_at_index(dst, i) {
+        Some(_) if !slot.kill => Err(format!("index in use: {i}")),
+        Some(old) => {
+            // Not `detach_window`: that would destroy a session this empties.
+            model.remove_link(dst, old);
+            if let Some(s) = model.sessions.get_mut(&dst)
+                && s.active == old
+            {
+                s.active = window;
+            }
+            Ok((i, vec![old]))
+        }
+        None => Ok((i, Vec::new())),
+    }
+}
+
+/// `link-window`: window `-s` also appears in `-t`'s session, at `-t`'s
+/// index (or after or before its window with `-a` or `-b`, or the first
+/// free one), and becomes current there unless `-d`. `-k` replaces a
+/// window at the index; the one replaced closes if that was its last link.
+pub fn link_window(state: &mut State, ctx: &ClientCtx, c: LinkWindow) -> Result<String, String> {
+    let model = &mut state.model;
+    let (_, window) = model.resolve_winlink(&c.src, ctx)?;
+    let (dst, index) = destination(model, ctx, c.dst.as_ref(), c.after)?;
+    let slot = Slot {
+        index,
+        shuffle: c.after || c.before,
+        kill: c.kill,
+        within: false,
+    };
+    let (index, killed) = place(model, dst, window, slot)?;
+    let current = model.sessions[&dst].active;
+    let select = !c.detach || killed.contains(&current);
+    model.add_link(dst, window, index);
+    model.sync_group(dst);
+    if select {
+        model.select_window_in(dst, window);
+    }
+    let removed = model.close_orphans(&killed);
+    state.events.panes_killed(removed);
+    Ok(String::new())
+}
+
+/// `unlink-window`: the window leaves `-t`'s session (and its group). A
+/// window with no other link needs `-k`, which closes it.
+pub fn unlink_window(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: UnlinkWindow,
+) -> Result<String, String> {
+    let model = &mut state.model;
+    let (session, window) = model.resolve_winlink(&c.target, ctx)?;
+    let linked = model.windows[&window].links.len() > 1;
+    if !linked && !c.kill {
+        return Err("window only linked to one session".to_string());
+    }
+    let removed = if linked {
+        model.detach_window(session, window);
+        model.close_orphans(&[window])
+    } else {
+        model.kill_window_everywhere(window, false)
+    };
+    state.events.panes_killed(removed);
+    Ok(String::new())
+}
+
+/// Moves `window` from `src_s`'s list to `index` of `dst_s` (free there):
+/// into the new list, then out of the old one, as tmux links then unlinks.
+fn relink(
+    model: &mut Model,
+    window: WindowId,
+    src_s: SessionId,
+    dst_s: SessionId,
+    index: u32,
+) -> Result<(), String> {
+    if src_s == dst_s {
         // Within its session only its place in the list changes; tmux
         // links it again before unlinking, so the session never empties.
-        if let Some(s) = model.sessions.get_mut(&session) {
-            s.windows.retain(|id| *id != window);
-        }
-    } else {
-        unlink(model, window);
+        model.set_index(src_s, window, index);
+        model.sync_group(src_s);
+        return Ok(());
     }
-    let Some(w) = model.windows.get_mut(&window) else {
-        return;
-    };
-    (w.session, w.index) = (session, index);
-    let windows = &model.windows;
-    if let Some(s) = model.sessions.get_mut(&session) {
-        let pos = s
-            .windows
-            .iter()
-            .position(|id| windows.get(id).is_some_and(|w| w.index > index))
-            .unwrap_or(s.windows.len());
-        s.windows.insert(pos, window);
+    if model.has_link(dst_s, window) {
+        return Err(ALREADY_IN.to_string());
     }
+    model.add_link(dst_s, window, index);
+    model.sync_group(dst_s);
+    model.detach_window(src_s, window);
+    Ok(())
 }
 
 /// tmux's `winlink_shuffle_up`: frees `index` in `session` by moving the
@@ -432,13 +547,12 @@ pub(crate) fn shuffle_up(model: &mut Model, session: SessionId, index: u32) -> R
         return Err(format!("no free index after {index}"));
     };
     for i in (index..gap).rev() {
-        if let Some(id) = model.window_at_index(session, i)
-            && let Some(w) = model.windows.get_mut(&id)
-        {
+        if let Some(id) = model.window_at_index(session, i) {
             // `i` is below `gap`, so this cannot overflow.
-            w.index = i + 1;
+            model.set_index(session, id, i + 1);
         }
     }
+    model.sync_group(session);
     Ok(())
 }
 
@@ -447,14 +561,6 @@ pub(crate) fn next_index(index: u32) -> Result<u32, String> {
     index
         .checked_add(1)
         .ok_or_else(|| format!("no index after {index}"))
-}
-
-/// Takes `window` out of its session's window list without closing it
-/// ([`Model::unlink_window`]).
-fn unlink(model: &mut Model, window: WindowId) {
-    if let Some(session) = model.windows.get(&window).map(|w| w.session) {
-        model.unlink_window(session, window);
-    }
 }
 
 /// `resize-window`: the window becomes `-x` by `-y` cells (either kept
@@ -468,8 +574,7 @@ pub fn resize_window(
     ctx: &ClientCtx,
     c: ResizeWindow,
 ) -> Result<String, String> {
-    let window = state.model.resolve_window(&c.target, ctx)?;
-    let session = state.model.windows[&window].session;
+    let (session, window) = state.model.resolve_winlink(&c.target, ctx)?;
     let status = state
         .model
         .options

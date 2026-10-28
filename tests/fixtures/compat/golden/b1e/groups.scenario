@@ -1,0 +1,42 @@
+# B1e: new-session -t, a session group. Members share one window list and
+# keep their own current window.
+$ new-session -d -s a -n aone -x 80 -y 24
+$ new-window -d -t a: -n w2
+$ new-window -d -t a: -n w3
+$ select-window -t a:2
+$ new-session -d -s c -t a
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} size=#{session_group_size} [#{session_group_list}] windows=#{session_windows} att=#{session_group_attached}'
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# A window made in one member appears in the other.
+$ select-window -t c:3
+$ new-window -t c: -n fromc
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}] active=#{window_active}'
+# Renames and moves are shared.
+$ rename-window -t c:2 renamed
+$ move-window -s c:1 -t c:7
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} active=#{window_active}'
+# Killing a window in one member kills it in the other, which falls back.
+$ kill-window -t a:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} active=#{window_active}'
+# A third member; no -s names it group-id.
+$ new-session -d -t c
+$ list-sessions -F '#{session_name} group=#{session_group} [#{session_group_list}]'
+# -n or a command with -t is refused; a duplicate name too.
+$ new-session -d -t a -n foo
+$ new-session -d -t a ls
+$ new-session -d -s a -t c
+# A group name that is no session starts a group (then a plain session).
+$ new-session -d -s solo -t nobody
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} [#{session_group_list}]'
+$ kill-session -t solo
+# Killing a member keeps the windows; the group stays with its members.
+$ kill-session -t a
+$ list-sessions -F '#{session_name} grouped=#{session_grouped} group=#{session_group} size=#{session_group_size} windows=#{session_windows}'
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked}'
+# A window linked outside the group counts the group once.
+$ new-session -d -s z -n zone
+$ link-window -d -s c:3 -t z:4
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} linked=#{window_linked} n=#{window_linked_sessions} [#{window_linked_sessions_list}]'
+# Emptying a member empties the group.
+$ unlink-window -k -t c:3
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id}'

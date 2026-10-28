@@ -44,6 +44,8 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("break-pane", "fe_2/structure"),
         pass("rotate-window", "fe_2/structure"),
         pass("move-window", "fe_2/structure"),
+        pass("link-window", "b1e/links"),
+        pass("unlink-window", "b1e/links"),
         pass("last-pane", ""),
         pass("next-layout", ""),
         pass("resize-window", "fe_3/hooks"),

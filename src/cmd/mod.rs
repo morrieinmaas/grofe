@@ -92,6 +92,9 @@ pub struct NewSession {
     pub format: Option<String>,
     /// `-n` (TC.9): the first window's name.
     pub window_name: Option<String>,
+    /// `-t` (B1e): the session to group with, raw (a name that is no
+    /// session makes a new group of that name).
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -662,6 +665,37 @@ pub struct MoveWindow {
     pub after: bool,
     /// `-r`: renumber the windows of session `-t` instead.
     pub renumber: bool,
+    /// `-b` (B1e): to the index before `-t`.
+    pub before: bool,
+    /// `-d` (B1e): do not make the window current.
+    pub detach: bool,
+    /// `-k` (B1e): unlink a window at the index.
+    pub kill: bool,
+}
+
+/// `link-window` (B1e): window `-s` also appears in `-t`'s session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkWindow {
+    /// `-s`.
+    pub src: Target,
+    /// `-t`; `None` when not given.
+    pub dst: Option<Target>,
+    /// `-a`: to the index after `-t`.
+    pub after: bool,
+    /// `-b`: to the index before `-t`.
+    pub before: bool,
+    /// `-d`: do not make the window current there.
+    pub detach: bool,
+    /// `-k`: unlink a window already at the index.
+    pub kill: bool,
+}
+
+/// `unlink-window` (B1e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnlinkWindow {
+    pub target: Target,
+    /// `-k`: close the window if this is its last link.
+    pub kill: bool,
 }
 
 /// `next-layout` (TC.8, M36-R6).
@@ -1101,6 +1135,8 @@ pub enum Command {
     LastPane(LastPane),
     RotateWindow(RotateWindow),
     MoveWindow(MoveWindow),
+    LinkWindow(LinkWindow),
+    UnlinkWindow(UnlinkWindow),
     MovePane(MovePane),
     NextLayout(NextLayout),
     /// `respawn-window` (TC.8): `respawn-pane`'s shape with a window target.

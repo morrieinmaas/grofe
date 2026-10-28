@@ -195,7 +195,8 @@ pub fn open_tree(
     let model = &state.model;
     let window = model.panes[&pane].window;
     let w = &model.windows[&window];
-    let session = w.session;
+    let shown = state.clients.get(&client).map(|c| c.session);
+    let session = model.link_session(window, shown).unwrap_or(w.session);
     let start = (Tag::Session(session), Tag::Window(window), Tag::Pane(pane));
     let tag = if opts.sessions {
         Tag::Session(session)
@@ -380,7 +381,7 @@ fn tree_items(state: &State, find: Option<&str>) -> Vec<Item> {
                 .collect();
             windows.push(Item {
                 tag: Tag::Window(w.id),
-                name: w.index.to_string(),
+                name: model.index_in(s.id, w.id).unwrap_or(w.index).to_string(),
                 text: window_text(state, w.active, panes.len()),
                 align: true,
                 children,
@@ -994,7 +995,11 @@ fn strip_of(state: &State, tag: Tag) -> Option<(Vec<Preview>, usize)> {
                 .map(|w| {
                     (
                         w.active,
-                        format!("{}:{}", w.index, w.name),
+                        format!(
+                            "{}:{}",
+                            model.index_in(s.id, w.id).unwrap_or(w.index),
+                            w.name
+                        ),
                         w.id == s.active,
                     )
                 })

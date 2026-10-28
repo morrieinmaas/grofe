@@ -3,7 +3,8 @@
 use std::time::Instant;
 
 use crate::cmd::{
-    self, HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SwitchClient, Target,
+    self, HasSession, KillSession, ListSessions, NewSession, Rename, Resolve, SessionRef,
+    SwitchClient, Target,
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{FormatCtx, Owner, ServerVars};
@@ -32,14 +33,45 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     if let Some(name) = &c.name {
         check_name(model, name)?;
     }
+    // `-t`: the session to group with, else the name of a new group.
+    let group = c.group.as_deref().map(|raw| {
+        let word = raw.split([':', '.']).next().unwrap_or(raw);
+        let found =
+            model.resolve_session(&Target::Session(SessionRef::Name(word.to_string())), ctx);
+        (word.to_string(), found.ok())
+    });
+    if group.is_some() && (c.command.is_some() || c.window_name.is_some()) {
+        return Err("command or window name given with target".to_string());
+    }
     let id = model.alloc_session_id();
-    let name = match c.name {
-        Some(name) => name,
-        None => (id.0..)
+    let prefix = group.as_ref().map(|(word, found)| {
+        found
+            .and_then(|s| model.group_of(s).map(|g| g.name.clone()))
+            .or_else(|| found.map(|s| model.sessions[&s].name.clone()))
+            .unwrap_or_else(|| word.clone())
+    });
+    let name = match (c.name, &prefix) {
+        (Some(name), _) => name,
+        (None, Some(prefix)) => (id.0..)
+            .map(|n| format!("{prefix}-{n}"))
+            .find(|n| model.session_by_name(n).is_none())
+            .unwrap_or_else(|| format!("{prefix}-{}", id.0)),
+        (None, None) => (id.0..)
             .map(|n| n.to_string())
             .find(|n| model.session_by_name(n).is_none())
             .unwrap_or_else(|| id.0.to_string()),
     };
+    if let (Some(prefix), Some((_, Some(target)))) = (&prefix, &group) {
+        return new_grouped(
+            state,
+            id,
+            name,
+            prefix,
+            *target,
+            c.print,
+            c.format.as_deref(),
+        );
+    }
     let here = ctx.pane.filter(|p| model.panes.contains_key(p));
     let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
     // A missing -x or -y is `default-size`'s, as tmux's detached sessions.
@@ -96,6 +128,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         last_panes: Vec::new(),
         floating: Vec::new(),
         pane_status: Default::default(),
+        links: Vec::new(),
     });
     // `-n` names the window for good, as `rename-window` does.
     if named {
@@ -103,12 +136,71 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
             .options
             .set(Owner::Window(window), "automatic-rename", "off", false)?;
     }
+    if let Some(prefix) = prefix {
+        state.model.join_group(&prefix, id);
+    }
     crate::server::hooks::session_created(state, id);
     if !c.print {
         return Ok(String::new());
     }
     let format = c.format.as_deref().unwrap_or(NEW_SESSION_TEMPLATE);
     let vars = FormatCtx::new(&state.model, pane);
+    Ok(format!(
+        "{}\n",
+        cmd::expand(format, &ServerVars::new(state, pane, &vars))
+    ))
+}
+
+/// `new-session -t`: session `id` joins `target`'s group (made, named
+/// `group`, if it had none) and takes its windows at their indexes, none
+/// of its own. Its current window is the first.
+fn new_grouped(
+    state: &mut State,
+    id: SessionId,
+    name: String,
+    group: &str,
+    target: SessionId,
+    print: bool,
+    format: Option<&str>,
+) -> Result<String, String> {
+    let model = &mut state.model;
+    // tmux makes a window and a pane for the session and drops them: the
+    // ids they took are gone (recorded).
+    model.alloc_window_id();
+    model.alloc_pane_id();
+    let t = &model.sessions[&target];
+    let session = Session {
+        id,
+        name,
+        windows: Vec::new(),
+        active: t.active,
+        env: t.env.clone(),
+        cwd: t.cwd.clone(),
+        cols: t.cols,
+        rows: t.rows,
+        last_windows: Vec::new(),
+        activity: Instant::now(),
+        attached: 0,
+        created: std::time::SystemTime::now(),
+    };
+    model.insert_session(session);
+    if model.group_of(target).is_none() {
+        model.join_group(group, target);
+    }
+    model.join_group(group, id);
+    model.sync_group(target);
+    crate::server::hooks::session_created(state, id);
+    if !print {
+        return Ok(String::new());
+    }
+    let model = &state.model;
+    let pane = model
+        .windows
+        .get(&model.sessions[&id].active)
+        .map(|w| w.active)
+        .ok_or("session has no windows")?;
+    let format = format.unwrap_or(NEW_SESSION_TEMPLATE);
+    let vars = FormatCtx::new(model, pane);
     Ok(format!(
         "{}\n",
         cmd::expand(format, &ServerVars::new(state, pane, &vars))

@@ -22,6 +22,7 @@ pub mod hooks;
 pub mod imgstore;
 pub mod input;
 pub mod layout;
+pub mod links;
 pub mod menu;
 pub mod model;
 pub mod mouse;

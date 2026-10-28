@@ -12,7 +12,7 @@ use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
     ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode, DeleteBuffer,
     DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, FindWindow, HasSession,
-    If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, ListBuffers,
+    If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, LinkWindow, ListBuffers,
     ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer,
     MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
     ParseError, PasteBuffer, PluginRestart, RefreshClient, RegisterSource, Reload, Rename,
@@ -20,7 +20,7 @@ use super::{
     SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer,
     SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
     ShowOptions, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow,
-    SwitchClient, Target, UnbindKey, WaitFor, WindowStep,
+    SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -207,6 +207,7 @@ const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('n', FlagKind::Value),
     ('P', FlagKind::Bool),
     ('F', FlagKind::Value),
+    ('t', FlagKind::Value),
 ];
 
 fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
@@ -239,6 +240,7 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         print: flags.present.contains(&'P'),
         format: flags.values.get(&'F').cloned(),
         window_name: flags.values.get(&'n').cloned(),
+        group: flags.values.get(&'t').cloned(),
     }))
 }
 
@@ -1586,6 +1588,9 @@ fn parse_move_window(argv: &[String]) -> Result<Command, ParseError> {
         ('s', FlagKind::Value),
         ('t', FlagKind::Value),
         ('a', FlagKind::Bool),
+        ('b', FlagKind::Bool),
+        ('d', FlagKind::Bool),
+        ('k', FlagKind::Bool),
         ('r', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "move-window")?;
@@ -1595,6 +1600,40 @@ fn parse_move_window(argv: &[String]) -> Result<Command, ParseError> {
         dst: target_if_given(&flags.values, 't')?,
         after: flags.present.contains(&'a'),
         renumber: flags.present.contains(&'r'),
+        before: flags.present.contains(&'b'),
+        detach: flags.present.contains(&'d'),
+        kill: flags.present.contains(&'k'),
+    }))
+}
+
+fn parse_link_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('s', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('a', FlagKind::Bool),
+        ('b', FlagKind::Bool),
+        ('d', FlagKind::Bool),
+        ('k', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "link-window")?;
+    no_extra_positionals(&flags, "link-window", 0)?;
+    Ok(Command::LinkWindow(LinkWindow {
+        src: target_or_current(&flags.values, 's')?,
+        dst: target_if_given(&flags.values, 't')?,
+        after: flags.present.contains(&'a'),
+        before: flags.present.contains(&'b'),
+        detach: flags.present.contains(&'d'),
+        kill: flags.present.contains(&'k'),
+    }))
+}
+
+fn parse_unlink_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('k', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "unlink-window")?;
+    no_extra_positionals(&flags, "unlink-window", 0)?;
+    Ok(Command::UnlinkWindow(UnlinkWindow {
+        target: target_or_current(&flags.values, 't')?,
+        kill: flags.present.contains(&'k'),
     }))
 }
 
@@ -2937,6 +2976,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         })),
         "rotate-window" => parse_rotate_window(rest),
         "move-window" => parse_move_window(rest),
+        "link-window" => parse_link_window(rest),
+        "unlink-window" => parse_unlink_window(rest),
         "next-layout" => Ok(Command::NextLayout(NextLayout {
             target: parse_target_only(rest, "next-layout")?,
         })),

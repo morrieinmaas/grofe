@@ -558,7 +558,7 @@ pub(crate) fn select_target(
                 w.set_active(pane);
             }
         }
-        model.select_window(window);
+        model.select_window_in(session, window);
     }
     Ok(session)
 }
@@ -2312,7 +2312,10 @@ fn default_row(
         .collect();
     let client_vars: Vec<ClientVars> = listed
         .iter()
-        .map(|(w, _)| ClientVars::new(model, c, Some(FormatCtx::new(model, w.active))))
+        .map(|(w, _)| {
+            let vars = FormatCtx::new(model, w.active).in_session(s.id);
+            ClientVars::new(model, c, Some(vars))
+        })
         .collect();
     let server_vars: Vec<options::ServerVars> = listed
         .iter()
@@ -2338,7 +2341,7 @@ fn default_row(
                     wopt("window-status-format", "")
                 },
                 vars,
-                index: w.index,
+                index: model.index_in(s.id, w.id).unwrap_or(w.index),
                 current,
                 last: s.last_windows.last() == Some(&w.id),
                 bell: w.bell_flag,
@@ -2492,6 +2495,7 @@ impl FormatVars for ClientVars<'_> {
         let specs = options::loop_specs(
             self.model,
             pane.pane_id(),
+            None,
             Some(self.client.session),
             kind,
             sort,
@@ -2503,7 +2507,12 @@ impl FormatVars for ClientVars<'_> {
                     vars: Box::new(ClientVars::new(
                         self.model,
                         self.client,
-                        Some(FormatCtx::at(self.model, s.pane, s.level)),
+                        Some(match s.session {
+                            Some(session) => {
+                                FormatCtx::at(self.model, s.pane, s.level).in_session(session)
+                            }
+                            None => FormatCtx::at(self.model, s.pane, s.level),
+                        }),
                     )),
                     pane: Some(s.pane),
                     active: s.active,

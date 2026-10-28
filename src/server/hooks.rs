@@ -662,8 +662,7 @@ impl Before {
                 ("pane-focused", Before::SelectPane(window, active))
             }
             Command::SelectWindow(c) => {
-                let window = m.resolve_window(&c.target, ctx).ok()?;
-                let session = m.windows.get(&window)?.session;
+                let (session, _) = m.resolve_winlink(&c.target, ctx).ok()?;
                 ("window-focused", Before::SelectWindow(session))
             }
             Command::NewWindow(_) => (
