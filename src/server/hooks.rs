@@ -3,9 +3,17 @@
 //! their context, plus the server environment `set-environment` keeps
 //! (spec §4.2).
 //!
+//! **Hooks are arrays, as in tmux.** Each event holds, at each [`Scope`]
+//! (global, a session's, a window's, a pane's), commands by index
+//! (`set-hook -g/-t/-p`, `-a`, `name[N]`, `-u`, `-R`). A firing hook runs
+//! the nearest scope that has any (`commands_for`); [`EVENTS`] holds all 68
+//! of tmux's hook names.
+//!
 //! **Events.** [`EVENTS`] lists grofe's event names, what fires each, and
 //! the tmux hook FE.3 maps onto it. Each is emitted where it happens, with
-//! the context tmux 3.7b gives its hook (recorded on a private socket):
+//! the context tmux 3.7b gives its hook (recorded on a private socket);
+//! the notify hooks about sessions, windows and panes that change in many
+//! places are found by comparing the model with its last look ([`watch`]):
 //!
 //! - the command-shaped ones (tmux's `after-*` hooks) by
 //!   [`run_command`], which `dispatch` runs every command through; they run
