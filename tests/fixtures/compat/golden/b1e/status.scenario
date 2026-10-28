@@ -1,0 +1,18 @@
+# B1e: a client in b sees a linked window under the index b knows it by.
+$ new-session -d -s a -n aone -x 40 -y 6 cat
+$ new-window -d -t a: -n w2 cat
+$ new-session -d -s b -n bone -x 40 -y 6 cat
+$ link-window -s a:2 -t b:5
+$ set -g status-right ''
+$ set -g status-left '[#{session_name}] '
+client 40x6 attach -t b
+screen
+$ list-windows -t b: -F '#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]'
+$ display -p -t b:5 '#{window_index} #{window_linked} #{window_linked_sessions} #{active_window_index} #{last_window_index} #{session_windows}'
+$ display -p -t a:2 '#{window_index} #{window_linked} #{window_linked_sessions} #{active_window_index} #{last_window_index} #{session_windows}'
+$ select-window -t b:1
+screen
+$ display -p -t b: '#{window_last_flag} #{window_stack_index} #{session_stack}'
+$ list-windows -t a: -F '#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]'
+$ unlink-window -t b:5
+screen

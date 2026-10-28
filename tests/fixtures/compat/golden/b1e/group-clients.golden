@@ -1,0 +1,60 @@
+$ new-session -d -s a -n aone -x 40 -y 6 cat
+? 0
+$ new-window -d -t a: -n w2 cat
+? 0
+$ new-session -d -s c -t a
+? 0
+$ set -g status-right ''
+? 0
+$ set -g status-left '[#{session_name}] '
+? 0
+client 40x6 attach -t c
+screen
+|
+|
+|
+|
+|
+| [c] 1:aone* 2:w2
+$ list-sessions -F '#{session_name} att=#{session_attached} gatt=#{session_group_attached} many=#{session_group_many_attached}'
+a att=0 gatt=1 many=0
+c att=1 gatt=1 many=0
+? 0
+$ display -p -t a: '#{session_group_attached} #{session_group_many_attached} #{session_attached}'
+1 0 0
+? 0
+$ select-window -t a:2
+? 0
+$ new-window -t a: -n w3 cat
+? 0
+screen
+|
+|
+|
+|
+|
+| [c] 1:aone* 2:w2  3:w3
+$ list-windows -F '#{session_name}:#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]' -a
+a:1 aone  1 [c]
+a:2 w2 - 0 []
+a:3 w3 * 1 [a]
+c:1 aone * 1 [c]
+c:2 w2  0 []
+c:3 w3  1 [a]
+? 0
+$ list-sessions
+a: 3 windows (created <TIME>) (group a)
+c: 3 windows (created <TIME>) (group a) (attached)
+? 0
+$ kill-session -t a
+? 0
+screen
+|
+|
+|
+|
+|
+| [c] 1:aone* 2:w2  3:w3
+$ list-sessions
+c: 3 windows (created <TIME>) (group a) (attached)
+? 0

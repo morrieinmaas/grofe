@@ -1,0 +1,55 @@
+$ new-session -d -s a -n aone -x 40 -y 6 cat
+? 0
+$ new-window -d -t a: -n w2 cat
+? 0
+$ new-session -d -s b -n bone -x 40 -y 6 cat
+? 0
+$ link-window -s a:2 -t b:5
+? 0
+$ set -g status-right ''
+? 0
+$ set -g status-left '[#{session_name}] '
+? 0
+client 40x6 attach -t b
+screen
+|
+|
+|
+|
+|
+| [b] 1:bone- 5:w2*
+$ list-windows -t b: -F '#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]'
+1 bone - 0 []
+5 w2 * 1 [b]
+? 0
+$ display -p -t b:5 '#{window_index} #{window_linked} #{window_linked_sessions} #{active_window_index} #{last_window_index} #{session_windows}'
+5 1 2 5 5 2
+? 0
+$ display -p -t a:2 '#{window_index} #{window_linked} #{window_linked_sessions} #{active_window_index} #{last_window_index} #{session_windows}'
+2 1 2 1 2 2
+? 0
+$ select-window -t b:1
+? 0
+screen
+|
+|
+|
+|
+|
+| [b] 1:bone* 5:w2-
+$ display -p -t b: '#{window_last_flag} #{window_stack_index} #{session_stack}'
+0 0 1,5
+? 0
+$ list-windows -t a: -F '#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]'
+1 aone * 1 [a]
+2 w2  0 []
+? 0
+$ unlink-window -t b:5
+? 0
+screen
+|
+|
+|
+|
+|
+| [b] 1:bone*

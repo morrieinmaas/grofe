@@ -2413,6 +2413,8 @@ impl<'a> ClientVars<'a> {
         client: &'a ClientEntry,
         pane: Option<FormatCtx<'a>>,
     ) -> ClientVars<'a> {
+        // A client sees a linked window as its own session has it.
+        let pane = pane.map(|p| p.or_session(client.session));
         ClientVars {
             model,
             client,

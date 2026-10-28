@@ -2577,7 +2577,11 @@ fn display_message(
     let model = &state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
     let text = c.text.as_deref().unwrap_or(DEFAULT_MESSAGE);
-    let vars = FormatCtx::new(model, pane);
+    // The session the target names, for a window linked into several.
+    let vars = match model.resolve_winlink(&c.target, ctx) {
+        Ok((session, _)) => FormatCtx::new(model, pane).in_session(session),
+        Err(_) => FormatCtx::new(model, pane),
+    };
     // `-c` names the client for the message; one that is not there shows
     // nothing, as tmux's `CMD_CLIENT_CANFAIL`. Formats see that client if
     // it shows the pane's session, else the current one.
@@ -2586,10 +2590,13 @@ fn display_message(
         None => clients::current_client(state, ctx),
     };
     let session = model
-        .panes
-        .get(&pane)
-        .and_then(|p| model.windows.get(&p.window))
-        .map(|w| w.session);
+        .resolve_winlink(&c.target, ctx)
+        .ok()
+        .map(|(s, _)| s)
+        .or_else(|| {
+            let w = model.windows.get(&model.panes.get(&pane)?.window)?;
+            Some(w.session)
+        });
     let for_formats = current
         .filter(|id| state.clients.get(id).map(|e| e.session) == session)
         .or_else(|| clients::current_client(state, ctx));
@@ -2868,6 +2875,12 @@ impl<'a> FormatCtx<'a> {
             names.push(s.name.clone());
         }
         names
+    }
+
+    /// These variables for `session`, unless one is set already.
+    pub fn or_session(mut self, session: SessionId) -> FormatCtx<'a> {
+        self.session = self.session.or(Some(session));
+        self
     }
 
     /// The session the window of `w` is seen in.

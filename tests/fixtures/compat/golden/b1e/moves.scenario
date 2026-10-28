@@ -1,0 +1,35 @@
+# B1e: move-window, swap-window and renumbering with linked windows and
+# groups. A move links the window into its new place, then unlinks the old
+# one, so a window linked elsewhere stays there.
+$ new-session -d -s a -n aone -x 80 -y 24
+$ new-window -d -t a: -n w2
+$ new-window -d -t a: -n w3
+$ new-session -d -s b -n bone -x 80 -y 24
+$ set -g renumber-windows off
+$ move-window -s a:3 -t b:7
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'
+# Link a:2 into b, then move that link inside b.
+$ link-window -d -s a:2 -t b:2
+$ move-window -s b:2 -t b:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'
+# Moving into an index in use needs -k, which closes the window it held.
+$ move-window -s a:1 -t b:5
+$ move-window -k -d -s a:1 -t b:7
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+# The same window at the same index.
+$ move-window -s b:5 -t b:5
+# move-window -r numbers only the target session again.
+$ move-window -r -t b
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'
+# swap-window across sessions swaps the places, current and last included.
+$ new-window -d -t a: -n w4
+$ swap-window -s a:1 -t b:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'
+# The last window of a session moved away takes the session with it.
+$ new-session -d -s d -n done
+$ move-window -s d:1 -t b:9
+$ list-sessions -F '#{session_name} #{session_windows}'
+# -a: after the target window, later windows move up.
+$ move-window -a -s b:9 -t a:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} linked=#{window_linked} [#{window_linked_sessions_list}] active=#{window_active}'

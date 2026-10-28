@@ -1,0 +1,19 @@
+# B1e: clients on group members. The group counts them all; each member
+# keeps its own current window, and a window made in one shows in the other.
+$ new-session -d -s a -n aone -x 40 -y 6 cat
+$ new-window -d -t a: -n w2 cat
+$ new-session -d -s c -t a
+$ set -g status-right ''
+$ set -g status-left '[#{session_name}] '
+client 40x6 attach -t c
+screen
+$ list-sessions -F '#{session_name} att=#{session_attached} gatt=#{session_group_attached} many=#{session_group_many_attached}'
+$ display -p -t a: '#{session_group_attached} #{session_group_many_attached} #{session_attached}'
+$ select-window -t a:2
+$ new-window -t a: -n w3 cat
+screen
+$ list-windows -F '#{session_name}:#{window_index} #{window_name} #{window_flags} #{window_active_sessions} [#{window_active_sessions_list}]' -a
+$ list-sessions
+$ kill-session -t a
+screen
+$ list-sessions
