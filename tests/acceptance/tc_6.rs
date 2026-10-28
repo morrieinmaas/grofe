@@ -147,6 +147,8 @@ fn a_rounded_popup_with_a_title_runs_in_its_directory() {
     want.extend(std::iter::repeat_n(side, 6));
     want.push(format!("     ╰{}╯", "─".repeat(46)));
     assert_eq!(screen[..11], want[..], "screen:\n{}", screen.join("\n"));
+    // "hi" can be drawn a frame before the newline moves the cursor.
+    let _ = wait_until(|| a.cursor() == (6, 4), WAIT);
     assert_eq!(a.cursor(), (6, 4), "the popup's cursor, after its output");
     assert_eq!(read(&pwd).trim_end(), dir.to_str().expect("utf-8"));
 
