@@ -29,3 +29,9 @@ $ set -wt b:7 synchronize-panes on
 $ show -wv -t a:2 synchronize-panes
 $ respawn-window -k -t b:7 cat
 $ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+# A respawn names the session the target names.
+$ new-session -d -s c -c /tmp -x 80 -y 24 cat
+$ new-session -d -s d -c /usr -x 80 -y 24 cat
+$ link-window -d -s c:1 -t d:5
+$ respawn-pane -t d:5.1
+$ respawn-pane -t c:1.1

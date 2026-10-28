@@ -174,7 +174,9 @@ impl Model {
     /// Gives every other member of `from`'s group `from`'s windows at the
     /// same indexes (tmux's `session_group_synchronize1`): their links are
     /// dropped and added again in `from`'s order, and each keeps its current
-    /// and last windows by index, else the lowest index becomes current.
+    /// and last windows by index. A member whose current index is gone first
+    /// moves, in its old list, to its last window, else the one before it
+    /// (the last of all from the first), as `session_detach` does.
     pub fn sync_group(&mut self, from: SessionId) {
         let Some(source) = self.sessions.get(&from).map(|s| s.windows.clone()) else {
             return;
@@ -183,13 +185,28 @@ impl Model {
             .into_iter()
             .filter_map(|w| Some((w, self.index_in(from, w)?)))
             .collect();
+        if source.is_empty() {
+            return;
+        }
         for member in self.group_peers(from) {
             let Some(s) = self.sessions.get(&member) else {
                 continue;
             };
             let slot = |w: &WindowId| self.index_in(member, *w);
-            let active = slot(&s.active);
-            let last: Vec<u32> = s.last_windows.iter().filter_map(slot).collect();
+            let own: Vec<u32> = s.windows.iter().filter_map(slot).collect();
+            let mut active = slot(&s.active);
+            let mut last: Vec<u32> = s.last_windows.iter().filter_map(slot).collect();
+            if let Some(cur) = active
+                && !source.iter().any(|(_, i)| *i == cur)
+            {
+                let before = own.iter().rev().find(|i| **i < cur).or(own.last()).copied();
+                let to = last.last().copied().or(before).filter(|i| *i != cur);
+                if let Some(to) = to {
+                    last.retain(|i| *i != to);
+                    last.push(cur);
+                    active = Some(to);
+                }
+            }
             for w in s.windows.clone() {
                 if let Some(win) = self.windows.get_mut(&w) {
                     win.links.retain(|(s, _)| *s != member);
@@ -214,19 +231,39 @@ impl Model {
         }
     }
 
-    /// With `renumber-windows` on, `session`'s windows are numbered again
-    /// from `base-index`, as tmux does when one of them goes.
+    /// With `renumber-windows` on, `session`'s windows, and its group's, are
+    /// numbered again from `base-index` in order, as tmux does when one of
+    /// them goes (`server_renumber_session`).
     pub fn renumber_session(&mut self, session: SessionId) {
         let on = self
             .options
             .lookup("renumber-windows", &[Owner::Session(session)])
             == Some("on");
         if on {
+            let mut all = self.group_peers(session);
+            all.insert(0, session);
+            for s in all {
+                self.renumber_from_base(s);
+            }
+        }
+    }
+
+    /// [`Model::renumber_from_base`] if the session has `renumber-windows`
+    /// on: `move-window` numbers the session the window left, and no group.
+    pub fn renumber_alone(&mut self, session: SessionId) {
+        if self.sessions.contains_key(&session)
+            && self
+                .options
+                .lookup("renumber-windows", &[Owner::Session(session)])
+                == Some("on")
+        {
             self.renumber_from_base(session);
         }
     }
 
-    /// `session`'s windows numbered from `base-index` in order.
+    /// `session`'s windows numbered from `base-index` in order. Like tmux's
+    /// `session_renumber_windows`, it leaves the group alone: a member
+    /// numbered by itself differs from the others until the next sync.
     pub fn renumber_from_base(&mut self, session: SessionId) {
         let base = self.base_index(session);
         let Some(list) = self.sessions.get(&session).map(|s| s.windows.clone()) else {
@@ -235,7 +272,6 @@ impl Model {
         for (i, w) in list.into_iter().enumerate() {
             self.set_index(session, w, base + i as u32);
         }
-        self.sync_group(session);
     }
 
     /// Takes `window` out of `session` as tmux's `session_detach` does: if it

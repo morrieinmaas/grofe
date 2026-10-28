@@ -100,3 +100,15 @@ b:1.1 %2
 b:2.1 %0
 b:7.1 %1
 ? 0
+$ new-session -d -s c -c /tmp -x 80 -y 24 cat
+? 0
+$ new-session -d -s d -c /usr -x 80 -y 24 cat
+? 0
+$ link-window -d -s c:1 -t d:5
+? 0
+$ respawn-pane -t d:5.1
+! respawn pane failed: pane d:5.1 still active
+? 1
+$ respawn-pane -t c:1.1
+! respawn pane failed: pane c:1.1 still active
+? 1

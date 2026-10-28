@@ -1,0 +1,39 @@
+# B1e review: more group operations.
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+$ new-window -d -t a: -n a2 cat
+$ new-window -d -t a: -n a3 cat
+$ new-window -d -t a: -n a4 cat
+$ new-session -d -s c -t a
+$ new-session -d -P -F '#{session_name} #{session_group} #{session_windows}' -t a
+$ rename-session -t c cc
+$ list-sessions -F '#{session_name} g=#{session_group} #{session_windows} #{session_id}'
+$ select-window -t a:3
+$ select-window -t cc:2
+$ select-window -t a:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+# the current window of a goes: the last window takes over in a, cc keeps its own
+$ kill-window -t a:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ set -t a renumber-windows on
+$ kill-window -t a:3
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ new-window -a -d -t a:2 -n ins
+$ new-window -a -d -t cc:1 -n bef
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ swap-window -s a:2 -t a:4
+$ list-windows -t cc -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ break-pane -d -n bp -s a:2 -t a:9
+$ split-window -d -t cc:3 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} #{window_panes}'
+$ break-pane -d -n bq -s cc:3.2 -t cc:
+$ join-pane -d -s cc:5 -t a:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} #{window_panes}'
+$ move-window -r -t cc
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ list-panes -s -t a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+$ respawn-window -k -t cc:1
+$ kill-session -t a
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+$ kill-window -t cc:1
+$ list-sessions -F '#{session_name} g=#{session_group} #{session_windows} #{session_grouped}'

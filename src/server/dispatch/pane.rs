@@ -60,7 +60,9 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
         return Err("size or position can't split a floating pane".to_string());
     }
     let size = (p.cols, p.rows);
-    let s = &model.sessions[&model.windows[&window].session];
+    // The session the target names, for a window linked into several.
+    let (in_session, _) = model.resolve_winlink(&c.target, ctx)?;
+    let s = &model.sessions[&in_session];
     let env = s.env.clone();
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
     let session = s.id;
@@ -432,12 +434,13 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
     let p = &model.panes[&pane];
     if p.dead.is_none() && !c.kill {
         let w = &model.windows[&p.window];
-        let index = w.pane_ids().iter().position(|id| *id == pane).unwrap_or(0) as u32;
-        let session = &model.sessions[&w.session].name;
+        let nth = w.pane_ids().iter().position(|id| *id == pane).unwrap_or(0) as u32;
+        let (session, _) = model.resolve_winlink(&c.target, ctx)?;
+        let index = model.index_in(session, w.id).unwrap_or(w.index);
+        let session = &model.sessions[&session].name;
         return Err(format!(
-            "respawn pane failed: pane {session}:{}.{} still active",
-            w.index,
-            index + model.pane_base_index(w.id)
+            "respawn pane failed: pane {session}:{index}.{} still active",
+            nth + model.pane_base_index(w.id)
         ));
     }
     let cwd = c

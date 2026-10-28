@@ -47,3 +47,8 @@ fn a_pane_in_a_linked_window_answers_for_the_session_in_play() {
 fn swap_window_d_keeps_the_current_windows() {
     check("b1e", "swapd", &[]);
 }
+
+#[test]
+fn group_members_follow_each_other_through_every_window_change() {
+    check("b1e", "groups2", &[]);
+}

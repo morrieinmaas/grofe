@@ -316,8 +316,11 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
         None => model.free_window_index(session),
     };
     let window = if alone {
-        let src_s = model.link_session(from, None).unwrap_or(session);
-        relink(model, from, src_s, session, index)?;
+        let (src_s, _) = model.resolve_winlink(&c.src, ctx)?;
+        if grouped(model, src_s, session) {
+            return Err(GROUPED.to_string());
+        }
+        relink(model, from, src_s, session, index, !c.detach)?;
         from
     } else {
         let (cols, rows) = (model.windows[&from].cols, model.windows[&from].rows);
@@ -433,9 +436,13 @@ pub fn move_window(state: &mut State, ctx: &ClientCtx, c: MoveWindow) -> Result<
     let current = model.sessions[&dst_s].active;
     // Replacing the current window selects the new one even with `-d`.
     let select = !c.detach || killed.contains(&current);
-    relink(model, window, src_s, dst_s, index)?;
+    relink(model, window, src_s, dst_s, index, select)?;
     if select {
         model.select_window_in(dst_s, window);
+    }
+    // tmux numbers the source session again unless `-s` named the window.
+    if c.src == Target::Current {
+        model.renumber_alone(src_s);
     }
     let removed = model.close_orphans(&killed);
     state.events.panes_killed(removed);
@@ -556,10 +563,23 @@ fn relink(
     src_s: SessionId,
     dst_s: SessionId,
     index: u32,
+    select: bool,
 ) -> Result<(), String> {
     if src_s == dst_s {
         // Within its session only its place in the list changes; tmux
         // links it again before unlinking, so the session never empties.
+        // The old link leaves the last-window stack, and if it was current
+        // and the new one is not selected, the session moves on as when a
+        // window goes.
+        if let Some(s) = model.sessions.get_mut(&src_s) {
+            s.last_windows.retain(|w| *w != window);
+            if s.active == window && !select && s.windows.len() > 1 {
+                let pos = s.windows.iter().position(|w| *w == window).unwrap_or(0);
+                let before = s.windows[(pos + s.windows.len() - 1) % s.windows.len()];
+                let last = s.last_windows.pop();
+                s.active = last.unwrap_or(before);
+            }
+        }
         model.set_index(src_s, window, index);
         model.sync_group(src_s);
         return Ok(());
@@ -586,7 +606,8 @@ pub(crate) fn shuffle_up(model: &mut Model, session: SessionId, index: u32) -> R
             model.set_index(session, id, i + 1);
         }
     }
-    model.sync_group(session);
+    // No group sync: tmux's `winlink_shuffle_up` leaves the other members
+    // alone until the window that took the index is attached.
     Ok(())
 }
 
@@ -743,7 +764,7 @@ pub fn respawn_window(
     c: RespawnPane,
 ) -> Result<String, String> {
     let model = &mut state.model;
-    let window = model.resolve_window(&c.target, ctx)?;
+    let (in_session, window) = model.resolve_winlink(&c.target, ctx)?;
     let panes = model.windows[&window].pane_ids();
     let live = panes
         .iter()
@@ -752,7 +773,8 @@ pub fn respawn_window(
         let w = &model.windows[&window];
         return Err(format!(
             "respawn window failed: window {}:{} still active",
-            model.sessions[&w.session].name, w.index
+            model.sessions[&in_session].name,
+            model.index_in(in_session, window).unwrap_or(w.index)
         ));
     }
     unzoom(model, window);
@@ -772,6 +794,8 @@ pub fn respawn_window(
         w.set_active(first);
     }
     state.model.relayout(window);
+    // tmux's `spawn_window` ends by synchronizing the session group.
+    state.model.sync_group(in_session);
     Ok(String::new())
 }
 

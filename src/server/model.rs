@@ -848,6 +848,28 @@ impl Model {
             .map_err(|_| format!("can't find window: {name}"))
     }
 
+    /// [`Model::word_window`] with the session it was found in: the current
+    /// one for an index or a name, else the session the word names.
+    fn word_winlink(&self, word: &str, ctx: &ClientCtx) -> Option<(SessionId, WindowId)> {
+        let current = self.current_session(ctx).ok()?;
+        let in_current = word
+            .parse::<u32>()
+            .ok()
+            .map(WindowRef::Index)
+            .into_iter()
+            .chain([WindowRef::Name(word.to_string())])
+            .find_map(|w| self.window_ref(&SessionRef::Current, &w, ctx).ok());
+        match in_current {
+            Some(w) => Some((current, w)),
+            None => {
+                let s = self
+                    .session_ref(&SessionRef::Name(word.to_string()), ctx)
+                    .ok()?;
+                Some((s, self.sessions[&s].active))
+            }
+        }
+    }
+
     /// A window of the current session by index, then by exact name, then
     /// a session's current window, as cmd-find.c tries them.
     fn word_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
@@ -898,6 +920,17 @@ impl Model {
         target: &Target,
         ctx: &ClientCtx,
     ) -> Result<(SessionId, WindowId), String> {
+        // A bare word naming a session is that session's current window,
+        // found in that session whatever the current one is.
+        if let Target::Session(SessionRef::Bare(word)) = target {
+            let word = word
+                .strip_prefix('=')
+                .filter(|n| !n.is_empty())
+                .unwrap_or(word);
+            if let Some(found) = self.word_winlink(word, ctx) {
+                return Ok(found);
+            }
+        }
         let window = self.resolve_window(target, ctx)?;
         let named = match target {
             Target::Window(s, _) if *s != SessionRef::Current => Some(self.session_ref(s, ctx)?),

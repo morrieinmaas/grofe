@@ -1,0 +1,196 @@
+$ new-session -d -s a -n a1 -x 80 -y 24 cat
+? 0
+$ new-window -d -t a: -n a2 cat
+? 0
+$ new-window -d -t a: -n a3 cat
+? 0
+$ new-window -d -t a: -n a4 cat
+? 0
+$ new-session -d -s c -t a
+? 0
+$ new-session -d -P -F '#{session_name} #{session_group} #{session_windows}' -t a
+a-2 a 4
+? 0
+$ rename-session -t c cc
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} #{session_windows} #{session_id}'
+a g=a 4 $0
+a-2 g=a 4 $2
+cc g=a 4 $1
+? 0
+$ select-window -t a:3
+? 0
+$ select-window -t cc:2
+? 0
+$ select-window -t a:1
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a:1 @0 a1 act=1 last=0
+a:2 @1 a2 act=0 last=0
+a:3 @2 a3 act=0 last=1
+a:4 @3 a4 act=0 last=0
+a-2:1 @0 a1 act=1 last=0
+a-2:2 @1 a2 act=0 last=0
+a-2:3 @2 a3 act=0 last=0
+a-2:4 @3 a4 act=0 last=0
+cc:1 @0 a1 act=0 last=1
+cc:2 @1 a2 act=1 last=0
+cc:3 @2 a3 act=0 last=0
+cc:4 @3 a4 act=0 last=0
+? 0
+$ kill-window -t a:1
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a:1 @1 a2 act=0 last=0
+a:2 @2 a3 act=1 last=0
+a:3 @3 a4 act=0 last=0
+a-2:1 @1 a2 act=0 last=0
+a-2:2 @2 a3 act=0 last=0
+a-2:3 @3 a4 act=1 last=0
+cc:1 @1 a2 act=1 last=0
+cc:2 @2 a3 act=0 last=0
+cc:3 @3 a4 act=0 last=0
+? 0
+$ set -t a renumber-windows on
+? 0
+$ kill-window -t a:3
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a:1 @1 a2 act=0 last=0
+a:2 @2 a3 act=1 last=0
+a-2:1 @1 a2 act=0 last=0
+a-2:2 @2 a3 act=1 last=0
+cc:1 @1 a2 act=1 last=0
+cc:2 @2 a3 act=0 last=0
+? 0
+$ new-window -a -d -t a:2 -n ins
+? 0
+$ new-window -a -d -t cc:1 -n bef
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a:1 @1 a2 act=0 last=0
+a:2 @7 bef act=1 last=0
+a:3 @2 a3 act=0 last=0
+a:4 @6 ins act=0 last=0
+a-2:1 @1 a2 act=0 last=0
+a-2:2 @7 bef act=1 last=0
+a-2:3 @2 a3 act=0 last=0
+a-2:4 @6 ins act=0 last=0
+cc:1 @1 a2 act=1 last=0
+cc:2 @7 bef act=0 last=0
+cc:3 @2 a3 act=0 last=0
+cc:4 @6 ins act=0 last=0
+? 0
+$ swap-window -s a:2 -t a:4
+? 0
+$ list-windows -t cc -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+cc:1 @1 a2 act=1 last=0
+cc:2 @6 ins act=0 last=0
+cc:3 @2 a3 act=0 last=0
+cc:4 @7 bef act=0 last=0
+? 0
+$ break-pane -d -n bp -s a:2 -t a:9
+? 0
+$ split-window -d -t cc:3 cat
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} #{window_panes}'
+a:1 @1 a2 act=1 last=0 1
+a:3 @2 a3 act=0 last=0 2
+a:4 @7 bef act=0 last=0 1
+a:9 @6 bp act=0 last=0 1
+a-2:1 @1 a2 act=1 last=0 1
+a-2:3 @2 a3 act=0 last=0 2
+a-2:4 @7 bef act=0 last=0 1
+a-2:9 @6 bp act=0 last=0 1
+cc:1 @1 a2 act=1 last=0 1
+cc:3 @2 a3 act=0 last=0 2
+cc:4 @7 bef act=0 last=0 1
+cc:9 @6 bp act=0 last=0 1
+? 0
+$ break-pane -d -n bq -s cc:3.2 -t cc:
+? 0
+$ join-pane -d -s cc:5 -t a:1
+! can't find window: 5
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} #{window_panes}'
+a:1 @1 a2 act=1 last=0 1
+a:2 @8 bq act=0 last=0 1
+a:3 @2 a3 act=0 last=0 1
+a:4 @7 bef act=0 last=0 1
+a:9 @6 bp act=0 last=0 1
+a-2:1 @1 a2 act=1 last=0 1
+a-2:2 @8 bq act=0 last=0 1
+a-2:3 @2 a3 act=0 last=0 1
+a-2:4 @7 bef act=0 last=0 1
+a-2:9 @6 bp act=0 last=0 1
+cc:1 @1 a2 act=1 last=0 1
+cc:2 @8 bq act=0 last=0 1
+cc:3 @2 a3 act=0 last=0 1
+cc:4 @7 bef act=0 last=0 1
+cc:9 @6 bp act=0 last=0 1
+? 0
+$ move-window -r -t cc
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a:1 @1 a2 act=1 last=0
+a:2 @8 bq act=0 last=0
+a:3 @2 a3 act=0 last=0
+a:4 @7 bef act=0 last=0
+a:9 @6 bp act=0 last=0
+a-2:1 @1 a2 act=1 last=0
+a-2:2 @8 bq act=0 last=0
+a-2:3 @2 a3 act=0 last=0
+a-2:4 @7 bef act=0 last=0
+a-2:9 @6 bp act=0 last=0
+cc:1 @1 a2 act=1 last=0
+cc:2 @8 bq act=0 last=0
+cc:3 @2 a3 act=0 last=0
+cc:4 @7 bef act=0 last=0
+cc:5 @6 bp act=0 last=0
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+a:1.1 %1
+a:2.1 %8
+a:3.1 %2
+a:4.1 %7
+a:9.1 %6
+a-2:1.1 %1
+a-2:2.1 %8
+a-2:3.1 %2
+a-2:4.1 %7
+a-2:9.1 %6
+cc:1.1 %1
+cc:2.1 %8
+cc:3.1 %2
+cc:4.1 %7
+cc:5.1 %6
+? 0
+$ list-panes -s -t a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id}'
+a:1.1 %1
+a:2.1 %8
+a:3.1 %2
+a:4.1 %7
+a:9.1 %6
+? 0
+$ respawn-window -k -t cc:1
+? 0
+$ kill-session -t a
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag}'
+a-2:1 @1 a2 act=1 last=0
+a-2:2 @8 bq act=0 last=0
+a-2:3 @2 a3 act=0 last=0
+a-2:4 @7 bef act=0 last=0
+a-2:5 @6 bp act=0 last=0
+cc:1 @1 a2 act=1 last=0
+cc:2 @8 bq act=0 last=0
+cc:3 @2 a3 act=0 last=0
+cc:4 @7 bef act=0 last=0
+cc:5 @6 bp act=0 last=0
+? 0
+$ kill-window -t cc:1
+? 0
+$ list-sessions -F '#{session_name} g=#{session_group} #{session_windows} #{session_grouped}'
+a-2 g=a 4 1
+cc g=a 4 1
+? 0
