@@ -226,12 +226,13 @@ exec = true
     let screen = |id: &str| srv.capture(id);
     wait_until(|| screen(&p[0][0]).contains("typed-marker"), WAIT).unwrap();
     wait_until(|| screen(&p[1][0]).contains("exec-marker"), WAIT).unwrap();
-    // The typed command was entered at a shell prompt, which stays; the
-    // exec pane ended with its command (the harness keeps it dead).
+    // The typed command was entered at a shell, which stays (the prompt is
+    // `$` or, as root in CI, `#`); the exec pane ended with its command
+    // (the harness keeps it dead).
+    let typed = screen(&p[0][0]);
     assert!(
-        screen(&p[0][0]).contains("$ echo typed-marker"),
-        "{}",
-        screen(&p[0][0])
+        typed.contains("echo typed-marker") && typed.lines().any(|l| l == "typed-marker"),
+        "{typed}"
     );
     assert_eq!(p[0][4], "0", "typed pane alive: {p:?}");
     wait_until(|| panes(&srv, "run:")[1][4] == "1", WAIT).expect("exec pane ended");
