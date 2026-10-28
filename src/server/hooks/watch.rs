@@ -56,17 +56,20 @@ struct SessionSnap {
 struct WindowSnap {
     name: String,
     active: PaneId,
-    layout: String,
+    /// Only while `window-layout-changed` is bound: building it is the
+    /// costly part of a look.
+    layout: Option<String>,
     size: (u16, u16),
     sessions: BTreeSet<SessionId>,
 }
 
-fn watched(state: &State) -> bool {
+pub(super) fn watched(state: &State) -> bool {
     WATCHED.iter().any(|name| wanted(state, name))
 }
 
 fn snapshot(state: &State, before: Option<&Snap>) -> Snap {
     let m = &state.model;
+    let layouts = wanted(state, "window-layout-changed");
     let focus_events = m.options.lookup("focus-events", &[]) == Some("on");
     let mut snap = Snap::default();
     for s in m.sessions.values() {
@@ -80,14 +83,16 @@ fn snapshot(state: &State, before: Option<&Snap>) -> Snap {
         let window = WindowSnap {
             name: w.name.clone(),
             active: w.active,
-            layout: crate::server::dispatch::options::window_layout(w),
+            layout: layouts.then(|| crate::server::dispatch::options::window_layout(w)),
             size: (w.cols, w.rows),
             sessions: w.links.iter().map(|(s, _)| *s).collect(),
         };
         snap.windows.insert(w.id, window);
     }
-    for pane in m.panes.keys() {
-        snap.titles.insert(*pane, state.passthrough.title(*pane));
+    if wanted(state, "pane-title-changed") {
+        for pane in m.panes.keys() {
+            snap.titles.insert(*pane, state.passthrough.title(*pane));
+        }
     }
     for c in state.clients.values() {
         // A terminal that does not report focus is always focused.
@@ -134,6 +139,62 @@ pub fn track(state: &mut State) {
         }
     }
     state.hooks.watch.last = Some(now);
+}
+
+/// Takes a new look without firing anything: what commands a notify hook
+/// runs changes fires no notify hooks, as in tmux (`notify_add` skips them
+/// while a `CMDQ_STATE_NOHOOKS` item runs).
+pub(super) fn absorb(state: &mut State) {
+    if !watched(state) {
+        state.hooks.watch.last = None;
+        return;
+    }
+    let before = state.hooks.watch.last.take();
+    state.hooks.watch.last = Some(snapshot(state, before.as_ref()));
+}
+
+/// After each command: what it changed fires now, so two changes one
+/// request makes (a rename and an `after-*` hook's rename) fire twice, as
+/// tmux fires each as it happens; inside a notify hook nothing fires.
+pub(super) fn after_command(state: &mut State) {
+    if state.hooks.quiet {
+        absorb(state);
+    } else {
+        track(state);
+    }
+}
+
+/// A command tmux reports on whether or not anything changed:
+/// `rename-window` fires `window-renamed` even for the same name, and
+/// `select-layout` and `next-layout` fire `window-layout-changed` twice
+/// (`layout_set_select` and the command each notify). The change is taken
+/// into the last look so the next comparison does not fire it again.
+pub(super) fn window_event(state: &mut State, event: &'static str, window: WindowId, times: usize) {
+    if !watched(state) {
+        return;
+    }
+    if let (Some(last), Some(w)) = (
+        state.hooks.watch.last.as_mut(),
+        state.model.windows.get(&window),
+    ) && let Some(snap) = last.windows.get_mut(&window)
+    {
+        match event {
+            "window-renamed" => snap.name = w.name.clone(),
+            _ => {
+                if snap.layout.is_some() {
+                    snap.layout = Some(crate::server::dispatch::options::window_layout(w));
+                }
+            }
+        }
+    }
+    if !wanted(state, event) {
+        return;
+    }
+    for _ in 0..times {
+        if let Some(f) = window_fired(state, event, window) {
+            notify(state, f);
+        }
+    }
 }
 
 /// Fires only the focus hooks, for the moments where tmux orders them
@@ -217,7 +278,7 @@ fn diff(state: &State, before: &Snap, now: &Snap) -> Vec<Fired> {
         if w.active != was.active {
             out.extend(window_fired(state, "window-pane-changed", *id));
         }
-        if w.layout != was.layout {
+        if w.layout.is_some() && was.layout.is_some() && w.layout != was.layout {
             out.extend(window_fired(state, "window-layout-changed", *id));
         }
         if w.size != was.size {

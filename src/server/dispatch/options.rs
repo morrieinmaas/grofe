@@ -1441,7 +1441,7 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
     };
     match b.kind {
         // tmux reads on/yes/off/no in any case; `true` and `false` are
-        // grofe's own, which tmux 3.7b refuses.
+        // grofe's own, which `set_option` refuses in the tmux dialect.
         Kind::Bool => match value.to_ascii_lowercase().as_str() {
             "on" | "yes" | "true" | "1" => Ok("on".to_string()),
             "off" | "no" | "false" | "0" => Ok("off".to_string()),
@@ -1774,6 +1774,15 @@ fn set_option(
             return Err("empty value".to_string());
         }
     };
+    // grofe's own dialect also reads `true` and `false` for a flag option;
+    // tmux 3.7b refuses them (`options_from_string_flag`).
+    let tmux = ctx.dialect == Dialect::Tmux;
+    if tmux
+        && builtin(&c.name).is_some_and(|b| b.kind == Kind::Bool)
+        && matches!(value.to_ascii_lowercase().as_str(), "true" | "false")
+    {
+        return Err(format!("bad value: {value}"));
+    }
     // `-a` appends to a string's value at this scope (tmux: style options
     // join with a comma); any other kind takes the value as given.
     let separator = if c.name.ends_with("-style") { "," } else { "" };
@@ -1782,7 +1791,6 @@ fn set_option(
     // text `show` already prints in place of the value. Any other value
     // shows as stored, normalized as tmux normalizes it (`mouse yes` is
     // `on`).
-    let tmux = ctx.dialect == Dialect::Tmux;
     let (value, sent) = match model.options.get(owner, &c.name) {
         Some(old) if c.append && is_text(&c.name) => {
             let before = tmux_text(&model.options, owner, &c.name, &old.value);

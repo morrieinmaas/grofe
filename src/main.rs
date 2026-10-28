@@ -447,7 +447,7 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
         Err(e) => return fail(&e),
     };
     let argv = ["attach-session".to_string(), "-t".to_string(), id];
-    match attach_to(&socket, &argv) {
+    match attach_to(&socket, &argv, true) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -716,7 +716,7 @@ fn shell_command(globals: &Globals, command: &str) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
-    match attach_to(socket, argv) {
+    match attach_to(socket, argv, false) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -726,7 +726,9 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
 }
 
 /// [`attach`]'s work: the reason the client was let go, or the error.
-fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
+/// `created`: the session is the one this client's `new-session` just
+/// made (no `client-attached` hook, as tmux).
+fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, String> {
     let parsed = match grofe::cmd::parse(argv) {
         Ok(grofe::cmd::Command::AttachSession(a)) => a,
         Ok(_) => return Err("attach-session: unexpected command".to_string()),
@@ -772,6 +774,7 @@ fn attach_to(socket: &Path, argv: &[String]) -> Result<String, String> {
         target: client::raw_target(&argv[1..]),
         detach_others: parsed.detach_others,
         nest: parsed.nest,
+        created,
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
     client::attach(stream, ctx, opts, term)

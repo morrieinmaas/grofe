@@ -93,6 +93,8 @@ pub struct AttachRequest {
     pub nest: bool,
     /// The client's terminal device, if it said (`client_tty`).
     pub tty: Option<String>,
+    /// Its own `new-session` made the session: no `client-attached`.
+    pub created: bool,
 }
 
 /// An accepted attach: the connection writes `output` (one frame at a
@@ -370,6 +372,7 @@ pub fn client_name(id: ClientId) -> String {
 /// activity).
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
+    let req_created = req.created;
     let target = match &req.target {
         // A tmux attach reads `-t` the tmux way (`=name` exact, FE.1).
         Some(raw) if req.ctx.dialect == crate::protocol::Dialect::Tmux => {
@@ -453,7 +456,10 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     hooks::track_focus(state);
     hooks::client_session_changed(state, id);
     hooks::client_resized(state, id);
-    hooks::client_attached(state, id);
+    // As tmux: only attach-session fires it, not new-session's attach.
+    if !req_created {
+        hooks::client_attached(state, id);
+    }
     Ok(Accepted {
         id,
         output,
@@ -3257,6 +3263,7 @@ mod tests {
                     detach_others: false,
                     nest: true,
                     tty: Some(tty.to_string()),
+                    created: false,
                 },
             )
             .expect("attach");

@@ -30,8 +30,11 @@
 //! the shell exits; a CLI request's later commands and its reply wait for
 //! its own queue ([`request_waiting`]). Commands
 //! run as they are, each expanding its own formats (`run-shell` sees the
-//! `#{hook*}` variables). Commands a hook runs fire notify hooks but no
-//! `after-*` ones, as in tmux (recorded).
+//! `#{hook*}` variables). Commands an `after-*` hook runs fire notify
+//! hooks but no `after-*` ones; commands a notify hook runs fire neither
+//! (`Hooks::quiet`), as in tmux (recorded), so a hook's own commands
+//! cannot fire it again (a `run-shell` that calls `tmux` is a new client,
+//! which can, in tmux too).
 //!
 //! **Environment.** The global environment starts as the server process's
 //! own, and is all a pane or `run-shell` gets from the server's. Hidden
@@ -553,6 +556,11 @@ pub struct Hooks {
     next_request: u64,
     /// Hook commands are running: they fire no command-shaped hooks.
     running: bool,
+    /// A notify hook's commands are running: they fire no hooks at all, as
+    /// tmux's `notify_add` drops events while a `CMDQ_STATE_NOHOOKS` item
+    /// of the global queue runs. This is what keeps a `window-renamed`
+    /// hook that renames from firing itself forever.
+    quiet: bool,
     /// How deep `run_commands` is nested ([`enter`]); 1 is a request's own
     /// commands.
     depth: u32,
@@ -610,6 +618,7 @@ impl Default for Hooks {
             request: None,
             next_request: 0,
             running: false,
+            quiet: false,
             depth: 0,
             current: None,
             watch: watch::Watch::default(),
@@ -974,8 +983,7 @@ impl Fired {
 }
 
 /// Whether a hook is bound to `name` anywhere (the scopes are looked up
-/// when it fires). Commands a hook runs fire notify hooks too, as tmux
-/// 3.7b's do (recorded).
+/// when it fires).
 fn wanted(state: &State, name: &str) -> bool {
     state
         .hooks
@@ -1019,6 +1027,9 @@ fn session_pane(state: &State, session: SessionId) -> Option<PaneId> {
 /// Queues a notify-shaped hook on the global queue, after the current
 /// reply; a full job queue keeps it for the next [`run_pending`].
 fn notify(state: &mut State, f: Fired) {
+    if state.hooks.quiet {
+        return;
+    }
     let job: Job = Box::new(move |state: &mut State| enqueue(state, Origin::Global, &f));
     if let Err(TrySendError::Full(job) | TrySendError::Closed(job)) = state.jobs.try_send(job) {
         state.hooks.overflow.push(job);
@@ -1434,14 +1445,30 @@ pub fn run_command(
     let before = Before::of(state, ctx, &cmd).filter(|(name, _)| {
         streamed(name) || (!state.hooks.running && (wanted(state, name) || sets_hooks(name)))
     });
+    let reported = reported_window(state, ctx, &cmd);
     let result = route(state, ctx, cmd);
+    if result.is_ok()
+        && let Some((event, window, times)) = reported
+    {
+        watch::window_event(state, event, window, times);
+    }
+    watch::after_command(state);
     // A failed command runs `command-error` instead, in the current
     // context. What the hook prints is dropped: the error is all the reply
     // can carry.
-    if result.is_err() && !state.hooks.running && wanted(state, "command-error") {
+    // What the hook prints goes out with the error, and its own errors
+    // after the command's, as tmux prints them.
+    if let Err(e) = &result
+        && !state.hooks.running
+        && wanted(state, "command-error")
+    {
         let mut f = Fired::new("command-error", context_pane(state, ctx.pane));
         f.client = ctx.client;
-        let _ = fire_now(state, ctx, &f);
+        let (printed, errors) = fire_now(state, ctx, &f);
+        state.failed_out.push_str(&printed);
+        if !errors.is_empty() {
+            return Err(std::iter::once(e.clone()).chain(errors).collect::<Vec<_>>().join("\n"));
+        }
     }
     let (Ok(out), Some((name, before))) = (&result, before) else {
         return result;
@@ -1458,14 +1485,47 @@ pub fn run_command(
     let mut f = Fired::new(name, pane);
     f.client = ctx.client;
     let mut out = out.clone();
-    out.push_str(&fire_now(state, ctx, &f));
+    // ponytail: an after-* hook's errors are dropped; tmux prints them and
+    // exits 1 while the request's later commands still run.
+    out.push_str(&fire_now(state, ctx, &f).0);
     Ok(out)
 }
 
+/// The window a command that tmux always reports on is about, before it
+/// runs (a rename changes what `-t` names), with the hook and how many
+/// times tmux fires it ([`watch::window_event`]).
+fn reported_window(
+    state: &State,
+    ctx: &ClientCtx,
+    cmd: &Command,
+) -> Option<(&'static str, WindowId, usize)> {
+    if !watch::watched(state) {
+        return None;
+    }
+    let m = &state.model;
+    let as_pane = |t: &Target| {
+        m.pane_type(t, ctx)
+            .ok()
+            .and_then(|t| m.resolve_window(&t, ctx).ok())
+    };
+    match cmd {
+        Command::RenameWindow(c) => {
+            Some(("window-renamed", m.resolve_window(&c.target, ctx).ok()?, 1))
+        }
+        Command::SelectLayout(c) if c.spread => {
+            let pane = m.resolve_pane(&c.target, ctx).ok()?;
+            Some(("window-layout-changed", m.panes.get(&pane)?.window, 2))
+        }
+        Command::SelectLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
+        Command::NextLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
+        _ => None,
+    }
+}
+
 /// Runs `f`'s hook on its origin's queue: the attached client's for a
-/// binding, else the CLI request's own. What it printed, for the command's
-/// reply.
-fn fire_now(state: &mut State, ctx: &ClientCtx, f: &Fired) -> String {
+/// binding, else the CLI request's own. What it printed and the errors
+/// its commands failed with so far, for the command's reply.
+fn fire_now(state: &mut State, ctx: &ClientCtx, f: &Fired) -> (String, Vec<String>) {
     let origin = match ctx.client {
         Some(id) => Origin::Client(id),
         None => {
@@ -1479,13 +1539,15 @@ fn fire_now(state: &mut State, ctx: &ClientCtx, f: &Fired) -> String {
     };
     enqueue(state, origin, f);
     let mut out = String::new();
+    let mut errors = Vec::new();
     if let Some(q) = state.hooks.queues.get_mut(&origin) {
         out.push_str(&std::mem::take(&mut q.out));
+        errors = std::mem::take(&mut q.errors);
         if !q.waiting && q.items.is_empty() {
             state.hooks.queues.remove(&origin);
         }
     }
-    out
+    (out, errors)
 }
 
 /// `set-hook -R`: runs `spec`'s hook now as if it had fired for `pane`,
@@ -1498,7 +1560,7 @@ pub fn run_now(
 ) -> String {
     let mut f = Fired::new(spec.name, pane);
     f.client = ctx.client;
-    fire_now(state, ctx, &f)
+    fire_now(state, ctx, &f).0
 }
 
 /// Where a hook runs: tmux gives each CLI request and each attached
@@ -1518,6 +1580,9 @@ struct HookQueue {
     waiting: bool,
     /// What the hooks printed, for a CLI request's reply.
     out: String,
+    /// The errors its hook commands failed with, for a CLI request's
+    /// reply when `command-error` ran them.
+    errors: Vec<String>,
     /// Told, with the rest of the output, when the queue is next idle.
     idle: Vec<oneshot::Sender<String>>,
 }
@@ -1608,7 +1673,14 @@ fn drain(state: &mut State, origin: Origin) {
         };
         let mut shell = None;
         let mut printed = String::new();
+        // A notify hook's commands fire nothing (`quiet`); what changed
+        // before them fires first.
+        let quiet = origin == Origin::Global && item.fired.event != "load-commands";
+        if quiet {
+            watch::track(state);
+        }
         state.hooks.running = true;
+        state.hooks.quiet = quiet;
         // A hook's `run-shell` answers here, not to the request that
         // triggered it.
         let deferred = state.deferred_reply.take();
@@ -1621,6 +1693,9 @@ fn drain(state: &mut State, origin: Origin) {
                 Ok(text) => printed.push_str(&text),
                 Err(e) => {
                     eprintln!("grofe hook {}: {e}", item.fired.event);
+                    if let Some(q) = state.hooks.queues.get_mut(&origin) {
+                        q.errors.push(e);
+                    }
                     item.cmds.clear();
                 }
             }
@@ -1629,6 +1704,7 @@ fn drain(state: &mut State, origin: Origin) {
         state.hooks.current = None;
         state.deferred_reply = deferred;
         state.hooks.running = false;
+        state.hooks.quiet = false;
         let Some(q) = state.hooks.queues.get_mut(&origin) else {
             return;
         };
@@ -2155,13 +2231,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_session_hook_fires_again_for_the_session_it_makes() {
+    async fn a_session_hook_does_not_fire_for_the_session_it_makes() {
         let mut state = test_state();
-        // The hook's own new-session fires session-created again, as in
-        // tmux; that second run fails (the name is taken) and stops.
-        let hook = "new-session -d -s from-hook";
+        // The hook's own new-session fires no session-created, as in tmux
+        // (recorded, `golden/b2a/hook-quiet`): one session more, not one
+        // per request from now on.
+        let hook = "new-session -d";
         fire(&mut state, &["set-hook", "-g", "session-created", hook]).unwrap();
         fire(&mut state, &["new-session", "-d", "-s", "a"]).unwrap();
+        fire(&mut state, &["list-sessions"]).unwrap();
+        fire(&mut state, &["list-sessions"]).unwrap();
         let names: Vec<&str> = state
             .model
             .sessions
@@ -2169,7 +2248,6 @@ mod tests {
             .map(|s| s.name.as_str())
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
-        assert!(names.contains(&"from-hook"));
     }
 
     #[test]

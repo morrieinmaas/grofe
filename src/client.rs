@@ -411,6 +411,8 @@ pub struct AttachOptions {
     pub target: Option<String>,
     pub detach_others: bool,
     pub nest: bool,
+    /// The session was just made by this client's `new-session`.
+    pub created: bool,
 }
 
 /// The raw `-t` value of an already validated `attach-session` argv (the
@@ -665,6 +667,7 @@ fn run(
         target: opts.target,
         detach_others: opts.detach_others,
         nest: opts.nest,
+        created: opts.created,
         tty: nix::unistd::ttyname(io::stdin())
             .ok()
             .map(|p| p.display().to_string()),

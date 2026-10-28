@@ -623,12 +623,18 @@ async fn actor(
         let idle =
             state.exit_when_empty && state.connections == 0 && state.model.sessions.is_empty();
         let due = clients::deadline(&state).map(Instant::from_std);
+        // Pane output changes nothing the notify hooks watch, and it is
+        // the busiest message: no look at the model after it.
+        let mut output = false;
         tokio::select! {
             msg = msgs.recv() => match msg {
                 Some(msg) => handle(&mut state, msg),
                 None => break,
             },
-            Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            Some(event) = pane_events.recv() => {
+                output = matches!(event.kind, PaneEventKind::Output(_));
+                handle(&mut state, ServerMsg::Pane(event));
+            }
             Some(job) = jobs.recv() => run_job(&mut state, job),
             accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
                 Ok((stream, _)) => {
@@ -662,7 +668,9 @@ async fn actor(
             _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
         events::track_focus(&mut state);
-        hooks::track(&mut state);
+        if !output {
+            hooks::track(&mut state);
+        }
         clients::check_unattached(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
@@ -950,6 +958,7 @@ async fn connection_loop(
             detach_others,
             nest,
             tty,
+            created,
         }) => {
             let req = clients::AttachRequest {
                 pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
@@ -961,6 +970,7 @@ async fn connection_loop(
                 detach_others,
                 nest,
                 tty,
+                created,
             };
             attach(lines, req, msgs.clone()).await;
             return;

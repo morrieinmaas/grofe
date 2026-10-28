@@ -292,8 +292,11 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   The others are stored with no effect (`show-config --explain` marks
   them): `alternate-screen`, `scroll-on-clear`, `cursor-style`,
   `cursor-colour`, `fill-character`, `key-table`, `lock-*`, `menu-*`,
-  `popup-style`, `copy-mode-*-style` and `-format`, `pane-scrollbars*`,
-  `pane-status-*`, `other-pane-height`/`-width` (the `main-*` layouts size
+  `popup-style`, `copy-mode-mark-style`, `-selection-style`, `-position-*`
+  and the `copy-mode-*line-number*` ones (the two match styles do take
+  effect), `pane-scrollbars*`, `pane-status-*`, `session-status-*`,
+  `tree-mode-preview-*`, `window-pane-*status-format`, `xterm-keys`,
+  `assume-paste-time`, `default-client-command`, `pane-colours`, `other-pane-height`/`-width` (the `main-*` layouts size
   from `main-pane-*` alone), `remain-on-exit-format`, `message-format`,
   `message-line`, `message-command-style`, `prompt-*-cursor-*`, `editor`,
   `history-file`, `get-clipboard`, `backspace`, `user-keys`,
@@ -309,21 +312,31 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   session, global; `pane-*`: pane, window, global; `window-*`: window,
   global). Every `after-<verb>` hook of a command grofe has fires with
   tmux's context (`hook-after`), and `command-error` fires when a command
-  fails (what it prints is dropped; tmux's exit status is the hook's).
+  fails: what it prints goes out with the error, and its own errors after
+  the command's (`hook-command-error`; a `run-shell` hook makes tmux exit
+  0, grofe exits 1). Commands a notify hook runs fire no hooks at all, as
+  tmux's `notify_add` skips them, so a `window-renamed` hook that renames
+  cannot fire itself (`hook-quiet`); an `after-*` hook's commands fire
+  notify hooks but no `after-*` ones.
   The notify hooks `session-renamed`, `session-window-changed`,
   `window-renamed`, `window-pane-changed`, `window-layout-changed`,
   `window-resized`, `window-linked`, `window-unlinked`, `pane-title-changed`,
   `pane-focus-in`/`-out` and `pane-set-clipboard` are found by comparing the
-  model with its last look after each message (`server/hooks/watch.rs`;
-  `hook-events`); `client-attached`, `client-detached` and
-  `client-focus-in`/`-out` fire where the client changes. Never fired,
+  model with its last look after each command and each message but pane
+  output (`server/hooks/watch.rs`; `hook-events`), so two changes in one
+  request fire twice. `rename-window` fires `window-renamed` even for the
+  same name, and `select-layout` and `next-layout` fire
+  `window-layout-changed` twice, as tmux does (`hook-quiet`).
+  `client-attached`, `client-detached` and
+  `client-focus-in`/`-out` fire where the client changes; a `new-session`
+  that attaches fires no `client-attached`, only `attach-session` does
+  (`hook-new-attach`). Never fired,
   accepted so a tmux config loads: `after-lock-server`, `after-queue`,
   `after-pipe-pane`, `client-active`, `client-light-theme`,
-  `client-dark-theme`, `pane-mode-changed`. Known divergences: a rename to
-  the same name is not seen; `select-layout` fires `window-layout-changed`
-  only when the layout changed (tmux fires it twice every time); a
-  `new-session` that attaches also fires `client-attached` (tmux does so
-  only for `attach-session`); `hook_arguments` and `hook_flag_*` are not set.
+  `client-dark-theme`, `pane-mode-changed`. Known divergences: two changes
+  of the same thing inside one command fire once; an `after-*` hook's
+  failing command is dropped (tmux prints it and exits 1);
+  `hook_arguments`, `hook_argument_N` and `hook_flag_*` are not set.
   grofe's own names for the first fifteen (`pane-focused`, ...) still work
   with `set-hook` in its own dialect.
 - **Command flags (B2a)** follow tmux 3.7b (`golden/b2a/flags`):
@@ -339,8 +352,10 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   only the target (floating panes go too), `kill-session -a` keeps only the
   target, `-C` clears its alert flags and `-g` kills its whole group.
   `break-pane -a`/`-b` put the window after or before `-t`'s, `-P -F` print
-  it. Flag options read `on`, `yes`, `off` and `no` in any case, as tmux;
-  grofe still reads `true` and `false`, which tmux 3.7b refuses.
+  it. Flag options read `1`, `0` and `on`, `yes`, `off` and `no` in any
+  case, as tmux; `true` and `false` are `bad value` in the tmux dialect, as
+  in tmux 3.7b (`options-flags`), and read only in grofe's own (a TOML
+  `true` is `on` before it gets there).
 - **`#{client_pid}` (B1a)** is the pid of the attached client, from the
   socket's peer credentials (`tests/client_pid.rs`); empty with no client.
 - **Linked windows and session groups (B1e)** follow tmux 3.7b

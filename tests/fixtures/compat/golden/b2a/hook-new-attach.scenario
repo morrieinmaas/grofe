@@ -1,0 +1,13 @@
+# A client that new-session attaches to the session it made fires
+# client-session-changed but no client-attached: tmux fires that hook only
+# from attach-session (hook-events has the attach-session case).
+$ new-session -d -s a -x 80 -y 24 cat
+$ set -g @attached 0
+$ set -g @changed 0
+$ set-hook -g client-attached 'set -gF @attached "#{e|+:#{@attached},1}"'
+$ set-hook -g client-session-changed 'set -gF @changed "#{e|+:#{@changed},1}"'
+client 80x24 new-session -s fresh cat
+$ run-shell 'sleep 0.5'
+$ show -gv @attached
+$ show -gv @changed
+$ list-clients -F '#{session_name}'

@@ -77,6 +77,7 @@ fn hellos() -> Vec<(&'static str, Hello)> {
                 detach_others: false,
                 nest: false,
                 tty: Some("/dev/ttys004".into()),
+                created: false,
             },
         ),
     ]

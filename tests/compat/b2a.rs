@@ -58,3 +58,23 @@ fn a_popup_takes_the_border_options() {
 fn command_flags_do_what_tmux_does() {
     check("b2a", "flags", &[]);
 }
+
+#[test]
+fn a_notify_hook_s_own_commands_fire_no_hooks_and_each_change_fires() {
+    check("b2a", "hook-quiet", &[]);
+}
+
+#[test]
+fn new_session_s_own_attach_fires_no_client_attached() {
+    check("b2a", "hook-new-attach", &[]);
+}
+
+#[test]
+fn a_flag_option_refuses_true_and_false_as_tmux_does() {
+    check("b2a", "options-flags", &[]);
+}
+
+#[test]
+fn command_error_prints_with_the_error() {
+    check("b2a", "hook-command-error", &[]);
+}

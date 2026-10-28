@@ -1,0 +1,22 @@
+$ new-session -d -s a -x 80 -y 24 cat
+? 0
+$ set -g @attached 0
+? 0
+$ set -g @changed 0
+? 0
+$ set-hook -g client-attached 'set -gF @attached "#{e|+:#{@attached},1}"'
+? 0
+$ set-hook -g client-session-changed 'set -gF @changed "#{e|+:#{@changed},1}"'
+? 0
+client 80x24 new-session -s fresh cat
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @attached
+0
+? 0
+$ show -gv @changed
+1
+? 0
+$ list-clients -F '#{session_name}'
+fresh
+? 0

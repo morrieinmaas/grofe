@@ -1,0 +1,116 @@
+$ new-session -d -s a -n w0 -x 80 -y 24 cat
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g session-created 'set -gF @n "#{e|+:#{@n},1}" ; new-session -d -s from-hook cat'
+? 0
+$ new-session -d -s b cat
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-sessions -F '#{session_name}'
+a
+b
+from-hook
+? 0
+$ show -gv @n
+1
+? 0
+$ set-hook -gu session-created
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g window-renamed 'set -gF @n "#{e|+:#{@n},1}" ; rename-window -t a:1 "y#{@n}"'
+? 0
+$ rename-window -t a:1 w
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-windows -t a -F '#{window_name}'
+y1
+? 0
+$ show -gv @n
+1
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g window-renamed 'set -gF @n "#{e|+:#{@n},1}"'
+? 0
+$ rename-window -t a:1 same
+? 0
+$ rename-window -t a:1 same
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @n
+2
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g after-rename-window 'rename-window -t a:1 "q#{window_name}"'
+? 0
+$ rename-window -t a:1 v
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-windows -t a -F '#{window_name}'
+qv
+? 0
+$ show -gv @n
+2
+? 0
+$ set-hook -gu after-rename-window
+? 0
+$ set-hook -gu window-renamed
+? 0
+$ split-window -d -t a:1 cat
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g window-layout-changed 'set -gF @n "#{e|+:#{@n},1}" ; next-layout -t a:1'
+? 0
+$ select-layout -t a:1 even-horizontal
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @n
+2
+? 0
+$ set -g @n 0
+? 0
+$ next-layout -t a:1
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @n
+2
+? 0
+$ set -g @n 0
+? 0
+$ select-layout -t a:1 even-horizontal
+? 0
+$ select-layout -t a:1 even-horizontal
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @n
+4
+? 0
+$ set-hook -gu window-layout-changed
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g session-renamed 'set -gF @n "#{e|+:#{@n},1}" ; rename-session -t b "b#{@n}"'
+? 0
+$ rename-session -t b c
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-sessions -F '#{session_name}'
+a
+c
+from-hook
+? 0
+$ show -gv @n
+1
+? 0
