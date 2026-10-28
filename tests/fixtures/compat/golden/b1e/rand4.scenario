@@ -1,0 +1,153 @@
+# B1e review: a seeded random sequence of window and session commands, tmux 3.7b's result.
+$ new-session -d -s s0 -n w0 -x 80 -y 24 cat
+$ link-window -d -k -s s0:1 -t s0:
+$ new-window -d -a -t s0: -n w2 cat
+$ link-window -a -s s0:3 -t s0:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window  -s s0:3 -t s0:4
+$ last-window -t s0:
+$ link-window -a -s s0:3 -t s0:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ move-window -b -k -s s0:4 -t s0:1
+$ new-window -d -t s0: -n w3 cat
+$ move-window -a -s s0:2 -t s0:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ move-window -a -b -d -s s0:3 -t s0:
+$ new-window -d -t s0:1 -n w4 cat
+$ new-window -d -t s0:3 -n w5 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t s0:4 -n w6 cat
+$ new-window -d -a -t s0:3 -n w7 cat
+$ link-window -b -s s0:4 -t s0:3
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ move-window -d -k -s s0:4 -t s0:5
+$ link-window -b -k -s s0:5 -t s0:
+$ link-window -a -d -s s0:2 -t s0:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ select-window -t s0:1
+$ new-window -d -a -t s0:2 -n w8 cat
+$ new-session -d -s g1 -t s0
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ move-window  -s s0:3 -t g1:
+$ select-window -t g1:1
+$ new-session -d -s n2 -n x2 -x 80 -y 24 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window  -s g1:3 -t n2:
+$ move-window -a -s g1:4 -t s0:3
+$ new-window -d -t g1: -n w9 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ select-window -t n2:4
+$ kill-window -a -t s0:2
+$ link-window -b -s s0:5 -t g1:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window  -s s0:5 -t g1:
+$ new-window -d -a -t g1: -n w10 cat
+$ rename-window -t g1:5 r32
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window -a -k -s s0:3 -t g1:1
+$ rename-window -t g1:4 r34
+$ link-window -a -k -s g1:4 -t n2:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-session -d -s n3 -n x3 -x 80 -y 24 cat
+$ kill-session -t =s0
+$ link-window -d -s n3:3 -t g1:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window -b -k -s n2:4 -t n3:1
+$ rename-window -t g1:4 r40
+$ select-window -t n3:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ last-window -t n2:
+$ move-window  -s n2:2 -t n3:
+$ rename-window -t n2:5 r44
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ move-window -d -s n3:4 -t n2:2
+$ new-session -d -s n4 -n x4 -x 80 -y 24 cat
+$ link-window  -s n2:3 -t g1:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t n2: -n w11 cat
+$ move-window -a -s n3:3 -t g1:
+$ swap-window -d -s g1:2 -t n3:5
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t g1: -n w12 cat
+$ link-window  -s n4:2 -t n3:2
+$ select-window -t n2:3
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ swap-window  -s n2:3 -t n4:4
+$ kill-window  -t n3:3
+$ kill-session -t =n4
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -a -t n2: -n w13 cat
+$ rename-window -t n3:3 r58
+$ kill-window  -t n3:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window  -s n3:1 -t g1:
+$ unlink-window  -t n3:4
+$ new-window -d -a -t n2:2 -n w14 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -a -t n3: -n w15 cat
+$ rename-window -t n3:5 r64
+$ unlink-window -k -t g1:2
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -a -t g1: -n w16 cat
+$ new-window -d -a -t n3: -n w17 cat
+$ move-window  -s n3:2 -t n2:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t n3: -n w18 cat
+$ new-session -d -s n5 -n x5 -x 80 -y 24 cat
+$ move-window -a -b -k -s n5:5 -t n3:3
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ kill-window  -t n5:1
+$ new-session -d -s g6 -t n3
+$ new-window -d -t g1: -n w19 cat
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window -b -s g1:5 -t n3:
+$ kill-session -t =n5
+$ move-window -b -s n2:5 -t g6:4
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t n3:4 -n w20 cat
+$ move-window  -s g1:2 -t g6:
+$ select-window -t n3:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ link-window -k -s g1:4 -t n3:
+$ link-window  -s n3:1 -t g1:5
+$ unlink-window  -t g1:1
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-window -d -t n3:2 -n w21 cat
+$ swap-window  -s n3:4 -t n2:1
+$ link-window -k -s g6:4 -t g1:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ new-session -d -s n7 -n x7 -x 80 -y 24 cat
+$ link-window -d -s g1:4 -t n7:3
+$ link-window -b -d -k -s n3:3 -t n2:
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'
+$ list-sessions -F '#{session_name} g=#{session_group} n=#{session_windows}'
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_id} #{window_name} act=#{window_active} last=#{window_last_flag} l=#{window_linked}'

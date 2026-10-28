@@ -57,3 +57,10 @@ fn group_members_follow_each_other_through_every_window_change() {
 fn a_mark_holds_while_the_session_it_was_made_in_has_the_window() {
     check("b1e", "marked", &[]);
 }
+
+#[test]
+fn seeded_random_window_commands_end_where_tmux_ends() {
+    for seed in 1..=12 {
+        check("b1e", &format!("rand{seed}"), &[]);
+    }
+}

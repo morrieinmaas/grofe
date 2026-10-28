@@ -476,6 +476,15 @@ fn place(
     {
         return Err(format!("same index: {i}"));
     }
+    // tmux looks at the index before it links, so an index in use is
+    // reported ahead of a window the session holds already.
+    if let Some(i) = slot.index
+        && !slot.shuffle
+        && !slot.kill
+        && model.window_at_index(dst, i).is_some()
+    {
+        return Err(format!("index in use: {i}"));
+    }
     if !slot.within && model.has_link(dst, window) {
         return Err(ALREADY_IN.to_string());
     }

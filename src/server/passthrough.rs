@@ -773,10 +773,25 @@ fn move_focus(state: &mut State, session: SessionId, active: PaneId) {
     {
         return;
     }
-    if let Some(old) = before {
+    // tmux keeps focus per pane: one that another session's focused client
+    // shows (a window linked into both) is neither left nor entered again.
+    if let Some(old) = before
+        && !held_elsewhere(state, session, old)
+    {
         report_focus(state, old, b"\x1b[O");
     }
-    report_focus(state, active, b"\x1b[I");
+    if !held_elsewhere(state, session, active) {
+        report_focus(state, active, b"\x1b[I");
+    }
+}
+
+/// Whether a focused client of a session other than `session` shows `pane`
+/// as its current window's active pane.
+fn held_elsewhere(state: &State, session: SessionId, pane: PaneId) -> bool {
+    state
+        .clients
+        .values()
+        .any(|c| c.session != session && c.focused && active_pane(state, c.session) == Some(pane))
 }
 
 /// Client `id` is about to go (detach, exit, lost connection); it is still
@@ -799,7 +814,10 @@ pub fn on_client_gone(state: &mut State, id: ClientId) {
     let Some(pane) = state.passthrough.focus.remove(&session) else {
         return;
     };
-    if focused && state.model.options.lookup("focus-events", &[]) == Some("on") {
+    if focused
+        && state.model.options.lookup("focus-events", &[]) == Some("on")
+        && !held_elsewhere(state, session, pane)
+    {
         report_focus(state, pane, b"\x1b[O");
     }
 }

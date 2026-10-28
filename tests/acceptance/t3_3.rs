@@ -551,3 +551,50 @@ fn focus_reports_on_detach_and_reattach() {
     seen(p2, "^[[I^[[O^[[Ix");
     seen(p1, "");
 }
+
+/// A pane has one focus, as tmux's per-pane flag: a window linked into two
+/// sessions with a client each is entered once, and the first client
+/// leaving does not take the focus from the other.
+#[test]
+fn a_window_linked_into_two_sessions_has_one_focus() {
+    let tui = "printf '\\033[?1004h'; stty -echo -icanon; printf 'ready '; exec cat -v";
+    let srv = start(tui);
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "other",
+        "-x",
+        "80",
+        "-y",
+        "23",
+        "cat",
+    ])
+    .expect("new-session");
+    srv.cmd(&["link-window", "-s", "main:1", "-t", "other:5"])
+        .expect("link-window");
+    let seen = |want: &str| {
+        let want = format!("ready {want}");
+        let want = want.trim_end();
+        if let Err(e) = wait_until(|| srv.capture("main:1.1").trim() == want, WAIT) {
+            panic!(
+                "{e}: the pane shows {:?}, want {want:?}",
+                srv.capture("main:1.1").trim()
+            );
+        }
+    };
+    seen("");
+    let mut a = attach(&srv);
+    seen("^[[I");
+    let mut b = Harness::spawn_attach_with_env(srv.command(), "other", &[], 80, 24);
+    b.wait_for_output(b"\x1b[2J", 0);
+    b.send("x");
+    seen("^[[Ix");
+    b.send("\x02d");
+    b.wait_exit();
+    a.send("y");
+    seen("^[[Ixy");
+    a.send("\x02d");
+    a.wait_exit();
+    seen("^[[Ixy^[[O");
+}

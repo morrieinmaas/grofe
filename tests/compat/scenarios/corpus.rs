@@ -97,14 +97,9 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
     ("display-menu -O: cosmetic, ignored", MOUSE),
     ("resize-pane -M: cosmetic, ignored", MOUSE),
     ("send-keys -M", MOUSE),
-    // Spec 4.5 out of scope: linked windows and session groups (M36-R9).
-    ("link-window -a -s -t", GROUPS),
-    ("unlink-window -k -t", GROUPS),
-    ("new-session -d -s -t", GROUPS),
 ];
 
 const MOUSE: &str = "tmux's stock mouse bindings (spec 4.5 out of scope, M36-R7)";
-const GROUPS: &str = "linked windows and session groups (spec 4.5 out of scope, M36-R9)";
 
 /// Corpus lines that still fail the replay, each with the task whose claim
 /// it contradicts. A listed line must still fail, so a fix shows up.
