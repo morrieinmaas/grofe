@@ -1,0 +1,47 @@
+# WP-A: what a command run from a key binding prints shows in view mode
+# over the pane (server_client_print); q leaves it, a copy mode under it
+# comes back, and run-shell's lines (the empty ones dropped) go there too.
+$ new-session -d -s main -n first -x 60 -y 12 cat
+$ set -g status off
+$ set -g copy-mode-position-format '#[align=right][#{scroll_position}/#{history_size}]'
+client 60x12 attach -t main
+keys C-b ?
+screen
+keys j j j
+screen
+keys G
+screen
+$ display -p -t main '#{pane_mode} #{pane_in_mode} #{scroll_position}'
+keys q
+screen
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+keys C-b #
+keys x
+screen x
+keys C-u
+$ bind-key j run-shell 'echo hello; echo; echo world; exit 3'
+keys C-b j
+screen hello
+keys q
+$ bind-key k display-message -p 'dp out'
+keys C-b [
+keys C-b k
+screen dp out
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+keys q
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+screen
+keys q
+$ bind-key l show-options -g status
+keys C-b l
+screen status
+keys q
+$ bind-key m new-window -d -P -F '#{window_index}'
+keys C-b m
+screen
+keys q
+$ set -g mode-keys emacs
+keys C-b k
+keys Escape
+screen
+$ display -p -t main '#{pane_mode}'

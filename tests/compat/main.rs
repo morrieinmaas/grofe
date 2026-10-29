@@ -30,6 +30,7 @@ mod tp_10;
 mod tp_4;
 mod tp_5;
 mod tp_6;
+mod wpa;
 
 use std::collections::BTreeSet;
 use std::fs;

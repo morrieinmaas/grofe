@@ -864,15 +864,15 @@ fn verb(template: &str) -> String {
 /// `run-shell` (R23): `/bin/sh -c` in a task of its own, never waited on
 /// by the actor. From the CLI it runs in the CLI's cwd and its stdout is
 /// the reply, sent once it exits; from a binding (an attached client) it
-/// runs in the session's cwd, its output is dropped, and the binding's
-/// later commands and the client's later input wait for it, as tmux's
-/// client queue does (`clients::run_binding`). With `-b` (TC.5)
-/// the reply is empty and immediate, and the output is dropped. The shell
+/// runs in the session's cwd, its output shows in view mode over the
+/// client's pane, and the binding's later commands and the client's later
+/// input wait for it, as tmux's client queue does (`clients::run_binding`).
+/// With `-b` (TC.5) the reply is empty and immediate, and the output shows
+/// in view mode over a pane when it ends (see below). The shell
 /// gets the server environment and the session's (`hooks::shell_env`).
 /// A failing command's output and tmux's message go to the CLI's stdout,
 /// and the CLI exits with the command's status (D20, as tmux 3.7b).
-// ponytail: from a binding the output would go to view mode (M5). No
-// `-d`, `-C`.
+// ponytail: no `-C`.
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
     let client_session = ctx
         .client
@@ -881,7 +881,6 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let session_cwd = client_session
         .and_then(|s| state.model.sessions.get(&s))
         .map(|s| s.cwd.clone());
-    let from_binding = session_cwd.is_some();
     let cwd = pane::usable_cwd(session_cwd.unwrap_or_else(|| ctx.cwd.clone()));
     let session =
         client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
@@ -898,22 +897,41 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
             expand_command(state, &at, &c.cmd)
         }
     };
-    // Whatever runs it waits for the shell (a CLI request, a hook's queue,
-    // a binding's client); only the CLI and a hook keep its output.
-    let capture = !from_binding || hooks::in_hook(state);
+    // Its output is the reply (the CLI prints it, a binding shows it in
+    // view mode), except with `-t`, where tmux prints it in that pane's
+    // view mode, as it does for `-b` (the pane `cmd_find_from_nothing`
+    // finds when there is no `-t`).
+    let explicit = (c.target != cmd::Target::Current)
+        .then(|| state.model.resolve_pane(&c.target, ctx).ok())
+        .flatten();
+    let to_pane = explicit.is_some();
+    // A binding's output shows over its client's pane, the lines as the
+    // job prints them.
+    let viewer = ctx.client.filter(|id| state.clients.contains_key(id));
     let reply = (!c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
     let jobs = state.shell_jobs.clone();
     let delay = c.delay;
+    let jobs_tx = state.jobs.clone();
     tokio::spawn(async move {
         // `-d` (FE.1): wait first; with no command, only wait.
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
-        let result = match script.is_empty() && delay.is_some() {
+        let mut result = match script.is_empty() && delay.is_some() {
             true => Ok(String::new()),
-            false => shell(&script, cwd, env, socket, capture && reply.is_some(), &jobs).await,
+            false => shell(&script, cwd, env, socket, true, &jobs).await,
         };
+        if reply.is_none() || to_pane || viewer.is_some() {
+            let printed = match &mut result {
+                Ok(text) => std::mem::take(text),
+                Err(f) => std::mem::take(&mut f.out),
+            };
+            let job: crate::server::Job = Box::new(move |state: &mut State| {
+                crate::server::copy::view::print_shell(state, explicit, viewer, &printed);
+            });
+            let _ = jobs_tx.send(job).await;
+        }
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }

@@ -2986,7 +2986,14 @@ pub(crate) fn run_commands_for(
 
 /// What a held [`BindingRun`] waits for; the error to show, if the held
 /// commands failed.
-type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Waited> + Send>>;
+
+/// How a held command ended: what it printed, and the error to show.
+#[derive(Default)]
+struct Waited {
+    out: String,
+    err: Option<String>,
+}
 
 /// Runs `run`'s next commands until one makes it wait, then resumes it on
 /// the actor once that is done.
@@ -3025,9 +3032,16 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             None => one(state),
         };
         let wait = binding_wait(state, id);
-        if let Err(e) = result {
-            show_message(state, id, e.trim_end());
-            run.cmds.clear();
+        // What a command prints shows in the view mode of the client's
+        // pane (`server_client_print`), the error on its status line.
+        match result {
+            Ok(text) => crate::server::copy::view::print_to_client(state, id, &text),
+            Err(e) => {
+                let printed = std::mem::take(&mut state.failed_out);
+                crate::server::copy::view::print_to_client(state, id, &printed);
+                show_message(state, id, e.trim_end());
+                run.cmds.clear();
+            }
         }
         let Some(wait) = wait else {
             continue;
@@ -3040,9 +3054,10 @@ fn run_from(state: &mut State, mut run: BindingRun) {
         changed(state);
         let jobs = state.jobs.clone();
         tokio::spawn(async move {
-            let error = wait.await;
+            let waited = wait.await;
             let job: crate::server::Job = Box::new(move |state: &mut State| {
-                if let Some(e) = error {
+                crate::server::copy::view::print_to_client(state, run.id, &waited.out);
+                if let Some(e) = waited.err {
                     show_message(state, run.id, e.trim_end());
                     run.cmds.clear();
                 }
@@ -3067,15 +3082,19 @@ fn binding_wait(state: &mut State, id: ClientId) -> Option<BindingWait> {
     if let Some(rx) = state.deferred_reply.take() {
         return Some(Box::pin(async move {
             match rx.await {
-                Ok(Err(f)) if !f.err.is_empty() => Some(f.err),
-                _ => None,
+                Ok(Ok(out)) => Waited { out, err: None },
+                Ok(Err(f)) => Waited {
+                    out: f.out,
+                    err: (!f.err.is_empty()).then_some(f.err),
+                },
+                Err(_) => Waited::default(),
             }
         }));
     }
     let rx = hooks::take_client_wait(state, id)?;
     Some(Box::pin(async move {
         let _ = rx.await;
-        None
+        Waited::default()
     }))
 }
 

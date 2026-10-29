@@ -23,6 +23,7 @@
 pub mod pipe;
 pub mod search;
 pub mod select;
+pub mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,7 @@ use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
+use crate::cmd;
 use crate::protocol::Dialect;
 use crate::server::dispatch::options;
 use crate::server::imgstore::PaneImages;
@@ -44,6 +46,8 @@ use crate::types::{ClientId, PaneId, Rect};
 
 /// `#{pane_mode}` while a pane is in copy mode.
 pub const MODE_NAME: &str = "copy-mode";
+/// `#{pane_mode}` while it shows command output.
+pub const VIEW_MODE_NAME: &str = "view-mode";
 /// The key table copy mode uses with `mode-keys vi`.
 pub const VI_TABLE: &str = "copy-mode-vi";
 /// The key table with `mode-keys emacs` (not shipped, spec §4.11).
@@ -97,11 +101,15 @@ impl Copies {
 
     /// Leaves copy mode in `pane`; whether it was in it.
     pub fn remove(&mut self, pane: PaneId) -> bool {
-        let Some(mode) = self.modes.remove(&pane) else {
+        let Some(mut mode) = self.modes.remove(&pane) else {
             return false;
         };
         if let Some(last) = search::remember(&mode) {
             self.searches.insert(pane, last);
+        }
+        // A view mode opened over copy mode gives the pane back to it.
+        if let Some(under) = mode.under.take() {
+            self.modes.insert(pane, *under);
         }
         true
     }
@@ -127,7 +135,7 @@ struct Cell {
 /// A cell an intact tab covers.
 const TAB_PAD: char = '\0';
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Row {
     /// Trailing default blanks are dropped.
     cells: Vec<Cell>,
@@ -136,11 +144,14 @@ struct Row {
     /// The OSC 133 marks of the row ([`marks`]: `GRID_LINE_START_PROMPT`
     /// and `GRID_LINE_START_OUTPUT`).
     mark: u8,
+    /// When the row went into the history (tmux's `grid_line.time`), in
+    /// seconds; only a view mode's rows have one.
+    time: u64,
 }
 
 /// A copy of a pane's history and screen (tmux's backing screen): `hsize`
 /// history rows, then `sy` screen rows, `sx` columns.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Grid {
     pub sx: usize,
     pub hsize: usize,
@@ -319,6 +330,7 @@ impl Grid {
             cells: Vec::with_capacity(cells.len()),
             wrapped,
             mark: 0,
+            time: 0,
         };
         // The cell with the latest interned look, and that look.
         let mut last: Option<(usize, u32)> = None;
@@ -916,6 +928,11 @@ pub struct Mode {
     pub search_str: Option<String>,
     /// The search's and the jumps' own state (TM.3).
     pub search: search::Search,
+    /// A view mode (tmux's `window_view_mode`): the text is a command's
+    /// output, not the pane's.
+    pub view: bool,
+    /// The copy mode a view mode was opened over, which `q` gives back.
+    pub under: Option<Box<Mode>>,
 }
 
 /// Where `recentre-top-bottom` puts the cursor's line next.
@@ -973,6 +990,8 @@ impl Mode {
             sel: select::Sel::default(),
             search_str: None,
             search: search::Search::default(),
+            view: false,
+            under: None,
         }
     }
 
@@ -2282,7 +2301,8 @@ fn resize_pending(state: &State, pane: PaneId) -> bool {
     let (Some(p), Some(m)) = (state.model.panes.get(&pane), state.copy.get(pane)) else {
         return false;
     };
-    m.grid.sy != usize::from(p.rows) || m.grid.sx != usize::from(p.cols)
+    // The text of a view mode is not the pane's to read again.
+    !m.view && (m.grid.sy != usize::from(p.rows) || m.grid.sx != usize::from(p.cols))
 }
 
 // ponytail: a pane resized in copy mode gets a fresh copy at its new size
@@ -2311,8 +2331,9 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
     }
     let mode = state.copy.get(pane)?;
     Some(match name {
-        "pane_in_mode" => "1".to_string(),
-        "pane_mode" => MODE_NAME.to_string(),
+        "pane_in_mode" => if mode.under.is_some() { "2" } else { "1" }.to_string(),
+        "pane_mode" => if mode.view { VIEW_MODE_NAME } else { MODE_NAME }.to_string(),
+        "top_line_time" => mode.grid.row_time(mode.grid.hsize - mode.oy).to_string(),
         "copy_cursor_x" => mode.cx.to_string(),
         "copy_cursor_y" => mode.cy.to_string(),
         "scroll_position" => mode.oy.to_string(),
@@ -2488,13 +2509,8 @@ impl Overlay for CopyOverlay {
                     put(x, y, cell);
                 }
             }
-            if !mode.hide_position {
-                let label = format!("[{}/{}]", mode.oy, mode.grid.hsize);
-                let s = style("mode-style", MODE_STYLE);
-                let start = cols.saturating_sub(label.len());
-                for (i, c) in label.chars().take(cols).enumerate() {
-                    put(start + i, 0, styled(c, &s));
-                }
+            if !mode.hide_position && mode.grid.sy > 1 {
+                position_label(state, pane, mode, cols, &mut |x, cell| put(x, 0, cell));
             }
             if mode.cx >= cols && mode.cy < rows {
                 put(
@@ -2539,6 +2555,80 @@ impl Overlay for CopyOverlay {
                 );
                 screenimg::mark_covered(screen, from);
             }
+        }
+    }
+}
+
+/// `copy-mode-position-format` on the view's first row (tmux's
+/// `window_copy_write_line`): its columns are drawn over the row's text,
+/// in `copy-mode-position-style`.
+fn position_label(
+    state: &State,
+    pane: PaneId,
+    mode: &Mode,
+    cols: usize,
+    put: &mut dyn FnMut(usize, SnapCell),
+) {
+    use crate::server::dispatch::options::{FormatCtx, ServerVars};
+    use unicode_width::UnicodeWidthChar;
+    let chain = options::chain(&state.model, pane);
+    let fmt = state
+        .model
+        .options
+        .lookup("copy-mode-position-format", &chain)
+        .unwrap_or_default();
+    if fmt.is_empty() {
+        return;
+    }
+    let vars = FormatCtx::new(&state.model, pane);
+    let vars = ServerVars::new(state, pane, &vars);
+    let expanded = cmd::expand(fmt, &vars);
+    if expanded.is_empty() {
+        return;
+    }
+    let style = state
+        .model
+        .options
+        .lookup("copy-mode-position-style", &chain)
+        .unwrap_or(MODE_STYLE);
+    let base = status::base_style(style, &vars);
+    let top = mode.grid.hsize - mode.oy;
+    let under: Vec<(char, Style)> = (0..cols)
+        .map(|x| {
+            let cell = mode.grid.snap(x, top);
+            let look = Style {
+                fg: cell.fg,
+                bg: cell.bg,
+                attrs: cell.flags & STYLE_FLAGS,
+                underline_color: cell.underline_color,
+            };
+            (cell.c, look)
+        })
+        .collect();
+    let drawn = status::draw_over(&expanded, base, &under);
+    let mut x = 0;
+    for span in &drawn.line.spans {
+        for c in span.text.chars() {
+            let w = c.width().unwrap_or(0);
+            if w == 0 {
+                continue;
+            }
+            if x + w > cols {
+                return;
+            }
+            if under.get(x) != Some(&(c, span.style)) {
+                let mut cell = styled(c, &span.style);
+                if w == 2 {
+                    cell.flags.insert(CellFlags::WIDE_CHAR);
+                }
+                put(x, cell);
+                if w == 2 {
+                    let mut spacer = styled(' ', &span.style);
+                    spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
+                    put(x + 1, spacer);
+                }
+            }
+            x += w;
         }
     }
 }
