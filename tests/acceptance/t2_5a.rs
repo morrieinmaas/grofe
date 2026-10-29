@@ -234,6 +234,53 @@ fn a_client_that_stops_reading_does_not_delay_another() {
     drop(stuck);
 }
 
+/// A pane that floods must not stall the server's other I/O: a request,
+/// on an open connection or a new one (what an attach makes three of
+/// before its first frame), is answered in milliseconds. The pane reader
+/// used to yield only when its coop budget ran out, so the runtime polled
+/// its I/O driver about every two seconds of a debug flood, and an attach
+/// could wait over ten for its first frame.
+#[test]
+fn a_flooding_pane_does_not_stall_other_requests() {
+    let srv = TestServer::start();
+    let mut control = Control::connect(&srv);
+    control.cmd(&["list-sessions"]).ok();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "23",
+        "exec seq 1 1000000000",
+    ])
+    .expect("new-session");
+    let flood = Instant::now();
+    let mut worst = (Duration::ZERO, Duration::ZERO);
+    let mut n = 0;
+    while flood.elapsed() < Duration::from_secs(6) {
+        let asked = Instant::now();
+        control.cmd(&["list-sessions"]).expect("list-sessions");
+        worst = worst.max((asked.elapsed(), flood.elapsed()));
+        n += 1;
+        if n % 10 == 0 {
+            let asked = Instant::now();
+            Control::connect(&srv)
+                .cmd(&["list-sessions"])
+                .expect("list-sessions on a new connection");
+            worst = worst.max((asked.elapsed(), flood.elapsed()));
+        }
+        sleep(Duration::from_millis(20));
+    }
+    let (took, at) = worst;
+    assert!(
+        took < Duration::from_secs(1),
+        "a request took {took:?}, answered {at:?} into the flood"
+    );
+}
+
 /// One control connection to the server, for timing requests without a
 /// CLI spawn each.
 struct Control {

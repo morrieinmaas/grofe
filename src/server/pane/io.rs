@@ -179,6 +179,7 @@ pub(crate) async fn reader(mut r: Reader) {
     while !(drained && exit.is_some()) {
         let mut tapped = None;
         let mut found = Vec::new();
+        let mut read = false;
         let sync = lock(&r.emu)
             .parser
             .sync_timeout()
@@ -199,6 +200,7 @@ pub(crate) async fn reader(mut r: Reader) {
                         r.pipe.tee(&buf[..n]);
                         found = r.feed(&buf[..n]);
                         quiet_since = Instant::now();
+                        read = true;
                         if OUTPUT_TAP.load(Ordering::Relaxed) {
                             tapped = Some(buf[..n].to_vec());
                         }
@@ -231,6 +233,14 @@ pub(crate) async fn reader(mut r: Reader) {
         // chunk or cwd would not come again.
         for kind in found {
             let _ = r.to_actor.send(r.event(kind)).await;
+        }
+        // A pane that never stops writing keeps its fd readable, so without
+        // this the task only yields when its coop budget runs out, and the
+        // worker polls the I/O driver once per 61 of those: seconds in which
+        // no connection is accepted or read. `yield_now` waits for a driver
+        // poll before polling this task again.
+        if read {
+            tokio::task::yield_now().await;
         }
     }
     // A child that began a synchronized update and exited before its timeout
