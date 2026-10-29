@@ -402,6 +402,42 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   (`b2b/display-v3`). `confirm-before -t` takes a client by name
   or tty, and `-y`, `-c` and `-b` as tmux.
 
+- **Modes and prompts (WP-A)** are recorded in `golden/wpa/`.
+  What a command run from a key, a menu or a prompt prints shows in a view
+  mode over the client's pane, as tmux's `server_client_print` does (stock
+  `prefix ?`, `#`, `~`, `run-shell`, `show-options`, `display -p`,
+  `new-window -P`, `show-buffer`): it wraps at the pane width, scrolls into
+  a history, takes copy mode's keys (`q` leaves; a copy mode under it comes
+  back; with a clock under it the clock does) and draws
+  `copy-mode-position-format` on its first row, `#{top_line_time}` included
+  for its own lines. `run-shell` prints its lines there (an empty one adds
+  nothing, except with `-b` or `-t`, which print into the target pane or the
+  pane tmux finds with no client), and an error shows on the status line with
+  a capital. `choose-tree`, `choose-client` and `choose-buffer` take
+  `-F -f -K -N -O -r -G -y -t -Z` and a template whose `%%` is the item as a
+  target (`=session:`, `=session:index.`, `=session:index.%pane`, a client's
+  tty, a buffer's name), and have mode-tree's keys: line keys, `O` and `r`
+  (sort), `t T C-t` (tags; `t` moves down), `/ ? C-s n N` (search), `f`
+  (filter), `v` (preview size), `x X` (kill after asking), `:` (a command per
+  tagged item), `m M`, `S-Up S-Down J K` (swap windows, index order only), `H`
+  and the folds, `mode-style` for the current line. `command-prompt` draws in
+  `message-style` (`message-command-style` in vi's command mode), completes a
+  command name with Tab (to what the candidates share), moves by words with
+  `M-b M-f C-Left C-Right`, has `status-keys vi`, `C-t C-y C-v`, `-e`, `-t`
+  and one prompt per `-p` entry. `customize-mode` (stock `prefix C`) lists the
+  server, session, window and pane options and the key tables with tmux's
+  descriptions, cycles a flag or a choice, prompts for a value, unsets and
+  resets, hides global values (`H`), and edits a key's command, note and
+  repeat flag. Not done: the mouse in the choosers and in customize-mode, the
+  `F1` help popup and `e` (edit a buffer) there, tmux's frozen pane while a
+  chooser prompt is open, the candidate menu of an ambiguous Tab and the
+  `-t` / `-s` target completions, `d` and `D` on a key and its "The default
+  is:" line in customize-mode (and options grofe does not have), pane copy
+  mode's `#{top_line_time}` (a pane's lines carry no time), the
+  `switch-client -Z` zoom, and the activity sort of panes. tmux 3.7b loops
+  forever when a customize-mode `-f` filter rejects a key and can die when a
+  key is unset under the open mode; grofe does neither.
+
 ## Key parity
 
 `scripts/key-parity.sh` (plan M3.7, TP.9a and TP.9b) loads the owner's

@@ -2984,6 +2984,16 @@ pub(crate) fn run_commands_for(
     run_from(state, run);
 }
 
+/// `text` with a capital first letter, as tmux's `cmdq_error` shows an error
+/// on an attached client's status line.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// What a held [`BindingRun`] waits for; the error to show, if the held
 /// commands failed.
 type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Waited> + Send>>;
@@ -3039,7 +3049,7 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             Err(e) => {
                 let printed = std::mem::take(&mut state.failed_out);
                 crate::server::copy::view::print_to_client(state, id, &printed);
-                show_message(state, id, e.trim_end());
+                show_message(state, id, &capitalized(e.trim_end()));
                 run.cmds.clear();
             }
         }
@@ -3058,7 +3068,7 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             let job: crate::server::Job = Box::new(move |state: &mut State| {
                 crate::server::copy::view::print_to_client(state, run.id, &waited.out);
                 if let Some(e) = waited.err {
-                    show_message(state, run.id, e.trim_end());
+                    show_message(state, run.id, &capitalized(e.trim_end()));
                     run.cmds.clear();
                 }
                 run_from(state, run);

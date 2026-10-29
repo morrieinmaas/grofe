@@ -2119,6 +2119,10 @@ pub fn page_down(state: &mut State, pane: PaneId, scroll_exit: bool) {
 
 /// A fresh copy of `pane` for its mode (`refresh-from-pane`).
 pub fn refresh(state: &mut State, pane: PaneId) {
+    // A view mode's text is not the pane's.
+    if state.copy.get(pane).is_some_and(|m| m.view) {
+        return;
+    }
     let source = state.copy.get(pane).and_then(|m| m.source).unwrap_or(pane);
     let Some(p) = state.model.panes.get(&source) else {
         return;

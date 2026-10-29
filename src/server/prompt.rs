@@ -1627,6 +1627,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         .then(|| state.model.resolve_pane(&c.target, ctx).ok())
         .flatten();
     let to_pane = explicit.is_some();
+    let keep_blank = to_pane || c.background;
     // A binding's output shows over its client's pane, the lines as the
     // job prints them.
     let viewer = ctx.client.filter(|id| state.clients.contains_key(id));
@@ -1650,7 +1651,9 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
                 Err(f) => std::mem::take(&mut f.out),
             };
             let job: crate::server::Job = Box::new(move |state: &mut State| {
-                crate::server::copy::view::print_shell(state, explicit, viewer, &printed);
+                crate::server::copy::view::print_shell(
+                    state, explicit, viewer, &printed, keep_blank,
+                );
             });
             let _ = jobs_tx.send(job).await;
         }

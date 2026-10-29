@@ -327,10 +327,17 @@ fn pane_from_nothing(state: &State) -> Option<PaneId> {
     model.windows.get(&session.active).map(|w| w.active)
 }
 
-/// What `run-shell` printed: lines, the empty ones dropped
-/// (`cmd_run_shell_print`), in the view mode of `pane`, else of the
-/// pane [`pane_from_nothing`] finds.
-pub fn print_shell(state: &mut State, pane: Option<PaneId>, client: Option<ClientId>, text: &str) {
+/// What `run-shell` printed, in the view mode of `pane`, else of the
+/// client's pane, else of the pane [`pane_from_nothing`] finds. Through a
+/// client's `cmdq_print` an empty line adds nothing; added to a pane
+/// (`-b`, `-t`) it is a blank line (`keep_blank`).
+pub fn print_shell(
+    state: &mut State,
+    pane: Option<PaneId>,
+    client: Option<ClientId>,
+    text: &str,
+    keep_blank: bool,
+) {
     if text.is_empty() {
         return;
     }
@@ -339,7 +346,7 @@ pub fn print_shell(state: &mut State, pane: Option<PaneId>, client: Option<Clien
         .or_else(|| client.and_then(|c| active_pane(state, c)))
         .or_else(|| pane_from_nothing(state));
     if let Some(pane) = pane {
-        print(state, pane, text, false);
+        print(state, pane, text, keep_blank);
     }
 }
 
