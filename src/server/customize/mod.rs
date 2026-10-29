@@ -724,11 +724,20 @@ fn draw_key(state: &State, table: &str, key: &Key, page: &mut Page) {
     if page.at_end() {
         return;
     }
-    let command = b
-        .shown
-        .clone()
-        .unwrap_or_else(|| options::tmux_command_line(&b.cmds));
-    page.text(&format!("Command: {command}"), false, None);
+    let shown = |b: &crate::server::input::Binding| {
+        b.shown
+            .clone()
+            .unwrap_or_else(|| options::tmux_command_line(&b.cmds))
+    };
+    let command = shown(b);
+    if !page.text(&format!("Command: {command}"), false, None) {
+        return;
+    }
+    if let Some(default) = state.registry.key_tables.default_of(table, key)
+        && shown(&default) != command
+    {
+        page.text(&format!("The default is: {}", shown(&default)), false, None);
+    }
 }
 
 fn draw_option(
@@ -1119,6 +1128,16 @@ pub fn toggle_key_repeat(state: &mut State, table: &str, key: &Key) {
 
 pub fn unbind_key(state: &mut State, table: &str, key: &Key) {
     state.registry.key_tables.unbind_runtime(table, key);
+}
+
+/// `window_customize_reset_key`: the key's default binding back, or none.
+pub fn reset_key(state: &mut State, table: &str, key: &Key) {
+    state.registry.key_tables.reset_to_default(table, key);
+}
+
+/// Whether resetting `key` leaves it bound.
+pub fn key_has_default(state: &State, table: &str, key: &Key) -> bool {
+    state.registry.key_tables.default_of(table, key).is_some()
 }
 
 #[cfg(test)]

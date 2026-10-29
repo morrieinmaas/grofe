@@ -1,0 +1,391 @@
+$ new-session -d -s main -n one -x 70 -y 30 cat
+? 0
+$ set -g status off
+? 0
+$ bind-key C customize-mode -Z -f '#{||:#{m:status-left-length,#{option_name}},#{is_key}}'
+? 0
+$ bind-key -T mytab F5 display-message five
+? 0
+$ bind-key -T mytab F6 display-message six
+? 0
+$ bind-key C-z display-message zz
+? 0
+client 70x30 attach -t main
+keys C-b C
+$ run-shell 'sleep 0.5'
+? 0
+screen Session Options
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) + Key Table - mytab
+| (6) + Key Table - prefix
+| (7) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Server Options (filter: active) ───────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys /
+$ run-shell 'sleep 0.5'
+? 0
+screen (search)
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) + Key Table - mytab
+| (6) + Key Table - prefix
+| (7) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Server Options (filter: active) ───────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (search)
+keys F5 Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen F5
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) - Key Table - mytab
+| (6) ├─> + F5
+| (7) └─> + F6
+| (8) + Key Table - prefix
+| (9) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ F5 (filter: active) ───────────────────────────────────────────────┐
+| │ There is no note for this key.                                     │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message five                                      │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys w
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) - Key Table - mytab
+| (6) ├─> + F5
+| (7) └─> + F6
+| (8) + Key Table - prefix
+| (9) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ F5 (filter: active) ───────────────────────────────────────────────┐
+| │ There is no note for this key.                                     │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message five                                      │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys d
+$ run-shell 'sleep 0.5'
+? 0
+screen Reset
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) - Key Table - mytab
+| (6) ├─> + F5
+| (7) └─> + F6
+| (8) + Key Table - prefix
+| (9) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ F5 (filter: active) ───────────────────────────────────────────────┐
+| │ There is no note for this key.                                     │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message five                                      │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| Reset F5 to default?
+keys y
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) - Key Table - mytab
+| (6) └─> + F6
+| (7) + Key Table - prefix
+| (8) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Key Table - mytab (filter: active) ────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ list-keys -T mytab
+? 0
+keys /
+$ run-shell 'sleep 0.5'
+? 0
+screen (search)
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) - Key Table - mytab
+| (6) └─> + F6
+| (7) + Key Table - prefix
+| (8) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Key Table - mytab (filter: active) ────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (search)
+keys C - z Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen C-z
+|       ├─> + Right
+|       ├─> + M-1
+|       ├─> + M-2
+|       ├─> + M-3
+|       ├─> + M-4
+|       ├─> + M-5
+|       ├─> + M-6
+|       ├─> + M-7
+|       ├─> + M-n
+|       ├─> + M-o
+|       ├─> + M-p
+|       ├─> + M-Up
+|       ├─> + M-Down
+|       ├─> + M-Left
+|       ├─> + M-Right
+|       ├─> + C-b
+|       ├─> + C-o
+|       ├─> + C-z
+| ┌ C-z (filter: active) ──────────────────────────────────────────────┐
+| │ There is no note for this key.                                     │
+| │                                                                    │
+| │ This key is in the prefix table.                                   │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message zz                                        │
+| │ The default is: suspend-client                                     │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys d
+$ run-shell 'sleep 0.5'
+? 0
+screen Reset
+|       ├─> + Right
+|       ├─> + M-1
+|       ├─> + M-2
+|       ├─> + M-3
+|       ├─> + M-4
+|       ├─> + M-5
+|       ├─> + M-6
+|       ├─> + M-7
+|       ├─> + M-n
+|       ├─> + M-o
+|       ├─> + M-p
+|       ├─> + M-Up
+|       ├─> + M-Down
+|       ├─> + M-Left
+|       ├─> + M-Right
+|       ├─> + C-b
+|       ├─> + C-o
+|       ├─> + C-z
+| ┌ C-z (filter: active) ──────────────────────────────────────────────┐
+| │ There is no note for this key.                                     │
+| │                                                                    │
+| │ This key is in the prefix table.                                   │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message zz                                        │
+| │ The default is: suspend-client                                     │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| Reset C-z to default?
+keys y
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|       ├─> + Right
+|       ├─> + M-1
+|       ├─> + M-2
+|       ├─> + M-3
+|       ├─> + M-4
+|       ├─> + M-5
+|       ├─> + M-6
+|       ├─> + M-7
+|       ├─> + M-n
+|       ├─> + M-o
+|       ├─> + M-p
+|       ├─> + M-Up
+|       ├─> + M-Down
+|       ├─> + M-Left
+|       ├─> + M-Right
+|       ├─> + C-b
+|       ├─> + C-o
+|       ├─> + C-z
+| ┌ C-z (filter: active) ──────────────────────────────────────────────┐
+| │ Suspend the current client.                                        │
+| │                                                                    │
+| │ This key is in the prefix table.                                   │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: suspend-client                                            │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ list-keys -T prefix C-z
+? 0
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

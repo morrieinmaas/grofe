@@ -1718,8 +1718,8 @@ fn custom_change(
             Entry::Group => return Routed::Consumed,
         };
         if reset {
-            // Only a whole option resets.
-            if !matches!(first, Entry::Option { idx: None, .. }) {
+            // An array item does not reset; a whole option or a key does.
+            if matches!(first, Entry::Option { idx: Some(_), .. }) {
                 return Routed::Consumed;
             }
             format!("Reset {name} to default? ")
@@ -1727,19 +1727,25 @@ fn custom_change(
             format!("Unset {name}? ")
         }
     };
-    // Unsetting the key under the cursor first folds it and steps up
-    // (`window_customize_unset_key`).
-    let step_up = (!reset && !tagged && matches!(first, Entry::Key { .. } | Entry::Field { .. }))
-        .then(|| {
-            (
-                v.lines.get(current).map(|l| l.tag),
-                current
-                    .checked_sub(1)
-                    .and_then(|i| v.lines.get(i))
-                    .map(|l| l.tag),
-                current,
-            )
-        });
+    // Unsetting the key under the cursor, or resetting one with no
+    // default, first folds it and steps up (`window_customize_unset_key`,
+    // `window_customize_reset_key`).
+    let goes = match first {
+        Entry::Key { table, key } | Entry::Field { table, key, .. } => {
+            !reset || !customize::key_has_default(state, table, key)
+        }
+        _ => false,
+    };
+    let step_up = (goes && !tagged).then(|| {
+        (
+            v.lines.get(current).map(|l| l.tag),
+            current
+                .checked_sub(1)
+                .and_then(|i| v.lines.get(i))
+                .map(|l| l.tag),
+            current,
+        )
+    });
     ask_yes(state, client, &label, move |state| {
         if let Some((Some(here), Some(above), at)) = step_up
             && let Some(tree) = state.trees.open.get_mut(&client)
@@ -1760,7 +1766,10 @@ fn custom_change(
                         state, fs, scope, &name, idx, reset,
                     ));
                 }
-                Entry::Key { table, key } | Entry::Field { table, key, .. } if !reset => {
+                Entry::Key { table, key } | Entry::Field { table, key, .. } if reset => {
+                    customize::reset_key(state, &table, &key);
+                }
+                Entry::Key { table, key } | Entry::Field { table, key, .. } => {
                     customize::unbind_key(state, &table, &key);
                 }
                 _ => {}
@@ -1788,6 +1797,14 @@ fn custom_key(
     let routed = match ch {
         _ if enter => custom_enter(state, client, v, current, false, true),
         Some('s') => custom_enter(state, client, v, current, false, true),
+        // `w` sets a window option; tmux ignores it on a key.
+        Some('w')
+            if custom_tag(v, current)
+                .and_then(|t| custom_entry(state, client, t))
+                .is_some_and(|(e, _)| matches!(e, Entry::Key { .. } | Entry::Field { .. })) =>
+        {
+            Routed::Consumed
+        }
         Some('w') => custom_enter(state, client, v, current, false, false),
         Some('S' | 'W') => custom_enter(state, client, v, current, true, false),
         Some('d') => custom_change(state, client, v, current, true, false),

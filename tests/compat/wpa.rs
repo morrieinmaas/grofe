@@ -42,3 +42,8 @@ fn customize_mode_matches_tmux() {
 fn more_binding_output_matches_tmux() {
     check("wpa", "view-more", &[]);
 }
+
+#[test]
+fn customize_mode_resets_keys_and_ignores_w_on_them() {
+    check("wpa", "customize-keys", &[]);
+}

@@ -1114,6 +1114,25 @@ impl KeyTables {
         }
     }
 
+    /// The binding `key` has in `table` on a fresh server: grofe's default
+    /// tables, made tmux's stock ones as this server's are.
+    pub fn default_of(&self, table: &str, key: &Key) -> Option<Binding> {
+        let mut stock = default_bindings();
+        if self.tmux_stock {
+            stock.use_tmux_stock();
+        }
+        stock.exact(table, key).cloned()
+    }
+
+    /// `key_bindings_reset`: `key` in `table` gets its default binding
+    /// back, or is unbound when it has none.
+    pub fn reset_to_default(&mut self, table: &str, key: &Key) {
+        match self.default_of(table, key) {
+            Some(b) => self.insert(table, *key, b),
+            None => self.unbind_runtime(table, key),
+        }
+    }
+
     /// Every key bound in `table`, sorted by name (stable output).
     pub fn keys(&self, table: &str) -> Vec<Key> {
         let mut keys: Vec<Key> = self
@@ -4320,6 +4339,28 @@ mod tests {
     fn words(b: &Binding) -> Vec<&str> {
         assert_eq!(b.cmds.len(), 1, "one command");
         b.cmds[0].iter().map(String::as_str).collect()
+    }
+
+    /// customize-mode's `d` on a key (`key_bindings_reset`): a rebound
+    /// stock key gets tmux's binding back, a key with no default goes.
+    #[test]
+    fn a_key_resets_to_its_default_or_goes() {
+        let mut t = default_bindings();
+        t.use_tmux_stock();
+        let cz = parse_key("C-z").unwrap();
+        let stock = t.exact(PREFIX_TABLE, &cz).unwrap().cmds.clone();
+        t.bind(
+            PREFIX_TABLE,
+            cz,
+            vec!["display-message".into(), "zz".into()],
+            false,
+        );
+        t.reset_to_default(PREFIX_TABLE, &cz);
+        assert_eq!(t.exact(PREFIX_TABLE, &cz).unwrap().cmds, stock);
+        let f5 = parse_key("F5").unwrap();
+        t.bind("mytab", f5, vec!["display-message".into()], false);
+        t.reset_to_default("mytab", &f5);
+        assert!(t.exact("mytab", &f5).is_none());
     }
 
     /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a
