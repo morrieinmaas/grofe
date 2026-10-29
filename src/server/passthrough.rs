@@ -636,9 +636,14 @@ fn osc52_store(body: &[u8]) -> Option<PaneEventKind> {
 
 /// An OSC 52 query (`Pc;?`), which asks for the clipboard: the parameter
 /// as sent and how the pane ended the sequence, which its answer ends the
-/// same way.
+/// same way. As tmux's `input_osc_52_parse`, the data is everything after
+/// the first `;` and must be exactly `?`.
 fn osc52_query(body: &[u8], bel: bool) -> Option<PaneEventKind> {
-    let param = body.strip_suffix(b";?")?;
+    let at = body.iter().position(|&b| b == b';')?;
+    let (param, data) = (&body[..at], &body[at + 1..]);
+    if data != b"?" {
+        return None;
+    }
     let param = param
         .iter()
         .map(|&b| b as char)
@@ -1432,6 +1437,9 @@ mod tests {
                     bel: false,
                 }),
             ),
+            // tmux's data is all after the first `;`: `x;?` is not `?`.
+            (b"\x1b]52;c;x;?\x07", None),
+            (b"\x1b]52;?\x07", None),
             (b"\x1b]52;c;\x07", None),
             (b"\x1b]52;c;!!!\x07", None),
             (b"\x1b]52;aGk=\x07", None),
@@ -1439,6 +1447,19 @@ mod tests {
             let (out, events) = scan_all(&[input]);
             assert_eq!(out, input);
             assert_eq!(events.into_iter().next(), want, "{input:?}");
+        }
+        // A query read in two pieces is still one query.
+        let input: &[u8] = b"x\x1b]52;c;?\x1b\\y";
+        for cut in 0..=input.len() {
+            let (a, b) = input.split_at(cut);
+            assert_eq!(
+                scan_all(&[a, b]).1,
+                vec![PaneEventKind::ClipboardQuery {
+                    param: "c".into(),
+                    bel: false,
+                }],
+                "split at {cut}"
+            );
         }
         let mut big = b"\x1b]52;c;".to_vec();
         big.resize(MAX_OSC52 + 10, b'A');
