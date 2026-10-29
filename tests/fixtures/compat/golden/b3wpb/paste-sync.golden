@@ -1,0 +1,59 @@
+$ new-session -d -s main -x 60 -y 15 "printf '\\033[?2004h'; stty -echo; cat -v"
+? 0
+$ split-window -d -t main 'stty -echo; cat -v'
+? 0
+$ split-window -d -t main:.2 "printf '\\033[?2004h'; stty -echo; cat -v"
+? 0
+$ set-option -g status off
+? 0
+$ set-option -w -t main synchronize-panes on
+? 0
+$ run-shell 'sleep 1'
+? 0
+client 60x15 attach -t main
+keys Escape [200~ hi Escape [201~ Enter
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.1
+^[[200~hi^[[201~
+
+
+
+
+
+
+? 0
+$ capture-pane -p -t main:.2
+hi
+
+
+? 0
+$ capture-pane -p -t main:.3
+^[[200~hi^[[201~
+
+
+? 0
+$ select-pane -t main:.2
+? 0
+keys Escape [200~ yo Escape [201~ Enter
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.1
+^[[200~hi^[[201~
+^[[200~yo^[[201~
+
+
+
+
+
+? 0
+$ capture-pane -p -t main:.2
+hi
+yo
+
+? 0
+$ capture-pane -p -t main:.3
+^[[200~hi^[[201~
+^[[200~yo^[[201~
+
+? 0

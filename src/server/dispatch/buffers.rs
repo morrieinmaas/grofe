@@ -380,6 +380,14 @@ pub fn paste_buffer(state: &mut State, ctx: &ClientCtx, c: PasteBuffer) -> Resul
         return Ok(String::new());
     };
     let name = b.name.clone();
+    // tmux pastes nothing into a pane taking no input, but `-d` still
+    // deletes the buffer.
+    if state.model.panes[&pane].input_off {
+        if c.delete {
+            state.buffers.delete(&name);
+        }
+        return Ok(String::new());
+    }
     let handle = &state.model.panes[&pane].handle;
     let separator = match &c.separator {
         Some(s) => s.as_bytes(),

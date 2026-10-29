@@ -2881,6 +2881,27 @@ fn write_input(state: &State, pane: PaneId, bytes: Vec<u8>) {
     }
 }
 
+/// Whether keys written to `pane` reach it: it is alive and was not
+/// stopped by `select-pane -d` (tmux's `fd != -1` and `PANE_INPUTOFF`).
+pub(crate) fn takes_input(state: &State, pane: PaneId) -> bool {
+    state
+        .model
+        .panes
+        .get(&pane)
+        .is_some_and(|p| p.dead.is_none() && !p.input_off)
+}
+
+/// tmux's `window_pane_copy_key`: `key`, just written to `pane`, goes to
+/// its [`sync_targets`] as well, encoded for each one's own modes.
+pub(crate) fn copy_key(state: &State, pane: PaneId, key: &crate::server::input::Key) {
+    for other in sync_targets(state, pane) {
+        let bytes = crate::server::input::encode(key, &state.model.panes[&other].handle.modes());
+        if !bytes.is_empty() {
+            write_input(state, other, bytes);
+        }
+    }
+}
+
 /// Whether `pane` shows a mode (copy, clock, a chooser), which takes the
 /// keys instead of the program.
 fn pane_in_mode(state: &State, pane: PaneId) -> bool {
@@ -2916,13 +2937,7 @@ pub(crate) fn sync_targets(state: &State, pane: PaneId) -> Vec<PaneId> {
         .into_iter()
         .filter(|p| *p != pane)
         .filter(|p| !w.zoomed || *p == w.active)
-        .filter(|p| {
-            model
-                .panes
-                .get(p)
-                .is_some_and(|q| q.dead.is_none() && !q.input_off)
-        })
-        .filter(|p| !pane_in_mode(state, *p) && on(*p))
+        .filter(|p| takes_input(state, *p) && !pane_in_mode(state, *p) && on(*p))
         .collect()
 }
 
@@ -2982,27 +2997,26 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             let Some(pane) = pane else {
                 return;
             };
-            if state.model.panes.get(&pane).is_none_or(|p| p.input_off) {
+            // A focus report goes in whatever the pane takes, as tmux's
+            // `window_pane_update_focus`; keys and pastes stop at a pane
+            // that takes no input or has exited (`window_pane_key`).
+            if !matches!(input, Input::Focus(_)) && !takes_input(state, pane) {
                 return;
             }
-            let others = match input {
-                Input::Key(_) | Input::Paste { .. } => sync_targets(state, pane),
-                _ => Vec::new(),
-            };
-            write_input(state, pane, bytes.clone());
-            for other in others {
-                let Some(p) = state.model.panes.get(&other) else {
-                    continue;
-                };
-                // A key is encoded for each pane's own modes; a paste
-                // goes through as the active pane got it.
-                let bytes = match &input {
-                    Input::Key(key) => crate::server::input::encode(key, &p.handle.modes()),
-                    _ => bytes.clone(),
-                };
-                if !bytes.is_empty() {
-                    write_input(state, other, bytes);
+            write_input(state, pane, bytes);
+            match &input {
+                Input::Key(key) => copy_key(state, pane, key),
+                Input::Paste { data, start, end } => {
+                    // tmux's `window_pane_copy_paste` copies the text as
+                    // is; the paste markers are keys, written to each pane
+                    // as its own mode asks (`input_key_pane`).
+                    for other in sync_targets(state, pane) {
+                        let modes = state.model.panes[&other].handle.modes();
+                        let bytes = crate::server::input::encode_paste(data, *start, *end, &modes);
+                        write_input(state, other, bytes);
+                    }
                 }
+                _ => {}
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),

@@ -592,6 +592,10 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         copy::command_in(state, pane, &args)?;
         return Ok(String::new());
     }
+    // tmux resets the target before typing anything, `-K` or not.
+    if c.reset {
+        state.model.panes[&pane].handle.reset_state();
+    }
     // `-K`: the keys are typed on the client, bindings and all, whatever
     // pane they end up in.
     if c.client_key {
@@ -608,17 +612,31 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         let Some(client) = client else {
             return Ok(String::new());
         };
-        for _ in 0..repeat.min(copy::MAX_REPEAT) {
+        // A typed key runs its binding at once, so a binding that types
+        // itself would recurse until the stack overflows and the server
+        // dies. tmux queues the keys and spins instead.
+        // ponytail: grofe stops at a depth tmux has no limit for.
+        // Once the limit is hit, every level stops typing.
+        thread_local!(static TYPING: std::cell::Cell<(u32, bool)> = const { std::cell::Cell::new((0, false)) });
+        let (depth, _) = TYPING.get();
+        if depth >= MAX_TYPING_DEPTH {
+            TYPING.set((depth, true));
+            return Err("send-keys: -K nested too deeply".to_string());
+        }
+        TYPING.set((depth + 1, false));
+        'typing: for _ in 0..repeat.min(copy::MAX_REPEAT) {
             for item in &c.items {
                 for key in typed_keys(item) {
                     clients::type_key(state, client, key);
+                    if TYPING.get().1 {
+                        break 'typing;
+                    }
                 }
             }
         }
+        let tripped = TYPING.get().1 && depth > 0;
+        TYPING.set((depth, tripped));
         return Ok(String::new());
-    }
-    if c.reset {
-        state.model.panes[&pane].handle.reset_state();
     }
     if c.items.is_empty() {
         return Ok(String::new());
@@ -666,10 +684,10 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         }
         return Ok(String::new());
     }
-    // As tmux's `window_pane_key`: a pane that takes no input drops the
-    // keys, and with `synchronize-panes` they go to the window's other
-    // panes as well, each encoded for its own modes.
-    if state.model.panes[&pane].input_off {
+    // As tmux's `window_pane_key`: a pane that takes no input (or has
+    // exited) drops the keys, and with `synchronize-panes` they go to the
+    // window's other panes as well, each encoded for its own modes.
+    if !clients::takes_input(state, pane) {
         return Ok(String::new());
     }
     let mut targets = vec![pane];
@@ -708,6 +726,9 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
     }
     Ok(String::new())
 }
+
+/// How deep `send-keys -K` may run inside the bindings of keys it typed.
+const MAX_TYPING_DEPTH: u32 = 16;
 
 /// Most bytes `send-keys` queues at once.
 const SEND_CHUNK: usize = 64 * 1024;
@@ -774,14 +795,19 @@ pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<
     let Some(key) = prefix else {
         return Ok(String::new());
     };
-    let handle = &model.panes[&pane].handle;
-    let bytes = input::encode(&key, &handle.modes());
-    if bytes.is_empty() {
+    // As any key, through tmux's `window_pane_key`: not into a pane that
+    // takes no input, and copied to the panes synchronized with it.
+    if !clients::takes_input(state, pane) {
         return Ok(String::new());
     }
-    handle
-        .enqueue_input(bytes)
-        .map_err(|e| format!("send-prefix: {pane}: {e}"))?;
+    let handle = &model.panes[&pane].handle;
+    let bytes = input::encode(&key, &handle.modes());
+    if !bytes.is_empty() {
+        handle
+            .enqueue_input(bytes)
+            .map_err(|e| format!("send-prefix: {pane}: {e}"))?;
+    }
+    clients::copy_key(state, pane, &key);
     Ok(String::new())
 }
 
