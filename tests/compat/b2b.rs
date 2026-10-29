@@ -128,3 +128,8 @@ fn an_incremental_prompt_searches_again_on_the_keys_tmux_does() {
 fn pipe_commands_expand_tmux_s_short_forms() {
     check("b2b", "pipe-forms", &[]);
 }
+
+#[test]
+fn prompt_history_is_kept_per_type() {
+    check("b2b", "prompt-history", &[]);
+}

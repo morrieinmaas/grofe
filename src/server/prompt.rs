@@ -49,15 +49,20 @@ const PROMPT_STYLE: &str = "bg=yellow,fg=black";
 // ponytail: fixed until `word-separators` is an option (M5 copy mode).
 const WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
 
-/// Every client's open prompt and the server-wide history.
+/// tmux 3.7b's prompt types (`command-prompt -T`), each with a history
+/// of its own; a prompt is `command` unless `-T` says otherwise.
+const PROMPT_TYPES: [&str; 4] = ["command", "search", "target", "window-target"];
+
+/// Every client's open prompt and the server-wide histories.
 #[derive(Debug, Default)]
 pub struct Prompts {
     open: BTreeMap<ClientId, Prompt>,
     /// The CLI replies of `command-prompt`s waiting for their prompt to
     /// close.
     waiting: BTreeMap<ClientId, oneshot::Sender<Result<String, Failure>>>,
-    /// Lines entered at any prompt, newest last.
-    history: Vec<String>,
+    /// Lines entered at the prompts of each of [`PROMPT_TYPES`], newest
+    /// last.
+    history: [Vec<String>; PROMPT_TYPES.len()],
 }
 
 impl Prompts {
@@ -79,15 +84,17 @@ impl Prompts {
         self.open.remove(&id)
     }
 
-    /// Adds an entered line: empty lines and a repeat of the newest are
-    /// skipped, the oldest go past [`HISTORY_LIMIT`].
-    fn remember(&mut self, line: &str) {
-        if line.is_empty() || self.history.last().is_some_and(|l| l == line) {
+    /// Adds a line entered at a prompt of type `kind`: empty lines and a
+    /// repeat of the newest are skipped, the oldest go past
+    /// [`HISTORY_LIMIT`].
+    fn remember(&mut self, kind: usize, line: &str) {
+        let history = &mut self.history[kind];
+        if line.is_empty() || history.last().is_some_and(|l| l == line) {
             return;
         }
-        self.history.push(line.to_string());
-        let over = self.history.len().saturating_sub(HISTORY_LIMIT);
-        self.history.drain(..over);
+        history.push(line.to_string());
+        let over = history.len().saturating_sub(HISTORY_LIMIT);
+        history.drain(..over);
     }
 }
 
@@ -131,6 +138,8 @@ struct Prompt {
     /// `confirm-before`: the key that confirms, and whether Enter does.
     confirm_key: char,
     default_yes: bool,
+    /// Which of [`PROMPT_TYPES`] the prompt is, so which history it walks.
+    kind: usize,
 }
 
 /// What a key did to a prompt.
@@ -157,6 +166,7 @@ impl Prompt {
             last: String::new(),
             confirm_key: 'y',
             default_yes: false,
+            kind: 0,
         }
     }
 
@@ -264,13 +274,11 @@ impl Prompt {
                 && !m.super_
                 && matches!(key.code, KeyCode::Char(k) if k.eq_ignore_ascii_case(&c))
         };
+        // Down always lands somewhere, an empty line past the newest.
         let up = key.code == KeyCode::Up || ctrl('p');
         let down = key.code == KeyCode::Down || ctrl('n');
         let at_oldest = self.back == Some(history.len().saturating_sub(1));
-        let always = ctrl('u')
-            || ctrl('w')
-            || (up && !history.is_empty() && !at_oldest)
-            || (down && self.back.is_some());
+        let always = ctrl('u') || ctrl('w') || (up && !history.is_empty() && !at_oldest) || down;
         let before = self.line();
         let edit = self.key(key, history);
         let changed = edit == Edit::Keep && (always || self.line() != before);
@@ -329,11 +337,11 @@ impl Prompt {
         self.set_line(&history[history.len() - 1 - back]);
     }
 
-    /// Down: the next newer entry, then an empty line, as tmux.
+    /// Down: the next newer entry, then an empty line, as tmux (whose Down
+    /// past the newest entry empties the line too).
     fn newer(&mut self, history: &[String]) {
         match self.back {
-            None => {}
-            Some(0) => {
+            None | Some(0) => {
                 self.back = None;
                 self.set_line("");
             }
@@ -485,6 +493,7 @@ impl InputHook for PromptHook {
         }
         let Prompts { open, history, .. } = &mut state.prompts;
         let prompt = open.get_mut(&client)?;
+        let history = &history[prompt.kind];
         if let Input::Focus(_) = input {
             return None;
         }
@@ -564,9 +573,9 @@ impl InputHook for PromptHook {
             // Enter keeps the position the last change found and runs
             // nothing more.
             Edit::Enter if prompt.incremental => {
-                let line = prompt.line();
+                let (line, kind) = (prompt.line(), prompt.kind);
                 state.prompts.close(client);
-                state.prompts.remember(&line);
+                state.prompts.remember(kind, &line);
                 Routed::Consumed
             }
             Edit::Enter => {
@@ -574,7 +583,7 @@ impl InputHook for PromptHook {
                 let line = prompt.line();
                 let command = match prompt.read {
                     Read::Line => {
-                        state.prompts.remember(&line);
+                        state.prompts.remember(prompt.kind, &line);
                         Some(replace_template(&prompt.template, &line))
                     }
                     Read::Single | Read::Key => Some(replace_template(&prompt.template, &line)),
@@ -641,7 +650,7 @@ pub fn client_gone(state: &mut State, id: ClientId) {
 /// keeps it, as in tmux. From the CLI the reply waits until the prompt
 /// closes, as tmux's does, unless `-b`. `-1` answers with the one
 /// keystroke typed, `-k` with the name of the one key pressed (TC.7); `-T`
-/// is accepted, since grofe's prompt has no completion to choose.
+/// picks the history the prompt walks (grofe's prompt has no completion).
 // ponytail: several `-p` prompts (`-p a,b`) are one label.
 pub fn command_prompt(
     state: &mut State,
@@ -654,6 +663,13 @@ pub fn command_prompt(
     if state.prompts.is_open(id) {
         return Ok(String::new());
     }
+    let kind = match c.prompt_type.as_deref() {
+        None => 0,
+        Some(t) => PROMPT_TYPES
+            .iter()
+            .position(|k| *k == t)
+            .ok_or_else(|| format!("unknown type: {t}"))?,
+    };
     let expand = |s: &str| expand_for(state, id, s);
     let label = match (&c.prompt, &c.template) {
         (Some(p), _) => format!("{} ", expand(p)),
@@ -680,6 +696,7 @@ pub fn command_prompt(
         read,
         numeric: c.numeric && !c.single,
         incremental,
+        kind,
         ..Prompt::new(label, &initial, template)
     };
     if incremental {
@@ -1073,11 +1090,8 @@ mod tests {
         assert_eq!(press(&mut p, ctrl('s')), Some('+'));
         assert_eq!(press(&mut p, key(KeyCode::Left)), None, "a move only");
         assert_eq!(press(&mut p, key(KeyCode::Char('x'))), Some('='));
-        assert_eq!(
-            press(&mut p, key(KeyCode::Down)),
-            None,
-            "no entry to step to"
-        );
+        assert_eq!(press(&mut p, key(KeyCode::Down)), Some('='), "empties");
+        assert_eq!(p.line(), "");
         assert_eq!(press(&mut p, key(KeyCode::Up)), Some('='));
         assert_eq!(press(&mut p, key(KeyCode::Up)), Some('='));
         assert_eq!(p.line(), "old");
@@ -1180,7 +1194,7 @@ mod tests {
         let history = ["one".to_string(), "two".to_string()];
         let mut p = prompt("draft");
         p.key(&key(KeyCode::Down), &history);
-        assert_eq!(p.line(), "draft");
+        assert_eq!(p.line(), "", "Down past the newest empties the line");
         p.key(&key(KeyCode::Up), &history);
         assert_eq!(p.line(), "two");
         p.key(&key(KeyCode::Up), &history);
@@ -1202,19 +1216,21 @@ mod tests {
     #[test]
     fn history_skips_empty_lines_and_repeats_and_is_capped() {
         let mut prompts = Prompts::default();
-        prompts.remember("a");
-        prompts.remember("a");
-        prompts.remember("");
-        prompts.remember("b");
-        prompts.remember("a");
-        assert_eq!(prompts.history, ["a", "b", "a"]);
+        prompts.remember(0, "a");
+        prompts.remember(0, "a");
+        prompts.remember(0, "");
+        prompts.remember(0, "b");
+        prompts.remember(0, "a");
+        prompts.remember(1, "search");
+        assert_eq!(prompts.history[0], ["a", "b", "a"]);
+        assert_eq!(prompts.history[1], ["search"], "a history per type");
         for i in 0..HISTORY_LIMIT + 5 {
-            prompts.remember(&i.to_string());
+            prompts.remember(0, &i.to_string());
         }
-        assert_eq!(prompts.history.len(), HISTORY_LIMIT);
-        assert_eq!(prompts.history[0], "5");
+        assert_eq!(prompts.history[0].len(), HISTORY_LIMIT);
+        assert_eq!(prompts.history[0][0], "5");
         assert_eq!(
-            prompts.history.last().map(String::as_str),
+            prompts.history[0].last().map(String::as_str),
             Some((HISTORY_LIMIT + 4).to_string().as_str())
         );
     }
@@ -1338,7 +1354,7 @@ mod tests {
         assert_eq!(got, Some(Routed::Consumed));
         assert!(!state.prompts.is_open(ClientId(1)));
         // Nothing enters the history.
-        assert!(state.prompts.history.is_empty());
+        assert!(state.prompts.history.iter().all(Vec::is_empty));
 
         assert_eq!(single_char(&ctrl('x')), Some('\x18'));
         assert_eq!(single_char(&key(KeyCode::Backspace)), Some('\x7f'));

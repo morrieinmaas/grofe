@@ -1,0 +1,154 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+$ display-message -p -v '#S:#I.#P'
+# expanding format: #S:#I.#P
+# found #S: session_name
+# format 'session_name' found: main
+# replaced 'session_name' with 'main'
+# found #I: window_index
+# format 'window_index' found: 1
+# replaced 'window_index' with '1'
+# found #P: pane_index
+# format 'pane_index' found: 1
+# replaced 'pane_index' with '1'
+# result is: main:1.1
+main:1.1
+? 0
+$ display-message -p -v 'a#,b#}c'
+# expanding format: a#,b#}c
+# found #,
+# found #}
+# result is: a,b}c
+a,b}c
+? 0
+$ display-message -p -v '#{l:#{session_name}#,x}'
+# expanding format: #{l:#{session_name}#,x}
+# found #{}: l:#{session_name}#,x
+# modifier 0 is l
+# literal string is '#{session_name}#,x'
+# replaced 'l:#{session_name}#,x' with '#{session_name},x'
+# result is: #{session_name},x
+#{session_name},x
+? 0
+$ display-message -p -v '#{?pane_dead,dead,window_zoomed_flag,zoomed,pane_active,active,none}'
+# expanding format: #{?pane_dead,dead,window_zoomed_flag,zoomed,pane_active,active,none}
+# found #{}: ?pane_dead,dead,window_zoomed_flag,zoomed,pane_active,active,none
+# condition is: pane_dead
+# condition 'pane_dead' found: 0
+# condition 'pane_dead' is false
+# condition is: window_zoomed_flag
+# condition 'window_zoomed_flag' found: 0
+# condition 'window_zoomed_flag' is false
+# condition is: pane_active
+# condition 'pane_active' found: 1
+# condition 'pane_active' is true
+#  expanding format: active
+#  result is: active
+# replaced '?pane_dead,dead,window_zoomed_flag,zoomed,pane_active,active,none' with 'active'
+# result is: active
+active
+? 0
+$ display-message -p -v '#{?pane_dead,dead,nosuch,no}'
+# expanding format: #{?pane_dead,dead,nosuch,no}
+# found #{}: ?pane_dead,dead,nosuch,no
+# condition is: pane_dead
+# condition 'pane_dead' found: 0
+# condition 'pane_dead' is false
+# condition is: nosuch
+#  expanding format: nosuch
+#  result is: nosuch
+# condition 'nosuch' not found; assuming false
+# condition 'nosuch' is false
+# no condition matched in 'pane_dead,dead,nosuch,no'; using empty string
+# replaced '?pane_dead,dead,nosuch,no' with ''
+# result is: 
+
+? 0
+$ display-message -p -v '#{?pane_dead,dead}'
+# expanding format: #{?pane_dead,dead}
+# found #{}: ?pane_dead,dead
+# condition is: pane_dead
+# condition 'pane_dead' found: 0
+# condition 'pane_dead' is false
+# no condition matched in 'pane_dead,dead'; using empty string
+# replaced '?pane_dead,dead' with ''
+# result is: 
+
+? 0
+$ display-message -p -v '#{?#{==:#S,main},yes,no}'
+# expanding format: #{?#{==:#S,main},yes,no}
+# found #{}: ?#{==:#S,main},yes,no
+# condition is: #{==:#S,main}
+#  expanding format: #{==:#S,main}
+#  found #{}: ==:#S,main
+#  modifier 0 is ==
+#   expanding format: #S
+#   found #S: session_name
+#   format 'session_name' found: main
+#   replaced 'session_name' with 'main'
+#   result is: main
+#   expanding format: main
+#   result is: main
+#  compare == left is: main
+#  compare == right is: main
+#  replaced '==:#S,main' with '1'
+#  result is: 1
+# condition '#{==:#S,main}' is true
+#  expanding format: yes
+#  result is: yes
+# replaced '?#{==:#S,main},yes,no' with 'yes'
+# result is: yes
+yes
+? 0
+$ display-message -p -v '#[fg=#F]#S#[default] ##[x] #x'
+# expanding format: #[fg=#F]#S#[default] ##[x] #x
+# found #*1[
+# found #S: session_name
+# format 'session_name' found: main
+# replaced 'session_name' with 'main'
+# found #*1[
+# found #*2[
+# result is: #[fg=#F]main#[default] ##[x] #x
+#[fg=#F]main#[default] ##[x] #x
+? 0
+$ display-message -p -v 'x#{session_name'
+# expanding format: x#{session_name
+# result is: x
+x
+? 0
+$ display-message -p -v '#(echo #S)'
+# expanding format: #(echo #S)
+# found #(): echo #S
+#  expanding format: echo #S
+#  found #S: session_name
+#  format 'session_name' found: main
+#  replaced 'session_name' with 'main'
+#  result is: echo main
+# #() result: 
+# result is: 
+
+? 0
+$ display-message -p -v 'a #'
+# expanding format: a #
+# result is: a 
+a 
+? 0
+$ display-message -p -v '#{=3:#{l:abcdef}}'
+# expanding format: #{=3:#{l:abcdef}}
+# found #{}: =3:#{l:abcdef}
+#  expanding format: 3
+#  result is: 3
+# modifier 0 is =
+# modifier 0 argument 0: 3
+# expanding inner format '#{l:abcdef}'
+#  expanding format: #{l:abcdef}
+#  found #{}: l:abcdef
+#  modifier 0 is l
+#  literal string is 'abcdef'
+#  replaced 'l:abcdef' with 'abcdef'
+#  result is: abcdef
+# applied length limit 3: abc
+# replaced '=3:#{l:abcdef}' with 'abc'
+# result is: abc
+abc
+? 0

@@ -1,0 +1,36 @@
+$ new-session -d -s main -x 80 -y 24 cat
+? 0
+client 80x24 attach -t main
+$ command-prompt -b -p one 'set -g @a "%%"'
+? 0
+keys a b c Enter
+$ command-prompt -b -T search -p two 'set -g @b "%%"'
+? 0
+keys Up Enter
+$ command-prompt -b -T search -p three 'set -g @c "%%"'
+? 0
+keys s r c h Enter
+$ command-prompt -b -p four 'set -g @d "%%"'
+? 0
+keys Up Enter
+$ command-prompt -b -T search -p five 'set -g @e "%%"'
+? 0
+keys Up Enter
+$ command-prompt -b -T target -p six 'set -g @f "%%"'
+? 0
+keys Up Enter
+$ command-prompt -b -p seven 'set -g @g "%%"'
+? 0
+keys x y Down Enter
+$ command-prompt -b -p eight 'set -g @h "%%"'
+? 0
+keys Up Down Enter
+$ display -p 'a=#{@a} b=#{@b} c=#{@c} d=#{@d} e=#{@e} f=#{@f} g=#{@g} h=#{@h}'
+a=abc b= c=srch d=abc e=srch f= g= h=
+? 0
+$ command-prompt -T bogus 'display x'
+! unknown type: bogus
+? 1
+$ command-prompt -T window-target -b -p nine 'set -g @i "%%"'
+? 0
+keys Escape

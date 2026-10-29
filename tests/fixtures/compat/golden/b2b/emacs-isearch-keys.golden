@@ -1,0 +1,58 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ set-window-option -g mode-keys emacs
+? 0
+$ set-option -g status off
+? 0
+client 80x24 attach -t main
+$ copy-mode -H -t main
+? 0
+keys Escape <
+keys C-s
+keys f
+keys o
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,1,500 search=1,404,foo
+? 0
+keys Enter
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,1,500 search=1,404,foo
+? 0
+keys C-s
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 search=0,,
+? 0
+keys f
+keys o
+keys o
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,1,500 search=1,404,foo
+? 0
+keys Up
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,2,500 search=1,404,foo
+? 0
+keys C-a
+keys C-w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,3,500 search=1,404,foo
+? 0
+keys C-w
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 11,4,500 search=1,404,foo
+? 0
+keys C-u
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 search=0,,
+? 0
+keys C-u
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 search=0,,
+? 0
+keys C-c
+$ display -p -t main '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y},#{scroll_position} search=#{search_present},#{search_count},#{search_match}'
+1 57,0,500 search=0,,
+? 0

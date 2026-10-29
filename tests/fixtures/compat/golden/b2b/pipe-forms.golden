@@ -1,0 +1,29 @@
+$ new-session -d -s main -x 80 -y 24 'cat {fixtures}/../copy/fixture.txt; tmux wait-for -S ready; exec sleep 100000'
+? 0
+$ wait-for ready
+? 0
+$ pipe-pane -t main 'cat > "$HOME/pf.#S.#I.#P"'
+? 0
+$ display -p -t main 'pipe=#{pane_pipe}'
+pipe=1
+? 0
+$ copy-mode -t main
+? 0
+$ send-keys -t main -X history-top
+? 0
+$ send-keys -t main -X select-line
+? 0
+$ send-keys -t main -X copy-pipe-no-clear 'cat > "$HOME/cp.#S.#I"'
+? 0
+$ send-keys -t main -X pipe-no-clear 'cat > "$HOME/pl.#S.#P"'
+? 0
+$ send-keys -t main -X copy-pipe -- 'cat > "$HOME/cq.#S"'
+? 0
+$ run-shell 'sleep 1; cd "$HOME" && ls pf.* cp.* pl.* cq.*'
+cp.main.1
+cq.main
+pf.main.1.1
+pl.main.1
+? 0
+$ pipe-pane -t main
+? 0

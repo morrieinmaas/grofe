@@ -1184,7 +1184,6 @@ impl PaneHandle {
     }
 }
 
-/// The mouse reporting `mode` asks for: the widest of 1000, 1002, 1003.
 /// How many cells tmux's `grid_expand_line` has allocated for a line
 /// written up to cell `used` of a `cols` wide grid: a quarter, a half or
 /// all of the width.
@@ -1200,6 +1199,7 @@ fn allocated(used: usize, cols: usize) -> usize {
     }
 }
 
+/// The mouse reporting `mode` asks for: the widest of 1000, 1002, 1003.
 fn mouse_mode(mode: TermMode) -> MouseMode {
     if mode.contains(TermMode::MOUSE_MOTION) {
         MouseMode::Motion
