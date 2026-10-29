@@ -7,3 +7,8 @@ use crate::tp::check;
 fn command_output_shows_in_view_mode() {
     check("wpa", "view", &[]);
 }
+
+#[test]
+fn the_command_prompt_matches_tmux() {
+    check("wpa", "prompt", &[]);
+}
