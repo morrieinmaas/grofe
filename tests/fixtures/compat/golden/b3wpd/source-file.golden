@@ -89,7 +89,7 @@ $ source-file
 $ source-file -q
 ! command source-file: too few arguments (need at least 1)
 ? 1
-$ run-shell 'cd ~/c && printf "set -g @v1 a\nsetw -ga @v2 \"x y\"\nset -g @v3 b ; set -g @v4 c\nbind -n C-a send -t : x\n%%if 1\nset -g @v5 d\n%%endif\nsource-file c/n2.conf\n" > v.conf && printf "set -g @n2 nested\n" > n2.conf'
+$ run-shell 'cd ~/c && printf "set -g @v1 a\nsetw -ga @v2 \"x y\"\nset -g @v3 b ; set -g @v4 c\nbind -n C-a send -t : x\n\045if 1\nset -g @v5 d\n\045endif\nsource-file c/n2.conf\n" > v.conf && printf "set -g @n2 nested\n" > n2.conf'
 ? 0
 $ source-file -v c/v.conf
 <TMPDIR>/home/c/v.conf:1: set-option -g @v1 a

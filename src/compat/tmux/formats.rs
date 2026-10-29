@@ -895,36 +895,12 @@ pub(crate) fn rows() -> Vec<Row> {
             "fe_3/environment",
         ),
         row(
-            "set-environment -F",
-            Behaviour,
-            Native("set-environment"),
-            &[],
-            "B3 WP-D",
-            "b3wpd/environment",
-        ),
-        row(
-            "set-environment -r",
-            Behaviour,
-            Native("set-environment"),
-            &[],
-            "B3 WP-D",
-            "b3wpd/environment",
-        ),
-        row(
             "show-environment",
             PassThrough,
             Native("show-environment"),
             &[],
             "M3.6",
             "fe_3/environment",
-        ),
-        row(
-            "show-environment -s",
-            Behaviour,
-            Native("show-environment"),
-            &[],
-            "B3 WP-D",
-            "b3wpd/environment",
         ),
     ]
 }

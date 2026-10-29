@@ -5053,11 +5053,12 @@ mod tests {
 
     #[test]
     fn environment_flags() {
-        let Ok(Command::SetEnvironment(c)) = parse(&argv(&["setenv", "-grF", "X"])) else {
+        let Ok(Command::SetEnvironment(c)) = parse(&argv(&["set-environment", "-grF", "X"])) else {
             panic!();
         };
         assert!(c.global && c.clear && c.format && !c.unset && !c.hidden);
-        let Ok(Command::ShowEnvironment(c)) = parse(&argv(&["showenv", "-gs", "X"])) else {
+        let Ok(Command::ShowEnvironment(c)) = parse(&argv(&["show-environment", "-gs", "X"]))
+        else {
             panic!();
         };
         assert!(c.global && c.shell && !c.hidden);
