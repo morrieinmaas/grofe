@@ -49,10 +49,12 @@ fn server(identity: &str) -> (TestServer, Harness) {
     (srv, client)
 }
 
-/// A right-button press and release at 0-based client cell `(col, row)`.
+/// A right-button press at 0-based client cell `(col, row)`. The button
+/// stays down: tmux 3.7b's menu closes on the release outside it
+/// (`golden/b3wpc/menu-bound-mouse`).
 fn right_click(client: &mut Harness, col: u16, row: u16) {
     let (x, y) = (col + 1, row + 1);
-    client.send(format!("\x1b[<2;{x};{y}M\x1b[<2;{x};{y}m"));
+    client.send(format!("\x1b[<2;{x};{y}M"));
 }
 
 #[test]

@@ -725,7 +725,10 @@ fn a_mouse_menu_opens_at_the_pointer() {
     );
     let mut a = attach(&srv, 80, 24);
     a.wait_for("$");
-    click_alone(&mut a, 3, 21, 9);
+    // The button stays down: its release outside the menu would close it,
+    // as tmux 3.7b's does (`b3wpc/menu-bound-mouse`).
+    std::thread::sleep(Duration::from_millis(400));
+    a.send(sgr(2, 21, 9, false));
     a.wait_until("the menu", WAIT, |t| t.contains("One"));
     let text = a.text();
     let row = text.lines().nth(8).unwrap_or_default();

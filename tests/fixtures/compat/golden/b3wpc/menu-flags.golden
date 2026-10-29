@@ -1,0 +1,139 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g @r none
+? 0
+$ split-window -h -l 25 -t main cat
+? 0
+$ select-pane -t main:1.1
+? 0
+client 60x15 attach -t main
+$& display-menu -c {client} -C 1 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+~ 3 34-34 fg=green bg=default
+~ 4 34-34 fg=green bg=default
+~ 5 11-11 fg=default bg=yellow
+~ 5 12-15 fg=black bg=yellow
+~ 5 16-17 fg=default bg=yellow
+~ 5 18-20 fg=black bg=yellow
+~ 5 21-21 fg=default bg=yellow
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys Enter
+$ show -gv @r
+beta
+? 0
+$& display-menu -c {client} -C 2 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+~ 3 34-34 fg=green bg=default
+~ 4 34-34 fg=green bg=default
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 11-11 fg=default bg=yellow
+~ 7 12-16 fg=black bg=yellow
+~ 7 17-17 fg=default bg=yellow
+~ 7 18-20 fg=black bg=yellow
+~ 7 21-21 fg=default bg=yellow
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys q
+$& display-menu -c {client} -C 4 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+~ 3 34-34 fg=green bg=default
+~ 4 11-11 fg=default bg=yellow
+~ 4 12-16 fg=black bg=yellow
+~ 4 17-17 fg=default bg=yellow
+~ 4 18-20 fg=black bg=yellow
+~ 4 21-21 fg=default bg=yellow
+~ 4 34-34 fg=green bg=default
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys q
+$& display-menu -c {client} -C 99 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+~ 3 34-34 fg=green bg=default
+~ 4 34-34 fg=green bg=default
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 11-11 fg=default bg=yellow
+~ 7 12-16 fg=black bg=yellow
+~ 7 17-17 fg=default bg=yellow
+~ 7 18-20 fg=black bg=yellow
+~ 7 21-21 fg=default bg=yellow
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys q
+$& display-menu -c {client} -C - -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+~ 3 34-34 fg=green bg=default
+~ 4 34-34 fg=green bg=default
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys Down
+styles 3-9
+~ 3 34-34 fg=green bg=default
+~ 4 11-11 fg=default bg=yellow
+~ 4 12-16 fg=black bg=yellow
+~ 4 17-17 fg=default bg=yellow
+~ 4 18-20 fg=black bg=yellow
+~ 4 21-21 fg=default bg=yellow
+~ 4 34-34 fg=green bg=default
+~ 5 34-34 fg=green bg=default
+~ 6 34-34 fg=green bg=default
+~ 7 34-34 fg=green bg=default
+~ 8 12-14 fg=default bg=default dim
+keys q
+$ display-menu -c {client} -C x -x 10 -y 10 A a ''
+! starting choice invalid
+? 1
+$& display-menu -c {client} -t %1 -x P -y P -T '#{pane_id}' Alpha a 'set -g @r alpha'
+screen %1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │┌─%1────────┐
+|                                   ││ Alpha (a) │
+|                                   │└───────────┘
+| [main] 1:first*
+keys a
+$ show -gv @r
+alpha
+? 0
+$& display-menu -c {client} -t %1 -x C -y C -T Menu Here h 'set -g @r #{pane_id}'
+screen Menu
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                        ┌─Menu─────┐
+|                        │ Here (h) │
+|                        └──────────┘
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys h
+$ show -gv @r
+%1
+? 0

@@ -920,8 +920,21 @@ pub struct DisplayPopup {
     /// `-e NAME=value`, in order, a later one winning; one without `=` is
     /// ignored, as tmux 3.7b ignores it.
     pub env: Vec<(String, String)>,
-    /// `-T`: the title (cosmetic), raw.
+    /// `-T`: the title, raw.
     pub title: Option<String>,
+    /// `-s`: the style of the box, over `popup-style`, raw.
+    pub style: Option<String>,
+    /// `-S`: the style of the border, over `popup-border-style`, raw.
+    pub border_style: Option<String>,
+    /// `-C`: close the client's popup and do nothing else.
+    pub close: bool,
+    /// `-k`: any key closes the popup once its command has exited.
+    pub any_key: bool,
+    /// `-N`: when changing a popup that is open, reset its flags.
+    pub reset_flags: bool,
+    /// `-t`: the pane the formats expand against and the popup is placed
+    /// against; the current one when not given.
+    pub target: Option<Target>,
     /// `-w`: cells, or `N%` of the client.
     pub width: Option<SplitSize>,
     /// `-h`: cells, or `N%` of the client.
@@ -1029,13 +1042,41 @@ pub struct DisplayMenu {
     /// `-t`: the pane the formats expand against, the menu is placed
     /// against and the items run for; the current one when not given.
     pub target: Option<Target>,
+    /// `-c`: the one client to show it on, raw.
+    pub client: Option<String>,
+    /// `-b`: the border lines, raw.
+    pub border: Option<String>,
+    /// `-s`: the style of the box, over `menu-style`, raw.
+    pub style: Option<String>,
+    /// `-H`: the style of the chosen item, over `menu-selected-style`, raw.
+    pub selected_style: Option<String>,
+    /// `-S`: the style of the border, over `menu-border-style`, raw.
+    pub border_style: Option<String>,
+    /// `-C`: the item chosen to start with (`-` for none), raw.
+    pub starting_choice: Option<String>,
+    /// `-O`: stay open after the button that opened the menu is released.
+    pub stay_open: bool,
+    /// `-M`: take the mouse even when no mouse event opened the menu.
+    pub mouse: bool,
     /// Required (at least one); empty only for a bare `display-menu`.
     pub items: Vec<MenuEntry>,
 }
 
-/// `display-panes` (TC.7): no flags natively.
+/// `display-panes` (TC.7).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DisplayPanes {}
+pub struct DisplayPanes {
+    /// `-d`: how long the labels stay, in milliseconds, raw; 0 for ever.
+    pub duration: Option<String>,
+    /// `-b`: the caller does not wait for the labels to close.
+    pub background: bool,
+    /// `-N`: the labels take no keys; any key closes them.
+    pub no_keys: bool,
+    /// `-t`: the one client to show them on, raw.
+    pub client: Option<String>,
+    /// The command a chosen pane runs; `%%` is the pane's id. Default
+    /// `select-pane -t "%%%"`.
+    pub template: Option<String>,
+}
 
 /// `confirm-before` (TC.7).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

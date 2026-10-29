@@ -1,0 +1,40 @@
+# B3 WP-C: display-menu -C (the row chosen to start with), -t (the pane the
+# menu is placed and its formats expand against) and -c. The box is columns
+# 10..22 and its items on rows 4 (Alpha), 5 (Beta), 6 (a separator), 7
+# (Gamma) and 8 (-Dim).
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g @r none
+$ split-window -h -l 25 -t main cat
+$ select-pane -t main:1.1
+client 60x15 attach -t main
+$& display-menu -c {client} -C 1 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys Enter
+$ show -gv @r
+$& display-menu -c {client} -C 2 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys q
+$& display-menu -c {client} -C 4 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys q
+$& display-menu -c {client} -C 99 -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys q
+$& display-menu -c {client} -C - -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys Down
+styles 3-9
+keys q
+$ display-menu -c {client} -C x -x 10 -y 10 A a ''
+# -t: placed at the target pane's left edge and the title expands against it.
+$& display-menu -c {client} -t %1 -x P -y P -T '#{pane_id}' Alpha a 'set -g @r alpha'
+screen %1
+keys a
+$ show -gv @r
+# The item runs against the target: the formats in its command, too.
+$& display-menu -c {client} -t %1 -x C -y C -T Menu Here h 'set -g @r #{pane_id}'
+screen Menu
+keys h
+$ show -gv @r

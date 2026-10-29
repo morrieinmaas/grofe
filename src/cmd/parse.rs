@@ -1961,6 +1961,12 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
         ('h', FlagKind::Value),
         ('x', FlagKind::Value),
         ('y', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('S', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('C', FlagKind::Bool),
+        ('k', FlagKind::Bool),
+        ('N', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "display-popup")?;
     Ok(Command::DisplayPopup(DisplayPopup {
@@ -1977,6 +1983,12 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         title: flags.values.get(&'T').cloned(),
+        style: flags.values.get(&'s').cloned(),
+        border_style: flags.values.get(&'S').cloned(),
+        close: flags.present.contains(&'C'),
+        any_key: flags.present.contains(&'k'),
+        reset_flags: flags.present.contains(&'N'),
+        target: target_if_given(&flags.values, 't')?,
         width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
         height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,
         x: flags.values.get(&'x').cloned(),
@@ -2082,6 +2094,14 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         ('x', FlagKind::Value),
         ('y', FlagKind::Value),
         ('t', FlagKind::Value),
+        ('c', FlagKind::Value),
+        ('b', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('H', FlagKind::Value),
+        ('S', FlagKind::Value),
+        ('C', FlagKind::Value),
+        ('O', FlagKind::Bool),
+        ('M', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "display-menu")?;
     needs_positionals(argv, &flags, "display-menu", 1)?;
@@ -2090,7 +2110,33 @@ fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
         x: flags.values.get(&'x').cloned(),
         y: flags.values.get(&'y').cloned(),
         target: target_if_given(&flags.values, 't')?,
+        client: flags.values.get(&'c').cloned(),
+        border: flags.values.get(&'b').cloned(),
+        style: flags.values.get(&'s').cloned(),
+        selected_style: flags.values.get(&'H').cloned(),
+        border_style: flags.values.get(&'S').cloned(),
+        starting_choice: flags.values.get(&'C').cloned(),
+        stay_open: flags.present.contains(&'O'),
+        mouse: flags.present.contains(&'M'),
         items: menu_entries(&flags.positionals)?,
+    }))
+}
+
+fn parse_display_panes(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('b', FlagKind::Bool),
+        ('d', FlagKind::Value),
+        ('N', FlagKind::Bool),
+        ('t', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "display-panes")?;
+    no_extra_positionals(&flags, "display-panes", 1)?;
+    Ok(Command::DisplayPanes(DisplayPanes {
+        duration: flags.values.get(&'d').cloned(),
+        background: flags.present.contains(&'b'),
+        no_keys: flags.present.contains(&'N'),
+        client: flags.values.get(&'t').cloned(),
+        template: flags.positionals.first().cloned(),
     }))
 }
 
@@ -3249,11 +3295,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "float-pane" => parse_float_pane(rest),
         "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
-        "display-panes" => {
-            let flags = tokenize(rest, &NO_FLAGS, "display-panes")?;
-            no_extra_positionals(&flags, "display-panes", 0)?;
-            Ok(Command::DisplayPanes(DisplayPanes {}))
-        }
+        "display-panes" => parse_display_panes(rest),
         "confirm-before" => parse_confirm_before(rest),
         "if-shell" => parse_if_shell(rest),
         "set-hook" => parse_set_hook(rest),

@@ -1,0 +1,290 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+client 60x15 attach -t main
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+keys C-c
+$ set -g popup-style 'bg=blue'
+? 0
+$ set -g popup-border-style 'fg=red'
+? 0
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+~ 3 5-24 fg=red bg=default
+~ 4 5-5 fg=red bg=default
+~ 4 6-23 fg=default bg=blue
+~ 4 24-24 fg=red bg=default
+~ 5 5-5 fg=red bg=default
+~ 5 6-23 fg=default bg=blue
+~ 5 24-24 fg=red bg=default
+~ 6 5-5 fg=red bg=default
+~ 6 6-23 fg=default bg=blue
+~ 6 24-24 fg=red bg=default
+~ 7 5-24 fg=red bg=default
+keys C-c
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -s 'fg=yellow,bold' -S 'fg=green,bg=magenta' -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+~ 3 5-24 fg=green bg=magenta
+~ 4 5-5 fg=green bg=magenta
+~ 4 6-7 fg=yellow bg=default
+~ 4 24-24 fg=green bg=magenta
+~ 5 5-5 fg=green bg=magenta
+~ 5 24-24 fg=green bg=magenta
+~ 6 5-5 fg=green bg=magenta
+~ 6 24-24 fg=green bg=magenta
+~ 7 5-24 fg=green bg=magenta
+keys C-c
+$ set -g popup-style default
+? 0
+$ set -g popup-border-style default
+? 0
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+screen Title
+|
+|
+|
+|      ┌─Title────────────┐
+|      │hi                │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$ display-popup -c {client} -T Changed -S 'fg=red' -s 'bg=blue' -b double
+? 0
+screen
+|
+|
+|
+|      ╔═Changed══════════╗
+|      ║hi                ║
+|      ║                  ║
+|      ║                  ║
+|      ╚══════════════════╝
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+styles 3-7
+~ 3 5-24 fg=red bg=default
+~ 4 5-5 fg=red bg=default
+~ 4 6-23 fg=default bg=blue
+~ 4 24-24 fg=red bg=default
+~ 5 5-5 fg=red bg=default
+~ 5 6-23 fg=default bg=blue
+~ 5 24-24 fg=red bg=default
+~ 6 5-5 fg=red bg=default
+~ 6 6-23 fg=default bg=blue
+~ 6 24-24 fg=red bg=default
+~ 7 5-24 fg=red bg=default
+$ display-popup -c {client} -B
+? 0
+screen
+|
+|
+|
+|      hi
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$ display-popup -c {client} -C
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$ display-popup -c {client} -C
+? 0
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -k -T Done 'echo finished'
+screen finished
+|
+|
+|
+|      ┌─Done─────────────┐
+|      │finished          │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+keys x
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Done 'echo finished'
+screen finished
+|
+|
+|
+|      ┌─Done─────────────┐
+|      │finished          │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+keys x
+screen finished
+|
+|
+|
+|      ┌─Done─────────────┐
+|      │finished          │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+keys C-c
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -E -T Run 'stty raw -echo; exec cat -v'
+screen Run
+|
+|
+|
+|      ┌─Run──────────────┐
+|      │                  │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+keys C-c
+screen Run
+|
+|
+|
+|      ┌─Run──────────────┐
+|      │^C                │
+|      │                  │
+|      │                  │
+|      └──────────────────┘
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$ display-popup -c {client} -C
+? 0
+$ split-window -h -l 25 -t main cat
+? 0
+$& display-popup -c {client} -t %0 -w 10 -h 3 -x P -y P -T '#{pane_id}' 'sleep 30'
+screen %0
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| ┌─%0─────┐                        │
+| │        │                        │
+| └────────┘                        │
+| [main] 1:first*
+$ display-popup -c {client} -C
+? 0
+$& display-popup -c {client} -t %1 -w 10 -h 3 -x P -y P -T '#{pane_id}' 'sleep 30'
+screen %1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │┌─%1─────┐
+|                                   ││        │
+|                                   │└────────┘
+| [main] 1:first*
+$ display-popup -c {client} -C
+? 0

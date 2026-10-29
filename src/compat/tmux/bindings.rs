@@ -21,7 +21,6 @@ use crate::cmd::Command;
 const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
 
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
-const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
 
 const fn row(
     tmux_form: &'static str,
@@ -87,24 +86,16 @@ fn without_cosmetic(inv: &Invocation<'_>, cosmetic: &[char]) -> Vec<String> {
     args
 }
 
-/// `display-popup`: grofe draws every `-b` border-lines value tmux has
-/// (TC.6), so only the fill and border styles are cosmetic.
-// ponytail: `-s`/`-S` styles are dropped; the popup keeps the default
-// colours until TC.6's overlay reads a style.
+/// `display-popup`: every flag tmux has is native, styles and `-k -N -C`
+/// included.
 fn display_popup(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native("display-popup", &without_cosmetic(inv, &['s', 'S']))
+    inv.native("display-popup", inv.args)
 }
 
-/// `display-menu`: the border lines, the styles and `-O` (stay open after
-/// the mouse button that opened the menu is released) change only how the
-/// menu looks or how a mouse release closes it.
-// ponytail: grofe's menu is drawn in tmux's default menu style whatever
-// `-b -s -S -H` say.
+/// `display-menu`: every flag tmux has is native, the border lines, the
+/// styles, `-O -M -C` and `-c` included.
 fn display_menu(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
-    inv.native(
-        "display-menu",
-        &without_cosmetic(inv, &['b', 's', 'S', 'H', 'O']),
-    )
+    inv.native("display-menu", inv.args)
 }
 
 /// `new-pane`: the pane's border styles are cosmetic.
@@ -115,7 +106,7 @@ fn new_pane(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
     use GrofeTarget::Translate;
-    use MappingKind::{Behaviour, FlagRename, PassThrough};
+    use MappingKind::{Behaviour, PassThrough};
     vec![
         // The conditional (TC.10): the format form on the actor, the shell
         // form off it; the branch runs in the request's dialect. A bare
@@ -153,16 +144,16 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "display-popup -s",
-            FlagRename,
+            PassThrough,
             Translate(display_popup),
-            COSMETIC,
+            &[],
             "fe_4/popup-styles",
         ),
         row(
             "display-popup -S",
-            FlagRename,
+            PassThrough,
             Translate(display_popup),
-            COSMETIC,
+            &[],
             "fe_4/popup-styles",
         ),
         row(
@@ -185,16 +176,16 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "display-menu -b",
-            FlagRename,
+            PassThrough,
             Translate(display_menu),
-            COSMETIC,
+            &[],
             "",
         ),
         row(
             "display-menu -O",
-            FlagRename,
+            PassThrough,
             Translate(display_menu),
-            COSMETIC,
+            &[],
             "",
         ),
         pass("display-panes", ""),

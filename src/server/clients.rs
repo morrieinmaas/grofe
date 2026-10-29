@@ -258,9 +258,9 @@ pub struct ClientEntry {
     /// until it resumes and sends its size, which redraws it in full.
     suspended: bool,
     suspend_tx: mpsc::Sender<()>,
-    /// The outer terminal's mouse modes as last written (R2); `None`
-    /// before the first write.
-    mouse_modes: Option<bool>,
+    /// The outer terminal's mouse modes as last written (R2): 0 off, 1 on,
+    /// 2 on with all motion; `None` before the first write.
+    mouse_modes: Option<u8>,
     /// Input held while a binding's shell condition runs ([`hold_input`]),
     /// in order, and how many conditions hold it.
     held: VecDeque<Held>,
@@ -1289,25 +1289,59 @@ pub fn changed(state: &mut State) {
     arm_names(state, Instant::now());
 }
 
-/// The outer terminal's mouse reporting on and off.
+/// The outer terminal's mouse reporting on and off, and on with every
+/// motion (mode 1003) for `focus-follows-mouse` and a menu that takes the
+/// mouse (tmux's `tty_update_mode`).
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+const MOUSE_MOTION_ON: &[u8] = b"\x1b[?1003h";
+const MOUSE_MOTION_OFF: &[u8] = b"\x1b[?1003l";
 
-/// Writes each client's mouse modes where its session's `mouse` option
-/// differs from what it was last sent (R2): so on attach, and after any
-/// `set`, `reload` or switch that changes it. The client's exit reset
-/// turns them off again.
-fn sync_mouse_modes(state: &mut State) {
+/// Writes each client's mouse modes where they differ from what they were
+/// last sent (R2): so on attach, and after any `set`, `reload`, switch or
+/// menu that changes them. The client's exit reset turns them off again.
+pub(crate) fn sync_mouse_modes(state: &mut State) {
     let model = &state.model;
-    for c in state.clients.values_mut() {
-        let on = model
-            .options
-            .lookup("mouse", &[Owner::Session(c.session)])
-            .is_some_and(|v| v == "on");
-        if c.mouse_modes != Some(on) {
-            c.mouse_modes = Some(on);
-            c.outbox.queue_raw(if on { MOUSE_ON } else { MOUSE_OFF });
+    let levels: Vec<(ClientId, u8)> = state
+        .clients
+        .iter()
+        .map(|(id, c)| {
+            let owners = [Owner::Session(c.session)];
+            let on = |name: &str| {
+                model
+                    .options
+                    .lookup(name, &owners)
+                    .is_some_and(|v| v == "on")
+            };
+            let level = if crate::server::menu::wants_mouse(state, *id)
+                || on("mouse") && on("focus-follows-mouse")
+            {
+                2
+            } else {
+                u8::from(on("mouse"))
+            };
+            (*id, level)
+        })
+        .collect();
+    for (id, level) in levels {
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        if c.mouse_modes == Some(level) {
+            continue;
         }
+        let before = c.mouse_modes;
+        c.mouse_modes = Some(level);
+        if level == 2 {
+            c.outbox.queue_raw(MOUSE_ON);
+            c.outbox.queue_raw(MOUSE_MOTION_ON);
+            continue;
+        }
+        if before == Some(2) {
+            c.outbox.queue_raw(MOUSE_MOTION_OFF);
+        }
+        c.outbox
+            .queue_raw(if level == 1 { MOUSE_ON } else { MOUSE_OFF });
     }
 }
 

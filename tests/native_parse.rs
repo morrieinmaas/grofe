@@ -421,6 +421,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 x: None,
                 y: None,
                 command: Some(argv(&["net.sh", "#{mouse_status_range}"])),
+                ..Default::default()
             }),
         ),
         (
@@ -546,11 +547,12 @@ fn every_new_verb_parses_with_its_rows_flags() {
                         command: "display-menu -T sub Kill k kill-pane".to_string(),
                     },
                 ],
+                ..Default::default()
             }),
         ),
         (
             vec!["display-panes"],
-            Command::DisplayPanes(DisplayPanes {}),
+            Command::DisplayPanes(DisplayPanes::default()),
         ),
         (
             vec!["confirm-before", "-p", "kill-pane #P? (y/n)", "kill-pane"],

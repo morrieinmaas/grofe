@@ -1368,7 +1368,7 @@ pub fn trim_left(expanded: &str, limit: usize) -> String {
 
 /// Parses a tmux style value (`status-style`'s own syntax, and a
 /// `#[...]` directive's content) onto `style`.
-fn apply_style_directive(style: &mut Style, directive: &str) {
+pub(crate) fn apply_style_directive(style: &mut Style, directive: &str) {
     for item in directive.split(',') {
         let item = item.trim();
         if let Some(v) = item.strip_prefix("fg=") {

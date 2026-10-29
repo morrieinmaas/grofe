@@ -13,7 +13,13 @@
 //! - Keys go to the command. Escape and C-c close the popup instead when it
 //!   has no `-E`, or when its command has exited; without `-E` a popup
 //!   stays open after its command exits.
-//! - A second popup on a client that has one open does nothing.
+//! - `-k` closes an exited popup on any key. A second popup on a client that
+//!   has one open changes the open one instead ([`modify`]): its title (a
+//!   missing `-T` clears it), `-s -S` styles, `-b`/`-B` lines, and its flags
+//!   when `-N`, `-E` or `-k` is given. `-C` closes the client's popup.
+//! - The popup is drawn in `popup-style` (the colours the command leaves
+//!   default, inside the border) and `popup-border-style`, each with `-s`
+//!   and `-S` replacing only the colours, no attributes, as recorded.
 //! - From the CLI, `display-popup` answers when the popup closes, with its
 //!   command's exit status, or 129 when closing the popup hung it up.
 //! - A client resize fits the box to the client and resizes the pty.
@@ -100,7 +106,7 @@ impl Lines {
     }
 
     /// Top-left, top-right, bottom-left, bottom-right, horizontal, vertical.
-    fn chars(self) -> [char; 6] {
+    pub(crate) fn chars(self) -> [char; 6] {
         match self {
             Lines::Single => ['┌', '┐', '└', '┘', '─', '│'],
             Lines::Rounded => ['╭', '╮', '╰', '╯', '─', '│'],
@@ -108,6 +114,20 @@ impl Lines {
             Lines::Heavy => ['┏', '┓', '┗', '┛', '━', '┃'],
             Lines::Simple => ['+', '+', '+', '+', '-', '|'],
             Lines::Padded => [' '; 6],
+        }
+    }
+}
+
+impl Lines {
+    /// The left and right joins a menu's separator rows start and end with
+    /// (tmux's `CELL_LEFTJOIN` and `CELL_RIGHTJOIN`).
+    pub(crate) fn joins(self) -> (char, char) {
+        match self {
+            Lines::Single | Lines::Rounded => ('├', '┤'),
+            Lines::Double => ('╠', '╣'),
+            Lines::Heavy => ('┣', '┫'),
+            Lines::Simple => ('+', '+'),
+            Lines::Padded => (' ', ' '),
         }
     }
 }
@@ -174,9 +194,14 @@ pub struct Frame {
     pub lines: Option<Lines>,
     /// Expanded; drawn in the top edge.
     pub title: Option<String>,
-    pub border_style: Style,
+    /// `-S`: replaces the colours of `popup-border-style`.
+    pub border_style: Option<String>,
+    /// `-s`: replaces the colours of `popup-style`.
+    pub style: Option<String>,
     /// `-E`: close when the command exits.
     pub close_on_exit: bool,
+    /// `-k`: any key closes the popup once its command has exited.
+    pub any_key: bool,
 }
 
 impl Frame {
@@ -498,6 +523,52 @@ pub fn shutdown(state: &mut State) {
     }
 }
 
+/// What `display-popup` changes in a popup that is open already (tmux's
+/// `popup_modify`); `None` leaves a part as it is.
+#[derive(Default)]
+pub struct Change {
+    pub title: Option<String>,
+    pub style: Option<String>,
+    pub border_style: Option<String>,
+    pub lines: Option<Option<Lines>>,
+    /// `close_on_exit` and `any_key`, replacing both.
+    pub flags: Option<(bool, bool)>,
+}
+
+/// Changes client `id`'s open popup as `change` says. Taking the border
+/// away (or giving it back) resizes the command's pty to the new inside.
+pub fn modify(state: &mut State, id: ClientId, change: Change) {
+    let size = state.clients.get(&id).map(|c| c.size);
+    let Some(popup) = state.popups.open.get_mut(&id) else {
+        return;
+    };
+    let frame = &mut popup.frame;
+    if let Some(title) = change.title {
+        frame.title = Some(title);
+    }
+    if let Some(style) = change.style {
+        frame.style = Some(style);
+    }
+    if let Some(style) = change.border_style {
+        frame.border_style = Some(style);
+    }
+    if let Some(lines) = change.lines {
+        frame.lines = lines;
+    }
+    if let Some((close_on_exit, any_key)) = change.flags {
+        frame.close_on_exit = close_on_exit;
+        frame.any_key = any_key;
+    }
+    if let Some(size) = size {
+        let (_, inside) = frame.fitted(size).inside();
+        if inside != popup.pty && inside.0 > 0 && inside.1 > 0 {
+            popup.pty = inside;
+            let _ = popup.running.handle.resize(inside.0, inside.1);
+        }
+    }
+    clients::mark_dirty(state, id);
+}
+
 /// Clients were resized: each popup's pty takes the size of its box as
 /// fitted to its client now ([`Frame::fitted`]), so its command gets the
 /// SIGWINCH; the overlay then draws the fitted box.
@@ -552,6 +623,11 @@ impl InputHook for PopupHook {
         let bytes = match input {
             Input::Focus(_) => return None,
             Input::Key(key) if may_close && closes(key) => {
+                close(state, client);
+                return Some(Routed::Consumed);
+            }
+            // `-k`: once the command has exited any key closes the popup.
+            Input::Key(_) if popup.exited.is_some() && popup.frame.any_key => {
                 close(state, client);
                 return Some(Routed::Consumed);
             }
@@ -619,13 +695,14 @@ impl Overlay for PopupOverlay {
         if cols == 0 || rows == 0 {
             return;
         }
+        let (fill, border) = styles(state, client, frame);
         if let Some(lines) = frame.lines {
-            draw_box(screen, frame, lines);
+            draw_box(screen, frame, lines, &border);
         }
         let snap = popup.running.handle.snapshot_rows(0..rows);
         for (r, row) in snap.rows.iter().enumerate() {
             for (c, cell) in row.iter().take(usize::from(cols)).enumerate() {
-                set(screen, (x + c as i32, y + r as i32), cell.clone());
+                set(screen, (x + c as i32, y + r as i32), restyled(cell, &fill));
             }
         }
         let cursor = snap.cursor;
@@ -638,6 +715,56 @@ impl Overlay for PopupOverlay {
             ..cursor
         });
     }
+}
+
+/// The fill and the border style of `frame` now, as tmux's
+/// `popup_reapply_styles` builds them: `popup-style` and
+/// `popup-border-style` of the client's current window, over which `-s` and
+/// `-S` replace only the colours; no attributes.
+fn styles(state: &State, client: ClientId, frame: &Frame) -> (Style, Style) {
+    use crate::server::dispatch::options::Owner;
+    let session = state.clients.get(&client).map(|c| c.session);
+    let window = session
+        .and_then(|s| state.model.sessions.get(&s))
+        .map(|s| s.active);
+    let owners: Vec<Owner> = window
+        .map(Owner::Window)
+        .into_iter()
+        .chain(session.map(Owner::Session))
+        .collect();
+    let style = |name: &str, over: &Option<String>| {
+        let mut st = status::parse_style(
+            state
+                .model
+                .options
+                .lookup(name, &owners)
+                .unwrap_or_default(),
+        );
+        if let Some(over) = over {
+            let over = status::parse_style(over);
+            (st.fg, st.bg) = (over.fg, over.bg);
+        }
+        st.attrs = CellFlags::empty();
+        st
+    };
+    (
+        style("popup-style", &frame.style),
+        style("popup-border-style", &frame.border_style),
+    )
+}
+
+/// `cell` with the colours it leaves default taken from `fill`, as tmux
+/// draws a popup over its `popup-style`.
+fn restyled(cell: &SnapCell, fill: &Style) -> SnapCell {
+    let default = Style::default();
+    let mut cell = cell.clone();
+    if cell.fg == default.fg {
+        cell.fg = fill.fg;
+    }
+    if cell.bg == default.bg {
+        cell.bg = fill.bg;
+    }
+    cell
 }
 
 /// Puts `cell` at `(x, y)` if that is on screen.
@@ -666,9 +793,8 @@ fn cell(c: char, style: &Style) -> SnapCell {
 /// Draws the box's border in its style, then the title in its top edge
 /// from the third column, cut to the edge's inside less two cells, as
 /// tmux's `screen_write_box` does.
-fn draw_box(screen: &mut Screen, frame: &Frame, lines: Lines) {
+fn draw_box(screen: &mut Screen, frame: &Frame, lines: Lines, style: &Style) {
     let [tl, tr, bl, br, horizontal, vertical] = lines.chars();
-    let style = &frame.border_style;
     let (x, y) = frame.at;
     let (w, h) = (i32::from(frame.size.0), i32::from(frame.size.1));
     for i in 0..w {
@@ -821,10 +947,12 @@ mod tests {
             size: (20, 5),
             lines: Some(Lines::Double),
             title: Some("a-very-long-title-longer-than-box".to_string()),
-            border_style: Style::default(),
+            border_style: None,
+            style: None,
             close_on_exit: false,
+            any_key: false,
         };
-        draw_box(&mut screen, &frame, Lines::Double);
+        draw_box(&mut screen, &frame, Lines::Double, &Style::default());
         let row = |y: usize| -> String {
             screen.cells[y * 30..(y + 1) * 30]
                 .iter()
@@ -848,10 +976,12 @@ mod tests {
             size: (6, 4),
             lines: Some(Lines::Single),
             title: None,
-            border_style: Style::default(),
+            border_style: None,
+            style: None,
             close_on_exit: false,
+            any_key: false,
         };
-        draw_box(&mut screen, &frame, Lines::Single);
+        draw_box(&mut screen, &frame, Lines::Single, &Style::default());
         let text: String = screen.cells[..10].iter().map(|c| c.c).collect();
         assert_eq!(text, "   │      ");
         let text: String = screen.cells[10..20].iter().map(|c| c.c).collect();
@@ -892,8 +1022,10 @@ mod tests {
             size: (10, 4),
             lines: Some(Lines::Single),
             title: None,
-            border_style: Style::default(),
+            border_style: None,
+            style: None,
             close_on_exit: false,
+            any_key: false,
         };
         let spawn = PaneSpawn {
             id: PaneId(0),

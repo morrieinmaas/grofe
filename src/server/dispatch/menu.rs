@@ -5,7 +5,8 @@
 use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry, Resolve};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::input::parse_key;
-use crate::server::menu::{self, Menu, MenuItem, Position};
+use crate::server::menu::{self, Look, Menu, MenuItem, PanesArgs, Position, Start};
+use crate::server::popup::Lines;
 use crate::server::{State, clients, prompt};
 
 /// tmux's wording for a verb given no arguments.
@@ -13,18 +14,18 @@ fn too_few_arguments(verb: &str) -> String {
     cmd::ParseError::TooFewArguments(verb.to_string(), 1).to_string()
 }
 
-/// `display-menu [-T title] [-x x] [-y y] name key command ...` on the
-/// current client, as tmux 3.7b: title, labels and commands are formats;
-/// an empty name is a separator, a name starting with `-` a disabled item;
-/// a key that is not a key name shows no key. Nothing opens while the
-/// client has a menu open, or when the menu does not fit. From the CLI the
-/// reply waits until the menu closes.
+/// `display-menu [-OM] [-b lines] [-c client] [-C row] [-H style] [-s style]
+/// [-S style] [-t pane] [-T title] [-x x] [-y y] name key command ...` on
+/// the current client, as tmux 3.7b: title, labels and commands are
+/// formats; an empty name is a separator, a name starting with `-` a
+/// disabled item; a key that is not a key name shows no key. Nothing opens
+/// while the client has a menu open, or when the menu does not fit. From
+/// the CLI the reply waits until the menu closes.
 pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Result<String, String> {
     if c.items.is_empty() {
         return Err(too_few_arguments("display-menu"));
     }
-    let id = clients::current_client(state, ctx).ok_or("no current client")?;
-    // `-t`: the pane the menu is for, as the current one.
+    let id = target_client(state, ctx, c.client.as_deref())?;
     let at;
     let ctx = match &c.target {
         Some(target) => {
@@ -36,16 +37,25 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         }
         None => ctx,
     };
-    // tmux 3.7b (recorded) does nothing while the client shows a popup.
-    if state.popups.is_open(id) {
+    if state.popups.is_open(id) || state.menus.is_open(id) {
         return Ok(String::new());
     }
+    let start = match c.starting_choice.as_deref() {
+        None => Start::First,
+        Some("-") => Start::None,
+        Some(n) => Start::At(
+            strtonum(n, 0, i64::from(u32::MAX)).map_err(|e| format!("starting choice {e}"))? as u32,
+        ),
+    };
+    let lines = match c.border.as_deref() {
+        None => None,
+        Some(v) => {
+            Some(Lines::parse(v).map_err(|_| format!("menu-border-lines unknown value: {v}"))?)
+        }
+    };
     let pointer = crate::server::mouse::pointer(state, id);
     let mut x = position(state, ctx, c.x.as_deref(), Axis::X, pointer)?;
     let mut y = position(state, ctx, c.y.as_deref(), Axis::Y, pointer)?;
-    // From a mouse key, a native menu with no position opens at the pointer
-    // (spec §4.5, TC.10); tmux's own opens at the centre, its stock
-    // bindings say `-x M -y M`.
     if let Some((px, py)) = pointer
         && ctx.dialect == Dialect::Grofe
     {
@@ -73,11 +83,47 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
         items,
         x,
         y,
+        look: Look {
+            lines,
+            style: c.style,
+            selected: c.selected_style,
+            border: c.border_style,
+            stay_open: c.stay_open,
+            mouse: c.mouse,
+            start,
+        },
     };
     if menu::open(state, ctx, id, menu) {
         menu::wait_for_close(state, id);
     }
     Ok(String::new())
+}
+
+/// The client `name` names, else the current one.
+fn target_client(
+    state: &State,
+    ctx: &ClientCtx,
+    name: Option<&str>,
+) -> Result<crate::types::ClientId, String> {
+    match name {
+        Some(name) => {
+            clients::client_named(state, name).ok_or_else(|| format!("can't find client: {name}"))
+        }
+        None => clients::current_client(state, ctx).ok_or_else(|| "no current client".to_string()),
+    }
+}
+
+/// OpenBSD's `strtonum`, as tmux words its failures: `invalid`, `too small`
+/// or `too large`.
+fn strtonum(value: &str, min: i64, max: i64) -> Result<i64, &'static str> {
+    let n: i64 = value.parse().map_err(|_| "invalid")?;
+    if n < min {
+        Err("too small")
+    } else if n > max {
+        Err("too large")
+    } else {
+        Ok(n)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,16 +180,34 @@ fn strtol(s: &str) -> i64 {
     digits[..end].parse::<i64>().map_or(0, |n| sign * n)
 }
 
-/// `display-panes` on the current client: each pane labelled with its
-/// index until a key or tmux's `display-panes-time`; a digit selects that
-/// pane. From the CLI the reply waits until the labels close.
+/// `display-panes [-bN] [-d duration] [-t client] [template]`: each pane
+/// of the current window labelled with its index until a key or `-d`
+/// milliseconds (`display-panes-time`; 0 keeps them up); a digit (or `a`
+/// to `z`) chooses that pane, and the template runs with `%%` for its id
+/// (`select-pane -t "%%%"` by default). `-N` takes no keys. From the CLI
+/// the reply waits until the labels close, unless `-b`.
 pub fn display_panes(
     state: &mut State,
     ctx: &ClientCtx,
-    _c: DisplayPanes,
+    c: DisplayPanes,
 ) -> Result<String, String> {
-    let id = clients::current_client(state, ctx).ok_or("no current client")?;
-    if menu::open_panes(state, id) {
+    let id = target_client(state, ctx, c.client.as_deref())?;
+    if state.menus.is_open(id) || state.popups.is_open(id) {
+        return Ok(String::new());
+    }
+    let duration = match c.duration.as_deref() {
+        None => None,
+        Some(n) => Some(std::time::Duration::from_millis(
+            strtonum(n, 0, i64::from(u32::MAX)).map_err(|e| format!("delay {e}"))? as u64,
+        )),
+    };
+    let args = PanesArgs {
+        duration,
+        no_keys: c.no_keys,
+        template: c.template,
+        dialect: ctx.dialect,
+    };
+    if menu::open_panes(state, id, args) && !c.background {
         menu::wait_for_close(state, id);
     }
     Ok(String::new())

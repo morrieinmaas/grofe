@@ -14,7 +14,10 @@ use crate::server::popup::{self, Frame, Lines, Position};
 use crate::server::{State, clients, hooks, menu, prompt};
 use crate::types::{ClientId, PaneId, Rect, SplitSize};
 
-/// `display-popup` on the current client, or the one `-c` names: the
+/// `display-popup -C` closes the client's popup (or menu) and nothing else;
+/// on a client that has a popup open the command changes that popup
+/// ([`popup::modify`]) and opens none. Otherwise, on the current client, or
+/// the one `-c` names: the
 /// command (the user's shell without one) in a pty inside a box `-w` by
 /// `-h` (half the client each way by default), border included, placed by
 /// `-x`/`-y` as a menu is. `-T` and `-d` are formats. The command gets the
@@ -32,6 +35,46 @@ pub fn display_popup(
         Some(name) => client_named(state, name)?,
         None => clients::current_client(state, ctx).ok_or("no current client")?,
     };
+    if c.close {
+        popup::close(state, id);
+        menu::clear(state, id);
+        return Ok(String::new());
+    }
+    let modify = state.popups.is_open(id);
+    if !modify && state.menus.is_open(id) {
+        return Ok(String::new());
+    }
+    // `-t` is the pane the formats expand against and `P` is placed by.
+    let pane = match &c.target {
+        Some(target) => state.model.resolve_pane(target, ctx)?,
+        None => client_pane(state, id).ok_or("no current client")?,
+    };
+    let at_pane = ClientCtx {
+        pane: Some(pane),
+        ..ctx.clone()
+    };
+    let ctx = &at_pane;
+    let lines = match (c.no_border, c.border.as_deref()) {
+        (true, _) => Some(None),
+        (false, None) => None,
+        (false, Some(value)) => Some(Lines::parse(value)?),
+    };
+    if modify {
+        let title = c
+            .title
+            .as_deref()
+            .map_or_else(String::new, |t| prompt::expand_command(state, ctx, t));
+        let change = popup::Change {
+            title: Some(title),
+            style: c.style,
+            border_style: c.border_style,
+            lines,
+            flags: (c.reset_flags || c.close_on_exit || c.any_key)
+                .then_some((c.close_on_exit, c.any_key)),
+        };
+        popup::modify(state, id, change);
+        return Ok(String::new());
+    }
     let (cols, rows) = state.clients[&id].size;
     let w = c.width.map_or(cols / 2, |s| cells(s, cols));
     let h = c.height.map_or(rows / 2, |s| cells(s, rows));
@@ -41,24 +84,15 @@ pub fn display_popup(
     if h > rows {
         return Err("height too large".to_string());
     }
-    if state.popups.is_open(id) {
-        return Ok(String::new());
-    }
     let session = state.clients[&id].session;
-    let pane = client_pane(state, id).ok_or("no current client")?;
-    // `popup-border-lines` and `popup-border-style` are the defaults `-b`
-    // and `-S` override.
+    // `popup-border-lines` is the default `-b` and `-B` override.
     let chain = crate::server::dispatch::options::chain(&state.model, pane);
     let option = |name: &str| state.model.options.lookup(name, &chain).map(str::to_string);
-    let lines = match (c.no_border, c.border.as_deref()) {
-        (true, _) => None,
-        (false, None) => Lines::parse(&option("popup-border-lines").unwrap_or_default())
+    let lines = match lines {
+        Some(lines) => lines,
+        None => Lines::parse(&option("popup-border-lines").unwrap_or_default())
             .unwrap_or(Some(Lines::Single)),
-        (false, Some(value)) => Lines::parse(value)?,
     };
-    let border_style = option("popup-border-style")
-        .map(|v| crate::server::status::parse_style(&v))
-        .unwrap_or_default();
     let pane_rect = clients::overlay_ctx(state, id)
         .and_then(|cx| cx.panes.iter().find(|(p, _)| *p == pane).map(|(_, r)| *r))
         .unwrap_or(Rect {
@@ -108,8 +142,10 @@ pub fn display_popup(
         size: (w, h),
         lines,
         title,
-        border_style,
+        border_style: c.border_style,
+        style: c.style,
         close_on_exit: c.close_on_exit,
+        any_key: c.any_key,
     };
     let spawn = spawn_for(state, session, pane, (argv, shell), cwd, env);
     if popup::open(state, id, frame, spawn)? {

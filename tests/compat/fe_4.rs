@@ -347,11 +347,10 @@ fn twenty_thousand_braces_are_command_too_long() {
     let _ = cli.run(&words(&["kill-server"]));
 }
 
-/// Case 4: a style flag grofe draws no differently is ignored, with
-/// exactly one log line naming it (the `popup-styles` golden has the
-/// screen, and tmux's error for an unknown `-b`).
+/// Case 4: the style flags of a popup are drawn since B3 WP-C
+/// (`golden/b3wpc/popup-style`), so none is ignored and nothing is logged.
 #[test]
-fn popup_style_flags_are_ignored_with_one_log_line() {
+fn popup_style_flags_are_not_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let cli = grofe_cli(dir.path());
     let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
@@ -371,11 +370,7 @@ fn popup_style_flags_are_ignored_with_one_log_line() {
         "true",
     ]));
     assert_eq!(err, "no current client\n");
-    assert_eq!(
-        miss_log(dir.path())[before..],
-        ["display-popup -S: cosmetic, ignored".to_string()],
-        "one line for the flag, however often it is given"
-    );
+    assert!(miss_log(dir.path())[before..].is_empty());
     let _ = cli.run(&words(&["kill-server"]));
 }
 

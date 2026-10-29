@@ -1,0 +1,49 @@
+# B3 WP-C: menu-style, menu-selected-style, menu-border-style and
+# menu-border-lines, and display-menu -s -H -S -b over them. The menu's
+# box is columns 10..22, rows 3..7; the title is in the top edge.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+client 60x15 attach -t main
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+keys q
+$ set -g menu-style 'fg=green,bg=black'
+$ set -g menu-selected-style 'fg=white,bg=red,bold'
+$ set -g menu-border-style 'fg=cyan'
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+keys Down
+styles 3-7
+keys q
+$& display-menu -c {client} -s 'bg=yellow,bold' -S 'fg=magenta,bg=blue' -H 'fg=black,bg=white,underscore' -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' -Disabled b 'set -g @r beta'
+styles 3-7 Menu
+keys q
+$ set -g menu-style default
+$ set -g menu-selected-style default
+$ set -g menu-border-style default
+$ set -g menu-border-lines double
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+keys q
+$& display-menu -c {client} -b heavy -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+keys q
+$& display-menu -c {client} -b rounded -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+keys q
+$& display-menu -c {client} -b simple -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+keys q
+$& display-menu -c {client} -b padded -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+keys q
+$& display-menu -c {client} -b none -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+styles 3-7
+keys q
+$ set -g menu-border-style 'fg=red,bg=blue'
+$& display-menu -c {client} -b single -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+keys q
+$ display-menu -c {client} -b nothing -x 10 -y 10 A a ''

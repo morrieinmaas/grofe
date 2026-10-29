@@ -1,0 +1,58 @@
+# B3 WP-C: display-popup -s -S, popup-style and popup-border-style, -k, -N,
+# -C and the popup modified while it is open. The popup is 20 by 5, its box
+# columns 5..24 and rows 3..7.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+client 60x15 attach -t main
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+keys C-c
+$ set -g popup-style 'bg=blue'
+$ set -g popup-border-style 'fg=red'
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+keys C-c
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -s 'fg=yellow,bold' -S 'fg=green,bg=magenta' -T Title 'echo hi; sleep 30'
+styles 3-7 Title
+keys C-c
+$ set -g popup-style default
+$ set -g popup-border-style default
+# Modified while open: the title, styles, lines and flags change; nothing new opens.
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Title 'echo hi; sleep 30'
+screen Title
+$ display-popup -c {client} -T Changed -S 'fg=red' -s 'bg=blue' -b double
+screen
+styles 3-7
+$ display-popup -c {client} -B
+screen
+# -C closes whatever popup the client has.
+$ display-popup -c {client} -C
+screen
+$ display-popup -c {client} -C
+# -k: after the command exits any key closes the popup.
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -k -T Done 'echo finished'
+screen finished
+keys x
+screen
+# Without it a key goes nowhere and Escape closes.
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -T Done 'echo finished'
+screen finished
+keys x
+screen finished
+keys C-c
+screen
+# -E: C-c does not close a running command, it is the command's key.
+$& display-popup -c {client} -w 20 -h 5 -x 5 -y 8 -E -T Run 'stty raw -echo; exec cat -v'
+screen Run
+keys C-c
+screen Run
+$ display-popup -c {client} -C
+# -t places the popup against a pane, and its title expands against it.
+$ split-window -h -l 25 -t main cat
+$& display-popup -c {client} -t %0 -w 10 -h 3 -x P -y P -T '#{pane_id}' 'sleep 30'
+screen %0
+$ display-popup -c {client} -C
+$& display-popup -c {client} -t %1 -w 10 -h 3 -x P -y P -T '#{pane_id}' 'sleep 30'
+screen %1
+$ display-popup -c {client} -C
