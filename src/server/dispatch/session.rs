@@ -83,7 +83,9 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     let size = cap_size(c.width.unwrap_or(default.0), c.height.unwrap_or(default.1));
     let window = model.alloc_window_id();
     // Only what `update-environment` names comes from the client (TC.5).
-    let env = crate::server::hooks::session_environment(state, id, &ctx.env);
+    let mut env = crate::server::hooks::session_environment(state, id, &ctx.env);
+    // `-e` variables belong to the session, so its later panes get them.
+    env.extend(c.env);
     let pane = spawn_pane(
         state,
         (id, window),
@@ -233,8 +235,37 @@ fn attach_existing(state: &mut State, ctx: &ClientCtx, id: SessionId) {
 
 pub fn kill_session(state: &mut State, ctx: &ClientCtx, c: KillSession) -> Result<String, String> {
     let id = state.model.resolve_session(&c.target, ctx)?;
-    let removed = state.model.remove_session(id);
-    state.events.panes_killed(removed);
+    // As tmux, `-C` wins over `-a`, and `-a` over `-g`.
+    let doomed: Vec<SessionId> = if c.clear_alerts {
+        let model = &mut state.model;
+        let windows = model.sessions[&id].windows.clone();
+        for id in windows {
+            if let Some(w) = model.windows.get_mut(&id) {
+                w.bell_flag = false;
+                w.activity_flag = false;
+                w.silence_flag = false;
+            }
+        }
+        Vec::new()
+    } else if c.others {
+        state
+            .model
+            .sessions
+            .keys()
+            .copied()
+            .filter(|s| *s != id)
+            .collect()
+    } else if c.group && state.model.group_of(id).is_some() {
+        let mut all = state.model.group_peers(id);
+        all.insert(0, id);
+        all
+    } else {
+        vec![id]
+    };
+    for session in doomed {
+        let removed = state.model.remove_session(session);
+        state.events.panes_killed(removed);
+    }
     Ok(String::new())
 }
 

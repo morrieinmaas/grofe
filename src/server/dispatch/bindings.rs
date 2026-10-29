@@ -87,6 +87,7 @@ fn shell_form(
     let reply = (!background).then(|| super::defer_reply(state));
     let socket = state.socket.clone();
     let jobs = state.jobs.clone();
+    let shell_jobs = state.shell_jobs.clone();
     let event = state.mouse.current().cloned();
     // A binding's client types on behind the condition, as tmux's
     // per-client queue waits: its input is held until the branch has run.
@@ -98,7 +99,7 @@ fn shell_form(
     }
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let yes = prompt::shell(&script, cwd, env, socket, false)
+        let yes = prompt::shell(&script, cwd, env, socket, false, &shell_jobs)
             .await
             .is_ok();
         let job: Job = Box::new(move |state: &mut State| {

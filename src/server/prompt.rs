@@ -34,6 +34,7 @@ use crate::server::dispatch::{
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
+use crate::server::shell_jobs::ShellJobs;
 use crate::server::status;
 use crate::server::{State, hooks};
 use crate::types::ClientId;
@@ -902,6 +903,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let capture = !from_binding || hooks::in_hook(state);
     let reply = (!c.background).then(|| dispatch::defer_reply(state));
     let socket = state.socket.clone();
+    let jobs = state.shell_jobs.clone();
     let delay = c.delay;
     tokio::spawn(async move {
         // `-d` (FE.1): wait first; with no command, only wait.
@@ -910,7 +912,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         }
         let result = match script.is_empty() && delay.is_some() {
             true => Ok(String::new()),
-            false => shell(&script, cwd, env, socket, capture && reply.is_some()).await,
+            false => shell(&script, cwd, env, socket, capture && reply.is_some(), &jobs).await,
         };
         if let Some(reply) = reply {
             let _ = reply.send(result);
@@ -962,13 +964,15 @@ impl cmd::FormatVars for NoVars {
 /// Runs `script` to completion: its stdout (ending in a newline) when
 /// `capture` is set, or the error tmux words for a nonzero exit or a
 /// signal. stderr is discarded, as in tmux; without `capture` so is
-/// stdout, so a chatty bound command costs no server memory.
+/// stdout, so a chatty bound command costs no server memory. `jobs`
+/// tracks the shell while it runs.
 pub(crate) async fn shell(
     script: &str,
     cwd: PathBuf,
     env: Vec<(String, String)>,
     socket: PathBuf,
     capture: bool,
+    jobs: &ShellJobs,
 ) -> Result<String, Failure> {
     let stdout = if capture {
         Stdio::piped()
@@ -994,10 +998,10 @@ pub(crate) async fn shell(
             .spawn()
     };
     let child = child.map_err(|e| format!("failed to run command: {e}"))?;
-    let out = child
-        .wait_with_output()
-        .await
-        .map_err(|e| Failure::from(format!("'{script}' failed: {e}")))?;
+    let tracked = jobs.track(&child);
+    let out = child.wait_with_output().await;
+    drop(tracked);
+    let out = out.map_err(|e| Failure::from(format!("'{script}' failed: {e}")))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
@@ -1452,7 +1456,15 @@ mod tests {
     #[tokio::test]
     async fn shell_runs_bin_sh_as_sh() {
         let dir = std::env::temp_dir().canonicalize().expect("temp dir");
-        let got = shell("echo \"$0\"", dir, Vec::new(), PathBuf::from("/x"), true).await;
+        let got = shell(
+            "echo \"$0\"",
+            dir,
+            Vec::new(),
+            PathBuf::from("/x"),
+            true,
+            &ShellJobs::default(),
+        )
+        .await;
         assert_eq!(got, Ok("sh\n".to_string()));
     }
 
@@ -1466,31 +1478,80 @@ mod tests {
                 dir.clone(),
                 Vec::new(),
                 socket.clone(),
-                true
+                true,
+                &ShellJobs::default()
             )
             .await,
             Ok("hi\ntwo\n".to_string())
         );
         assert_eq!(
-            shell("printf abc", dir.clone(), Vec::new(), socket.clone(), true).await,
+            shell(
+                "printf abc",
+                dir.clone(),
+                Vec::new(),
+                socket.clone(),
+                true,
+                &ShellJobs::default()
+            )
+            .await,
             Ok("abc\n".to_string())
         );
         assert_eq!(
-            shell("true", dir.clone(), Vec::new(), socket.clone(), true).await,
+            shell(
+                "true",
+                dir.clone(),
+                Vec::new(),
+                socket.clone(),
+                true,
+                &ShellJobs::default()
+            )
+            .await,
             Ok(String::new())
         );
-        let pwd = shell("pwd -P", dir.clone(), Vec::new(), socket.clone(), true).await;
+        let pwd = shell(
+            "pwd -P",
+            dir.clone(),
+            Vec::new(),
+            socket.clone(),
+            true,
+            &ShellJobs::default(),
+        )
+        .await;
         assert_eq!(pwd, Ok(format!("{}\n", dir.display())));
         assert_eq!(
-            shell("echo \"$GROFE\"", dir.clone(), Vec::new(), socket, true).await,
+            shell(
+                "echo \"$GROFE\"",
+                dir.clone(),
+                Vec::new(),
+                socket,
+                true,
+                &ShellJobs::default()
+            )
+            .await,
             Ok("/nonexistent.sock\n".to_string())
         );
         assert_eq!(
-            shell("exit 3", dir.clone(), Vec::new(), PathBuf::from("/x"), true).await,
+            shell(
+                "exit 3",
+                dir.clone(),
+                Vec::new(),
+                PathBuf::from("/x"),
+                true,
+                &ShellJobs::default()
+            )
+            .await,
             Err(failed("'exit 3' returned 3\n", 3))
         );
         assert_eq!(
-            shell("echo a; exit 3", dir, Vec::new(), PathBuf::from("/x"), true).await,
+            shell(
+                "echo a; exit 3",
+                dir,
+                Vec::new(),
+                PathBuf::from("/x"),
+                true,
+                &ShellJobs::default()
+            )
+            .await,
             Err(failed("a\n'echo a; exit 3' returned 3\n", 3))
         );
         // Without capture (a binding) stdout goes nowhere.
@@ -1501,7 +1562,8 @@ mod tests {
                 dir.clone(),
                 Vec::new(),
                 PathBuf::from("/x"),
-                false
+                false,
+                &ShellJobs::default()
             )
             .await,
             Ok(String::new())
@@ -1512,7 +1574,8 @@ mod tests {
                 dir,
                 Vec::new(),
                 PathBuf::from("/x"),
-                false
+                false,
+                &ShellJobs::default()
             )
             .await,
             Err(failed("'echo a; exit 2' returned 2\n", 2))

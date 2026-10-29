@@ -93,13 +93,14 @@ pub struct PaneRef {
 
 /// A parsed target (spec §4.5). Syntax only: whether the named
 /// session/window/pane actually exists is for [`Resolve`] to decide.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Target {
     Session(SessionRef),
     Window(SessionRef, WindowRef),
     Pane(PaneRef),
     /// Empty or omitted: the client's current pane/window/session, from
     /// the request's [`ClientCtx`].
+    #[default]
     Current,
 }
 

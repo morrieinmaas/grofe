@@ -1,0 +1,28 @@
+$ new-session -d -s a -x 80 -y 24 cat
+? 0
+$ set-hook -g command-error 'display -p "err-hook #{hook}"'
+? 0
+$ select-pane -t nosuch:9
+err-hook command-error
+! can't find session: nosuch
+? 1
+$ display -p ok ; select-pane -t nosuch:9 ; display -p after
+ok
+err-hook command-error
+! can't find session: nosuch
+? 1
+$ set-hook -g command-error 'display -p one ; select-pane -t nope2:3 ; display -p two'
+? 0
+$ select-pane -t nosuch:9
+one
+! can't find session: nosuch
+! can't find session: nope2
+? 1
+$ set-hook -g command-error 'set -g @x 1'
+? 0
+$ select-pane -t nosuch:9
+! can't find session: nosuch
+? 1
+$ show -gv @x
+1
+? 0

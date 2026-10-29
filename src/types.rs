@@ -104,9 +104,10 @@ pub struct Rect {
 }
 
 /// The direction a layout cell is split in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Dir {
     Horizontal,
+    #[default]
     Vertical,
 }
 
@@ -120,8 +121,9 @@ pub enum Edge {
 }
 
 /// The size given to a new split.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SplitSize {
+    #[default]
     Half,
     Percent(u8),
     Cells(u16),

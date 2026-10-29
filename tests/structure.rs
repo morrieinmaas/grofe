@@ -1039,7 +1039,7 @@ fn export_then_import_reproduces_the_geometry() {
         grofe::server::layout::MainSize::Percent(50),
         grofe::server::layout::MainSize::Cells(24),
     );
-    let tiled = Preset::from_name("tiled", width, height).unwrap();
+    let tiled = Preset::from_name("tiled", width, height, 0).unwrap();
     let order: Vec<PaneId> = tree.compute(area).iter().map(|(p, _)| *p).collect();
     assert!(tree.preset(area, tiled, &order));
     assert_ne!(render(&tree), before);

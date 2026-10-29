@@ -28,6 +28,7 @@ use super::select::{self, Copied};
 use super::{Action, Ctx, Mode};
 use crate::cmd;
 use crate::server::dispatch::options::{FormatCtx, ServerVars};
+use crate::server::shell_jobs::ShellJobs;
 use crate::server::{State, hooks, pane};
 use crate::types::PaneId;
 
@@ -172,8 +173,9 @@ pub fn run_pipes(state: &State, pane: PaneId, copied: &[Copied]) {
         }
         let env = job_env(state, pane);
         let data = c.data.clone();
+        let jobs = state.shell_jobs.clone();
         tokio::spawn(async move {
-            run(&command, env, data, PIPE_TIMEOUT).await;
+            run(&command, env, data, PIPE_TIMEOUT, &jobs).await;
         });
     }
 }
@@ -195,12 +197,14 @@ fn job_env(state: &State, pane: PaneId) -> Vec<(String, String)> {
 
 /// Runs `command` under `/bin/sh -c` in a process group of its own with
 /// `data` on stdin, then closes it; waits for the shell, killing its group
-/// at `timeout`. The exit status, or `None` if it could not run.
+/// at `timeout`. The exit status, or `None` if it could not run. `jobs`
+/// tracks the shell while it runs.
 pub async fn run(
     command: &str,
     env: Vec<(String, String)>,
     data: Vec<u8>,
     timeout: Duration,
+    jobs: &ShellJobs,
 ) -> Option<ExitStatus> {
     let child = {
         let _lock = pane::spawn_lock();
@@ -228,6 +232,7 @@ pub async fn run(
         .id()
         .and_then(|id| i32::try_from(id).ok())
         .map(Pid::from_raw);
+    let _tracked = jobs.track(&child);
     let stdin = child.stdin.take();
     let work = async {
         // A command that exits without reading closes the pipe: the
@@ -339,7 +344,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let command = format!("echo \"$0\" > '{}'", out.display());
-        let status = run(&command, vec![], Vec::new(), PIPE_TIMEOUT).await;
+        let status = run(
+            &command,
+            vec![],
+            Vec::new(),
+            PIPE_TIMEOUT,
+            &ShellJobs::default(),
+        )
+        .await;
         assert!(status.is_some_and(|s| s.success()));
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "sh\n");
     }
@@ -349,7 +361,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let command = format!("cat > '{}'", out.display());
-        let status = run(&command, vec![], b"$(x) `y`\n".to_vec(), PIPE_TIMEOUT).await;
+        let status = run(
+            &command,
+            vec![],
+            b"$(x) `y`\n".to_vec(),
+            PIPE_TIMEOUT,
+            &ShellJobs::default(),
+        )
+        .await;
         assert!(status.is_some_and(|s| s.success()));
         assert_eq!(std::fs::read(&out).unwrap(), b"$(x) `y`\n");
     }
@@ -377,7 +396,14 @@ mod tests {
         let command = command.replace("<pid>", &format!("'{}'", pid.display()));
         let started = Instant::now();
         let data = vec![b'x'; 1 << 20];
-        let status = run(&command, vec![], data, Duration::from_millis(500)).await;
+        let status = run(
+            &command,
+            vec![],
+            data,
+            Duration::from_millis(500),
+            &ShellJobs::default(),
+        )
+        .await;
         assert!(started.elapsed() < Duration::from_secs(5));
         let pid: i32 = std::fs::read_to_string(&pid)
             .unwrap()

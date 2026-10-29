@@ -1,0 +1,174 @@
+$ new-session -d -s main -n first -x 80 -y 24 cat
+? 0
+$ new-window -d -t main -n second cat
+? 0
+$ split-window -d -t main:1 cat
+? 0
+$ new-session -d -s other cat
+? 0
+$ set-hook after-select-pane 'display -p "s-main"'
+? 0
+$ show-hooks
+after-select-pane[0] display-message -p s-main
+? 0
+$ show-hooks -t other
+after-select-pane[0] display-message -p s-main
+? 0
+$ show-hooks -g after-select-pane
+after-select-pane
+? 0
+$ set-hook -t other after-select-pane 'display -p "s-other"'
+? 0
+$ show-hooks -t other after-select-pane
+after-select-pane[0] display-message -p s-other
+? 0
+$ show-hooks -t main
+? 0
+$ set-hook -a after-select-pane 'display -p "second"'
+? 0
+$ set-hook after-select-pane[5] 'display -p "five"'
+? 0
+$ set-hook after-select-pane[1] 'display -p "one"'
+? 0
+$ show-hooks after-select-pane
+after-select-pane[0] display-message -p s-other
+after-select-pane[1] display-message -p one
+after-select-pane[5] display-message -p five
+? 0
+$ show-hooks -t main:1
+? 0
+$ show-hooks -w
+? 0
+$ show-hooks -p
+? 0
+$ show-hooks -w -t main:1 pane-focus-in
+? 0
+$ set-hook -w pane-focus-in 'display -p "wf"'
+? 0
+$ set-hook -p pane-focus-in 'display -p "pf"'
+? 0
+$ set-hook -p -t main:1.2 pane-focus-in 'display -p "pf2"'
+? 0
+$ show-hooks -w pane-focus-in
+pane-focus-in[0] display-message -p wf
+? 0
+$ show-hooks -p pane-focus-in
+pane-focus-in[0] display-message -p pf
+? 0
+$ show-hooks -p -t main:1.2 pane-focus-in
+pane-focus-in[0] display-message -p pf2
+? 0
+$ show-hooks -w -t main:1
+? 0
+$ show-hooks -p -t main:1.2
+pane-focus-in[0] display-message -p pf2
+? 0
+$ set-hook -w after-select-pane 'display -p x'
+? 0
+$ set-hook -p after-select-pane 'display -p x'
+? 0
+$ set-hook -t main:1 after-select-pane 'display -p x'
+? 0
+$ set-hook -t main:1 pane-focus-in 'display -p wt'
+? 0
+$ show-hooks -t main:1 pane-focus-in
+pane-focus-in[0] display-message -p wt
+? 0
+$ show-hooks pane-focus-in
+pane-focus-in[0] display-message -p wf
+? 0
+$ set-hook -g pane-focus-in 'display -p g'
+? 0
+$ show-hooks -g pane-focus-in
+pane-focus-in[0] display-message -p g
+? 0
+$ show-hooks -gw pane-focus-in
+pane-focus-in[0] display-message -p g
+? 0
+$ show-hooks -gp pane-focus-in
+pane-focus-in[0] display-message -p pf
+? 0
+$ set-hook -gw window-renamed 'display -p ren'
+? 0
+$ show-hooks -gw window-renamed
+window-renamed[0] display-message -p ren
+? 0
+$ set-hook -u after-select-pane[1]
+? 0
+$ show-hooks after-select-pane
+after-select-pane[0] display-message -p x
+? 0
+$ set-hook -u after-select-pane
+? 0
+$ show-hooks after-select-pane
+? 0
+$ set-hook -gu pane-focus-in
+? 0
+$ show-hooks -g pane-focus-in
+pane-focus-in
+? 0
+$ set-hook -R after-select-pane
+? 0
+$ set-hook -R nope
+? 0
+$ set-hook -g after-select-pane 'display -p "g1"'
+? 0
+$ set-hook -R after-select-pane
+g1
+? 0
+$ set-hook -gR after-select-pane
+g1
+? 0
+$ set-hook -t other -R after-select-pane
+g1
+? 0
+$ set-hook -a -g after-select-pane 'display -p "g2"'
+? 0
+$ set-hook -a -g after-select-pane
+! empty value
+? 1
+$ set-hook -g after-select-pane[0] 'display -p "g0"'
+? 0
+$ show-hooks -g after-select-pane
+after-select-pane[0] display-message -p g0
+after-select-pane[1] display-message -p g2
+? 0
+$ set-hook -g after-select-pane[x] 'display -p g'
+! ambiguous option: after-select-pane[x]
+? 1
+$ set-hook -g 'after-select-pane[]' 'display -p g'
+! ambiguous option: after-select-pane[]
+? 1
+$ set-hook -g
+! command set-hook: too few arguments (need at least 1)
+? 1
+$ set-hook
+! command set-hook: too few arguments (need at least 1)
+? 1
+$ set-hook -g after-select-pane 'display -p a' extra
+! command set-hook: too many arguments (need at most 2)
+? 1
+$ set-hook -g after-select-pane ''
+? 0
+$ show-hooks -g after-select-pane
+after-select-pane
+? 0
+$ set-hook -g after-select-pane 'nope'
+! unknown command: nope
+? 1
+$ set-hook -g after-select-pane '   '
+? 0
+$ set-hook -gu nope
+! invalid option: nope
+? 1
+$ set-hook -gu after-select-pane[3]
+? 0
+$ show-hooks -g after-select-pane
+after-select-pane[0] 
+? 0
+$ show-hooks -g nope
+! invalid option: nope
+? 1
+$ show-hooks -t nope
+! no such session: nope
+? 1

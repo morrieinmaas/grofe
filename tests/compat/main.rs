@@ -11,6 +11,7 @@
 mod b1c;
 mod b1d;
 mod b1e;
+mod b2a;
 mod b2b;
 mod fe_1;
 mod fe_2;

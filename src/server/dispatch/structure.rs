@@ -15,9 +15,11 @@ use crate::cmd::{
 use crate::protocol::ClientCtx;
 use crate::server::State;
 use crate::server::dispatch::options::Owner;
-use crate::server::dispatch::pane::{respawn, select_last, toggle_zoom, unzoom};
+use crate::server::dispatch::pane::{print_pane, respawn, select_last, toggle_zoom, unzoom};
 use crate::server::dispatch::resolve_cwd;
-use crate::server::dispatch::window::{AUTOMATIC_RENAME, apply_preset, default_name, main_sizes};
+use crate::server::dispatch::window::{
+    AUTOMATIC_RENAME, apply_preset, default_name, main_sizes, tiled_max_columns,
+};
 use crate::server::layout::{Insert, LayoutTree, Preset};
 use crate::server::model::{HOLE, Model, Window};
 use crate::types::{Dir, PaneId, SessionId, SplitSize, WindowId, cap_size};
@@ -343,7 +345,13 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
     let pane = model.resolve_pane(&c.src, ctx)?;
     let from = model.panes[&pane].window;
     unzoom(model, from);
-    let (session, index) = destination(model, ctx, c.dst.as_ref(), false, false)?;
+    let (session, index) = destination(model, ctx, c.dst.as_ref(), c.after, c.before)?;
+    // `-a` and `-b` make room first, as tmux's `winlink_shuffle_up`.
+    if (c.after || c.before)
+        && let Some(i) = index
+    {
+        shuffle_up(model, session, i)?;
+    }
     let alone = model.windows[&from].pane_ids().len() == 1;
     let index = match index {
         Some(i) => match model.window_at_index(session, i) {
@@ -401,7 +409,11 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
     if !c.detach {
         model.select_window_in(session, window);
     }
-    Ok(String::new())
+    Ok(if c.print {
+        print_pane(model, pane, c.format.as_deref())
+    } else {
+        String::new()
+    })
 }
 
 /// Where a window goes: `-t`'s session and index (`None`: the first free
@@ -823,7 +835,8 @@ pub fn next_layout(state: &mut State, ctx: &ClientCtx, c: NextLayout) -> Result<
         .layout
         .last_preset()
         .map_or(0, |i| (i + 1) % Preset::NAMES.len());
-    let preset = Preset::from_name(Preset::NAMES[next], width, height)
+    let columns = tiled_max_columns(model, window);
+    let preset = Preset::from_name(Preset::NAMES[next], width, height, columns)
         .ok_or_else(|| format!("invalid layout: {}", Preset::NAMES[next]))?;
     apply_preset(model, window, preset);
     Ok(String::new())

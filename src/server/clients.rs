@@ -93,6 +93,8 @@ pub struct AttachRequest {
     pub nest: bool,
     /// The client's terminal device, if it said (`client_tty`).
     pub tty: Option<String>,
+    /// Its own `new-session` made the session: no `client-attached`.
+    pub created: bool,
 }
 
 /// An accepted attach: the connection writes `output` (one frame at a
@@ -370,6 +372,7 @@ pub fn client_name(id: ClientId) -> String {
 /// activity).
 pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String> {
     let now = Instant::now();
+    let req_created = req.created;
     let target = match &req.target {
         // A tmux attach reads `-t` the tmux way (`=name` exact, FE.1).
         Some(raw) if req.ctx.dialect == crate::protocol::Dialect::Tmux => {
@@ -448,9 +451,15 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
         hooks::update_environment(state, session, &client_env);
     }
-    // As tmux 3.7b (recorded): an attach is a session change, then a resize.
+    // As tmux 3.7b (recorded): the panes it focuses, a session change, a
+    // resize, then the attach.
+    hooks::track_focus(state);
     hooks::client_session_changed(state, id);
     hooks::client_resized(state, id);
+    // As tmux: only attach-session fires it, not new-session's attach.
+    if !req_created {
+        hooks::client_attached(state, id);
+    }
     Ok(Accepted {
         id,
         output,
@@ -584,7 +593,9 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
     if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
         hooks::update_environment(state, session, &client_env);
     }
+    hooks::track_focus(state);
     hooks::client_session_changed(state, id);
+    check_unattached(state);
 }
 
 /// Session activity (tmux's `session_update_activity`): what makes it the
@@ -633,9 +644,8 @@ pub fn display_message(state: &mut State, id: ClientId, text: &str, delay: Optio
     set_message(state, id, text.to_string(), delay);
 }
 
-/// How many messages `show-messages` keeps: tmux's `message-limit`
-/// default.
-// ponytail: fixed until `message-limit` is an option.
+/// How many messages `show-messages` keeps when `message-limit` is unset:
+/// tmux's default.
 const MESSAGE_LIMIT: usize = 1000;
 
 /// Adds a status-line message for client `id` to the server's message
@@ -648,9 +658,15 @@ fn log_message(state: &mut State, id: ClientId, text: &str) {
 }
 
 fn push_message(state: &mut State, line: String) {
+    let limit = state
+        .model
+        .options
+        .lookup("message-limit", &[])
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(MESSAGE_LIMIT);
     let log = &mut state.registry.messages;
     log.push_back((SystemTime::now(), line));
-    while log.len() > MESSAGE_LIMIT {
+    while log.len() > limit {
         log.pop_front();
     }
 }
@@ -1120,6 +1136,44 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     sync_attached(state);
     leave_session(state, id, c.session);
     graphics::on_clients_changed(state);
+    hooks::track_focus(state);
+    hooks::client_detached(state, &c.name, c.session);
+    check_unattached(state);
+}
+
+/// tmux's `server_check_unattached`: a session no client shows goes when
+/// its `destroy-unattached` says so (`on`; `keep-last` keeps the last of a
+/// group and every ungrouped one; `keep-group` keeps the last of a group).
+/// Run where a session loses or gains a client, and when the option is set.
+pub fn check_unattached(state: &mut State) {
+    use crate::server::dispatch::options::Owner;
+    let unattached: Vec<SessionId> = state
+        .model
+        .sessions
+        .values()
+        .filter(|s| s.attached == 0)
+        .map(|s| s.id)
+        .collect();
+    for id in unattached {
+        let mode = state
+            .model
+            .options
+            .lookup("destroy-unattached", &[Owner::Session(id)]);
+        let grouped = state.model.group_of(id).map(|g| g.members.len());
+        let destroy = match mode {
+            Some("on") => true,
+            Some("keep-last") => grouped.is_some_and(|n| n > 1),
+            Some("keep-group") => grouped.is_none_or(|n| n > 1),
+            _ => false,
+        };
+        if destroy {
+            let removed = state.model.remove_session(id);
+            state.events.panes_killed(removed);
+        }
+    }
+    if state.model.closed() {
+        state.exit = true;
+    }
 }
 
 /// `id` no longer shows `session`: if it owned the size, the session's
@@ -2640,6 +2694,16 @@ pub(crate) fn key_settings(model: &Model, session: SessionId) -> KeySettings {
             .lookup("repeat-time", &chain)
             .and_then(|v| v.parse::<u64>().ok())
             .map_or(default.repeat_time, Duration::from_millis),
+        initial_repeat_time: model
+            .options
+            .lookup("initial-repeat-time", &chain)
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default.initial_repeat_time, Duration::from_millis),
+        prefix_timeout: model
+            .options
+            .lookup("prefix-timeout", &[])
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default.prefix_timeout, Duration::from_millis),
     }
 }
 
@@ -2818,6 +2882,7 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
         if state.model.options.lookup("focus-events", &[]) != Some("on") {
             return;
         }
+        hooks::client_focus(state, id, focused);
     }
     let hooks = state.registry.input_hooks.clone();
     let hooked = hooks
@@ -3198,6 +3263,7 @@ mod tests {
                     detach_others: false,
                     nest: true,
                     tty: Some(tty.to_string()),
+                    created: false,
                 },
             )
             .expect("attach");
@@ -3476,6 +3542,18 @@ mod tests {
         assert_eq!(
             messages(&state).next().map(|(_, m)| m.as_str()),
             Some("client-1 message: 0")
+        );
+        // `message-limit` is the cap once it is set.
+        state
+            .model
+            .options
+            .set(Owner::Global, "message-limit", "3", false)
+            .unwrap();
+        display_message(&mut state, id, "last", None);
+        assert_eq!(messages(&state).count(), 3);
+        assert_eq!(
+            messages(&state).next_back().map(|(_, m)| m.as_str()),
+            Some("client-1 message: last")
         );
     }
 

@@ -105,8 +105,9 @@ pub enum Preset {
     MainVertical { main: MainSize },
     /// As `MainVertical`, with the main pane on the right.
     MainVerticalMirrored { main: MainSize },
-    /// A grid, filled row by row.
-    Tiled,
+    /// A grid, filled row by row, at most `max_columns` wide (0: as wide as
+    /// needs be; `tiled-layout-max-columns`).
+    Tiled { max_columns: u16 },
 }
 
 impl Preset {
@@ -123,7 +124,12 @@ impl Preset {
 
     /// The preset tmux names `name`, its main pane sized by `width` (the
     /// vertical ones) or `height` (the horizontal ones).
-    pub fn from_name(name: &str, width: MainSize, height: MainSize) -> Option<Preset> {
+    pub fn from_name(
+        name: &str,
+        width: MainSize,
+        height: MainSize,
+        max_columns: u16,
+    ) -> Option<Preset> {
         Some(match name {
             "even-horizontal" => Preset::EvenHorizontal,
             "even-vertical" => Preset::EvenVertical,
@@ -131,7 +137,7 @@ impl Preset {
             "main-horizontal-mirrored" => Preset::MainHorizontalMirrored { main: height },
             "main-vertical" => Preset::MainVertical { main: width },
             "main-vertical-mirrored" => Preset::MainVerticalMirrored { main: width },
-            "tiled" => Preset::Tiled,
+            "tiled" => Preset::Tiled { max_columns },
             _ => return None,
         })
     }
@@ -145,7 +151,7 @@ impl Preset {
             Preset::MainHorizontalMirrored { .. } => 3,
             Preset::MainVertical { .. } => 4,
             Preset::MainVerticalMirrored { .. } => 5,
-            Preset::Tiled => 6,
+            Preset::Tiled { .. } => 6,
         }
     }
 }
@@ -571,7 +577,7 @@ impl LayoutTree {
             Preset::MainHorizontalMirrored { main } => main_split(area, v, main, panes, true),
             Preset::MainVertical { main } => main_split(area, h, main, panes, false),
             Preset::MainVerticalMirrored { main } => main_split(area, h, main, panes, true),
-            Preset::Tiled => tiled(area, panes),
+            Preset::Tiled { max_columns } => tiled(area, panes, max_columns),
         };
         let Some(root) = root else {
             return false;
@@ -1161,17 +1167,17 @@ fn main_split(
     })
 }
 
-/// tmux's `layout_set_tiled`: the fewest rows, then columns, that hold
-/// every pane, filled row by row, each cell the same size and the last
-/// row and each row's last cell taking what is left over; a pane alone
-/// on the last row spans it. `None` when the grid needs more room than
-/// `area` has (D18).
-fn tiled(area: Rect, panes: &[PaneId]) -> Option<Node> {
+/// tmux's `layout_set_tiled`: the fewest rows, then columns (up to
+/// `max_columns`, if not 0), that hold every pane, filled row by row, each
+/// cell the same size and the last row and each row's last cell taking
+/// what is left over; a pane alone on the last row spans it. `None` when
+/// the grid needs more room than `area` has (D18).
+fn tiled(area: Rect, panes: &[PaneId], max_columns: u16) -> Option<Node> {
     let n = panes.len();
     let (mut rows, mut cols) = (1usize, 1usize);
     while rows * cols < n {
         rows += 1;
-        if rows * cols < n {
+        if rows * cols < n && (max_columns == 0 || cols < usize::from(max_columns)) {
             cols += 1;
         }
     }
@@ -1840,6 +1846,27 @@ mod tests {
     const C: PaneId = PaneId(3);
     const D: PaneId = PaneId(4);
     const E: PaneId = PaneId(5);
+
+    /// `tiled-layout-max-columns` caps the grid's width: nine panes in
+    /// three columns become five rows of two (tmux's `layout_set_tiled`).
+    #[test]
+    fn tiled_stops_at_the_maximum_columns() {
+        let panes: Vec<PaneId> = (0..9).map(PaneId).collect();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 200,
+            rows: 60,
+        };
+        let rows_of = |max_columns: u16| match tiled(area, &panes, max_columns) {
+            Some(Node::Split { children, .. }) => children.len(),
+            _ => 0,
+        };
+        assert_eq!(rows_of(0), 3);
+        assert_eq!(rows_of(9), 3);
+        assert_eq!(rows_of(2), 5);
+        assert_eq!(rows_of(1), 9);
+    }
 
     #[test]
     fn single_pane_fills_area() {
@@ -3220,13 +3247,13 @@ mod tests {
             Preset::MainHorizontalMirrored { main: h },
             Preset::MainVertical { main: w },
             Preset::MainVerticalMirrored { main: w },
-            Preset::Tiled,
+            Preset::Tiled { max_columns: 0 },
         ];
         for (i, (name, preset)) in Preset::NAMES.iter().zip(want).enumerate() {
-            assert_eq!(Preset::from_name(name, w, h), Some(preset), "{name}");
+            assert_eq!(Preset::from_name(name, w, h, 0), Some(preset), "{name}");
             assert_eq!(preset.index(), i, "{name}");
         }
-        assert_eq!(Preset::from_name("nope", w, h), None);
+        assert_eq!(Preset::from_name("nope", w, h, 0), None);
     }
 
     #[test]
@@ -3251,7 +3278,7 @@ mod tests {
         prop_oneof![
             Just(Preset::EvenHorizontal),
             Just(Preset::EvenVertical),
-            Just(Preset::Tiled),
+            Just(Preset::Tiled { max_columns: 0 }),
             (0u16..60).prop_map(|c| Preset::MainHorizontal {
                 main: MainSize::Cells(c)
             }),
@@ -3383,7 +3410,7 @@ mod tests {
         let mvm = Preset::MainVerticalMirrored {
             main: MainSize::WIDTH,
         };
-        let t = Preset::Tiled;
+        let t = Preset::Tiled { max_columns: 0 };
         let cases: &[((u16, u16), u32, Preset, &str)] = &[
             ((200, 50), 2, mh, "0,0 200x24;0,25 200x25"),
             ((200, 50), 2, mhm, "0,26 200x24;0,0 200x25"),
@@ -3517,7 +3544,7 @@ mod tests {
         let mut tree = stacked(area, &order);
         let before = tree.compute(area);
         for (i, name) in Preset::NAMES.iter().enumerate() {
-            let preset = Preset::from_name(name, MainSize::WIDTH, MainSize::HEIGHT).unwrap();
+            let preset = Preset::from_name(name, MainSize::WIDTH, MainSize::HEIGHT, 0).unwrap();
             let mut t = tree.clone();
             let applied = t.preset(rect(3, 3), preset, &order);
             assert!(!applied, "{name}");
@@ -3811,7 +3838,7 @@ mod tests {
 
         tree.resize(area, A, Edge::Right, 30);
         tree.resize_to(area, D, Dir::Vertical, 3);
-        assert!(tree.preset(area, Preset::Tiled, &[A, D, B, C]));
+        assert!(tree.preset(area, Preset::Tiled { max_columns: 0 }, &[A, D, B, C]));
         assert_ne!(tree.compute(area), before);
 
         tree.import(&exported).unwrap();
@@ -3981,7 +4008,7 @@ mod tests {
                     8 => {
                         let name = Preset::NAMES[a % Preset::NAMES.len()];
                         let main = if flags[1] { MainSize::Cells(n) } else { MainSize::Percent(n as u8) };
-                        let preset = Preset::from_name(name, main, main).unwrap();
+                        let preset = Preset::from_name(name, main, main, 0).unwrap();
                         let order: Vec<PaneId> = tree.order.clone();
                         let old = tree.clone();
                         if !tree.preset(area, preset, &order) {

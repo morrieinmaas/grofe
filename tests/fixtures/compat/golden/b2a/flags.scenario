@@ -1,0 +1,49 @@
+# Command flags B2a adds: -e on split-window, new-window and new-pane,
+# split-window -Z, new-window -b -k -S, kill-pane -a, kill-session -a and
+# -C, and break-pane -a -b -P -F.
+$ new-session -d -s main -n first -x 100 -y 30 cat
+$ split-window -d -t main:1 -e FOO=bar -e BAZ=qux -e NOEQ sh -c 'echo "$FOO $BAZ $NOEQ" > $HOME/e1.log; exec cat'
+$ new-window -d -t main -n second -e FOO=win sh -c 'echo "$FOO" > $HOME/e2.log; exec cat'
+$ new-pane -d -t main:1 -e FOO=float sh -c 'echo "$FOO" > $HOME/e3.log; exec cat'
+$ new-session -d -s envs -e ONLY=session sh -c 'echo "$ONLY" > $HOME/e4.log; exec cat'
+$ new-window -d -t envs: -n w sh -c 'echo "$ONLY" > $HOME/e5.log; exec cat'
+$ run-shell 'sleep 1'
+$ run-shell 'cat $HOME/e1.log $HOME/e2.log $HOME/e3.log $HOME/e4.log $HOME/e5.log'
+$ kill-session -t envs
+$ list-windows -t main -F '#{window_index}:#{window_name}:#{window_zoomed_flag}'
+$ split-window -t main:1 -Z cat
+$ list-panes -t main:1 -F '#{pane_index} #{pane_active} #{window_zoomed_flag}'
+$ split-window -d -t main:1 -Z cat
+$ list-panes -t main:1 -F '#{pane_index} #{pane_active} #{window_zoomed_flag}'
+$ select-pane -t main:1.1
+$ list-panes -t main:1 -F '#{pane_index} #{pane_active} #{window_zoomed_flag}'
+$ kill-pane -a -t main:1.2
+$ list-panes -t main:1 -F '#{pane_index} #{pane_id} #{window_zoomed_flag}'
+$ new-window -d -t main:2 -b -n before cat
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ new-window -d -t main:3 -n x cat
+$ new-window -d -t main:3 -k -n killed cat
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ new-window -d -S -n killed -t main
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ new-window -d -S -n fresh -t main
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ new-window -d -n killed -t main cat
+$ new-window -d -S -n killed -t main
+$ new-window -S -n killed -t main
+$ list-windows -t main -F '#{window_index}:#{window_name}:#{window_active}'
+$ break-pane -d -a -P -F '#{session_name}:#{window_index}.#{pane_index}' -s main:1.1 -t main:1
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ split-window -d -t main:2 cat
+$ break-pane -d -b -P -n brk -s main:2.1 -t main:2
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ break-pane -d -P -n named -s main:2.1
+$ list-windows -t main -F '#{window_index}:#{window_name}'
+$ new-session -d -s a2 cat
+$ new-session -d -s b2 cat
+$ new-session -d -s c2 cat
+$ kill-session -a -t b2
+$ list-sessions -F '#{session_name}'
+$ kill-session -a -t nope
+$ kill-pane -a -t nope
+$ kill-session -C -t b2

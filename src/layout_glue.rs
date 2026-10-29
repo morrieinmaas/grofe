@@ -107,7 +107,7 @@ impl layouts::Server for Host {
         }
         control_hello(&self.socket)?;
         let argv = ["attach-session", "-t", session_id].map(String::from);
-        let reason = attach_to(&self.socket, &argv)?;
+        let reason = attach_to(&self.socket, &argv, false)?;
         println!("[{reason}]");
         Ok(())
     }

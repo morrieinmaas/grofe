@@ -171,12 +171,22 @@ impl Drop for Live<'_> {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let _ = self
+        // Bounded: a server that stops answering must not hang the test.
+        let kill = self
             .cli
             .command(&["kill-server".to_string()])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn();
+        if let Ok(mut kill) = kill {
+            let deadline = Instant::now() + CMD_TIMEOUT;
+            while matches!(kill.try_wait(), Ok(None)) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let _ = kill.kill();
+            let _ = kill.wait();
+        }
     }
 }
 

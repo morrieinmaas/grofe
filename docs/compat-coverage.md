@@ -253,7 +253,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   argument count) refuses the file, runs nothing, and prints
   `<path>:<line>: <error>` on stdout with exit 1, as tmux's
   `cfg_print_causes`. A command that is valid tmux but that grofe cannot do
-  (an `Unsupported` row, a hook or flag it lacks, `set-hook` without `-g`)
+  (an `Unsupported` row, a flag it lacks)
   fails only itself and the rest of its `;` line, with the same text on
   stderr, and is noted in `compat-miss.log`; the other lines run. A nested
   `source-file` is the same. `source-file` takes `-F` (path as a format),
@@ -274,18 +274,100 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   moves the client to the neighbour in name order instead. Stored with no
   effect, like `terminal-features`: `terminal-overrides` (a list),
   `window-status-activity-style` and `focus-follows-mouse`. A colour option
-  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names). Still
-  absent: `key-table`, `exit-unattached`, `destroy-unattached`,
-  `display-panes-*`, `message-command-style`.
+  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names).
+- **The rest of tmux 3.7b's options (B2a).** Every option in tmux's table is
+  now a real option that `set` and `show` take, with tmux's type, scope,
+  default and error words (`golden/b2a/options`): the 33 style options are
+  checked with `style_parse` as tmux checks them (`invalid style: x`, unless
+  the value holds a format), `pane-colours` elements as colours, and
+  `default-client-command` as commands. `codepoint-widths`, `pane-colours`
+  and `user-keys` are arrays. `prompt-cursor-colour` and `cursor-colour`
+  accept `none` (tmux shows it but refuses it). These have an effect:
+  `destroy-unattached` (also on every request's end, as tmux checks as each
+  CLI client goes), `exit-unattached`, `initial-repeat-time`, `prefix-timeout`,
+  `display-panes-time`, `-colour` and `-active-colour`, `message-limit`,
+  `allow-set-title`, `tiled-layout-max-columns`, and `popup-border-lines`
+  and `popup-border-style` (the defaults of `display-popup`'s `-b` and
+  `-S`; `golden/b2a/options-effects`, `options-sessions`, `options-popup`).
+  The others are stored with no effect (`show-config --explain` marks
+  them): `alternate-screen`, `scroll-on-clear`, `cursor-style`,
+  `cursor-colour`, `fill-character`, `key-table`, `lock-*`, `menu-*`,
+  `popup-style`, `copy-mode-mark-style`, `-selection-style`, `-position-*`
+  and the `copy-mode-*line-number*` ones (the two match styles do take
+  effect), `pane-scrollbars*`, `pane-status-*`, `session-status-*`,
+  `tree-mode-preview-*`, `window-pane-*status-format`, `xterm-keys`,
+  `assume-paste-time`, `default-client-command`, `pane-colours`, `other-pane-height`/`-width` (the `main-*` layouts size
+  from `main-pane-*` alone), `remain-on-exit-format`, `message-format`,
+  `message-line`, `message-command-style`, `prompt-*-cursor-*`, `editor`,
+  `history-file`, `get-clipboard`, `backspace`, `user-keys`,
+  `codepoint-widths`, `input-buffer-size`, `prompt-history-limit` and
+  `variation-selector-always-wide`.
+- **Hooks (B2a)** are tmux's: an array of commands per scope (`set-hook -g`
+  global, `-t` a session, `-w -t` a window, `-p -t` a pane), `-a` appends,
+  `name[N]` sets one element, `-u` removes (a local hook falls back to the
+  wider scope again, an empty local one hides it), `-R` runs the hook now,
+  and `show-hooks [-gpw] [-t]` lists them as tmux does
+  (`golden/b2a/hook-scopes`, `hook-fire`). All 68 hook names are accepted. A
+  firing hook runs the nearest scope that has commands (a session hook:
+  session, global; `pane-*`: pane, window, global; `window-*`: window,
+  global). Every `after-<verb>` hook of a command grofe has fires with
+  tmux's context (`hook-after`), and `command-error` fires when a command
+  fails: what it prints goes out with the error, and its own errors after
+  the command's (`hook-command-error`; a `run-shell` hook makes tmux exit
+  0, grofe exits 1). Commands a notify hook runs fire no hooks at all, as
+  tmux's `notify_add` skips them, so a `window-renamed` hook that renames
+  cannot fire itself and a session it kills fires no `session-closed`
+  (`hook-quiet`); an `after-*` hook's commands fire notify hooks but no
+  `after-*` ones.
+  The notify hooks `session-renamed`, `session-window-changed`,
+  `window-renamed`, `window-pane-changed`, `window-layout-changed`,
+  `window-resized`, `window-linked`, `window-unlinked`, `pane-title-changed`,
+  `pane-focus-in`/`-out` and `pane-set-clipboard` are found by comparing the
+  model with its last look after each command and each message but pane
+  output (`server/hooks/watch.rs`; `hook-events`), so two changes in one
+  request fire twice. `rename-window` fires `window-renamed` even for the
+  same name, and `select-layout` and `next-layout` fire
+  `window-layout-changed` twice (`select-layout -E` once), as tmux does
+  (`hook-quiet`).
+  `client-attached`, `client-detached` and
+  `client-focus-in`/`-out` fire where the client changes; a `new-session`
+  that attaches fires no `client-attached`, only `attach-session` does
+  (`hook-new-attach`). Never fired,
+  accepted so a tmux config loads: `after-lock-server`, `after-queue`,
+  `after-pipe-pane`, `client-active`, `client-light-theme`,
+  `client-dark-theme`, `pane-mode-changed`. Known divergences: two changes
+  of the same thing inside one command fire once; an `after-*` hook's
+  failing command is dropped (tmux prints it and exits 1);
+  `hook_arguments`, `hook_argument_N` and `hook_flag_*` are not set.
+  grofe's own names for the first fifteen (`pane-focused`, ...) still work
+  with `set-hook` in its own dialect.
+- **Command flags (B2a)** follow tmux 3.7b (`golden/b2a/flags`):
+  `split-window`, `new-window`, `new-pane` and `new-session` take `-e
+  VAR=value` (repeatable; a word with no `=` is ignored; the variable
+  reaches the new pane after the session's own, `new-session -e` belongs to
+  the session), `split-window -Z` zooms the window on the active pane
+  afterwards (`new-pane -Z` is accepted and does nothing), `new-pane -d`
+  keeps the active pane. `new-window -b` takes the target's index and moves
+  it up, `-k` replaces a window at the index (a current one is replaced
+  even with `-d`), `-S -n name` selects the window of that name instead of
+  making another (`multiple windows named x` for two). `kill-pane -a` keeps
+  only the target (floating panes go too), `kill-session -a` keeps only the
+  target, `-C` clears its alert flags and `-g` kills its whole group.
+  `break-pane -a`/`-b` put the window after or before `-t`'s, `-P -F` print
+  it. Flag options read `1`, `0` and `on`, `yes`, `off` and `no` in any
+  case, as tmux; `true` and `false` are `bad value` in the tmux dialect, as
+  in tmux 3.7b (`options-flags`), and read only in grofe's own (a TOML
+  `true` is `on` before it gets there).
 - **`#{client_pid}` (B1a)** is the pid of the attached client, from the
   socket's peer credentials (`tests/client_pid.rs`); empty with no client.
 - **Linked windows and session groups (B1e)** follow tmux 3.7b
   (`docs/linked-windows.md`, `golden/b1e`): `link-window -a -b -d -k`,
   `unlink-window -k`, `move-window -a -b -d -k -r`, `new-session -t`, and the
   `window_linked*` and `session_group*` formats. Known divergences: a window
-  can be linked into a session once (tmux allows twice); the
-  `window-linked` and `window-unlinked` hooks do not exist; alert flags and
-  `pane`-level option lookups use the window's first link.
+  can be linked into a session once (tmux allows twice); a
+  `window-linked` hook for a second session runs in the window's first
+  link; alert flags and `pane`-level option lookups use the window's first
+  link.
 - **Options and format variables** the spec does not name are listed in the
   generated tables below (a `no` in the last column).
 - **Format modifiers (B1b)** follow tmux 3.7b's `format.c` and are recorded

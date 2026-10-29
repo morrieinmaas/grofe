@@ -96,11 +96,19 @@ pub struct NewSession {
     /// `-t` (B1e): the session to group with, raw (a name that is no
     /// session makes a new group of that name).
     pub group: Option<String>,
+    /// `-e`: variables of the session's environment, which its panes get.
+    pub env: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KillSession {
     pub target: Target,
+    /// `-a`: every session but the target.
+    pub others: bool,
+    /// `-C`: clear the target's alert flags instead.
+    pub clear_alerts: bool,
+    /// `-g`: the target's whole session group.
+    pub group: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +125,7 @@ pub struct ListSessions {
 
 /// `new-window` (`-d -t -n -c`, plus a trailing shell command; from M3.6
 /// `-a -P -F`, TC.8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NewWindow {
     pub detached: bool,
     pub target: Target,
@@ -130,6 +138,14 @@ pub struct NewWindow {
     pub print: bool,
     /// `-F`.
     pub format: Option<String>,
+    /// `-e`: variables for the new pane's environment.
+    pub env: Vec<(String, String)>,
+    /// `-b`: at the index before the target window.
+    pub before: bool,
+    /// `-k`: a window at the index asked for goes, instead of an error.
+    pub kill: bool,
+    /// `-S`: with `-n`, select a window of that name if there is one.
+    pub select_existing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +172,7 @@ pub struct ListWindows {
 
 /// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command;
 /// from M3.6 `-b -f -d -P -F`, TC.8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitWindow {
     pub dir: Dir,
     pub cwd: Option<String>,
@@ -173,11 +189,17 @@ pub struct SplitWindow {
     pub print: bool,
     /// `-F`.
     pub format: Option<String>,
+    /// `-e`: variables for the new pane's environment.
+    pub env: Vec<(String, String)>,
+    /// `-Z`: the new pane fills the window.
+    pub zoom: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KillPane {
     pub target: Target,
+    /// `-a`: every pane of the window but the target.
+    pub others: bool,
 }
 
 /// `select-pane` (`-L -R -U -D -t`). `edge` is `None` when no direction
@@ -648,7 +670,7 @@ pub struct SwapWindow {
 }
 
 /// `break-pane` (TC.8): move pane `-s` into a window of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BreakPane {
     /// `-s`.
     pub src: Target,
@@ -658,6 +680,14 @@ pub struct BreakPane {
     pub detach: bool,
     /// `-n`: the new window's name.
     pub name: Option<String>,
+    /// `-a`: at the index after `-t`'s window, later windows moving up.
+    pub after: bool,
+    /// `-b`: at the index before `-t`'s window.
+    pub before: bool,
+    /// `-P`: print the new window (`-F`, else tmux's default format).
+    pub print: bool,
+    /// `-F`.
+    pub format: Option<String>,
 }
 
 /// `resize-window` (TC.8).
@@ -890,7 +920,7 @@ pub enum Offset {
 /// which fzf 0.74.4 sends as `-x 138 -y 30 -X 31 -Y 9`; TC.6's golden
 /// (M36-R2) settles their meaning. Sizes may be `N%` (`-x 50%`); whether
 /// one fits the window is checked when it runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NewPane {
     /// `-P`: print the new pane's `format`.
     pub print: bool,
@@ -909,6 +939,12 @@ pub struct NewPane {
     /// `-Y`.
     pub y: Option<Offset>,
     pub command: Option<Vec<String>>,
+    /// `-e`: variables for the new pane's environment.
+    pub env: Vec<(String, String)>,
+    /// `-Z`: accepted; a floating pane never changes the window's zoom.
+    pub zoom: bool,
+    /// `-d`: the new pane does not become active.
+    pub detached: bool,
 }
 
 /// `float-pane` (grofe's own; tmux 3.7b has no such verb): a tiled pane
@@ -1015,13 +1051,28 @@ pub struct If {
 }
 
 /// `set-hook` (TC.5): bind a command to one of grofe's events (the event
-/// names are TC.5's; FE.3 maps tmux's hook names onto them).
+/// names are TC.5's; FE.3 maps tmux's hook names onto them). The flags are
+/// tmux's: `-g` the global hooks, `-p`/`-w`/`-t` a pane's, window's or
+/// session's own, `-a` append, `-u` remove, `-R` run now; a hook is an
+/// array, so the name may end in `[N]`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SetHook {
     /// `-g`.
     pub global: bool,
     /// `-u`: remove the hook.
     pub unset: bool,
+    /// `-a`: add the command after the others.
+    pub append: bool,
+    /// `-p`: a pane's hook (a window's hook that panes may override).
+    pub pane: bool,
+    /// `-w`: a window's hook.
+    pub window: bool,
+    /// `-R`: run the hook now instead of setting it.
+    pub run: bool,
+    /// `-t`: where the hook is set or run.
+    pub target: Target,
+    /// The `-t` text, for the errors that name it.
+    pub target_text: Option<String>,
     /// Required; `None` only for a bare `set-hook`.
     pub hook: Option<String>,
     /// A stored command string.
@@ -1035,6 +1086,12 @@ pub struct ShowHooks {
     pub global: bool,
     /// `-w`: tmux's window and pane hooks, listed apart from the rest.
     pub window: bool,
+    /// `-p`: a pane's own hooks.
+    pub pane: bool,
+    /// `-t`: whose hooks.
+    pub target: Target,
+    /// The `-t` text, for the errors that name it.
+    pub target_text: Option<String>,
     pub hook: Option<String>,
 }
 

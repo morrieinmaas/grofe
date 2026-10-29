@@ -2583,6 +2583,12 @@ pub struct KeySettings {
     pub prefix2: Option<Key>,
     /// `repeat-time`; zero turns repeat off.
     pub repeat_time: Duration,
+    /// `initial-repeat-time`: the first press of a repeating key waits this
+    /// long instead, unless zero.
+    pub initial_repeat_time: Duration,
+    /// `prefix-timeout`: how long the prefix table waits for a key; zero
+    /// waits for ever.
+    pub prefix_timeout: Duration,
 }
 
 impl KeySettings {
@@ -2601,6 +2607,8 @@ impl Default for KeySettings {
             prefix: Some(Key::new(KeyCode::Char('b'), ctrl())),
             prefix2: None,
             repeat_time: Duration::from_millis(500),
+            initial_repeat_time: Duration::ZERO,
+            prefix_timeout: Duration::ZERO,
         }
     }
 }
@@ -2611,6 +2619,10 @@ pub struct KeyState {
     table: String,
     /// Set while a repeating binding's `repeat-time` runs.
     repeat_until: Option<Instant>,
+    /// The key that last started or kept a repeat.
+    repeat_key: Option<Key>,
+    /// Set while the prefix table waits, under `prefix-timeout`.
+    prefix_until: Option<Instant>,
 }
 
 impl Default for KeyState {
@@ -2618,6 +2630,8 @@ impl Default for KeyState {
         KeyState {
             table: ROOT_TABLE.to_string(),
             repeat_until: None,
+            repeat_key: None,
+            prefix_until: None,
         }
     }
 }
@@ -2636,16 +2650,23 @@ impl KeyState {
     pub fn set_table(&mut self, name: &str) {
         self.table = name.to_string();
         self.repeat_until = None;
+        self.prefix_until = None;
     }
 
-    /// When the running repeat ends, if one is running.
+    /// When the running repeat or the wait for a key after the prefix
+    /// ends, if one is running.
     pub fn deadline(&self) -> Option<Instant> {
-        self.repeat_until
+        [self.repeat_until, self.prefix_until]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
-    /// End an expired repeat; whether the table changed (status redraw).
+    /// End an expired repeat, or a prefix nobody followed within
+    /// `prefix-timeout`; whether the table changed (status redraw).
     pub fn expire(&mut self, now: Instant) -> bool {
-        if self.repeat_until.is_some_and(|d| now >= d) {
+        let due = |t: Option<Instant>| t.is_some_and(|d| now >= d);
+        if due(self.repeat_until) || due(self.prefix_until) {
             self.set_table(ROOT_TABLE);
             true
         } else {
@@ -2698,6 +2719,8 @@ impl KeyState {
             // The prefix always wins, unless already in the prefix table.
             if settings.is_prefix(&key) && self.table != PREFIX_TABLE {
                 self.set_table(PREFIX_TABLE);
+                self.prefix_until =
+                    (!settings.prefix_timeout.is_zero()).then(|| now + settings.prefix_timeout);
                 return Routed::Consumed;
             }
             if let Some(b) = tables.lookup(&self.table, &key) {
@@ -2710,7 +2733,16 @@ impl KeyState {
                     continue;
                 }
                 if b.repeat && !settings.repeat_time.is_zero() {
-                    self.repeat_until = Some(now + settings.repeat_time);
+                    // As `server_client_repeat_time`: the first press of a
+                    // key, or a different one, waits `initial-repeat-time`.
+                    let first_press = !repeating || self.repeat_key != Some(key);
+                    let wait = if first_press && !settings.initial_repeat_time.is_zero() {
+                        settings.initial_repeat_time
+                    } else {
+                        settings.repeat_time
+                    };
+                    self.repeat_until = Some(now + wait);
+                    self.repeat_key = Some(key);
                 } else {
                     self.set_table(ROOT_TABLE);
                 }
@@ -3841,6 +3873,44 @@ mod tests {
         assert_eq!(c.state.table(), PREFIX_TABLE);
         assert!(c.state.expire(t + Duration::from_millis(500)));
         assert_eq!(c.state.table(), ROOT_TABLE);
+    }
+
+    /// `initial-repeat-time` replaces `repeat-time` for the first press of
+    /// a repeating key, or a different one, and not for the presses that
+    /// keep it going.
+    #[test]
+    fn initial_repeat_time_is_for_the_first_press_only() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.settings.initial_repeat_time = Duration::from_millis(100);
+        c.send(b"\x02\x1b[A", t);
+        assert_eq!(c.state.deadline(), Some(t + Duration::from_millis(100)));
+        let later = t + Duration::from_millis(50);
+        c.send(b"\x1b[A", later);
+        assert_eq!(c.state.deadline(), Some(later + Duration::from_millis(500)));
+        // After the repeat ran out, the next press is a first one again.
+        let after = later + Duration::from_secs(1);
+        c.state.expire(after);
+        c.send(b"\x02\x1b[A", after);
+        assert_eq!(c.state.deadline(), Some(after + Duration::from_millis(100)));
+    }
+
+    /// `prefix-timeout` ends the wait for the key after the prefix.
+    #[test]
+    fn prefix_timeout_returns_to_root() {
+        let t = Instant::now();
+        let mut c = Client::new();
+        c.settings.prefix_timeout = Duration::from_millis(200);
+        c.send(b"\x02", t);
+        assert_eq!(c.state.table(), PREFIX_TABLE);
+        assert_eq!(c.state.deadline(), Some(t + Duration::from_millis(200)));
+        assert!(!c.state.expire(t + Duration::from_millis(199)));
+        assert!(c.state.expire(t + Duration::from_millis(200)));
+        assert_eq!(c.state.table(), ROOT_TABLE);
+        // Without it the prefix waits for ever.
+        c.settings.prefix_timeout = Duration::ZERO;
+        c.send(b"\x02", t);
+        assert_eq!(c.state.deadline(), None);
     }
 
     #[test]

@@ -573,3 +573,61 @@ fn sighup_is_ignored_and_sigint_stops_the_server() {
     )
     .unwrap_or_else(|e| panic!("SIGINT did not stop the server: {e}; log:\n{}", srv.log()));
 }
+
+/// A shell that writes its pid to `pidfile`, then runs until `dir` is gone
+/// (so even a failed test leaves it running no longer than its tempdir).
+/// With `ignore_term`, SIGTERM does not stop it.
+fn hung_job(pidfile: &std::path::Path, dir: &std::path::Path, ignore_term: bool) -> String {
+    let trap = if ignore_term { "trap '' TERM; " } else { "" };
+    format!(
+        "{trap}echo $$ > '{}'; while [ -d '{}' ]; do sleep 0.05; done",
+        pidfile.display(),
+        dir.display()
+    )
+}
+
+/// The pid `hung_job` wrote, once it has.
+fn job_pid(pidfile: &std::path::Path) -> nix::unistd::Pid {
+    let mut pid = None;
+    wait_until(
+        || {
+            pid = std::fs::read_to_string(pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse().ok());
+            pid.is_some()
+        },
+        WAIT,
+    )
+    .expect("the job started");
+    nix::unistd::Pid::from_raw(pid.unwrap_or_default())
+}
+
+/// As tmux 3.7b (`job_kill_all` as its server exits): `kill-server` sends
+/// SIGTERM to a `run-shell -b` job still running, so none outlives it.
+#[test]
+fn kill_server_ends_a_hung_background_run_shell() {
+    let srv = TestServer::start();
+    let keep = tempfile::tempdir().expect("tempdir");
+    let pidfile = srv.home.join("job.pid");
+    srv.cmd(&["run-shell", "-b", &hung_job(&pidfile, keep.path(), false)])
+        .expect("run-shell -b");
+    let pid = job_pid(&pidfile);
+    srv.cmd(&["kill-server"]).expect("kill-server");
+    wait_until(|| process_gone(pid), WAIT)
+        .unwrap_or_else(|e| panic!("job {pid} outlived the server: {e}"));
+}
+
+/// Dropping the harness leaves nothing the server started behind, even a
+/// job that ignores the SIGTERM the server ends it with.
+#[test]
+fn dropping_the_harness_ends_a_job_that_ignores_sigterm() {
+    let srv = TestServer::start();
+    let keep = tempfile::tempdir().expect("tempdir");
+    let pidfile = keep.path().join("job.pid");
+    srv.cmd(&["run-shell", "-b", &hung_job(&pidfile, keep.path(), true)])
+        .expect("run-shell -b");
+    let pid = job_pid(&pidfile);
+    drop(srv);
+    wait_until(|| process_gone(pid), WAIT)
+        .unwrap_or_else(|e| panic!("job {pid} outlived the harness: {e}"));
+}

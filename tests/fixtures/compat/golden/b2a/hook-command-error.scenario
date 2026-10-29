@@ -1,0 +1,12 @@
+# command-error runs after a failing command: what it prints goes out with
+# the error, its own failing command's error after the first, and the
+# request still fails. (A run-shell hook makes tmux exit 0; hook-events.)
+$ new-session -d -s a -x 80 -y 24 cat
+$ set-hook -g command-error 'display -p "err-hook #{hook}"'
+$ select-pane -t nosuch:9
+$ display -p ok ; select-pane -t nosuch:9 ; display -p after
+$ set-hook -g command-error 'display -p one ; select-pane -t nope2:3 ; display -p two'
+$ select-pane -t nosuch:9
+$ set-hook -g command-error 'set -g @x 1'
+$ select-pane -t nosuch:9
+$ show -gv @x

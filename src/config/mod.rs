@@ -132,6 +132,81 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
         "copy-mode.current-match-style",
         "copy-mode-current-match-style",
     ),
+    // B2a: the rest of tmux 3.7b's options, by tmux's names.
+    ("prefix-timeout", "prefix-timeout"),
+    ("assume-paste-time", "assume-paste-time"),
+    ("destroy-unattached", "destroy-unattached"),
+    ("display-panes-active-colour", "display-panes-active-colour"),
+    ("display-panes-colour", "display-panes-colour"),
+    ("display-panes-time", "display-panes-time"),
+    ("initial-repeat-time", "initial-repeat-time"),
+    ("key-table", "key-table"),
+    ("lock-after-time", "lock-after-time"),
+    ("lock-command", "lock-command"),
+    ("message-command-style", "message-command-style"),
+    ("message-format", "message-format"),
+    ("message-line", "message-line"),
+    ("prompt-cursor-colour", "prompt-cursor-colour"),
+    ("prompt-cursor-style", "prompt-cursor-style"),
+    ("prompt-command-cursor-style", "prompt-command-cursor-style"),
+    ("cursor-colour", "cursor-colour"),
+    ("cursor-style", "cursor-style"),
+    ("menu-style", "menu-style"),
+    ("menu-selected-style", "menu-selected-style"),
+    ("menu-border-style", "menu-border-style"),
+    ("menu-border-lines", "menu-border-lines"),
+    ("pane-status-current-style", "pane-status-current-style"),
+    ("pane-status-style", "pane-status-style"),
+    (
+        "session-status-current-style",
+        "session-status-current-style",
+    ),
+    ("session-status-style", "session-status-style"),
+    ("allow-set-title", "allow-set-title"),
+    ("alternate-screen", "alternate-screen"),
+    ("copy-mode-mark-style", "copy-mode-mark-style"),
+    ("copy-mode-position-format", "copy-mode-position-format"),
+    ("copy-mode-position-style", "copy-mode-position-style"),
+    ("copy-mode-selection-style", "copy-mode-selection-style"),
+    (
+        "copy-mode-current-line-number-style",
+        "copy-mode-current-line-number-style",
+    ),
+    ("copy-mode-line-number-style", "copy-mode-line-number-style"),
+    ("copy-mode-line-numbers", "copy-mode-line-numbers"),
+    ("fill-character", "fill-character"),
+    ("other-pane-height", "other-pane-height"),
+    ("other-pane-width", "other-pane-width"),
+    ("pane-scrollbars", "pane-scrollbars"),
+    ("pane-scrollbars-style", "pane-scrollbars-style"),
+    ("pane-scrollbars-position", "pane-scrollbars-position"),
+    ("popup-style", "popup-style"),
+    ("popup-border-style", "popup-border-style"),
+    ("popup-border-lines", "popup-border-lines"),
+    ("remain-on-exit-format", "remain-on-exit-format"),
+    ("scroll-on-clear", "scroll-on-clear"),
+    ("tiled-layout-max-columns", "tiled-layout-max-columns"),
+    ("tree-mode-preview-format", "tree-mode-preview-format"),
+    ("tree-mode-preview-style", "tree-mode-preview-style"),
+    (
+        "window-pane-current-status-format",
+        "window-pane-current-status-format",
+    ),
+    ("window-pane-status-format", "window-pane-status-format"),
+    ("xterm-keys", "xterm-keys"),
+    ("backspace", "backspace"),
+    ("default-client-command", "default-client-command"),
+    ("editor", "editor"),
+    ("exit-unattached", "exit-unattached"),
+    ("get-clipboard", "get-clipboard"),
+    ("history-file", "history-file"),
+    ("input-buffer-size", "input-buffer-size"),
+    ("message-limit", "message-limit"),
+    ("prompt-history-limit", "prompt-history-limit"),
+    (
+        "variation-selector-always-wide",
+        "variation-selector-always-wide",
+    ),
 ];
 
 /// TOML key to tmux option name for every list option (TC.2b). A TOML
@@ -142,6 +217,9 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("update-environment", "update-environment"),
     ("terminal-features", "terminal-features"),
     ("terminal-overrides", "terminal-overrides"),
+    ("codepoint-widths", "codepoint-widths"),
+    ("pane-colours", "pane-colours"),
+    ("user-keys", "user-keys"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -177,7 +255,13 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "wrap-search"
         | "graphics"
         | "focus-follows-mouse"
-        | "exit-empty" => Ty::Bool,
+        | "exit-empty"
+        | "allow-set-title"
+        | "alternate-screen"
+        | "scroll-on-clear"
+        | "xterm-keys"
+        | "exit-unattached"
+        | "variation-selector-always-wide" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
@@ -189,7 +273,16 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "status.interval"
         | "message.display-time-ms"
         | "monitor-silence"
-        | "buffer-limit" => Ty::Int,
+        | "buffer-limit"
+        | "assume-paste-time"
+        | "display-panes-time"
+        | "initial-repeat-time"
+        | "lock-after-time"
+        | "tiled-layout-max-columns"
+        | "input-buffer-size"
+        | "message-limit"
+        | "prefix-timeout"
+        | "prompt-history-limit" => Ty::Int,
         _ => Ty::Str,
     }
 }

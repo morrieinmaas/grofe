@@ -52,8 +52,30 @@ const SELECTED_STYLE: &str = "bg=yellow,fg=black";
 const PANES_TIME: Duration = Duration::from_millis(1000);
 
 /// tmux's `display-panes-colour` and `display-panes-active-colour`.
-const PANES_STYLE: &str = "fg=blue";
-const PANES_ACTIVE_STYLE: &str = "fg=red";
+/// `display-panes-colour` and `display-panes-active-colour` as styles, and
+/// `display-panes-time` as a duration, for the client's session.
+fn panes_options(state: &State, id: ClientId) -> (String, String, Duration) {
+    use crate::server::dispatch::options::Owner;
+    let owners: Vec<Owner> = state
+        .clients
+        .get(&id)
+        .map(|c| Owner::Session(c.session))
+        .into_iter()
+        .collect();
+    let options = &state.model.options;
+    let colour = |name: &str, default: &str| {
+        format!("fg={}", options.lookup(name, &owners).unwrap_or(default))
+    };
+    let time = options
+        .lookup("display-panes-time", &owners)
+        .and_then(|t| t.parse::<u64>().ok())
+        .map_or(PANES_TIME, Duration::from_millis);
+    (
+        colour("display-panes-colour", "blue"),
+        colour("display-panes-active-colour", "red"),
+        time,
+    )
+}
 
 /// Open menus and pane labels, per client. Lives on `State.menus`.
 #[derive(Default)]
@@ -689,12 +711,13 @@ pub fn open_panes(state: &mut State, id: ClientId) -> bool {
     state.menus.generation += 1;
     let generation = state.menus.generation;
     state.menus.open.insert(id, Open::Panes(generation));
+    let (_, _, time) = panes_options(state, id);
     clients::mark_dirty(state, id);
     // Without a runtime (unit tests) the labels stay until a key.
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
         let jobs = state.jobs.clone();
         rt.spawn(async move {
-            tokio::time::sleep(PANES_TIME).await;
+            tokio::time::sleep(time).await;
             let job: crate::server::Job = Box::new(move |state: &mut State| {
                 if matches!(state.menus.open.get(&id), Some(Open::Panes(g)) if *g == generation) {
                     state.menus.close(id);
@@ -852,7 +875,8 @@ impl Overlay for MenuOverlay {
             }
             Some(Open::Panes(_)) => {
                 let labels = pane_labels(state, client, cx);
-                draw_panes(&labels, screen);
+                let (style, active, _) = panes_options(state, client);
+                draw_panes(&labels, screen, &style, &active);
                 screen.cursor = None;
             }
             None => {}
@@ -1067,7 +1091,7 @@ const DIGITS: [[&str; 5]; 10] = [
 /// right and, from index 10, the letter that selects it under the digits;
 /// a pane too small for the digits gets the index (and letter) as text.
 /// The active pane's label is red, the others blue.
-fn draw_panes(labels: &[PaneLabel], screen: &mut Screen) {
+fn draw_panes(labels: &[PaneLabel], screen: &mut Screen, style: &str, active: &str) {
     for label in labels {
         let Rect { x, y, cols, rows } = label.rect;
         let (x, y, sx, sy) = (
@@ -1076,11 +1100,7 @@ fn draw_panes(labels: &[PaneLabel], screen: &mut Screen) {
             usize::from(cols),
             usize::from(rows),
         );
-        let colour = if label.active {
-            PANES_ACTIVE_STYLE
-        } else {
-            PANES_STYLE
-        };
+        let colour = if label.active { active } else { style };
         let fg = status::parse_style(colour);
         let bg = Style {
             bg: fg.fg,
@@ -1519,6 +1539,24 @@ mod tests {
     }
 
     /// Recorded on tmux 3.7b: three panes, pane 0 active.
+    /// The labels take `display-panes-colour` and
+    /// `display-panes-active-colour`.
+    #[test]
+    fn display_panes_draws_in_the_colours_it_is_given() {
+        let mut s = screen(80, 24);
+        let labels = [
+            label(3, (0, 0, 39, 23), true),
+            label(4, (40, 0, 39, 23), false),
+        ];
+        draw_panes(&labels, &mut s, "fg=green", "fg=yellow");
+        let any = |colour: &str| {
+            let fg = status::parse_style(colour).fg;
+            bg_cells(&s, fg).iter().any(|row| !row.is_empty())
+        };
+        assert!(any("fg=yellow") && any("fg=green"));
+        assert!(!any("fg=red") && !any("fg=blue"));
+    }
+
     #[test]
     fn display_panes_draws_big_digits_and_sizes() {
         let labels = [
@@ -1527,7 +1565,7 @@ mod tests {
             label(2, (50, 15, 30, 8), false),
         ];
         let mut s = screen(80, 24);
-        draw_panes(&labels, &mut s);
+        draw_panes(&labels, &mut s, "fg=blue", "fg=red");
         let red = status::parse_style("fg=red").fg;
         let blue = status::parse_style("fg=blue").fg;
         let reds = bg_cells(&s, red);
@@ -1554,7 +1592,12 @@ mod tests {
     #[test]
     fn display_panes_digits_letters_and_small_panes() {
         let mut s = screen(80, 24);
-        draw_panes(&[label(3, (0, 0, 39, 23), true)], &mut s);
+        draw_panes(
+            &[label(3, (0, 0, 39, 23), true)],
+            &mut s,
+            "fg=blue",
+            "fg=red",
+        );
         let red = status::parse_style("fg=red").fg;
         let reds = bg_cells(&s, red);
         assert_eq!(reds[10], [20]);
@@ -1567,6 +1610,8 @@ mod tests {
                 label(11, (60, 0, 20, 23), false),
             ],
             &mut s,
+            "fg=blue",
+            "fg=red",
         );
         let blue = status::parse_style("fg=blue").fg;
         let blues = bg_cells(&s, blue);
@@ -1577,7 +1622,12 @@ mod tests {
         assert_eq!(rows[14].chars().nth(74), Some('b'));
         // A 3-row pane: the index as text at its centre, then a blank.
         let mut s = screen(80, 24);
-        draw_panes(&[label(1, (0, 20, 39, 3), true)], &mut s);
+        draw_panes(
+            &[label(1, (0, 20, 39, 3), true)],
+            &mut s,
+            "fg=blue",
+            "fg=red",
+        );
         assert_eq!(text_rows(&s)[21], "                  1");
         assert_eq!(at(&s, 18, 21).fg, red);
         assert_eq!(at(&s, 19, 21).fg, red);

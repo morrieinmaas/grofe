@@ -77,6 +77,7 @@ fn hellos() -> Vec<(&'static str, Hello)> {
                 detach_others: false,
                 nest: false,
                 tty: Some("/dev/ttys004".into()),
+                created: false,
             },
         ),
     ]
@@ -752,13 +753,49 @@ fn replies_come_in_request_order_with_events_between() {
 
 // --- grofe control ---------------------------------------------------------
 
-fn bridge(srv: &TestServer) -> std::process::Child {
+/// A `grofe control` bridge, killed and reaped when dropped, so a test that
+/// fails while it runs leaves none behind.
+struct Bridge(Option<std::process::Child>);
+
+impl Bridge {
+    fn child(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().expect("the bridge is running")
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = common::wait_child(child, WAIT);
+        }
+    }
+}
+
+fn bridge(srv: &TestServer) -> Bridge {
     let mut cmd = srv.command();
     cmd.arg("control")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    cmd.spawn().unwrap()
+    Bridge(Some(cmd.spawn().unwrap()))
+}
+
+/// The next line from the bridge, failing the test after [`WAIT`] rather
+/// than hanging it. A pipe has no read timeout, so a thread reads the line
+/// and hands the reader back.
+fn line_within(
+    reader: BufReader<std::process::ChildStdout>,
+) -> (String, BufReader<std::process::ChildStdout>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = reader;
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        let _ = tx.send((line, reader));
+    });
+    rx.recv_timeout(WAIT)
+        .expect("a line from the bridge in time")
 }
 
 struct Finished {
@@ -767,7 +804,8 @@ struct Finished {
 }
 
 /// Waits for the bridge to exit on its own (stdin already closed).
-fn finish(mut child: std::process::Child) -> Finished {
+fn finish(mut bridge: Bridge) -> Finished {
+    let mut child = bridge.0.take().expect("the bridge is running");
     let mut stdout = child.stdout.take().unwrap();
     let reader = thread::spawn(move || {
         let mut buf = Vec::new();
@@ -787,6 +825,7 @@ fn control_prints_one_reply_line_per_request_and_exits() {
     srv.cmd(&["new-session", "-d", "-s", "a"]).unwrap();
     let mut child = bridge(&srv);
     child
+        .child()
         .stdin
         .take()
         .unwrap()
@@ -805,6 +844,7 @@ fn control_answers_several_requests_and_relays_errors() {
     let srv = TestServer::start();
     let mut child = bridge(&srv);
     child
+        .child()
         .stdin
         .take()
         .unwrap()
@@ -843,16 +883,15 @@ fn subscribed(
     srv: &TestServer,
     events: &str,
 ) -> (
-    std::process::Child,
+    Bridge,
     std::process::ChildStdin,
     BufReader<std::process::ChildStdout>,
 ) {
     let mut child = bridge(srv);
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stdin = child.child().stdin.take().unwrap();
+    let stdout = BufReader::new(child.child().stdout.take().unwrap());
     writeln!(stdin, r#"{{"id":1,"argv":["subscribe","{events}"]}}"#).unwrap();
-    let mut line = String::new();
-    stdout.read_line(&mut line).unwrap();
+    let (line, stdout) = line_within(stdout);
     assert_eq!(line.trim_end(), r#"{"id":1,"ok":true,"out":""}"#);
     (child, stdin, stdout)
 }
@@ -883,31 +922,37 @@ fn fire(srv: &TestServer, n: usize, pad: usize) {
 fn a_control_subscription_over_10000_events_loses_none_to_a_prompt_reader() {
     const N: usize = 10_000;
     let srv = TestServer::start();
-    let (mut child, stdin, stdout) = subscribed(&srv, "option-changed");
-    let reader = thread::spawn(move || {
-        let mut seen = 0;
+    let (_child, _stdin, stdout) = subscribed(&srv, "option-changed");
+    // The count arrives on a channel, so a bridge that goes quiet fails
+    // the test instead of hanging it on a join.
+    let (tx, seen) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut n = 0;
         for line in stdout.lines() {
-            let line = line.unwrap();
-            assert!(!line.contains("events-dropped"), "dropped: {line}");
-            seen += 1;
-            if seen == N {
+            let Ok(line) = line else { break };
+            if line.contains("events-dropped") {
+                let _ = tx.send(Err(line));
+                return;
+            }
+            n += 1;
+            if n == N {
                 break;
             }
         }
-        seen
+        let _ = tx.send(Ok(n));
     });
     fire(&srv, N, 0);
-    assert_eq!(reader.join().unwrap(), N);
-    drop(stdin);
-    let _ = child.kill();
-    let _ = child.wait();
+    let seen = seen
+        .recv_timeout(WAIT)
+        .expect("the bridge relayed every event in time");
+    assert_eq!(seen, Ok(N));
 }
 
 #[test]
 fn a_control_subscription_drops_only_when_its_reader_stalls() {
     const N: usize = 4000;
     let srv = TestServer::start();
-    let (mut child, stdin, stdout) = subscribed(&srv, "option-changed");
+    let (_child, _stdin, stdout) = subscribed(&srv, "option-changed");
     // Nobody reads the bridge's stdout while the events are made.
     fire(&srv, N, 512);
 
@@ -939,30 +984,23 @@ fn a_control_subscription_drops_only_when_its_reader_stalls() {
     }
     assert!(dropped > 0, "nothing was dropped");
     assert_eq!(values + dropped, N);
-    drop(stdin);
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 #[test]
 fn control_keeps_streaming_after_stdin_ends_when_subscribed() {
     let srv = TestServer::start();
     let mut child = bridge(&srv);
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stdin = child.child().stdin.take().unwrap();
+    let stdout = BufReader::new(child.child().stdout.take().unwrap());
     writeln!(stdin, r#"{{"id":1,"argv":["subscribe","option-changed"]}}"#).unwrap();
     drop(stdin);
-    let mut line = String::new();
-    stdout.read_line(&mut line).unwrap();
+    let (_, stdout) = line_within(stdout);
     srv.cmd(&["set", "-g", "@late", "1"]).unwrap();
-    line.clear();
-    stdout.read_line(&mut line).unwrap();
+    let (line, _) = line_within(stdout);
     assert_eq!(
         line.trim_end(),
         r#"{"event":"option-changed","scope":"global","name":"@late","value":"1"}"#
     );
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 // --- the bridge's line framing ----------------------------------------------
@@ -970,7 +1008,7 @@ fn control_keeps_streaming_after_stdin_ends_when_subscribed() {
 /// Sends `input` to a bridge, closes stdin and returns what it printed.
 fn run_bridge(srv: &TestServer, input: &[u8]) -> Finished {
     let mut child = bridge(srv);
-    let mut stdin = child.stdin.take().unwrap();
+    let mut stdin = child.child().stdin.take().unwrap();
     let input = input.to_vec();
     // A writer thread: a large input must not wait on the bridge's output.
     let writer = thread::spawn(move || {
@@ -1049,15 +1087,12 @@ fn control_is_not_a_command_under_the_tmux_name() {
             None => cmd.env_remove(key),
         };
     }
-    let out = cmd
-        .current_dir(&srv.home)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    cmd.current_dir(&srv.home);
+    let out = common::run_bounded(cmd, WAIT);
     // The server's own tmux-dialect answer, as for any unknown command, and
     // no bridge: nothing on stdout, whatever stdin was.
     assert!(!out.status.success());
     assert!(out.stdout.is_empty(), "{:?}", out.stdout);
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = out.stderr;
     assert!(err.contains("unknown command: control"), "{err}");
 }

@@ -104,6 +104,7 @@ fn raw_attach(srv: &TestServer, (cols, rows): (u16, u16)) -> UnixStream {
         detach_others: false,
         nest: false,
         tty: None,
+        created: false,
     };
     let line = encode_hello(&hello).expect("hello") + "\n";
     stream.write_all(line.as_bytes()).expect("send hello");

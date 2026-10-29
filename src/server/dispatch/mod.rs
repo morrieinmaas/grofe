@@ -297,8 +297,12 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // reads it any more (FE.3).
         Command::SetOption(c) => {
             let silence = c.name == "monitor-silence";
+            let unattached = c.name == "destroy-unattached";
             let out = options::run(state, ctx, Command::SetOption(c));
             server::sources::prune_unreferenced(state);
+            if unattached && out.is_ok() {
+                clients::check_unattached(state);
+            }
             if silence && out.is_ok() {
                 server::alerts::silence_option_set(state);
             }

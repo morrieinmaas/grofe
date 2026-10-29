@@ -1,0 +1,73 @@
+# What a notify hook's own commands change fires no notify hook (tmux's
+# notify_add skips them), so a hook that renames, relayouts or makes a
+# session does not fire itself again; an after-* hook's commands do fire
+# notify hooks. Each change fires as it happens: a rename to the same name,
+# and two renames in one request, each fire window-renamed, and
+# select-layout and next-layout fire window-layout-changed twice (-E once).
+# A session a notify hook kills fires no session-closed.
+$ new-session -d -s a -n w0 -x 80 -y 24 cat
+$ set -g @n 0
+$ set-hook -g session-created 'set -gF @n "#{e|+:#{@n},1}" ; new-session -d -s from-hook cat'
+$ new-session -d -s b cat
+$ run-shell 'sleep 0.5'
+$ list-sessions -F '#{session_name}'
+$ show -gv @n
+$ set-hook -gu session-created
+$ set -g @n 0
+$ set-hook -g window-renamed 'set -gF @n "#{e|+:#{@n},1}" ; rename-window -t a:1 "y#{@n}"'
+$ rename-window -t a:1 w
+$ run-shell 'sleep 0.5'
+$ list-windows -t a -F '#{window_name}'
+$ show -gv @n
+$ set -g @n 0
+$ set-hook -g window-renamed 'set -gF @n "#{e|+:#{@n},1}"'
+$ rename-window -t a:1 same
+$ rename-window -t a:1 same
+$ run-shell 'sleep 0.5'
+$ show -gv @n
+$ set -g @n 0
+$ set-hook -g after-rename-window 'rename-window -t a:1 "q#{window_name}"'
+$ rename-window -t a:1 v
+$ run-shell 'sleep 0.5'
+$ list-windows -t a -F '#{window_name}'
+$ show -gv @n
+$ set-hook -gu after-rename-window
+$ set-hook -gu window-renamed
+$ split-window -d -t a:1 cat
+$ set -g @n 0
+$ set-hook -g window-layout-changed 'set -gF @n "#{e|+:#{@n},1}" ; next-layout -t a:1'
+$ select-layout -t a:1 even-horizontal
+$ run-shell 'sleep 0.5'
+$ show -gv @n
+$ set -g @n 0
+$ next-layout -t a:1
+$ run-shell 'sleep 0.5'
+$ show -gv @n
+$ set -g @n 0
+$ select-layout -t a:1 even-horizontal
+$ select-layout -t a:1 even-horizontal
+$ run-shell 'sleep 0.5'
+$ show -gv @n
+$ set -g @n 0
+$ select-layout -E -t a:1
+$ run-shell 'sleep 0.5'
+$ show -gv @n
+$ set-hook -gu window-layout-changed
+$ set -g @n 0
+$ set-hook -g session-renamed 'set -gF @n "#{e|+:#{@n},1}" ; rename-session -t b "b#{@n}"'
+$ rename-session -t b c
+$ run-shell 'sleep 0.5'
+$ list-sessions -F '#{session_name}'
+$ show -gv @n
+$ set-hook -gu session-renamed
+$ set -g @n 0
+$ set-hook -g session-closed 'set -gF @n "#{e|+:#{@n},1}"'
+$ set-hook -g window-renamed 'kill-session -t from-hook'
+$ rename-window -t a:1 k
+$ run-shell 'sleep 0.5'
+$ list-sessions -F '#{session_name}'
+$ show -gv @n
+$ set-hook -gu window-renamed
+$ kill-session -t c
+$ run-shell 'sleep 0.5'
+$ show -gv @n

@@ -172,6 +172,11 @@ pub enum Hello {
         /// dialect (FE.2). An older client sends none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tty: Option<String>,
+        /// The client attaches to the session its own `new-session` just
+        /// made: tmux fires no `client-attached` for that, only for
+        /// `attach-session`. Sent only when `true`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        created: bool,
     },
 }
 
@@ -610,6 +615,7 @@ mod tests {
             detach_others: true,
             nest: true,
             tty: None,
+            created: false,
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
@@ -643,6 +649,7 @@ mod tests {
             detach_others: false,
             nest: false,
             tty: None,
+            created: false,
         };
         let line = encode_hello(&attach).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), attach);
@@ -672,6 +679,7 @@ mod tests {
             detach_others: false,
             nest: false,
             tty: None,
+            created: false,
         };
         let line = encode_hello(&hello).unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -801,6 +809,7 @@ mod tests {
             detach_others: true,
             nest: true,
             tty: None,
+            created: false,
         };
         let decoded = decode_hello(&encode_hello(&hello).unwrap()).unwrap();
         match decoded {

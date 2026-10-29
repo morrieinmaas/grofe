@@ -11,7 +11,6 @@ use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::model::Floating;
 use crate::server::pane::{PaneSpawn, pane_shell, usable_cwd};
 use crate::server::popup::{self, Frame, Lines, Position};
-use crate::server::status::Style;
 use crate::server::{State, clients, hooks, menu, prompt};
 use crate::types::{ClientId, PaneId, Rect, SplitSize};
 
@@ -33,11 +32,6 @@ pub fn display_popup(
         Some(name) => client_named(state, name)?,
         None => clients::current_client(state, ctx).ok_or("no current client")?,
     };
-    let lines = match (c.no_border, c.border.as_deref()) {
-        (true, _) => None,
-        (false, None) => Some(Lines::Single),
-        (false, Some(value)) => Lines::parse(value)?,
-    };
     let (cols, rows) = state.clients[&id].size;
     let w = c.width.map_or(cols / 2, |s| cells(s, cols));
     let h = c.height.map_or(rows / 2, |s| cells(s, rows));
@@ -52,6 +46,19 @@ pub fn display_popup(
     }
     let session = state.clients[&id].session;
     let pane = client_pane(state, id).ok_or("no current client")?;
+    // `popup-border-lines` and `popup-border-style` are the defaults `-b`
+    // and `-S` override.
+    let chain = crate::server::dispatch::options::chain(&state.model, pane);
+    let option = |name: &str| state.model.options.lookup(name, &chain).map(str::to_string);
+    let lines = match (c.no_border, c.border.as_deref()) {
+        (true, _) => None,
+        (false, None) => Lines::parse(&option("popup-border-lines").unwrap_or_default())
+            .unwrap_or(Some(Lines::Single)),
+        (false, Some(value)) => Lines::parse(value)?,
+    };
+    let border_style = option("popup-border-style")
+        .map(|v| crate::server::status::parse_style(&v))
+        .unwrap_or_default();
     let pane_rect = clients::overlay_ctx(state, id)
         .and_then(|cx| cx.panes.iter().find(|(p, _)| *p == pane).map(|(_, r)| *r))
         .unwrap_or(Rect {
@@ -101,7 +108,7 @@ pub fn display_popup(
         size: (w, h),
         lines,
         title,
-        border_style: Style::default(),
+        border_style,
         close_on_exit: c.close_on_exit,
     };
     let spawn = spawn_for(state, session, pane, (argv, shell), cwd, env);
@@ -129,7 +136,8 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
     let session = w.session;
     let (x, y, width, height) = float_rect(w, (c.width, c.height), (c.x, c.y))?;
     let s = &model.sessions[&session];
-    let env = s.env.clone();
+    let mut env = s.env.clone();
+    env.extend(c.env);
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
     let cell_px = clients::cell_px(state, session);
     let new = spawn_pane(
@@ -154,7 +162,9 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         rows: height,
         z,
     });
-    w.set_active(new);
+    if !c.detached {
+        w.set_active(new);
+    }
     if !c.print {
         return Ok(String::new());
     }

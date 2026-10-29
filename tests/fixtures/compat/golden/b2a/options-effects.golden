@@ -1,0 +1,64 @@
+$ new-session -d -s w -n one -x 200 -y 60 sh -c 'printf "\033]2;first\007"; exec cat'
+? 0
+$ split-window -d -t w sh -c 'printf "\033]2;second\007"; exec cat'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t w -F '#{pane_index} #{pane_title}'
+1 first
+2 second
+? 0
+$ set -gw allow-set-title off
+? 0
+$ split-window -d -t w sh -c 'printf "\033]2;third\007"; exec cat'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t w -F '#{pane_index} #{pane_title}'
+1 first
+2 <HOST>
+3 second
+? 0
+$ set -gw allow-set-title on
+? 0
+$ split-window -d -t w cat
+? 0
+$ split-window -d -t w cat
+? 0
+$ split-window -d -t w cat
+? 0
+$ split-window -d -t w cat
+! size or position no space for a new pane
+? 1
+$ split-window -d -t w cat
+! size or position no space for a new pane
+? 1
+$ split-window -d -t w cat
+! size or position no space for a new pane
+? 1
+$ select-layout -t w tiled
+? 0
+$ display -p -t w '#{window_layout}'
+4417,200x60,0,0[200x19,0,0{99x19,0,0,0,100x19,100,0,5},200x19,0,20{99x19,0,20,4,100x19,100,20,3},200x20,0,40{99x20,0,40,2,100x20,100,40,1}]
+? 0
+$ set -gw tiled-layout-max-columns 2
+? 0
+$ select-layout -t w tiled
+? 0
+$ display -p -t w '#{window_layout}'
+4417,200x60,0,0[200x19,0,0{99x19,0,0,0,100x19,100,0,5},200x19,0,20{99x19,0,20,4,100x19,100,20,3},200x20,0,40{99x20,0,40,2,100x20,100,40,1}]
+? 0
+$ set -gw tiled-layout-max-columns 1
+? 0
+$ select-layout -t w tiled
+? 0
+$ display -p -t w '#{window_layout}'
+b22a,200x60,0,0[200x9,0,0,0,200x9,0,10,5,200x9,0,20,4,200x9,0,30,3,200x9,0,40,2,200x10,0,50,1]
+? 0
+$ set -gw tiled-layout-max-columns 9
+? 0
+$ select-layout -t w tiled
+? 0
+$ display -p -t w '#{window_layout}'
+4417,200x60,0,0[200x19,0,0{99x19,0,0,0,100x19,100,0,5},200x19,0,20{99x19,0,20,4,100x19,100,20,3},200x20,0,40{99x20,0,40,2,100x20,100,40,1}]
+? 0

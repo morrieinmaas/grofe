@@ -1,0 +1,18 @@
+# A flag option takes 1, on and yes, 0, off and no (the words in any case),
+# or no value to flip it; tmux 3.7b refuses anything else, true and false
+# among them.
+$ new-session -d -s a -x 80 -y 24 cat
+$ set -g mouse true
+$ set -g mouse FALSE
+$ set -g mouse On
+$ show -gv mouse
+$ set -g mouse 0
+$ show -gv mouse
+$ set -g mouse YES
+$ show -gv mouse
+$ set -g mouse
+$ show -gv mouse
+$ setw -g automatic-rename true
+$ set -w -t a:1 monitor-bell false
+$ set -q -g mouse true
+$ set -g mouse 2

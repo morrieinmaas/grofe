@@ -202,10 +202,7 @@ fn hooks_match_their_golden() {
     check("hooks", HOOK_GAPS, same);
 }
 
-const HOOK_GAPS: &[(&str, &str)] = &[(
-    "$ set-hook after-select-pane 'display x'",
-    "refused on purpose: grofe's hooks are global only (TC.5)",
-)];
+const HOOK_GAPS: &[(&str, &str)] = &[];
 
 /// A pane's one-word command runs through `default-shell` (new-window,
 /// split-window, respawn-pane, new-session, `default-command`), several

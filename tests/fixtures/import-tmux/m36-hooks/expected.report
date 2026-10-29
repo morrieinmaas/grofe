@@ -1,4 +1,4 @@
 ~/.tmux.conf:5: note: hooks.session-created is replaced by a later set-hook at ~/.tmux.conf:6
 ~/.tmux.conf:6: note: hooks.session-created unset here (-u)
-~/.tmux.conf:9: set-hook: not supported (session, window and pane hooks; grofe's hooks are global (set-hook -g)): set-hook after-kill-pane 'display gone'
-~/.tmux.conf:10: set-hook: not supported (hook arrays; a hook holds one command in grofe): set-hook -g client-resized[1] 'display resized'
+~/.tmux.conf:9: set-hook: not supported (session, window and pane hooks; `[hooks]` holds the global ones (set-hook -g)): set-hook after-kill-pane 'display gone'
+~/.tmux.conf:10: set-hook: not supported (hook arrays; `[hooks]` holds one command per event): set-hook -g client-resized[1] 'display resized'

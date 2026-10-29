@@ -36,7 +36,9 @@ Attach adds `cols`, `rows` (integers), `term` (string), `caps` (object of
 booleans `truecolor`, `styled_underline`, `sync`, `kitty_keys`,
 `kitty_graphics`, `sixel`, each defaulting to `false`, and `cell_px`, `[w, h]`
 or `null`), `target` (string or `null`, `attach -t` raw), `detach_others` and
-`nest` (booleans, default `false`), and optionally `tty` (string).
+`nest` (booleans, default `false`), and optionally `tty` (string) and
+`created` (boolean, default `false`: the session is the one this client's
+`new-session` just made, which fires no `client-attached` hook).
 
 An unknown field in a hello is ignored. An unknown `mode`, or a hello that
 does not parse, gets `malformed hello: ...` and a close.

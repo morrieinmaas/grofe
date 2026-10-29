@@ -1,0 +1,42 @@
+# The after-* hooks of the commands grofe has, printing with display -p:
+# each runs in the context tmux gives it (the target, or the new pane or
+# session) and its output follows the command's own.
+$ new-session -d -s main -n first -x 80 -y 24 cat
+$ new-session -d -s other -x 80 -y 24 cat
+$ set-hook -g after-split-window 'display -p "split #{pane_id} #{session_name}:#{window_index}.#{pane_index}"'
+$ set-hook -g after-rename-window 'display -p "rename-window #{window_name} #{session_name}"'
+$ set-hook -g after-rename-session 'display -p "rename-session #{session_name}"'
+$ set-hook -g after-new-session 'display -p "new-session #{session_name}"'
+$ set-hook -g after-send-keys 'display -p "send-keys #{pane_id}"'
+$ set-hook -g after-select-layout 'display -p "select-layout #{window_layout}"'
+$ set-hook -g after-set-option 'display -p "set-option #{session_name}"'
+$ set-hook -g after-set-environment 'display -p "set-environment"'
+$ set-hook -g after-show-options 'display -p "show-options"'
+$ set-hook -g after-list-sessions 'display -p "list-sessions"'
+$ set-hook -g after-list-windows 'display -p "list-windows #{session_name}"'
+$ set-hook -g after-list-panes 'display -p "list-panes #{window_index}"'
+$ set-hook -g after-capture-pane 'display -p "capture-pane #{pane_id}"'
+$ set-hook -g after-display-message 'display -p "display-message #{pane_id}"'
+$ set-hook -g after-bind-key 'display -p "bind-key"'
+$ set-hook -g after-unbind-key 'display -p "unbind-key"'
+$ set-hook -g after-set-buffer 'display -p "set-buffer"'
+$ set-hook -g after-paste-buffer 'display -p "paste-buffer #{pane_id}"'
+$ split-window -d -t other cat
+$ split-window -t main:1 -P -F 'reply #{pane_id}' cat
+$ rename-window -t other:1 renamed
+$ rename-session -t other again
+$ new-session -d -s third cat
+$ send-keys -t main:1.1 x
+$ select-layout -t main:1 tiled
+$ set -g @x 1
+$ set-environment -g FOO bar
+$ show-options -g @x
+$ list-sessions -F '#{session_name}'
+$ list-windows -t again -F '#{window_name}'
+$ list-panes -t main:1 -F '#{pane_id}'
+$ capture-pane -p -t main:1.1
+$ display-message -p -t main:1.2 'hello'
+$ bind-key -T prefix F12 list-keys
+$ unbind-key -T prefix F12
+$ set-buffer -b b1 data
+$ paste-buffer -b b1 -t main:1.1

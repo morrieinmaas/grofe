@@ -63,7 +63,9 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     // The session the target names, for a window linked into several.
     let (in_session, _) = model.resolve_winlink(&c.target, ctx)?;
     let s = &model.sessions[&in_session];
-    let env = s.env.clone();
+    // `-e` wins over the session's own variables.
+    let mut env = s.env.clone();
+    env.extend(c.env);
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
     let session = s.id;
     let cell_px = clients::cell_px(state, session);
@@ -110,7 +112,12 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     if !c.detached {
         w.set_active(new);
     }
+    // `-Z`: the window is zoomed again on the active pane, whichever it is.
+    let active = w.active;
     model.relayout(window);
+    if c.zoom {
+        toggle_zoom(model, window, active);
+    }
     Ok(if c.print {
         print_pane(model, new, c.format.as_deref())
     } else {
@@ -123,8 +130,23 @@ fn kill_pane(state: &mut State, ctx: &ClientCtx, c: KillPane) -> Result<String, 
     let pane = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&pane].window;
     unzoom(model, window);
-    let removed = model.remove_pane(pane);
-    state.events.panes_killed(removed);
+    // `-a`: every other pane of the window goes, floating ones too.
+    let doomed: Vec<PaneId> = if c.others {
+        model
+            .windows
+            .get(&window)
+            .map(|w| w.pane_ids())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| *p != pane)
+            .collect()
+    } else {
+        vec![pane]
+    };
+    for pane in doomed {
+        let removed = state.model.remove_pane(pane);
+        state.events.panes_killed(removed);
+    }
     Ok(String::new())
 }
 

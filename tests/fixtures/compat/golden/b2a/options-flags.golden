@@ -1,0 +1,40 @@
+$ new-session -d -s a -x 80 -y 24 cat
+? 0
+$ set -g mouse true
+! bad value: true
+? 1
+$ set -g mouse FALSE
+! bad value: FALSE
+? 1
+$ set -g mouse On
+? 0
+$ show -gv mouse
+on
+? 0
+$ set -g mouse 0
+? 0
+$ show -gv mouse
+off
+? 0
+$ set -g mouse YES
+? 0
+$ show -gv mouse
+on
+? 0
+$ set -g mouse
+? 0
+$ show -gv mouse
+off
+? 0
+$ setw -g automatic-rename true
+! bad value: true
+? 1
+$ set -w -t a:1 monitor-bell false
+! bad value: false
+? 1
+$ set -q -g mouse true
+! bad value: true
+? 1
+$ set -g mouse 2
+! bad value: 2
+? 1

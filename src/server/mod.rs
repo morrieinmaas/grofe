@@ -35,6 +35,7 @@ pub mod popup;
 pub mod prompt;
 pub mod render;
 pub mod screenimg;
+pub mod shell_jobs;
 pub mod sixel;
 pub mod sources;
 pub mod status;
@@ -231,6 +232,8 @@ pub struct State {
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
     pub jobs: mpsc::Sender<Job>,
+    /// The shell jobs still running, sent SIGTERM as the server exits.
+    pub shell_jobs: shell_jobs::ShellJobs,
     /// Set by a handler that answers later ([`dispatch::defer_reply`]);
     /// taken by whoever ran the command.
     pub deferred_reply: Option<oneshot::Receiver<Result<String, protocol::Failure>>>,
@@ -408,7 +411,8 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
         }
     };
     let options = StartOptions::from_env();
-    match runtime.block_on(serve(socket.to_path_buf(), ready, options, exit_when_empty)) {
+    let code = match runtime.block_on(serve(socket.to_path_buf(), ready, options, exit_when_empty))
+    {
         Ok(()) => {
             eprintln!("grofe server exiting");
             0
@@ -417,8 +421,15 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
             eprintln!("grofe server error: {e:#}");
             1
         }
-    }
+    };
+    // Dropping the runtime would wait, unbounded, for its blocking threads;
+    // one stuck in a file read (a FIFO) would keep the server from exiting.
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
+    code
 }
+
+/// How long the exiting server waits for its blocking threads.
+const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(1);
 
 /// Closes every fd above 2 except `keep`: a leaked pipe from whoever
 /// started the CLI would otherwise keep its reader waiting for an EOF that
@@ -531,6 +542,7 @@ async fn serve(
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
         jobs: jobs_tx,
+        shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
@@ -550,6 +562,9 @@ async fn serve(
         shutdown: shutdown_rx,
         alive: alive_tx,
     };
+    // As tmux 3.7b's `job_kill_all` once its loop ends: whatever way
+    // `serve` leaves, a panic included, the jobs still running get SIGTERM.
+    let _jobs = shell_jobs::KillOnExit(state.shell_jobs.clone());
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
@@ -624,12 +639,18 @@ async fn actor(
         let idle =
             state.exit_when_empty && state.connections == 0 && state.model.sessions.is_empty();
         let due = clients::deadline(&state).map(Instant::from_std);
+        // Pane output changes nothing the notify hooks watch, and it is
+        // the busiest message: no look at the model after it.
+        let mut output = false;
         tokio::select! {
             msg = msgs.recv() => match msg {
                 Some(msg) => handle(&mut state, msg),
                 None => break,
             },
-            Some(event) = pane_events.recv() => handle(&mut state, ServerMsg::Pane(event)),
+            Some(event) = pane_events.recv() => {
+                output = matches!(event.kind, PaneEventKind::Output(_));
+                handle(&mut state, ServerMsg::Pane(event));
+            }
             Some(job) = jobs.recv() => run_job(&mut state, job),
             accepted = listener.accept(), if accept_paused_until.is_none() => match accepted {
                 Ok((stream, _)) => {
@@ -663,6 +684,10 @@ async fn actor(
             _ = sighup.recv() => eprintln!("grofe server: SIGHUP ignored"),
         }
         events::track_focus(&mut state);
+        if !output {
+            hooks::track(&mut state);
+        }
+        clients::check_unattached(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
         if state.exit {
@@ -689,13 +714,18 @@ async fn actor(
 /// such as `has-session`) gets ENOENT even if the server then stays up; the
 /// CLI retries such a connect once after a short wait to cover this window.
 fn exit_if_empty(state: &mut State, listener: &UnixListener) {
-    // `set -s exit-empty off` keeps the server up with no sessions.
+    // `set -s exit-empty off` keeps the server up with no sessions;
+    // `set -s exit-unattached on` takes it down when no client is attached,
+    // sessions or not (tmux's `server_loop`).
     let keep = state.model.options.lookup("exit-empty", &[]) == Some("off");
+    let unattached = state.model.options.lookup("exit-unattached", &[]) == Some("on");
+    let has_sessions = !state.model.sessions.is_empty() && !unattached;
     if !state.exit_when_empty
         || keep
         || state.exit
         || state.connections > 0
-        || !state.model.sessions.is_empty()
+        || has_sessions
+        || !state.clients.is_empty()
     {
         return;
     }
@@ -944,6 +974,7 @@ async fn connection_loop(
             detach_others,
             nest,
             tty,
+            created,
         }) => {
             let req = clients::AttachRequest {
                 pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
@@ -955,6 +986,7 @@ async fn connection_loop(
                 detach_others,
                 nest,
                 tty,
+                created,
             };
             attach(lines, req, msgs.clone()).await;
             return;
@@ -1209,6 +1241,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
         jobs,
+        shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
