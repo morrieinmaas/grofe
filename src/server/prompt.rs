@@ -1179,8 +1179,9 @@ fn complete_word(state: &mut State, client: ClientId) {
         return;
     }
     let word: String = text[first..last].iter().collect();
-    // Only a command prompt completes; an empty word has nothing to.
-    if word.is_empty() || prompt.kind != 0 || word.starts_with("-t") || word.starts_with("-s") {
+    // A command or search prompt completes (tmux's target types complete
+    // targets, which grofe lacks); an empty word has nothing to.
+    if word.is_empty() || prompt.kind > 1 || word.starts_with("-t") || word.starts_with("-s") {
         return;
     }
     let candidates = completions(state, &word, first == 0);
@@ -1349,52 +1350,40 @@ pub fn command_prompt(
             .ok_or_else(|| format!("unknown type: {t}"))?,
     };
     let expand = |s: &str| expand_for(state, id, s);
-    // `-p a,b` is one prompt each, with the `-I` text of the same place;
-    // with none the prompt is `(verb)` or `:`.
-    let (raw, space) = match (&c.prompt, &c.template) {
-        (Some(p), _) => (p.clone(), true),
-        (None, Some(t)) => (format!("({})", verb(t)), true),
-        (None, None) => (":".to_string(), false),
-    };
-    let parts = |text: &str| -> Vec<String> {
-        if c.literal {
-            vec![text.to_string()]
-        } else {
-            text.split(',').map(String::from).collect()
-        }
-    };
-    let inputs = c.initial.as_deref().map(parts).unwrap_or_default();
-    let mut steps: std::collections::VecDeque<(String, String)> = parts(&raw)
+    let inputs = c
+        .initial
+        .as_deref()
+        .map(|i| parts(&c, i))
+        .unwrap_or_default();
+    let mut steps: std::collections::VecDeque<(String, String)> = labels(&c)
         .into_iter()
         .enumerate()
         .map(|(i, label)| {
-            let label = if space { format!("{label} ") } else { label };
             let input = inputs.get(i).map(String::as_str).unwrap_or("");
             (expand(&label), expand(input))
         })
         .collect();
     let (label, initial) = steps.pop_front().unwrap_or_default();
     let dialect = crate::compat::prompt_dialect(state, ctx.dialect, c.template.is_some());
+    let Flags {
+        read,
+        numeric,
+        incremental,
+        bspace_exit,
+    } = flags(&c);
     // `-F` (FE.1): the template is a format, expanded now.
     let template = match c.template {
         Some(t) if c.expand => expand(&t),
         Some(t) => t,
         None => "%1".to_string(),
     };
-    // As tmux: `-1` wins over `-N`, which wins over `-i`, then `-k`.
-    let incremental = c.incremental && !c.single && !c.numeric;
-    let read = match (c.key && !incremental, c.single) {
-        (true, _) => Read::Key,
-        (false, true) => Read::Single,
-        (false, false) => Read::Line,
-    };
     let mut prompt = Prompt {
         dialect,
         read,
-        numeric: c.numeric && !c.single,
+        numeric,
         incremental,
         kind,
-        bspace_exit: c.bspace_exit && !c.single && !c.numeric && !incremental && !c.key,
+        bspace_exit,
         pending: steps,
         ..Prompt::new(label, &initial, template)
     };
@@ -1409,6 +1398,66 @@ pub fn command_prompt(
         run_incremental(state, id, '=', "");
     }
     Ok(String::new())
+}
+
+/// `-p` or `-I` text split at its commas, or whole with `-l`.
+fn parts(c: &CommandPrompt, text: &str) -> Vec<String> {
+    if c.literal {
+        vec![text.to_string()]
+    } else {
+        text.split(',').map(String::from).collect()
+    }
+}
+
+/// A `command-prompt`'s prompts before expansion: `-p a,b` is one each,
+/// with none it is `(verb)` or `:`; each but `:` ends in a space, except
+/// with `-l`, which keeps the prompt as it is.
+fn labels(c: &CommandPrompt) -> Vec<String> {
+    let (raw, space) = match (&c.prompt, &c.template) {
+        (Some(p), _) => (p.clone(), true),
+        (None, Some(t)) => (format!("({})", verb(t)), true),
+        (None, None) => (":".to_string(), false),
+    };
+    parts(c, &raw)
+        .into_iter()
+        .map(|l| {
+            if space && !c.literal {
+                format!("{l} ")
+            } else {
+                l
+            }
+        })
+        .collect()
+}
+
+/// How a `command-prompt` reads, from its flags.
+#[derive(Debug, PartialEq, Eq)]
+struct Flags {
+    read: Read,
+    numeric: bool,
+    incremental: bool,
+    bspace_exit: bool,
+}
+
+/// As tmux: only one of `-1`, `-N`, `-i`, `-k` and `-e` counts, the first
+/// of them in that order.
+fn flags(c: &CommandPrompt) -> Flags {
+    let single = c.single;
+    let numeric = c.numeric && !single;
+    let incremental = c.incremental && !single && !numeric;
+    let key = c.key && !single && !numeric && !incremental;
+    Flags {
+        read: if key {
+            Read::Key
+        } else if single {
+            Read::Single
+        } else {
+            Read::Line
+        },
+        numeric,
+        incremental,
+        bspace_exit: c.bspace_exit && !single && !numeric && !incremental && !key,
+    }
 }
 
 /// Opens a prompt on client `id` whose answer goes to `then` instead of a
@@ -2099,6 +2148,36 @@ mod tests {
         key(KeyCode::Char(c))
     }
 
+    /// `cmd_command_prompt_exec`: `-1` before `-N` before `-i` before
+    /// `-k`, so `-1 -k` reads one keystroke and `-N -k` digits.
+    #[test]
+    fn prompts_split_at_commas_and_l_keeps_them_as_they_are() {
+        let c = |p: &str, literal| CommandPrompt {
+            prompt: Some(p.to_string()),
+            literal,
+            ..CommandPrompt::default()
+        };
+        assert_eq!(labels(&c("a,b", false)), ["a ", "b "]);
+        assert_eq!(labels(&c("a,b", true)), ["a,b"]);
+        assert_eq!(labels(&CommandPrompt::default()), [":"]);
+    }
+
+    #[test]
+    fn the_first_reading_flag_wins_as_in_tmux() {
+        let read = |single, numeric, key| {
+            flags(&CommandPrompt {
+                single,
+                numeric,
+                key,
+                ..CommandPrompt::default()
+            })
+        };
+        assert_eq!(read(true, false, true).read, Read::Single);
+        let f = read(false, true, true);
+        assert_eq!((f.read, f.numeric), (Read::Line, true));
+        assert_eq!(read(false, false, true).read, Read::Key);
+    }
+
     /// `status_prompt_translate_key` passes `C-e` through in vi's typing
     /// mode, so it still goes to the end of the line.
     #[test]
@@ -2126,6 +2205,22 @@ mod tests {
         assert_eq!(common_prefix(&list("new-")), "new-");
         assert!(list("new-").contains(&"new-window".to_string()));
         assert!(list("neww").contains(&"neww".to_string()));
+    }
+
+    /// `status_prompt_complete` completes commands on a `-T search`
+    /// prompt as on a command one; only the target types differ.
+    #[test]
+    fn a_search_prompt_completes_too() {
+        let mut state = crate::server::test_state();
+        for (kind, want) in [(1, "split-window "), (2, "split-w")] {
+            let prompt = Prompt {
+                kind,
+                ..Prompt::new(String::new(), "split-w", "%1".to_string())
+            };
+            state.prompts.open.insert(ClientId(1), prompt);
+            complete_word(&mut state, ClientId(1));
+            assert_eq!(state.prompts.open[&ClientId(1)].line(), want);
+        }
     }
 
     #[test]
