@@ -2835,7 +2835,7 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         } else {
             given.clone()
         };
-        match glob_files(&ctx.cwd.join(&given)) {
+        match glob_files(&source_pattern(&ctx.cwd, &given)) {
             Ok(found) => files.extend(found),
             Err(GlobError::NoMatch) if c.quiet => {}
             Err(e) => errors.push(format!("{}: {given}", e.text())),
@@ -2928,16 +2928,37 @@ fn glob_files(pattern: &Path) -> Result<Vec<PathBuf>, GlobError> {
     }
 }
 
-/// `path` as a pattern that matches only itself.
-fn glob_escape(path: &Path) -> String {
-    let mut out = String::new();
-    for ch in path.to_string_lossy().chars() {
-        if matches!(ch, '*' | '?' | '[' | '\\') {
-            out.push('\\');
+/// The pattern `source-file` globs for `given`: an absolute path as it
+/// is, else under the requester's `cwd`, which is quoted so only `given`
+/// is a pattern, as tmux's `cmd_source_file_quote_for_glob`.
+fn source_pattern(cwd: &Path, given: &str) -> PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    if given.starts_with('/') {
+        return PathBuf::from(given);
+    }
+    let mut pattern = glob_quote(cwd.as_os_str().as_bytes());
+    pattern.push(b'/');
+    pattern.extend_from_slice(given.as_bytes());
+    PathBuf::from(std::ffi::OsString::from_vec(pattern))
+}
+
+/// `bytes` with `glob(3)`'s special characters quoted, so the pattern
+/// matches only itself.
+fn glob_quote(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for &b in bytes {
+        if matches!(b, b'*' | b'?' | b'[' | b'\\') {
+            out.push(b'\\');
         }
-        out.push(ch);
+        out.push(b);
     }
     out
+}
+
+/// `path` as a pattern that matches only itself.
+fn glob_escape(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    String::from_utf8_lossy(&glob_quote(path.as_os_str().as_bytes())).into_owned()
 }
 
 /// One file `source-file` found.
@@ -5265,6 +5286,36 @@ mod tests {
     use super::*;
     use crate::protocol::Dialect;
     use crate::server::model::{BASE_INDEX, HISTORY_LIMIT, PANE_BASE_INDEX};
+
+    /// `source-file` globs only the path it is given: the requester's cwd
+    /// is quoted first, as tmux's `cmd_source_file_quote_for_glob`, so a
+    /// cwd named `[ab]` reads its own file, not `a/` or `b/`'s.
+    #[test]
+    fn source_file_takes_the_cwd_literally() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("[ab]*");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(dir.path().join("a")).unwrap();
+        std::fs::write(cwd.join("f.conf"), "set -g @where cwd\n").unwrap();
+        std::fs::write(dir.path().join("a/f.conf"), "set -g @where glob\n").unwrap();
+        let mut state = crate::server::test_state();
+        let ctx = ClientCtx {
+            cwd,
+            dialect: Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let mut run = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv)
+        };
+        assert_eq!(run(&["source-file", "f.conf"]), Ok(String::new()));
+        assert_eq!(run(&["show-options", "-gv", "@where"]), Ok("cwd\n".into()));
+        assert_eq!(
+            run(&["source-file", "f*.conf"]).map(|_| ()),
+            Ok(()),
+            "the given path is still a glob"
+        );
+    }
 
     /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in
     /// `tc_0b/display-formats` and `tm_0/list-keys-copy-mode-vi`).
