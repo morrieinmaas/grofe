@@ -778,8 +778,8 @@ pub fn send_current(state: &mut State) -> Result<String, String> {
     Ok(String::new())
 }
 
-/// Report `m` goes to `pane` if the pointer is over it, the pane is not in
-/// copy mode and takes input, and its mouse mode asks for this kind of
+/// Report `m` goes to `pane` if the pointer is over it, the pane is in no
+/// mode and takes input, and its mouse mode asks for this kind of
 /// event.
 // ponytail: a drag that leaves its pane is dropped rather than following
 // the pane it started in.
@@ -792,7 +792,7 @@ fn send_event(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) {
 }
 
 /// Sends report `m` to the pane under it, if that pane asked for this
-/// kind of event and is not in copy mode.
+/// kind of event and is in no mode.
 fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
     if let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) {
         send_to(state, pane, m, (x, y));
@@ -803,7 +803,11 @@ fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
 /// Report `m`, at 0-based cell `(x, y)` of `pane`, goes to the pane's
 /// process if its mouse mode asks for it.
 fn send_to(state: &mut State, pane: PaneId, m: &Mouse, (x, y): (u16, u16)) {
-    if state.copy.is_active(pane) {
+    // A pane in a mode gives its app nothing (tmux's `window_pane_key`).
+    if state.copy.is_active(pane)
+        || state.clocks.is_active(pane)
+        || crate::server::tree::is_over(state, pane)
+    {
         return;
     }
     // A pane taking no input gets no mouse either (tmux's `window_pane_key`).
