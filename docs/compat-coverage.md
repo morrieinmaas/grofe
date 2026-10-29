@@ -316,8 +316,9 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   the command's (`hook-command-error`; a `run-shell` hook makes tmux exit
   0, grofe exits 1). Commands a notify hook runs fire no hooks at all, as
   tmux's `notify_add` skips them, so a `window-renamed` hook that renames
-  cannot fire itself (`hook-quiet`); an `after-*` hook's commands fire
-  notify hooks but no `after-*` ones.
+  cannot fire itself and a session it kills fires no `session-closed`
+  (`hook-quiet`); an `after-*` hook's commands fire notify hooks but no
+  `after-*` ones.
   The notify hooks `session-renamed`, `session-window-changed`,
   `window-renamed`, `window-pane-changed`, `window-layout-changed`,
   `window-resized`, `window-linked`, `window-unlinked`, `pane-title-changed`,
@@ -326,7 +327,8 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   output (`server/hooks/watch.rs`; `hook-events`), so two changes in one
   request fire twice. `rename-window` fires `window-renamed` even for the
   same name, and `select-layout` and `next-layout` fire
-  `window-layout-changed` twice, as tmux does (`hook-quiet`).
+  `window-layout-changed` twice (`select-layout -E` once), as tmux does
+  (`hook-quiet`).
   `client-attached`, `client-detached` and
   `client-focus-in`/`-out` fire where the client changes; a `new-session`
   that attaches fires no `client-attached`, only `attach-session` does

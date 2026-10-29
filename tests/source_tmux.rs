@@ -119,8 +119,9 @@ fn a_parse_error_runs_nothing_and_names_its_line() {
     assert!(!out.stdout.contains("one"), "{}", out.stdout);
 }
 
-/// Valid tmux that grofe cannot do (`lock-server`) fails its own command and the rest of its line; the other lines
-/// run, and the request fails with each error named by file and line.
+/// Valid tmux that grofe cannot do (`lock-server`) fails its own command
+/// and the rest of its line; the other lines run, and the request fails
+/// with each error named by file and line.
 #[test]
 fn a_command_grofe_lacks_fails_only_its_own_line() {
     let srv = server();

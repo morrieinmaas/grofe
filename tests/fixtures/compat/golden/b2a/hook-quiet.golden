@@ -96,6 +96,15 @@ $ run-shell 'sleep 0.5'
 $ show -gv @n
 4
 ? 0
+$ set -g @n 0
+? 0
+$ select-layout -E -t a:1
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ show -gv @n
+1
+? 0
 $ set-hook -gu window-layout-changed
 ? 0
 $ set -g @n 0
@@ -110,6 +119,34 @@ $ list-sessions -F '#{session_name}'
 a
 c
 from-hook
+? 0
+$ show -gv @n
+1
+? 0
+$ set-hook -gu session-renamed
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g session-closed 'set -gF @n "#{e|+:#{@n},1}"'
+? 0
+$ set-hook -g window-renamed 'kill-session -t from-hook'
+? 0
+$ rename-window -t a:1 k
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-sessions -F '#{session_name}'
+a
+c
+? 0
+$ show -gv @n
+0
+? 0
+$ set-hook -gu window-renamed
+? 0
+$ kill-session -t c
+? 0
+$ run-shell 'sleep 0.5'
 ? 0
 $ show -gv @n
 1

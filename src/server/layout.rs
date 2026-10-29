@@ -1168,10 +1168,10 @@ fn main_split(
 }
 
 /// tmux's `layout_set_tiled`: the fewest rows, then columns (up to
-/// `max_columns`, if not 0), that hold every pane, filled row by row, each cell the same size and the last
-/// row and each row's last cell taking what is left over; a pane alone
-/// on the last row spans it. `None` when the grid needs more room than
-/// `area` has (D18).
+/// `max_columns`, if not 0), that hold every pane, filled row by row, each
+/// cell the same size and the last row and each row's last cell taking
+/// what is left over; a pane alone on the last row spans it. `None` when
+/// the grid needs more room than `area` has (D18).
 fn tiled(area: Rect, panes: &[PaneId], max_columns: u16) -> Option<Node> {
     let n = panes.len();
     let (mut rows, mut cols) = (1usize, 1usize);

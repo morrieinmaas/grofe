@@ -167,7 +167,8 @@ pub(super) fn after_command(state: &mut State) {
 /// A command tmux reports on whether or not anything changed:
 /// `rename-window` fires `window-renamed` even for the same name, and
 /// `select-layout` and `next-layout` fire `window-layout-changed` twice
-/// (`layout_set_select` and the command each notify). The change is taken
+/// (`layout_set_select` and the command each notify; `select-layout -E`
+/// once, as `layout_spread_out` does not). The change is taken
 /// into the last look so the next comparison does not fire it again.
 pub(super) fn window_event(state: &mut State, event: &'static str, window: WindowId, times: usize) {
     if !watched(state) {

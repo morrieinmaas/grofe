@@ -1454,10 +1454,8 @@ pub fn run_command(
     }
     watch::after_command(state);
     // A failed command runs `command-error` instead, in the current
-    // context. What the hook prints is dropped: the error is all the reply
-    // can carry.
-    // What the hook prints goes out with the error, and its own errors
-    // after the command's, as tmux prints them.
+    // context: what the hook prints goes out with the error, and its own
+    // errors after the command's, as tmux prints them.
     if let Err(e) = &result
         && !state.hooks.running
         && wanted(state, "command-error")
@@ -1515,9 +1513,10 @@ fn reported_window(
         Command::RenameWindow(c) => {
             Some(("window-renamed", m.resolve_window(&c.target, ctx).ok()?, 1))
         }
+        // `-E` spreads the cells without a preset's own notify: once.
         Command::SelectLayout(c) if c.spread => {
             let pane = m.resolve_pane(&c.target, ctx).ok()?;
-            Some(("window-layout-changed", m.panes.get(&pane)?.window, 2))
+            Some(("window-layout-changed", m.panes.get(&pane)?.window, 1))
         }
         Command::SelectLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
         Command::NextLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
