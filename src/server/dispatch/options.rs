@@ -4483,8 +4483,6 @@ const NO_EFFECT: &[&str] = &[
     "status-keys",
     "terminal-features",
     "terminal-overrides",
-    "window-status-activity-style",
-    "focus-follows-mouse",
     "assume-paste-time",
     "key-table",
     "lock-after-time",
@@ -5110,6 +5108,12 @@ mod tests {
             pane_cell: Some((3, 4)),
             report: (3, 4),
             wheel: false,
+            event: crate::server::input::Mouse {
+                kind: crate::server::input::MouseKind::Move,
+                col: 3,
+                row: 4,
+                mods: Default::default(),
+            },
         };
         crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
             run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])

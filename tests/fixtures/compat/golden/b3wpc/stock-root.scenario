@@ -1,0 +1,59 @@
+# B3 WP-C: tmux 3.7b's stock root mouse rows are ordinary bindings: listed,
+# unbound one by one or all at once, and bound again. The left pane is
+# columns 0..33, the border column 34, the right pane columns 35..59.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ new-window -d -n second cat
+$ split-window -h -l 25 -t main:1 cat
+$ select-pane -t main:1.1
+$ list-keys -T root
+client 60x15 attach -t main
+# MouseDown1Pane focuses the pane.
+keys Escape '[<0;50;5M'
+keys Escape '[<0;50;5m'
+$ display-message -p -t main '#{pane_id}'
+# Unbound, a click focuses nothing.
+$ unbind -n MouseDown1Pane
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main '#{pane_id}'
+$ list-keys -T root MouseDown1Pane
+$ bind -n MouseDown1Pane select-pane -t= \\; send -M
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main '#{pane_id}'
+# The wheel on a pane enters copy mode; unbound it does nothing.
+keys Escape '[<64;10;5M'
+$ display-message -p -t main '#{pane_in_mode}'
+$ send-keys -t main -X cancel
+$ unbind -n WheelUpPane
+keys Escape '[<64;10;5M'
+$ display-message -p -t main '#{pane_in_mode}'
+# The status line: a click on a window label selects the window, a wheel
+# changes window; unbound they do nothing.
+keys Escape '[<0;20;15M'
+keys Escape '[<0;20;15m'
+$ display-message -p -t main '#{window_index}'
+$ unbind -n MouseDown1Status
+keys Escape '[<0;10;15M'
+keys Escape '[<0;10;15m'
+$ display-message -p -t main '#{window_index}'
+$ unbind -n WheelUpStatus
+$ unbind -n WheelDownStatus
+keys Escape '[<64;10;15M'
+$ display-message -p -t main '#{window_index}'
+keys Escape '[<65;10;15M'
+$ display-message -p -t main '#{window_index}'
+# A right click opens the pane menu; unbound it goes to the pane.
+$ unbind -n MouseDown3Pane
+keys Escape '[<2;10;5M'
+keys Escape '[<2;10;5m'
+screen
+# Every root binding at once.
+$ unbind -a -T root
+$ list-keys -T root
+keys Escape '[<0;50;5M'
+keys Escape '[<0;50;5m'
+$ display-message -p -t main '#{pane_id}'
+$ list-keys -T root MouseDown3Status

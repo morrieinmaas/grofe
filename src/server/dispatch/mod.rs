@@ -284,6 +284,9 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             window::list_panes(state, ctx, c)
         }
 
+        // The mouse event of a mouse key's commands goes to its pane.
+        Command::SendKeys(c) if c.mouse => server::mouse::send_current(state),
+
         Command::SplitWindow(_)
         | Command::KillPane(_)
         | Command::SelectPane(_)

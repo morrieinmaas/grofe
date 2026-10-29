@@ -326,6 +326,8 @@ pub struct SendKeys {
     pub client_key: bool,
     /// `-c`: the client `-K` types on, else the target session's.
     pub client: Option<String>,
+    /// `-M`: the mouse event the command runs for goes to its pane.
+    pub mouse: bool,
 }
 
 /// `clear-history` (`-H`): drops the pane's scrollback.

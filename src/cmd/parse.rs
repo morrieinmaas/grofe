@@ -730,6 +730,7 @@ const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
     ('R', FlagKind::Bool),
     ('K', FlagKind::Bool),
     ('c', FlagKind::Value),
+    ('M', FlagKind::Bool),
 ];
 
 fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
@@ -773,6 +774,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
         reset: flags.present.contains(&'R'),
         client_key: flags.present.contains(&'K'),
         client: flags.values.get(&'c').cloned(),
+        mouse: flags.present.contains(&'M'),
     }))
 }
 

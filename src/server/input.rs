@@ -1186,6 +1186,22 @@ impl KeyTables {
         t
     }
 
+    /// Binds one stock `root` row from [`TMUX_STOCK_ROOT`], in tmux's
+    /// dialect and as tmux prints it.
+    fn insert_stock_root(&mut self, name: &str, text: &str) {
+        // `list-keys` joins the commands with ` \; `, which a command
+        // string spells `;`.
+        let source = text.replace(" \\; ", " ; ");
+        let (Ok(key), Ok(cmds)) = (parse_key(name), crate::cmd::split_command_string(&source))
+        else {
+            return;
+        };
+        let mut b = Binding::new(cmds, false, BindingSource::Default);
+        b.dialect = Dialect::Tmux;
+        b.shown = Some(text.to_string());
+        self.insert(ROOT_TABLE, key, b);
+    }
+
     /// Makes the default prefix table tmux 3.7b's stock one, for a server
     /// with tmux identity: grofe's default prefix bindings go, and each
     /// stock key the config and the runtime neither bound nor unbound gets
@@ -1222,6 +1238,25 @@ impl KeyTables {
         }
         for (key, b) in add {
             self.insert(PREFIX_TABLE, key, b);
+        }
+        // The rest of the stock `root` rows: those the config and the
+        // runtime neither bound nor unbound.
+        let unbound_root = |key: &Key| {
+            self.config_unbound
+                .iter()
+                .chain(&self.runtime_unbound)
+                .any(|(t, k)| t == ROOT_TABLE && k == key)
+        };
+        let add: Vec<(&str, &str)> = TMUX_STOCK_ROOT
+            .iter()
+            .filter(|(name, _)| {
+                parse_key(name)
+                    .is_ok_and(|key| !unbound_root(&key) && self.exact(ROOT_TABLE, &key).is_none())
+            })
+            .copied()
+            .collect();
+        for (name, text) in add {
+            self.insert_stock_root(name, text);
         }
         // The stock copy-mode-vi rows run as they are; those whose `{ }`
         // template `cmds` holds as a string show as tmux prints them.
@@ -1612,19 +1647,12 @@ pub fn default_bindings() -> KeyTables {
         b.dialect = Dialect::Tmux;
         t.insert(PREFIX_TABLE, key, b);
     }
-    // tmux 3.7b's stock border rows. The mouse module runs them as its
-    // built-in border model, so a border does something only while they (or
-    // a binding of your own) are bound ([`crate::server::mouse`]).
-    for (key, verb) in [
-        ("MouseDown1Border", "select-pane"),
-        ("MouseDrag1Border", "resize-pane"),
-    ] {
-        if let Ok(key) = parse_key(key) {
-            let argv = vec![verb.to_string(), "-M".to_string()];
-            let mut b = Binding::new(vec![argv], false, BindingSource::Default);
-            // `-M` is tmux's spelling only.
-            b.dialect = Dialect::Tmux;
-            t.insert(ROOT_TABLE, key, b);
+    // tmux 3.7b's stock mouse rows, in its dialect ([`NATIVE_STOCK_ROOT`]):
+    // ordinary bindings, which the mouse module runs as they are (a border
+    // drag, `resize-pane -M`, is the mouse's own).
+    for (name, text) in TMUX_STOCK_ROOT {
+        if NATIVE_STOCK_ROOT.contains(name) {
+            t.insert_stock_root(name, text);
         }
     }
     t
@@ -2087,6 +2115,101 @@ pub const TMUX_COPY_MODE_VI_SHOWN: &[(&str, &str)] = &[
         r#"9"#,
         r#"command-prompt -N -I 9 -p (repeat) { send-keys -N "%%" }"#,
     ),
+];
+
+/// tmux 3.7b's stock `root` table, all of its mouse rows (`list-keys -T
+/// root` on a `-f /dev/null` server, the `b3wpc/stock-root` golden): the key
+/// and its commands as tmux prints them. A server with tmux identity binds
+/// them all; the rows in [`NATIVE_STOCK_ROOT`] are bound on every server.
+pub const TMUX_STOCK_ROOT: &[(&str, &str)] = &[
+    (r#"MouseDown1Pane"#, r##"select-pane -t = \; send-keys -M"##),
+    (r#"MouseDown1Status"#, r##"switch-client -t ="##),
+    (r#"MouseDown1Border"#, r##"select-pane -M"##),
+    (
+        r#"MouseDown1ScrollbarUp"#,
+        r##"if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-up } { copy-mode -u }"##,
+    ),
+    (
+        r#"MouseDown1ScrollbarDown"#,
+        r##"if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-down } { copy-mode -d }"##,
+    ),
+    (r#"MouseDown1Control8"#, r##"resize-pane -Z"##),
+    (
+        r#"MouseDown1Control9"#,
+        r##"display-menu -O -T "Kill pane #{pane_index}?" -t = -x M -y M Yes y { kill-pane -t = } No n {  }"##,
+    ),
+    (
+        r#"MouseDown2Pane"#,
+        r##"select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { paste-buffer -p }"##,
+    ),
+    (
+        r#"MouseDown3Pane"#,
+        r##"if-shell -F -t = "#{||:#{mouse_any_flag},#{&&:#{pane_in_mode},#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}}}" { select-pane -t = ; send-keys -M } { display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z } }"##,
+    ),
+    (
+        r#"MouseDown3Status"#,
+        r##"display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }"##,
+    ),
+    (
+        r#"MouseDown3StatusLeft"#,
+        r##"display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }"##,
+    ),
+    (
+        r#"MouseDrag1Pane"#,
+        r##"if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -M }"##,
+    ),
+    (r#"MouseDrag1Border"#, r##"resize-pane -M"##),
+    (
+        r#"MouseDrag1ScrollbarSlider"#,
+        r##"if-shell -F -t = "#{pane_in_mode}" { send-keys -X scroll-to-mouse } { copy-mode -S }"##,
+    ),
+    (r#"WheelDownStatus"#, r##"next-window"##),
+    (
+        r#"WheelUpPane"#,
+        r##"if-shell -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }"##,
+    ),
+    (r#"WheelUpStatus"#, r##"previous-window"##),
+    (
+        r#"DoubleClick1Pane"#,
+        r##"select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }"##,
+    ),
+    (
+        r#"TripleClick1Pane"#,
+        r##"select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }"##,
+    ),
+    (
+        r#"M-MouseDown3Pane"#,
+        r##"display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }"##,
+    ),
+    (
+        r#"M-MouseDown3Status"#,
+        r##"display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }"##,
+    ),
+    (
+        r#"M-MouseDown3StatusLeft"#,
+        r##"display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }"##,
+    ),
+    (r#"C-MouseDown1Pane"#, r##"swap-pane -s @"##),
+    (r#"C-MouseDown1Status"#, r##"swap-window -t @"##),
+];
+
+/// The stock `root` rows every server binds, whatever its identity: the
+/// pane, status line, border and wheel rows. The right-button menus, the
+/// Meta and Control variants and the scrollbar rows are tmux's alone.
+pub const NATIVE_STOCK_ROOT: &[&str] = &[
+    "MouseDown1Pane",
+    "MouseDown1Status",
+    "MouseDown1Border",
+    "MouseDown1Control8",
+    "MouseDown1Control9",
+    "MouseDown2Pane",
+    "MouseDrag1Pane",
+    "MouseDrag1Border",
+    "WheelDownStatus",
+    "WheelUpPane",
+    "WheelUpStatus",
+    "DoubleClick1Pane",
+    "TripleClick1Pane",
 ];
 
 /// tmux 3.7b's stock prefix table (`list-keys -T prefix` on a `-f
@@ -4577,6 +4700,51 @@ mod tests {
             encode(&k("M-BTab"), &InputModes::default()),
             b"\x1b[Z".to_vec()
         );
+    }
+
+    /// tmux 3.7b's whole stock `root` table is bound on a server with tmux
+    /// identity, as tmux prints it, and parses as commands; the rows a
+    /// config or the runtime unbound stay unbound.
+    #[test]
+    fn the_stock_root_rows_are_bindings() {
+        let k = |name: &str| parse_key(name).unwrap();
+        let ctx = crate::protocol::ClientCtx {
+            dialect: Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let mut t = default_bindings();
+        for name in NATIVE_STOCK_ROOT {
+            assert!(t.exact(ROOT_TABLE, &k(name)).is_some(), "{name}");
+        }
+        assert!(t.exact(ROOT_TABLE, &k("MouseDown3Pane")).is_none());
+        t.use_tmux_stock();
+        assert_eq!(t.keys(ROOT_TABLE).len(), TMUX_STOCK_ROOT.len());
+        // `unbind -n` sticks through a reload, which binds the stock again.
+        t.unbind_runtime(ROOT_TABLE, &k("MouseDown3Status"));
+        t.use_tmux_stock();
+        assert_eq!(t.keys(ROOT_TABLE).len(), TMUX_STOCK_ROOT.len() - 1);
+        for (name, text) in TMUX_STOCK_ROOT {
+            let Some(b) = t.exact(ROOT_TABLE, &k(name)) else {
+                assert_eq!(*name, "MouseDown3Status");
+                continue;
+            };
+            assert_eq!(b.shown.as_deref(), Some(*text), "{name}");
+            for argv in &b.cmds {
+                // A mouse key's `=` and `@` are targets by the time it runs.
+                let argv: Vec<String> = argv
+                    .iter()
+                    .map(|w| match w.as_str() {
+                        "=" | "@" => "%0".to_string(),
+                        w => w.replace("-t=", "-t%0"),
+                    })
+                    .collect();
+                if let Err(e) = crate::compat::parse_split(&ctx, &argv) {
+                    panic!("{name}: {argv:?}: {e}");
+                }
+            }
+        }
+        let click = t.exact(ROOT_TABLE, &k("MouseDown1Pane")).unwrap();
+        assert_eq!(click.cmds.len(), 2, "select-pane, then send-keys -M");
     }
 
     #[test]

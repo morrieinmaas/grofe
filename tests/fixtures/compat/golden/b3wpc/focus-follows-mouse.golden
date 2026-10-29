@@ -1,0 +1,72 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ split-window -h -l 25 -t main cat
+? 0
+$ select-pane -t main:1.1
+? 0
+client 60x15 attach -t main
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+keys Escape '[<35;50;5M'
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+$ set -g focus-follows-mouse on
+? 0
+keys Escape '[<35;50;5M'
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+keys Escape '[<35;10;5M'
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+keys Escape '[<35;35;5M'
+keys Escape '[<35;50;15M'
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+keys Escape '[<35;50;5M'
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+keys Escape '[<35;50;15M'
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+$ set -g focus-follows-mouse off
+? 0
+keys Escape '[<35;10;5M'
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+$ set -g focus-follows-mouse on
+? 0
+$ set -g mouse off
+? 0
+keys Escape '[<35;50;5M'
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+$ set -g mouse on
+? 0
+$ bind -n MouseMovePane set -g @moved '#{pane_id}'
+! unknown key: MouseMovePane
+? 1
+keys Escape '[<35;40;5M'
+$ show -gv @moved
+! invalid option: @moved
+? 1
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
