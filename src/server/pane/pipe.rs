@@ -13,8 +13,9 @@
 //! that writes faster than the pane takes it is held back, as a pipe holds
 //! back its writer; nothing it wrote is lost, and neither the pane nor the
 //! server waits for it.
-// ponytail: tmux buffers a slow command's input without limit; the queue
-// here holds 1024 reads, and what comes while it is full is dropped.
+// ponytail: tmux buffers what the pane writes for a slow `-O` command
+// without limit; the queue here holds 1024 reads, and what comes while it
+// is full is dropped, so a command that stops reading never holds the pane.
 
 use std::io as stdio;
 use std::process::Stdio;
@@ -76,9 +77,11 @@ impl Open {
         if let (Some(writer), Ok(runtime)) =
             (self.writer.take(), tokio::runtime::Handle::try_current())
         {
+            let stop = writer.abort_handle();
             runtime.spawn(async move {
-                tokio::time::sleep(DRAIN_LIMIT).await;
-                writer.abort();
+                if tokio::time::timeout(DRAIN_LIMIT, writer).await.is_err() {
+                    stop.abort();
+                }
             });
         }
     }
@@ -117,7 +120,7 @@ impl Pipe {
         }
         let open = lock(&self.open).take();
         if let Some(open) = open {
-            drop(open);
+            open.drain();
         }
     }
 

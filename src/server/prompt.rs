@@ -1059,7 +1059,7 @@ mod tests {
         p.incremental = true;
         p.last = "prev".to_string();
         let history = ["old".to_string(), "new".to_string()];
-        let mut press = |p: &mut Prompt, k: Key| p.incremental_key(&k, &history).1;
+        let press = |p: &mut Prompt, k: Key| p.incremental_key(&k, &history).1;
         assert_eq!(press(&mut p, ctrl('u')), Some('='), "C-u on an empty line");
         assert_eq!(
             press(&mut p, ctrl('w')),
