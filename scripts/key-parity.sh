@@ -12,8 +12,8 @@
 #   tmux          real tmux 3.7b ($KEY_PARITY_TMUX, an absolute path) on
 #                 -L grofe-tp9b-tmux -f /dev/null, sourcing canopy's
 #                 tmux.conf as canopy's installed stub does: its layers,
-#                 athome's user.conf (whose TPM loads vim-tmux-navigator),
-#                 then the plugin loader.
+#                 athome's user.conf, then the plugin loader; then
+#                 vim-tmux-navigator's rows as TC.0 recorded them.
 #   grofe-tmux    grofe answering to the tmux name, reading its native
 #                 config: athome's config.toml, canopy's grofe/conf.d
 #                 fragments, athome's user.toml, whose load-commands run
@@ -205,22 +205,19 @@ EOF
       "$(printf '0%.0s' $(seq 64))" "${f#*/}" \
       "$(shasum -a 256 "$store/plugins/$f" | awk '{ print $1 }')" >>"$w/artifacts"
   done
-  # user.conf's TPM lines find a TPM that loads nothing: canopy vendors the
-  # plugins, and the clone it would otherwise run must not happen here.
-  # The one plugin athome still loads through TPM is vim-tmux-navigator,
-  # which canopy does not vendor. On tmux this TPM binds its keys as TC.0's
-  # container recorded them (TM.0's golden takes its copy-mode-vi rows from
-  # the same lines); on grofe canopy's 40-canopy-nav.toml stands in for it.
+  # A TPM that loads nothing, should a user.conf still run one: canopy
+  # vendors the plugins, and the clone TPM would run must not happen here.
   printf '#!/bin/sh\nexit 0\n' >"$home/.config/tmux/plugins/tpm/tpm"
+  chmod +x "$home/.config/tmux/plugins/tpm/tpm"
+  # vim-tmux-navigator, which canopy does not vendor and athome's user.conf
+  # no longer loads through TPM. On tmux its keys are bound as TC.0's
+  # container recorded them (TM.0's golden takes its copy-mode-vi rows from
+  # the same lines), once the config is read (start_tmux); on grofe
+  # canopy's 40-canopy-nav.toml binds them natively.
   if [ "$1" = tmux ]; then
     grep -E "^bind-key -T (root|copy-mode-vi) ('C-\\\\'|C-[hjkl]) " \
-      "$repo/tests/compat/corpus/container-stored.argv" >"$w/navigator.argv"
-    cat >"$home/.config/tmux/plugins/tpm/tpm" <<EOF
-#!/bin/sh
-while IFS= read -r line; do eval "tmux \$line"; done <"$w/navigator.argv"
-EOF
+      "$repo/tests/compat/corpus/container-stored.argv" >"$w/navigator.conf"
   fi
-  chmod +x "$home/.config/tmux/plugins/tpm/tpm"
   # The one athome script that changes a key table as it loads.
   cp "$dots/dot_config/tmux/executable_wk-keys-fix.sh" "$home/.config/tmux/wk-keys-fix.sh"
   chmod +x "$home/.config/tmux/wk-keys-fix.sh"
@@ -326,6 +323,8 @@ start_tmux() {
   # loads the config: a plugin reads $PWD as it loads (sessionx).
   run_cwd="$work" run_in "$1" "$2" source-file "$tmp/$1/hd/.local/share/canopy/tmux/tmux.conf" ||
     fail "$1: source-file tmux.conf exited nonzero"
+  run_in "$1" "$2" source-file "$tmp/$1/navigator.conf" ||
+    fail "$1: source-file navigator.conf exited nonzero"
   # The window the session started with, where base-index puts it once
   # the config is read, as it is when tmux reads the config first.
   run_in "$1" "$2" move-window -s main:0 -t main:1

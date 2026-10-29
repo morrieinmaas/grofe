@@ -573,7 +573,7 @@ read back what tmux did.
 | `root` | `C-MouseDown1Status` | mouse | grofe | tmux identity only: `swap-window -t @`, the same for the window clicked |
 | `root` | `MouseDown1ScrollbarUp` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
 | `root` | `MouseDown1ScrollbarDown` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
-| `root` | `C-h` | native | both | vim-tmux-navigator, which athome loads through TPM on tmux, is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
+| `root` | `C-h` | native | both | vim-tmux-navigator, bound on tmux as TC.0's container recorded it, is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
 | `root` | `C-j` | native | both | the same |
 | `root` | `C-k` | native | both | the same |
 | `root` | `C-l` | native | both | the same |
@@ -604,11 +604,11 @@ read back what tmux did.
 | `prefix` | `*` | gap | grofe | a gap, not a choice: grofe's own default table leaves out tmux 3.7's stock `* new-pane`, though the verb exists (TC.6, built to fzf's recorded form). Under the tmux name the stock binding is there; what a bare `new-pane` does on grofe is not checked here |
 | `prefix` | `<` | oos | grofe | out of scope: tmux's window menu opens at `-x W -y W`, a mouse position form (spec §4.5, mouse argv forms), so grofe's own default table leaves it unbound |
 | `prefix` | `>` | oos | grofe | out of scope: tmux's pane menu opens at `-x P -y P`, but its items are mouse argv forms (`copy-mode -t=`, `send-keys -X -t =`, `#{mouse_word}`; spec §4.5), so grofe's own default table leaves it unbound |
-| `copy-mode-vi` | `C-h` | gap | both | vim-tmux-navigator's copy-mode-vi rows (`select-pane -L`, and `-D -U -R -l` below): canopy's `40-canopy-nav.toml` still defers them to M5, so grofe keeps the stock row. A canopy change, outside grofe |
-| `copy-mode-vi` | `C-j` | gap | both | the same (`select-pane -D`; grofe keeps the stock `copy-pipe-and-cancel`) |
-| `copy-mode-vi` | `C-k` | gap | both | the same (`select-pane -U`; unbound on grofe) |
-| `copy-mode-vi` | `C-l` | gap | both | the same (`select-pane -R`; unbound on grofe) |
-| `copy-mode-vi` | `C-\\` | gap | both | the same (`select-pane -l`; unbound on grofe) |
+| `copy-mode-vi` | `C-h` | native | both | vim-tmux-navigator's copy-mode-vi rows (`select-pane -L`, and `-D -U -R -l` below): canopy's `40-canopy-nav.toml` binds the same move behind the plugin's `@tmux_navigator_disable_when_zoomed` check, an `if-shell -F` |
+| `copy-mode-vi` | `C-j` | native | both | the same (`select-pane -D`) |
+| `copy-mode-vi` | `C-k` | native | both | the same (`select-pane -U`) |
+| `copy-mode-vi` | `C-l` | native | both | the same (`select-pane -R`) |
+| `copy-mode-vi` | `C-\\` | native | both | the same (`select-pane -l`) |
 | `copy-mode-vi` | `/` | native | grofe | grofe's own default table writes the prompt's template as a quoted string, not a `{ }` block: the same command. Under the tmux name it is printed as tmux prints it |
 | `copy-mode-vi` | `?` | native | grofe | the same |
 | `copy-mode-vi` | `:` | native | grofe | the same |
