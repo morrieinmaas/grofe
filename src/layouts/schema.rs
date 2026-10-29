@@ -472,7 +472,7 @@ fn count_cells(g: &crate::server::layout::LayoutGeometry) -> usize {
 
 fn check_layout(ctx: &Ctx, l: &Spanned<String>) -> Result<(), LayoutError> {
     let s = l.get_ref();
-    let preset = Preset::from_name(s, MainSize::WIDTH, MainSize::HEIGHT).is_some();
+    let preset = Preset::from_name(s, MainSize::WIDTH, MainSize::HEIGHT, 0).is_some();
     if preset || parse_tmux_layout(s).is_some() {
         return Ok(());
     }
