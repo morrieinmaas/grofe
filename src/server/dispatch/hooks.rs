@@ -82,6 +82,9 @@ pub fn set_environment(
     c: SetEnvironment,
 ) -> Result<String, String> {
     let name = c.name.ok_or_else(|| too_few("set-environment"))?;
+    if name.is_empty() {
+        return Err("empty variable name".to_string());
+    }
     if name.contains('=') {
         return Err("variable name contains =".to_string());
     }
@@ -355,6 +358,28 @@ mod tests {
         assert_eq!(
             run(&mut state, &["show-environment", "-gs", "R"]),
             Ok("unset R;\n".to_string())
+        );
+    }
+
+    /// tmux's `cmd_set_environment_exec` refuses an empty name before
+    /// anything else, so `-r` cannot make an entry that `show-environment
+    /// -s` would print as `unset ;`.
+    #[test]
+    fn set_environment_refuses_an_empty_name() {
+        let mut state = test_state();
+        for args in [&["-g", "", "x"][..], &["-gr", ""], &["-gu", ""]] {
+            let mut argv = vec!["set-environment"];
+            argv.extend_from_slice(args);
+            assert_eq!(
+                run(&mut state, &argv),
+                Err("empty variable name".to_string()),
+                "{args:?}"
+            );
+        }
+        assert!(
+            !run(&mut state, &["show-environment", "-gs"])
+                .unwrap()
+                .contains("unset ;")
         );
     }
 
