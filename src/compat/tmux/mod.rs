@@ -1542,7 +1542,7 @@ fn core_rows() -> Vec<Row> {
             "send-keys -M",
             PassThrough,
             GrofeTarget::Native("send-keys"),
-            &[],
+            SEMANTIC,
             "",
             "fe_1/errors",
         ),

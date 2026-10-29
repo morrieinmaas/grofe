@@ -1,3 +1,0 @@
-~/.tmux.conf:3: note: display-popup -s dropped: cosmetic, grofe draws it no differently
-~/.tmux.conf:3: note: display-popup -S dropped: cosmetic, grofe draws it no differently
-~/.tmux.conf:5: note: display-menu -b dropped: cosmetic, grofe draws it no differently
