@@ -773,7 +773,7 @@ fn keys_after_a_shell_condition_wait_for_its_branch() {
     a.wait_until("the branch's error", WAIT, |t| {
         t.lines()
             .last()
-            .is_some_and(|l| l.contains("unknown command: splat-window"))
+            .is_some_and(|l| l.contains("Unknown command: splat-window"))
     });
 }
 

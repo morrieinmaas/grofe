@@ -223,13 +223,13 @@ fn a_failing_binding_shows_its_error_in_the_status_line() {
     a.wait_for("[main] 1:");
     // One window: there is no last window.
     a.send(format!("{PREFIX}l"));
-    a.wait_for("no last window");
+    a.wait_for("No last window");
     let screen = a.text();
     let status = screen.lines().nth(23).unwrap_or_default();
-    assert!(status.starts_with("no last window"), "status: {status:?}");
+    assert!(status.starts_with("No last window"), "status: {status:?}");
     // It goes away after display-time, as in tmux.
     a.wait_until("message cleared", Duration::from_secs(5), |t| {
-        !t.contains("no last window") && t.contains("[main] 1:")
+        !t.contains("No last window") && t.contains("[main] 1:")
     });
 }
 
