@@ -559,6 +559,22 @@ read back what tmux did.
 | `copy-mode-vi` | `7` | native | grofe | the same |
 | `copy-mode-vi` | `8` | native | grofe | the same |
 | `copy-mode-vi` | `9` | native | grofe | the same |
+| `copy-mode` | `C-r` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `C-s` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `F` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-1` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-2` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-3` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-4` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-5` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-6` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-7` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-8` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `M-9` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `T` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `f` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `g` | native | grofe | the same, in the emacs table |
+| `copy-mode` | `t` | native | grofe | the same, in the emacs table |
 
 ## Coverage
 
