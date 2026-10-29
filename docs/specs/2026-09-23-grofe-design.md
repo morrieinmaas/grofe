@@ -1168,7 +1168,7 @@ after the freeze.
 
 ```toml
 [plugins.event-log]
-cmd = ["sh", "event-log/event-log.sh"]
+cmd = ["event-log/event-log.sh"]
 env = { LC_ALL = "C" }
 enabled = true
 restart = "always"
@@ -1176,7 +1176,7 @@ restart = "always"
 
 | Key | Type, default | Meaning |
 |---|---|---|
-| `cmd` | array of strings, required, non-empty | the argv, run directly and never through a shell. `cmd[0]` without a `/` is looked up on the plugin's `PATH`; a relative path containing `/` resolves against the directory of the file that set `cmd`, as `source-file` does (§5.1). Any later word that contains `/`, does not start with `/` or `-`, and names an existing path in that directory resolves the same way, so `["sh", "event-log/event-log.sh"]` finds its script wherever the server runs; a word that names nothing there is left as written |
+| `cmd` | array of strings, required, non-empty | the argv, run directly and never through a shell. `cmd[0]` without a `/` is looked up on the plugin's `PATH`; a relative path containing `/` resolves against the directory of the file that set `cmd`, as `source-file` does (§5.1). Only `cmd[0]` is a path: every later word is passed exactly as written, so `["sh", "event-log/event-log.sh"]` does not find its script. A script that needs an interpreter is `cmd[0]` itself (shebang and exec bit, as `["event-log/event-log.sh"]` finds it wherever the server runs) or is given by an absolute path |
 | `env` | table of strings, empty | variables added over the server environment |
 | `enabled` | boolean, `true` | `false` declares the plugin without starting it |
 | `restart` | `always` (default), `on-failure` or `never` | `always` restarts after any exit; `on-failure` only after a non-zero exit or a signal, and an exit 0 leaves it `exited`; `never` leaves it `exited` after any exit |
