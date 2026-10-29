@@ -413,8 +413,14 @@ fn session_created_is_when_the_session_was_made() {
 /// once with tmux 3.7b's result (its loop limit stops at 100), `if -F`
 /// nested past grofe's limit fails at once, and the server keeps serving
 /// another client meanwhile.
+///
+/// The budget catches a quadratic blowup (minutes at this size), not timing:
+/// the format path is linear (about 0.2 s in a debug build on an idle
+/// machine, doubling with n), but the full suite loads the machine several
+/// times over, so the budget is 3 s.
 #[test]
 fn deep_nesting_answers_at_once_and_the_server_keeps_serving() {
+    const BUDGET: Duration = Duration::from_secs(3);
     let srv = scripted();
     let n = 100_000;
     let deep = format!("{}x{}", "#{!:".repeat(n), "}".repeat(n));
@@ -441,7 +447,7 @@ fn deep_nesting_answers_at_once_and_the_server_keeps_serving() {
             assert_eq!(display(&srv, "alpha", "#{session_name}"), "alpha");
         }
         let took = busy.join().expect("busy client");
-        assert!(took < Duration::from_secs(1), "{took:?}");
+        assert!(took < BUDGET, "{took:?}");
     });
     assert_eq!(
         srv.request(&argv(&["display-message", "-p", &deep]), WAIT),
@@ -459,7 +465,7 @@ fn deep_nesting_answers_at_once_and_the_server_keeps_serving() {
         Err("if-shell: nested more than 100 deep".to_string())
     );
     let took = start.elapsed();
-    assert!(took < Duration::from_secs(1), "{took:?}");
+    assert!(took < BUDGET, "{took:?}");
     assert_eq!(display(&srv, "alpha", "#{session_name}"), "alpha");
 }
 

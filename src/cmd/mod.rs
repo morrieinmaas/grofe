@@ -911,6 +911,32 @@ pub struct NewPane {
     pub command: Option<Vec<String>>,
 }
 
+/// `float-pane` (grofe's own; tmux 3.7b has no such verb): a tiled pane
+/// becomes a floating one, keeping its process and history. The flags are
+/// `new-pane`'s: `-x`/`-y` the size, `-X`/`-Y` the place, each defaulting as
+/// there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatPane {
+    /// `-t`.
+    pub target: Target,
+    pub width: Option<SplitSize>,
+    pub height: Option<SplitSize>,
+    pub x: Option<Offset>,
+    pub y: Option<Offset>,
+}
+
+/// `place-pane` (grofe's own): moves a floating pane to the window cell
+/// `-X`, `-Y` of its top-left content cell, as `new-pane` reads them; an
+/// axis not given stays. The place is held inside the window as a mouse
+/// drag holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacePane {
+    /// `-t`.
+    pub target: Target,
+    pub x: Option<Offset>,
+    pub y: Option<Offset>,
+}
+
 /// One `display-menu` item: tmux reads its arguments as `name key command`
 /// triples, except that an empty name is a separator on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1229,6 +1255,8 @@ pub enum Command {
     WaitFor(WaitFor),
     DisplayPopup(DisplayPopup),
     NewPane(NewPane),
+    FloatPane(FloatPane),
+    PlacePane(PlacePane),
     DisplayMenu(DisplayMenu),
     DisplayPanes(DisplayPanes),
     ConfirmBefore(ConfirmBefore),

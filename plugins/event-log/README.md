@@ -8,10 +8,12 @@ server's `PATH` or `GROFE_BIN` set to its path (see below).
 
 ```toml
 [plugins.event-log]
-cmd = ["sh", "event-log/event-log.sh"]
+cmd = ["event-log/event-log.sh"]
 ```
 
-The path resolves against the directory of the config file. `GROFE_STATE` is
+The script has a shebang and the exec bit, so it is `cmd[0]` itself. Its
+path resolves against the directory of the config file; to run it through an
+interpreter instead, give an absolute path to the script. `GROFE_STATE` is
 the state directory the server sets for every plugin. If `grofe` is not on the
 server's `PATH`, set `env = { GROFE_BIN = "/path/to/grofe" }`.
 

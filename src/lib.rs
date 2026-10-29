@@ -6,6 +6,7 @@ pub mod compat;
 pub mod config;
 pub mod event;
 pub mod import_tmux;
+pub mod layouts;
 pub mod paths;
 pub mod protocol;
 pub mod server;

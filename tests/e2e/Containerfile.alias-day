@@ -112,7 +112,7 @@ RUN for tool in wl-copy wl-paste xclip xsel; do \
   && chmod 755 /usr/local/bin/claude
 
 # The test user: passwordless sudo (athome's zsh step runs sudo chsh), and
-# lingering, so its systemd user manager (and with it tmux.service) runs
+# lingering, so its systemd user manager (and with it canopy-tmux.service) runs
 # without a login.
 RUN useradd -m -u 1000 -s /bin/bash test \
   && printf 'test ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/test \

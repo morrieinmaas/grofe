@@ -12,16 +12,16 @@ use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
     ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode,
     DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup,
-    FindWindow, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane,
-    LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
+    FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow,
+    LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
     ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane, PluginRestart,
-    RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow,
-    RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow,
-    SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer,
-    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile, SplitWindow, Subscribe,
-    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor,
-    WindowStep,
+    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane, PlacePane,
+    PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
+    ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane,
+    SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook,
+    SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile,
+    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
+    UnlinkWindow, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1898,6 +1898,40 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_float_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('x', FlagKind::Value),
+        ('y', FlagKind::Value),
+        ('X', FlagKind::Value),
+        ('Y', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "float-pane")?;
+    no_extra_positionals(&flags, "float-pane", 0)?;
+    Ok(Command::FloatPane(FloatPane {
+        target: target_or_current(&flags.values, 't')?,
+        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(&flags, 'X')?,
+        y: offset_value(&flags, 'Y')?,
+    }))
+}
+
+fn parse_place_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('X', FlagKind::Value),
+        ('Y', FlagKind::Value),
+    ];
+    let flags = flags_for(argv, SHORT, "place-pane")?;
+    no_extra_positionals(&flags, "place-pane", 0)?;
+    Ok(Command::PlacePane(PlacePane {
+        target: target_or_current(&flags.values, 't')?,
+        x: offset_value(&flags, 'X')?,
+        y: offset_value(&flags, 'Y')?,
+    }))
+}
+
 /// `display-menu`'s items, read as tmux 3.7b's `cmd_display_menu` reads
 /// them: `name key command`, except an empty name, which is a separator
 /// alone; a short last item is `not enough arguments`.
@@ -3073,6 +3107,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "wait-for" => parse_wait_for(rest),
         "display-popup" => parse_display_popup(rest),
         "new-pane" => parse_new_pane(rest),
+        "float-pane" => parse_float_pane(rest),
+        "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
         "display-panes" => {
             let flags = tokenize(rest, &NO_FLAGS, "display-panes")?;

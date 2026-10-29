@@ -244,13 +244,15 @@ disabling it after five crashes in a minute), and stops it on `kill-server`:
 
 ```toml
 [plugins.event-log]
-cmd = ["sh", "event-log/event-log.sh"]
+cmd = ["event-log/event-log.sh"]
 env = { LC_ALL = "C" }
 restart = "always"
 ```
 
-A relative path in `cmd` resolves against the directory of the config file
-that sets it. The plugin gets `GROFE` (the socket), `GROFE_PLUGIN` (its name)
+Only `cmd[0]` is a path: a relative one containing a `/` resolves against the
+directory of the config file that sets it, and every later word is passed as
+written. A script that needs an interpreter should be `cmd[0]` itself (a
+shebang line and the exec bit) or be given by an absolute path. The plugin gets `GROFE` (the socket), `GROFE_PLUGIN` (its name)
 and `GROFE_STATE` (the state directory); its output goes to
 `<state>/plugins/<name>.log`. `list-plugins` and `plugin-restart <name>` show
 and restart them.

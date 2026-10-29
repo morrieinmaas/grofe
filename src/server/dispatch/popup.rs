@@ -3,7 +3,7 @@
 //! renderer over its layout. The values and error texts are tmux 3.7b's, recorded
 //! on a private server.
 
-use crate::cmd::{DisplayPopup, NewPane, Offset, Resolve};
+use crate::cmd::{DisplayPopup, FloatPane, NewPane, Offset, PlacePane, Resolve};
 use crate::compat;
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::pane::print_pane;
@@ -120,26 +120,14 @@ pub fn display_popup(
 /// becomes the active pane, takes input and bindings as any pane does,
 /// is listed and counted with the window's panes, and closes as a pane
 /// does. `-P` prints it (`-F`, else tmux's `session:window.pane`).
-// ponytail: a floating pane does not move when its window is resized,
-// and its border cannot be dragged.
+// ponytail: a floating pane does not move when its window is resized.
 pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String, String> {
     let model = &state.model;
     let target = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&target].window;
     let w = &model.windows[&window];
     let session = w.session;
-    let (sx, sy) = (w.cols, w.rows);
-    let width = c.width.map_or(sx / 2, |s| cells(s, sx));
-    let height = c.height.map_or(sy / 4, |s| cells(s, sy));
-    let n = w.floating.len() as i32 + 1;
-    let x = c.x.map_or(4 * n, |o| offset(o, sx));
-    let y = c.y.map_or(2 * n, |o| offset(o, sy));
-    if width > sx || height > sy || x > i32::from(sx) || y > i32::from(sy) {
-        return Err("size or position too large".to_string());
-    }
-    if x + i32::from(width) <= 0 || y + i32::from(height) <= 0 {
-        return Err("size or position too small".to_string());
-    }
+    let (x, y, width, height) = float_rect(w, (c.width, c.height), (c.x, c.y))?;
     let s = &model.sessions[&session];
     let env = s.env.clone();
     let cwd = resolve_cwd(model, ctx, Some(target), c.cwd.as_deref(), &s.cwd);
@@ -150,7 +138,7 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         env,
         c.command,
         cwd,
-        (width.max(1), height.max(1)),
+        (width, height),
         cell_px,
     )?;
     let Some(w) = state.model.windows.get_mut(&window) else {
@@ -162,8 +150,8 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         pane: new,
         x,
         y,
-        cols: width.max(1),
-        rows: height.max(1),
+        cols: width,
+        rows: height,
         z,
     });
     w.set_active(new);
@@ -171,6 +159,85 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         return Ok(String::new());
     }
     Ok(print_pane(&state.model, new, c.format.as_deref()))
+}
+
+/// The content rect `(x, y, cols, rows)` of a new floating pane in `w`, from
+/// `new-pane`'s `-x -y -X -Y`: half the window's width and a quarter of its
+/// height, cascading 4 right and 2 down, unless given.
+fn float_rect(
+    w: &crate::server::model::Window,
+    (width, height): (Option<SplitSize>, Option<SplitSize>),
+    (x, y): (Option<Offset>, Option<Offset>),
+) -> Result<(i32, i32, u16, u16), String> {
+    let (sx, sy) = (w.cols, w.rows);
+    let width = width.map_or(sx / 2, |s| cells(s, sx));
+    let height = height.map_or(sy / 4, |s| cells(s, sy));
+    let n = w.floating.len() as i32 + 1;
+    let x = x.map_or(4 * n, |o| offset(o, sx));
+    let y = y.map_or(2 * n, |o| offset(o, sy));
+    if width > sx || height > sy || x > i32::from(sx) || y > i32::from(sy) {
+        return Err("size or position too large".to_string());
+    }
+    if x + i32::from(width) <= 0 || y + i32::from(height) <= 0 {
+        return Err("size or position too small".to_string());
+    }
+    Ok((x, y, width.max(1), height.max(1)))
+}
+
+/// `float-pane` (grofe's own): the target tiled pane leaves the layout for
+/// a floating place, on top, with its process and history. The window needs
+/// another tiled pane to keep the layout.
+pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<String, String> {
+    let model = &mut state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let window = model.panes[&pane].window;
+    let w = &model.windows[&window];
+    if w.floating(pane).is_some() {
+        return Err("pane is already floating".to_string());
+    }
+    if w.tiled_ids().len() < 2 {
+        return Err("can't float the only tiled pane".to_string());
+    }
+    let (x, y, cols, rows) = float_rect(w, (c.width, c.height), (c.x, c.y))?;
+    let Some(w) = model.windows.get_mut(&window) else {
+        return Ok(String::new());
+    };
+    // The pane stays the window's, so the active and last panes stand.
+    w.zoomed = false;
+    w.layout.remove(pane);
+    let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
+    w.floating.push(Floating {
+        pane,
+        x,
+        y,
+        cols,
+        rows,
+        z,
+    });
+    model.relayout(window);
+    Ok(String::new())
+}
+
+/// `place-pane` (grofe's own): the floating target pane moves to `-X`, `-Y`.
+pub fn place_pane(state: &mut State, ctx: &ClientCtx, c: PlacePane) -> Result<String, String> {
+    let model = &mut state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let window = model.panes[&pane].window;
+    let Some(w) = model.windows.get_mut(&window) else {
+        return Ok(String::new());
+    };
+    let size = (w.cols, w.rows);
+    let Some(f) = w.floating.iter_mut().find(|f| f.pane == pane) else {
+        return Err("pane is not floating".to_string());
+    };
+    if c.x.is_none() && c.y.is_none() {
+        return Err("place-pane needs -X or -Y".to_string());
+    }
+    let x = c.x.map_or(f.x, |o| offset(o, size.0));
+    let y = c.y.map_or(f.y, |o| offset(o, size.1));
+    let at = crate::server::floating::placed(f, (x, y), size);
+    (f.x, f.y) = (at.x, at.y);
+    Ok(String::new())
 }
 
 /// The spawn for a popup's command: `GROFE_PANE` is `pane`'s id, `env` the

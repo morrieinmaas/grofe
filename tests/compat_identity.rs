@@ -777,13 +777,19 @@ fn run_shell_jobs_get_tmux_s_variables() {
     let _ = tmux(&srv, &["kill-server"]);
 }
 
-/// `list-plugins` and `plugin-restart` are grofe's own verbs (spec §7.4):
+/// `list-plugins`, `plugin-restart`, `float-pane` and `place-pane` are
+/// grofe's own verbs (spec §7.4):
 /// under the `tmux` name they are unknown commands, as in tmux 3.7b, even
 /// on a server that has them, and a grofe-name call still runs them.
 #[test]
 fn plugin_verbs_are_unknown_commands_under_the_tmux_name() {
     let srv = start_as_tmux();
-    for args in [&["list-plugins"][..], &["plugin-restart", "p"]] {
+    for args in [
+        &["list-plugins"][..],
+        &["plugin-restart", "p"],
+        &["float-pane"],
+        &["place-pane", "-X", "1"],
+    ] {
         let out = tmux(&srv, args);
         assert!(!out.status.success(), "{args:?}: {out:?}");
         assert_eq!(

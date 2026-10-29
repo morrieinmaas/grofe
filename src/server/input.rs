@@ -1612,6 +1612,21 @@ pub fn default_bindings() -> KeyTables {
         b.dialect = Dialect::Tmux;
         t.insert(PREFIX_TABLE, key, b);
     }
+    // tmux 3.7b's stock border rows. The mouse module runs them as its
+    // built-in border model, so a border does something only while they (or
+    // a binding of your own) are bound ([`crate::server::mouse`]).
+    for (key, verb) in [
+        ("MouseDown1Border", "select-pane"),
+        ("MouseDrag1Border", "resize-pane"),
+    ] {
+        if let Ok(key) = parse_key(key) {
+            let argv = vec![verb.to_string(), "-M".to_string()];
+            let mut b = Binding::new(vec![argv], false, BindingSource::Default);
+            // `-M` is tmux's spelling only.
+            b.dialect = Dialect::Tmux;
+            t.insert(ROOT_TABLE, key, b);
+        }
+    }
     t
 }
 

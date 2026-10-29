@@ -1707,7 +1707,7 @@ fn append_cell(g: &LayoutGeometry, out: &mut String) {
 }
 
 /// tmux's `layout_checksum`: a 16-bit rotate-and-add over the bytes.
-fn tmux_checksum(s: &str) -> u16 {
+pub fn tmux_checksum(s: &str) -> u16 {
     s.bytes().fold(0u16, |sum, b| {
         let sum = (sum >> 1).wrapping_add((sum & 1) << 15);
         sum.wrapping_add(u16::from(b))
