@@ -996,7 +996,7 @@ static-cli.argv	kill-pane -t <expr>	plugin:opensessions/packages/runtime-rs/src/
 static-cli.argv	kill-pane -t <name>	plugin:tmux-fzf/scripts/pane.sh
 static-cli.argv	kill-pane -t <pane>	manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it)
 static-cli.argv	kill-server	athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl
-static-cli.argv	kill-server	athome:home/dot_config/systemd/user/tmux.service.tmpl
+static-cli.argv	kill-server	athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl
 static-cli.argv	kill-server	athome:home/dot_zsh/aliases.zsh
 static-cli.argv	kill-session -t 0	canopy:plugins/tmux-resurrect/scripts/restore.sh
 static-cli.argv	kill-session -t <expr>	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
@@ -1078,7 +1078,7 @@ static-cli.argv	move-window -a -s <$src_win> -t <$cur_ses>	plugin:tmux-fzf/scrip
 static-cli.argv	move-window -s <$session_name>:<$created_window_num> -t <$session_name>:<$window_number>	canopy:plugins/tmux-resurrect/scripts/restore.sh
 static-cli.argv	new-session	athome:home/dot_zsh/aliases.zsh
 static-cli.argv	new-session -A -s	athome:home/dot_zsh/aliases.zsh
-static-cli.argv	new-session -d	athome:home/dot_config/systemd/user/tmux.service.tmpl
+static-cli.argv	new-session -d	athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl
 static-cli.argv	new-session -d	plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	new-session -d -P -F #{session_name}	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs
 static-cli.argv	new-session -d -c <dir> -P -F #{session_name}	manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs

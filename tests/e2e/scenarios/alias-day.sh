@@ -179,14 +179,14 @@ stage_apply() {
   check "no credential in the environment (GITHUB_TOKEN, GH_TOKEN, BW_*, RBW_*)" \
     bash -c "! env | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_[A-Z_]*|RBW_[A-Z_]*)=' && ! sudo cat /proc/1/environ | tr '\\0' '\\n' | grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_|RBW_)'"
 
-  # The login: athome's tmux.service, which script 24 enabled. Its
+  # The login: athome's canopy-tmux.service, which script 24 enabled. Its
   # graphical-session.target never comes up in a headless container, so the
   # unit is started by hand, as the target would start it.
-  check "tmux.service is enabled (script 24)" systemctl --user is-enabled tmux.service
-  check "tmux.service starts a grofe server, which answers #{grofe_version}" \
-    bash -c "systemctl --user start tmux.service && systemctl --user is-active tmux.service &&
+  check "canopy-tmux.service is enabled (script 24)" systemctl --user is-enabled canopy-tmux.service
+  check "canopy-tmux.service starts a grofe server, which answers #{grofe_version}" \
+    bash -c "systemctl --user start canopy-tmux.service && systemctl --user is-active canopy-tmux.service &&
       v=\"\$(PATH='$home_bin/bin':\$PATH tmux display -p '#{grofe_version}')\" && echo \"grofe_version=\$v\" && test -n \"\$v\""
-  systemctl --user status tmux.service --no-pager >"$OUT/tmux.service.status" 2>&1 || true
+  systemctl --user status canopy-tmux.service --no-pager >"$OUT/canopy-tmux.service.status" 2>&1 || true
 
 
   echo "stage 2: $fails failure(s)"

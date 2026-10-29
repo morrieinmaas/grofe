@@ -9,7 +9,7 @@ name: compat
 # Written for the record and for `act`: GitHub Actions is disabled, and the
 # gate is scripts/ci-local.sh. This job cannot pass on GitHub yet, because
 # both pinned commits are on local branches that are not pushed (canopy
-# `m37-tp12`, athome `grofe-config`). There is no workflow_dispatch
+# `m37-tp12`, athome `canopy-tmux-unit-on-grofe`). There is no workflow_dispatch
 # trigger, so `scripts/ci-local.sh` (`act workflow_dispatch`) leaves it out
 # until they are. The suite still runs in the gate: ci-local passes
 # GROFE_COMPAT_CANOPY, GROFE_COMPAT_ATHOME and GROFE_COMPAT_REQUIRED through
@@ -27,7 +27,7 @@ concurrency:
 
 env:
   CANOPY_SHA: 4faa58fff9d83b23b8e90faedb1d67ab3f6a9536
-  ATHOME_SHA: 6d3ee207afcce40f2a91a8f54db9a773814a928b
+  ATHOME_SHA: 905f10a0b05764e51fae2a32f0975116c2691815
 
 jobs:
   compat:

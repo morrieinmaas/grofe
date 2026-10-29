@@ -528,7 +528,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `kill-pane` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `kill-pane -t` | 8 | 0 | cc1 cj1 sc6 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+5) |
 | `kill-pane -t[=]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
-| `kill-server` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, athome:home/dot_config/systemd/user/tmux.service.tmpl, athome:home/dot_zsh/aliases.zsh (+2) |
+| `kill-server` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl, athome:home/dot_zsh/aliases.zsh (+2) |
 | `kill-session -t` | 4 | 0 | cc1 sc3 | cmd:M1 | yes | `-t` | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli (+4) |
 | `kill-window` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `kill-window -t` | 3 | 0 | cc1 sc2 | cmd:M1 | yes | `-t` | container:cli, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs, plugin:tmux-fzf/scripts/.fzf-tmux |
@@ -571,7 +571,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `new-session -c -d -n -P -s` | 1 | 0 | cc1 | cmd:M1 | yes | `-n`, `-P` | container:cli |
 | `new-session -c -d -n -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-n` | plugin:tmux-sessionx/scripts/sessionx.sh |
 | `new-session -c -d -s` | 8 | 0 | cj1 sc7 | cmd:M1 | yes |  | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job (+3) |
-| `new-session -d` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/dot_config/systemd/user/tmux.service.tmpl, canopy:lib/tmux.sh, container:pane (+1) |
+| `new-session -d` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl, canopy:lib/tmux.sh, container:pane (+1) |
 | `new-session -d -F -P` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -d -F -P -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -d -s` | 3 | 0 | sc3 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, plugin:tmux-fzf/scripts/session.sh, plugin:tmux-sessionx/scripts/sessionx.sh |
