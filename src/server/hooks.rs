@@ -1467,7 +1467,10 @@ pub fn run_command(
         let (printed, errors) = fire_now(state, ctx, &f);
         state.failed_out.push_str(&printed);
         if !errors.is_empty() {
-            return Err(std::iter::once(e.clone()).chain(errors).collect::<Vec<_>>().join("\n"));
+            return Err(std::iter::once(e.clone())
+                .chain(errors)
+                .collect::<Vec<_>>()
+                .join("\n"));
         }
     }
     let (Ok(out), Some((name, before))) = (&result, before) else {
