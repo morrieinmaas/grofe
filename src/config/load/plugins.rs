@@ -230,11 +230,9 @@ impl Loader {
     }
 }
 
-/// A `cmd` array: strings, not empty. A path with a `/` in it that is
-/// relative resolves against the directory of the file that set it:
-/// `cmd[0]` always, a later word only when it names something that exists
-/// there, so `["sh", "x/run.sh"]` finds its script and `["echo", "a/b"]`
-/// stays as written.
+/// A `cmd` array: strings, not empty. Only `cmd[0]` is a path: when it holds
+/// a `/` and is relative, it resolves against the directory of the file that
+/// set it. Every later word is passed exactly as written.
 fn cmd_value(a: &[toml::Spanned<DeValue>], file: &Path) -> Result<Vec<String>, String> {
     let mut argv = Vec::new();
     for item in a {
@@ -251,16 +249,11 @@ fn cmd_value(a: &[toml::Spanned<DeValue>], file: &Path) -> Result<Vec<String>, S
     if argv.is_empty() || argv[0].is_empty() {
         return Err("cmd must not be empty".to_string());
     }
-    let dir = file.parent().unwrap_or(Path::new(""));
-    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
-    for (i, word) in argv.iter_mut().enumerate() {
-        if !word.contains('/') || word.starts_with('/') || word.starts_with('-') {
-            continue;
-        }
-        let path = dir.join(&*word);
-        if i == 0 || path.exists() {
-            *word = path.display().to_string();
-        }
+    let word = &mut argv[0];
+    if word.contains('/') && !word.starts_with('/') && !word.starts_with('-') {
+        let dir = file.parent().unwrap_or(Path::new(""));
+        let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+        *word = dir.join(&*word).display().to_string();
     }
     Ok(argv)
 }

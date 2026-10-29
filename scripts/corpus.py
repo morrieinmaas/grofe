@@ -1065,7 +1065,7 @@ def static_sources(env) -> list[tuple[str, Path, str]]:
         "home/dot_zsh/aliases.zsh",
         "home/dot_zsh/functions.zsh",
         "home/.chezmoitemplates/gh-dash/config.yml",
-        "home/dot_config/systemd/user/tmux.service.tmpl",
+        "home/dot_config/systemd/user/canopy-tmux.service.tmpl",
         "home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl",
         "home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl",
     ):

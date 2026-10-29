@@ -648,12 +648,16 @@ fn a_relative_cmd_runs_from_the_config_file_s_directory() {
     let dir = srv.config_home.join("grofe");
     fs::create_dir_all(dir.join("bin")).expect("bin dir");
     let marker = srv.home.join("marker");
+    let path = dir.join("bin/p.sh");
     fs::write(
-        dir.join("bin/p.sh"),
-        format!("touch {}\nexec sleep 600\n", marker.display()),
+        &path,
+        format!("#!/bin/sh\ntouch {}\nexec sleep 600\n", marker.display()),
     )
     .expect("script");
-    let srv = start_with(srv, "[plugins.p]\ncmd = [\"sh\", \"bin/p.sh\"]\n", None);
+    let mut perms = fs::metadata(&path).expect("stat").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    fs::set_permissions(&path, perms).expect("chmod");
+    let srv = start_with(srv, "[plugins.p]\ncmd = [\"bin/p.sh\"]\n", None);
     running(&srv, "p");
     wait_until(|| marker.exists(), WAIT).expect("the script ran");
 }
@@ -910,11 +914,13 @@ fn a_relative_cmd_resolves_against_the_file_that_set_it() {
         r.plugins["a"].cmd,
         [here("sub/run.sh"), "x/none".into(), "-c".into()]
     );
+    // Only cmd[0] is a path: a later word is left as written even when it
+    // names a file that exists next to the config.
     assert_eq!(
         r.plugins["b"].cmd,
         [
             "sh".to_string(),
-            here("sub/run.sh"),
+            "sub/run.sh".into(),
             "/abs/p".into(),
             "--f=a/b".into()
         ]
