@@ -1,0 +1,174 @@
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+? 0
+$ set-environment -g FOO 'a b'
+? 0
+$ set-environment -g BAR 'x"y$z`w\q'
+? 0
+$ show-environment -gs FOO
+FOO="a b"; export FOO;
+? 0
+$ show-environment -gs BAR
+BAR="x\"y\$z\`w\\q"; export BAR;
+? 0
+$ set-environment -gr FOO
+? 0
+$ show-environment -g FOO
+-FOO
+? 0
+$ show-environment -gs FOO
+unset FOO;
+? 0
+$ set-environment -gr NEW
+? 0
+$ show-environment -g NEW
+-NEW
+? 0
+$ show-environment -gs NEW
+unset NEW;
+? 0
+$ set-environment -gu NEW
+? 0
+$ show-environment -g NEW
+! unknown variable: NEW
+? 1
+$ set-environment -gr BAR extra
+! can't specify a value with -r
+? 1
+$ set-environment -gur BAR
+? 0
+$ show-environment -g BAR
+! unknown variable: BAR
+? 1
+$ set-environment -gru BAR
+? 0
+$ set-environment -gr
+! command set-environment: too few arguments (need at least 1)
+? 1
+$ set-environment -r 'A=B'
+! variable name contains =
+? 1
+$ set-environment -gh HID v
+? 0
+$ show-environment -gh HID
+HID=v
+? 0
+$ show-environment -ghs HID
+HID="v"; export HID;
+? 0
+$ show-environment -g HID
+? 0
+$ set-environment -ghr HID
+? 0
+$ show-environment -gh HID
+-HID
+? 0
+$ show-environment -ghs HID
+unset HID;
+? 0
+$ show-environment -g HID
+? 0
+$ set-environment -gh HID2 v2
+? 0
+$ set-environment -gr HID2
+? 0
+$ show-environment -gh HID2
+-HID2
+? 0
+$ show-environment -g HID2
+? 0
+$ set-option -g @dir /x
+? 0
+$ set-environment -gF F1 '#{@dir}/y'
+? 0
+$ show-environment -g F1
+F1=/x/y
+? 0
+$ set-environment -g F2 '#{@dir}/y'
+? 0
+$ show-environment -g F2
+F2=#{@dir}/y
+? 0
+$ set-environment -t main -F F3 '#{session_name}-#{@dir}'
+? 0
+$ show-environment -t main F3
+F3=main-/x
+? 0
+$ show-environment -t main -s F3
+F3="main-/x"; export F3;
+? 0
+$ set-environment -gFr F1
+? 0
+$ show-environment -g F1
+-F1
+? 0
+$ set-environment -gF
+! command set-environment: too few arguments (need at least 1)
+? 1
+$ set-environment -t main Q 'x"y$z`w\q'
+? 0
+$ set-environment -t main SESS 'one two'
+? 0
+$ set-environment -t main -r SESS
+? 0
+$ show-environment -t main SESS
+-SESS
+? 0
+$ show-environment -t main -s SESS
+unset SESS;
+? 0
+$ set-environment -t main -r GLOBALONLY
+? 0
+$ show-environment -t main GLOBALONLY
+-GLOBALONLY
+? 0
+$ set-environment -t main -h SH 'hid'
+? 0
+$ set-environment -t main -h -r SH
+? 0
+$ show-environment -t main -h
+-SH
+? 0
+$ show-environment -t main -hs
+unset SH;
+? 0
+$ show-environment -t main -s
+unset DISPLAY;
+F3="main-/x"; export F3;
+unset GLOBALONLY;
+unset KRB5CCNAME;
+unset MSYSTEM;
+Q="x\"y\$z\`w\\q"; export Q;
+unset SESS;
+unset SSH_AGENT_PID;
+unset SSH_ASKPASS;
+unset SSH_AUTH_SOCK;
+unset SSH_CONNECTION;
+unset WAYLAND_DISPLAY;
+unset WINDOWID;
+unset XAUTHORITY;
+unset XDG_CURRENT_DESKTOP;
+unset XDG_SESSION_DESKTOP;
+unset XDG_SESSION_TYPE;
+? 0
+$ set-environment -g PROBE1 yes
+? 0
+$ set-environment -g PROBE2 yes
+? 0
+$ set-environment -gr PROBE1
+? 0
+$ new-window -d -t main:2 'env | sort | grep PROBE; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:2
+PROBE2=yes
+
+
+
+
+
+
+
+
+
+? 0

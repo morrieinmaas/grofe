@@ -72,9 +72,10 @@ pub fn show_hooks(state: &mut State, ctx: &ClientCtx, c: ShowHooks) -> Result<St
     hooks::show(state, ctx, &c, index, spec)
 }
 
-/// `set-environment [-g] [-h] [-t session] name value`, or `-u name`: the
-/// global environment with `-g`, else the target session's. Texts are
-/// tmux 3.7b's (recorded).
+/// `set-environment [-g] [-h] [-r] [-F] [-t session] name value`, or `-u
+/// name`, or `-r name`: the global environment with `-g`, else the target
+/// session's. `-u` removes the variable, `-r` marks it removed (`-NAME`),
+/// `-F` expands the value as a format. Texts are tmux 3.7b's (recorded).
 pub fn set_environment(
     state: &mut State,
     ctx: &ClientCtx,
@@ -84,28 +85,49 @@ pub fn set_environment(
     if name.contains('=') {
         return Err("variable name contains =".to_string());
     }
-    let value = match (c.unset, c.value) {
-        (true, Some(_)) => return Err("can't specify a value with -u".to_string()),
-        (true, None) => None,
-        (false, None) => return Err("no value specified".to_string()),
-        (false, Some(value)) => Some(value),
-    };
-    if c.global {
-        hooks::set_global(state, &name, value, c.hidden);
+    let session = if c.global {
+        None
     } else {
         // tmux finds `-t` as a pane (cmd-set-option.c).
         let target = state.model.pane_type(&c.target, ctx)?;
-        let session = state.model.resolve_session(&target, ctx)?;
-        hooks::set_session(state, session, &name, value, c.hidden);
+        Some(state.model.resolve_session(&target, ctx)?)
+    };
+    let value = if c.unset {
+        if c.value.is_some() {
+            return Err("can't specify a value with -u".to_string());
+        }
+        None
+    } else if c.clear {
+        if c.value.is_some() {
+            return Err("can't specify a value with -r".to_string());
+        }
+        match session {
+            None => hooks::clear_global(state, &name),
+            Some(s) => hooks::clear_session(state, s, &name),
+        }
+        return Ok(String::new());
+    } else {
+        let value = c.value.ok_or_else(|| "no value specified".to_string())?;
+        Some(if c.format {
+            let pane = state.model.resolve_pane(&c.target, ctx).ok();
+            super::bindings::expand(state, ctx, pane, &value)
+        } else {
+            value
+        })
+    };
+    match session {
+        None => hooks::set_global(state, &name, value, c.hidden),
+        Some(s) => hooks::set_session(state, s, &name, value, c.hidden),
     }
     Ok(String::new())
 }
 
-/// `show-environment [-g] [-h] [-t session] [name]`: `NAME=value` lines,
-/// by name, of the visible variables (the hidden ones with `-h`), and
-/// `-NAME` for a session variable marked removed. A named
-/// variable that does not exist is an error; one of the other kind shows
-/// nothing, as in tmux 3.7b.
+/// `show-environment [-g] [-h] [-s] [-t session] [name]`: `NAME=value`
+/// lines, by name, of the visible variables (the hidden ones with `-h`),
+/// and `-NAME` for a variable marked removed. With `-s`, shell commands
+/// instead: `NAME="value"; export NAME;`, and `unset NAME;` for a removed
+/// one. A named variable that does not exist is an error; one of the other
+/// kind shows nothing, as in tmux 3.7b.
 pub fn show_environment(
     state: &mut State,
     ctx: &ClientCtx,
@@ -117,9 +139,18 @@ pub fn show_environment(
         Some(state.model.resolve_session(&c.target, ctx)?)
     };
     let vars = hooks::variables(state, session);
-    let line = |v: &hooks::Variable| match &v.value {
-        Some(value) => format!("{}={value}\n", v.name),
-        None => format!("-{}\n", v.name),
+    let line = |v: &hooks::Variable| match (&v.value, c.shell) {
+        (Some(value), false) => format!("{}={value}\n", v.name),
+        (None, false) => format!("-{}\n", v.name),
+        (Some(value), true) => {
+            format!(
+                "{}=\"{}\"; export {};\n",
+                v.name,
+                shell_escape(value),
+                v.name
+            )
+        }
+        (None, true) => format!("unset {};\n", v.name),
     };
     if let Some(name) = &c.name {
         let v = vars
@@ -137,6 +168,19 @@ pub fn show_environment(
         .filter(|v| v.hidden == c.hidden)
         .map(line)
         .collect())
+}
+
+/// A value for inside double quotes in `sh`: `$`, `` ` ``, `"` and `\` get
+/// a backslash, as tmux's `cmd_show_environment_escape`.
+fn shell_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '$' | '`' | '"' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -295,6 +339,80 @@ mod tests {
         assert_eq!(
             run(&mut state, &["show-environment", "-g"]),
             Ok("B=2\nS=y\n".to_string())
+        );
+    }
+
+    #[test]
+    fn show_environment_s_prints_shell_lines() {
+        let mut state = test_state();
+        run(&mut state, &["set-environment", "-g", "A", "a b"]).unwrap();
+        run(&mut state, &["set-environment", "-g", "Q", "x\"$y`z\\w"]).unwrap();
+        run(&mut state, &["set-environment", "-gr", "R"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-gs"]),
+            Ok("A=\"a b\"; export A;\nQ=\"x\\\"\\$y\\`z\\\\w\"; export Q;\nunset R;\n".to_string())
+        );
+        assert_eq!(
+            run(&mut state, &["show-environment", "-gs", "R"]),
+            Ok("unset R;\n".to_string())
+        );
+    }
+
+    #[test]
+    fn set_environment_r_marks_a_variable_removed() {
+        let mut state = test_state();
+        run(&mut state, &["set-environment", "-g", "A", "1"]).unwrap();
+        run(&mut state, &["set-environment", "-gr", "A"]).unwrap();
+        run(&mut state, &["set-environment", "-gr", "NEW"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-g"]),
+            Ok("-A\n-NEW\n".to_string())
+        );
+        assert_eq!(
+            run(&mut state, &["set-environment", "-gr", "A", "x"]),
+            Err("can't specify a value with -r".to_string())
+        );
+        // `-u` removes it altogether.
+        run(&mut state, &["set-environment", "-gu", "NEW"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-g", "NEW"]),
+            Err("unknown variable: NEW".to_string())
+        );
+        // A hidden variable stays hidden when removed; a set value revives it.
+        run(&mut state, &["set-environment", "-gh", "H", "1"]).unwrap();
+        run(&mut state, &["set-environment", "-gr", "H"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-gh"]),
+            Ok("-H\n".to_string())
+        );
+        run(&mut state, &["set-environment", "-g", "A", "2"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-g"]),
+            Ok("A=2\n".to_string())
+        );
+    }
+
+    #[test]
+    fn a_removed_global_variable_is_not_given_to_panes() {
+        let mut state = test_state();
+        run(&mut state, &["set-environment", "-g", "KEEP", "1"]).unwrap();
+        run(&mut state, &["set-environment", "-g", "DROP", "1"]).unwrap();
+        run(&mut state, &["set-environment", "-gr", "DROP"]).unwrap();
+        let env = crate::server::hooks::shell_env(&state, None);
+        assert!(env.contains(&("KEEP".to_string(), "1".to_string())));
+        assert!(!env.iter().any(|(k, _)| k == "DROP"));
+    }
+
+    #[tokio::test]
+    async fn set_environment_f_expands_the_value() {
+        let mut state = test_state();
+        run(&mut state, &["new-session", "-d", "-s", "work"]).unwrap();
+        run(&mut state, &["set-option", "-g", "@d", "/x"]).unwrap();
+        run(&mut state, &["set-environment", "-gF", "A", "#{@d}/y"]).unwrap();
+        run(&mut state, &["set-environment", "-g", "B", "#{@d}/y"]).unwrap();
+        assert_eq!(
+            run(&mut state, &["show-environment", "-g"]),
+            Ok("A=/x/y\nB=#{@d}/y\n".to_string())
         );
     }
 

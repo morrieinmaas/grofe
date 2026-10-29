@@ -558,7 +558,10 @@ pub struct SourceFile {
     pub format: bool,
     /// `-n`: read a tmux file and report its errors, run nothing.
     pub parse_only: bool,
-    pub path: String,
+    /// `-v`: print each command as it is read.
+    pub verbose: bool,
+    /// One or more paths, each possibly a glob.
+    pub paths: Vec<String>,
 }
 
 /// `reload` (grofe's own): re-read the config chain (spec §5.4).
@@ -1133,6 +1136,10 @@ pub struct SetEnvironment {
     pub unset: bool,
     /// `-h`: hidden, never given to a new pane.
     pub hidden: bool,
+    /// `-r`: mark it removed (`-NAME`), so a new pane lacks it.
+    pub clear: bool,
+    /// `-F`: the value is a format.
+    pub format: bool,
     /// `-t`: the session.
     pub target: Target,
     /// Required; `None` only for a bare `set-environment`.
@@ -1147,6 +1154,8 @@ pub struct ShowEnvironment {
     pub global: bool,
     /// `-h`: the hidden variables.
     pub hidden: bool,
+    /// `-s`: shell `export` and `unset` lines.
+    pub shell: bool,
     /// `-t`: the session.
     pub target: Target,
     pub name: Option<String>,

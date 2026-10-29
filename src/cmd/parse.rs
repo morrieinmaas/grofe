@@ -1326,11 +1326,17 @@ fn one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<String, ParseEr
         .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))
 }
 
+fn at_least_one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<Vec<String>, ParseError> {
+    if flags.positionals.is_empty() {
+        return Err(ParseError::MissingArgument(cmd_name.to_string()));
+    }
+    Ok(flags.positionals.clone())
+}
+
 fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            // `-v` is tmux's verbose parse trace, which grofe leaves out.
             short: &[
                 ('q', FlagKind::Bool),
                 ('F', FlagKind::Bool),
@@ -1345,7 +1351,8 @@ fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
         quiet: flags.present.contains(&'q'),
         format: flags.present.contains(&'F'),
         parse_only: flags.present.contains(&'n'),
-        path: one_positional(&flags, "source-file")?,
+        verbose: flags.present.contains(&'v'),
+        paths: at_least_one_positional(&flags, "source-file")?,
     }))
 }
 
@@ -2196,6 +2203,8 @@ fn parse_set_environment(argv: &[String]) -> Result<Command, ParseError> {
         ('g', FlagKind::Bool),
         ('u', FlagKind::Bool),
         ('h', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+        ('F', FlagKind::Bool),
         ('t', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "set-environment")?;
@@ -2206,6 +2215,8 @@ fn parse_set_environment(argv: &[String]) -> Result<Command, ParseError> {
         global: flags.present.contains(&'g'),
         unset: flags.present.contains(&'u'),
         hidden: flags.present.contains(&'h'),
+        clear: flags.present.contains(&'r'),
+        format: flags.present.contains(&'F'),
         target: target_or_current(&flags.values, 't')?,
         name: positionals.next(),
         value: positionals.next(),
@@ -2216,6 +2227,7 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('g', FlagKind::Bool),
         ('h', FlagKind::Bool),
+        ('s', FlagKind::Bool),
         ('t', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "show-environment")?;
@@ -2223,6 +2235,7 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ShowEnvironment(ShowEnvironment {
         global: flags.present.contains(&'g'),
         hidden: flags.present.contains(&'h'),
+        shell: flags.present.contains(&'s'),
         target: target_or_current(&flags.values, 't')?,
         name: flags.positionals.first().cloned(),
     }))
@@ -4874,12 +4887,35 @@ mod tests {
                 quiet: true,
                 format: false,
                 parse_only: false,
-                path: "sub.toml".to_string(),
+                verbose: false,
+                paths: vec!["sub.toml".to_string()],
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["source-file", "-nv", "a.conf", "b*.conf"])),
+            Ok(Command::SourceFile(SourceFile {
+                quiet: false,
+                format: false,
+                parse_only: true,
+                verbose: true,
+                paths: vec!["a.conf".to_string(), "b*.conf".to_string()],
             }))
         );
         assert!(parse(&argv(&["source-file"])).is_err());
         assert_eq!(parse(&argv(&["reload"])), Ok(Command::Reload(Reload)));
         assert!(parse(&argv(&["reload", "x"])).is_err());
+    }
+
+    #[test]
+    fn environment_flags() {
+        let Ok(Command::SetEnvironment(c)) = parse(&argv(&["setenv", "-grF", "X"])) else {
+            panic!();
+        };
+        assert!(c.global && c.clear && c.format && !c.unset && !c.hidden);
+        let Ok(Command::ShowEnvironment(c)) = parse(&argv(&["showenv", "-gs", "X"])) else {
+            panic!();
+        };
+        assert!(c.global && c.shell && !c.hidden);
     }
 
     #[test]

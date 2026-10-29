@@ -1,0 +1,61 @@
+# B3 WP-D: show-environment -s, set-environment -r and -F, hidden variables with them.
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+$ set-environment -g FOO 'a b'
+$ set-environment -g BAR 'x"y$z`w\q'
+$ show-environment -gs FOO
+$ show-environment -gs BAR
+$ set-environment -gr FOO
+$ show-environment -g FOO
+$ show-environment -gs FOO
+$ set-environment -gr NEW
+$ show-environment -g NEW
+$ show-environment -gs NEW
+$ set-environment -gu NEW
+$ show-environment -g NEW
+$ set-environment -gr BAR extra
+$ set-environment -gur BAR
+$ show-environment -g BAR
+$ set-environment -gru BAR
+$ set-environment -gr
+$ set-environment -r 'A=B'
+$ set-environment -gh HID v
+$ show-environment -gh HID
+$ show-environment -ghs HID
+$ show-environment -g HID
+$ set-environment -ghr HID
+$ show-environment -gh HID
+$ show-environment -ghs HID
+$ show-environment -g HID
+$ set-environment -gh HID2 v2
+$ set-environment -gr HID2
+$ show-environment -gh HID2
+$ show-environment -g HID2
+$ set-option -g @dir /x
+$ set-environment -gF F1 '#{@dir}/y'
+$ show-environment -g F1
+$ set-environment -g F2 '#{@dir}/y'
+$ show-environment -g F2
+$ set-environment -t main -F F3 '#{session_name}-#{@dir}'
+$ show-environment -t main F3
+$ show-environment -t main -s F3
+$ set-environment -gFr F1
+$ show-environment -g F1
+$ set-environment -gF
+$ set-environment -t main Q 'x"y$z`w\q'
+$ set-environment -t main SESS 'one two'
+$ set-environment -t main -r SESS
+$ show-environment -t main SESS
+$ show-environment -t main -s SESS
+$ set-environment -t main -r GLOBALONLY
+$ show-environment -t main GLOBALONLY
+$ set-environment -t main -h SH 'hid'
+$ set-environment -t main -h -r SH
+$ show-environment -t main -h
+$ show-environment -t main -hs
+$ show-environment -t main -s
+$ set-environment -g PROBE1 yes
+$ set-environment -g PROBE2 yes
+$ set-environment -gr PROBE1
+$ new-window -d -t main:2 'env | sort | grep PROBE; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:2

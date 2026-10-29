@@ -77,6 +77,12 @@ pub enum PaneEventKind {
         param: String,
         data: Vec<u8>,
     },
+    /// OSC 52 query from the scanner: the selection parameter, and whether
+    /// the pane ended it with BEL (else ST), which the answer copies.
+    ClipboardQuery {
+        param: String,
+        bel: bool,
+    },
     /// What an OSC 7 reported, as `#{pane_path}` shows it (the scanner's
     /// [`crate::server::passthrough`] `osc7_text`).
     Path(String),

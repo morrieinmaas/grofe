@@ -2806,9 +2806,11 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     line
 }
 
-/// `source-file [-q] path`: loads one file at runtime, read by its name.
-/// A relative path is the requester's cwd's, as in tmux; `-q` hides only a
-/// missing file.
+/// `source-file [-Fnqv] path ...`: loads each file at runtime, read by its
+/// name. A path is a glob, as tmux's `glob(3)`, and one that matches
+/// nothing is `No such file or directory: path` unless `-q`; the others
+/// still load. A relative path is the requester's cwd's, even in a nested
+/// file (recorded).
 ///
 /// - `*.toml` is grofe's config (spec §5.1), with its includes resolved
 ///   against it. Its values and bindings count as runtime (R10): `reload`
@@ -2823,20 +2825,128 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 /// run `source-file` (its includes are `config::load_one`'s, which refuse
 /// a cycle), so only a tmux file nests this way.
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
-    // `-F`: the path is a format, expanded for the requester's pane.
-    let given = if c.format {
-        let pane = state.model.resolve_pane(&Target::Current, ctx).ok();
-        super::bindings::expand(state, ctx, pane, &c.path)
-    } else {
-        c.path.clone()
-    };
-    let path = ctx.cwd.join(&given);
-    if !path.exists() {
-        if c.quiet {
-            return Ok(String::new());
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
+    for given in &c.paths {
+        // `-F`: the path is a format, expanded for the requester's pane.
+        let given = if c.format {
+            let pane = state.model.resolve_pane(&Target::Current, ctx).ok();
+            super::bindings::expand(state, ctx, pane, given)
+        } else {
+            given.clone()
+        };
+        match glob_files(&ctx.cwd.join(&given)) {
+            Ok(found) => files.extend(found),
+            Err(GlobError::NoMatch) if c.quiet => {}
+            Err(e) => errors.push(format!("{}: {given}", e.text())),
         }
-        return Err(format!("No such file or directory: {}", path.display()));
     }
+    let mut out = String::new();
+    // What tmux refused while parsing is printed when every file is done.
+    let mut refused = String::new();
+    let mut files = files.into_iter();
+    while let Some(path) = files.next() {
+        match source_one(state, ctx, &path, &c) {
+            Ok(text) => out.push_str(&text),
+            Err(e) if e.is_empty() => refused.push_str(&std::mem::take(&mut state.failed_out)),
+            Err(e) => {
+                out.push_str(&std::mem::take(&mut state.failed_out));
+                errors.push(e);
+            }
+        }
+        // A command that held the request holds the files after it too.
+        if let Some(held) = &mut state.held {
+            held.errors.append(&mut errors);
+            held.frames.extend(files.by_ref().map(|path| {
+                let rest = SourceFile {
+                    format: false,
+                    paths: vec![glob_escape(&path)],
+                    ..c.clone()
+                };
+                super::client::HeldFrame {
+                    ctx: ctx.clone(),
+                    cmds: vec![Command::SourceFile(rest)],
+                    keep_going: true,
+                    depth: source_depth(),
+                }
+            }));
+            out.push_str(&refused);
+            return Ok(out);
+        }
+    }
+    out.push_str(&refused);
+    if errors.is_empty() && refused.is_empty() {
+        return Ok(out);
+    }
+    state.failed_out = out;
+    Err(join_nonempty(&errors))
+}
+
+/// Why a path gave no file: `glob(3)`'s own failures, with the `strerror`
+/// text tmux prints for them.
+enum GlobError {
+    NoMatch,
+    Other(i32),
+}
+
+impl GlobError {
+    fn text(&self) -> &'static str {
+        match self {
+            GlobError::NoMatch => "No such file or directory",
+            GlobError::Other(rc) if *rc == nix::libc::GLOB_NOSPACE => "Cannot allocate memory",
+            GlobError::Other(_) => "Invalid argument",
+        }
+    }
+}
+
+/// The files `pattern` matches, in `glob(3)`'s order (sorted).
+fn glob_files(pattern: &Path) -> Result<Vec<PathBuf>, GlobError> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let pattern = std::ffi::CString::new(pattern.as_os_str().as_bytes())
+        .map_err(|_| GlobError::Other(nix::libc::GLOB_ABORTED))?;
+    // SAFETY: `found` is zeroed storage for `glob` to fill; the paths it
+    // holds are read before `globfree` releases them.
+    unsafe {
+        let mut found: nix::libc::glob_t = std::mem::zeroed();
+        let rc = nix::libc::glob(pattern.as_ptr(), 0, None, &mut found);
+        if rc != 0 {
+            nix::libc::globfree(&mut found);
+            return Err(if rc == nix::libc::GLOB_NOMATCH {
+                GlobError::NoMatch
+            } else {
+                GlobError::Other(rc)
+            });
+        }
+        let files = (0..found.gl_pathc)
+            .map(|i| {
+                let path = std::ffi::CStr::from_ptr(*found.gl_pathv.add(i));
+                PathBuf::from(std::ffi::OsString::from_vec(path.to_bytes().to_vec()))
+            })
+            .collect();
+        nix::libc::globfree(&mut found);
+        Ok(files)
+    }
+}
+
+/// `path` as a pattern that matches only itself.
+fn glob_escape(path: &Path) -> String {
+    let mut out = String::new();
+    for ch in path.to_string_lossy().chars() {
+        if matches!(ch, '*' | '?' | '[' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// One file `source-file` found.
+fn source_one(
+    state: &mut State,
+    ctx: &ClientCtx,
+    path: &Path,
+    c: &SourceFile,
+) -> Result<String, String> {
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
     if tmux && path.extension().is_none_or(|e| e != "toml") {
@@ -2845,10 +2955,14 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
             return Err("too many nested files".to_string());
         }
         return with_source_depth(depth + 1, || {
-            source_tmux_file(state, ctx, &path, c.parse_only)
+            let verbose = c.verbose || SOURCE_VERBOSE.get();
+            let old = SOURCE_VERBOSE.replace(verbose);
+            let out = source_tmux_file(state, ctx, path, c.parse_only, verbose);
+            SOURCE_VERBOSE.set(old);
+            out
         });
     }
-    let resolved = config::load_one(&path, &config_env()).map_err(|e| join_errors(&e))?;
+    let resolved = config::load_one(path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
     log_warnings(&resolved);
     let model = &mut state.model;
@@ -2930,6 +3044,147 @@ impl crate::cmd::ConfigHost for FileHost<'_> {
     }
 }
 
+thread_local! {
+    /// `source-file -v` is on for the files it sources in turn.
+    static SOURCE_VERBOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// tmux's command aliases, for `source-file -v`, which prints full names.
+const COMMAND_ALIASES: &[(&str, &str)] = &[
+    ("attach", "attach-session"),
+    ("bind", "bind-key"),
+    ("breakp", "break-pane"),
+    ("capturep", "capture-pane"),
+    ("clearhist", "clear-history"),
+    ("clearphist", "clear-prompt-history"),
+    ("confirm", "confirm-before"),
+    ("deleteb", "delete-buffer"),
+    ("detach", "detach-client"),
+    ("display", "display-message"),
+    ("displayp", "display-panes"),
+    ("findw", "find-window"),
+    ("has", "has-session"),
+    ("if", "if-shell"),
+    ("joinp", "join-pane"),
+    ("killp", "kill-pane"),
+    ("killw", "kill-window"),
+    ("last", "last-window"),
+    ("lastp", "last-pane"),
+    ("linkw", "link-window"),
+    ("loadb", "load-buffer"),
+    ("lock", "lock-server"),
+    ("lockc", "lock-client"),
+    ("locks", "lock-session"),
+    ("ls", "list-sessions"),
+    ("lsb", "list-buffers"),
+    ("lsc", "list-clients"),
+    ("lscm", "list-commands"),
+    ("lsk", "list-keys"),
+    ("lsp", "list-panes"),
+    ("lsw", "list-windows"),
+    ("menu", "display-menu"),
+    ("movep", "move-pane"),
+    ("movew", "move-window"),
+    ("new", "new-session"),
+    ("neww", "new-window"),
+    ("next", "next-window"),
+    ("nextl", "next-layout"),
+    ("pasteb", "paste-buffer"),
+    ("pipep", "pipe-pane"),
+    ("popup", "display-popup"),
+    ("prev", "previous-window"),
+    ("prevl", "previous-layout"),
+    ("refresh", "refresh-client"),
+    ("rename", "rename-session"),
+    ("renamew", "rename-window"),
+    ("resizep", "resize-pane"),
+    ("resizew", "resize-window"),
+    ("respawnp", "respawn-pane"),
+    ("respawnw", "respawn-window"),
+    ("rotatew", "rotate-window"),
+    ("run", "run-shell"),
+    ("saveb", "save-buffer"),
+    ("selectl", "select-layout"),
+    ("selectp", "select-pane"),
+    ("selectw", "select-window"),
+    ("send", "send-keys"),
+    ("set", "set-option"),
+    ("setb", "set-buffer"),
+    ("setenv", "set-environment"),
+    ("setw", "set-window-option"),
+    ("show", "show-options"),
+    ("showb", "show-buffer"),
+    ("showenv", "show-environment"),
+    ("showmsgs", "show-messages"),
+    ("showphist", "show-prompt-history"),
+    ("showw", "show-window-options"),
+    ("source", "source-file"),
+    ("splitw", "split-window"),
+    ("start", "start-server"),
+    ("suspendc", "suspend-client"),
+    ("swapp", "swap-pane"),
+    ("swapw", "swap-window"),
+    ("switchc", "switch-client"),
+    ("unbind", "unbind-key"),
+    ("unlinkw", "unlink-window"),
+    ("wait", "wait-for"),
+];
+
+/// A command as `source-file -v` prints it (tmux's `cmd_print`, recorded):
+/// the full name, a cluster of flags in letter order, and an argument that
+/// needs it in double quotes. Flags that take a value keep the order typed.
+fn print_command(argv: &[String]) -> String {
+    let Some((name, rest)) = argv.split_first() else {
+        return String::new();
+    };
+    let name = COMMAND_ALIASES
+        .iter()
+        .find(|(alias, _)| alias == name)
+        .map_or(name.as_str(), |(_, full)| full);
+    let mut words = vec![name.to_string()];
+    for word in rest {
+        let cluster = word.len() > 2
+            && word.starts_with('-')
+            && word[1..].chars().all(|c| c.is_ascii_alphabetic());
+        if cluster {
+            let mut flags: Vec<char> = word[1..].chars().collect();
+            flags.sort_unstable();
+            words.push(format!("-{}", flags.into_iter().collect::<String>()));
+        } else if word.is_empty() {
+            words.push("''".to_string());
+        } else if word.contains(|c: char| " #$\\\"';~*?[]{}()<>&|^`".contains(c)) {
+            let mut quoted = String::from("\"");
+            for c in word.chars() {
+                if matches!(c, '"' | '\\' | '$' | '`') {
+                    quoted.push('\\');
+                }
+                quoted.push(c);
+            }
+            quoted.push('"');
+            words.push(quoted);
+        } else {
+            words.push(word.clone());
+        }
+    }
+    words.join(" ")
+}
+
+/// A config file's text. An open that fails says why, as tmux (`strerror`
+/// first, then the path); a read that fails is always `Input/output error`
+/// (recorded: a directory), as tmux's file reader reports it.
+fn read_config(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        let text = e.to_string();
+        let text = text.split(" (os error").next().unwrap_or_default();
+        format!("{text}: {}", path.display())
+    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|_| format!("Input/output error: {}", path.display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// A tmux config file, read as tmux 3.7b's `source-file` reads one
 /// (recorded): split into lines ([`cmd::split_config_file_with`], which
 /// also settles `%if` and `NAME=value`) and every command parsed through
@@ -2950,8 +3205,9 @@ fn source_tmux_file(
     ctx: &ClientCtx,
     path: &Path,
     parse_only: bool,
+    verbose: bool,
 ) -> Result<String, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = read_config(path)?;
     let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
     // tmux collects what it refuses while parsing and prints it on stdout
     // when the file is done (`cfg_print_causes`), and the request fails.
@@ -2976,6 +3232,17 @@ fn source_tmux_file(
         Ok(split) => split,
         Err((line, e)) => return refused(state, at(line, &e)),
     };
+    let mut shown = String::new();
+    for (line, cmds) in &split {
+        if verbose {
+            let cmds: Vec<String> = cmds.iter().map(|argv| print_command(argv)).collect();
+            shown.push_str(&format!(
+                "{}:{line}: {}\n",
+                path.display(),
+                cmds.join(" ; ")
+            ));
+        }
+    }
     for (line, cmds) in split {
         let mut group = Vec::new();
         for argv in cmds {
@@ -2992,9 +3259,9 @@ fn source_tmux_file(
         groups.push(group);
     }
     if parse_only {
-        return Ok(String::new());
+        return Ok(shown);
     }
-    let mut out = String::new();
+    let mut out = shown;
     let mut errors = Vec::new();
     let mut groups = groups.into_iter();
     while let Some(group) = groups.next() {

@@ -1,0 +1,68 @@
+# B3 WP-D: an OSC 52 query from a pane (ESC ] 52 ; c ; ? BEL or ST) answered from the top paste buffer.
+$ new-session -d -s main -x 70 -y 12 'sleep 100000'
+$ set-buffer 'older'
+$ set-buffer 'hello world'
+$ set-buffer -b named 'named buffer'
+$ show-options -gv set-clipboard
+$ show-options -gv get-clipboard
+$ new-window -d -t main:2 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:3 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c st'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:4 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh p bel'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:5 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh cs bel'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:6 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh - bel'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:7 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh qc bel'
+$ run-shell 'sleep 0.4'
+$ new-window -d -t main:8 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh x bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g set-clipboard on
+$ new-window -d -t main:9 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g set-clipboard off
+$ new-window -d -t main:10 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g set-clipboard external
+$ new-window -d -t main:11 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g set-clipboard on
+$ set-option -g get-clipboard off
+$ new-window -d -t main:12 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g get-clipboard request
+$ new-window -d -t main:13 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g get-clipboard both
+$ new-window -d -t main:14 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ set-option -g get-clipboard buffer
+$ delete-buffer
+$ new-window -d -t main:15 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ delete-buffer
+$ new-window -d -t main:16 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ delete-buffer -b named
+$ new-window -d -t main:17 'sh {fixtures}/g*den/b3wpd/osc52-probe.sh c bel'
+$ run-shell 'sleep 0.4'
+$ run-shell 'sleep 3'
+$ capture-pane -p -t main:2
+$ capture-pane -p -t main:3
+$ capture-pane -p -t main:4
+$ capture-pane -p -t main:5
+$ capture-pane -p -t main:6
+$ capture-pane -p -t main:7
+$ capture-pane -p -t main:8
+$ capture-pane -p -t main:9
+$ capture-pane -p -t main:10
+$ capture-pane -p -t main:11
+$ capture-pane -p -t main:12
+$ capture-pane -p -t main:13
+$ capture-pane -p -t main:14
+$ capture-pane -p -t main:15
+$ capture-pane -p -t main:16
+$ capture-pane -p -t main:17
+$ list-buffers

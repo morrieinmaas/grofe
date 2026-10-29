@@ -385,6 +385,7 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         kind @ (PaneEventKind::Title(_)
         | PaneEventKind::Bell
         | PaneEventKind::Clipboard { .. }
+        | PaneEventKind::ClipboardQuery { .. }
         | PaneEventKind::Path(_)
         | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),

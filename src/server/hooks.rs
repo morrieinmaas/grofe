@@ -531,7 +531,8 @@ struct Stored {
 
 #[derive(Clone)]
 struct Var {
-    value: String,
+    /// `None`: marked removed (`set-environment -r`), shown as `-NAME`.
+    value: Option<String>,
     hidden: bool,
 }
 
@@ -573,7 +574,7 @@ pub struct Hooks {
     reply_hold: Option<oneshot::Receiver<String>>,
     global: Arc<RwLock<Env>>,
     /// Hidden session variables (`set-environment -h -t`), by session.
-    session_hidden: BTreeMap<SessionId, BTreeMap<String, String>>,
+    session_hidden: BTreeMap<SessionId, BTreeMap<String, Option<String>>>,
     /// Session variables marked removed (`-NAME`), by session.
     session_removed: BTreeMap<SessionId, BTreeSet<String>>,
 }
@@ -597,7 +598,7 @@ impl Default for Hooks {
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .map(|(k, value)| {
                 let var = Var {
-                    value,
+                    value: Some(value),
                     hidden: false,
                 };
                 (k, var)
@@ -605,7 +606,7 @@ impl Default for Hooks {
             .collect();
         if let Some(cwd) = start_cwd() {
             let var = Var {
-                value: cwd,
+                value: Some(cwd),
                 hidden: false,
             };
             env.insert("PWD".to_string(), var);
@@ -638,7 +639,7 @@ impl Hooks {
         let global = Arc::clone(&hooks.global);
         cmd::parse::set_variable_source(Box::new(move |name| {
             let env = global.read().unwrap_or_else(PoisonError::into_inner);
-            env.get(name).map(|v| v.value.clone())
+            env.get(name).and_then(|v| v.value.clone())
         }));
         hooks
     }
@@ -1976,7 +1977,7 @@ pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
 fn visible(env: &Env) -> Vec<(String, String)> {
     env.iter()
         .filter(|(_, v)| !v.hidden)
-        .map(|(k, v)| (k.clone(), v.value.clone()))
+        .filter_map(|(k, v)| Some((k.clone(), v.value.clone()?)))
         .collect()
 }
 
@@ -2047,12 +2048,55 @@ pub fn set_global(state: &mut State, name: &str, value: Option<String>, hidden: 
         .unwrap_or_else(PoisonError::into_inner);
     match value {
         Some(value) => {
-            env.insert(name.to_string(), Var { value, hidden });
+            env.insert(
+                name.to_string(),
+                Var {
+                    value: Some(value),
+                    hidden,
+                },
+            );
         }
         None => {
             env.remove(name);
         }
     }
+}
+
+/// `set-environment -gr name`: the global variable is marked removed
+/// (`-NAME`), so a new pane lacks it, as tmux's `environ_clear`: an entry
+/// that is there keeps its hidden mark and loses its value, else a new one
+/// is made.
+pub fn clear_global(state: &mut State, name: &str) {
+    state
+        .hooks
+        .global
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(name.to_string())
+        .and_modify(|v| v.value = None)
+        .or_insert(Var {
+            value: None,
+            hidden: false,
+        });
+}
+
+/// `set-environment -t session -r name`: as [`clear_global`] for a session.
+pub fn clear_session(state: &mut State, session: SessionId, name: &str) {
+    let Some(s) = state.model.sessions.get_mut(&session) else {
+        return;
+    };
+    s.env.retain(|(k, _)| k != name);
+    let hidden = state.hooks.session_hidden.entry(session).or_default();
+    if let Some(v) = hidden.get_mut(name) {
+        *v = None;
+        return;
+    }
+    state
+        .hooks
+        .session_removed
+        .entry(session)
+        .or_default()
+        .insert(name.to_string());
 }
 
 /// `set-environment -t session [-h] name value`, or `-u` (`value` `None`),
@@ -2080,7 +2124,7 @@ pub fn set_session(
     hidden_vars.remove(name);
     match value {
         Some(value) if hidden => {
-            hidden_vars.insert(name.to_string(), value);
+            hidden_vars.insert(name.to_string(), Some(value));
         }
         Some(value) => s.env.push((name.to_string(), value)),
         None => {}
@@ -2105,7 +2149,7 @@ pub fn variables(state: &State, session: Option<SessionId>) -> Vec<Variable> {
             .iter()
             .map(|(k, v)| Variable {
                 name: k.clone(),
-                value: Some(v.value.clone()),
+                value: v.value.clone(),
                 hidden: v.hidden,
             })
             .collect();
@@ -2123,7 +2167,7 @@ pub fn variables(state: &State, session: Option<SessionId>) -> Vec<Variable> {
     }
     if let Some(hidden) = state.hooks.session_hidden.get(&session) {
         for (k, v) in hidden {
-            vars.insert(k, (Some(v), true));
+            vars.insert(k, (v.as_deref(), true));
         }
     }
     vars.into_iter()

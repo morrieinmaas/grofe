@@ -49,10 +49,7 @@
 
 use std::fmt::Write as _;
 
-use super::{
-    Arg, FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Rewritten, Row, SEMANTIC,
-    TmuxError, row,
-};
+use super::{Arg, GrofeTarget, Invocation, MappingKind, Rewrite, Rewritten, Row, TmuxError, row};
 use crate::cmd::format::SHORT_FORMS;
 use crate::cmd::{Command, RegisterSource};
 
@@ -836,11 +833,9 @@ pub fn unquote(text: &str) -> String {
 
 // ---- Rows --------------------------------------------------------------------
 
-const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
-
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
-    use GrofeTarget::{Native, Translate, Unsupported};
+    use GrofeTarget::{Native, Translate};
     use MappingKind::{Behaviour, FlagRename, PassThrough};
     vec![
         row(
@@ -902,18 +897,18 @@ pub(crate) fn rows() -> Vec<Row> {
         row(
             "set-environment -F",
             Behaviour,
-            Unsupported("a value expanded as a format"),
-            SEMANTIC,
-            "M3.6",
-            "",
+            Native("set-environment"),
+            &[],
+            "B3 WP-D",
+            "b3wpd/environment",
         ),
         row(
             "set-environment -r",
             Behaviour,
-            Unsupported("a variable removed from new panes' environment"),
-            SEMANTIC,
-            "M3.6",
-            "",
+            Native("set-environment"),
+            &[],
+            "B3 WP-D",
+            "b3wpd/environment",
         ),
         row(
             "show-environment",
@@ -926,10 +921,10 @@ pub(crate) fn rows() -> Vec<Row> {
         row(
             "show-environment -s",
             Behaviour,
-            Unsupported("output as shell commands"),
-            COSMETIC,
-            "M3.6",
-            "",
+            Native("show-environment"),
+            &[],
+            "B3 WP-D",
+            "b3wpd/environment",
         ),
     ]
 }

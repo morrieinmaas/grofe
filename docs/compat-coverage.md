@@ -277,11 +277,34 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   (an `Unsupported` row, a flag it lacks)
   fails only itself and the rest of its `;` line, with the same text on
   stderr, and is noted in `compat-miss.log`; the other lines run. A nested
-  `source-file` is the same. `source-file` takes `-F` (path as a format),
-  `-n` (parse only: report errors, run nothing, set no variable) and `-v`
-  (accepted, no trace). Not done: several paths or globs in one
-  `source-file`, `-t`, and tmux's error for a stray `%word` in the middle of
-  a line (grofe only reads `%` at the start of a line).
+  `source-file` is the same. `source-file` takes several paths, each a
+  `glob(3)` pattern loaded in sorted order (`golden/b3wpd/source-file`): a
+  path that matches nothing is `No such file or directory: <path>` unless
+  `-q`, and the other paths still load; a relative path is the requester's
+  cwd's even inside a nested file (tmux 3.7b does not use the file's
+  directory); a file that cannot be read is `Input/output error: <path>`;
+  what tmux refused while parsing prints once every file is done. `-F`
+  expands each path as a format, `-n` parses only (report errors, run
+  nothing, set no variable) and `-v` prints `<file>:<line>: <command>` for
+  each command read, with the full command name, a flag cluster in letter
+  order and an argument that needs it in double quotes, nested files
+  included; flags that take a value keep the order typed, which tmux may
+  reorder. Not done: `-` (stdin), `-t`, a `-v` carried into the lines
+  that follow a `run-shell` hold, and tmux's error for a stray `%word` in
+  the middle of a line (grofe only reads `%` at the start of a line).
+- **Environment flags and OSC 52 queries (B3 WP-D).**
+  `show-environment -s` prints `NAME="value"; export NAME;` (with `$`,
+  `` ` ``, `"` and `\` escaped) and `unset NAME;` for a removed variable;
+  `set-environment -r` marks a variable removed (`-NAME`), globally or in a
+  session, so a new pane lacks it (a hidden variable stays hidden); `-F`
+  expands the value as a format (`golden/b3wpd/environment`). A pane's OSC 52
+  query (`ESC ] 52 ; c ; ? BEL` or `ST`) is answered as tmux 3.7b does
+  (`golden/b3wpd/osc52`), only under `set-clipboard on` and `get-clipboard
+  buffer`: from the top automatic paste buffer, as `ESC ] 52 ; <first
+  selection character> ; <base64> <the query's terminator>`, and with no
+  automatic buffer not at all. `get-clipboard request` and `both` answer
+  nothing: grofe never reads or asks the host's clipboard, and tmux, with
+  `both`, answered nothing in the recording either.
 - **Options plugins and themes set (B1a).** `prefix2` (a second prefix key,
   `send-prefix -2` is not done), `status-bg` and `status-fg` (drawn over
   `status-style`, as `status.c`), `default-size` (the size of a `new-session
@@ -320,7 +343,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `assume-paste-time`, `default-client-command`, `pane-colours`, `other-pane-height`/`-width` (the `main-*` layouts size
   from `main-pane-*` alone), `remain-on-exit-format`, `message-format`,
   `message-line`, `message-command-style`, `prompt-*-cursor-*`, `editor`,
-  `history-file`, `get-clipboard`, `backspace`, `user-keys`,
+  `history-file`, `backspace`, `user-keys`,
   `codepoint-widths`, `input-buffer-size`, `prompt-history-limit` and
   `variation-selector-always-wide`.
 - **Hooks (B2a)** are tmux's: an array of commands per scope (`set-hook -g`

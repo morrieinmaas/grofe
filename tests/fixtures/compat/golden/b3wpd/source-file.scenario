@@ -1,0 +1,42 @@
+# B3 WP-D: source-file with several paths and globs, -q -n -v -F, and nested relative paths.
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+$ run-shell 'mkdir -p ~/c/nest/sub ~/c/dir.conf && cd ~/c && printf "set -g @a1 one\n" > a1.conf && printf "set -g @a2 two\n" > a2.conf && printf "set -g @order 1\n" > g1.conf && printf "set -ga @order 2\n" > g2.conf && printf "set -ga @order 3\n" > g3.conf && printf "bogus-command\n" > m1.conf && printf "set -g @m2 ran\n" > m2.conf && printf "set -g @n ran\n" > n.conf && printf "source-file inner.conf\nsource-file sub/deep.conf\nsource-file -q i*.conf\n" > nest/outer.conf && printf "set -g @inner yes\n" > nest/inner.conf && printf "set -g @deep yes\n" > nest/sub/deep.conf'
+$ source-file c/a1.conf c/a2.conf
+$ show-options -gv @a1
+$ show-options -gv @a2
+$ source-file c/g*.conf
+$ show-options -gv @order
+$ source-file c/nomatch*.conf
+$ source-file -q c/nomatch*.conf
+$ source-file c/missing.conf
+$ source-file -q c/missing.conf
+$ set-option -gu @a1
+$ set-option -gu @a2
+$ source-file c/a1.conf c/nomatch*.conf c/a2.conf
+$ show-options -gv @a1
+$ show-options -gv @a2
+$ source-file c/m*.conf
+$ show-options -gv @m2
+$ source-file c/dir.conf
+$ source-file -n c/n.conf
+$ show-options -gv @n
+$ source-file -n c/m1.conf
+$ source-file -n c/nomatch*.conf
+$ source-file -v c/n.conf
+$ show-options -gv @n
+$ set-option -g @dir 'c'
+$ set-option -gu @a1
+$ source-file -F '#{@dir}/a*.conf'
+$ show-options -gv @a1
+$ source-file c/nest/outer.conf
+$ show-options -gv @inner
+$ show-options -gv @deep
+$ source-file
+$ source-file -q
+$ run-shell 'cd ~/c && printf "set -g @v1 a\nsetw -ga @v2 \"x y\"\nset -g @v3 b ; set -g @v4 c\nbind -n C-a send -t : x\n%%if 1\nset -g @v5 d\n%%endif\nsource-file c/n2.conf\n" > v.conf && printf "set -g @n2 nested\n" > n2.conf'
+$ source-file -v c/v.conf
+$ show-options -gv @v3
+$ source-file -nv c/v.conf
+$ show-options -gv @v4
+$ source-file -v c/a1.conf c/m*.conf
+$ source-file -qv c/nomatch*.conf

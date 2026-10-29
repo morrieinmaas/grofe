@@ -454,3 +454,83 @@ fn which_key_loads_on_a_native_grofe_server() {
         .unwrap_or_else(|| panic!("no prefix Space:\n{keys}"));
     assert!(space.contains("display-menu"), "{space}");
 }
+
+/// Several paths and globs in one `source-file`, as tmux's `glob(3)`: a
+/// glob loads its files in sorted order, a path that matches nothing is
+/// `path: No such file or directory` unless `-q`, and the other paths still
+/// load.
+#[test]
+fn source_file_takes_several_paths_and_globs() {
+    let srv = server();
+    write(&srv, "g1.conf", "set -g @order 1\n");
+    write(&srv, "g3.conf", "set -ga @order 3\n");
+    write(&srv, "g2.conf", "set -ga @order 2\n");
+    write(&srv, "one.conf", "set -g @one 1\n");
+    write(&srv, "two.conf", "set -g @two 2\n");
+    tmux(&srv, &["source-file", "one.conf", "two.conf"]).expect("two paths");
+    assert_eq!(
+        (opt(&srv, "@one"), opt(&srv, "@two")),
+        ("1".into(), "2".into())
+    );
+    tmux(&srv, &["source-file", "g*.conf"]).expect("glob");
+    assert_eq!(opt(&srv, "@order"), "123");
+
+    srv.cmd(&["set-option", "-gu", "@one"]).unwrap();
+    let out = tmux_run(&srv, &["source-file", "one.conf", "no*.conf", "two.conf"]);
+    assert!(!out.status.success());
+    assert_eq!(out.stderr.trim_end(), "No such file or directory: no*.conf");
+    assert_eq!(opt(&srv, "@one"), "1");
+    assert_eq!(
+        tmux(&srv, &["source-file", "-q", "no*.conf", "missing.conf"]),
+        Ok(String::new())
+    );
+    let out = tmux_run(&srv, &["source-file", "missing.conf"]);
+    assert_eq!(
+        out.stderr.trim_end(),
+        "No such file or directory: missing.conf"
+    );
+}
+
+/// A relative path in a file that was itself sourced is still the
+/// requester's cwd's, not the file's directory, as tmux 3.7b (recorded).
+#[test]
+fn a_nested_relative_path_is_relative_to_the_cwd() {
+    let srv = server();
+    let dir = srv.home.join("nest");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("inner.conf"), "set -g @inner yes\n").unwrap();
+    fs::write(srv.home.join("top.conf"), "set -g @top yes\n").unwrap();
+    fs::write(
+        dir.join("outer.conf"),
+        "source-file inner.conf\nsource-file top.conf\n",
+    )
+    .unwrap();
+    let out = tmux_run(&srv, &["source-file", "nest/outer.conf"]);
+    assert!(!out.status.success());
+    assert_eq!(
+        out.stderr.trim_end(),
+        "No such file or directory: inner.conf"
+    );
+    assert_eq!(
+        (opt(&srv, "@inner"), opt(&srv, "@top")),
+        (String::new(), "yes".into())
+    );
+}
+
+/// A `run-shell` in the first file holds the second file too.
+#[test]
+fn a_hold_in_one_file_holds_the_next_file() {
+    let srv = server();
+    let bin = srv.home.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    symlink(env!("CARGO_BIN_EXE_grofe"), bin.join("tmux")).unwrap();
+    let bin_tmux = bin.join("tmux").display().to_string();
+    write(
+        &srv,
+        "h1.conf",
+        &format!("run-shell 'sleep 0.3; {bin_tmux} -S \"${{TMUX%%,*}}\" set -g @x shell'\n"),
+    );
+    write(&srv, "h2.conf", "set -gF @y '#{@x}'\n");
+    assert_eq!(tmux(&srv, &["source-file", "h*.conf"]), Ok(String::new()));
+    assert_eq!(opt(&srv, "@y"), "shell");
+}

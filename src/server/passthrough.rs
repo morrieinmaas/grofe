@@ -439,7 +439,7 @@ impl Scanner {
                 BEL => {
                     out.push(b);
                     self.state = Ground;
-                    self.osc_end(found, out.len());
+                    self.osc_end(found, out.len(), true);
                 }
                 ESC => {
                     self.held.push(b);
@@ -464,7 +464,7 @@ impl Scanner {
                     self.release(out);
                     out.push(b);
                     self.state = Ground;
-                    self.osc_end(found, out.len());
+                    self.osc_end(found, out.len(), false);
                 } else {
                     // The held ESC starts a new sequence.
                     self.state = Esc;
@@ -520,7 +520,7 @@ impl Scanner {
         }
     }
 
-    fn osc_end(&mut self, found: &mut Vec<PaneEventKind>, out_len: usize) {
+    fn osc_end(&mut self, found: &mut Vec<PaneEventKind>, out_len: usize, bel: bool) {
         let payload = std::mem::take(&mut self.buf);
         if self.overlong {
             return;
@@ -539,7 +539,7 @@ impl Scanner {
         {
             found.push(PaneEventKind::Path(text));
         } else if let Some(body) = payload.strip_prefix(b"52;") {
-            found.extend(osc52_store(body));
+            found.extend(osc52_store(body).or_else(|| osc52_query(body, bel)));
         } else if relayed(&payload) {
             found.push(PaneEventKind::Osc(payload));
         }
@@ -634,6 +634,19 @@ fn osc52_store(body: &[u8]) -> Option<PaneEventKind> {
     Some(PaneEventKind::Clipboard { param, data })
 }
 
+/// An OSC 52 query (`Pc;?`), which asks for the clipboard: the parameter
+/// as sent and how the pane ended the sequence, which its answer ends the
+/// same way.
+fn osc52_query(body: &[u8], bel: bool) -> Option<PaneEventKind> {
+    let param = body.strip_suffix(b";?")?;
+    let param = param
+        .iter()
+        .map(|&b| b as char)
+        .filter(|c| OSC52_PARAMS.contains(*c))
+        .collect();
+    Some(PaneEventKind::ClipboardQuery { param, bel })
+}
+
 /// Whether passthrough re-emits this OSC body: a notification (9, 777)
 /// or the cursor colour (12, 112), but not a colour query, which the
 /// emulator answers.
@@ -689,6 +702,21 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             crate::server::hooks::pane_set_clipboard(state, pane);
             let to = clients_showing(state, window);
             send_clipboard(state, to, &osc52(&param, &data));
+        }
+        // As tmux 3.7b's `input_osc_52` (recorded): under `set-clipboard
+        // on` and `get-clipboard buffer`, a query is answered from the top
+        // automatic buffer, the first selection character echoed and the
+        // pane's own terminator copied; with no such buffer, no answer. The
+        // host's clipboard is never asked (`request` and `both` answer
+        // nothing, as tmux with no client to ask).
+        PaneEventKind::ClipboardQuery { param, bel }
+            if state.model.options.lookup("set-clipboard", &[]) == Some("on")
+                && state.model.options.lookup("get-clipboard", &[]) == Some("buffer") =>
+        {
+            if let Some(buffer) = state.buffers.top() {
+                let reply = clipboard_reply(&param, &buffer.data, bel);
+                let _ = p.handle.enqueue_input(reply);
+            }
         }
         // `allow-set-title off` drops the pane's own title changes.
         PaneEventKind::Title(_) if title_blocked(state, pane) => {}
@@ -923,6 +951,15 @@ pub(crate) fn osc(body: &[u8]) -> Vec<u8> {
 pub(crate) fn osc52(param: &str, data: &[u8]) -> Vec<u8> {
     let data = base64::engine::general_purpose::STANDARD.encode(data);
     format!("\x1b]52;{param};{data}\x07").into_bytes()
+}
+
+/// The answer to an OSC 52 query: `ESC ] 52 ; <first selection char> ;
+/// <base64> <BEL or ST>`.
+fn clipboard_reply(param: &str, data: &[u8], bel: bool) -> Vec<u8> {
+    let first: String = param.chars().take(1).collect();
+    let data = base64::engine::general_purpose::STANDARD.encode(data);
+    let end = if bel { "\x07" } else { "\x1b\\" };
+    format!("\x1b]52;{first};{data}{end}").into_bytes()
 }
 
 /// The largest copy sent to the clients as OSC 52.
@@ -1382,7 +1419,20 @@ mod tests {
             (b"\x1b]52;;aGk=\x1b\\", Some(store("", b"hi"))),
             (b"\x1b]52;cs;aGk=\x07", Some(store("cs", b"hi"))),
             (b"\x1b]52;c]7;aGk=\x07", Some(store("c7", b"hi"))),
-            (b"\x1b]52;c;?\x07", None),
+            (
+                b"\x1b]52;c;?\x07",
+                Some(PaneEventKind::ClipboardQuery {
+                    param: "c".into(),
+                    bel: true,
+                }),
+            ),
+            (
+                b"\x1b]52;xs;?\x1b\\",
+                Some(PaneEventKind::ClipboardQuery {
+                    param: "s".into(),
+                    bel: false,
+                }),
+            ),
             (b"\x1b]52;c;\x07", None),
             (b"\x1b]52;c;!!!\x07", None),
             (b"\x1b]52;aGk=\x07", None),
@@ -1404,6 +1454,18 @@ mod tests {
                 "split at {cut}"
             );
         }
+    }
+
+    #[test]
+    fn a_clipboard_reply_echoes_the_first_selection_and_the_terminator() {
+        assert_eq!(
+            clipboard_reply("cs", b"hi", true),
+            b"\x1b]52;c;aGk=\x07".to_vec()
+        );
+        assert_eq!(
+            clipboard_reply("", b"hi", false),
+            b"\x1b]52;;aGk=\x1b\\".to_vec()
+        );
     }
 
     #[test]

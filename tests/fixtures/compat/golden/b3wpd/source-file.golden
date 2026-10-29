@@ -1,0 +1,123 @@
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+? 0
+$ run-shell 'mkdir -p ~/c/nest/sub ~/c/dir.conf && cd ~/c && printf "set -g @a1 one\n" > a1.conf && printf "set -g @a2 two\n" > a2.conf && printf "set -g @order 1\n" > g1.conf && printf "set -ga @order 2\n" > g2.conf && printf "set -ga @order 3\n" > g3.conf && printf "bogus-command\n" > m1.conf && printf "set -g @m2 ran\n" > m2.conf && printf "set -g @n ran\n" > n.conf && printf "source-file inner.conf\nsource-file sub/deep.conf\nsource-file -q i*.conf\n" > nest/outer.conf && printf "set -g @inner yes\n" > nest/inner.conf && printf "set -g @deep yes\n" > nest/sub/deep.conf'
+? 0
+$ source-file c/a1.conf c/a2.conf
+? 0
+$ show-options -gv @a1
+one
+? 0
+$ show-options -gv @a2
+two
+? 0
+$ source-file c/g*.conf
+? 0
+$ show-options -gv @order
+123
+? 0
+$ source-file c/nomatch*.conf
+! No such file or directory: c/nomatch*.conf
+? 1
+$ source-file -q c/nomatch*.conf
+? 0
+$ source-file c/missing.conf
+! No such file or directory: c/missing.conf
+? 1
+$ source-file -q c/missing.conf
+? 0
+$ set-option -gu @a1
+? 0
+$ set-option -gu @a2
+? 0
+$ source-file c/a1.conf c/nomatch*.conf c/a2.conf
+! No such file or directory: c/nomatch*.conf
+? 1
+$ show-options -gv @a1
+one
+? 0
+$ show-options -gv @a2
+two
+? 0
+$ source-file c/m*.conf
+<TMPDIR>/home/c/m1.conf:1: unknown command: bogus-command
+? 1
+$ show-options -gv @m2
+ran
+? 0
+$ source-file c/dir.conf
+! Input/output error: <TMPDIR>/home/c/dir.conf
+? 1
+$ source-file -n c/n.conf
+? 0
+$ show-options -gv @n
+! invalid option: @n
+? 1
+$ source-file -n c/m1.conf
+<TMPDIR>/home/c/m1.conf:1: unknown command: bogus-command
+? 1
+$ source-file -n c/nomatch*.conf
+! No such file or directory: c/nomatch*.conf
+? 1
+$ source-file -v c/n.conf
+<TMPDIR>/home/c/n.conf:1: set-option -g @n ran
+? 0
+$ show-options -gv @n
+ran
+? 0
+$ set-option -g @dir 'c'
+? 0
+$ set-option -gu @a1
+? 0
+$ source-file -F '#{@dir}/a*.conf'
+? 0
+$ show-options -gv @a1
+one
+? 0
+$ source-file c/nest/outer.conf
+! No such file or directory: inner.conf
+! No such file or directory: sub/deep.conf
+? 1
+$ show-options -gv @inner
+! invalid option: @inner
+? 1
+$ show-options -gv @deep
+! invalid option: @deep
+? 1
+$ source-file
+! command source-file: too few arguments (need at least 1)
+? 1
+$ source-file -q
+! command source-file: too few arguments (need at least 1)
+? 1
+$ run-shell 'cd ~/c && printf "set -g @v1 a\nsetw -ga @v2 \"x y\"\nset -g @v3 b ; set -g @v4 c\nbind -n C-a send -t : x\n%%if 1\nset -g @v5 d\n%%endif\nsource-file c/n2.conf\n" > v.conf && printf "set -g @n2 nested\n" > n2.conf'
+? 0
+$ source-file -v c/v.conf
+<TMPDIR>/home/c/v.conf:1: set-option -g @v1 a
+<TMPDIR>/home/c/v.conf:2: set-window-option -ag @v2 "x y"
+<TMPDIR>/home/c/v.conf:3: set-option -g @v3 b ; set-option -g @v4 c
+<TMPDIR>/home/c/v.conf:4: bind-key -n C-a send -t : x
+<TMPDIR>/home/c/v.conf:6: set-option -g @v5 d
+<TMPDIR>/home/c/v.conf:8: source-file c/n2.conf
+<TMPDIR>/home/c/n2.conf:1: set-option -g @n2 nested
+? 0
+$ show-options -gv @v3
+b
+? 0
+$ source-file -nv c/v.conf
+<TMPDIR>/home/c/v.conf:1: set-option -g @v1 a
+<TMPDIR>/home/c/v.conf:2: set-window-option -ag @v2 "x y"
+<TMPDIR>/home/c/v.conf:3: set-option -g @v3 b ; set-option -g @v4 c
+<TMPDIR>/home/c/v.conf:4: bind-key -n C-a send -t : x
+<TMPDIR>/home/c/v.conf:6: set-option -g @v5 d
+<TMPDIR>/home/c/v.conf:8: source-file c/n2.conf
+? 0
+$ show-options -gv @v4
+c
+? 0
+$ source-file -v c/a1.conf c/m*.conf
+<TMPDIR>/home/c/a1.conf:1: set-option -g @a1 one
+<TMPDIR>/home/c/m2.conf:1: set-option -g @m2 ran
+<TMPDIR>/home/c/m1.conf:1: unknown command: bogus-command
+? 1
+$ source-file -qv c/nomatch*.conf
+? 0
