@@ -1535,13 +1535,13 @@ fn core_rows() -> Vec<Row> {
             "M3.6",
             "fe_1/targets",
         ),
-        // Out of scope (spec §4.5), before the verbs they would match.
-        // tmux 3.7b's own text for a `send -M` with no mouse event
-        // (recorded).
+        // `send -M` sends the mouse event a mouse key's commands run for to
+        // its pane; with none, tmux 3.7b's own `no mouse target` (recorded)
+        // is the server's answer.
         row(
             "send-keys -M",
-            Behaviour,
-            GrofeTarget::Refuse(cmd::target::NO_MOUSE_TARGET),
+            PassThrough,
+            GrofeTarget::Native("send-keys"),
             SEMANTIC,
             "",
             "fe_1/errors",
@@ -1558,7 +1558,6 @@ fn core_rows() -> Vec<Row> {
             "fe_4/mouse-forms",
         ),
         unsupported("lock-server", UNUSED, &[]),
-        unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
         // Front-end rows.
         row(
@@ -2320,7 +2319,6 @@ mod tests {
     /// form replaces the core refusal, and a mapping never does.
     #[test]
     fn an_area_refusal_replaces_a_core_one() {
-        assert_eq!(one(&["send", "-M"]).unwrap_err().0, "no mouse target");
         let area = row(
             "resize-pane -M",
             MappingKind::Behaviour,
@@ -2353,7 +2351,12 @@ mod tests {
             one(&["copy-mode", "-M"]),
             Ok(Command::CopyMode(cmd::CopyMode { mouse: true, .. }))
         ));
-        assert!(row_for(&args(&["send", "-M"])).is_some_and(Row::refuses));
+        // `send -M` is native: the server answers `no mouse target` when
+        // no mouse key's commands are running.
+        assert!(matches!(
+            one(&["send", "-M"]),
+            Ok(Command::SendKeys(cmd::SendKeys { mouse: true, .. }))
+        ));
     }
 
     /// Recorded on tmux 3.7b: flags are checked against tmux's usage.

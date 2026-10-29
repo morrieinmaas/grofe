@@ -20,6 +20,19 @@
 //! - `display-panes` labels each pane with its index, in big digits when
 //!   the pane has room. A digit (or `a` to `z` for index 10 on) selects that
 //!   pane; any other key closes the labels and goes on as usual.
+//! - With the mouse (a menu a mouse key opens, or `-M`): no row starts chosen,
+//!   and `menu_key_cb`'s rules apply to a report: outside the box (one column
+//!   more than the box is inside, as tmux counts) a release closes the menu
+//!   (`-O`: a press does, a release does not) and clears the row, inside a
+//!   release chooses the row chosen last (`-O`: any press or release but the
+//!   wheel and a drag), and any other report chooses the row under it. A
+//!   release is any report whose low button bits are 3, so motion with no
+//!   button is one. Without the mouse a menu takes no press of button 1 and
+//!   any other report closes it.
+//! - `menu-style`, `menu-selected-style` and `menu-border-style` (over
+//!   which `-s -H -S` replace only the colours) and `menu-border-lines` or
+//!   `-b` draw the box; a menu's mouse takes the client's mouse reports
+//!   even with `mouse` off ([`wants_mouse`]).
 //!
 //! Pane-supplied text (a window name in a label) reaches the screen only as
 //! cells: a control character is dropped, never written to the terminal.
@@ -33,25 +46,18 @@ use unicode_width::UnicodeWidthChar;
 use crate::cmd;
 use crate::config::Resolved;
 use crate::protocol::{ClientCtx, Dialect, Failure};
-use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
+use crate::server::input::{Input, InputHook, Key, KeyCode, Mouse, MouseButton, MouseKind, Routed};
+use crate::server::mouse::MouseTarget;
 use crate::server::pane::{CellFlags, SnapCell};
+use crate::server::popup::Lines;
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::status::{self, Style};
 use crate::server::{State, clients, dispatch, prompt};
 use crate::types::{ClientId, PaneId, Rect};
 
-/// tmux's `menu-selected-style`.
-// ponytail: tmux's `menu-style`, `menu-selected-style`,
-// `menu-border-style` and `menu-border-lines` are fixed at their defaults
-// until they are options.
-const SELECTED_STYLE: &str = "bg=yellow,fg=black";
-
 /// tmux's `display-panes-time`, in milliseconds.
-// ponytail: the three `display-panes-*` options are fixed at tmux's
-// defaults until they are options.
 const PANES_TIME: Duration = Duration::from_millis(1000);
 
-/// tmux's `display-panes-colour` and `display-panes-active-colour`.
 /// `display-panes-colour` and `display-panes-active-colour` as styles, and
 /// `display-panes-time` as a duration, for the client's session.
 fn panes_options(state: &State, id: ClientId) -> (String, String, Duration) {
@@ -103,9 +109,20 @@ impl Menus {
 }
 
 enum Open {
-    Menu(Shown),
-    /// `display-panes`, with its generation.
-    Panes(u64),
+    Menu(Box<Shown>),
+    Panes(PanesOpen),
+}
+
+/// `display-panes` while its labels are up.
+struct PanesOpen {
+    /// Counts openings, so a timer only closes its own.
+    generation: u64,
+    /// `-N`: the labels take no keys.
+    no_keys: bool,
+    /// The command a chosen pane runs, `%%` for its id (default
+    /// `select-pane`), in the opener's dialect.
+    template: Option<String>,
+    dialect: Dialect,
 }
 
 /// A menu as a caller describes it: labels, title and commands are
@@ -116,6 +133,37 @@ pub struct Menu {
     pub items: Vec<MenuItem>,
     pub x: Position,
     pub y: Position,
+    pub look: Look,
+}
+
+/// How a menu looks and what it takes, as `display-menu`'s flags say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Look {
+    /// `-b`, checked: `None` reads `menu-border-lines`, `Some(None)` is
+    /// `none`.
+    pub lines: Option<Option<Lines>>,
+    /// `-s`, `-H` and `-S`: over the options, replacing only colours.
+    pub style: Option<String>,
+    pub selected: Option<String>,
+    pub border: Option<String>,
+    /// `-O`.
+    pub stay_open: bool,
+    /// `-M`.
+    pub mouse: bool,
+    /// `-C`.
+    pub start: Start,
+}
+
+/// The row a menu starts on when it takes no mouse (tmux's
+/// `starting_choice`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Start {
+    /// Row 0, or the next row that can be chosen.
+    #[default]
+    First,
+    /// `-C -`: none.
+    None,
+    At(u32),
 }
 
 /// One menu row.
@@ -175,6 +223,12 @@ struct Shown {
     dialect: Dialect,
     /// The opener's context, for a nested menu's formats.
     ctx: ClientCtx,
+    look: Look,
+    /// `MENU_NOMOUSE`: no mouse event opened the menu and `-M` was not given.
+    no_mouse: bool,
+    /// The mouse event the menu was opened for: its rows' commands run for
+    /// it, as tmux's `menu_key_cb` passes the item's event on.
+    event: Option<MouseTarget>,
 }
 
 struct Row {
@@ -226,6 +280,47 @@ impl Shown {
         self.choice = i.filter(|n| self.enabled(*n));
     }
 
+    /// The row a menu that takes no mouse starts on, as tmux's
+    /// `menu_prepare` finds it: row `start` or the next that can be
+    /// chosen, wrapping; from past the end, the last that can be.
+    fn starting_choice(&self, start: Start) -> Option<usize> {
+        let count = self.rows.len() as i64;
+        let start = match start {
+            Start::First => 0,
+            Start::None => return None,
+            Start::At(n) => i64::from(n),
+        };
+        if start >= count {
+            let last = count - 1;
+            let mut choice = last + 1;
+            loop {
+                if self.enabled((choice - 1) as usize) {
+                    return Some((choice - 1) as usize);
+                }
+                choice -= 1;
+                if choice == 0 {
+                    choice = count;
+                }
+                if choice == last + 1 {
+                    return None;
+                }
+            }
+        }
+        let mut choice = start;
+        loop {
+            if self.enabled(choice as usize) {
+                return Some(choice as usize);
+            }
+            choice += 1;
+            if choice == count {
+                choice = 0;
+            }
+            if choice == start {
+                return None;
+            }
+        }
+    }
+
     /// The first (`from_end` false) or last enabled row.
     fn edge(&mut self, from_end: bool) {
         let mut rows: Vec<usize> = (0..self.rows.len()).filter(|i| self.enabled(*i)).collect();
@@ -261,8 +356,8 @@ impl Shown {
             KeyCode::Char('b') if m.ctrl => (0..5).for_each(|_| self.step(true)),
             KeyCode::PageDown => (0..5).for_each(|_| self.step(false)),
             KeyCode::Char('f') if m.ctrl => (0..5).for_each(|_| self.step(false)),
-            KeyCode::Enter => return self.choice.map_or(Step::Close, Step::Choose),
-            KeyCode::Char('m') if m.ctrl => return self.choice.map_or(Step::Close, Step::Choose),
+            KeyCode::Enter => return self.chosen(),
+            KeyCode::Char('m') if m.ctrl => return self.chosen(),
             KeyCode::Escape => return Step::Close,
             KeyCode::Char('q') if plain => return Step::Close,
             KeyCode::Char('c' | 'g') if m.ctrl => return Step::Close,
@@ -276,6 +371,88 @@ enum Step {
     Keep,
     Close,
     Choose(usize),
+}
+
+/// A report as tmux's `menu_key_cb` reads its button bits (`b & 195`, the
+/// drag bit and the wheel).
+struct Bits {
+    buttons: u16,
+    release: bool,
+    drag: bool,
+    wheel: bool,
+}
+
+impl Bits {
+    fn of(kind: MouseKind) -> Bits {
+        let code = |b: MouseButton| match b {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+            MouseButton::Other(n) => 128 + u16::from(n.saturating_sub(8)),
+        };
+        let (buttons, drag) = match kind {
+            MouseKind::Down(b) => (code(b), false),
+            MouseKind::Up(_) => (3, false),
+            MouseKind::Drag(b) => (code(b), true),
+            MouseKind::Move => (3, true),
+            MouseKind::WheelUp => (64, false),
+            MouseKind::WheelDown => (65, false),
+            MouseKind::WheelLeft => (66, false),
+            MouseKind::WheelRight => (67, false),
+        };
+        Bits {
+            buttons,
+            release: buttons == 3,
+            drag,
+            wheel: matches!(buttons, 64 | 65),
+        }
+    }
+}
+
+impl Shown {
+    /// tmux's `chosen:` label: the row chosen last runs, or the menu
+    /// closes (a separator or a disabled row keeps a `-O` menu open).
+    fn chosen(&self) -> Step {
+        let Some(i) = self.choice else {
+            return Step::Close;
+        };
+        if self.enabled(i) {
+            Step::Choose(i)
+        } else if self.look.stay_open {
+            Step::Keep
+        } else {
+            Step::Close
+        }
+    }
+
+    /// What a mouse report does, as tmux's `menu_key_cb`.
+    fn mouse(&mut self, m: &Mouse) -> Step {
+        let bits = Bits::of(m.kind);
+        if self.no_mouse {
+            return if bits.buttons == 0 {
+                Step::Keep
+            } else {
+                Step::Close
+            };
+        }
+        let (px, py) = (i64::from(self.at.0), i64::from(self.at.1));
+        let (x, y) = (i64::from(m.col), i64::from(m.row));
+        let count = self.rows.len() as i64;
+        let outside = x < px || x > px + 4 + self.width as i64 || y < py + 1 || y > py + count;
+        let stay = self.look.stay_open;
+        if outside {
+            if !stay && bits.release || stay && !bits.release && !bits.wheel && !bits.drag {
+                return Step::Close;
+            }
+            self.choice = None;
+            return Step::Keep;
+        }
+        if !stay && bits.release || stay && !bits.wheel && !bits.drag {
+            return self.chosen();
+        }
+        self.choice = usize::try_from(y - py - 1).ok();
+        Step::Keep
+    }
 }
 
 /// The display width of `text` without its `#[...]` directives (tmux's
@@ -432,7 +609,9 @@ fn place(
         Position::Cells(n) => n,
         Position::Centre => (rows - 1) / 2 + h / 2,
         Position::Pane | Position::PaneRight => i64::from(pane.y) + i64::from(pane.rows),
-        Position::Pointer(y) => i64::from(y) + h,
+        // tmux's `popup_mouse_top`: the row `h` below the pointer, at most
+        // the client's last row.
+        Position::Pointer(y) => (i64::from(y) + h).min(rows - 1),
         Position::Expr(_) => 0,
     };
     n = if n < h { 0 } else { n - h };
@@ -493,6 +672,9 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
     let Some(at) = place((x, y), (w, h), size, pane) else {
         return false;
     };
+    let event = state.mouse.current().filter(|m| m.client == id).cloned();
+    let no_mouse = event.is_none() && !menu.look.mouse;
+    let start = menu.look.start;
     let mut shown = Shown {
         title,
         rows,
@@ -501,10 +683,16 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
         choice: None,
         dialect: ctx.dialect,
         ctx: ctx.clone(),
+        look: menu.look,
+        no_mouse,
+        event,
     };
-    shown.edge(false);
-    state.menus.open.insert(id, Open::Menu(shown));
+    if no_mouse {
+        shown.choice = shown.starting_choice(start);
+    }
+    state.menus.open.insert(id, Open::Menu(Box::new(shown)));
     clients::mark_dirty(state, id);
+    clients::sync_mouse_modes(state);
     true
 }
 
@@ -702,24 +890,49 @@ fn current_pane_rect(state: &State, ctx: &ClientCtx, cx: &OverlayCtx) -> Option<
     cx.panes.iter().find(|(p, _)| *p == pane).map(|(_, r)| *r)
 }
 
+/// How `display-panes` was asked for.
+pub struct PanesArgs {
+    /// `-d`; the `display-panes-time` option without it. Zero keeps the
+    /// labels up until a key.
+    pub duration: Option<Duration>,
+    /// `-N`.
+    pub no_keys: bool,
+    /// The template, else `select-pane -t "%%%"`.
+    pub template: Option<String>,
+    /// The dialect the template runs in: the opener's.
+    pub dialect: Dialect,
+}
+
 /// Opens `display-panes` on client `id`, unless something is open there
-/// already. The labels close after tmux's `display-panes-time`.
-pub fn open_panes(state: &mut State, id: ClientId) -> bool {
+/// already. The labels close after `args.duration`.
+pub fn open_panes(state: &mut State, id: ClientId, args: PanesArgs) -> bool {
     if state.menus.is_open(id) {
         return false;
     }
     state.menus.generation += 1;
     let generation = state.menus.generation;
-    state.menus.open.insert(id, Open::Panes(generation));
+    state.menus.open.insert(
+        id,
+        Open::Panes(PanesOpen {
+            generation,
+            no_keys: args.no_keys,
+            template: args.template,
+            dialect: args.dialect,
+        }),
+    );
     let (_, _, time) = panes_options(state, id);
+    let time = args.duration.unwrap_or(time);
     clients::mark_dirty(state, id);
     // Without a runtime (unit tests) the labels stay until a key.
-    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+    if !time.is_zero()
+        && let Ok(rt) = tokio::runtime::Handle::try_current()
+    {
         let jobs = state.jobs.clone();
         rt.spawn(async move {
             tokio::time::sleep(time).await;
             let job: crate::server::Job = Box::new(move |state: &mut State| {
-                if matches!(state.menus.open.get(&id), Some(Open::Panes(g)) if *g == generation) {
+                if matches!(state.menus.open.get(&id), Some(Open::Panes(p)) if p.generation == generation)
+                {
                     state.menus.close(id);
                     clients::mark_dirty(state, id);
                 }
@@ -728,6 +941,13 @@ pub fn open_panes(state: &mut State, id: ClientId) -> bool {
         });
     }
     true
+}
+
+/// Whether client `id` has a menu open that takes the mouse, which
+/// asks the terminal for every motion even with `mouse` off (tmux's menu
+/// screen mode), and for the client's mouse reports.
+pub fn wants_mouse(state: &State, id: ClientId) -> bool {
+    matches!(state.menus.open.get(&id), Some(Open::Menu(m)) if !m.no_mouse)
 }
 
 /// The caller waits for client `id`'s menu to close, as tmux's
@@ -757,9 +977,8 @@ impl InputHook for MenuHook {
                 let step = match input {
                     Input::Key(key) => shown.key(key),
                     Input::Focus(_) => return None,
-                    // ponytail: the mouse in a menu is TC.10's; until then a
-                    // click or paste is eaten.
-                    Input::Mouse(_) | Input::Paste { .. } => Step::Keep,
+                    Input::Mouse(m) => shown.mouse(m),
+                    Input::Paste { .. } => Step::Keep,
                 };
                 match step {
                     Step::Keep => Routed::Consumed,
@@ -773,8 +992,14 @@ impl InputHook for MenuHook {
             Open::Panes(_) => match input {
                 Input::Focus(_) => return None,
                 Input::Key(key) => {
-                    state.menus.close(client);
+                    let Some(Open::Panes(panes)) = state.menus.close(client) else {
+                        return None;
+                    };
                     clients::mark_dirty(state, client);
+                    // `-N`: no key is the labels'; it closes them and goes on.
+                    if panes.no_keys {
+                        return None;
+                    }
                     let index = match key.code {
                         KeyCode::Char(c) if key.mods == Default::default() => pane_label_index(c),
                         _ => None,
@@ -782,14 +1007,7 @@ impl InputHook for MenuHook {
                     // Any other key closes the labels and goes on as usual.
                     let index = index?;
                     match pane_at_index(state, client, index) {
-                        Some(pane) => Routed::Command(
-                            vec![vec![
-                                "select-pane".to_string(),
-                                "-t".to_string(),
-                                pane.to_string(),
-                            ]],
-                            Dialect::Grofe,
-                        ),
+                        Some(pane) => choose_pane(state, client, &panes, pane),
                         None => Routed::Consumed,
                     }
                 }
@@ -801,8 +1019,64 @@ impl InputHook for MenuHook {
             },
         };
         clients::mark_dirty(state, client);
+        clients::sync_mouse_modes(state);
         Some(routed)
     }
+}
+
+/// `display-panes` chose `pane`: its window leaves zoom, and the template
+/// (`select-pane -t "%%%"` without one) runs with the pane's id for `%%`.
+fn choose_pane(state: &mut State, id: ClientId, panes: &PanesOpen, pane: PaneId) -> Routed {
+    if let Some(window) = state.model.panes.get(&pane).map(|p| p.window) {
+        dispatch::pane::unzoom(&mut state.model, window);
+    }
+    let Some(template) = &panes.template else {
+        let target = pane.to_string();
+        let argv = ["select-pane", "-t", target.as_str()].map(String::from);
+        return Routed::Command(vec![argv.to_vec()], Dialect::Grofe);
+    };
+    match cmd::split_command_string(&replace_template(template, &pane.to_string())) {
+        Ok(cmds) if !cmds.is_empty() => Routed::Command(cmds, panes.dialect),
+        Ok(_) => Routed::Consumed,
+        Err(e) => {
+            clients::show_message(state, id, &e.to_string());
+            Routed::Consumed
+        }
+    }
+}
+
+/// tmux's `cmd_template_replace` for one answer that has nothing to
+/// quote: `%1` everywhere and `%%` the first time stand for `answer`, and
+/// a `%` after either is part of the mark (`%%%`).
+fn replace_template(template: &str, answer: &str) -> String {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut replaced = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        if c == '%' {
+            let matched = match chars.get(i) {
+                Some('1') => true,
+                Some('%') if !replaced => {
+                    replaced = true;
+                    true
+                }
+                _ => false,
+            };
+            if matched {
+                i += 1;
+                if chars.get(i) == Some(&'%') {
+                    i += 1;
+                }
+                out.push_str(answer);
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Row `i` of client `id`'s menu was chosen: the menu closes, then the
@@ -817,18 +1091,37 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
     match row.action {
         // As tmux appends the item's command to the client's queue: behind
         // the rest of the binding that waits for the menu (recorded: `BM`).
-        // A CLI caller's menu runs it now.
+        // A CLI caller's menu runs it now. A menu a mouse key opened runs it
+        // for that mouse event, so `-t=` in it is the pane clicked.
         // ponytail: tmux 3.7b drops a CLI menu's command while the client
         // waits on a prompt (recorded); grofe runs it.
         Action::Run(command) => match cmd::split_command_string(&command) {
-            Ok(cmds) if !cmds.is_empty() && shown.ctx.client.is_none() => {
-                Routed::Command(cmds, shown.dialect)
-            }
             Ok(cmds) if !cmds.is_empty() => {
                 let dialect = shown.dialect;
-                let run = move |state: &mut State| clients::run_binding(state, id, &cmds, dialect);
-                clients::in_input_order(state, id, Box::new(run));
-                Routed::Consumed
+                match shown.event.take() {
+                    Some(event) => {
+                        let run = move |state: &mut State| {
+                            clients::run_commands_for(
+                                state,
+                                id,
+                                &cmds,
+                                dialect,
+                                false,
+                                Some(event),
+                            );
+                        };
+                        clients::in_input_order(state, id, Box::new(run));
+                        Routed::Consumed
+                    }
+                    None if shown.ctx.client.is_none() => Routed::Command(cmds, dialect),
+                    None => {
+                        let run = move |state: &mut State| {
+                            clients::run_binding(state, id, &cmds, dialect)
+                        };
+                        clients::in_input_order(state, id, Box::new(run));
+                        Routed::Consumed
+                    }
+                }
             }
             Ok(_) => Routed::Consumed,
             Err(e) => {
@@ -870,7 +1163,7 @@ impl Overlay for MenuOverlay {
     fn draw(&self, state: &State, client: ClientId, cx: &OverlayCtx, screen: &mut Screen) {
         match state.menus.open.get(&client) {
             Some(Open::Menu(shown)) => {
-                draw_menu(shown, screen);
+                draw_menu(shown, screen, &styles(state, client, shown));
                 screen.cursor = None;
             }
             Some(Open::Panes(_)) => {
@@ -978,11 +1271,11 @@ enum Align {
 /// cells, as tmux's `format_draw`: `#[...]` directives change the style,
 /// `#[default]` goes back to `base`, and `#[align=...]` puts what follows
 /// at the left, the centre or the right. Nothing is drawn past `width`.
-fn format_draw(screen: &mut Screen, (x, y): (usize, usize), width: usize, text: &str, base: &str) {
+fn format_draw(screen: &mut Screen, (x, y): (usize, usize), width: usize, text: &str, base: Style) {
     let mut parts: [Vec<(char, Style)>; 3] = Default::default();
     let mut align = Align::Left;
     let mut directives = String::new();
-    let mut style = status::parse_style(base);
+    let mut style = base;
     for token in tokens(text) {
         match token {
             Token::Char(c) => parts[align as usize].push((c, style)),
@@ -999,7 +1292,8 @@ fn format_draw(screen: &mut Screen, (x, y): (usize, usize), width: usize, text: 
                         }
                     }
                 }
-                style = status::parse_style(&format!("{base}{directives}"));
+                style = base;
+                status::apply_style_directive(&mut style, directives.trim_start_matches(','));
             }
         }
     }
@@ -1023,49 +1317,106 @@ fn format_draw(screen: &mut Screen, (x, y): (usize, usize), width: usize, text: 
     }
 }
 
+/// The three styles and the border lines a menu is drawn with.
+struct Styles {
+    menu: Style,
+    selected: Style,
+    border: Style,
+    lines: Option<Lines>,
+}
+
+/// The styles of `shown` now, as tmux's `menu_reapply_styles` builds them:
+/// the options of the client's current window (formats expanded), over
+/// which `-s -H -S` replace only the colours; `-b` over `menu-border-lines`.
+fn styles(state: &State, client: ClientId, shown: &Shown) -> Styles {
+    use crate::server::dispatch::options::Owner;
+    let session = state.clients.get(&client).map(|c| c.session);
+    let window = session
+        .and_then(|s| state.model.sessions.get(&s))
+        .map(|s| s.active);
+    let owners: Vec<Owner> = window
+        .map(Owner::Window)
+        .into_iter()
+        .chain(session.map(Owner::Session))
+        .collect();
+    let option = |name: &str| {
+        state
+            .model
+            .options
+            .lookup(name, &owners)
+            .unwrap_or_default()
+    };
+    let style = |name: &str, over: &Option<String>| {
+        let mut st = status::parse_style(&prompt::expand_command(state, &shown.ctx, option(name)));
+        if let Some(over) = over {
+            let over = status::parse_style(over);
+            (st.fg, st.bg) = (over.fg, over.bg);
+        }
+        st
+    };
+    Styles {
+        menu: style("menu-style", &shown.look.style),
+        selected: style("menu-selected-style", &shown.look.selected),
+        border: style("menu-border-style", &shown.look.border),
+        lines: shown.look.lines.unwrap_or_else(|| {
+            Lines::parse(option("menu-border-lines")).unwrap_or(Some(Lines::Single))
+        }),
+    }
+}
+
 /// Draws a menu as tmux's `screen_write_menu` does: the box in
 /// `menu-border-style` with the title in its top edge, each item's row
 /// filled in `menu-style` (or `menu-selected-style` when chosen), its label
 /// after one blank, a disabled one dim, and a separator as a line across
-/// the box.
-fn draw_menu(menu: &Shown, screen: &mut Screen) {
+/// the box. `menu-border-lines` `none` still takes the cells, as blanks.
+fn draw_menu(menu: &Shown, screen: &mut Screen, st: &Styles) {
     let (x, y) = (usize::from(menu.at.0), usize::from(menu.at.1));
     let (w, h) = (menu.width + 4, menu.rows.len() + 2);
-    let border = Style::default();
+    let border = &st.border;
+    let ([tl, tr, bl, br, horizontal, vertical], left_join, right_join) = match st.lines {
+        Some(lines) => (lines.chars(), lines.joins().0, lines.joins().1),
+        None => ([' '; 6], ' ', ' '),
+    };
     for i in 0..w {
         let (top, bottom) = match i {
-            0 => ('┌', '└'),
-            i if i + 1 == w => ('┐', '┘'),
-            _ => ('─', '─'),
+            0 => (tl, bl),
+            i if i + 1 == w => (tr, br),
+            _ => (horizontal, horizontal),
         };
-        put(screen, (x + i, y), top, &border);
-        put(screen, (x + i, y + h - 1), bottom, &border);
+        put(screen, (x + i, y), top, border);
+        put(screen, (x + i, y + h - 1), bottom, border);
     }
     for j in 1..h - 1 {
-        put(screen, (x, y + j), '│', &border);
-        put(screen, (x + w - 1, y + j), '│', &border);
+        put(screen, (x, y + j), vertical, border);
+        put(screen, (x + w - 1, y + j), vertical, border);
     }
     if let Some(title) = &menu.title {
-        format_draw(screen, (x + 2, y), w - 4, title, "");
+        format_draw(screen, (x + 2, y), w - 4, title, *border);
     }
     for (i, row) in menu.rows.iter().enumerate() {
         let row_y = y + 1 + i;
         let Some(row) = row else {
-            put(screen, (x, row_y), '├', &border);
+            put(screen, (x, row_y), left_join, border);
             for col in 1..w - 1 {
-                put(screen, (x + col, row_y), '─', &border);
+                put(screen, (x + col, row_y), horizontal, border);
             }
-            put(screen, (x + w - 1, row_y), '┤', &border);
+            put(screen, (x + w - 1, row_y), right_join, border);
             continue;
         };
-        let chosen = menu.choice == Some(i) && row.enabled();
-        let base = if chosen { SELECTED_STYLE } else { "" };
-        let fill = status::parse_style(base);
+        let base = if menu.choice == Some(i) && row.enabled() {
+            st.selected
+        } else {
+            st.menu
+        };
         for col in 1..w - 1 {
-            put(screen, (x + col, row_y), ' ', &fill);
+            put(screen, (x + col, row_y), ' ', &base);
         }
         match row.label.strip_prefix('-') {
-            Some(label) => format_draw(screen, (x + 2, row_y), menu.width, label, "dim"),
+            Some(label) => {
+                let mut dim = base;
+                dim.attrs |= CellFlags::DIM;
+                format_draw(screen, (x + 2, row_y), menu.width, label, dim);
+            }
             None => format_draw(screen, (x + 2, row_y), menu.width, &row.label, base),
         }
     }
@@ -1162,6 +1513,15 @@ fn draw_panes(labels: &[PaneLabel], screen: &mut Screen, style: &str, active: &s
 /// already takes from the config, so there is nothing more to apply.
 pub fn configure(_state: &mut State, _config: &Resolved) {}
 
+/// Closes whatever menu or pane labels client `id` has open (tmux's
+/// `server_client_clear_overlay`, for the menus).
+pub fn clear(state: &mut State, id: ClientId) {
+    if state.menus.close(id).is_some() {
+        clients::mark_dirty(state, id);
+        clients::sync_mouse_modes(state);
+    }
+}
+
 /// Client `id` went away: its menu closes, and a CLI waiting on it gets
 /// an empty success.
 pub fn client_gone(state: &mut State, id: ClientId) {
@@ -1222,13 +1582,26 @@ mod tests {
             choice: None,
             dialect: Dialect::Grofe,
             ctx: crate::server::test_ctx(),
+            look: Look::default(),
+            no_mouse: true,
+            event: None,
         };
         s.edge(false);
         s
     }
 
     fn selected() -> Style {
-        status::parse_style(SELECTED_STYLE)
+        status::parse_style("bg=yellow,fg=black")
+    }
+
+    /// tmux's default menu styles and `single` lines.
+    fn defaults() -> Styles {
+        Styles {
+            menu: Style::default(),
+            selected: selected(),
+            border: Style::default(),
+            lines: Some(Lines::Single),
+        }
     }
 
     /// Recorded on tmux 3.7b, 80x24: `display-menu -T Title -x C -y C First
@@ -1271,7 +1644,7 @@ mod tests {
             80,
         );
         assert_eq!(menu.rows.len(), rows.len());
-        draw_menu(&menu, &mut s);
+        draw_menu(&menu, &mut s, &defaults());
         let got = text_rows(&s);
         let want = [
             "                           ┌─Title────────────────┐",
@@ -1301,7 +1674,7 @@ mod tests {
         menu.key(&parse_key("Down").expect("key"));
         assert_eq!(menu.choice, Some(2));
         let mut s = screen(80, 24);
-        draw_menu(&menu, &mut s);
+        draw_menu(&menu, &mut s, &defaults());
         assert_eq!(at(&s, 28, 10).bg, selected().bg);
         assert_eq!(at(&s, 28, 8).bg, Style::default().bg);
     }
@@ -1326,7 +1699,7 @@ mod tests {
         ];
         let mut m = shown(None, items, (2, 2), 80);
         let mut s = screen(80, 24);
-        draw_menu(&m, &mut s);
+        draw_menu(&m, &mut s, &defaults());
         let got = text_rows(&s);
         assert_eq!(
             got[2..12],
@@ -1410,7 +1783,7 @@ mod tests {
             let key = if label.contains("(C-x)") { "C-x" } else { "a" };
             let m = shown(Some(title), vec![item(label_only, key)], (0, 0), 80);
             let mut s = screen(40, 5);
-            draw_menu(&m, &mut s);
+            draw_menu(&m, &mut s, &defaults());
             assert_eq!(text_rows(&s)[0], want, "{title}");
         }
     }
@@ -1430,7 +1803,7 @@ mod tests {
             80,
         );
         let mut s = screen(80, 24);
-        draw_menu(&m, &mut s);
+        draw_menu(&m, &mut s, &defaults());
         assert_eq!(text_rows(&s)[8], "┌─Red x─────────┐");
         let red = status::parse_style("fg=red").fg;
         let blue = status::parse_style("fg=blue").fg;
@@ -1455,7 +1828,7 @@ mod tests {
         ];
         let m = shown(None, items, (0, 7), 20);
         let mut s = screen(20, 24);
-        draw_menu(&m, &mut s);
+        draw_menu(&m, &mut s, &defaults());
         assert_eq!(
             text_rows(&s)[7..12],
             [
@@ -1507,11 +1880,12 @@ mod tests {
         assert_eq!(place((Centre, Centre), (81, 3), (80, 24), pane0), None);
         // TC.10, recorded on tmux 3.7b (`-x M -y M`, an 11 by 4 box): the
         // box is centred on the pointer's column, its top on its row, and
-        // kept inside the client.
+        // kept inside the client; near the bottom `popup_mouse_top` is at
+        // most the last row, then the height less (`b3wpc/menu-bound-mouse`).
         let m = |x, y| place((Pointer(x), Pointer(y)), (11, 4), (80, 24), pane0);
         assert_eq!(m(20, 8), Some((15, 8)));
         assert_eq!(m(69, 2), Some((64, 2)));
-        assert_eq!(m(4, 21), Some((0, 20)));
+        assert_eq!(m(4, 21), Some((0, 19)));
         assert_eq!(m(39, 0), Some((34, 0)));
         assert_eq!(m(1, 11), Some((0, 11)));
     }
@@ -1656,7 +2030,7 @@ mod tests {
             80,
         );
         let mut s = screen(40, 5);
-        draw_menu(&m, &mut s);
+        draw_menu(&m, &mut s, &defaults());
         for c in &s.cells {
             assert!(!c.c.is_control(), "{c:?}");
             assert!(c.zerowidth.iter().all(|z| !z.is_control()), "{c:?}");
@@ -1674,5 +2048,222 @@ mod tests {
         assert_eq!(trim_keep_right("#[fg=red]abcdef", 2), "#[fg=red]ef");
         assert_eq!(trim_keep_right("ab", 5), "ab");
         assert_eq!(format_width("#[fg=red]ab#[default]日"), 4);
+    }
+
+    /// The menu of `b3wpc/menu-mouse`: 13 wide at (10, 3), Alpha on row 4,
+    /// Beta on 5, a separator on 6, Gamma on 7, a disabled row on 8.
+    fn mouse_menu(stay_open: bool) -> Shown {
+        let mut m = shown(
+            Some("Menu"),
+            vec![
+                item("Alpha", "a"),
+                item("Beta", "b"),
+                sep(),
+                item("Gamma", "g"),
+                item("-Dim", "d"),
+            ],
+            (10, 3),
+            80,
+        );
+        m.no_mouse = false;
+        m.choice = None;
+        m.look.stay_open = stay_open;
+        m
+    }
+
+    fn report(kind: MouseKind, col: u16, row: u16) -> Mouse {
+        Mouse {
+            kind,
+            col,
+            row,
+            mods: Default::default(),
+        }
+    }
+
+    /// Recorded on tmux 3.7b (`b3wpc/menu-mouse`): a drag highlights, a
+    /// release chooses the row chosen last, and one with none closes.
+    #[test]
+    fn a_release_chooses_the_row_chosen_last() {
+        let (left, down) = (MouseButton::Left, MouseKind::Down(MouseButton::Left));
+        let mut m = mouse_menu(false);
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Drag(left), 12, 5)),
+            Step::Keep
+        ));
+        assert_eq!(m.choice, Some(1));
+        // The release is wherever; the row is the one chosen last.
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Up(left), 30, 9)),
+            Step::Close
+        ));
+        let mut m = mouse_menu(false);
+        m.mouse(&report(down, 12, 5));
+        assert_eq!(m.choice, Some(1));
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Up(left), 12, 8)),
+            Step::Choose(1)
+        ));
+        // Motion with no button is a release too: with no row chosen it
+        // closes the menu.
+        let mut m = mouse_menu(false);
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Move, 12, 5)),
+            Step::Close
+        ));
+    }
+
+    /// One column right of the box is inside; two is outside. The top
+    /// and bottom borders are outside.
+    #[test]
+    fn the_inside_is_tmuxs_off_by_one() {
+        let drag = MouseKind::Drag(MouseButton::Left);
+        let mut m = mouse_menu(false);
+        m.mouse(&report(drag, 23, 5));
+        assert_eq!(m.choice, Some(1));
+        m.mouse(&report(drag, 24, 5));
+        assert_eq!(m.choice, None);
+        m.mouse(&report(drag, 12, 5));
+        m.mouse(&report(drag, 12, 3));
+        assert_eq!(m.choice, None);
+        m.mouse(&report(drag, 12, 5));
+        m.mouse(&report(drag, 12, 9));
+        assert_eq!(m.choice, None);
+    }
+
+    /// A separator or a disabled row chosen closes the menu, or with
+    /// `-O` leaves it open.
+    #[test]
+    fn a_row_that_cannot_be_chosen_closes_a_menu_unless_it_stays_open() {
+        for (stay, want_close) in [(false, true), (true, false)] {
+            for row in [6, 8] {
+                let mut m = mouse_menu(stay);
+                m.choice = Some(row - 4);
+                assert_eq!(
+                    matches!(m.chosen(), Step::Close),
+                    want_close,
+                    "{row} {stay}"
+                );
+                assert_eq!(
+                    matches!(m.chosen(), Step::Keep),
+                    !want_close,
+                    "{row} {stay}"
+                );
+            }
+        }
+    }
+
+    /// `-O`: a press or release chooses, the wheel and a drag only
+    /// highlight, and a press outside closes.
+    #[test]
+    fn a_stay_open_menu_chooses_on_a_press_or_release() {
+        let (left, down, up) = (
+            MouseButton::Left,
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        );
+        let mut m = mouse_menu(true);
+        // No row chosen yet: a press closes it.
+        assert!(matches!(m.mouse(&report(down, 12, 5)), Step::Close));
+        let mut m = mouse_menu(true);
+        m.mouse(&report(MouseKind::Move, 12, 5));
+        assert_eq!(m.choice, Some(1));
+        assert!(matches!(m.mouse(&report(down, 12, 5)), Step::Choose(1)));
+        assert!(matches!(m.mouse(&report(up, 12, 5)), Step::Choose(1)));
+        assert!(matches!(
+            m.mouse(&report(MouseKind::WheelUp, 12, 4)),
+            Step::Keep
+        ));
+        assert_eq!(m.choice, Some(0));
+        m.mouse(&report(MouseKind::Drag(left), 12, 7));
+        assert_eq!(m.choice, Some(3));
+        // Outside: motion and a release leave it open and clear the row,
+        // a press closes it.
+        assert!(matches!(m.mouse(&report(up, 50, 5)), Step::Keep));
+        assert_eq!(m.choice, None);
+        assert!(matches!(m.mouse(&report(down, 50, 5)), Step::Close));
+    }
+
+    /// A menu no mouse event opened takes no press of button 1, and any
+    /// other report closes it.
+    #[test]
+    fn a_menu_without_the_mouse_closes_on_any_other_report() {
+        let mut m = mouse_menu(false);
+        m.no_mouse = true;
+        let left = MouseButton::Left;
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Down(left), 12, 5)),
+            Step::Keep
+        ));
+        assert!(matches!(
+            m.mouse(&report(MouseKind::Drag(left), 12, 5)),
+            Step::Keep
+        ));
+        for kind in [
+            MouseKind::Up(left),
+            MouseKind::Move,
+            MouseKind::WheelUp,
+            MouseKind::Down(MouseButton::Right),
+        ] {
+            assert!(
+                matches!(m.mouse(&report(kind, 12, 5)), Step::Close),
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// Recorded (`b3wpc/menu-flags`): `-C` past the end takes the last row
+    /// that can be chosen, a separator the next row, and a disabled row
+    /// wraps.
+    #[test]
+    fn the_starting_choice_skips_rows_that_cannot_be_chosen() {
+        let m = mouse_menu(false);
+        assert_eq!(m.starting_choice(Start::First), Some(0));
+        assert_eq!(m.starting_choice(Start::At(1)), Some(1));
+        assert_eq!(m.starting_choice(Start::At(2)), Some(3));
+        assert_eq!(m.starting_choice(Start::At(4)), Some(0));
+        assert_eq!(m.starting_choice(Start::At(99)), Some(3));
+        assert_eq!(m.starting_choice(Start::None), None);
+    }
+
+    /// Recorded: the pane menu of a click on the second last row opens one
+    /// above the last row, not pushed down over the status line.
+    #[test]
+    fn a_menu_at_the_pointer_follows_popup_mouse_top() {
+        let full = Rect {
+            x: 0,
+            y: 0,
+            cols: 60,
+            rows: 14,
+        };
+        // tmux: `popup_mouse_top` is at most the last row, then `h` less.
+        let at = place(
+            (Position::Pointer(20), Position::Pointer(5)),
+            (22, 11),
+            (60, 15),
+            full,
+        );
+        assert_eq!(at, Some((9, 3)));
+        let at = place(
+            (Position::Pointer(20), Position::Pointer(2)),
+            (22, 11),
+            (60, 15),
+            full,
+        );
+        assert_eq!(at, Some((9, 2)));
+    }
+
+    #[test]
+    fn a_template_takes_the_pane_id_once() {
+        assert_eq!(
+            replace_template("select-pane -t \"%%%\"", "%3"),
+            "select-pane -t \"%3\""
+        );
+        assert_eq!(
+            replace_template("set -g @p got-%%", "%1"),
+            "set -g @p got-%1"
+        );
+        assert_eq!(replace_template("a %1 b %1 c %%", "%2"), "a %2 b %2 c %2");
+        assert_eq!(replace_template("a %% b %%", "%2"), "a %2 b %%");
+        assert_eq!(replace_template("no mark", "%2"), "no mark");
     }
 }

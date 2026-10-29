@@ -1,0 +1,197 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ new-window -d -n second cat
+? 0
+client 60x15 attach -t main
+keys Escape '[<2;21;6M'
+screen Horizontal
+|
+|
+|
+|         ┌────────1 (%0)────────┐
+|         │ Horizontal Split (h) │
+|         │ Vertical Split   (v) │
+|         ├──────────────────────┤
+|         │ Swap Marked          │
+|         ├──────────────────────┤
+|         │ Kill             (X) │
+|         │ Respawn          (R) │
+|         │ Mark             (m) │
+|         │ Zoom                 │
+|         └──────────────────────┘
+| [main] 1:first* 2:second
+keys Escape '[<2;21;6m'
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second
+keys Escape '[<2;21;6M'
+screen Horizontal
+|
+|
+|
+|         ┌────────1 (%0)────────┐
+|         │ Horizontal Split (h) │
+|         │ Vertical Split   (v) │
+|         ├──────────────────────┤
+|         │ Swap Marked          │
+|         ├──────────────────────┤
+|         │ Kill             (X) │
+|         │ Respawn          (R) │
+|         │ Mark             (m) │
+|         │ Zoom                 │
+|         └──────────────────────┘
+| [main] 1:first* 2:second
+keys Escape '[<34;21;11M'
+styles 2-13
+~ 7 10-13 fg=default bg=default dim
+~ 7 15-20 fg=default bg=default dim
+~ 10 9-9 fg=default bg=yellow
+~ 10 10-16 fg=black bg=yellow
+~ 10 17-26 fg=default bg=yellow
+~ 10 27-29 fg=black bg=yellow
+~ 10 30-30 fg=default bg=yellow
+~ 12 10-13 fg=default bg=default dim
+keys Escape '[<2;21;11m'
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second
+$ display-message -p -t main '#{pane_marked}'
+0
+? 0
+keys Escape '[<2;10;15M'
+screen Swap
+|
+|        ┌─────1:first────┐
+|        │ Swap Left  (l) │
+|        │ Swap Right (r) │
+|        │ Swap Marked    │
+|        ├────────────────┤
+|        │ Kill       (X) │
+|        │ Respawn    (R) │
+|        │ Mark       (m) │
+|        │ Rename     (n) │
+|        ├────────────────┤
+|        │ New After  (w) │
+|        │ New At End (W) │
+|        └────────────────┘
+| [main] 1:first* 2:second
+keys Escape '[<2;10;15m'
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second
+keys Escape '[<10;21;6M'
+screen Horizontal
+|
+|
+|
+|         ┌────────1 (%0)────────┐
+|         │ Horizontal Split (h) │
+|         │ Vertical Split   (v) │
+|         ├──────────────────────┤
+|         │ Swap Marked          │
+|         ├──────────────────────┤
+|         │ Kill             (X) │
+|         │ Respawn          (R) │
+|         │ Mark             (m) │
+|         │ Zoom                 │
+|         └──────────────────────┘
+| [main] 1:first* 2:second
+keys Escape '[<10;21;6m'
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second
+keys Escape '[<2;3;15M'
+screen Renumber
+|
+|
+|
+| ┌──────main───────┐
+| │ Next        (n) │
+| │ Previous    (p) │
+| ├─────────────────┤
+| │ Renumber    (N) │
+| │ Rename      (r) │
+| │ Detach      (d) │
+| ├─────────────────┤
+| │ New Session (s) │
+| │ New Window  (w) │
+| └─────────────────┘
+| [main] 1:first* 2:second
+keys Escape '[<2;3;15m'
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:second
+keys Escape '[<0;20;15M'
+keys Escape '[<0;20;15m'
+$ display -p -t main '#{window_index}'
+2
+? 0

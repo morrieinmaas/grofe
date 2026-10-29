@@ -1,0 +1,29 @@
+# B3 WP-C: an activity alert shows in the status line (window-status-activity-style,
+# reverse by default) and, with visual-activity, as a message.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g display-time 60000
+$ new-window -d -n act 'sleep 1; echo hi; sleep 30'
+$ set -w -t main:act monitor-activity on
+client 60x15 attach -t main
+$ run-shell 'sleep 2'
+screen 2:act
+styles 14-14
+$ list-windows -t main -F "#{window_index} #{window_activity_flag} #{window_silence_flag} #{window_bell_flag}"
+$ set -w -t main:act window-status-activity-style 'fg=red,bold'
+styles 14-14
+$ set -w -t main:act window-status-activity-style default
+styles 14-14
+$ select-window -t main:2
+$ select-window -t main:1
+styles 14-14
+# visual-activity on: a message, and no bell. A new alert after the window is selected.
+$ set -g visual-activity on
+$ send-keys -t main:2 x Enter
+$ run-shell 'sleep 0.5'
+screen Activity
+$ set -g visual-activity both
+$ send-keys -t main:2 y Enter
+$ run-shell 'sleep 0.5'
+screen window 2

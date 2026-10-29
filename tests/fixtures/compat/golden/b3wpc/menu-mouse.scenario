@@ -1,0 +1,151 @@
+# B3 WP-C: the mouse in display-menu (tmux 3.7b menu_key_cb). The menu is
+# 13 wide at column 10, its items on rows 4 (Alpha), 5 (Beta), 6 (a
+# separator), 7 (Gamma) and 8 (-Dim); a mouse report is 1-based. -M takes
+# the mouse with no mouse event behind the menu, so no row starts chosen.
+# A release is any report with the low button bits 3, so motion with no
+# button is one; a drag (button held) is not.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g @r none
+client 60x15 attach -t main
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+# A drag highlights the row under it; the separator and the disabled row show nothing.
+keys Escape '[<32;13;6M'
+styles 3-9
+keys Escape '[<32;13;7M'
+styles 3-9
+keys Escape '[<32;13;8M'
+styles 3-9
+keys Escape '[<32;13;9M'
+styles 3-9
+# One column right of the box is still inside, as tmux checks it; two is outside.
+keys Escape '[<32;24;6M'
+styles 3-9
+keys Escape '[<32;25;6M'
+styles 3-9
+# The wheel highlights inside and clears the row outside.
+keys Escape '[<64;13;6M'
+styles 3-9
+keys Escape '[<65;45;5M'
+styles 3-9
+# Motion with no button is a release: it chooses the row chosen last.
+keys Escape '[<32;13;8M'
+keys Escape '[<35;13;6M'
+$ show -gv @r
+screen
+# Motion with no row chosen closes the menu.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<35;13;6M'
+screen
+$ show -gv @r
+# A press only highlights; the release over an item chooses it.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;6M'
+styles 3-9
+keys Escape '[<0;13;6m'
+$ show -gv @r
+screen
+# The release chooses the row chosen last, wherever it is.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;5M'
+keys Escape '[<0;13;8m'
+$ show -gv @r
+screen
+# A release with no row chosen closes the menu.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;5m'
+$ show -gv @r
+screen
+# A release over the separator or the disabled row closes with no command.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;7M'
+keys Escape '[<0;13;7m'
+$ show -gv @r
+screen
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;9M'
+keys Escape '[<0;13;9m'
+$ show -gv @r
+screen
+# A press outside clears the row and leaves the menu open, the release outside closes it.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;6M'
+keys Escape '[<0;45;5M'
+styles 3-9
+keys Escape '[<0;45;5m'
+$ show -gv @r
+screen
+# Button 2 and 3 presses behave as button 1 does.
+$& display-menu -c {client} -M -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<2;13;8M'
+styles 3-9
+keys Escape '[<2;13;8m'
+$ show -gv @r
+# -O: a press with no row chosen closes the menu.
+$& display-menu -c {client} -M -O -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<0;13;6M'
+$ show -gv @r
+screen
+# -O: motion highlights, so the press that follows chooses the row.
+$& display-menu -c {client} -M -O -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<35;13;6M'
+styles 3-9
+keys Escape '[<35;45;5M'
+styles 3-9
+keys Escape '[<0;45;5m'
+screen Menu
+keys Escape '[<35;13;6M'
+keys Escape '[<0;13;6M'
+$ show -gv @r
+screen
+keys Escape '[<0;13;8m'
+screen
+# -O: a release over the highlighted row chooses it too.
+$& display-menu -c {client} -M -O -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<35;13;5M'
+keys Escape '[<0;13;5m'
+$ show -gv @r
+screen
+# -O: a press outside closes it, on the separator or the disabled row it stays open.
+$& display-menu -c {client} -M -O -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<35;13;7M'
+keys Escape '[<0;13;7M'
+screen Menu
+keys Escape '[<35;13;9M'
+keys Escape '[<0;13;9M'
+screen Menu
+keys Escape '[<0;45;5M'
+screen
+# Without -M the menu a CLI opens takes no press of button 1, but any other
+# report closes it, and its first row starts chosen.
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+styles 3-9 Menu
+keys Escape '[<0;13;6M'
+styles 3-9
+keys Escape '[<32;13;6M'
+styles 3-9
+keys Escape '[<0;13;6m'
+screen
+$ show -gv @r
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<64;13;6M'
+screen
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' Beta b 'set -g @r beta' '' Gamma g 'set -g @r gamma' -Dim d 'set -g @r dim'
+screen Menu
+keys Escape '[<2;13;6M'
+screen

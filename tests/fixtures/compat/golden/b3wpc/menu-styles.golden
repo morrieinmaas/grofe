@@ -1,0 +1,185 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+client 60x15 attach -t main
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+~ 6 11-11 fg=default bg=yellow
+~ 6 12-16 fg=black bg=yellow
+~ 6 17-17 fg=default bg=yellow
+~ 6 18-20 fg=black bg=yellow
+~ 6 21-21 fg=default bg=yellow
+keys q
+$ set -g menu-style 'fg=green,bg=black'
+? 0
+$ set -g menu-selected-style 'fg=white,bg=red,bold'
+? 0
+$ set -g menu-border-style 'fg=cyan'
+? 0
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+~ 5 10-22 fg=cyan bg=default
+~ 6 10-10 fg=cyan bg=default
+~ 6 11-11 fg=default bg=red
+~ 6 12-16 fg=white bg=red bold
+~ 6 17-17 fg=default bg=red
+~ 6 18-20 fg=white bg=red bold
+~ 6 21-21 fg=default bg=red
+~ 6 22-22 fg=cyan bg=default
+~ 7 10-22 fg=cyan bg=default
+keys Down
+styles 3-7
+~ 5 10-22 fg=cyan bg=default
+~ 6 10-10 fg=cyan bg=default
+~ 6 11-11 fg=default bg=black
+~ 6 12-16 fg=green bg=black
+~ 6 17-17 fg=default bg=black
+~ 6 18-20 fg=green bg=black
+~ 6 21-21 fg=default bg=black
+~ 6 22-22 fg=cyan bg=default
+~ 7 10-22 fg=cyan bg=default
+keys q
+$& display-menu -c {client} -s 'bg=yellow,bold' -S 'fg=magenta,bg=blue' -H 'fg=black,bg=white,underscore' -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' -Disabled b 'set -g @r beta'
+styles 3-7 Menu
+~ 5 10-22 fg=magenta bg=blue
+~ 6 10-10 fg=magenta bg=blue
+~ 6 11-11 fg=default bg=white
+~ 6 12-16 fg=black bg=white bold
+~ 6 17-17 fg=default bg=white
+~ 6 18-20 fg=black bg=white bold
+~ 6 21-21 fg=default bg=white
+~ 6 22-22 fg=magenta bg=blue
+~ 7 10-22 fg=magenta bg=blue
+keys q
+$ set -g menu-style default
+? 0
+$ set -g menu-selected-style default
+? 0
+$ set -g menu-border-style default
+? 0
+$ set -g menu-border-lines double
+? 0
+$& display-menu -c {client} -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|           ╔═Menu══════╗
+|           ║ Alpha (a) ║
+|           ╠═══════════╣
+|           ║ Beta  (b) ║
+|           ╚═══════════╝
+|
+|
+|
+|
+| [main] 1:first*
+keys q
+$& display-menu -c {client} -b heavy -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|           ┏━Menu━━━━━━┓
+|           ┃ Alpha (a) ┃
+|           ┣━━━━━━━━━━━┫
+|           ┃ Beta  (b) ┃
+|           ┗━━━━━━━━━━━┛
+|
+|
+|
+|
+| [main] 1:first*
+keys q
+$& display-menu -c {client} -b rounded -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|           ╭─Menu──────╮
+|           │ Alpha (a) │
+|           ├───────────┤
+|           │ Beta  (b) │
+|           ╰───────────╯
+|
+|
+|
+|
+| [main] 1:first*
+keys q
+$& display-menu -c {client} -b simple -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|           +-Menu------+
+|           | Alpha (a) |
+|           +-----------+
+|           | Beta  (b) |
+|           +-----------+
+|
+|
+|
+|
+| [main] 1:first*
+keys q
+$& display-menu -c {client} -b padded -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|             Menu
+|             Alpha (a)
+|
+|             Beta  (b)
+|
+|
+|
+|
+|
+| [main] 1:first*
+keys q
+$& display-menu -c {client} -b none -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+screen Menu
+|
+|
+|
+|
+|
+|             Menu
+|             Alpha (a)
+|
+|             Beta  (b)
+|
+|
+|
+|
+|
+| [main] 1:first*
+styles 3-7
+keys q
+$ set -g menu-border-style 'fg=red,bg=blue'
+? 0
+$& display-menu -c {client} -b single -x 10 -y 10 -T Menu Alpha a 'set -g @r alpha' '' Beta b 'set -g @r beta'
+styles 3-7 Menu
+~ 5 10-22 fg=red bg=blue
+~ 6 10-10 fg=red bg=blue
+~ 6 22-22 fg=red bg=blue
+~ 7 10-22 fg=red bg=blue
+keys q
+$ display-menu -c {client} -b nothing -x 10 -y 10 A a ''
+! menu-border-lines unknown value: nothing
+? 1

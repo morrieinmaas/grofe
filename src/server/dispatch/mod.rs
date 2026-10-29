@@ -284,6 +284,9 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             window::list_panes(state, ctx, c)
         }
 
+        // The mouse event of a mouse key's commands goes to its pane.
+        Command::SendKeys(c) if c.mouse => server::mouse::send_current(state),
+
         Command::SplitWindow(_)
         | Command::KillPane(_)
         | Command::SelectPane(_)
@@ -407,6 +410,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::DeleteBuffer(c) => buffers::delete_buffer(state, ctx, c),
         Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),
         Command::ChooseBuffer(c) => buffers::choose_buffer(state, ctx, c),
+        Command::CustomizeMode(c) => client::customize_mode(state, ctx, c),
         // M5: copy mode (TM.1).
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
     }

@@ -1,0 +1,56 @@
+# B3 WP-C: display-panes -d -b -N -t and the template.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g @p none
+$ split-window -h -l 25 -t main cat
+$ select-pane -t main:1.1
+client 60x15 attach -t main
+# A template: %% is the chosen pane's id.
+$& display-panes -t {client} -d 0 'set -g @p got-%%'
+screen 34x14
+keys 2
+$ show -gv @p
+$ display-message -p -t main '#{pane_id}'
+# The default template selects the pane.
+$& display-panes -t {client} -d 0
+screen 34x14
+keys 1
+$ display-message -p -t main '#{pane_id}'
+# -b returns at once, the labels stay until a key.
+$ display-panes -b -t {client} -d 0
+screen 34x14
+keys 2
+$ display-message -p -t main '#{pane_id}'
+# -N: no key is the labels'; the key closes them and goes to the pane.
+$& display-panes -N -t {client} -d 0 'set -g @p never'
+screen 34x14
+keys 1
+screen
+$ show -gv @p
+$ capture-pane -p -t main:1.2
+# -d is milliseconds; the labels close by themselves.
+$ display-panes -b -t {client} -d 1500
+screen 34x14
+$ run-shell 'sleep 2'
+screen
+# A key that is no pane closes the labels and goes on as usual.
+$ display-panes -b -t {client} -d 0
+screen 34x14
+keys x
+screen
+# A zoomed window is unzoomed by choosing a pane.
+$ resize-pane -Z -t main:1.1
+$& display-panes -t {client} -d 0
+screen
+keys 2
+$ display-message -p -t main '#{window_zoomed_flag} #{pane_id}'
+# The template runs in its own right: %1 style numbers, no pane at the index.
+$& display-panes -t {client} -d 0 'set -g @p [%1]'
+screen 34x14
+keys 9
+$ show -gv @p
+screen
+$ display-panes -d x
+$ display-panes -t nosuch
+$ display-panes a b

@@ -1,6 +1,6 @@
-//! Mouse: bindable mouse keys and grofe's built-in mouse model (TC.10,
-//! spec §4.5 bindings row), forwarding to panes that asked for the mouse
-//! (T3.2), and the mouse in copy mode (TM.6, spec §4.11 "Mouse").
+//! Mouse: bindable mouse keys (TC.10, spec §4.5 bindings row), forwarding
+//! to panes that asked for the mouse (T3.2), and the mouse in copy mode
+//! (TM.6, spec §4.11 "Mouse").
 //!
 //! Every report becomes a mouse key, as tmux 3.7b's
 //! `server_client_check_mouse` makes one (recorded on a private server):
@@ -22,52 +22,37 @@
 //! or on the status line the clicked window's active pane. While it runs,
 //! `#{mouse_status_range}` and the other mouse formats ([`format_var`])
 //! describe the event, and a bare `=` target (M36-R3) means the pointer's
-//! target ([`resolve_targets`]). An unbound key gets the built-in model,
-//! which replaces tmux's stock mouse bindings:
-//! - a press focuses the pane under the pointer (`select-pane -t =`) and,
-//!   if that pane asked for the mouse, is forwarded too;
-//! - the wheel goes to a pane that asked for the mouse; on the alternate
-//!   screen without mouse mode it does nothing (recorded: tmux sends such a
-//!   pane nothing, mode 1007 or not); otherwise wheel up is `copy-mode -e`,
-//!   tmux's `WheelUpPane` row: its condition is
-//!   `#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}`, and in copy
-//!   mode `copy-mode-vi`'s own `WheelUpPane` scrolls;
-//! - a drag with the left button over a pane that is in no mode and did not
-//!   ask for the mouse is `copy-mode -M`, and a double or triple click there
-//!   is `copy-mode -H`, `select-word` or `select-line`, then
-//!   `copy-pipe-and-cancel` (tmux's `MouseDrag1Pane`, `DoubleClick1Pane`
-//!   and `TripleClick1Pane` rows), and a middle click there also pastes
-//!   the newest buffer (`paste-buffer -p`, tmux's `MouseDown2Pane`);
-//! - `MouseDown1Status` switches to the window clicked (`switch-client -t
-//!   =`), and the wheel on the status line goes to the previous or next
-//!   window;
-//! - `MouseDrag1Border` moves the border under the pointer with it until
-//!   the release (`resize-pane -M`), and `MouseDown1Border` clears the
-//!   marked pane (`select-pane -M`);
-//! - with tmux identity, the stock right-click menus (`MouseDown3Status`,
-//!   `MouseDown3StatusLeft`, `MouseDown3Pane`, [`stock_menu`]) and
-//!   `C-MouseDown1Pane` and `C-MouseDown1Status`, which swap the clicked
-//!   pane or window with the client's active one (`swap-pane -s@`);
-//!   the release (`resize-pane -M`);
-//! - a floating pane's border is a border too (recorded,
-//!   `tc_6/float-border-mouse`): `MouseDown1Border` there also focuses and
-//!   raises the pane, as tmux's `select-pane -M` does for a floating pane,
-//!   and `MouseDrag1Border` moves it by its top edge and resizes it by the
-//!   others until the release, as tmux's `resize-pane -M` does
-//!   (`floating.rs`);
-//! - both border behaviours run only through the key table, as in tmux:
-//!   the default `root` table binds tmux's stock rows `MouseDown1Border`
-//!   (`select-pane -M`) and `MouseDrag1Border` (`resize-pane -M`), and a
-//!   binding that is such a row (any modifiers, or no command) is the
-//!   built-in model, as tmux would run that row; any other binding runs
-//!   instead of it; with no binding for the key (unbound, or a modifier
-//!   variant never bound) a border does nothing;
-//! - with `pane-border-status` on, a pane's title line is its border, and
-//!   `MouseDown1Control8` and `Control9`, where the default
-//!   `pane-border-format` puts its `[z]` and `[x]` buttons, zoom the pane
-//!   and ask to kill it (tmux's stock bindings);
-//! - every other mouse event reaches a pane that asked for it, filtered by
-//!   the mode it asked for, and nothing else; a pane in copy mode gets none.
+//! target ([`resolve_targets`]).
+//!
+//! Everything a mouse key does is a binding. tmux 3.7b's stock `root` rows
+//! (`input::TMUX_STOCK_ROOT`, listed by `list-keys -T root` as tmux lists
+//! them) are ordinary default bindings, so `unbind -n MouseDown3Pane` and
+//! `unbind -a -T root` take them away, and the keys they bound then do
+//! what tmux does with an unbound key: the report goes to the pane it is
+//! over, if that pane asked for the mouse (`forward_key`, [`send_event`]).
+//! A server with grofe identity binds the pane, status line, border and
+//! wheel rows; one with tmux identity all of them, the right-button menus,
+//! the Meta and Control variants and the scrollbar rows too. The commands
+//! the rows run are native: `send-keys -M` sends the event on to its pane
+//! ([`send_current`]), `copy-mode -M`, `-e` and `-H` start copy mode as
+//! the key asks, `select-pane -M` clears the mark (and focuses a floating
+//! pane), and `display-menu` opens a menu that keeps the event, so `-t=` in
+//! its items is still the pane clicked.
+//!
+//! The one thing the mouse does itself is the border drag: a binding of
+//! `MouseDrag1Border` that is `resize-pane -M` (the front end has the
+//! command do nothing outside a drag) moves the border under the pointer
+//! with it until the release, or a floating pane by its edges
+//! (`tc_6/float-border-mouse`, [`drag_border_start`]).
+//!
+//! `focus-follows-mouse` makes motion over a pane its window's active pane,
+//! whether or not `mouse` is on ([`focus_follows`]), and has the client
+//! report every motion (`clients::sync_mouse_modes`).
+//!
+//! With `pane-border-status` on, a pane's title line is its border, and
+//! `MouseDown1Control8` and `Control9`, where the default
+//! `pane-border-format` puts its `[z]` and `[x]` buttons, zoom the pane
+//! and ask to kill it (tmux's stock bindings).
 //!
 //! In copy mode, as tmux 3.7b's `window_copy_command`: a `send-keys -X`
 //! that a mouse key runs first moves the cursor to the pointer unless the
@@ -186,6 +171,9 @@ pub struct MouseTarget {
     pub report: (u16, u16),
     /// The event is the wheel, which moves no copy-mode cursor.
     pub wheel: bool,
+    /// The report the key is for (a double click's is its second press),
+    /// which `send-keys -M` sends on to the pane.
+    pub event: Mouse,
 }
 
 impl MouseState {
@@ -452,6 +440,7 @@ fn target(
                 | MouseKind::WheelLeft
                 | MouseKind::WheelRight
         ),
+        event: *m,
     })
 }
 
@@ -598,7 +587,35 @@ fn mouse_on(state: &State, client: ClientId) -> bool {
     ) == Some("on")
 }
 
+/// `focus-follows-mouse`: motion over a pane that is not its window's
+/// active one makes it so (tmux's `server_client_check_mouse`, before the
+/// `mouse` option is looked at).
+fn focus_follows(state: &mut State, client: ClientId, m: &Mouse) {
+    use crate::server::dispatch::options::Owner;
+    let Some(session) = state.clients.get(&client).map(|c| c.session) else {
+        return;
+    };
+    let options = &state.model.options;
+    if options.lookup("focus-follows-mouse", &[Owner::Session(session)]) != Some("on") {
+        return;
+    }
+    let Hit::Pane(pane, ..) = hit(state, client, (m.col, m.row)) else {
+        return;
+    };
+    let Some(window) = client_window(state, client).filter(|w| w.active != pane) else {
+        return;
+    };
+    let window = window.id;
+    if let Some(w) = state.model.windows.get_mut(&window) {
+        w.set_active(pane);
+    }
+    clients::changed(state);
+}
+
 fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
+    if m.kind == MouseKind::Move {
+        focus_follows(state, client, m);
+    }
     if !mouse_on(state, client) {
         // The key tables drop it, as with no mouse at all.
         return None;
@@ -652,12 +669,16 @@ fn fire(
         m.mods,
     );
     match binding(state, client, &key, &target) {
-        Some((cmds, dialect)) if !is_stock_border_row(&key, &cmds) => {
-            run_mouse_binding(state, &target, &cmds, dialect);
+        // tmux's `resize-pane -M` is the border drag of the mouse itself.
+        Some((cmds, _)) if is_border_drag_row(&key, &cmds) => {
+            drag_border_start(state, client, m, &target);
         }
-        // A border is only what its bindings make it: no row, no behaviour.
-        None if place == MousePlace::Border => {}
-        _ => builtin(state, client, m, &key, &target),
+        Some((cmds, dialect)) => run_mouse_binding(state, &target, &cmds, dialect),
+        // Bound nowhere: the report goes to the pane it is over, as
+        // tmux's `forward_key`.
+        None => {
+            send_event(state, client, m, target.pane);
+        }
     }
 }
 
@@ -694,262 +715,110 @@ fn binding(
     Some((b.cmds.clone(), b.dialect))
 }
 
-/// Whether `cmds`, bound to `key` (with any modifiers), is tmux 3.7b's own
-/// stock row for it: `MouseDown1Border` `select-pane -M`,
-/// `MouseDrag1Border` `resize-pane -M` (by name or alias), or no command
-/// at all, which in tmux leaves the stock row bound. The built-in model is
-/// that row ([`builtin`]): a config that copies tmux's defaults binds them,
-/// and the front end's `resize-pane -M` is no command outside a drag.
-fn is_stock_border_row(key: &Key, cmds: &[Vec<String>]) -> bool {
+/// Whether `cmds`, bound to `key` (with any modifiers), is tmux 3.7b's
+/// `MouseDrag1Border` row, `resize-pane -M` (by name or alias), or no
+/// command at all, which in tmux leaves the stock row bound. The drag is
+/// the mouse's own ([`drag_border_start`]): `resize-pane -M` is no command
+/// outside a drag, as the front end has it.
+fn is_border_drag_row(key: &Key, cmds: &[Vec<String>]) -> bool {
     let KeyCode::Mouse(mk) = key.code else {
         return false;
     };
-    if mk.place != MousePlace::Border || mk.button != 1 {
+    if mk.place != MousePlace::Border || mk.button != 1 || mk.action != MouseAction::Drag {
         return false;
     }
-    let verbs: &[&str] = match mk.action {
-        MouseAction::Down => &["select-pane", "selectp"],
-        MouseAction::Drag => &["resize-pane", "resizep"],
-        _ => return false,
-    };
     match cmds {
         [] => true,
         [c] => {
-            matches!(c.as_slice(), [verb, flag] if verbs.contains(&verb.as_str()) && flag == "-M")
+            matches!(c.as_slice(), [verb, flag] if ["resize-pane", "resizep"].contains(&verb.as_str()) && flag == "-M")
         }
         _ => false,
     }
 }
 
-/// grofe's built-in model for an unbound mouse key (the module docs).
-fn builtin(state: &mut State, client: ClientId, m: &Mouse, key: &Key, target: &MouseTarget) {
-    let KeyCode::Mouse(mk) = key.code else {
-        return;
-    };
-    let run = |state: &mut State, argv: &[&str]| {
-        let cmds = vec![argv.iter().map(|s| s.to_string()).collect()];
-        run_mouse_binding(state, target, &cmds, Dialect::Grofe);
-    };
-    match (mk.place, mk.action, mk.button) {
-        (MousePlace::Status, MouseAction::Down, 1) if !ctrl_click(state, key) => {
-            run(state, &["switch-client", "-t", "="]);
-        }
-        (MousePlace::Status, MouseAction::WheelUp, _) => run(state, &["previous-window"]),
-        (MousePlace::Status, MouseAction::WheelDown, _) => run(state, &["next-window"]),
-        (MousePlace::Border, MouseAction::Drag, 1) => {
-            let floating = client_window(state, client)
-                .and_then(|w| w.floating(target.pane))
-                .is_some()
-                .then_some(target.pane);
-            if let Some(p) = state.mouse.pointers.get_mut(&client) {
-                p.drag = Some(Drag {
-                    button: 1,
-                    border: true,
-                });
-                p.float_drag = floating;
+/// A border drag starts (tmux's `resize-pane -M` on `MouseDrag1Border`):
+/// the pointer moves the border under it until the release; a floating
+/// pane is focused and raised first, and moved or resized by its edges.
+fn drag_border_start(state: &mut State, client: ClientId, m: &Mouse, target: &MouseTarget) {
+    let floating = client_window(state, client)
+        .and_then(|w| w.floating(target.pane))
+        .is_some()
+        .then_some(target.pane);
+    if let Some(p) = state.mouse.pointers.get_mut(&client) {
+        p.drag = Some(Drag {
+            button: 1,
+            border: true,
+        });
+        p.float_drag = floating;
+    }
+    // As `resize-pane -M`: the first report already moves it.
+    let from = target.cell;
+    match floating {
+        Some(pane) => {
+            // tmux focuses (and so raises) a floating pane first.
+            let window = state.model.panes.get(&pane).map(|p| p.window);
+            if let Some(w) = window.and_then(|w| state.model.windows.get_mut(&w)) {
+                w.set_active(pane);
             }
-            // As `resize-pane -M`: the first report already moves it.
-            let from = target.cell;
-            match floating {
-                Some(pane) => {
-                    // tmux focuses (and so raises) a floating pane first.
-                    let window = state.model.panes.get(&pane).map(|p| p.window);
-                    if let Some(w) = window.and_then(|w| state.model.windows.get_mut(&w)) {
-                        w.set_active(pane);
-                    }
-                    clients::changed(state);
-                    drag_float(state, client, pane, from, (m.col, m.row));
-                }
-                None => drag_border(state, client, from, (m.col, m.row)),
-            }
+            clients::changed(state);
+            drag_float(state, client, pane, from, (m.col, m.row));
         }
-        // tmux's `MouseDown1Border`: a click on a border clears the mark
-        // (and focuses a floating pane, `mark_pane`).
-        (MousePlace::Border, MouseAction::Down, 1) => run(state, &["select-pane", "-M"]),
-        // tmux's `C-MouseDown1Pane` and `C-MouseDown1Status`: swap the
-        // clicked pane or window with the client's active one.
-        (MousePlace::Pane, MouseAction::Down, 1) if ctrl_click(state, key) => {
-            run(state, &["swap-pane", "-s", "@"]);
-        }
-        (MousePlace::Status, MouseAction::Down, 1) if ctrl_click(state, key) => {
-            run(state, &["swap-window", "-t", "@"]);
-        }
-        (MousePlace::Status, MouseAction::Down, 3) if stock_menu(state, key, target, None) => {}
-        (MousePlace::StatusLeft, MouseAction::Down, 3) if stock_menu(state, key, target, None) => {}
-        (MousePlace::Pane, MouseAction::Down, 3) if stock_menu(state, key, target, Some(m)) => {}
-        // The default `pane-border-format`'s buttons, tmux's stock
-        // `MouseDown1Control8` and `MouseDown1Control9`.
-        (MousePlace::Control(8), MouseAction::Down, 1) => {
-            run(state, &["resize-pane", "-Z", "-t", "="])
-        }
-        // The menu's command runs after the mouse event, so it names the
-        // pane rather than `=`.
-        (MousePlace::Control(9), MouseAction::Down, 1) => {
-            let kill = format!("kill-pane -t {}", target.pane);
-            run(
-                state,
-                &[
-                    "display-menu",
-                    "-T",
-                    "Kill pane #{pane_index}?",
-                    "Yes",
-                    "y",
-                    &kill,
-                    "No",
-                    "n",
-                    "",
-                ],
-            )
-        }
-        (MousePlace::Pane, _, _) => in_pane(state, client, m, mk, target),
-        _ => {}
+        None => drag_border(state, client, from, (m.col, m.row)),
     }
 }
 
-/// Whether `key` is the press with Control alone that tmux 3.7b's stock
-/// `C-MouseDown1Pane` and `C-MouseDown1Status` rows take, on a server with
-/// tmux identity.
-fn ctrl_click(state: &State, key: &Key) -> bool {
-    let m = key.mods;
-    state.model.identity == crate::compat::Identity::Tmux && m.ctrl && !m.alt && !m.shift
+/// `send-keys -M`: the mouse event the running command is for goes to its
+/// pane, as the pane's mouse mode asks (tmux's `window_pane_key`). Outside
+/// a mouse key's commands it is tmux's own failure.
+pub fn send_current(state: &mut State) -> Result<String, String> {
+    let Some(t) = state.mouse.current.clone() else {
+        return Err(crate::cmd::target::NO_MOUSE_TARGET.to_string());
+    };
+    send_event(state, t.client, &t.event, t.pane);
+    Ok(String::new())
 }
 
-/// tmux's `DEFAULT_SESSION_MENU`, as `list-keys` prints the stock
-/// `MouseDown3StatusLeft` row's items.
-const SESSION_MENU: &str = r##"display-menu -T "#[align=centre]#{session_name}" -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session -- '%%' } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }"##;
-
-/// tmux 3.7b's stock right-click menus, for a server with tmux identity:
-/// `MouseDown3Status` (the window menu, the prefix `<` one), `MouseDown3StatusLeft`
-/// (the session menu) and `MouseDown3Pane` (the prefix `>` menu at the
-/// pointer), each also with Meta (`M-MouseDown3Pane` opens the menu even
-/// where the pane asked for the mouse). `pane` is the report for a pane
-/// click, whose plain right button goes to the application instead when it
-/// asked for the mouse or is in a mode but copy mode, as the stock row's
-/// condition says. Returns whether a menu was opened.
-// ponytail: these stand in for tmux's root-table rows, so `unbind -n
-// MouseDown3Pane` does not remove them and `list-keys -T root` does not
-// list them.
-fn stock_menu(state: &mut State, key: &Key, target: &MouseTarget, pane: Option<&Mouse>) -> bool {
-    use crate::compat::Identity;
-    let m = key.mods;
-    if state.model.identity != Identity::Tmux || m.ctrl || m.shift || m.super_ {
-        return false;
-    }
-    let stock = |name: &str| {
-        crate::server::input::TMUX_STOCK
-            .iter()
-            .find(|(k, ..)| *k == name)
-            .map(|(.., text)| *text)
-    };
-    let KeyCode::Mouse(mk) = key.code else {
-        return false;
-    };
-    let text = match (mk.place, pane) {
-        (MousePlace::Status, _) => stock("<").map(str::to_string),
-        (MousePlace::StatusLeft, _) => Some(SESSION_MENU.to_string()),
-        (_, Some(_)) => {
-            let taken = state.model.panes.get(&target.pane).is_none_or(|p| {
-                p.handle.modes().mouse != MouseMode::Off
-                    || state.clocks.is_active(target.pane)
-                    || crate::server::tree::is_over(state, target.pane)
-            });
-            if taken && !m.alt {
-                return false;
-            }
-            stock(">").map(|t| t.replacen("-x P -y P", "-x M -y M", 1))
-        }
-        _ => None,
-    };
-    let Some(cmds) = text.and_then(|t| crate::cmd::split_command_string(&t).ok()) else {
-        return false;
-    };
-    run_mouse_binding(state, target, &cmds, Dialect::Tmux);
-    true
-}
-
-/// The built-in model for key `mk` in a pane, as tmux 3.7b's stock `root`
-/// pane rows: each copy-mode row runs only for a pane that is in no mode
-/// and did not ask for the mouse (the wheel also not on the alternate
-/// screen); otherwise, and for every other key, a press focuses the pane
-/// and the report is forwarded (`send-keys -M`).
-fn in_pane(state: &mut State, client: ClientId, m: &Mouse, mk: MouseKey, target: &MouseTarget) {
-    let Some(p) = state.model.panes.get(&target.pane) else {
-        return;
-    };
-    let modes = p.handle.modes();
-    // Any mode counts, as tmux's `#{pane_in_mode}`: copy mode or a chooser.
-    let busy = state.copy.is_active(target.pane)
-        || crate::server::tree::is_over(state, target.pane)
-        || modes.mouse != MouseMode::Off;
-    let run = |state: &mut State, cmds: &[&[&str]]| {
-        let cmds: Vec<Vec<String>> = cmds
-            .iter()
-            .map(|argv| argv.iter().map(|s| s.to_string()).collect())
-            .collect();
-        run_mouse_binding(state, target, &cmds, Dialect::Grofe);
-    };
-    let focus: &[&str] = &["select-pane", "-t", "="];
-    match (mk.action, mk.button) {
-        (MouseAction::WheelUp, _) if !busy && !modes.alt_screen => {
-            run(state, &[&["copy-mode", "-e"]]);
-        }
-        (MouseAction::Drag, 1) if !busy => run(state, &[&["copy-mode", "-M"]]),
-        (MouseAction::DoubleClick | MouseAction::TripleClick, 1) if !busy => {
-            let select = if mk.action == MouseAction::DoubleClick {
-                "select-word"
-            } else {
-                "select-line"
-            };
-            // `run-shell -d 0.3` holds the copy (and the client's input)
-            // while the selection shows, as tmux's queue does.
-            run(
-                state,
-                &[
-                    focus,
-                    &["copy-mode", "-H"],
-                    &["send-keys", "-X", select],
-                    &["run-shell", "-d", "0.3"],
-                    &["send-keys", "-X", "copy-pipe-and-cancel"],
-                ],
-            );
-        }
-        // tmux's `MouseDown2Pane`: focus, then paste the newest buffer.
-        (MouseAction::Down, 2) if !busy => run(state, &[focus, &["paste-buffer", "-p"]]),
-        // A double click is no report of its own to forward.
-        (MouseAction::DoubleClick, 1) => run(state, &[focus]),
-        (MouseAction::DoubleClick, _) => {}
-        _ => {
-            // As tmux (`select-pane -t = \; send-keys -M`): the pane is
-            // active before its click arrives.
-            if matches!(m.kind, MouseKind::Down(_)) {
-                run(state, &[focus]);
-            }
-            forward(state, client, m);
-        }
+/// Report `m` goes to `pane` if the pointer is over it, the pane is in no
+/// mode and takes input, and its mouse mode asks for this kind of
+/// event.
+// ponytail: a drag that leaves its pane is dropped rather than following
+// the pane it started in.
+fn send_event(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) {
+    if let Hit::Pane(over, x, y) = hit(state, client, (m.col, m.row))
+        && over == pane
+    {
+        send_to(state, pane, m, (x, y));
     }
 }
 
 /// Sends report `m` to the pane under it, if that pane asked for this
-/// kind of event and is not in copy mode.
-// ponytail: a drag that leaves its pane is dropped rather than following
-// the pane it started in.
+/// kind of event and is in no mode.
 fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
-    let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) else {
-        return Routed::Consumed;
-    };
-    if state.copy.is_active(pane) {
-        return Routed::Consumed;
+    if let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) {
+        send_to(state, pane, m, (x, y));
+    }
+    Routed::Consumed
+}
+
+/// Report `m`, at 0-based cell `(x, y)` of `pane`, goes to the pane's
+/// process if its mouse mode asks for it.
+fn send_to(state: &mut State, pane: PaneId, m: &Mouse, (x, y): (u16, u16)) {
+    // A pane in a mode gives its app nothing (tmux's `window_pane_key`).
+    if state.copy.is_active(pane)
+        || state.clocks.is_active(pane)
+        || crate::server::tree::is_over(state, pane)
+    {
+        return;
     }
     // A pane taking no input gets no mouse either (tmux's `window_pane_key`).
     let Some(p) = state.model.panes.get(&pane).filter(|p| !p.input_off) else {
-        return Routed::Consumed;
+        return;
     };
     if let Some(bytes) = encode(m, x, y, &p.handle.modes())
         && p.handle.enqueue_input(bytes).is_err()
     {
         eprintln!("grofe server: input queue full for {pane}");
     }
-    Routed::Consumed
 }
 
 /// A border drag from client cell `from` to `to`, as tmux 3.7b's
@@ -1371,40 +1240,36 @@ mod tests {
     use crate::server::input::Mods;
 
     #[test]
-    fn only_tmuxs_own_border_rows_count_as_stock() {
+    fn only_tmuxs_own_border_drag_row_is_the_mouses_drag() {
         let key = |name: &str| crate::server::input::parse_key(name).unwrap();
         let cmd = |words: &[&str]| vec![words.iter().map(|w| w.to_string()).collect::<Vec<_>>()];
         let (down, drag) = (key("MouseDown1Border"), key("MouseDrag1Border"));
-        assert!(is_stock_border_row(&drag, &cmd(&["resize-pane", "-M"])));
-        assert!(is_stock_border_row(&drag, &cmd(&["resizep", "-M"])));
-        assert!(is_stock_border_row(&down, &cmd(&["select-pane", "-M"])));
-        assert!(is_stock_border_row(&down, &[]));
-        // Each verb is stock only on its own key.
-        assert!(!is_stock_border_row(&down, &cmd(&["resize-pane", "-M"])));
-        assert!(!is_stock_border_row(&drag, &cmd(&["select-pane", "-M"])));
+        assert!(is_border_drag_row(&drag, &cmd(&["resize-pane", "-M"])));
+        assert!(is_border_drag_row(&drag, &cmd(&["resizep", "-M"])));
+        assert!(is_border_drag_row(&drag, &[]));
+        // The click row is a command that runs as it is.
+        assert!(!is_border_drag_row(&down, &cmd(&["select-pane", "-M"])));
+        assert!(!is_border_drag_row(&down, &cmd(&["resize-pane", "-M"])));
         // Anything more, less or else is the user's own.
-        assert!(!is_stock_border_row(
+        assert!(!is_border_drag_row(
             &drag,
             &cmd(&["resize-pane", "-M", "-Z"])
         ));
-        assert!(!is_stock_border_row(&drag, &cmd(&["resize-pane", "-Z"])));
-        assert!(!is_stock_border_row(
-            &drag,
-            &cmd(&["display-message", "hi"])
-        ));
+        assert!(!is_border_drag_row(&drag, &cmd(&["resize-pane", "-Z"])));
+        assert!(!is_border_drag_row(&drag, &cmd(&["display-message", "hi"])));
         let two = [cmd(&["resize-pane", "-M"]), cmd(&["kill-pane"])].concat();
-        assert!(!is_stock_border_row(&drag, &two));
+        assert!(!is_border_drag_row(&drag, &two));
         // A modifier does not change what the row does, as in tmux; the
-        // built-in model has no other button and no other place.
-        assert!(is_stock_border_row(
+        // built-in drag has no other button and no other place.
+        assert!(is_border_drag_row(
             &key("M-MouseDrag1Border"),
             &cmd(&["resize-pane", "-M"])
         ));
-        assert!(!is_stock_border_row(
+        assert!(!is_border_drag_row(
             &key("MouseDrag3Border"),
             &cmd(&["resize-pane", "-M"])
         ));
-        assert!(!is_stock_border_row(
+        assert!(!is_border_drag_row(
             &key("MouseDrag1Pane"),
             &cmd(&["resize-pane", "-M"])
         ));
@@ -1738,6 +1603,7 @@ mod tests {
             pane_cell: None,
             report: (5, 23),
             wheel: false,
+            event: mouse(MouseKind::Move),
         }
     }
 

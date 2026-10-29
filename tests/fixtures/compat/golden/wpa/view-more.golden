@@ -1,0 +1,284 @@
+$ new-session -d -s main -n one -x 60 -y 12 cat
+? 0
+$ set -g status off
+? 0
+$ set -g copy-mode-position-format '#[align=right][#{scroll_position}/#{history_size}]'
+? 0
+$ set-buffer -b alpha 'first buffer'
+? 0
+$ set-buffer -b beta 'second buffer'
+? 0
+client 60x12 attach -t main
+keys C-b #
+$ run-shell 'sleep 0.5'
+? 0
+screen alpha
+| beta: 13 bytes: "second buffer"                        [0/0]
+| alpha: 12 bytes: "first buffer"
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key a new-window -d -P -F 'made #{window_index}'
+? 0
+keys C-b a
+$ run-shell 'sleep 0.5'
+? 0
+screen made
+| made 2                                                 [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key b show-buffer -b alpha
+? 0
+keys C-b b
+$ run-shell 'sleep 0.5'
+? 0
+screen first buffer
+| first buffer                                           [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key c run-shell -b 'echo from-bg; echo; echo second'
+? 0
+keys C-b c
+$ run-shell 'sleep 0.5'
+? 0
+screen from-bg
+| from-bg                                                [0/0]
+|
+| second
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+view-mode 1
+? 0
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key d display-message -p 'one\ntwo'
+? 0
+keys C-b d
+$ run-shell 'sleep 0.5'
+? 0
+screen two
+| one\ntwo                                               [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key e if-shell true "display-message -p ifyes" "display-message -p ifno"
+? 0
+keys C-b e
+$ run-shell 'sleep 0.5'
+? 0
+screen ifyes
+| ifyes                                                  [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key f display-message -p ay '\;' display-message -p bee
+? 0
+keys C-b f
+$ run-shell 'sleep 0.5'
+? 0
+screen bee
+| ay                                                     [0/0]
+| bee
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ bind-key g kill-window -t nosuch
+? 0
+keys C-b g
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| q
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

@@ -110,6 +110,7 @@ fn three_windows<'a>(v: &'a [Vars; 3], current: usize) -> Vec<WindowStatus<'a>> 
             current: i == current,
             last: false,
             bell: false,
+            alert: false,
             options: WindowOptions::default(),
         })
         .collect()
@@ -319,6 +320,7 @@ fn canopy_style_options_expand_their_formats() {
             current: i == 0,
             last: false,
             bell: false,
+            alert: false,
             options,
         })
         .collect();
@@ -551,7 +553,7 @@ fn a_message_takes_the_first_status_row() {
     h.wait_until("the message on row 0", WAIT, |t| {
         let mut rows = t.lines();
         rows.next()
-            .is_some_and(|r| r.starts_with("can't find window"))
+            .is_some_and(|r| r.starts_with("Can't find window"))
             && rows.next().is_some_and(|r| r.starts_with("second row"))
     });
 }

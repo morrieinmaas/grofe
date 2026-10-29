@@ -92,11 +92,9 @@ pub const MISS_ALLOWED: &[(&str, &str)] = &[
         "show-buffer -b",
         "the corpus line's `-b` has no value: tmux's own `-b expects an argument`",
     ),
-    // tmux's stock mouse bindings, which grofe's built-in mouse model
-    // replaces (spec 4.5 out of scope, "Mouse argv forms"; M36-R7).
-    ("display-menu -O: cosmetic, ignored", MOUSE),
+    // tmux's stock border drag, which the mouse does itself (spec 4.5 out
+    // of scope, "Mouse argv forms"; M36-R7).
     ("resize-pane -M: cosmetic, ignored", MOUSE),
-    ("send-keys -M", MOUSE),
 ];
 
 const MOUSE: &str = "tmux's stock mouse bindings (spec 4.5 out of scope, M36-R7)";

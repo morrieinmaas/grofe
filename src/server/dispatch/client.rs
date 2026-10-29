@@ -5,8 +5,8 @@
 use tokio::sync::oneshot;
 
 use crate::cmd::{
-    ChooseClient, ChooseTree, Command, FindWindow, ParseError, RefreshClient, ShowMessages,
-    SuspendClient, WaitFor,
+    ChooseClient, ChooseTree, Command, CustomizeMode, FindWindow, ParseError, RefreshClient,
+    ShowMessages, SuspendClient, WaitFor,
 };
 use crate::protocol::{ClientCtx, Failure};
 use crate::server::{Job, State, clients, dispatch, hooks, tree};
@@ -61,7 +61,16 @@ pub fn choose_client(
     ctx: &ClientCtx,
     c: ChooseClient,
 ) -> Result<String, String> {
-    tree::open_clients(state, ctx, c.zoom)
+    tree::open_clients(state, ctx, c.zoom, &c.opts, ctx.dialect)
+}
+
+/// `customize-mode`: tmux's option and key browser over the target pane.
+pub fn customize_mode(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: CustomizeMode,
+) -> Result<String, String> {
+    tree::open_customize(state, ctx, c.zoom, &c.opts, ctx.dialect)
 }
 
 /// `suspend-client`: the client (`-t`, else the current one) stops itself
@@ -88,9 +97,8 @@ pub fn find_window(state: &mut State, ctx: &ClientCtx, c: FindWindow) -> Result<
         &c.target,
         tree::Opts {
             zoom: c.zoom,
-            sessions: false,
-            windows: false,
             find: Some(pattern),
+            ..tree::Opts::new(ctx.dialect)
         },
     )
 }
@@ -98,15 +106,17 @@ pub fn find_window(state: &mut State, ctx: &ClientCtx, c: FindWindow) -> Result<
 /// `choose-tree`: sessions, windows and panes as a tree over the target
 /// pane; Enter switches the client to the chosen one.
 pub fn choose_tree(state: &mut State, ctx: &ClientCtx, c: ChooseTree) -> Result<String, String> {
+    let target = c.opts.target.clone();
     tree::open_tree(
         state,
         ctx,
-        &crate::cmd::Target::Current,
+        &target,
         tree::Opts {
             zoom: c.zoom,
             sessions: c.sessions,
             windows: c.windows,
-            find: None,
+            chooser: c.opts,
+            ..tree::Opts::new(ctx.dialect)
         },
     )
 }

@@ -358,6 +358,30 @@ fn the_wheel_over_an_open_chooser_does_not_enter_copy_mode() {
     assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "0");
 }
 
+/// A pane in a mode (a chooser, the clock) takes the mouse itself: the
+/// stock rows' `send-keys -M` gives the app below it nothing, as tmux's
+/// `window_pane_key` hands a mode's pane no input.
+#[test]
+fn the_mouse_over_a_mode_never_reaches_the_app_below() {
+    let tui = "stty -echo; printf '\\033[?1000h\\033[?1006hready'; exec cat -v";
+    let srv = start(tui);
+    let mut a = attach(&srv, 80, 24);
+    wait_until(|| srv.capture("main").contains("ready"), WAIT).expect("the fake TUI");
+    for mode in ["choose-tree", "clock-mode"] {
+        srv.cmd(&[mode]).expect(mode);
+        wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") != "0", WAIT).expect(mode);
+        a.send(sgr(WHEEL_UP, 10, 5, false));
+        a.send(sgr(0, 10, 5, false));
+        a.send(sgr(0, 10, 5, true));
+        a.send("q");
+        wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT).expect(mode);
+    }
+    a.send("z\r");
+    wait_until(|| srv.capture("main").contains('z'), WAIT).expect("the z");
+    let text = srv.capture("main");
+    assert!(!text.contains("^[[<"), "{text}");
+}
+
 /// Case 2: Neovim asked for the mouse, so it gets the wheel and the pane
 /// does not enter copy mode.
 #[test]

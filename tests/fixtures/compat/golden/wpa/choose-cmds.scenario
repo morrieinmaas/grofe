@@ -1,0 +1,87 @@
+# WP-A: the chooser's template (%% is the item as a target), -F, -f, -K,
+# the x kill prompt, the : command prompt, / search with n and N, f filter
+# and tagging with t. A pause before each screen lets the redraw land.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ new-window -d -n two cat
+$ new-window -d -n three cat
+$ new-session -d -s other -n four cat
+$ set -g status off
+$ select-pane -t main:1 -T pa
+$ select-pane -t main:2 -T pb
+$ select-pane -t main:3 -T pc
+$ select-pane -t other:1 -T pd
+client 70x30 attach -t main
+$ bind-key j choose-tree -w -F '#{?pane_format,pane #{pane_index},#{?window_format,win #{window_name}#{window_flags},#{session_windows} wins}}' "rename-window -t '%%' picked"
+keys C-b j
+$ run-shell 'sleep 0.5'
+screen (sort: index)
+keys j
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_name}'
+$ bind-key k choose-tree -w -f '#{==:#{window_name},four}' -F 'F:#{window_name}' -K 'x#{line}'
+keys C-b k
+$ run-shell 'sleep 0.5'
+screen F:four
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key l choose-tree -w -F '#{?pane_format,pane #{pane_index},#{?window_format,win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b l
+$ run-shell 'sleep 0.5'
+screen (sort: index)
+keys /
+$ run-shell 'sleep 0.5'
+screen (search)
+keys three
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen
+keys n
+$ run-shell 'sleep 0.5'
+screen
+keys N
+$ run-shell 'sleep 0.5'
+screen
+keys f
+$ run-shell 'sleep 0.5'
+screen (filter)
+keys four
+$ run-shell 'sleep 0.5'
+screen (filter) four
+keys Enter
+$ run-shell 'sleep 0.5'
+screen (filter: active)
+keys f
+$ run-shell 'sleep 0.5'
+screen (filter) four
+keys C-u Enter
+$ run-shell 'sleep 0.5'
+screen
+keys x
+$ run-shell 'sleep 0.5'
+screen Kill window
+keys n
+$ run-shell 'sleep 0.5'
+screen
+keys t j t
+$ run-shell 'sleep 0.5'
+screen
+keys :
+$ run-shell 'sleep 0.5'
+screen (2 tagged)
+keys rename-window Space -t Space "'%%'" Space tagged
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ list-windows -a -F '#{session_name}:#{window_index} #{window_name}'

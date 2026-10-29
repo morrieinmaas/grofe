@@ -1992,7 +1992,7 @@ fn spelled_default(options: &Options, name: &str, value: Option<&str>) -> Option
 /// `value`, `name`'s at `owner`, as the tmux dialect shows it: the text a
 /// tmux request sent for it, tmux's own default text for a default grofe
 /// spells another way, else the value.
-fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
+pub(crate) fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
     if let Some(sent) = options.shown(owner, name, value) {
         return sent.to_string();
     }
@@ -2627,7 +2627,7 @@ fn list_keys_tmux(
 /// 1, `C-` 2, `S-` 4); within one, characters by code point (Enter, Tab
 /// and Escape are C0 characters), then tmux's special keys in its own
 /// order, then the mouse keys.
-fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
+pub(crate) fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
     use crate::server::input::KeyCode;
     let m = &key.mods;
     let mods = u8::from(m.alt) | u8::from(m.ctrl) << 1 | u8::from(m.shift) << 2;
@@ -4750,8 +4750,6 @@ const NO_EFFECT: &[&str] = &[
     "status-keys",
     "terminal-features",
     "terminal-overrides",
-    "window-status-activity-style",
-    "focus-follows-mouse",
     "assume-paste-time",
     "key-table",
     "lock-after-time",
@@ -4764,10 +4762,6 @@ const NO_EFFECT: &[&str] = &[
     "prompt-command-cursor-style",
     "cursor-colour",
     "cursor-style",
-    "menu-style",
-    "menu-selected-style",
-    "menu-border-style",
-    "menu-border-lines",
     "pane-status-current-style",
     "pane-status-style",
     "session-status-current-style",
@@ -4786,7 +4780,6 @@ const NO_EFFECT: &[&str] = &[
     "pane-scrollbars",
     "pane-scrollbars-style",
     "pane-scrollbars-position",
-    "popup-style",
     "remain-on-exit-format",
     "scroll-on-clear",
     "tree-mode-preview-format",
@@ -5382,6 +5375,12 @@ mod tests {
             pane_cell: Some((3, 4)),
             report: (3, 4),
             wheel: false,
+            event: crate::server::input::Mouse {
+                kind: crate::server::input::MouseKind::Move,
+                col: 3,
+                row: 4,
+                mods: Default::default(),
+            },
         };
         crate::server::mouse::MouseState::with_current(&mut state, Some(target), |state| {
             run(state, &["set", "-gF", "@m", "#{mouse_pane} #{mouse_x}"])

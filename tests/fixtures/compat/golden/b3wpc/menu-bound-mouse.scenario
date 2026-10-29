@@ -1,0 +1,41 @@
+# B3 WP-C: the menus tmux 3.7b's stock root rows open, with the mouse. The
+# pane menu opens at the pointer (MouseDown3Pane), the window menu on the
+# status line (MouseDown3Status), the session menu on its left end.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ new-window -d -n second cat
+client 60x15 attach -t main
+# A right press opens the pane menu.
+keys Escape '[<2;21;6M'
+screen Horizontal
+# The release where the press was: the menu stays or goes as tmux says.
+keys Escape '[<2;21;6m'
+screen
+# Press, drag onto an item and release over it chooses the item.
+keys Escape '[<2;21;6M'
+screen Horizontal
+keys Escape '[<34;21;11M'
+styles 2-13
+keys Escape '[<2;21;11m'
+screen
+$ display-message -p -t main '#{pane_marked}'
+# The window menu at the status line.
+keys Escape '[<2;10;15M'
+screen Swap
+keys Escape '[<2;10;15m'
+screen
+# Meta forms open the menu too.
+keys Escape '[<10;21;6M'
+screen Horizontal
+keys Escape '[<10;21;6m'
+screen
+# The session menu.
+keys Escape '[<2;3;15M'
+screen Renumber
+keys Escape '[<2;3;15m'
+screen
+# A left click on a window label selects the window (MouseDown1Status).
+keys Escape '[<0;20;15M'
+keys Escape '[<0;20;15m'
+$ display -p -t main '#{window_index}'

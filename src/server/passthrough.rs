@@ -687,10 +687,9 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
     };
     match kind {
         PaneEventKind::Path(text) => p.handle.set_reported_path(text),
-        PaneEventKind::Bell => {
-            crate::server::alerts::bell(state, window);
-            send(state, clients_on(state, session), b"\x07");
-        }
+        // The terminal rings from `alerts`, by `visual-bell` and the
+        // window's alert settings, as tmux's `alerts_set_message` does.
+        PaneEventKind::Bell => crate::server::alerts::bell(state, window),
         // As tmux 3.7b's `input_osc_52` (recorded): only under `on`, a
         // store makes a buffer and goes, with the pane's own parameter, to
         // the clients showing its window; `external` and `off` drop it.

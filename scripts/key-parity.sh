@@ -29,7 +29,7 @@
 # with a class and a reason:
 #
 #   oos         out of scope in the spec: reported, excused
-#   mouse       a stock mouse binding, left to grofe's built-in mouse model
+#   mouse       a stock mouse binding only a server with tmux identity binds
 #   native      grofe binds the key in its own form, by design
 #   gap         a known gap outside grofe
 #
@@ -102,6 +102,11 @@ cleanup() {
   # and every server was started from a binary under $tmp.
   pkill -f "$runs/" 2>/dev/null || true
   pkill -f "$tmp/" 2>/dev/null || true
+  # A server that spins (tmux 3.7b can) ignores both kill-server and
+  # SIGTERM: whatever is left a moment later gets SIGKILL.
+  sleep 1
+  pkill -9 -f "$runs/" 2>/dev/null || true
+  pkill -9 -f "$tmp/" 2>/dev/null || true
   if [ -n "$keep" ]; then
     mkdir -p "$keep"
     cp -R "$tmp/out/." "$keep/" 2>/dev/null || true
@@ -275,7 +280,8 @@ run_in() {
   [ "${1:-}" = --grofe ] && { bin=grofe; shift; }
   (
     cd "${run_cwd:-$w/hd}"
-    exec env -i \
+    # Bounded: a command to a server that stopped answering gets SIGALRM.
+    exec perl -e 'alarm shift; exec @ARGV or die "$ARGV[0]: $!\n"' 60 env -i \
       HOME="$w/hd" XDG_CONFIG_HOME="$w/hd/.config" XDG_DATA_HOME="$w/hd/.local/share" \
       XDG_STATE_HOME="$w/hd/.local/state" XDG_RUNTIME_DIR="$r" TMUX_TMPDIR="$r" \
       CANOPY_SCRATCH_TMPDIR="$r" TMPDIR="$w/tmp" \

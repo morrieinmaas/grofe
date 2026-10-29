@@ -14,6 +14,7 @@ mod b1e;
 mod b2a;
 mod b2b;
 mod b3wpb;
+mod b3wpc;
 mod b3wpd;
 mod fe_1;
 mod fe_2;
@@ -32,6 +33,7 @@ mod tp_10;
 mod tp_4;
 mod tp_5;
 mod tp_6;
+mod wpa;
 
 use std::collections::BTreeSet;
 use std::fs;

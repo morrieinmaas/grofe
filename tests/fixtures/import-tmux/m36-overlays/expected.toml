@@ -5,10 +5,10 @@
 # ~/.tmux.conf:2
 g = "display-popup -E -w 80% -h 80% -b rounded 'exec htop'"
 # ~/.tmux.conf:3
-G = "display-popup -E 'exec top'"
+G = "display-popup -E -s fg=red -S fg=blue 'exec top'"
 # ~/.tmux.conf:4
 m = 'display-menu -T "#{session_name}" -x C -y C "New window" n new-window "Kill" k "confirm-before -p \"kill #{window_name}?\" kill-window"'
 # ~/.tmux.conf:5
-M = "display-menu -T menu Zoom z 'resize-pane -Z'"
+M = "display-menu -b double -T menu Zoom z 'resize-pane -Z'"
 # ~/.tmux.conf:6
 "," = """command-prompt -I "#{window_name}" "rename-window '%%'""""

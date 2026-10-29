@@ -1,0 +1,93 @@
+$ new-session -d -s main -n first -x 60 -y 15 "sh -c 'while read x; do printf \"\\a\"; done'"
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g display-time 60000
+? 0
+$ new-window -d -n other "sh -c 'while read x; do printf \"\\a\"; done'"
+? 0
+client 60x15 attach -t main
+$ send-keys -t main:2 Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+screen 2:other
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:other!
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-23 fg=black bg=green reverse
+~ 14 24-59 fg=default bg=green
+$ list-windows -t main -F "#{window_index} #{window_bell_flag}"
+1 0
+2 1
+? 0
+$ set -w -t main:other window-status-bell-style 'fg=red'
+? 0
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-23 fg=red bg=green
+~ 14 24-59 fg=default bg=green
+$ set -g visual-bell on
+? 0
+$ send-keys -t main:1 Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+screen Bell in current window
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Bell in current window
+$ send-keys -t main:2 Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+screen Bell in window 2
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Bell in window 2

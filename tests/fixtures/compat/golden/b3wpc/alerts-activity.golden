@@ -1,0 +1,115 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g display-time 60000
+? 0
+$ new-window -d -n act 'sleep 1; echo hi; sleep 30'
+? 0
+$ set -w -t main:act monitor-activity on
+? 0
+client 60x15 attach -t main
+$ run-shell 'sleep 2'
+? 0
+screen 2:act
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:act#
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-21 fg=black bg=green reverse
+~ 14 22-59 fg=default bg=green
+$ list-windows -t main -F "#{window_index} #{window_activity_flag} #{window_silence_flag} #{window_bell_flag}"
+1 0 0 0
+2 1 0 0
+? 0
+$ set -w -t main:act window-status-activity-style 'fg=red,bold'
+? 0
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-21 fg=red bg=green bold
+~ 14 22-59 fg=default bg=green
+$ set -w -t main:act window-status-activity-style default
+? 0
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-21 fg=black bg=green
+~ 14 22-59 fg=default bg=green
+$ select-window -t main:2
+? 0
+$ select-window -t main:1
+? 0
+styles 14-14
+~ 14 0-5 fg=black bg=green
+~ 14 6-6 fg=default bg=green
+~ 14 7-14 fg=black bg=green
+~ 14 15-15 fg=default bg=green
+~ 14 16-21 fg=black bg=green
+~ 14 22-59 fg=default bg=green
+$ set -g visual-activity on
+? 0
+$ send-keys -t main:2 x Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+screen Activity
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Activity in window 2
+$ set -g visual-activity both
+? 0
+$ send-keys -t main:2 y Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+screen window 2
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Activity in window 2

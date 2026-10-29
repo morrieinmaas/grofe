@@ -258,9 +258,9 @@ pub struct ClientEntry {
     /// until it resumes and sends its size, which redraws it in full.
     suspended: bool,
     suspend_tx: mpsc::Sender<()>,
-    /// The outer terminal's mouse modes as last written (R2); `None`
-    /// before the first write.
-    mouse_modes: Option<bool>,
+    /// The outer terminal's mouse modes as last written (R2): 0 off, 1 on,
+    /// 2 on with all motion; `None` before the first write.
+    mouse_modes: Option<u8>,
     /// Input held while a binding's shell condition runs ([`hold_input`]),
     /// in order, and how many conditions hold it.
     held: VecDeque<Held>,
@@ -1289,25 +1289,59 @@ pub fn changed(state: &mut State) {
     arm_names(state, Instant::now());
 }
 
-/// The outer terminal's mouse reporting on and off.
+/// The outer terminal's mouse reporting on and off, and on with every
+/// motion (mode 1003) for `focus-follows-mouse` and a menu that takes the
+/// mouse (tmux's `tty_update_mode`).
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+const MOUSE_MOTION_ON: &[u8] = b"\x1b[?1003h";
+const MOUSE_MOTION_OFF: &[u8] = b"\x1b[?1003l";
 
-/// Writes each client's mouse modes where its session's `mouse` option
-/// differs from what it was last sent (R2): so on attach, and after any
-/// `set`, `reload` or switch that changes it. The client's exit reset
-/// turns them off again.
-fn sync_mouse_modes(state: &mut State) {
+/// Writes each client's mouse modes where they differ from what they were
+/// last sent (R2): so on attach, and after any `set`, `reload`, switch or
+/// menu that changes them. The client's exit reset turns them off again.
+pub(crate) fn sync_mouse_modes(state: &mut State) {
     let model = &state.model;
-    for c in state.clients.values_mut() {
-        let on = model
-            .options
-            .lookup("mouse", &[Owner::Session(c.session)])
-            .is_some_and(|v| v == "on");
-        if c.mouse_modes != Some(on) {
-            c.mouse_modes = Some(on);
-            c.outbox.queue_raw(if on { MOUSE_ON } else { MOUSE_OFF });
+    let levels: Vec<(ClientId, u8)> = state
+        .clients
+        .iter()
+        .map(|(id, c)| {
+            let owners = [Owner::Session(c.session)];
+            let on = |name: &str| {
+                model
+                    .options
+                    .lookup(name, &owners)
+                    .is_some_and(|v| v == "on")
+            };
+            let level = if crate::server::menu::wants_mouse(state, *id)
+                || on("mouse") && on("focus-follows-mouse")
+            {
+                2
+            } else {
+                u8::from(on("mouse"))
+            };
+            (*id, level)
+        })
+        .collect();
+    for (id, level) in levels {
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        if c.mouse_modes == Some(level) {
+            continue;
         }
+        let before = c.mouse_modes;
+        c.mouse_modes = Some(level);
+        if level == 2 {
+            c.outbox.queue_raw(MOUSE_ON);
+            c.outbox.queue_raw(MOUSE_MOTION_ON);
+            continue;
+        }
+        if before == Some(2) {
+            c.outbox.queue_raw(MOUSE_MOTION_OFF);
+        }
+        c.outbox
+            .queue_raw(if level == 1 { MOUSE_ON } else { MOUSE_OFF });
     }
 }
 
@@ -2468,12 +2502,14 @@ fn default_row(
                 current,
                 last: s.last_windows.last() == Some(&w.id),
                 bell: w.bell_flag,
+                alert: w.activity_flag || w.silence_flag,
                 options: WindowOptions {
                     separator: wopt("window-status-separator", defaults.separator),
                     style: wopt("window-status-style", defaults.style),
                     current_style: wopt("window-status-current-style", defaults.current_style),
                     last_style: wopt("window-status-last-style", defaults.last_style),
                     bell_style: wopt("window-status-bell-style", defaults.bell_style),
+                    activity_style: wopt("window-status-activity-style", defaults.activity_style),
                 },
             }
         })
@@ -3076,9 +3112,26 @@ pub(crate) fn run_commands_for(
     run_from(state, run);
 }
 
+/// `text` with a capital first letter, as tmux's `cmdq_error` shows an error
+/// on an attached client's status line.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// What a held [`BindingRun`] waits for; the error to show, if the held
 /// commands failed.
-type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+type BindingWait = std::pin::Pin<Box<dyn std::future::Future<Output = Waited> + Send>>;
+
+/// How a held command ended: what it printed, and the error to show.
+#[derive(Default)]
+struct Waited {
+    out: String,
+    err: Option<String>,
+}
 
 /// Runs `run`'s next commands until one makes it wait, then resumes it on
 /// the actor once that is done.
@@ -3117,9 +3170,16 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             None => one(state),
         };
         let wait = binding_wait(state, id);
-        if let Err(e) = result {
-            show_message(state, id, e.trim_end());
-            run.cmds.clear();
+        // What a command prints shows in the view mode of the client's
+        // pane (`server_client_print`), the error on its status line.
+        match result {
+            Ok(text) => crate::server::copy::view::print_to_client(state, id, &text),
+            Err(e) => {
+                let printed = std::mem::take(&mut state.failed_out);
+                crate::server::copy::view::print_to_client(state, id, &printed);
+                show_message(state, id, &capitalized(e.trim_end()));
+                run.cmds.clear();
+            }
         }
         let Some(wait) = wait else {
             continue;
@@ -3132,10 +3192,11 @@ fn run_from(state: &mut State, mut run: BindingRun) {
         changed(state);
         let jobs = state.jobs.clone();
         tokio::spawn(async move {
-            let error = wait.await;
+            let waited = wait.await;
             let job: crate::server::Job = Box::new(move |state: &mut State| {
-                if let Some(e) = error {
-                    show_message(state, run.id, e.trim_end());
+                crate::server::copy::view::print_to_client(state, run.id, &waited.out);
+                if let Some(e) = waited.err {
+                    show_message(state, run.id, &capitalized(e.trim_end()));
                     run.cmds.clear();
                 }
                 run_from(state, run);
@@ -3159,15 +3220,19 @@ fn binding_wait(state: &mut State, id: ClientId) -> Option<BindingWait> {
     if let Some(rx) = state.deferred_reply.take() {
         return Some(Box::pin(async move {
             match rx.await {
-                Ok(Err(f)) if !f.err.is_empty() => Some(f.err),
-                _ => None,
+                Ok(Ok(out)) => Waited { out, err: None },
+                Ok(Err(f)) => Waited {
+                    out: f.out,
+                    err: (!f.err.is_empty()).then_some(f.err),
+                },
+                Err(_) => Waited::default(),
             }
         }));
     }
     let rx = hooks::take_client_wait(state, id)?;
     Some(Box::pin(async move {
         let _ = rx.await;
-        None
+        Waited::default()
     }))
 }
 

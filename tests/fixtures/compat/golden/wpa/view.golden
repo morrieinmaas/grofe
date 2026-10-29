@@ -1,0 +1,194 @@
+$ new-session -d -s main -n first -x 60 -y 12 cat
+? 0
+$ set -g status off
+? 0
+$ set -g copy-mode-position-format '#[align=right][#{scroll_position}/#{history_size}]'
+? 0
+client 60x12 attach -t main
+keys C-b ?
+screen
+| C-b Space   Select next layout                        [77/0]
+| C-b !       Break pane to a new window
+| C-b "       Split window vertically
+| C-b #       List all paste buffers
+| C-b $       Rename current session
+| C-b %       Split window horizontally
+| C-b &       Kill current window
+| C-b '       Prompt for window index to select
+| C-b (       Switch to previous client
+| C-b )       Switch to next client
+| C-b *       New floating pane
+| C-b ,       Rename current window
+keys j j j
+screen
+| C-b Space   Select next layout                        [77/0]
+| C-b !       Break pane to a new window
+| C-b "       Split window vertically
+| C-b #       List all paste buffers
+| C-b $       Rename current session
+| C-b %       Split window horizontally
+| C-b &       Kill current window
+| C-b '       Prompt for window index to select
+| C-b (       Switch to previous client
+| C-b )       Switch to next client
+| C-b *       New floating pane
+| C-b ,       Rename current window
+keys G
+screen
+| C-b M-Right Resize the pane right by 5                 [0/0]
+| C-b C-b     Send the prefix key
+| C-b C-o     Rotate through the panes
+| C-b C-z     Suspend the current client
+| C-b C-Up    Resize the pane up
+| C-b C-Down  Resize the pane down
+| C-b C-Left  Resize the pane left
+| C-b C-Right Resize the pane right
+| C-b S-Up    Move the visible part of the window up
+| C-b S-Down  Move the visible part of the window down
+| C-b S-Left  Move the visible part of the window left
+| C-b S-Right Move the visible part of the window right
+$ display -p -t main '#{pane_mode} #{pane_in_mode} #{scroll_position}'
+view-mode 1 0
+? 0
+keys q
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+ 0
+? 0
+keys C-b #
+keys x
+screen x
+| x
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys C-u
+$ bind-key j run-shell 'echo hello; echo; echo world; exit 3'
+? 0
+keys C-b j
+screen hello
+| hello                                                  [0/0]
+| world
+| 'echo hello; echo; echo world; exit 3' returned 3
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ bind-key k display-message -p 'dp out'
+? 0
+keys C-b [
+keys C-b k
+screen dp out
+| dp out                                                 [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+view-mode 2
+? 0
+keys q
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+copy-mode 1
+? 0
+screen
+|                                                        [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ bind-key l show-options -g status
+? 0
+keys C-b l
+screen status
+| status off                                             [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ bind-key m new-window -d -P -F '#{window_index}'
+? 0
+keys C-b m
+screen
+| 2                                                      [0/0]
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys q
+$ set -g mode-keys emacs
+? 0
+keys C-b k
+keys Escape
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+$ display -p -t main '#{pane_mode}'
+
+? 0

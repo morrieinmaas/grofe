@@ -1,0 +1,15 @@
+# B3 WP-C: a silent window alerts after monitor-silence seconds; its
+# status label takes window-status-activity-style, and visual-silence a message.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g display-time 60000
+$ set -g visual-silence on
+$ new-window -d -n quiet 'sleep 60'
+$ set -w -t main:quiet monitor-silence 1
+client 60x15 attach -t main
+screen Silence in window 2
+styles 14-14
+$ list-windows -t main -F "#{window_index} #{window_silence_flag}"
+$ set -w -t main:quiet window-status-activity-style 'bg=green'
+styles 14-14

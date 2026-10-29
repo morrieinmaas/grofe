@@ -1,0 +1,273 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g @p none
+? 0
+$ split-window -h -l 25 -t main cat
+? 0
+$ select-pane -t main:1.1
+? 0
+client 60x15 attach -t main
+$& display-panes -t {client} -d 0 'set -g @p got-%%'
+screen 34x14
+|                              34x14│                    25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys 2
+$ show -gv @p
+got-%1
+? 0
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+$& display-panes -t {client} -d 0
+screen 34x14
+|                              34x14│                    25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys 1
+$ display-message -p -t main '#{pane_id}'
+%0
+? 0
+$ display-panes -b -t {client} -d 0
+? 0
+screen 34x14
+|                              34x14│                    25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys 2
+$ display-message -p -t main '#{pane_id}'
+%1
+? 0
+$& display-panes -N -t {client} -d 0 'set -g @p never'
+screen 34x14
+|                              34x14│                    25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys 1
+screen
+|                                   │1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+$ show -gv @p
+got-%1
+? 0
+$ capture-pane -p -t main:1.2
+1
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ display-panes -b -t {client} -d 1500
+? 0
+screen 34x14
+|                              34x14│1                   25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+$ run-shell 'sleep 2'
+? 0
+screen
+|                                   │1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+$ display-panes -b -t {client} -d 0
+? 0
+screen 34x14
+|                              34x14│1                   25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys x
+screen
+|                                   │1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+$ resize-pane -Z -t main:1.1
+? 0
+$& display-panes -t {client} -d 0
+screen
+|                                                        60x14
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*Z
+keys 2
+$ display-message -p -t main '#{window_zoomed_flag} #{pane_id}'
+0 %1
+? 0
+$& display-panes -t {client} -d 0 'set -g @p [%1]'
+screen 34x14
+|                              34x14│1                   25x14
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+keys 9
+$ show -gv @p
+got-%1
+? 0
+screen
+|                                   │1
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+|                                   │
+| [main] 1:first*
+$ display-panes -d x
+! delay invalid
+? 1
+$ display-panes -t nosuch
+! can't find client: nosuch
+? 1
+$ display-panes a b
+! command display-panes: too many arguments (need at most 1)
+? 1

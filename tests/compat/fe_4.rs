@@ -280,9 +280,11 @@ fn miss_log(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Case 6: `send -M` fails with tmux's text, and one line in the log.
+/// Case 6: `send -M` outside a mouse key fails with tmux's text. It is a
+/// native command since B3 WP-C (the stock mouse rows run it), so nothing
+/// is logged.
 #[test]
-fn send_m_fails_with_tmux_s_text_and_a_log_line() {
+fn send_m_fails_with_tmux_s_text() {
     let dir = tempfile::tempdir().unwrap();
     let cli = grofe_cli(dir.path());
     let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
@@ -291,7 +293,7 @@ fn send_m_fails_with_tmux_s_text_and_a_log_line() {
     let (status, out, err) = cli.run(&words(&["send", "-M"]));
     assert_eq!((status.code(), out.as_str()), (Some(1), ""));
     assert_eq!(err, "no mouse target\n");
-    assert_eq!(miss_log(dir.path())[before..], ["send-keys -M".to_string()]);
+    assert!(miss_log(dir.path())[before..].is_empty());
     let _ = cli.run(&words(&["kill-server"]));
 }
 
@@ -347,11 +349,10 @@ fn twenty_thousand_braces_are_command_too_long() {
     let _ = cli.run(&words(&["kill-server"]));
 }
 
-/// Case 4: a style flag grofe draws no differently is ignored, with
-/// exactly one log line naming it (the `popup-styles` golden has the
-/// screen, and tmux's error for an unknown `-b`).
+/// Case 4: the style flags of a popup are drawn since B3 WP-C
+/// (`golden/b3wpc/popup-style`), so none is ignored and nothing is logged.
 #[test]
-fn popup_style_flags_are_ignored_with_one_log_line() {
+fn popup_style_flags_are_not_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let cli = grofe_cli(dir.path());
     let (status, _, err) = cli.run(&words(&["new-session", "-d", "-s", "main"]));
@@ -371,11 +372,7 @@ fn popup_style_flags_are_ignored_with_one_log_line() {
         "true",
     ]));
     assert_eq!(err, "no current client\n");
-    assert_eq!(
-        miss_log(dir.path())[before..],
-        ["display-popup -S: cosmetic, ignored".to_string()],
-        "one line for the flag, however often it is given"
-    );
+    assert!(miss_log(dir.path())[before..].is_empty());
     let _ = cli.run(&words(&["kill-server"]));
 }
 

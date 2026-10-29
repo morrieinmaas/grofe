@@ -1,0 +1,975 @@
+$ new-session -d -s main -n one -x 70 -y 30 cat
+? 0
+$ set -g status off
+? 0
+$ bind-key C customize-mode -Z -f '#{||:#{m:status-*,#{option_name}},#{is_key}}'
+? 0
+$ bind-key -T mytab -N 'a note' x display-message hi
+? 0
+client 70x30 attach -t main
+keys C-b C
+$ run-shell 'sleep 0.5'
+? 0
+screen Server Options
+| (0)   Server Options
+| (1) + Session Options
+| (2)   Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) + Key Table - mytab
+| (6) + Key Table - prefix
+| (7) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Server Options (filter: active) ───────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j l
+$ run-shell 'sleep 0.5'
+? 0
+screen status-bg
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: left
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ Session Options (filter: active) ──────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j j j j j
+$ run-shell 'sleep 0.5'
+? 0
+screen status-justify
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: left
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-justify (filter: active) ───────────────────────────────────┐
+| │ Position of the window list in the status line.                    │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: left                                                 │
+| │ Available values are: left, centre, right, absolute-centre         │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys s
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-justify (filter: active) ───────────────────────────────────┐
+| │ Position of the window list in the status line.                    │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: centre                                               │
+| │ Available values are: left, centre, right, absolute-centre         │
+| │ The default is: left                                               │
+| │                                                                    │
+| │ Global value: left                                                 │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j s
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-keys (filter: active) ──────────────────────────────────────┐
+| │ Key set to use at the command prompt.                              │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: vi                                                   │
+| │ Available values are: emacs, vi                                    │
+| │ The default is: emacs                                              │
+| │                                                                    │
+| │ Global value: emacs                                                │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ show-options -g status-justify status-keys
+! command show-options: too many arguments (need at most 1)
+? 1
+keys j j
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-left-length (filter: active) ───────────────────────────────┐
+| │ Maximum width of the left side of the status line.                 │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: 10                                                   │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys s
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-left-length (filter: active) ───────────────────────────────┐
+| │ Maximum width of the left side of the status line.                 │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: 10                                                   │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (status-left-length, for session main) 10
+keys C-u 20 Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: (session main) 20
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-left-length (filter: active) ───────────────────────────────┐
+| │ Maximum width of the left side of the status line.                 │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: 20                                                   │
+| │ The default is: 10                                                 │
+| │                                                                    │
+| │ Global value: 10                                                   │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ show-options -g status-left-length
+status-left-length 10
+? 0
+keys u
+$ run-shell 'sleep 0.5'
+? 0
+screen Unset
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: (session main) 20
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-left-length (filter: active) ───────────────────────────────┐
+| │ Maximum width of the left side of the status line.                 │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: 20                                                   │
+| │ The default is: 10                                                 │
+| │                                                                    │
+| │ Global value: 10                                                   │
+| │                                                                    │
+| │                                                                    │
+| Unset status-left-length?
+keys y
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-left-length (filter: active) ───────────────────────────────┐
+| │ Maximum width of the left side of the status line.                 │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: 10                                                   │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ show-options -g status-left-length
+status-left-length 10
+? 0
+keys k k
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-keys (filter: active) ──────────────────────────────────────┐
+| │ Key set to use at the command prompt.                              │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: vi                                                   │
+| │ Available values are: emacs, vi                                    │
+| │ The default is: emacs                                              │
+| │                                                                    │
+| │ Global value: emacs                                                │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys d
+$ run-shell 'sleep 0.5'
+? 0
+screen Reset
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: (session main) vi
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-keys (filter: active) ──────────────────────────────────────┐
+| │ Key set to use at the command prompt.                              │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: vi                                                   │
+| │ Available values are: emacs, vi                                    │
+| │ The default is: emacs                                              │
+| │                                                                    │
+| │ Global value: emacs                                                │
+| │                                                                    │
+| Reset status-keys to default?
+keys y
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)     Server Options
+| (1)   - Session Options
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| ┌ status-keys (filter: active) ──────────────────────────────────────┐
+| │ Key set to use at the command prompt.                              │
+| │                                                                    │
+| │ This is a session option.                                          │
+| │                                                                    │
+| │ Option value: emacs                                                │
+| │ Available values are: emacs, vi                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ show-options -g status-justify status-keys
+! command show-options: too many arguments (need at most 1)
+? 1
+keys H
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (0)   Server Options
+| (1) - Session Options
+| (2) └─> status-justify: (session main) centre
+| (3)   Window & Pane Options
+| (4) + Key Table - copy-mode
+| (5) + Key Table - copy-mode-vi
+| (6) + Key Table - mytab
+| (7) + Key Table - prefix
+| (8) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Key Table - prefix (filter: active) ───────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys H
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| (M-k) + Key Table - prefix
+| ┌ Key Table - prefix (filter: active) ───────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys v
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| (M-k) + Key Table - prefix
+| (M-l) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+keys v
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| (M-k) + Key Table - prefix
+| ┌ Key Table - prefix (filter: active) ───────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys /
+$ run-shell 'sleep 0.5'
+? 0
+screen (search)
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| (M-k) + Key Table - prefix
+| ┌ Key Table - prefix (filter: active) ───────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (search)
+keys mytab
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| (M-k) + Key Table - prefix
+| ┌ Key Table - prefix (filter: active) ───────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (search) mytab
+keys Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen mytab
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) + Key Table - mytab
+| ┌ Key Table - mytab (filter: active) ────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys l
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (2)   ├─>   status-bg: default
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| ┌ Key Table - mytab (filter: active) ────────────────────────────────┐
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j l
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (3)   ├─>   status-fg: default
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message hi                                        │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| (M-l)     ├─> Command: display-message hi
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message hi                                        │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| (M-l)     ├─> Command: display-message hi
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message hi                                        │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| (x) display-message hi
+keys C-u display-message Space bye Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (4)   ├─> + status-format
+| (5)   ├─>   status-interval: 15 seconds
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| (M-l)     ├─> Command: display-message bye
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message bye                                       │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys j j
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| (M-l)     ├─> Command: display-message bye
+| (M-m)     ├─> Note: a note
+| (M-n)     └─> Repeat: off
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does not repeat.                                          │
+| │                                                                    │
+| │ Command: display-message bye                                       │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+keys Enter
+$ run-shell 'sleep 0.5'
+? 0
+screen
+| (6)   ├─>   status-justify: (session main) centre
+| (7)   ├─>   status-keys: emacs
+| (8)   ├─>   status-left: [#{session_name}]
+| (9)   ├─>   status-left-length: 10
+| (M-a) ├─>   status-left-style: default
+| (M-b) ├─>   status-position: bottom
+| (M-c) ├─>   status-right: #{?window_bigger,[#{window_offset_x}#,#{wind
+| (M-d) ├─>   status-right-length: 40
+| (M-e) ├─>   status-right-style: default
+| (M-f) └─>   status-style: bg=green,fg=black
+| (M-g)   Window & Pane Options
+| (M-h) + Key Table - copy-mode
+| (M-i) + Key Table - copy-mode-vi
+| (M-j) - Key Table - mytab
+| (M-k) └─> - x
+| (M-l)     ├─> Command: display-message bye
+| (M-m)     ├─> Note: a note
+| (M-n)     └─> Repeat: on
+| ┌ x (filter: active) ────────────────────────────────────────────────┐
+| │ a note.                                                            │
+| │                                                                    │
+| │ This key is in the mytab table.                                    │
+| │ This key does repeat.                                              │
+| │                                                                    │
+| │ Command: display-message bye                                       │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| │                                                                    │
+| └────────────────────────────────────────────────────────────────────┘
+$ list-keys -T mytab
+? 0
+keys q
+$ run-shell 'sleep 0.5'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|

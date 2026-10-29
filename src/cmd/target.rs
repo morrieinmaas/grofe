@@ -303,8 +303,23 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
     let window_part = &rest[..dot_idx];
     let pane_part = &rest[dot_idx + 1..];
     let window_offset = tmux_offset(window_part);
-    if pane_part.is_empty() || (is_unsupported_token(window_part) && window_offset.is_none()) {
+    if is_unsupported_token(window_part) && window_offset.is_none() {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
+    }
+    if pane_part.is_empty() {
+        // tmux's `session:window.` (what a chooser names a window): the
+        // window, so its active pane.
+        if !tmux_targets() {
+            return Err(ParseError::UnsupportedTarget(s.to_string()));
+        }
+        let window = if window_part.is_empty() {
+            WindowRef::Current
+        } else if let Some(n) = window_offset {
+            WindowRef::Offset(n)
+        } else {
+            parse_window_ref(window_part)?
+        };
+        return Ok(Target::Window(session, window));
     }
     // Empty window part ("`sess:.1`", "`:.1`"): the current window.
     let window = if window_part.is_empty() {

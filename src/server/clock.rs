@@ -210,7 +210,8 @@ fn tick(state: &mut State) {
 
 /// `pane_in_mode` and `pane_mode` for a pane showing the clock.
 pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
-    if !state.clocks.is_active(pane) {
+    // A view mode opened over the clock is on top and answers.
+    if !state.clocks.is_active(pane) || state.copy.get(pane).is_some_and(|m| m.over_clock) {
         return None;
     }
     match name {
@@ -246,7 +247,10 @@ impl InputHook for ClockHook {
         let c = state.clients.get(&client)?;
         let session = model.sessions.get(&c.session)?;
         let pane = model.windows.get(&session.active)?.active;
-        if !state.clocks.is_active(pane) || c.keys.table() != ROOT_TABLE {
+        if !state.clocks.is_active(pane)
+            || c.keys.table() != ROOT_TABLE
+            || state.copy.get(pane).is_some_and(|m| m.over_clock)
+        {
             return None;
         }
         match input {
