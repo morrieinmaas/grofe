@@ -15,7 +15,8 @@ use crate::types::{ClientId, PaneId};
 
 /// How a line of output is read: tmux runs it through its input parser, so
 /// colours work and other control characters do nothing.
-struct Pen {
+#[derive(Debug, Clone)]
+pub(super) struct Pen {
     fg: Color,
     bg: Color,
     flags: CellFlags,
@@ -23,7 +24,7 @@ struct Pen {
 }
 
 impl Pen {
-    fn new() -> Pen {
+    pub(super) fn new() -> Pen {
         Pen {
             fg: Color::Named(NamedColor::Foreground),
             bg: Color::Named(NamedColor::Background),
@@ -186,13 +187,13 @@ impl Grid {
     /// the history grew.
     pub fn add_line(&mut self, text: &str, now: u64) -> usize {
         let before = self.hsize;
+        let mut pen = std::mem::replace(&mut self.pen, Pen::new());
         let mut w = Writer {
             cells: vec![blank(); self.sx],
             grid: self,
             x: 0,
             now,
         };
-        let mut pen = Pen::new();
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -237,6 +238,7 @@ impl Grid {
             }
         }
         w.end_row(false);
+        self.pen = pen;
         self.hsize - before
     }
 
@@ -374,6 +376,17 @@ mod tests {
         assert!(g.wrapped(0));
         assert_eq!(g.line_text(1), "efg");
         assert_ne!(g.snap(0, 0).fg, g.snap(0, 1).bg);
+    }
+
+    /// `window_copy_vadd` parses every line with the mode's one input
+    /// context, so a colour set on one line goes on into the next.
+    #[test]
+    fn a_colour_carries_over_to_the_next_line() {
+        let mut g = Grid::view(4, 3);
+        g.add_line("\x1b[31ma", 0);
+        g.add_line("b", 0);
+        assert_eq!(g.snap(0, 1).fg, g.snap(0, 0).fg);
+        assert_ne!(g.snap(0, 1).fg, Color::Named(NamedColor::Foreground));
     }
 
     #[test]

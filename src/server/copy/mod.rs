@@ -163,6 +163,9 @@ pub struct Grid {
     look_ids: HashMap<LookKey, u32>,
     /// The pane's kitty placements in the copy's rows (G3).
     images: Option<PaneImages>,
+    /// View mode's colours, kept from one line of output to the next as
+    /// tmux's one `ictx` for the mode keeps them.
+    pen: view::Pen,
 }
 
 /// A look as a hashable key (the colours as numbers).
@@ -233,6 +236,7 @@ impl Grid {
             looks: vec![blank()],
             look_ids,
             images: None,
+            pen: view::Pen::new(),
         }
     }
 
