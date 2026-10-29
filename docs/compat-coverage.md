@@ -303,16 +303,21 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   server's environment; its pipe ends when the command's end of the socket
   does, as tmux sees it, and survives `respawn-pane`; a command that
   reads more slowly than the pane writes loses what does not fit in 1024
-  reads. `capture-pane -N` pads a line to the cells tmux
+  reads, and when the pane goes its command gets up to 30 s to read what
+  is queued (tmux keeps the exited pane until the pipe drains). What `-I`
+  reads waits while the pane's input queue is full, so none of it is lost.
+  The command, and a copy-mode pipe's, are formats, short forms included
+  (`b2b/pipe-forms`). `capture-pane -N` pads a line to the cells tmux
   allocated for it, which grofe works out from the width written, so a line
   that was written in several pieces can differ; `-q` is accepted for `-a`,
   which is not built. `display-message -a` lists the variables grofe
   answers (about 115 of tmux's 195), and `-v` traces the expansion as
   tmux's `format_log` does for variables, `#{?}`, comparisons, boolean
   operators, `m`, `s`, `=`, `p`, `n`, `w`, `e`, `E`, `T`, `b`, `t`, `q` and
-  the loops; it traces the text after the front end rewrote it, so `#S`
-  and the other one-letter aliases, `#{l:}`, a `#{?}` chain and `#()`
-  show as their rewrites or not at all. `confirm-before -t` takes a client by name
+  the loops. A tmux client's text is traced in tmux's own format language,
+  as `format_expand1` reads it: the one-letter short forms, `#,` and `#}`,
+  a `#{?}` chain, styles and `#()`, whose command is traced but not run
+  (`b2b/display-v3`). `confirm-before -t` takes a client by name
   or tty, and `-y`, `-c` and `-b` as tmux.
 
 ## Key parity
