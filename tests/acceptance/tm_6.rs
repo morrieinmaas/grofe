@@ -536,9 +536,10 @@ fn output_does_not_move_copy_mode() {
     let dir = tempfile::tempdir().expect("tempdir");
     let go = dir.path().join("go");
     let srv = start(&format!(
-        "seq 1 200; stty -echo; while [ ! -e '{}' ]; do sleep 0.05; done; \
+        "seq 1 200; stty -echo; while [ ! -e '{}' ] && [ -d '{}' ]; do sleep 0.05; done; \
          echo one; echo two; echo three; exec cat",
-        go.display()
+        go.display(),
+        dir.path().display()
     ));
     let mut a = attach(&srv, 80, 24);
     a.wait_until("179 on top", WAIT, |t| top_line(t).trim_end() == "179");
@@ -644,9 +645,16 @@ fn opt(srv: &TestServer, name: &str) -> String {
         .to_string()
 }
 
-/// A shell that waits for `flag` to exist.
+/// A shell that waits for `flag` to exist, or for its directory to go:
+/// a test that ends without creating `flag` deletes its tempdir, so the
+/// shell cannot outlive it.
 fn until(flag: &std::path::Path) -> String {
-    format!("while [ ! -e '{}' ]; do sleep 0.05; done", flag.display())
+    let dir = flag.parent().unwrap_or(flag);
+    format!(
+        "while [ ! -e '{}' ] && [ -d '{}' ]; do sleep 0.05; done",
+        flag.display(),
+        dir.display()
+    )
 }
 
 /// Text typed while a binding's `run-shell` runs reaches the pane only

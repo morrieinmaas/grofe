@@ -501,8 +501,7 @@ struct Live {
 impl Drop for Live {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            common::stop_server(&mut child, &self.srv.socket, &self.srv.ctx());
         }
     }
 }

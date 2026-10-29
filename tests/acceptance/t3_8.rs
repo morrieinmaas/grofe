@@ -69,8 +69,9 @@ fn attach(srv: &TestServer, env: &[(&str, &str)]) -> Harness {
 /// Shell text that waits until `flag` exists.
 fn wait_flag(flag: &Path) -> String {
     format!(
-        "while [ ! -e {} ]; do sleep 0.05; done",
-        shell_quote(&flag.to_string_lossy())
+        "while [ ! -e {} ] && [ -d {} ]; do sleep 0.05; done",
+        shell_quote(&flag.to_string_lossy()),
+        shell_quote(&flag.parent().unwrap_or(flag).to_string_lossy())
     )
 }
 
@@ -279,11 +280,12 @@ fn a_stalled_client_gets_each_image_once() {
     // rewrites the screen. A pause per burst, not per line: each `sleep` is
     // a fork, about 20 ms on macOS.
     let script = format!(
-        "cat {}; {}; i=0; while [ ! -e {} ]; do printf '%s\\n' {}; i=$((i+1)); \
+        "cat {}; {}; i=0; while [ ! -e {} ] && [ -d {} ]; do printf '%s\\n' {}; i=$((i+1)); \
          [ $((i % 10)) -eq 0 ] && sleep 0.03; done; echo END; exec sleep 600",
         shell_quote(&fixture("icat-placeholder-2x2.bin").to_string_lossy()),
         wait_flag(&go),
         shell_quote(&stop.to_string_lossy()),
+        shell_quote(&srv.home.to_string_lossy()),
         "$i".repeat(23),
     );
     new_session(&srv, &script);

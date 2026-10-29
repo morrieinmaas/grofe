@@ -157,7 +157,26 @@ fn unstick_fifo(path: &Path, read: bool) {
         options.read(true);
     }
     let until = Instant::now() + UNSTICK_FOR;
-    // A non-blocking open for writing fails (ENXIO) while no reader waits.
+    if read {
+        // A non-blocking open for writing fails (ENXIO) while no reader
+        // has the FIFO. One quick open and close can still leave the
+        // reader blocked (macOS, seen: in its read, with no writer left),
+        // so the writer comes back, held a moment each time, until the
+        // reader has gone.
+        let mut met = false;
+        while Instant::now() < until {
+            match options.open(path) {
+                Ok(_writer) => {
+                    met = true;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) if met => return,
+                Err(_) => {}
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        return;
+    }
     while options.open(path).is_err() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(10));
     }
