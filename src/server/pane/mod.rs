@@ -747,6 +747,35 @@ impl PaneHandle {
         self.dirty.store(true, Ordering::Release);
     }
 
+    /// `send-keys -R`, as tmux's `input_reset` with `screen_write_reset`:
+    /// the parser leaves any half-read sequence, the modes go back to
+    /// their start (cursor shown, wrapping, nothing else), tab stops
+    /// and the scroll region reset, and the screen is cleared (into the
+    /// scrollback) with the cursor home.
+    pub fn reset_state(&self) {
+        // `screen_write_reset` leaves only MODE_CURSOR|MODE_WRAP, so the
+        // kitty keyboard flags, synchronized output and the character sets
+        // go too (as [`REINIT`], but the alternate screen stays and the
+        // screen is cleared). `screen_write_clearscreen` drops the images.
+        const RESET: &[u8] = b"\x1b[0m\x1b[?25h\x1b[?7h\x1b[4l\x1b[20l\x1b[?6l\x1b[?1l\x1b>\
+            \x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1004l\x1b[?2004l\
+            \x1b[?2026l\x1b[r\x1b[?5W\x1b(B\x0f\x1b[<99u\x1b[=0;1u\x1b[2J\x1b[H";
+        let mut emu = lock(&self.emu);
+        let Emu {
+            term,
+            marks,
+            parser,
+            images,
+            ..
+        } = &mut *emu;
+        // `input_reset`: the parser is back at ground.
+        *parser = Processor::new();
+        parser.advance(&mut written::Written(term, marks, None), RESET);
+        images.reset();
+        drop(emu);
+        self.dirty.store(true, Ordering::Release);
+    }
+
     /// Tells the pty `size` now, dropping any held size ([`WinsizeGate`]).
     fn set_winsize(&self, size: Size) -> stdio::Result<()> {
         let key = winsize_key(&size.winsize(*lock(&self.cell_px)));
@@ -1829,6 +1858,43 @@ mod tests {
         let plain = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
             .expect("spawn");
         assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
+    }
+
+    /// `send-keys -R` leaves only the cursor and wrapping on, as tmux's
+    /// `screen_write_reset`: the kitty keyboard flags go with the rest,
+    /// the alternate screen stays, and a half-read sequence is dropped.
+    #[tokio::test]
+    async fn reset_state_clears_every_mode_but_the_alternate_screen() {
+        let (tx, _rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        let feed = |bytes: &[u8]| {
+            let mut emu = lock(&handle.emu);
+            let Emu {
+                term,
+                marks,
+                parser,
+                ..
+            } = &mut *emu;
+            parser.advance(&mut written::Written(term, marks, None), bytes);
+        };
+        feed(b"\x1b[?1049h\x1b[?2004h\x1b=\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[>1u\x1b[?7l\x1b[31");
+        let m = handle.modes();
+        assert!(m.bracketed_paste && m.app_keypad && m.app_cursor && m.kitty_flags != 0);
+        handle.reset_state();
+        let m = handle.modes();
+        assert!(
+            !m.bracketed_paste && !m.app_keypad && !m.app_cursor,
+            "{m:?}"
+        );
+        assert_eq!((m.kitty_flags, m.mouse_encoding), (0, MouseEncoding::X10));
+        assert!(m.alt_screen, "the alternate screen stays");
+        // The `\x1b[31` cut short above does not swallow what comes next.
+        feed(b"x");
+        let emu = lock(&handle.emu);
+        let mode = *emu.term.mode();
+        assert!(mode.contains(TermMode::LINE_WRAP) && mode.contains(TermMode::SHOW_CURSOR));
+        assert_eq!(emu.term.grid()[Line(0)][Column(0)].c, 'x');
     }
 
     /// A drag's resizes reach the pty at most every [`RESIZE_HOLD`], the

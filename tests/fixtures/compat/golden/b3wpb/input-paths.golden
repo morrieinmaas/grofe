@@ -1,0 +1,82 @@
+$ new-session -d -s main -x 40 -y 12 'stty -echo; cat -v'
+? 0
+$ split-window -d -t main 'stty -echo; cat -v'
+? 0
+$ split-window -d -t main 'stty -echo; cat -v'
+? 0
+$ set-option -g prefix C-a
+? 0
+$ set-option -w -t main synchronize-panes on
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ send-prefix -t main:.1
+? 0
+$ send-keys -t main:.1 Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.2
+^A
+
+? 0
+$ capture-pane -p -t main:.3
+^A
+
+
+
+
+? 0
+$ set-buffer -b pb pasted
+? 0
+$ paste-buffer -b pb -t main:.1
+? 0
+$ send-keys -t main:.1 Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.1
+^A
+pasted
+
+? 0
+$ capture-pane -p -t main:.2
+
+
+? 0
+$ select-pane -d -t main:.2
+? 0
+$ paste-buffer -d -b pb -t main:.2
+? 0
+$ list-buffers -F '#{buffer_name}'
+? 0
+$ send-prefix -t main:.2
+? 0
+$ send-keys -t main:.2 Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.2
+
+
+? 0
+$ new-session -d -s modes -x 30 -y 6 "printf 'one\\ntwo\\n\\033[?2004h\\033=\\033[?1h\\033[4h\\033[?6h\\033[?1000h\\033[?7l'; sleep 100000"
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ display-message -p -t modes 'bp=#{bracket_paste_flag} kp=#{keypad_flag} kc=#{keypad_cursor_flag} ins=#{insert_flag} org=#{origin_flag} mouse=#{mouse_any_flag} wrap=#{wrap_flag}'
+bp=1 kp=1 kc=1 ins=1 org=1 mouse=1 wrap=0
+? 0
+$ send-keys -R -t modes
+? 0
+$ display-message -p -t modes 'bp=#{bracket_paste_flag} kp=#{keypad_flag} kc=#{keypad_cursor_flag} ins=#{insert_flag} org=#{origin_flag} mouse=#{mouse_any_flag} wrap=#{wrap_flag} cur=#{cursor_x},#{cursor_y}'
+bp=0 kp=0 kc=0 ins=0 org=0 mouse=0 wrap=1 cur=0,0
+? 0
+$ capture-pane -p -t modes
+
+
+
+
+
+
+? 0

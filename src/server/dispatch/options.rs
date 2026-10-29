@@ -4157,6 +4157,9 @@ impl FormatVars for FormatCtx<'_> {
                 .position(|id| *id == w.id)
                 .map_or(0, |at| at + 1)
                 .to_string(),
+            "pane_input_off" => {
+                return Some(flag(m.panes.get(&self.pane)?.input_off));
+            }
             "pane_synchronized" => {
                 flag(m.options.lookup("synchronize-panes", &self.option_chain()) == Some("on"))
             }
@@ -4475,11 +4478,9 @@ pub fn list_names() -> impl Iterator<Item = &'static str> {
 const NO_EFFECT: &[&str] = &[
     "aggressive-resize",
     "default-command",
-    "default-terminal",
     "extended-keys",
     "extended-keys-format",
     "status-keys",
-    "synchronize-panes",
     "terminal-features",
     "terminal-overrides",
     "window-status-activity-style",

@@ -940,7 +940,8 @@ fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
     if state.copy.is_active(pane) {
         return Routed::Consumed;
     }
-    let Some(p) = state.model.panes.get(&pane) else {
+    // A pane taking no input gets no mouse either (tmux's `window_pane_key`).
+    let Some(p) = state.model.panes.get(&pane).filter(|p| !p.input_off) else {
         return Routed::Consumed;
     };
     if let Some(bytes) = encode(m, x, y, &p.handle.modes())

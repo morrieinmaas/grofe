@@ -1,0 +1,19 @@
+# B3 WP-B review: a paste typed on a client under synchronize-panes. The text is copied as is; the paste markers are keys, so each pane gets them only if it turned bracketed paste on itself (pane 1 and 3 did, pane 2 did not), whatever the active pane asked for.
+$ new-session -d -s main -x 60 -y 15 "printf '\\033[?2004h'; stty -echo; cat -v"
+$ split-window -d -t main 'stty -echo; cat -v'
+$ split-window -d -t main:.2 "printf '\\033[?2004h'; stty -echo; cat -v"
+$ set-option -g status off
+$ set-option -w -t main synchronize-panes on
+$ run-shell 'sleep 1'
+client 60x15 attach -t main
+keys Escape [200~ hi Escape [201~ Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.1
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ select-pane -t main:.2
+keys Escape [200~ yo Escape [201~ Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.1
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3

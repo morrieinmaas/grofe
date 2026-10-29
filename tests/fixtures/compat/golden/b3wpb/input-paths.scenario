@@ -1,0 +1,31 @@
+# B3 WP-B review: the other ways input reaches a pane under synchronize-panes and select-pane -d. send-prefix is a key (copied to the synchronized panes, dropped by a pane taking no input); paste-buffer writes to its target alone and pastes nothing into a pane taking no input, though -d still deletes the buffer; send-keys -R puts the modes back (bracketed paste, keypad, insert, origin, mouse, wrap) and clears the screen.
+$ new-session -d -s main -x 40 -y 12 'stty -echo; cat -v'
+$ split-window -d -t main 'stty -echo; cat -v'
+$ split-window -d -t main 'stty -echo; cat -v'
+$ set-option -g prefix C-a
+$ set-option -w -t main synchronize-panes on
+$ run-shell 'sleep 1'
+$ send-prefix -t main:.1
+$ send-keys -t main:.1 Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ set-buffer -b pb pasted
+$ paste-buffer -b pb -t main:.1
+$ send-keys -t main:.1 Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.1
+$ capture-pane -p -t main:.2
+$ select-pane -d -t main:.2
+$ paste-buffer -d -b pb -t main:.2
+$ list-buffers -F '#{buffer_name}'
+$ send-prefix -t main:.2
+$ send-keys -t main:.2 Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.2
+$ new-session -d -s modes -x 30 -y 6 "printf 'one\\ntwo\\n\\033[?2004h\\033=\\033[?1h\\033[4h\\033[?6h\\033[?1000h\\033[?7l'; sleep 100000"
+$ run-shell 'sleep 1'
+$ display-message -p -t modes 'bp=#{bracket_paste_flag} kp=#{keypad_flag} kc=#{keypad_cursor_flag} ins=#{insert_flag} org=#{origin_flag} mouse=#{mouse_any_flag} wrap=#{wrap_flag}'
+$ send-keys -R -t modes
+$ display-message -p -t modes 'bp=#{bracket_paste_flag} kp=#{keypad_flag} kc=#{keypad_cursor_flag} ins=#{insert_flag} org=#{origin_flag} mouse=#{mouse_any_flag} wrap=#{wrap_flag} cur=#{cursor_x},#{cursor_y}'
+$ capture-pane -p -t modes

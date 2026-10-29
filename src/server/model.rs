@@ -98,12 +98,34 @@ pub struct Window {
     /// (tmux's `last_panes`, for `last-pane`), kept by
     /// [`Window::set_active`] and [`Window::lose_pane`].
     pub last_panes: Vec<PaneId>,
+    /// When each pane last became active (tmux's `active_point`), for
+    /// `select-pane -L/-R/-U/-D`; a pane never made active has none (0).
+    pub active_points: ActivePoints,
     /// Floating panes (tmux 3.7's `new-pane`, TC.6), in creation order:
     /// panes of the window outside its layout, drawn over it.
     pub floating: Vec<Floating>,
     /// `pane-border-status` as last applied (`clients::sync_pane_status`):
     /// the panes along the top or bottom edge give up a row to their title.
     pub pane_status: PaneStatus,
+}
+
+/// Panes' `active_point`s, drawn from one counter for the whole server as
+/// in tmux, where it starts at 0 (so the first pane made active ties with
+/// the panes never made active).
+#[derive(Debug, Default, Clone)]
+pub struct ActivePoints(std::collections::BTreeMap<PaneId, u64>);
+
+static NEXT_ACTIVE_POINT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl ActivePoints {
+    fn stamp(&mut self, pane: PaneId) {
+        let point = NEXT_ACTIVE_POINT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.0.insert(pane, point);
+    }
+
+    pub fn get(&self, pane: PaneId) -> u64 {
+        self.0.get(&pane).copied().unwrap_or(0)
+    }
 }
 
 /// Where a floating pane is: the window cell of its top-left content
@@ -143,6 +165,7 @@ impl Window {
         self.last_panes.retain(|p| *p != pane && *p != old);
         self.last_panes.push(old);
         self.active = pane;
+        self.active_points.stamp(pane);
     }
 
     /// The pane `last-pane` goes back to.
@@ -267,6 +290,9 @@ pub struct Pane {
     /// The size last given to the pty.
     pub cols: u16,
     pub rows: u16,
+    /// `select-pane -d` / `last-pane -d` (tmux's `PANE_INPUTOFF`): the pane
+    /// takes no keys, pastes or `send-keys`.
+    pub input_off: bool,
     pub handle: PaneHandle,
 }
 
@@ -1117,6 +1143,7 @@ mod tests {
                 dead: None,
                 cols: 80,
                 rows: 24,
+                input_off: false,
                 handle,
             },
         );
@@ -1177,6 +1204,7 @@ mod tests {
             silence_flag: false,
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
+            active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
             links: Vec::new(),
@@ -1196,6 +1224,7 @@ mod tests {
             silence_flag: false,
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
+            active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
             links: Vec::new(),
@@ -1249,6 +1278,7 @@ mod tests {
             silence_flag: false,
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
+            active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
             links: Vec::new(),
@@ -1298,6 +1328,7 @@ mod tests {
                 silence_flag: false,
                 activity: std::time::SystemTime::now(),
                 last_panes: Vec::new(),
+                active_points: Default::default(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
                 links: Vec::new(),
@@ -1392,6 +1423,7 @@ mod tests {
                 silence_flag: false,
                 activity: t0 - Duration::from_secs(age),
                 last_panes: Vec::new(),
+                active_points: Default::default(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
                 links: Vec::new(),
@@ -1415,6 +1447,7 @@ mod tests {
             silence_flag: false,
             activity: t0,
             last_panes: Vec::new(),
+            active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
             links: Vec::new(),

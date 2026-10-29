@@ -203,7 +203,11 @@ fn every_new_verb_parses_with_its_rows_flags() {
         ),
         (
             vec!["last-pane", "-t", "@2"],
-            Command::LastPane(LastPane { target: t("@2") }),
+            Command::LastPane(LastPane {
+                target: t("@2"),
+                keep_zoom: false,
+                input: None,
+            }),
         ),
         (
             vec!["rotate-window", "-D"],
@@ -1092,6 +1096,7 @@ fn equals_targets_are_bare_words() {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                input: None,
                 mark: grofe::cmd::Mark::No,
             })),
             "{given}"

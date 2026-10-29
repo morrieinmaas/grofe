@@ -388,6 +388,7 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             silence_flag: false,
             activity: std::time::SystemTime::now(),
             last_panes: Vec::new(),
+            active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
             links: Vec::new(),
@@ -764,7 +765,7 @@ pub fn resize_window(
 pub fn last_pane(state: &mut State, ctx: &ClientCtx, c: LastPane) -> Result<String, String> {
     let model = &mut state.model;
     let window = model.resolve_window(&c.target, ctx)?;
-    select_last(model, window, false)?;
+    select_last(model, window, c.keep_zoom, c.input)?;
     Ok(String::new())
 }
 

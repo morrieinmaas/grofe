@@ -272,7 +272,7 @@ fn spawn_for(
         rows: 0,
         history_limit: state.model.history_limit(session),
         socket: state.socket.clone(),
-        term: state.inner_term,
+        term: state.pane_term(),
         cell_px: clients::cell_px(state, session),
         graphics_ok: false,
         images: false,
