@@ -40,7 +40,7 @@ use tokio::time::Instant;
 
 use crate::server::dispatch::options::Owner;
 use crate::server::{Job, State, clients, hooks};
-use crate::types::{PaneId, WindowId};
+use crate::types::{PaneId, SessionId, WindowId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Alert {
@@ -259,17 +259,38 @@ fn raise(state: &mut State, window: WindowId, alert: Alert) {
     let action = option(state, window, alert.action()).unwrap_or_default();
     if applies(&action, current) {
         hooks::window_alert(state, alert.hook(), window);
-        visual(state, window, alert);
     }
-}
-
-/// tmux's `alerts_set_message`: what each client of the window's session
-/// gets for `alert`, by the session's `visual-*` option.
-fn visual(state: &mut State, window: WindowId, alert: Alert) {
+    // Every session the window is linked into (a session group's members
+    // too), each by its own action, as tmux walks the window's winlinks.
     let Some(w) = state.model.windows.get(&window) else {
         return;
     };
-    let session = w.session;
+    let mut sessions: Vec<SessionId> = w.links.iter().map(|(s, _)| *s).collect();
+    if sessions.is_empty() {
+        sessions.push(w.session);
+    }
+    sessions.sort();
+    sessions.dedup();
+    for session in sessions {
+        let current = state
+            .model
+            .sessions
+            .get(&session)
+            .is_some_and(|s| s.active == window);
+        let chain = [Owner::Window(window), Owner::Session(session)];
+        let action = state.model.options.lookup(alert.action(), &chain);
+        if applies(action.unwrap_or_default(), current) {
+            visual(state, window, session, alert);
+        }
+    }
+}
+
+/// tmux's `alerts_set_message`: what each client of `session` gets for
+/// `alert` in `window`, by the session's `visual-*` option.
+fn visual(state: &mut State, window: WindowId, session: SessionId, alert: Alert) {
+    let Some(w) = state.model.windows.get(&window) else {
+        return;
+    };
     let (word, option) = alert.visual();
     let how = state
         .model

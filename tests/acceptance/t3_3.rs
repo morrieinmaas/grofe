@@ -255,6 +255,21 @@ fn bells_set_the_window_flag_as_tmux_does() {
     wait_display(&srv, "main:1", flag, "1");
 }
 
+/// A bell rings the clients of every session its window is linked into,
+/// as tmux's `alerts_check_bell` walks the window's winlinks: a client of
+/// a grouped session hears a bell in a window it shares.
+#[test]
+fn a_bell_rings_a_client_of_a_grouped_session() {
+    let srv = start("while read l; do printf '\\007'; done");
+    srv.cmd(&["new-session", "-d", "-s", "view", "-t", "main"])
+        .expect("grouped new-session");
+    let mut a = Harness::spawn_attach_with_env(srv.command(), "view", &[], 80, 24);
+    let mark = a.wait_for_output(b"\x1b[2J", 0);
+    srv.cmd(&["send-keys", "-t", "main:1", "Enter"])
+        .expect("send-keys");
+    a.wait_for_output(b"\x07", mark);
+}
+
 // ---- title ----
 
 /// Case 5 (R15): `set-titles` off (the default, matching tmux 3.7b) sends
