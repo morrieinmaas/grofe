@@ -20,7 +20,8 @@
 //! - `GROFE_REMAIN_ON_EXIT=1`: tests run with `remain-on-exit` on (spec §4.2).
 //!
 //! Every wait is bounded, and dropping a `TestServer` (including while a test
-//! panics) stops its server: `kill-server` first, then SIGKILL as a fallback.
+//! panics) stops its server: `kill-server` first, then SIGKILL as a fallback,
+//! then SIGKILL to whatever it started that still runs ([`stop_server`]).
 
 #![allow(dead_code)]
 
@@ -280,16 +281,14 @@ impl TestServer {
 const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 
 /// Stops the servers this harness started. The one [`Self::start`] spawned
-/// is this process's child: it is killed by pid and reaped, whether or not
-/// it still answers on its socket (a server unlinks its socket as the first
-/// step of shutting down, so a live process can have none).
+/// is this process's child: [`stop_server`] ends it, and what it started,
+/// whether or not it still answers on its socket (a server unlinks its
+/// socket as the first step of shutting down, so a live process can have
+/// none).
 impl Drop for TestServer {
     fn drop(&mut self) {
         if let Some(mut child) = self.server.take() {
-            let _ = child.kill();
-            // Bounded, so a server that will not die cannot hang the test;
-            // reaping it keeps it from lingering as a zombie.
-            let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
+            stop_server(&mut child, &self.socket, &self.ctx());
         }
         // ponytail: servers a test started some other way (auto-start, `-L`)
         // are not our children, so they only get a polite `kill-server` over
@@ -318,6 +317,83 @@ impl TestServer {
         sockets
     }
 }
+
+/// Stops `child`, a server this process spawned on `socket`, and what it
+/// left running. `kill-server` first, so the server ends its jobs, plugins
+/// and popups as on any exit; SIGKILL if it has not gone within the bound;
+/// the reap is bounded too, so a server that will not die cannot hang the
+/// test. Then, as a backstop, SIGKILL to every process that was below it
+/// and still runs: a job that ignored the server's SIGTERM, or a job's own
+/// child, which the server never signals.
+pub fn stop_server(child: &mut Child, socket: &Path, ctx: &ClientCtx) {
+    let below = descendants(child.id());
+    let reaped = |child: &mut Child| !matches!(child.try_wait(), Ok(None));
+    if kill_server_over(socket, ctx) {
+        let _ = wait_until(|| reaped(child), TEARDOWN_WAIT);
+    }
+    let _ = child.kill();
+    let _ = wait_until(|| reaped(child), TEARDOWN_WAIT);
+    kill_leftovers(&below);
+}
+
+/// Every process below `root` (pid and start time), from `ps`; empty if
+/// `ps` cannot say.
+fn descendants(root: u32) -> Vec<(i32, String)> {
+    let procs = processes();
+    let mut found = Vec::new();
+    let mut parents = vec![root as i32];
+    while let Some(parent) = parents.pop() {
+        for (pid, ppid, start) in &procs {
+            if *ppid == parent && !found.iter().any(|(p, _)| p == pid) {
+                found.push((*pid, start.clone()));
+                parents.push(*pid);
+            }
+        }
+    }
+    found
+}
+
+/// Every process's pid, parent pid and start time.
+fn processes() -> Vec<(i32, i32, String)> {
+    let Ok(out) = Command::new("ps")
+        .args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let ppid = fields.next()?.parse().ok()?;
+            Some((pid, ppid, fields.collect::<Vec<_>>().join(" ")))
+        })
+        .collect()
+}
+
+/// SIGKILL to each of `procs` still running. A pane's shell goes on its
+/// own once its pty hangs up, so they get a moment first; a pid is only
+/// signalled while its start time is still the one recorded, never a
+/// process that reused it.
+fn kill_leftovers(procs: &[(i32, String)]) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    let alive = |pid: i32| kill(Pid::from_raw(pid), None).is_ok();
+    if wait_until(|| procs.iter().all(|(pid, _)| !alive(*pid)), LEFTOVER_GRACE).is_ok() {
+        return;
+    }
+    for (pid, _, start) in processes() {
+        if procs.iter().any(|(p, s)| *p == pid && *s == start) {
+            let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+    }
+}
+
+/// How long [`kill_leftovers`] lets processes end on their own.
+const LEFTOVER_GRACE: Duration = Duration::from_millis(300);
 
 /// Sends `kill-server` over a control connection to `socket`, waiting a
 /// bounded time for the reply. Whether a server took the request.

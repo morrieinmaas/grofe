@@ -85,8 +85,9 @@ fn attach(srv: &TestServer, env: &[(&str, &str)]) -> Harness {
 
 fn wait_flag(flag: &Path) -> String {
     format!(
-        "while [ ! -e {} ]; do sleep 0.05; done",
-        shell_quote(&flag.to_string_lossy())
+        "while [ ! -e {} ] && [ -d {} ]; do sleep 0.05; done",
+        shell_quote(&flag.to_string_lossy()),
+        shell_quote(&flag.parent().unwrap_or(flag).to_string_lossy())
     )
 }
 
@@ -1000,12 +1001,13 @@ fn a_stalled_client_gets_its_placements_again() {
         &format!("{}{}", at(18, 1), image(1, "c=4,r=2,C=1")),
     );
     let script = format!(
-        "{}; {draw}; {}; i=0; while [ ! -e {} ]; do r=1; while [ $r -le 10 ]; do \
+        "{}; {draw}; {}; i=0; while [ ! -e {} ] && [ -d {} ]; do r=1; while [ $r -le 10 ]; do \
          printf '\\033[%d;1H%s%s' $r $i {}; r=$((r+1)); done; i=$((i+1)); \
          [ $((i % 10)) -eq 0 ] && sleep 0.03; done; printf '\\033[12;1HEND'; exec sleep 600",
         wait_flag(&go),
         wait_flag(&churn),
         shell_quote(&stop.to_string_lossy()),
+        shell_quote(&srv.home.to_string_lossy()),
         shell_quote(&"x".repeat(70)),
     );
     session(&srv, &script, true);

@@ -492,11 +492,16 @@ impl Rig {
 /// A case that fails part way still stops its server.
 impl Drop for Rig {
     fn drop(&mut self) {
-        let _ = self
+        // Bounded: a server that stops answering must not hang the test.
+        let kill = self
             .command(&["kill-server"])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn();
+        if let Ok(kill) = kill {
+            let _ = common::wait_child(kill, CMD);
+        }
     }
 }
 

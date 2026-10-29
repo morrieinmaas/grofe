@@ -101,11 +101,13 @@ impl Control {
 }
 
 /// A pane command that waits for `flag` to exist, then exits with
-/// `status`, so a test decides when the pane exits.
+/// `status`, so a test decides when the pane exits. It also stops once
+/// `flag`'s directory is gone, so it cannot outlive the test's tempdir.
 fn exit_on(flag: &std::path::Path, status: i32) -> String {
     format!(
-        "while [ ! -e {} ]; do sleep 0.01; done; exit {status}",
-        flag.display()
+        "while [ ! -e {} ] && [ -d {} ]; do sleep 0.01; done; exit {status}",
+        flag.display(),
+        flag.parent().unwrap_or(flag).display()
     )
 }
 
@@ -605,8 +607,9 @@ fn respawn_ignores_the_old_processes_output() {
     let srv = TestServer::start();
     let (ids, dir) = race_panes(&srv, |flag| {
         format!(
-            "while [ ! -e {} ]; do sleep 0.01; done; printf OLD-OUTPUT-MARK; sleep 30",
-            flag.display()
+            "while [ ! -e {} ] && [ -d {} ]; do sleep 0.01; done; printf OLD-OUTPUT-MARK; sleep 30",
+            flag.display(),
+            flag.parent().unwrap_or(flag).display()
         )
     });
     let mut sub = srv.subscribe(&["pane-output", "option-changed"]).unwrap();

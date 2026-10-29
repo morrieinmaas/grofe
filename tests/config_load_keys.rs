@@ -22,8 +22,7 @@ struct Live {
 
 impl Drop for Live {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        common::stop_server(&mut self.child, &self.srv.socket, &self.srv.ctx());
     }
 }
 
