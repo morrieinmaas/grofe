@@ -613,6 +613,17 @@ impl Model {
     /// nothing in the layout; the pane itself keeps at least one cell each
     /// way (tmux's `PANE_MINIMUM`).
     pub fn relayout(&mut self, window: WindowId) {
+        self.relayout_with(window, false);
+    }
+
+    /// [`Model::relayout`] for a mouse drag's report: each pty learns its
+    /// new size at most every 250 ms, as in tmux
+    /// ([`crate::server::pane::PaneHandle::resize_held`]).
+    pub fn relayout_held(&mut self, window: WindowId) {
+        self.relayout_with(window, true);
+    }
+
+    fn relayout_with(&mut self, window: WindowId, held: bool) {
         let Some(w) = self.windows.get(&window) else {
             return;
         };
@@ -633,7 +644,12 @@ impl Model {
             if (p.cols, p.rows) != (cols, rows) {
                 p.cols = cols;
                 p.rows = rows;
-                if let Err(e) = p.handle.resize(cols, rows) {
+                let resized = if held {
+                    p.handle.resize_held(cols, rows)
+                } else {
+                    p.handle.resize(cols, rows)
+                };
+                if let Err(e) = resized {
                     eprintln!("grofe server: resizing {id}: {e}");
                 }
             }

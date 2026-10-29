@@ -430,11 +430,11 @@ read back what tmux did.
 | `root` | `TripleClick1Pane` | mouse | both | built-in (TM.6): the same with `select-line`. Read back against tmux |
 | `root` | `MouseDrag1ScrollbarSlider` | mouse | both | never fires: grofe draws no pane scrollbar (copy-mode.md, out of scope) |
 | `root` | `MouseDown1Pane` | mouse | both | built-in: a press focuses the pane under the pointer and reaches it if it asked for the mouse |
-| `root` | `MouseDrag1Border` | mouse | both | built-in: the border under the pointer follows the drag until the release |
+| `root` | `MouseDrag1Border` | mouse | both | a default root binding, `resize-pane -M`, that runs the built-in drag: the border under the pointer follows it until the release; unbound, a border does nothing, as in tmux |
 | `root` | `WheelUpStatus` | mouse | both | built-in: the previous window |
 | `root` | `WheelDownStatus` | mouse | both | built-in: the next window |
 | `root` | `MouseDown2Pane` | mouse | both | built-in: focus, then `paste-buffer -p` over a pane in no mode that did not ask for the mouse; otherwise the press reaches the pane. Read back against tmux |
-| `root` | `MouseDown1Border` | mouse | both | `select-pane -M` clears the mark, which is out of scope (`m`); the built-in drag starts here |
+| `root` | `MouseDown1Border` | mouse | both | a default root binding, `select-pane -M`: clears the mark (out of scope, `m`) and focuses a floating pane; unbound, the click does nothing, as in tmux |
 | `root` | `MouseDown3Pane` | mouse | both | no replacement: tmux's pane menu opens at `-x M -y M`, a mouse argv form (spec §4.5); the press reaches a pane that asked for the mouse |
 | `root` | `M-MouseDown3Pane` | mouse | both | no replacement: the same pane menu, at `-x M -y M` |
 | `root` | `MouseDown3Status` | mouse | both | no replacement: tmux's window menu opens at `-x W -y W`, a mouse argv form |

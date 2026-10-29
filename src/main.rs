@@ -16,6 +16,8 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod layout_glue;
+
 use grofe::client;
 use grofe::paths::{self, Env};
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
@@ -126,6 +128,8 @@ fn main() -> ExitCode {
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
+        // grofe's own verb: under the tmux name `layout` is an unknown command.
+        "layout" if dialect() == Dialect::Grofe => layout_glue::run(&globals, &rest[1..]),
         // A stdio bridge to the server (T6.2).
         // grofe's own verb: under the tmux name `control` is an unknown command.
         "control" if dialect() == Dialect::Grofe && rest.len() == 1 => {

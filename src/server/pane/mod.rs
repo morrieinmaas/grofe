@@ -18,6 +18,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
@@ -283,6 +284,78 @@ impl Size {
 
 nix::ioctl_write_ptr_bad!(set_winsize, libc::TIOCSWINSZ, Winsize);
 
+/// How long a held resize waits after the pty last learned its size
+/// (tmux's 250 ms pane `resize_timer`).
+const RESIZE_HOLD: Duration = Duration::from_millis(250);
+
+/// The sizes a held resize ([`PaneHandle::resize_held`]) has not told the
+/// pty yet, as tmux's pane `resize_queue`: a mouse drag resizes the pane
+/// on every report, and its program hears of it at most every
+/// [`RESIZE_HOLD`].
+#[derive(Debug, Default)]
+struct WinsizeGate {
+    /// What the pty was last told (rows, cols, x and y pixels).
+    sent: Option<[u16; 4]>,
+    /// Held sizes wait until then.
+    hold_until: Option<Instant>,
+    /// The held sizes, oldest first.
+    queue: Vec<[u16; 4]>,
+    /// A task is waiting to tell the pty the queue.
+    flushing: bool,
+}
+
+fn winsize_key(ws: &Winsize) -> [u16; 4] {
+    [ws.ws_row, ws.ws_col, ws.ws_xpixel, ws.ws_ypixel]
+}
+
+fn send_winsize(master: &AsyncFd<OwnedFd>, key: [u16; 4]) -> stdio::Result<()> {
+    let [ws_row, ws_col, ws_xpixel, ws_ypixel] = key;
+    let ws = Winsize {
+        ws_row,
+        ws_col,
+        ws_xpixel,
+        ws_ypixel,
+    };
+    // SAFETY: a valid fd we hold and a pointer to a live Winsize.
+    unsafe { set_winsize(master.get_ref().as_raw_fd(), &ws) }?;
+    Ok(())
+}
+
+/// Tells the pty `gate`'s held sizes once their wait is over, as tmux's
+/// `server_client_check_pane_resize`: the newest, unless the sizes came
+/// back to the one the pty has, which takes the one before it now and the
+/// newest 10 ms later so the program still redraws.
+async fn flush_winsize(master: Arc<AsyncFd<OwnedFd>>, gate: Arc<Mutex<WinsizeGate>>) {
+    loop {
+        let wait = lock(&gate)
+            .hold_until
+            .map(|t| t.saturating_duration_since(Instant::now()));
+        // A resize told in the meantime puts the wait off again.
+        if let Some(wait) = wait.filter(|w| !w.is_zero()) {
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        let mut g = lock(&gate);
+        let queue = std::mem::take(&mut g.queue);
+        let (key, rest, hold) = match queue.as_slice() {
+            [] => {
+                g.flushing = false;
+                return;
+            }
+            [.., before, last] if Some(*last) == g.sent => {
+                (*before, vec![*last], Duration::from_millis(10))
+            }
+            [.., last] => (*last, Vec::new(), RESIZE_HOLD),
+        };
+        if let Err(e) = send_winsize(&master, key) {
+            eprintln!("grofe server: resizing a pane's pty: {e}");
+        }
+        g.sent = Some(key);
+        g.hold_until = Some(Instant::now() + hold);
+        g.queue = rest;
+    }
+}
+
 /// Ceiling on how many fds the fallback cloexec loop scans (macOS, or a Linux
 /// kernel too old for `CLOSE_RANGE_CLOEXEC`, i.e. before 5.11). `getrlimit`'s current
 /// soft limit is normally in the low thousands; a runaway or `RLIM_INFINITY`
@@ -405,6 +478,8 @@ pub struct PaneHandle {
     reported_path: Mutex<Option<String>>,
     /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
     tty: Option<PathBuf>,
+    /// Held resizes not yet told to the pty.
+    winsize: Arc<Mutex<WinsizeGate>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -547,6 +622,7 @@ impl PaneHandle {
             // A respawned pane keeps what it reported, as tmux's does.
             reported_path: Mutex::new(over.and_then(PaneHandle::reported_path)),
             tty,
+            winsize: Arc::default(),
             tasks: vec![reader, writer],
         })
     }
@@ -557,6 +633,37 @@ impl PaneHandle {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> stdio::Result<()> {
+        let size = self.resize_screen(cols, rows);
+        self.set_winsize(size)
+    }
+
+    /// [`PaneHandle::resize`] for a mouse drag's report: the screen now,
+    /// the pty (and so the program's `SIGWINCH`) at most every
+    /// [`RESIZE_HOLD`], always ending at the last size ([`WinsizeGate`]).
+    pub fn resize_held(&self, cols: u16, rows: u16) -> stdio::Result<()> {
+        let size = self.resize_screen(cols, rows);
+        let key = winsize_key(&size.winsize(*lock(&self.cell_px)));
+        let mut g = lock(&self.winsize);
+        let held = g.flushing || g.hold_until.is_some_and(|t| Instant::now() < t);
+        let runtime = tokio::runtime::Handle::try_current().ok();
+        let Some(runtime) = runtime.filter(|_| held) else {
+            send_winsize(&self.master, key)?;
+            g.sent = Some(key);
+            g.hold_until = Some(Instant::now() + RESIZE_HOLD);
+            return Ok(());
+        };
+        if g.queue.last().or(g.sent.as_ref()) != Some(&key) {
+            g.queue.push(key);
+        }
+        if !g.flushing && !g.queue.is_empty() {
+            g.flushing = true;
+            runtime.spawn(flush_winsize(self.master.clone(), self.winsize.clone()));
+        }
+        Ok(())
+    }
+
+    /// The emulator resized to `cols` by `rows` (at least the minimum).
+    fn resize_screen(&self, cols: u16, rows: u16) -> Size {
         let size = Size {
             cols: cols.max(MIN_COLS),
             rows: rows.max(1),
@@ -577,8 +684,7 @@ impl PaneHandle {
         marks.resize(term, size);
         let after = term.grid().history_size();
         images.resized(u32::from(size.cols), u32::from(size.rows), (before, after));
-        drop(emu);
-        self.set_winsize(size)
+        size
     }
 
     /// `clear-history`: drops the scrollback and the marks of its lines
@@ -605,10 +711,14 @@ impl PaneHandle {
         self.dirty.store(true, Ordering::Release);
     }
 
+    /// Tells the pty `size` now, dropping any held size ([`WinsizeGate`]).
     fn set_winsize(&self, size: Size) -> stdio::Result<()> {
-        let winsize = size.winsize(*lock(&self.cell_px));
-        // SAFETY: a valid fd we hold and a pointer to a live Winsize.
-        unsafe { set_winsize(self.master.get_ref().as_raw_fd(), &winsize) }?;
+        let key = winsize_key(&size.winsize(*lock(&self.cell_px)));
+        let mut g = lock(&self.winsize);
+        g.queue.clear();
+        send_winsize(&self.master, key)?;
+        g.sent = Some(key);
+        g.hold_until = Some(Instant::now() + RESIZE_HOLD);
         Ok(())
     }
 
@@ -1639,6 +1749,29 @@ mod tests {
         let plain = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
             .expect("spawn");
         assert_eq!(winsize_of(&plain), (80, 24, 0, 0));
+    }
+
+    /// A drag's resizes reach the pty at most every [`RESIZE_HOLD`], the
+    /// first at once and the last in the end (tmux's pane resize queue); a
+    /// plain resize goes at once and drops the held ones.
+    #[tokio::test]
+    async fn held_resizes_are_coalesced_and_end_at_the_last() {
+        let (tx, _rx) = mpsc::channel(8);
+        let handle = PaneHandle::spawn(spec_for(&["sleep", "30"]), tx, Arc::new(Notify::new()))
+            .expect("spawn");
+        handle.resize_held(40, 10).expect("first");
+        assert_eq!(winsize_of(&handle), (40, 10, 0, 0));
+        for cols in 41..=50 {
+            handle.resize_held(cols, 10).expect("held");
+        }
+        assert_eq!(winsize_of(&handle), (40, 10, 0, 0));
+        tokio::time::sleep(RESIZE_HOLD + Duration::from_millis(150)).await;
+        assert_eq!(winsize_of(&handle), (50, 10, 0, 0));
+        handle.resize_held(60, 10).expect("held again");
+        handle.resize(70, 10).expect("plain");
+        assert_eq!(winsize_of(&handle), (70, 10, 0, 0));
+        tokio::time::sleep(RESIZE_HOLD * 2).await;
+        assert_eq!(winsize_of(&handle), (70, 10, 0, 0));
     }
 
     /// What the pane reported (OSC 7, T3.3) is kept apart from the

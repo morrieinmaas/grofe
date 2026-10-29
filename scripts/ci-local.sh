@@ -99,6 +99,8 @@ macos() {
 case "${1:-both}" in
   linux) linux ;;
   macos) macos ;;
-  both) macos && linux ;;
+  # Not `macos && linux`: bash ignores set -e inside a function on the
+  # left of &&, so a failing cargo test there would not stop the run.
+  both) macos; linux ;;
   *) echo "usage: $0 [linux|macos]" >&2; exit 2 ;;
 esac
