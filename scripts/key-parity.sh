@@ -29,7 +29,7 @@
 # with a class and a reason:
 #
 #   oos         out of scope in the spec: reported, excused
-#   mouse       a stock mouse binding, left to grofe's built-in mouse model
+#   mouse       a stock mouse binding only a server with tmux identity binds
 #   native      grofe binds the key in its own form, by design
 #   gap         a known gap outside grofe
 #

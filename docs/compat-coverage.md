@@ -264,6 +264,39 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   a pane's `active_point` stays with its window (join-pane resets it).
   `send-keys -K` types at once rather than queueing, so a binding that types
   its own key stops at a nesting depth where tmux would spin.
+- **B3 WP-C, mouse, menus, popups and alerts.** tmux 3.7b's 24 stock `root`
+  mouse rows are ordinary default bindings, in its dialect and as `list-keys
+  -T root` prints them (`input::TMUX_STOCK_ROOT`, golden
+  `b3wpc/stock-root`): `unbind -n MouseDown3Pane` and `unbind -a -T root`
+  work, and an unbound mouse key sends its report to the pane it is over,
+  as `forward_key` does. A server with grofe identity binds the pane,
+  status line, border and wheel rows; tmux identity all of them. `send-keys
+  -M` is a native command (the event goes to its pane; outside a mouse key
+  it is `no mouse target`); the one thing the mouse still does itself is the
+  border drag, the binding `resize-pane -M`. `focus-follows-mouse` focuses
+  the pane motion goes over (the client then reports all motion, mode 1003;
+  `b3wpc/focus-follows-mouse`). Menus take the mouse as `menu_key_cb`
+  does: with a mouse event behind them (or `-M`) no row starts chosen, a
+  release outside closes (`-O`: a press does), a release inside chooses the
+  row chosen last, motion with no button is a release, and the stock menus
+  therefore live while the button is held (`b3wpc/menu-mouse`,
+  `menu-bound-mouse`); a menu opened by a mouse key runs its items for that
+  event, so `-t=` in them is the pane clicked. `menu-style`,
+  `menu-selected-style`, `menu-border-style` and `menu-border-lines` draw
+  (`display-menu -s -H -S -b` replace the colours, not the attributes;
+  `menu-styles`), `display-menu -C -c -M -O` work, and `-t` places the menu
+  and expands its formats (`menu-flags`). `display-panes` takes `-d -b -N
+  -t` and the template, unzooming the window it chooses in
+  (`display-panes`). A flagged window takes `window-status-activity-style`
+  for an activity or a silence alert, and `visual-bell`, `-activity` and
+  `-silence` show "Bell in window 2" (the terminal rings only for `off` and
+  `both`, and only when the action applies, as tmux's `alerts_set_message`;
+  `alerts-*`). `display-popup -s -S`, `popup-style`, `-k`, `-N`, `-C` and
+  `-t` work, and a second `display-popup` on a client changes the open
+  popup (`popup-style`). Not done: the items of a menu opened with `-t` on
+  another pane run for the client's current pane (a mouse key's run for the
+  event), `display-popup -EE` (close on a zero exit), a popup's drag, resize
+  and right-button menu, and the pane scrollbar rows, bound but never fired.
 - **A sourced tmux file (B1a).** It reads as tmux's `cmd-parse.y` does
   (goldens `fe_3/config-if` and friends). `%if`/`%elif`/`%else`/`%endif`
   take a format expanded for the requester's pane (`#{...}` after the
@@ -293,9 +326,8 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   server (`session_previous_session` passes a NULL sort order that
   `sort_qsort` dereferences, recorded: "server exited unexpectedly"); grofe
   moves the client to the neighbour in name order instead. Stored with no
-  effect, like `terminal-features`: `terminal-overrides` (a list),
-  `window-status-activity-style` and `focus-follows-mouse`. A colour option
-  takes the sixteen names, `colourN` and `#rrggbb` (not X11 names).
+  effect, like `terminal-features`: `terminal-overrides` (a list). A
+  colour option takes the sixteen names, `colourN` and `#rrggbb` (not X11 names).
 - **The rest of tmux 3.7b's options (B2a).** Every option in tmux's table is
   now a real option that `set` and `show` take, with tmux's type, scope,
   default and error words (`golden/b2a/options`): the 33 style options are
@@ -312,8 +344,8 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `-S`; `golden/b2a/options-effects`, `options-sessions`, `options-popup`).
   The others are stored with no effect (`show-config --explain` marks
   them): `alternate-screen`, `scroll-on-clear`, `cursor-style`,
-  `cursor-colour`, `fill-character`, `key-table`, `lock-*`, `menu-*`,
-  `popup-style`, `copy-mode-mark-style`, `-selection-style`, `-position-*`
+  `cursor-colour`, `fill-character`, `key-table`, `lock-*`,
+  `copy-mode-mark-style`, `-selection-style`, `-position-*`
   and the `copy-mode-*line-number*` ones (the two match styles do take
   effect), `pane-scrollbars*`, `pane-status-*`, `session-status-*`,
   `tree-mode-preview-*`, `window-pane-*status-format`, `xterm-keys`,
@@ -437,11 +469,13 @@ the row is for. A row whose key is `(all)` covers every key of its table
 that has no row of its own. The classes:
 
 - **oos**: out of scope in the spec (§4.5). Reported, the difference excused.
-- **mouse**: a stock tmux mouse binding. grofe leaves it unbound, and its
-  built-in mouse model (TC.10 and TM.6, `src/server/mouse.rs`) does the
-  job, or nothing does, as the reason says. Where the model does the job,
-  the script's third part clicks, wheels or drags it on an attached client
-  and reads back what tmux did.
+- **mouse**: a stock tmux mouse binding that only a server with tmux
+  identity binds, and a server under grofe's own name leaves unbound (the
+  right-button menus, the Meta and Control variants, the scrollbar rows).
+  Every other stock `root` row is an ordinary default binding on both
+  (`input::TMUX_STOCK_ROOT`, B3 WP-C), listed as tmux lists it, and the
+  script's third part clicks, wheels or drags it on an attached client and
+  reads back what tmux did.
 - **native**: grofe binds the key in its own form on purpose.
 - **gap**: a known gap outside grofe. Reported, not fixed here.
 
@@ -469,29 +503,17 @@ read back what tmux did.
 | Table | Key | Class | Servers | Reason |
 |---|---|---|---|---|
 | `prefix` | `m` | oos | grofe | out of scope: marks unused by the owner's scripts (spec §4.5, marked panes) |
-| `root` | `WheelUpPane` | mouse | both | built-in (TM.6): over a pane in no mode, not on the alternate screen and not asking for the mouse, `copy-mode -e`; otherwise the pane gets the wheel. Read back against tmux |
-| `root` | `MouseDrag1Pane` | mouse | both | built-in (TM.6): over such a pane, `copy-mode -M`, a selection from the press; the release runs `copy-mode-vi`'s `MouseDragEnd1Pane` (tmux-yank's copy). Read back against tmux |
-| `root` | `DoubleClick1Pane` | mouse | both | built-in (TM.6): `select-pane`, `copy-mode -H`, `select-word`, `run-shell -d 0.3`, `copy-pipe-and-cancel`. Read back against tmux |
-| `root` | `TripleClick1Pane` | mouse | both | built-in (TM.6): the same with `select-line`. Read back against tmux |
-| `root` | `MouseDrag1ScrollbarSlider` | mouse | both | never fires: grofe draws no pane scrollbar (copy-mode.md, out of scope) |
-| `root` | `MouseDown1Pane` | mouse | both | built-in: a press focuses the pane under the pointer and reaches it if it asked for the mouse |
-| `root` | `MouseDrag1Border` | mouse | both | a default root binding, `resize-pane -M`, that runs the built-in drag: the border under the pointer follows it until the release; unbound, a border does nothing, as in tmux |
-| `root` | `WheelUpStatus` | mouse | both | built-in: the previous window |
-| `root` | `WheelDownStatus` | mouse | both | built-in: the next window |
-| `root` | `MouseDown2Pane` | mouse | both | built-in: focus, then `paste-buffer -p` over a pane in no mode that did not ask for the mouse; otherwise the press reaches the pane. Read back against tmux |
-| `root` | `MouseDown1Border` | mouse | both | a default root binding, `select-pane -M`: clears the mark (out of scope, `m`) and focuses a floating pane; unbound, the click does nothing, as in tmux |
-| `root` | `MouseDown3Pane` | mouse | both | no replacement: tmux's pane menu opens at `-x M -y M`, a mouse argv form (spec §4.5); the press reaches a pane that asked for the mouse |
-| `root` | `M-MouseDown3Pane` | mouse | both | no replacement: the same pane menu, at `-x M -y M` |
-| `root` | `MouseDown3Status` | mouse | both | no replacement: tmux's window menu opens at `-x W -y W`, a mouse argv form |
-| `root` | `M-MouseDown3Status` | mouse | both | no replacement: the same window menu, at `-x W -y W` |
-| `root` | `MouseDown3StatusLeft` | mouse | both | no replacement: tmux's session menu opens at `-x M -y W`, a mouse argv form |
-| `root` | `M-MouseDown3StatusLeft` | mouse | both | no replacement: the same session menu |
-| `root` | `C-MouseDown1Pane` | mouse | both | no replacement: `swap-pane -s @` takes the pane under the pointer as a mouse target |
-| `root` | `C-MouseDown1Status` | mouse | both | no replacement: `swap-window -t @`, the same for the window clicked |
-| `root` | `MouseDown1Control8` | mouse | both | never fires: tmux 3.7's pane border controls, which grofe does not draw |
-| `root` | `MouseDown1Control9` | mouse | both | never fires: the same, and its menu opens at `-x M -y M` |
-| `root` | `MouseDown1ScrollbarUp` | mouse | both | never fires: grofe draws no pane scrollbar |
-| `root` | `MouseDown1ScrollbarDown` | mouse | both | never fires: grofe draws no pane scrollbar |
+| `root` | `MouseDrag1ScrollbarSlider` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar (copy-mode.md, out of scope) |
+| `root` | `MouseDown3Pane` | mouse | grofe | tmux identity only: the right-button pane menu, `display-menu -x M -y M` (a mouse argv form, spec §4.5); a grofe server leaves the press to the pane |
+| `root` | `M-MouseDown3Pane` | mouse | grofe | tmux identity only: the same menu, also over a pane that asked for the mouse |
+| `root` | `MouseDown3Status` | mouse | grofe | tmux identity only: the window menu, `display-menu -x W -y W` |
+| `root` | `M-MouseDown3Status` | mouse | grofe | tmux identity only: the same window menu |
+| `root` | `MouseDown3StatusLeft` | mouse | grofe | tmux identity only: the session menu, `display-menu -x M -y W` |
+| `root` | `M-MouseDown3StatusLeft` | mouse | grofe | tmux identity only: the same session menu |
+| `root` | `C-MouseDown1Pane` | mouse | grofe | tmux identity only: `swap-pane -s @`, the pane under the pointer and the active one |
+| `root` | `C-MouseDown1Status` | mouse | grofe | tmux identity only: `swap-window -t @`, the same for the window clicked |
+| `root` | `MouseDown1ScrollbarUp` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
+| `root` | `MouseDown1ScrollbarDown` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
 | `root` | `C-h` | native | both | vim-tmux-navigator, which athome loads through TPM on tmux, is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
 | `root` | `C-j` | native | both | the same |
 | `root` | `C-k` | native | both | the same |
