@@ -245,7 +245,10 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
 - **B3 WP-B, panes and input.** `synchronize-panes` copies what is typed,
   pasted or sent (`send-keys`, `send-prefix`) into a pane to the other panes
   of its window that have it on, are alive, visible (not hidden by zoom),
-  show no mode and take input, each key encoded for the receiver's modes.
+  show no mode and take input, each key encoded for the receiver's modes
+  (a paste's text as is, its markers only to a pane that turned bracketed
+  paste on). A pane taking input no more (`select-pane -d`) gets no keys,
+  pastes, `paste-buffer` or mouse.
   `select-pane -L/-R/-U/-D` is tmux's `window_pane_find_*`: of the panes on
   the edge (wrapping past the window's edge, border status counted) the most
   recently active wins (`active_point`, 0 for a pane never made active, the
@@ -259,6 +262,8 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `xterm-256color`) for a host without `tmux-256color`. Goldens `b3wpb/*`.
   Not done: floating panes are never `select-pane` direction candidates, and
   a pane's `active_point` stays with its window (join-pane resets it).
+  `send-keys -K` types at once rather than queueing, so a binding that types
+  its own key stops at a nesting depth where tmux would spin.
 - **A sourced tmux file (B1a).** It reads as tmux's `cmd-parse.y` does
   (goldens `fe_3/config-if` and friends). `%if`/`%elif`/`%else`/`%endif`
   take a format expanded for the requester's pane (`#{...}` after the
