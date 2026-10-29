@@ -1,0 +1,65 @@
+# WP-A: more of what a binding prints: list-buffers, new-window -P,
+# show-buffer, run-shell -b (an empty line stays), an embedded newline, an
+# if-shell branch, two commands, and an error that prints nothing.
+$ new-session -d -s main -n one -x 60 -y 12 cat
+$ set -g status off
+$ set -g copy-mode-position-format '#[align=right][#{scroll_position}/#{history_size}]'
+$ set-buffer -b alpha 'first buffer'
+$ set-buffer -b beta 'second buffer'
+client 60x12 attach -t main
+keys C-b #
+$ run-shell 'sleep 0.5'
+screen alpha
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key a new-window -d -P -F 'made #{window_index}'
+keys C-b a
+$ run-shell 'sleep 0.5'
+screen made
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key b show-buffer -b alpha
+keys C-b b
+$ run-shell 'sleep 0.5'
+screen first buffer
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key c run-shell -b 'echo from-bg; echo; echo second'
+keys C-b c
+$ run-shell 'sleep 0.5'
+screen from-bg
+$ display -p -t main '#{pane_mode} #{pane_in_mode}'
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key d display-message -p 'one\ntwo'
+keys C-b d
+$ run-shell 'sleep 0.5'
+screen two
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key e if-shell true "display-message -p ifyes" "display-message -p ifno"
+keys C-b e
+$ run-shell 'sleep 0.5'
+screen ifyes
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key f display-message -p ay '\;' display-message -p bee
+keys C-b f
+$ run-shell 'sleep 0.5'
+screen bee
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key g kill-window -t nosuch
+keys C-b g
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen

@@ -9,19 +9,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseTree,
-    ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore, CopyMode,
-    DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup,
-    FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow,
-    LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
-    ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane, PlacePane,
-    PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
-    ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane,
-    SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook,
-    SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile,
-    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseOpts,
+    ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore,
+    CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes,
+    DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
+    KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
+    ListPlugins, ListSessions, ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane,
+    NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane,
+    PlacePane, PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
+    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
+    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment,
+    SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions,
+    SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target,
+    UnbindKey, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1188,6 +1188,9 @@ const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('T', FlagKind::Value),
     ('c', FlagKind::Value),
+    // `-Z` keeps the target window zoomed; the choosers pass it, and it
+    // changes nothing here.
+    ('Z', FlagKind::Bool),
 ];
 
 fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
@@ -1367,6 +1370,10 @@ const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[
     ('N', FlagKind::Bool),
     ('i', FlagKind::Bool),
     ('F', FlagKind::Bool),
+    ('e', FlagKind::Bool),
+    ('C', FlagKind::Bool),
+    ('l', FlagKind::Bool),
+    ('t', FlagKind::Value),
 ];
 
 fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
@@ -1390,6 +1397,9 @@ fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
         numeric: flags.present.contains(&'N'),
         incremental: flags.present.contains(&'i'),
         expand: flags.present.contains(&'F'),
+        bspace_exit: flags.present.contains(&'e'),
+        literal: flags.present.contains(&'l'),
+        client: flags.values.get(&'t').cloned(),
     }))
 }
 
@@ -1858,11 +1868,73 @@ fn parse_show_messages(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+/// The flags `choose-tree`, `choose-client` and `choose-buffer` take
+/// beside their own.
+const CHOOSE_SHORT: &[(char, FlagKind)] = &[
+    ('F', FlagKind::Value),
+    ('f', FlagKind::Value),
+    ('K', FlagKind::Value),
+    ('N', FlagKind::Bool),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
+    ('t', FlagKind::Value),
+    ('y', FlagKind::Bool),
+    ('Z', FlagKind::Bool),
+];
+
+/// How many times the bool flag `flag` is given in `argv` (`-NN` is two),
+/// which the flag table does not count.
+fn count_flag(argv: &[String], flag: char, valued: &str) -> u8 {
+    let mut count: u8 = 0;
+    let mut skip = false;
+    for word in argv {
+        if skip {
+            skip = false;
+            continue;
+        }
+        let Some(letters) = word
+            .strip_prefix('-')
+            .filter(|w| !w.is_empty() && *w != "-")
+        else {
+            break;
+        };
+        for (i, c) in letters.char_indices() {
+            if c == flag {
+                count = count.saturating_add(1);
+            } else if valued.contains(c) {
+                skip = i + c.len_utf8() == letters.len();
+                break;
+            }
+        }
+    }
+    count
+}
+
+fn choose_opts(
+    argv: &[String],
+    flags: &ParsedFlags,
+    cmd_name: &str,
+) -> Result<ChooseOpts, ParseError> {
+    no_extra_positionals(flags, cmd_name, 1)?;
+    Ok(ChooseOpts {
+        target: target_or_current(&flags.values, 't')?,
+        format: flags.values.get(&'F').cloned(),
+        filter: flags.values.get(&'f').cloned(),
+        key_format: flags.values.get(&'K').cloned(),
+        sort: flags.values.get(&'O').cloned(),
+        reversed: flags.present.contains(&'r'),
+        no_preview: count_flag(argv, 'N', "FfKOt"),
+        prompt_yes: flags.present.contains(&'y'),
+        groups: flags.present.contains(&'G'),
+        template: flags.positionals.first().cloned(),
+    })
+}
+
 fn parse_choose_client(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('Z', FlagKind::Bool)], "choose-client")?;
-    no_extra_positionals(&flags, "choose-client", 0)?;
+    let flags = flags_for(argv, CHOOSE_SHORT, "choose-client")?;
     Ok(Command::ChooseClient(ChooseClient {
         zoom: flags.present.contains(&'Z'),
+        opts: choose_opts(argv, &flags, "choose-client")?,
     }))
 }
 
@@ -1888,16 +1960,25 @@ fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
 
 fn parse_choose_tree(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
-        ('Z', FlagKind::Bool),
+        ('F', FlagKind::Value),
+        ('f', FlagKind::Value),
+        ('G', FlagKind::Bool),
+        ('K', FlagKind::Value),
+        ('N', FlagKind::Bool),
+        ('O', FlagKind::Value),
+        ('r', FlagKind::Bool),
         ('s', FlagKind::Bool),
+        ('t', FlagKind::Value),
         ('w', FlagKind::Bool),
+        ('y', FlagKind::Bool),
+        ('Z', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "choose-tree")?;
-    no_extra_positionals(&flags, "choose-tree", 0)?;
     Ok(Command::ChooseTree(ChooseTree {
         zoom: flags.present.contains(&'Z'),
         sessions: flags.present.contains(&'s'),
         windows: flags.present.contains(&'w'),
+        opts: choose_opts(argv, &flags, "choose-tree")?,
     }))
 }
 
@@ -3387,11 +3468,30 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 target: target_or_current(&flags.values, 't')?,
             }))
         }
+        "customize-mode" => {
+            let flags = flags_for(
+                rest,
+                &[
+                    ('F', FlagKind::Value),
+                    ('f', FlagKind::Value),
+                    ('N', FlagKind::Bool),
+                    ('t', FlagKind::Value),
+                    ('y', FlagKind::Bool),
+                    ('Z', FlagKind::Bool),
+                ],
+                "customize-mode",
+            )?;
+            no_extra_positionals(&flags, "customize-mode", 0)?;
+            Ok(Command::CustomizeMode(CustomizeMode {
+                zoom: flags.present.contains(&'Z'),
+                opts: choose_opts(rest, &flags, "customize-mode")?,
+            }))
+        }
         "choose-buffer" => {
-            let flags = flags_for(rest, &[('Z', FlagKind::Bool)], "choose-buffer")?;
-            no_extra_positionals(&flags, "choose-buffer", 0)?;
+            let flags = flags_for(rest, CHOOSE_SHORT, "choose-buffer")?;
             Ok(Command::ChooseBuffer(ChooseBuffer {
                 zoom: flags.present.contains(&'Z'),
+                opts: choose_opts(rest, &flags, "choose-buffer")?,
             }))
         }
         _ => Err(ParseError::UnknownCommand(name.clone())),
@@ -3553,6 +3653,7 @@ mod tests {
                 zoom: true,
                 sessions: true,
                 windows: false,
+                ..Default::default()
             })
         );
     }
@@ -4948,6 +5049,9 @@ mod tests {
                 numeric: false,
                 incremental: false,
                 expand: false,
+                bspace_exit: false,
+                literal: false,
+                client: None,
             }))
         );
         assert_eq!(
@@ -4963,6 +5067,9 @@ mod tests {
                 numeric: false,
                 incremental: false,
                 expand: false,
+                bspace_exit: false,
+                literal: false,
+                client: None,
             }))
         );
         assert_eq!(
@@ -5190,5 +5297,55 @@ mod tests {
         );
         // A command name cannot be an assignment.
         assert!(read("A=1 B=2\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod choose_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn choosers_take_tmux_s_flags_and_a_template() {
+        let Ok(Command::ChooseTree(c)) = parse(&argv(&[
+            "choose-tree",
+            "-NN",
+            "-O",
+            "name",
+            "-r",
+            "-f",
+            "#{==:a,b}",
+            "-F",
+            "#{x}",
+            "-K",
+            "#{line}",
+            "-t",
+            "%1",
+            "-y",
+            "-G",
+            "-w",
+            "join-pane -t '%%'",
+        ])) else {
+            panic!("choose-tree");
+        };
+        assert_eq!(c.opts.no_preview, 2);
+        assert_eq!(c.opts.sort.as_deref(), Some("name"));
+        assert!(c.opts.reversed && c.opts.prompt_yes && c.opts.groups && c.windows);
+        assert_eq!(c.opts.filter.as_deref(), Some("#{==:a,b}"));
+        assert_eq!(c.opts.format.as_deref(), Some("#{x}"));
+        assert_eq!(c.opts.key_format.as_deref(), Some("#{line}"));
+        assert_eq!(c.opts.template.as_deref(), Some("join-pane -t '%%'"));
+        let Ok(Command::ChooseTree(c)) = parse(&argv(&["choose-tree", "-N"])) else {
+            panic!("choose-tree -N");
+        };
+        assert_eq!(c.opts.no_preview, 1);
+        let Ok(Command::ChooseBuffer(c)) = parse(&argv(&["choose-buffer", "-N", "-Z"])) else {
+            panic!("choose-buffer");
+        };
+        assert!(c.zoom);
+        assert_eq!(c.opts.no_preview, 1);
     }
 }

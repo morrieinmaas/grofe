@@ -348,7 +348,10 @@ fn every_new_verb_parses_with_its_rows_flags() {
         ),
         (
             vec!["choose-client", "-Z"],
-            Command::ChooseClient(ChooseClient { zoom: true }),
+            Command::ChooseClient(ChooseClient {
+                zoom: true,
+                ..Default::default()
+            }),
         ),
         (
             vec!["suspend-client", "-t", "c1"],
@@ -368,6 +371,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 zoom: true,
                 sessions: false,
                 windows: true,
+                ..Default::default()
             }),
         ),
         (

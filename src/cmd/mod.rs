@@ -602,6 +602,12 @@ pub struct CommandPrompt {
     /// `-F` (FE.1): the template is expanded as a format when the prompt
     /// opens.
     pub expand: bool,
+    /// `-e`: Backspace on an empty line cancels the prompt.
+    pub bspace_exit: bool,
+    /// `-l`: `-p` and `-I` are one prompt, commas and all.
+    pub literal: bool,
+    /// `-t`: the client, raw.
+    pub client: Option<String>,
 }
 
 /// `run-shell` (a shell command; from M3.6 `-b`, TC.5).
@@ -859,11 +865,38 @@ pub struct ShowMessages {
     pub terminals: bool,
 }
 
+/// What `choose-tree`, `choose-client` and `choose-buffer` share (tmux's
+/// `cmd_choose_tree_exec`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChooseOpts {
+    /// `-t`: the pane the chooser opens over.
+    pub target: Target,
+    /// `-F`: the format of each item's text.
+    pub format: Option<String>,
+    /// `-f`: a format an item must make true to be listed.
+    pub filter: Option<String>,
+    /// `-K`: the format of each line's key.
+    pub key_format: Option<String>,
+    /// `-O`: the sort order, raw.
+    pub sort: Option<String>,
+    /// `-r`: reverse it.
+    pub reversed: bool,
+    /// How many `-N`: one starts without the preview, two with a big one.
+    pub no_preview: u8,
+    /// `-y`: the kill prompts accept at once.
+    pub prompt_yes: bool,
+    /// `-G`: keep the sessions of a group apart.
+    pub groups: bool,
+    /// The command to run for the chosen item, `%%` standing for it.
+    pub template: Option<String>,
+}
+
 /// `choose-client` (TC.9).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChooseClient {
     /// `-Z`: zoom the pane the chooser opens over.
     pub zoom: bool,
+    pub opts: ChooseOpts,
 }
 
 /// `suspend-client` (TC.9).
@@ -892,6 +925,7 @@ pub struct ChooseTree {
     pub sessions: bool,
     /// `-w`: start with windows expanded under their sessions.
     pub windows: bool,
+    pub opts: ChooseOpts,
 }
 
 /// `wait-for` (TC.9, M36-R1): block until `channel` is signalled, or with
@@ -1302,10 +1336,20 @@ pub struct CopyMode {
     pub target: Target,
 }
 
+/// `customize-mode` (WP-A): tmux's option and key browser.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CustomizeMode {
+    /// `-Z`.
+    pub zoom: bool,
+    /// `-t`, `-F`, `-f`, `-N` and `-y`, as the choosers take them.
+    pub opts: ChooseOpts,
+}
+
 /// `choose-buffer [-Z]` (TM.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChooseBuffer {
     pub zoom: bool,
+    pub opts: ChooseOpts,
 }
 
 /// One parsed command (spec §4.5, M1 and M2 sets).
@@ -1407,6 +1451,7 @@ pub enum Command {
     DeleteBuffer(DeleteBuffer),
     PasteBuffer(PasteBuffer),
     ChooseBuffer(ChooseBuffer),
+    CustomizeMode(CustomizeMode),
     // M5: copy mode (TM.1).
     CopyMode(CopyMode),
 }

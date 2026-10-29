@@ -1558,7 +1558,6 @@ fn core_rows() -> Vec<Row> {
             "fe_4/mouse-forms",
         ),
         unsupported("lock-server", UNUSED, &[]),
-        unsupported("customize-mode", UNUSED, &[]),
         unsupported("server-access", UNUSED, &[]),
         // Front-end rows.
         row(

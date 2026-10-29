@@ -1,0 +1,44 @@
+# WP-A review: in customize-mode, w does nothing on a key, and d resets a key:
+# one with a default (prefix C-z) gets it back, one without (mytab F5) goes.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ set -g status off
+$ bind-key C customize-mode -Z -f '#{||:#{m:status-left-length,#{option_name}},#{is_key}}'
+$ bind-key -T mytab F5 display-message five
+$ bind-key -T mytab F6 display-message six
+$ bind-key C-z display-message zz
+client 70x30 attach -t main
+keys C-b C
+$ run-shell 'sleep 0.5'
+screen Session Options
+keys /
+$ run-shell 'sleep 0.5'
+screen (search)
+keys F5 Enter
+$ run-shell 'sleep 0.5'
+screen F5
+keys w
+$ run-shell 'sleep 0.5'
+screen
+keys d
+$ run-shell 'sleep 0.5'
+screen Reset
+keys y
+$ run-shell 'sleep 0.5'
+screen
+$ list-keys -T mytab
+keys /
+$ run-shell 'sleep 0.5'
+screen (search)
+keys C - z Enter
+$ run-shell 'sleep 0.5'
+screen C-z
+keys d
+$ run-shell 'sleep 0.5'
+screen Reset
+keys y
+$ run-shell 'sleep 0.5'
+screen
+$ list-keys -T prefix C-z
+keys q
+$ run-shell 'sleep 0.5'
+screen

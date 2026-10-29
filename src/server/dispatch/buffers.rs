@@ -412,7 +412,7 @@ pub fn choose_buffer(
     ctx: &ClientCtx,
     c: ChooseBuffer,
 ) -> Result<String, String> {
-    tree::open_buffers(state, ctx, c.zoom)
+    tree::open_buffers(state, ctx, c.zoom, &c.opts, ctx.dialect)
 }
 
 #[cfg(test)]

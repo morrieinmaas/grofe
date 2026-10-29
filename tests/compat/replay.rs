@@ -33,7 +33,7 @@
 //!   left out, since they draw nothing.
 //! - `keys <key>...`: type keys on the client's pty, as a person would, by
 //!   tmux key name: `C-<c>`, `C-Space`, `Space`, `Escape`, `Enter`, `Tab`,
-//!   `BSpace`, the arrows (also `C-` and `M-`), `Home`, `End`, `PPage`, `NPage`, or a word typed
+//!   `BSpace`, the arrows (also `C-` and `M-`), `S-Up`, `S-Down`, `C-Left`, `C-Right`, `M-<char>`, `Home`, `End`, `PPage`, `NPage`, or a word typed
 //!   as it is, then wait a moment, so an `Escape` is not
 //!   read as Meta with the next step's key. Recorded as the `keys` line
 //!   only; follow it with `screen <text>` to see what the keys did, and
@@ -48,7 +48,7 @@ use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -62,6 +62,8 @@ use alacritty_terminal::term::{Config, test::TermSize};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
 use nix::pty::{Winsize, openpty};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 
 use crate::normalize::{Context, Normalizer, fixtures_dir};
 
@@ -103,26 +105,56 @@ impl Cli {
 
     /// Run to completion, bounded by [`CMD_TIMEOUT`].
     pub fn run(&self, argv: &[String]) -> (ExitStatus, String, String) {
-        let child = self
+        self.run_within(argv, CMD_TIMEOUT)
+            .unwrap_or_else(|| panic!("{argv:?} still running after {CMD_TIMEOUT:?}"))
+    }
+
+    /// Run to completion, or kill the command once `limit` has passed and
+    /// return `None`: a server that stops answering leaves no client behind.
+    pub fn run_within(
+        &self,
+        argv: &[String],
+        limit: Duration,
+    ) -> Option<(ExitStatus, String, String)> {
+        let deadline = Instant::now() + limit;
+        let mut child = self
             .command(argv)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| panic!("spawning {argv:?}: {e}"));
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        let out = rx
-            .recv_timeout(CMD_TIMEOUT)
-            .unwrap_or_else(|_| panic!("{argv:?} still running after {CMD_TIMEOUT:?}"))
-            .unwrap_or_else(|e| panic!("{argv:?}: {e}"));
-        (
-            out.status,
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
+        let stdout = drain(child.stdout.take());
+        let stderr = drain(child.stderr.take());
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        };
+        // Something the command started may still hold its output open.
+        let left = deadline.saturating_duration_since(Instant::now());
+        let stdout = stdout.recv_timeout(left).ok()?;
+        let stderr = stderr.recv_timeout(left).ok()?;
+        Some((
+            status,
+            String::from_utf8_lossy(&stdout).into_owned(),
+            String::from_utf8_lossy(&stderr).into_owned(),
+        ))
+    }
+
+    /// The server's pid, if one answers within a second.
+    fn server_pid(&self) -> Option<i32> {
+        let argv = ["display-message".into(), "-p".into(), "#{pid}".into()];
+        match self.run_within(&argv, Duration::from_secs(1))? {
+            (status, out, _) if status.success() => out.trim().parse().ok(),
+            _ => None,
+        }
     }
 
     /// Wait until the server lists a client on `tty`.
@@ -157,11 +189,113 @@ impl Transcript {
     }
 }
 
-/// Everything a replay started, killed (with the server) when it ends.
+/// Read `pipe` to the end on a thread; the bytes arrive on the receiver.
+fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+/// Whether `pid` is a process that has not exited (a zombie counts as gone).
+fn alive(pid: i32) -> bool {
+    if kill(Pid::from_raw(pid), None).is_err() {
+        return false;
+    }
+    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => !stat
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+        Err(_) => true,
+    }
+}
+
+/// SIGKILL every server pid it is told about if the test process goes
+/// away (a SIGKILL, an abort, a hung `Drop`) before saying `done`: a
+/// process of its own, in its own process group, reading the pids on a
+/// pipe whose end closes when the test process dies. Daemonized servers
+/// are not our children, so nothing else would take them down.
+pub struct Reaper {
+    child: Child,
+    pids: Option<ChildStdin>,
+}
+
+const REAPER: &str = "pids=; while read -r p; do [ \"$p\" = done ] && exit 0; pids=\"$pids $p\"; done; [ -z \"$pids\" ] || kill -9 $pids 2>/dev/null; exit 0";
+
+impl Reaper {
+    pub fn spawn() -> Reaper {
+        let mut child = Command::new("/bin/sh")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .args(["-c", REAPER])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("spawn the reaper");
+        let pids = child.stdin.take();
+        Reaper { child, pids }
+    }
+
+    /// Have `pid` killed if this process dies before [`Reaper::done`].
+    pub fn watch(&mut self, pid: i32) {
+        use std::io::Write;
+        if let Some(pipe) = self.pids.as_mut() {
+            let _ = writeln!(pipe, "{pid}");
+        }
+    }
+
+    /// Everything is dealt with: exit without killing anything.
+    pub fn done(mut self) {
+        use std::io::Write;
+        if let Some(mut pipe) = self.pids.take() {
+            let _ = writeln!(pipe, "done");
+        }
+        let _ = self.child.wait();
+    }
+}
+
+/// Everything a replay started, killed (with the server) when it ends,
+/// panic or not.
 struct Live<'a> {
     cli: &'a Cli,
     client: Option<PtyClient>,
     background: Vec<Child>,
+    /// Every server pid seen, so a server that ignores `kill-server` (or
+    /// spins too hard to read it) still dies.
+    servers: Vec<i32>,
+    /// Whether the current server's pid is still to be asked for.
+    ask_pid: bool,
+    reaper: Option<Reaper>,
+}
+
+impl Live<'_> {
+    /// Ask for the server's pid once a server is up (and again after a
+    /// `kill-server` step), and hand it to the reaper.
+    fn learn_pid(&mut self) {
+        if !self.ask_pid {
+            return;
+        }
+        if let Some(pid) = self.cli.server_pid() {
+            self.ask_pid = false;
+            self.note(pid);
+        }
+    }
+
+    fn note(&mut self, pid: i32) {
+        if !self.servers.contains(&pid) {
+            self.servers.push(pid);
+            if let Some(r) = self.reaper.as_mut() {
+                r.watch(pid);
+            }
+        }
+    }
 }
 
 impl Drop for Live<'_> {
@@ -171,21 +305,24 @@ impl Drop for Live<'_> {
             let _ = child.kill();
             let _ = child.wait();
         }
+        if let Some(pid) = self.cli.server_pid() {
+            self.note(pid);
+        }
         // Bounded: a server that stops answering must not hang the test.
-        let kill = self
+        let _ = self
             .cli
-            .command(&["kill-server".to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        if let Ok(mut kill) = kill {
-            let deadline = Instant::now() + CMD_TIMEOUT;
-            while matches!(kill.try_wait(), Ok(None)) && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(10));
+            .run_within(&["kill-server".to_string()], CMD_TIMEOUT);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.servers.iter().any(|&p| alive(p)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        for &pid in &self.servers {
+            if alive(pid) {
+                let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
             }
-            let _ = kill.kill();
-            let _ = kill.wait();
+        }
+        if let Some(r) = self.reaper.take() {
+            r.done();
         }
     }
 }
@@ -211,6 +348,9 @@ pub fn replay(cli: &Cli, steps: &[Step]) -> Transcript {
         cli,
         client: None,
         background: Vec::new(),
+        servers: Vec::new(),
+        ask_pid: true,
+        reaper: Some(Reaper::spawn()),
     };
     let mut out = String::new();
     for step in steps {
@@ -245,6 +385,11 @@ pub fn replay(cli: &Cli, steps: &[Step]) -> Transcript {
                     Some(code) => out.push_str(&format!("? {code}\n")),
                     None => out.push_str(&format!("? {status}\n")),
                 }
+                if argv.first().is_some_and(|a| a == "kill-server") {
+                    live.ask_pid = true;
+                } else {
+                    live.learn_pid();
+                }
             }
             Step::Client {
                 line,
@@ -255,8 +400,11 @@ pub fn replay(cli: &Cli, steps: &[Step]) -> Transcript {
                 assert!(live.client.is_none(), "one client per scenario");
                 let argv = expand(argv, None);
                 let client = PtyClient::spawn(cli.command(&argv), *cols, *rows);
-                cli.wait_attached(&client.tty);
                 live.client = Some(client);
+                if let Some(c) = live.client.as_ref() {
+                    cli.wait_attached(&c.tty);
+                }
+                live.learn_pid();
                 out.push_str(&format!("{line}\n"));
             }
             Step::Styles { first, last, until } => {
@@ -373,12 +521,21 @@ fn key_bytes(words: &[String]) -> Result<Vec<u8>, String> {
             "Left" => out.extend_from_slice(b"\x1b[D"),
             "C-Up" => out.extend_from_slice(b"\x1b[1;5A"),
             "C-Down" => out.extend_from_slice(b"\x1b[1;5B"),
+            "S-Up" => out.extend_from_slice(b"\x1b[1;2A"),
+            "S-Down" => out.extend_from_slice(b"\x1b[1;2B"),
+            "C-Left" => out.extend_from_slice(b"\x1b[1;5D"),
+            "C-Right" => out.extend_from_slice(b"\x1b[1;5C"),
             "M-Up" => out.extend_from_slice(b"\x1b[1;3A"),
             "M-Down" => out.extend_from_slice(b"\x1b[1;3B"),
             "Home" => out.extend_from_slice(b"\x1bOH"),
             "End" => out.extend_from_slice(b"\x1bOF"),
             "PPage" => out.extend_from_slice(b"\x1b[5~"),
             "NPage" => out.extend_from_slice(b"\x1b[6~"),
+            // Meta and a character: an Escape right before it.
+            w if w.strip_prefix("M-").is_some_and(|c| c.chars().count() == 1) => {
+                out.push(0x1b);
+                out.extend_from_slice(&w.as_bytes()[2..]);
+            }
             w => match w.strip_prefix("C-").map(str::as_bytes) {
                 Some([c]) if c.is_ascii_alphabetic() => out.push(c.to_ascii_lowercase() - b'a' + 1),
                 Some(_) => return Err(format!("no control key {w:?}")),
@@ -748,4 +905,76 @@ fn style_of(cell: &Cell) -> Option<String> {
         look.push_str(a);
     }
     Some(look)
+}
+
+fn script_cli(dir: &Path, body: &str) -> Cli {
+    use std::os::unix::fs::PermissionsExt;
+    let program = dir.join("tmux");
+    fs::write(&program, format!("#!/bin/sh\n{body}")).unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    Cli {
+        program,
+        prefix: Vec::new(),
+        env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+        cwd: dir.to_path_buf(),
+        vars: Vec::new(),
+    }
+}
+
+#[test]
+fn a_server_that_ignores_kill_server_is_killed() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("server.pid");
+    let cli = script_cli(
+        dir.path(),
+        &format!(
+            "case \"$1\" in\n\
+             new-session) sleep 300 </dev/null >/dev/null 2>&1 & echo $! >{0} ;;\n\
+             display-message) cat {0} ;;\n\
+             esac\n",
+            pidfile.display()
+        ),
+    );
+    let steps = parse_scenario("$ new-session\n$ kill-server\n$ list-sessions\n").unwrap();
+    replay(&cli, &steps);
+    let pid: i32 = fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!alive(pid), "server {pid} outlived the replay");
+}
+
+#[test]
+fn a_command_past_its_limit_is_killed() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("cmd.pid");
+    let cli = script_cli(
+        dir.path(),
+        &format!("echo $$ >{}\nexec sleep 300\n", pidfile.display()),
+    );
+    let started = Instant::now();
+    assert!(cli.run_within(&[], Duration::from_secs(1)).is_none());
+    assert!(started.elapsed() < Duration::from_secs(6));
+    let pid: i32 = fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!alive(pid), "the timed-out command {pid} is still running");
+}
+
+#[test]
+fn the_reaper_kills_its_pids_when_the_test_goes_away() {
+    let mut victim = Command::new("sleep").arg("300").spawn().unwrap();
+    let mut reaper = Reaper::spawn();
+    reaper.watch(victim.id() as i32);
+    // What a SIGKILLed test process leaves: the pipe closes, no `done`.
+    drop(reaper.pids.take());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while victim.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "the reaper never killed it");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let _ = reaper.child.wait();
 }

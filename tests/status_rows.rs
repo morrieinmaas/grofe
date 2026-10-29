@@ -553,7 +553,7 @@ fn a_message_takes_the_first_status_row() {
     h.wait_until("the message on row 0", WAIT, |t| {
         let mut rows = t.lines();
         rows.next()
-            .is_some_and(|r| r.starts_with("can't find window"))
+            .is_some_and(|r| r.starts_with("Can't find window"))
             && rows.next().is_some_and(|r| r.starts_with("second row"))
     });
 }

@@ -1992,7 +1992,7 @@ fn spelled_default(options: &Options, name: &str, value: Option<&str>) -> Option
 /// `value`, `name`'s at `owner`, as the tmux dialect shows it: the text a
 /// tmux request sent for it, tmux's own default text for a default grofe
 /// spells another way, else the value.
-fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
+pub(crate) fn tmux_text(options: &Options, owner: Owner, name: &str, value: &str) -> String {
     if let Some(sent) = options.shown(owner, name, value) {
         return sent.to_string();
     }
@@ -2627,7 +2627,7 @@ fn list_keys_tmux(
 /// 1, `C-` 2, `S-` 4); within one, characters by code point (Enter, Tab
 /// and Escape are C0 characters), then tmux's special keys in its own
 /// order, then the mouse keys.
-fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
+pub(crate) fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
     use crate::server::input::KeyCode;
     let m = &key.mods;
     let mods = u8::from(m.alt) | u8::from(m.ctrl) << 1 | u8::from(m.shift) << 2;

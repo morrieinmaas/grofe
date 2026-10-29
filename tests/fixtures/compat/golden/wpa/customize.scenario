@@ -1,0 +1,100 @@
+# WP-A: customize-mode (prefix C): the option and key tree, its preview, cycling
+# a choice, setting a number at a prompt, unsetting and resetting, H hiding the
+# global values, / search, and editing a key's command and repeat flag.
+# (unsetting a key is left out: tmux 3.7b's server can die when the mode is
+# open over a removed binding). The filter keeps every key: tmux 3.7b loops forever in
+# window_customize_build_keys when a filter rejects one.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ set -g status off
+$ bind-key C customize-mode -Z -f '#{||:#{m:status-*,#{option_name}},#{is_key}}'
+$ bind-key -T mytab -N 'a note' x display-message hi
+client 70x30 attach -t main
+keys C-b C
+$ run-shell 'sleep 0.5'
+screen Server Options
+keys j l
+$ run-shell 'sleep 0.5'
+screen status-bg
+keys j j j j j
+$ run-shell 'sleep 0.5'
+screen status-justify
+keys s
+$ run-shell 'sleep 0.5'
+screen
+keys j s
+$ run-shell 'sleep 0.5'
+screen
+$ show-options -g status-justify status-keys
+keys j j
+$ run-shell 'sleep 0.5'
+screen
+keys s
+$ run-shell 'sleep 0.5'
+screen
+keys C-u 20 Enter
+$ run-shell 'sleep 0.5'
+screen
+$ show-options -g status-left-length
+keys u
+$ run-shell 'sleep 0.5'
+screen Unset
+keys y
+$ run-shell 'sleep 0.5'
+screen
+$ show-options -g status-left-length
+keys k k
+$ run-shell 'sleep 0.5'
+screen
+keys d
+$ run-shell 'sleep 0.5'
+screen Reset
+keys y
+$ run-shell 'sleep 0.5'
+screen
+$ show-options -g status-justify status-keys
+keys H
+$ run-shell 'sleep 0.5'
+screen
+keys H
+$ run-shell 'sleep 0.5'
+screen
+keys v
+$ run-shell 'sleep 0.5'
+screen
+keys v
+$ run-shell 'sleep 0.5'
+screen
+keys /
+$ run-shell 'sleep 0.5'
+screen (search)
+keys mytab
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen mytab
+keys l
+$ run-shell 'sleep 0.5'
+screen
+keys j l
+$ run-shell 'sleep 0.5'
+screen
+keys j
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen
+keys C-u display-message Space bye Enter
+$ run-shell 'sleep 0.5'
+screen
+keys j j
+$ run-shell 'sleep 0.5'
+screen
+keys Enter
+$ run-shell 'sleep 0.5'
+screen
+$ list-keys -T mytab
+keys q
+$ run-shell 'sleep 0.5'
+screen

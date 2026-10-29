@@ -1,0 +1,55 @@
+# WP-A: choose-buffer (-F, -O, sort keys, tagging, d, D, p and P). A client
+# chooser shows the client's tty, whose length differs, so tc_9 covers it.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ set -g status off
+$ set-buffer -b alpha 1111
+$ set-buffer -b beta 22
+$ set-buffer -b gamma 333333
+client 70x30 attach -t main
+$ bind-key b choose-buffer -F '#{buffer_name} (#{buffer_size})'
+keys C-b b
+$ run-shell 'sleep 0.5'
+screen (sort: creation)
+keys O
+$ run-shell 'sleep 0.5'
+screen (sort: name)
+keys O
+$ run-shell 'sleep 0.5'
+screen (sort: size)
+keys r
+$ run-shell 'sleep 0.5'
+screen reversed
+keys O
+$ run-shell 'sleep 0.5'
+screen (sort: creation, reversed)
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys D
+$ run-shell 'sleep 0.5'
+screen
+keys p
+$ run-shell 'sleep 0.5'
+screen
+$ list-buffers -F '#{buffer_name}'
+$ set-buffer -b delta 4444
+$ bind-key B choose-buffer -O name -F '#{buffer_name}'
+keys C-b B
+$ run-shell 'sleep 0.5'
+screen (sort: name)
+keys d
+$ run-shell 'sleep 0.5'
+screen
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys P
+$ run-shell 'sleep 0.5'
+screen
+$ list-buffers -F '#{buffer_name}'

@@ -1,0 +1,65 @@
+# WP-A: choose-tree's marks (m, M), swapping windows (S-Up, S-Down, K, J,
+# index order only), folding all (M-- and M-+), H and -s / -G flags.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ new-window -d -n two cat
+$ new-window -d -n three cat
+$ new-session -d -s other -n four cat
+$ set -g status off
+$ select-pane -t main:1 -T pa
+$ select-pane -t main:2 -T pb
+$ select-pane -t main:3 -T pc
+$ select-pane -t other:1 -T pd
+client 70x30 attach -t main
+$ bind-key t choose-tree -F '#{?pane_format,#{?pane_marked,#[reverse],}pane #{pane_index},#{?window_format,#{?window_marked_flag,#[reverse],}win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b t
+$ run-shell 'sleep 0.5'
+screen (sort: index)
+keys j j
+$ run-shell 'sleep 0.5'
+screen (sort: index)
+keys m
+$ run-shell 'sleep 0.5'
+screen
+styles 0-9
+keys M
+$ run-shell 'sleep 0.5'
+screen
+keys S-Down
+$ run-shell 'sleep 0.5'
+screen
+$ list-windows -F '#{window_index} #{window_name}'
+keys S-Up
+$ run-shell 'sleep 0.5'
+screen
+keys k
+$ run-shell 'sleep 0.5'
+screen
+keys J
+$ run-shell 'sleep 0.5'
+screen
+$ list-windows -F '#{window_index} #{window_name}'
+keys K
+$ run-shell 'sleep 0.5'
+screen
+keys M-- 
+$ run-shell 'sleep 0.5'
+screen
+keys M-+
+$ run-shell 'sleep 0.5'
+screen
+keys g
+$ run-shell 'sleep 0.5'
+screen
+keys H
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key s choose-tree -s -O name -r -F '#{?pane_format,#{?pane_marked,#[reverse],}pane #{pane_index},#{?window_format,#{?window_marked_flag,#[reverse],}win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b s
+$ run-shell 'sleep 0.5'
+screen (sort: name, reversed)
+keys q
+$ run-shell 'sleep 0.5'
+screen
