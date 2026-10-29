@@ -152,6 +152,9 @@ pub struct WindowStatus<'a> {
     pub last: bool,
     /// `window_bell_flag`.
     pub bell: bool,
+    /// `window_activity_flag` or `window_silence_flag`: both take
+    /// `window-status-activity-style`.
+    pub alert: bool,
     pub options: WindowOptions<'a>,
 }
 
@@ -164,6 +167,7 @@ pub struct WindowOptions<'a> {
     pub current_style: &'a str,
     pub last_style: &'a str,
     pub bell_style: &'a str,
+    pub activity_style: &'a str,
 }
 
 impl Default for WindowOptions<'_> {
@@ -175,6 +179,7 @@ impl Default for WindowOptions<'_> {
             current_style: "default",
             last_style: "default",
             bell_style: "reverse",
+            activity_style: "reverse",
         }
     }
 }
@@ -244,8 +249,9 @@ pub fn render_row(inputs: &StatusInputs) -> StatusRow {
 }
 
 /// One window of tmux's default `status-format[0]` list, as its `#{W:}`
-/// loop spells it (activity and silence styles never apply: grofe
-/// tracks neither).
+/// loop spells it: a bell takes `window-status-bell-style`, unless that is
+/// `default`, and then an activity or silence alert takes
+/// `window-status-activity-style`, unless that is `default` too.
 fn window_entry(w: &WindowStatus, now: &libc::tm) -> String {
     let o = &w.options;
     let e = |s: &str| expand(s, w.vars);
@@ -267,9 +273,13 @@ fn window_entry(w: &WindowStatus, now: &libc::tm) -> String {
         style.push_str(&last);
     }
     let bell = e(o.bell_style);
+    let activity = e(o.activity_style);
     if w.bell && !is_default(&bell) {
         style.push(' ');
         style.push_str(&bell);
+    } else if w.alert && !is_default(&activity) {
+        style.push(' ');
+        style.push_str(&activity);
     }
     let close = if w.current {
         "#[norange list=on default]"
@@ -1563,6 +1573,7 @@ mod tests {
             current,
             last: false,
             bell: false,
+            alert: false,
             options: WindowOptions::default(),
         }
     }
@@ -1934,5 +1945,37 @@ mod tests {
         };
         let line = render(&inputs);
         assert_eq!(plain_text(&line.spans).trim(), "");
+    }
+
+    /// Recorded on tmux 3.7b (`b3wpc/alerts-*`): a bell takes
+    /// `window-status-bell-style`, an activity or silence alert
+    /// `window-status-activity-style`, and a bell whose style is `default`
+    /// falls to the activity one.
+    #[test]
+    fn an_alert_takes_its_style_and_a_bell_wins() {
+        let now = fixed_tm(2026, 1, 1, 0, 0, 0);
+        let v = vars(&[]);
+        let entry = |bell: bool, alert: bool, bell_style: &'static str| {
+            let w = WindowStatus {
+                bell,
+                alert,
+                options: WindowOptions {
+                    bell_style,
+                    activity_style: "bg=green",
+                    ..WindowOptions::default()
+                },
+                ..window("x", &v, 2, false)
+            };
+            window_entry(&w, &now)
+        };
+        assert!(
+            entry(false, false, "reverse").contains("default]")
+                && !entry(false, false, "reverse").contains("reverse")
+        );
+        assert!(entry(true, false, "reverse").contains(" reverse]"));
+        assert!(entry(false, true, "reverse").contains(" bg=green]"));
+        assert!(entry(true, true, "reverse").contains(" reverse]"));
+        assert!(!entry(true, true, "reverse").contains("bg=green"));
+        assert!(entry(true, true, "default").contains(" bg=green]"));
     }
 }

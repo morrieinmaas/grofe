@@ -2468,12 +2468,14 @@ fn default_row(
                 current,
                 last: s.last_windows.last() == Some(&w.id),
                 bell: w.bell_flag,
+                alert: w.activity_flag || w.silence_flag,
                 options: WindowOptions {
                     separator: wopt("window-status-separator", defaults.separator),
                     style: wopt("window-status-style", defaults.style),
                     current_style: wopt("window-status-current-style", defaults.current_style),
                     last_style: wopt("window-status-last-style", defaults.last_style),
                     bell_style: wopt("window-status-bell-style", defaults.bell_style),
+                    activity_style: wopt("window-status-activity-style", defaults.activity_style),
                 },
             }
         })

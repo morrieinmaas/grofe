@@ -1,0 +1,22 @@
+# B3 WP-C: a bell in another window flags it (window-status-bell-style), and
+# with visual-bell a message names the window, or says "current window".
+$ new-session -d -s main -n first -x 60 -y 15 "sh -c 'while read x; do printf \"\\a\"; done'"
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g display-time 60000
+$ new-window -d -n other "sh -c 'while read x; do printf \"\\a\"; done'"
+client 60x15 attach -t main
+$ send-keys -t main:2 Enter
+$ run-shell 'sleep 0.5'
+screen 2:other
+styles 14-14
+$ list-windows -t main -F "#{window_index} #{window_bell_flag}"
+$ set -w -t main:other window-status-bell-style 'fg=red'
+styles 14-14
+$ set -g visual-bell on
+$ send-keys -t main:1 Enter
+$ run-shell 'sleep 0.5'
+screen Bell in current window
+$ send-keys -t main:2 Enter
+$ run-shell 'sleep 0.5'
+screen Bell in window 2

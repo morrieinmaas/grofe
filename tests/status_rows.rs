@@ -110,6 +110,7 @@ fn three_windows<'a>(v: &'a [Vars; 3], current: usize) -> Vec<WindowStatus<'a>> 
             current: i == current,
             last: false,
             bell: false,
+            alert: false,
             options: WindowOptions::default(),
         })
         .collect()
@@ -319,6 +320,7 @@ fn canopy_style_options_expand_their_formats() {
             current: i == 0,
             last: false,
             bell: false,
+            alert: false,
             options,
         })
         .collect();

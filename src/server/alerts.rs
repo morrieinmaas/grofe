@@ -23,9 +23,15 @@
 //! `#{hook_session}`, `#{hook_session_name}`, `#{hook_window}` and
 //! `#{hook_window_name}` set. Selecting the window clears its flags
 //! (`Model::select_window`).
-// ponytail: no `visual-*` status messages (the bell still reaches the
-// terminal, `passthrough`), and the activity and silence status styles
-// never apply (`status.rs`).
+//!
+//! When the action applies, `visual-bell`, `visual-activity` and
+//! `visual-silence` decide what the session's clients get, as tmux's
+//! `alerts_set_message`: `off` rings the terminal, `on` shows "Bell in
+//! window 2" (or "in current window") on the status line, `both` does both.
+//! A bell rings the terminal here and nowhere else, so `monitor-bell off`
+//! and `bell-action none` keep it quiet. The status line draws a flagged
+//! window in `window-status-bell-style`, or `window-status-activity-style`
+//! for an activity or silence flag (`status.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -57,6 +63,15 @@ impl Alert {
             Alert::Bell => "bell-action",
             Alert::Activity => "activity-action",
             Alert::Silence => "silence-action",
+        }
+    }
+
+    /// The word of tmux's message, and the option that picks how it shows.
+    fn visual(self) -> (&'static str, &'static str) {
+        match self {
+            Alert::Bell => ("Bell", "visual-bell"),
+            Alert::Activity => ("Activity", "visual-activity"),
+            Alert::Silence => ("Silence", "visual-silence"),
         }
     }
 
@@ -244,6 +259,48 @@ fn raise(state: &mut State, window: WindowId, alert: Alert) {
     let action = option(state, window, alert.action()).unwrap_or_default();
     if applies(&action, current) {
         hooks::window_alert(state, alert.hook(), window);
+        visual(state, window, alert);
+    }
+}
+
+/// tmux's `alerts_set_message`: what each client of the window's session
+/// gets for `alert`, by the session's `visual-*` option.
+fn visual(state: &mut State, window: WindowId, alert: Alert) {
+    let Some(w) = state.model.windows.get(&window) else {
+        return;
+    };
+    let session = w.session;
+    let (word, option) = alert.visual();
+    let how = state
+        .model
+        .options
+        .lookup(option, &[Owner::Session(session)])
+        .unwrap_or("off")
+        .to_string();
+    let current = state
+        .model
+        .sessions
+        .get(&session)
+        .is_some_and(|s| s.active == window);
+    let index = state.model.index_in(session, window).unwrap_or(w.index);
+    let text = if current {
+        format!("{word} in current window")
+    } else {
+        format!("{word} in window {index}")
+    };
+    let ids: Vec<_> = state
+        .clients
+        .iter()
+        .filter(|(_, c)| c.session == session)
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        if how == "off" || how == "both" {
+            clients::queue_raw(state, id, b"\x07");
+        }
+        if how != "off" {
+            clients::show_message(state, id, &text);
+        }
     }
 }
 

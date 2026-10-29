@@ -1,0 +1,55 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g display-time 60000
+? 0
+$ set -g visual-silence on
+? 0
+$ new-window -d -n quiet 'sleep 60'
+? 0
+$ set -w -t main:quiet monitor-silence 1
+? 0
+client 60x15 attach -t main
+screen Silence in window 2
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| Silence in window 2
+styles 14-14
+~ 14 0-6 fg=black bg=yellow
+~ 14 7-7 fg=default bg=yellow
+~ 14 8-9 fg=black bg=yellow
+~ 14 10-10 fg=default bg=yellow
+~ 14 11-16 fg=black bg=yellow
+~ 14 17-17 fg=default bg=yellow
+~ 14 18-18 fg=black bg=yellow
+~ 14 19-59 fg=default bg=yellow
+$ list-windows -t main -F "#{window_index} #{window_silence_flag}"
+1 0
+2 1
+? 0
+$ set -w -t main:quiet window-status-activity-style 'bg=green'
+? 0
+styles 14-14
+~ 14 0-6 fg=black bg=yellow
+~ 14 7-7 fg=default bg=yellow
+~ 14 8-9 fg=black bg=yellow
+~ 14 10-10 fg=default bg=yellow
+~ 14 11-16 fg=black bg=yellow
+~ 14 17-17 fg=default bg=yellow
+~ 14 18-18 fg=black bg=yellow
+~ 14 19-59 fg=default bg=yellow
