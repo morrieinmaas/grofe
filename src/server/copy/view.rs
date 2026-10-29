@@ -280,6 +280,7 @@ pub fn print(state: &mut State, pane: PaneId, text: &str, keep_blank: bool) {
     if !state.copy.get(pane).is_some_and(|m| m.view) {
         let mut mode = Mode::view(sx, sy, vi_keys(state, pane));
         mode.under = state.copy.modes.remove(&pane).map(Box::new);
+        mode.over_clock = state.clocks.is_active(pane);
         state.copy.insert(pane, mode);
     }
     // A lone newline is `cmdq_print` of "": the mode, and no line.

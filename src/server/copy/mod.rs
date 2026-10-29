@@ -933,6 +933,9 @@ pub struct Mode {
     pub view: bool,
     /// The copy mode a view mode was opened over, which `q` gives back.
     pub under: Option<Box<Mode>>,
+    /// The pane was showing the clock when this view mode opened over it,
+    /// so the mode is on top and the clock gets the keys after it.
+    pub over_clock: bool,
 }
 
 /// Where `recentre-top-bottom` puts the cursor's line next.
@@ -992,6 +995,7 @@ impl Mode {
             search: search::Search::default(),
             view: false,
             under: None,
+            over_clock: false,
         }
     }
 
@@ -2331,7 +2335,9 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
     }
     let mode = state.copy.get(pane)?;
     Some(match name {
-        "pane_in_mode" => if mode.under.is_some() { "2" } else { "1" }.to_string(),
+        "pane_in_mode" => {
+            (1 + usize::from(mode.under.is_some()) + usize::from(mode.over_clock)).to_string()
+        }
         "pane_mode" => if mode.view { VIEW_MODE_NAME } else { MODE_NAME }.to_string(),
         "top_line_time" => mode.grid.row_time(mode.grid.hsize - mode.oy).to_string(),
         "copy_cursor_x" => mode.cx.to_string(),

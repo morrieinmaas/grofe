@@ -33,7 +33,7 @@
 //!   left out, since they draw nothing.
 //! - `keys <key>...`: type keys on the client's pty, as a person would, by
 //!   tmux key name: `C-<c>`, `C-Space`, `Space`, `Escape`, `Enter`, `Tab`,
-//!   `BSpace`, the arrows (also `C-` and `M-`), `C-Left`, `C-Right`, `M-<char>`, `Home`, `End`, `PPage`, `NPage`, or a word typed
+//!   `BSpace`, the arrows (also `C-` and `M-`), `S-Up`, `S-Down`, `C-Left`, `C-Right`, `M-<char>`, `Home`, `End`, `PPage`, `NPage`, or a word typed
 //!   as it is, then wait a moment, so an `Escape` is not
 //!   read as Meta with the next step's key. Recorded as the `keys` line
 //!   only; follow it with `screen <text>` to see what the keys did, and
@@ -373,6 +373,8 @@ fn key_bytes(words: &[String]) -> Result<Vec<u8>, String> {
             "Left" => out.extend_from_slice(b"\x1b[D"),
             "C-Up" => out.extend_from_slice(b"\x1b[1;5A"),
             "C-Down" => out.extend_from_slice(b"\x1b[1;5B"),
+            "S-Up" => out.extend_from_slice(b"\x1b[1;2A"),
+            "S-Down" => out.extend_from_slice(b"\x1b[1;2B"),
             "C-Left" => out.extend_from_slice(b"\x1b[1;5D"),
             "C-Right" => out.extend_from_slice(b"\x1b[1;5C"),
             "M-Up" => out.extend_from_slice(b"\x1b[1;3A"),
@@ -384,7 +386,7 @@ fn key_bytes(words: &[String]) -> Result<Vec<u8>, String> {
             // Meta and a character: an Escape right before it.
             w if w.strip_prefix("M-").is_some_and(|c| c.chars().count() == 1) => {
                 out.push(0x1b);
-                out.extend_from_slice(w[2..].as_bytes());
+                out.extend_from_slice(&w.as_bytes()[2..]);
             }
             w => match w.strip_prefix("C-").map(str::as_bytes) {
                 Some([c]) if c.is_ascii_alphabetic() => out.push(c.to_ascii_lowercase() - b'a' + 1),

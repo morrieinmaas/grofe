@@ -1156,10 +1156,7 @@ fn complete_word(state: &mut State, client: ClientId) {
         return;
     };
     let text = &prompt.text;
-    let mut idx = prompt.cursor;
-    if idx != 0 {
-        idx -= 1;
-    }
+    let idx = prompt.cursor.saturating_sub(1);
     let space = |i: usize| text.get(i).is_some_and(|c| *c == ' ');
     let mut first = idx.min(text.len());
     while first > 0 && !space(first) {

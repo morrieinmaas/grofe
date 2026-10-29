@@ -1126,6 +1126,9 @@ const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('T', FlagKind::Value),
     ('c', FlagKind::Value),
+    // `-Z` keeps the target window zoomed; the choosers pass it, and it
+    // changes nothing here.
+    ('Z', FlagKind::Bool),
 ];
 
 fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
@@ -1822,7 +1825,7 @@ const CHOOSE_SHORT: &[(char, FlagKind)] = &[
 fn count_flag(argv: &[String], flag: char, valued: &str) -> u8 {
     let mut count: u8 = 0;
     let mut skip = false;
-    for word in argv.iter().skip(1) {
+    for word in argv {
         if skip {
             skip = false;
             continue;
@@ -5139,5 +5142,55 @@ mod tests {
         );
         // A command name cannot be an assignment.
         assert!(read("A=1 B=2\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod choose_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn choosers_take_tmux_s_flags_and_a_template() {
+        let Ok(Command::ChooseTree(c)) = parse(&argv(&[
+            "choose-tree",
+            "-NN",
+            "-O",
+            "name",
+            "-r",
+            "-f",
+            "#{==:a,b}",
+            "-F",
+            "#{x}",
+            "-K",
+            "#{line}",
+            "-t",
+            "%1",
+            "-y",
+            "-G",
+            "-w",
+            "join-pane -t '%%'",
+        ])) else {
+            panic!("choose-tree");
+        };
+        assert_eq!(c.opts.no_preview, 2);
+        assert_eq!(c.opts.sort.as_deref(), Some("name"));
+        assert!(c.opts.reversed && c.opts.prompt_yes && c.opts.groups && c.windows);
+        assert_eq!(c.opts.filter.as_deref(), Some("#{==:a,b}"));
+        assert_eq!(c.opts.format.as_deref(), Some("#{x}"));
+        assert_eq!(c.opts.key_format.as_deref(), Some("#{line}"));
+        assert_eq!(c.opts.template.as_deref(), Some("join-pane -t '%%'"));
+        let Ok(Command::ChooseTree(c)) = parse(&argv(&["choose-tree", "-N"])) else {
+            panic!("choose-tree -N");
+        };
+        assert_eq!(c.opts.no_preview, 1);
+        let Ok(Command::ChooseBuffer(c)) = parse(&argv(&["choose-buffer", "-N", "-Z"])) else {
+            panic!("choose-buffer");
+        };
+        assert!(c.zoom);
+        assert_eq!(c.opts.no_preview, 1);
     }
 }

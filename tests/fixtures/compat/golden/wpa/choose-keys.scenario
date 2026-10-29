@@ -1,0 +1,73 @@
+# WP-A: choose-tree's keys as mode-tree.c has them: sort order (O), reverse
+# (r), the preview sizes (v), tagging (t, T, C-t), -N, -O and the preview
+# title (the activity order is stepped over unseen, it depends on timing). A pause before each screen lets the redraw land.
+$ new-session -d -s main -n one -x 70 -y 30 cat
+$ new-window -d -n two cat
+$ new-session -d -s other -n three cat
+$ set -g status off
+$ select-pane -t main:1 -T pa
+$ select-pane -t main:2 -T pb
+$ select-pane -t other:1 -T pc
+client 70x30 attach -t main
+$ bind-key t choose-tree -Zw -F '#{?pane_format,pane #{pane_index},#{?window_format,win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b t
+$ run-shell 'sleep 0.5'
+screen (sort: index)
+keys O
+$ run-shell 'sleep 0.5'
+screen
+keys O
+$ run-shell 'sleep 0.5'
+keys O
+$ run-shell 'sleep 0.5'
+screen
+keys O
+$ run-shell 'sleep 0.5'
+screen
+keys r
+$ run-shell 'sleep 0.5'
+screen
+keys v
+$ run-shell 'sleep 0.5'
+screen
+keys v
+$ run-shell 'sleep 0.5'
+screen
+keys v
+$ run-shell 'sleep 0.5'
+screen
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys j
+$ run-shell 'sleep 0.5'
+screen
+keys t
+$ run-shell 'sleep 0.5'
+screen
+keys T
+$ run-shell 'sleep 0.5'
+screen
+keys C-t
+$ run-shell 'sleep 0.5'
+screen
+keys T
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key u choose-tree -N -F '#{?pane_format,pane #{pane_index},#{?window_format,win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b u
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen
+$ bind-key y choose-tree -NN -O name -F '#{?pane_format,pane #{pane_index},#{?window_format,win #{window_name}#{window_flags},#{session_windows} wins}}'
+keys C-b y
+$ run-shell 'sleep 0.5'
+screen
+keys q
+$ run-shell 'sleep 0.5'
+screen

@@ -12,3 +12,23 @@ fn command_output_shows_in_view_mode() {
 fn the_command_prompt_matches_tmux() {
     check("wpa", "prompt", &[]);
 }
+
+#[test]
+fn choose_tree_keys_match_tmux() {
+    check("wpa", "choose-keys", &[]);
+}
+
+#[test]
+fn choose_tree_templates_filters_prompts_and_tags_match_tmux() {
+    check("wpa", "choose-cmds", &[]);
+}
+
+#[test]
+fn choose_buffer_matches_tmux() {
+    check("wpa", "choose-buffer", &[]);
+}
+
+#[test]
+fn choose_tree_marks_swaps_and_folds_match_tmux() {
+    check("wpa", "choose-more", &[]);
+}
