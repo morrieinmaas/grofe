@@ -16,6 +16,7 @@ pub mod buffers;
 pub mod clients;
 pub mod clock;
 pub mod copy;
+pub mod customize;
 pub mod dispatch;
 pub mod events;
 pub mod floating;

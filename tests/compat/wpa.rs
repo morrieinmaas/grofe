@@ -32,3 +32,13 @@ fn choose_buffer_matches_tmux() {
 fn choose_tree_marks_swaps_and_folds_match_tmux() {
     check("wpa", "choose-more", &[]);
 }
+
+#[test]
+fn customize_mode_matches_tmux() {
+    check("wpa", "customize", &[]);
+}
+
+#[test]
+fn more_binding_output_matches_tmux() {
+    check("wpa", "view-more", &[]);
+}

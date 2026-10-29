@@ -114,6 +114,7 @@ pub fn format_var(state: &State, pane: PaneId, name: &str) -> Option<String> {
                 Kind::Tree { .. } => "tree-mode",
                 Kind::Clients => "client-mode",
                 Kind::Buffers => "buffer-mode",
+                Kind::Customize { .. } => "options-mode",
             }
             .to_string(),
         ),
@@ -130,12 +131,20 @@ enum Tag {
     Client(ClientId),
     /// A paste buffer, by its id (`buffers::Buffer::id`).
     Buffer(u64),
+    /// An item of customize-mode, by `customize`'s tag.
+    Custom(u64),
 }
 
 enum Kind {
-    Tree { find: Option<String> },
+    Tree {
+        find: Option<String>,
+    },
     Clients,
     Buffers,
+    /// customize-mode; `hide_global` is `H`.
+    Customize {
+        hide_global: bool,
+    },
 }
 
 /// A sort order (tmux's `sort_order`).
@@ -189,6 +198,7 @@ impl Kind {
             Kind::Tree { .. } => &[Order::Index, Order::Name, Order::Activity, Order::Z],
             Kind::Clients => &[Order::Name, Order::Size, Order::Creation, Order::Activity],
             Kind::Buffers => &[Order::Creation, Order::Name, Order::Size],
+            Kind::Customize { .. } => &[],
         }
     }
 
@@ -198,6 +208,7 @@ impl Kind {
             Kind::Tree { .. } => "switch-client -Zt '%%'",
             Kind::Clients => "detach-client -t '%%'",
             Kind::Buffers => "paste-buffer -p -b '%%'",
+            Kind::Customize { .. } => "",
         }
     }
 
@@ -206,6 +217,7 @@ impl Kind {
             Kind::Tree { .. } => TREE_FORMAT,
             Kind::Clients => "#{t/p:client_activity}: session #{session_name}",
             Kind::Buffers => "#{t/p:buffer_created}: #{buffer_sample}",
+            Kind::Customize { .. } => crate::server::customize::DEFAULT_FORMAT,
         }
     }
 }
@@ -280,6 +292,8 @@ struct Tree {
     prompt_yes: bool,
     /// `-G` was not given: a session group is listed once.
     squash_groups: bool,
+    /// The session of the client it opened for (customize-mode's scope).
+    session: Option<SessionId>,
 }
 
 /// One item and its children, as `mode_tree_add` makes them.
@@ -292,6 +306,31 @@ struct Item {
     /// Names are right-aligned against the other names at the same depth.
     align: bool,
     children: Vec<Item>,
+    /// customize-mode's: no text after the name, may not be tagged, shows
+    /// its parent's preview, and starts expanded (`None`: as the chooser's
+    /// own rule has it).
+    plain: bool,
+    no_tag: bool,
+    as_parent: bool,
+    start_expanded: Option<bool>,
+}
+
+impl Item {
+    /// The fields only customize-mode sets, at their usual values.
+    fn plain_defaults() -> Item {
+        Item {
+            tag: Tag::Custom(0),
+            session: None,
+            name: String::new(),
+            text: String::new(),
+            align: false,
+            children: Vec::new(),
+            plain: false,
+            no_tag: false,
+            as_parent: false,
+            start_expanded: None,
+        }
+    }
 }
 
 /// One drawn line, as `mode_tree_build_lines` makes them.
@@ -307,6 +346,9 @@ struct Line {
     name: String,
     text: String,
     align: bool,
+    plain: bool,
+    no_tag: bool,
+    as_parent: bool,
 }
 
 /// A tree as it is now: its lines, which is current, and the list's
@@ -333,6 +375,19 @@ impl Tree {
         }
     }
 
+    /// `mode_tree_set_height`: the list's rows out of the pane's `rows`;
+    /// customize-mode leaves its preview twelve.
+    fn list_height(&self, rows: usize, lines: usize) -> usize {
+        if let Kind::Customize { .. } = self.kind {
+            if self.preview == PreviewMode::Off {
+                return rows;
+            }
+            let h = if rows > 12 { rows - 12 } else { rows };
+            return if rows - h < 2 { rows } else { h };
+        }
+        list_height(rows, lines, self.preview)
+    }
+
     /// The format of the items' text: `-F`, else the mode's own.
     fn item_format(&self) -> String {
         match &self.format {
@@ -349,7 +404,7 @@ impl Tree {
     ) -> Result<Tree, String> {
         let order = match chooser.sort.as_deref() {
             Some(name) => Order::parse(name).ok_or("invalid sort order")?,
-            None => kind.orders()[0],
+            None => kind.orders().first().copied().unwrap_or(Order::Index),
         };
         let none = Tag::Pane(pane);
         Ok(Tree {
@@ -378,6 +433,7 @@ impl Tree {
             search: None,
             prompt_yes: chooser.prompt_yes,
             squash_groups: !chooser.groups,
+            session: None,
             kind,
         })
     }
@@ -455,6 +511,35 @@ pub fn open_buffers(
         return Ok(String::new());
     }
     open_list(state, ctx, Kind::Buffers, zoom, chooser, dialect)
+}
+
+/// Opens customize-mode on the current client, over the target pane.
+pub fn open_customize(
+    state: &mut State,
+    ctx: &ClientCtx,
+    zoom: bool,
+    chooser: &ChooseOpts,
+    dialect: Dialect,
+) -> Result<String, String> {
+    let mut tree = Tree::new(
+        Kind::Customize { hide_global: false },
+        PaneId(0),
+        chooser,
+        dialect,
+    )?;
+    let pane = state.model.resolve_pane(&chooser.target, ctx)?;
+    let Some(client) = clients::current_client(state, ctx) else {
+        return Ok(String::new());
+    };
+    if state.trees.is_open(client) {
+        return Ok(String::new());
+    }
+    tree.pane = pane;
+    tree.session = state.clients.get(&client).map(|c| c.session);
+    let none = Tag::Pane(pane);
+    tree.start = (none, none, none);
+    open(state, client, tree, zoom);
+    Ok(String::new())
 }
 
 /// A flat chooser (clients or buffers) over the target pane.
@@ -547,7 +632,7 @@ pub fn client_gone(state: &mut State, id: ClientId) {
 // --- Building ---------------------------------------------------------
 
 /// tmux's `format_true`.
-fn format_true(s: &str) -> bool {
+pub(crate) fn format_true(s: &str) -> bool {
     !s.is_empty() && s != "0"
 }
 
@@ -558,6 +643,7 @@ fn build(state: &State, tree: &Tree) -> (Vec<Item>, bool) {
         Kind::Clients => client_items(state, tree, filter),
         Kind::Buffers => buffer_items(state, tree, filter),
         Kind::Tree { find } => tree_items(state, tree, find.as_deref(), filter),
+        Kind::Customize { hide_global } => custom_items(state, tree, filter, *hide_global),
     };
     let items = filtered(tree.filter.as_deref());
     let finding = matches!(&tree.kind, Kind::Tree { find: Some(_) });
@@ -682,6 +768,7 @@ fn tree_items(state: &State, tree: &Tree, find: Option<&str>, filter: Option<&st
                     text: expand_tag(state, tree.pane, Some(s.id), Tag::Pane(*p), &format, None),
                     align: true,
                     children: Vec::new(),
+                    ..Item::plain_defaults()
                 })
                 .collect();
             kids.push(Item {
@@ -698,6 +785,7 @@ fn tree_items(state: &State, tree: &Tree, find: Option<&str>, filter: Option<&st
                 ),
                 align: true,
                 children,
+                ..Item::plain_defaults()
             });
         }
         if kids.is_empty() {
@@ -717,6 +805,7 @@ fn tree_items(state: &State, tree: &Tree, find: Option<&str>, filter: Option<&st
             ),
             align: false,
             children: kids,
+            ..Item::plain_defaults()
         });
     }
     out
@@ -880,6 +969,7 @@ fn expand_tag(
                 },
             );
         }
+        Tag::Custom(_) => return fmt.to_string(),
         Tag::Buffer(id) => {
             let Some(b) = state.buffers.by_id(id) else {
                 return fmt.to_string();
@@ -956,6 +1046,7 @@ fn buffer_items(state: &State, tree: &Tree, filter: Option<&str>) -> Vec<Item> {
             text: expand_tag(state, tree.pane, None, Tag::Buffer(b.id), format, None),
             align: false,
             children: Vec::new(),
+            ..Item::plain_defaults()
         })
         .collect()
 }
@@ -997,6 +1088,7 @@ fn client_items(state: &State, tree: &Tree, filter: Option<&str>) -> Vec<Item> {
             text: expand_tag(state, tree.pane, None, Tag::Client(*id), format, None),
             align: false,
             children: Vec::new(),
+            ..Item::plain_defaults()
         })
         .collect()
 }
@@ -1016,7 +1108,12 @@ fn add_lines(
 ) {
     let flat = items.iter().all(|i| i.children.is_empty());
     for (k, item) in items.iter().enumerate() {
-        let expanded = tree.expanded.get(&item.tag).copied().unwrap_or(true);
+        let expanded = tree
+            .expanded
+            .get(&item.tag)
+            .copied()
+            .or(item.start_expanded)
+            .unwrap_or(true);
         let at = out.len();
         out.push(Line {
             tag: item.tag,
@@ -1030,6 +1127,9 @@ fn add_lines(
             name: item.name.clone(),
             text: item.text.clone(),
             align: item.align,
+            plain: item.plain,
+            no_tag: item.no_tag,
+            as_parent: item.as_parent,
         });
         if expanded {
             add_lines(&item.children, depth + 1, Some(at), tree, out);
@@ -1110,7 +1210,7 @@ fn view(state: &State, tree: &Tree) -> View {
     } else {
         set_current(&lines, tree.tag, tree.current, tree.offset, tree.height)
     };
-    let height = list_height(rows, lines.len(), tree.preview);
+    let height = tree.list_height(rows, lines.len());
     // `mode_tree_check_selected`: a current line below the list scrolls.
     let offset = if height > 0 && current > height - 1 {
         offset.max(current - height + 1)
@@ -1232,7 +1332,7 @@ fn rebuild(state: &mut State, client: ClientId, tag: Option<Tag>) {
         .get(&tree.pane)
         .map_or(0, |p| usize::from(p.rows));
     let tag = tag.or(tree.tag);
-    let height = list_height(rows, lines.len(), tree.preview);
+    let height = tree.list_height(rows, lines.len());
     let (current, offset) = set_current(&lines, tag, tree.current, tree.offset, tree.height);
     let tag = lines.get(current).map(|l| l.tag);
     if let Some(tree) = state.trees.open.get_mut(&client) {
@@ -1277,7 +1377,7 @@ fn pane_of(state: &State, tag: Tag) -> Option<PaneId> {
             .get(&s)
             .and_then(|s| model.windows.get(&s.active))
             .map(|w| w.active),
-        Tag::Client(_) | Tag::Buffer(_) => None,
+        Tag::Client(_) | Tag::Buffer(_) | Tag::Custom(_) => None,
     }
 }
 
@@ -1312,6 +1412,7 @@ fn target_name(state: &State, session: Option<SessionId>, tag: Tag) -> Option<St
             Some(c.tty.clone().unwrap_or_else(|| c.name.clone()))
         }
         Tag::Buffer(id) => Some(state.buffers.by_id(id)?.name.clone()),
+        Tag::Custom(_) => None,
     }
 }
 
@@ -1342,6 +1443,357 @@ fn template_commands(
         }
     }
     out
+}
+
+// --- customize-mode -----------------------------------------------------
+
+use crate::server::customize::{self, Entry, Field, Fs, Set};
+
+/// Where the chooser's pane is, for customize-mode's scopes.
+fn custom_fs(state: &State, tree: &Tree) -> Option<Fs> {
+    let model = &state.model;
+    let window = model.panes.get(&tree.pane)?.window;
+    let session = model.link_session(window, tree.session)?;
+    Some(Fs {
+        session,
+        window,
+        pane: tree.pane,
+    })
+}
+
+/// Builds customize-mode's tree for `tree`, with the pane's variables
+/// under its formats.
+fn custom_build(
+    state: &State,
+    tree: &Tree,
+    filter: Option<&str>,
+    hide_global: bool,
+) -> Option<(customize::Built, Fs)> {
+    let fs = custom_fs(state, tree)?;
+    let format = tree.item_format();
+    let filter = filter.map(|f| tree.native(f));
+    let ctx = FormatCtx::new(&state.model, fs.pane);
+    let vars = ServerVars::new(state, fs.pane, &ctx);
+    Some((
+        customize::items(state, fs, &format, filter.as_deref(), hide_global, &vars),
+        fs,
+    ))
+}
+
+fn custom_nodes(nodes: Vec<customize::Node>) -> Vec<Item> {
+    nodes
+        .into_iter()
+        .map(|n| Item {
+            tag: Tag::Custom(n.tag),
+            plain: n.text.is_none(),
+            text: n.text.unwrap_or_default(),
+            name: n.name,
+            children: custom_nodes(n.children),
+            no_tag: n.no_tag,
+            as_parent: n.as_parent,
+            start_expanded: Some(n.expanded),
+            ..Item::plain_defaults()
+        })
+        .collect()
+}
+
+fn custom_items(state: &State, tree: &Tree, filter: Option<&str>, hide_global: bool) -> Vec<Item> {
+    match custom_build(state, tree, filter, hide_global) {
+        Some((built, _)) => custom_nodes(built.nodes),
+        None => Vec::new(),
+    }
+}
+
+/// What the item with `tag` is, and where the pane is.
+fn custom_entry(state: &State, client: ClientId, tag: u64) -> Option<(Entry, Fs)> {
+    let tree = state.trees.open.get(&client)?;
+    let hide = matches!(tree.kind, Kind::Customize { hide_global: true });
+    let (built, fs) = custom_build(state, tree, tree.filter.as_deref(), hide)?;
+    built.entries.get(&tag).cloned().map(|e| (e, fs))
+}
+
+fn custom_tag(v: &View, line: usize) -> Option<u64> {
+    match v.lines.get(line)?.tag {
+        Tag::Custom(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// Asks `label` (one key), and runs `then` when it is `y`; at once with
+/// `-y`.
+fn ask_yes(
+    state: &mut State,
+    client: ClientId,
+    label: &str,
+    then: impl FnOnce(&mut State) -> Routed + Send + 'static,
+) -> Routed {
+    if state.trees.open.get(&client).is_some_and(|t| t.prompt_yes) {
+        return then(state);
+    }
+    crate::server::prompt::ask(
+        state,
+        client,
+        label,
+        "",
+        "command",
+        true,
+        Box::new(move |state, _client, text| {
+            let mut chars = text.chars();
+            let yes = matches!(chars.next(), Some(c) if c.eq_ignore_ascii_case(&'y'))
+                && chars.next().is_none();
+            if yes { then(state) } else { Routed::Consumed }
+        }),
+    );
+    Routed::Consumed
+}
+
+/// A parse error as a status message with a capital, as tmux shows one.
+fn error_message(state: &mut State, client: ClientId, e: &str) {
+    let mut text = e.to_string();
+    if let Some(first) = text.get(..1) {
+        text = first.to_uppercase() + &text[1..];
+    }
+    clients::show_message(state, client, &text);
+}
+
+/// Enter, `s`, `w`, `S` and `W` on line `line`: sets the option, or edits
+/// the key's row (`window_customize_set_option`, `_set_key`).
+fn custom_enter(
+    state: &mut State,
+    client: ClientId,
+    v: &View,
+    line: usize,
+    global: bool,
+    pane: bool,
+) -> Routed {
+    let Some(tag) = custom_tag(v, line) else {
+        return Routed::Consumed;
+    };
+    let Some((entry, fs)) = custom_entry(state, client, tag) else {
+        return Routed::Consumed;
+    };
+    match entry {
+        Entry::Option { scope, name, idx } => {
+            match customize::set(state, fs, scope, &name, idx, global, pane) {
+                Some(Set::Command(argv)) => Routed::Command(vec![argv], Dialect::Tmux),
+                Some(Set::Prompt {
+                    label,
+                    initial,
+                    scope,
+                    idx,
+                }) => {
+                    crate::server::prompt::ask(
+                        state,
+                        client,
+                        &label,
+                        &initial,
+                        "command",
+                        false,
+                        Box::new(move |state, _client, text| {
+                            if text.is_empty() {
+                                return Routed::Consumed;
+                            }
+                            let argv = customize::set_command(state, scope, &name, idx, text);
+                            Routed::Command(vec![argv], Dialect::Tmux)
+                        }),
+                    );
+                    Routed::Consumed
+                }
+                None => Routed::Consumed,
+            }
+        }
+        Entry::Field { table, key, field } if !global => match field {
+            Field::Repeat => {
+                customize::toggle_key_repeat(state, &table, &key);
+                Routed::Consumed
+            }
+            Field::Command => {
+                let initial = customize::key_command_text(state, &table, &key);
+                crate::server::prompt::ask(
+                    state,
+                    client,
+                    &format!("({key}) "),
+                    &initial,
+                    "command",
+                    false,
+                    Box::new(move |state, client, text| {
+                        if text.is_empty() {
+                            return Routed::Consumed;
+                        }
+                        match cmd::split_command_string(text) {
+                            Ok(cmds) if !cmds.is_empty() => {
+                                customize::set_key_commands(state, &table, &key, cmds)
+                            }
+                            Ok(_) => {}
+                            Err(e) => error_message(state, client, &e.to_string()),
+                        }
+                        Routed::Consumed
+                    }),
+                );
+                Routed::Consumed
+            }
+            Field::Note => {
+                let initial = customize::key_note_text(state, &table, &key);
+                crate::server::prompt::ask(
+                    state,
+                    client,
+                    &format!("({key}) "),
+                    &initial,
+                    "command",
+                    false,
+                    Box::new(move |state, _client, text| {
+                        if !text.is_empty() {
+                            customize::set_key_note(state, &table, &key, text);
+                        }
+                        Routed::Consumed
+                    }),
+                );
+                Routed::Consumed
+            }
+        },
+        _ => Routed::Consumed,
+    }
+}
+
+/// `d`, `D`, `u` and `U`: reset or unset the current item, or the tagged
+/// ones, after asking.
+fn custom_change(
+    state: &mut State,
+    client: ClientId,
+    v: &View,
+    current: usize,
+    reset: bool,
+    tagged: bool,
+) -> Routed {
+    let Some(tree) = state.trees.open.get(&client) else {
+        return Routed::Consumed;
+    };
+    let tags: Vec<u64> = if tagged {
+        tagged_lines(v, tree)
+            .into_iter()
+            .filter_map(|t| match t {
+                Tag::Custom(n) => Some(n),
+                _ => None,
+            })
+            .collect()
+    } else {
+        custom_tag(v, current).into_iter().collect()
+    };
+    if tags.is_empty() {
+        return Routed::Consumed;
+    }
+    let entries: Vec<(Entry, Fs)> = tags
+        .iter()
+        .filter_map(|t| custom_entry(state, client, *t))
+        .collect();
+    let Some((first, _)) = entries.first() else {
+        return Routed::Consumed;
+    };
+    let what = if reset { "Reset" } else { "Unset" };
+    let label = if tagged {
+        format!(
+            "{what} {} tagged{}? ",
+            tags.len(),
+            if reset { " to default" } else { "" }
+        )
+    } else {
+        let name = match first {
+            Entry::Option { name, idx, .. } => match idx {
+                Some(i) if !reset => format!("{name}[{i}]"),
+                _ => name.clone(),
+            },
+            Entry::Key { key, .. } | Entry::Field { key, .. } => key.to_string(),
+            Entry::Group => return Routed::Consumed,
+        };
+        if reset {
+            // Only a whole option resets.
+            if !matches!(first, Entry::Option { idx: None, .. }) {
+                return Routed::Consumed;
+            }
+            format!("Reset {name} to default? ")
+        } else {
+            format!("Unset {name}? ")
+        }
+    };
+    // Unsetting the key under the cursor first folds it and steps up
+    // (`window_customize_unset_key`).
+    let step_up = (!reset && !tagged && matches!(first, Entry::Key { .. } | Entry::Field { .. }))
+        .then(|| {
+            (
+                v.lines.get(current).map(|l| l.tag),
+                current
+                    .checked_sub(1)
+                    .and_then(|i| v.lines.get(i))
+                    .map(|l| l.tag),
+                current,
+            )
+        });
+    ask_yes(state, client, &label, move |state| {
+        if let Some((Some(here), Some(above), at)) = step_up
+            && let Some(tree) = state.trees.open.get_mut(&client)
+        {
+            tree.expanded.insert(here, false);
+            tree.current = at - 1;
+            tree.offset = tree.offset.min(at - 1);
+            tree.tag = Some(above);
+        }
+        let mut cmds = Vec::new();
+        for (entry, fs) in entries {
+            match entry {
+                Entry::Option { scope, name, idx } => {
+                    if reset && idx.is_some() {
+                        continue;
+                    }
+                    cmds.extend(customize::unset_commands(
+                        state, fs, scope, &name, idx, reset,
+                    ));
+                }
+                Entry::Key { table, key } | Entry::Field { table, key, .. } if !reset => {
+                    customize::unbind_key(state, &table, &key);
+                }
+                _ => {}
+            }
+        }
+        rebuild(state, client, None);
+        Routed::Command(cmds, Dialect::Tmux)
+    })
+}
+
+/// customize-mode's own keys; `None` leaves the key to the chooser.
+fn custom_key(
+    state: &mut State,
+    client: ClientId,
+    key: &Key,
+    v: &View,
+    current: usize,
+) -> Option<Routed> {
+    let plain = key.mods == Default::default();
+    let ch = match key.code {
+        KeyCode::Char(c) if plain => Some(c),
+        _ => None,
+    };
+    let enter = plain && key.code == KeyCode::Enter;
+    let routed = match ch {
+        _ if enter => custom_enter(state, client, v, current, false, true),
+        Some('s') => custom_enter(state, client, v, current, false, true),
+        Some('w') => custom_enter(state, client, v, current, false, false),
+        Some('S' | 'W') => custom_enter(state, client, v, current, true, false),
+        Some('d') => custom_change(state, client, v, current, true, false),
+        Some('D') => custom_change(state, client, v, current, true, true),
+        Some('u') => custom_change(state, client, v, current, false, false),
+        Some('U') => custom_change(state, client, v, current, false, true),
+        Some('H') => {
+            if let Some(tree) = state.trees.open.get_mut(&client)
+                && let Kind::Customize { hide_global } = &mut tree.kind
+            {
+                *hide_global = !*hide_global;
+            }
+            rebuild(state, client, None);
+            Routed::Consumed
+        }
+        _ => return None,
+    };
+    Some(routed)
 }
 
 fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
@@ -1393,7 +1845,11 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
         }
     };
 
+    let kind_custom = matches!(tree.kind, Kind::Customize { .. });
     if let Some(i) = line_of_key(key, &v.keys) {
+        if kind_custom {
+            return custom_enter(state, client, &v, i, false, true);
+        }
         return choose(state, client, i);
     }
     let (m, plain) = (key.mods, Default::default());
@@ -1405,6 +1861,12 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
     let line = &v.lines[current];
     let line_tag = line.tag;
     let line_session = line.session;
+    if kind_custom && let Some(routed) = custom_key(state, client, key, &v, current) {
+        return routed;
+    }
+    let Some(tree) = state.trees.open.get(&client) else {
+        return Routed::Consumed;
+    };
     if is('q') || code == Some(KeyCode::Escape) || ctrl('[') || ctrl('g') {
         close(state, client);
         return Routed::Consumed;
@@ -1499,6 +1961,8 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
         } else {
             0
         };
+    } else if is('t') && line.no_tag {
+        return Routed::Consumed;
     } else if is('t') {
         // Parents and children are never both tagged: the current item's
         // parents and children are untagged first.
@@ -1535,7 +1999,10 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
         let all: BTreeSet<Tag> = v
             .lines
             .iter()
-            .filter(|l| l.parent.is_none())
+            .filter(|l| match l.parent {
+                None => !l.no_tag,
+                Some(p) => v.lines[p].no_tag,
+            })
             .map(|l| l.tag)
             .collect();
         if let Some(tree) = state.trees.open.get_mut(&client) {
@@ -1738,7 +2205,7 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
                 at = set_current(&lines, Some(w), at.0, at.1, tree.height);
             }
         }
-        let height = list_height(rows, lines.len(), tree.preview);
+        let height = tree.list_height(rows, lines.len());
         let tag = lines.get(at.0).map(|l| l.tag);
         let Some(tree) = state.trees.open.get_mut(&client) else {
             return Routed::Consumed;
@@ -1821,6 +2288,7 @@ fn search_matches(state: &State, tag: Tag, item: &Item, search: &Search) -> bool
             .buffers
             .by_id(id)
             .is_some_and(|b| has(&b.name) || has(&String::from_utf8_lossy(&b.data))),
+        Tag::Custom(_) => has(&item.name),
     }
 }
 
@@ -2116,7 +2584,7 @@ fn strip_of(state: &State, tag: Tag) -> Option<(Vec<Preview>, usize)> {
             let current = entries.iter().position(|e| e.2).unwrap_or(0);
             Some((entries, current))
         }
-        Tag::Pane(_) | Tag::Client(_) | Tag::Buffer(_) => None,
+        Tag::Pane(_) | Tag::Client(_) | Tag::Buffer(_) | Tag::Custom(_) => None,
     }
 }
 
@@ -2429,7 +2897,8 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
         } else {
             ""
         };
-        let text = format!("{key:<keylen$}{start}{name}{tagged}: ");
+        let colon = if line.plain { "" } else { ": " };
+        let text = format!("{key:<keylen$}{start}{name}{tagged}{colon}");
         let width = UnicodeWidthStr::width(text.as_str()).min(w);
         let mut style = if i == v.current {
             cv.fill(0, y, w, &mode_bg);
@@ -2452,14 +2921,23 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
     if tree.preview == PreviewMode::Off || sy <= 4 || h < 2 || sy - h <= 4 || w <= 4 {
         return;
     }
-    let line = &v.lines[v.current];
+    let current = &v.lines[v.current];
+    // A row under a key shows the key (`mode_tree_draw_as_parent`).
+    let line = match current.parent {
+        Some(p) if current.as_parent => &v.lines[p],
+        _ => current,
+    };
     cv.frame(0, h, w, sy - h);
-    let title = format!(
-        " {} (sort: {}{})",
-        line.name,
-        tree.order.name(),
-        if tree.reversed { ", reversed" } else { "" }
-    );
+    let title = if tree.kind.orders().is_empty() {
+        format!(" {}", line.name)
+    } else {
+        format!(
+            " {} (sort: {}{})",
+            line.name,
+            tree.order.name(),
+            if tree.reversed { ", reversed" } else { "" }
+        )
+    };
     if w - 2 >= title.len() {
         let mut x = 1 + cv.text(1, h, &title, &plain, w - 2);
         let filter = tree.filter.is_some() || matches!(&tree.kind, Kind::Tree { find: Some(_) });
@@ -2501,6 +2979,39 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
         Tag::Pane(p) => preview(state, cv, p, (x, y, box_x, box_y)),
         Tag::Client(c) => draw_client(state, cv, c, (x, y, box_x, box_y)),
         Tag::Buffer(id) => draw_buffer(state, cv, id, (x, y, box_x, box_y)),
+        Tag::Custom(t) => draw_custom(state, tree, cv, t, (x, y, box_x, box_y)),
+    }
+}
+
+/// customize-mode's preview: what the item is, as `customize::info` says.
+fn draw_custom(
+    state: &State,
+    tree: &Tree,
+    cv: &mut Canvas,
+    tag: u64,
+    (cx, cy, sx, sy): (usize, usize, usize, usize),
+) {
+    let hide = matches!(tree.kind, Kind::Customize { hide_global: true });
+    let Some((built, fs)) = custom_build(state, tree, tree.filter.as_deref(), hide) else {
+        return;
+    };
+    let Some(entry) = built.entries.get(&tag) else {
+        return;
+    };
+    let ctx = FormatCtx::new(&state.model, fs.pane);
+    let vars = ServerVars::new(state, fs.pane, &ctx);
+    let page = customize::info(state, fs, entry, sx, sy, &vars);
+    for (row, segments) in page.lines.iter().take(sy).enumerate() {
+        let mut x = 0;
+        for (text, style) in segments {
+            x += cv.text(
+                cx + x,
+                cy + row,
+                text,
+                &style.unwrap_or_default(),
+                sx.saturating_sub(x),
+            );
+        }
     }
 }
 
@@ -2765,6 +3276,9 @@ mod tests {
             name: String::new(),
             text: String::new(),
             align: false,
+            plain: false,
+            no_tag: false,
+            as_parent: false,
         }
     }
 

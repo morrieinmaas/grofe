@@ -4771,12 +4771,10 @@ mod tests {
         }
     }
 
-    /// `prefix C` is the one stock binding whose command grofe lacks:
-    /// `customize-mode`, tmux's option browser, is not built.
     #[test]
-    fn every_stock_prefix_binding_maps_but_customize_mode() {
+    fn every_stock_prefix_binding_maps() {
         let mut bad = Vec::new();
-        for (key, _, _, text) in TMUX_STOCK.iter().filter(|(key, ..)| *key != "C") {
+        for (key, _, _, text) in TMUX_STOCK.iter() {
             let mut errors = Vec::new();
             unmapped(text, &mut errors);
             bad.extend(errors.into_iter().map(|e| format!("prefix {key}: {e}")));

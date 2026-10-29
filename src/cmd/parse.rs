@@ -11,17 +11,17 @@ use super::target::parse_target;
 use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseOpts,
     ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore,
-    CopyMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup,
-    FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer, KillSession, KillWindow,
-    LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions,
-    ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane, PlacePane,
-    PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction, ResizePane,
-    ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane,
-    SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook,
-    SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile,
-    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnlinkWindow, WaitFor, WindowStep,
+    CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes,
+    DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
+    KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
+    ListPlugins, ListSessions, ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane,
+    NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane,
+    PlacePane, PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
+    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
+    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment,
+    SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions,
+    SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target,
+    UnbindKey, UnlinkWindow, WaitFor, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -3364,6 +3364,25 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 slider: flags.present.contains(&'S'),
                 source: target_if_given(&flags.values, 's')?,
                 target: target_or_current(&flags.values, 't')?,
+            }))
+        }
+        "customize-mode" => {
+            let flags = flags_for(
+                rest,
+                &[
+                    ('F', FlagKind::Value),
+                    ('f', FlagKind::Value),
+                    ('N', FlagKind::Bool),
+                    ('t', FlagKind::Value),
+                    ('y', FlagKind::Bool),
+                    ('Z', FlagKind::Bool),
+                ],
+                "customize-mode",
+            )?;
+            no_extra_positionals(&flags, "customize-mode", 0)?;
+            Ok(Command::CustomizeMode(CustomizeMode {
+                zoom: flags.present.contains(&'Z'),
+                opts: choose_opts(rest, &flags, "customize-mode")?,
             }))
         }
         "choose-buffer" => {

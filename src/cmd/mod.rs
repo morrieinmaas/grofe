@@ -1264,6 +1264,15 @@ pub struct CopyMode {
     pub target: Target,
 }
 
+/// `customize-mode` (WP-A): tmux's option and key browser.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CustomizeMode {
+    /// `-Z`.
+    pub zoom: bool,
+    /// `-t`, `-F`, `-f`, `-N` and `-y`, as the choosers take them.
+    pub opts: ChooseOpts,
+}
+
 /// `choose-buffer [-Z]` (TM.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChooseBuffer {
@@ -1370,6 +1379,7 @@ pub enum Command {
     DeleteBuffer(DeleteBuffer),
     PasteBuffer(PasteBuffer),
     ChooseBuffer(ChooseBuffer),
+    CustomizeMode(CustomizeMode),
     // M5: copy mode (TM.1).
     CopyMode(CopyMode),
 }

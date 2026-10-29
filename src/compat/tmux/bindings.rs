@@ -200,6 +200,7 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("display-panes", ""),
         pass("confirm-before", "tc_7/confirm-before"),
         pass("choose-tree", ""),
+        pass("customize-mode", ""),
     ]
 }
 
