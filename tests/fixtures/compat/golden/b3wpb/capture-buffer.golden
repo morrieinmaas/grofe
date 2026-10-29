@@ -1,0 +1,46 @@
+$ new-session -d -s main -x 20 -y 5 'printf "alpha\nbeta  \n"; sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ list-buffers
+? 0
+$ capture-pane -t main
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+buffer0 14
+? 0
+$ show-buffer
+alpha
+beta
+
+
+
+? 0
+$ capture-pane -b keep -t main
+? 0
+$ capture-pane -b keep -S 0 -E 0 -t main
+? 0
+$ show-buffer -b keep
+alpha
+? 0
+$ capture-pane -pN -t main
+alpha     
+beta      
+
+
+
+? 0
+$ capture-pane -N -b nn -t main
+? 0
+$ show-buffer -b nn
+alpha     
+beta      
+
+
+
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+nn 25
+keep 6
+buffer0 14
+? 0

@@ -1,0 +1,45 @@
+# B3 WP-B: the flags tmux has and grofe refused: select-window -n -p -l -T, last-pane -Z -d -e, send-keys -R and -K -c with no client to type on.
+$ new-session -d -s main -x 40 -y 12 'sleep 100000'
+$ new-window -d -t main:5 'sleep 100000'
+$ new-window -d -t main:7 'sleep 100000'
+$ select-window -n -t main
+$ display-message -p -t main '#{window_index}'
+$ select-window -n -t main
+$ display-message -p -t main '#{window_index}'
+$ select-window -n -t main
+$ display-message -p -t main '#{window_index}'
+$ select-window -p -t main
+$ display-message -p -t main '#{window_index}'
+$ select-window -l -t main
+$ display-message -p -t main '#{window_index}'
+$ select-window -T -t main:5
+$ display-message -p -t main '#{window_index}'
+$ select-window -T -t main:7
+$ display-message -p -t main '#{window_index}'
+$ select-window -T -t main:5
+$ display-message -p -t main '#{window_index}'
+$ select-window -nl -t main:7
+$ display-message -p -t main '#{window_index}'
+$ select-window -x -t main
+$ split-window -t main:1 'sleep 100000'
+$ split-window -t main:1 'sleep 100000'
+$ select-pane -t main:1.1
+$ last-pane -t main:1
+$ display-message -p -t main:1 '#{pane_index}'
+$ resize-pane -Z -t main:1.3
+$ last-pane -Z -t main:1
+$ display-message -p -t main:1 '#{pane_index} #{window_zoomed_flag}'
+$ last-pane -t main:1
+$ display-message -p -t main:1 '#{pane_index} #{window_zoomed_flag}'
+$ last-pane -d -t main:1
+$ display-message -p -t main:1 '#{pane_index}'
+$ select-pane -t main:1.3
+$ select-pane -l -e -t main:1
+$ last-pane -x
+$ new-session -d -s two -x 40 -y 12 cat
+$ send-keys -t two:1 -K a
+$ send-keys -t two:1 -K -c nonexistent a
+$ send-keys -t two:1 -R
+$ display-message -p -t two:1 '#{pane_in_mode}'
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t two:1

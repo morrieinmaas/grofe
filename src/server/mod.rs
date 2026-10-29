@@ -265,6 +265,22 @@ pub struct State {
 }
 
 impl State {
+    /// The `TERM` a new pane gets: tmux's `environ_for_session` exports the
+    /// `default-terminal` option verbatim. While it still holds the
+    /// default, [`Self::inner_term`] stands in, so a host lacking a
+    /// `tmux-256color` terminfo entry keeps grofe's fallback.
+    pub fn pane_term(&self) -> &'static str {
+        let set = self
+            .model
+            .options
+            .get(dispatch::options::Owner::Global, "default-terminal")
+            .map(|e| e.value.as_str());
+        match set {
+            Some(v) if v != "tmux-256color" => intern(v),
+            _ => self.inner_term,
+        }
+    }
+
     fn remove_socket(&self) {
         let Ok(meta) = fs::symlink_metadata(&self.socket) else {
             return;
@@ -273,6 +289,19 @@ impl State {
             let _ = fs::remove_file(&self.socket);
         }
     }
+}
+
+/// A `'static` copy of `s`, one per distinct value, for `PaneSpawn::term`.
+fn intern(s: &str) -> &'static str {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(found) = seen.iter().find(|v| **v == s) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    seen.push(leaked);
+    leaked
 }
 
 /// The dispatch seam: runs one command (`argv[0]` is the verb) against the

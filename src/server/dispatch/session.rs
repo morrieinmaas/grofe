@@ -128,6 +128,7 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         silence_flag: false,
         activity: std::time::SystemTime::now(),
         last_panes: Vec::new(),
+        active_points: Default::default(),
         floating: Vec::new(),
         pane_status: Default::default(),
         links: Vec::new(),

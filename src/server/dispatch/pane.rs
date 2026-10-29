@@ -11,11 +11,11 @@ use crate::server::borders::PaneStatus;
 use crate::server::dispatch::options;
 use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
-use crate::server::layout::{Insert, LayoutError};
+use crate::server::layout::{self, Insert, LayoutError};
 use crate::server::model::Model;
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
-use crate::server::{State, clients, copy, graphics, prompt};
-use crate::types::{Dir, Edge, PaneId, Rect, SplitSize, WindowId};
+use crate::server::{State, buffers, clients, copy, graphics, prompt};
+use crate::types::{Dir, Edge, PaneId, SplitSize, WindowId};
 
 /// Runs a pane command routed here by `dispatch::route`.
 pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, String> {
@@ -162,13 +162,15 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
     let model = &mut state.model;
     if c.last {
         let window = model.resolve_window(&c.target, ctx)?;
-        select_last(model, window, c.keep_zoom)?;
+        select_last(model, window, c.keep_zoom, c.input)?;
         return Ok(String::new());
     }
     let pane = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&pane].window;
     let Some(edge) = c.edge else {
-        if let Some(title) = &c.title {
+        if let Some(on) = c.input {
+            set_input(model, pane, on);
+        } else if let Some(title) = &c.title {
             set_title(state, pane, title);
         } else {
             switch_active(model, window, pane, c.keep_zoom);
@@ -178,12 +180,16 @@ fn select_pane(state: &mut State, ctx: &ClientCtx, c: SelectPane) -> Result<Stri
     let Some(w) = model.windows.get(&window) else {
         return Ok(String::new());
     };
-    // Neighbours are found in the unzoomed layout.
-    let area = w.area();
-    let next = w
-        .layout
-        .neighbour(area, pane, edge)
-        .or_else(|| wrapped_neighbour(w.layout.compute(area), area, pane, edge));
+    // Neighbours are found in the unzoomed layout, as tmux's
+    // `window_pane_find_*` do: the most recently active one across the edge.
+    // ponytail: floating panes are never candidates.
+    let next = layout::find_adjacent(&w.tiled_rects(), w.area(), w.pane_status, pane, edge, |p| {
+        w.active_points.get(p)
+    });
+    if let (Some(next), Some(on)) = (next, c.input) {
+        set_input(model, next, on);
+        return Ok(String::new());
+    }
     match (next, &c.title) {
         (Some(next), Some(title)) => set_title(state, next, title),
         (None, Some(_)) => {}
@@ -237,12 +243,14 @@ fn set_title(state: &mut State, pane: PaneId, title: &str) {
 }
 
 /// `last-pane` and `select-pane -l`: the window's last pane becomes active
-/// again (with `keep_zoom`, a zoomed window stays zoomed on it). With no
+/// again (with `keep_zoom`, a zoomed window stays zoomed on it), or with
+/// `input` takes input or stops taking it instead. With no
 /// last pane, a window of two panes takes the other one, as tmux 3.7b does.
 pub(crate) fn select_last(
     model: &mut Model,
     window: WindowId,
     keep_zoom: bool,
+    input: Option<bool>,
 ) -> Result<(), String> {
     let w = model
         .windows
@@ -260,8 +268,18 @@ pub(crate) fn select_last(
         None if order.len() == 2 => other().ok_or_else(|| "no last pane".to_string())?,
         None => return Err("no last pane".to_string()),
     };
-    switch_active(model, window, last, keep_zoom);
+    match input {
+        Some(on) => set_input(model, last, on),
+        None => switch_active(model, window, last, keep_zoom),
+    }
     Ok(())
+}
+
+/// `-e` and `-d`: whether `pane` takes input.
+fn set_input(model: &mut Model, pane: PaneId, on: bool) {
+    if let Some(p) = model.panes.get_mut(&pane) {
+        p.input_off = !on;
+    }
 }
 
 /// Makes `pane` its window's active pane. As tmux 3.7b: selecting the
@@ -282,45 +300,6 @@ fn switch_active(model: &mut Model, window: WindowId, pane: PaneId, keep_zoom: b
     if zoomed && keep_zoom {
         toggle_zoom(model, window, pane);
     }
-}
-
-/// The pane `select-pane` wraps to when `pane` has no neighbour across
-/// `edge`: one on the window's opposite side, overlapping `pane` on the
-/// cross axis (the one under `pane`'s centre line, else the first in
-/// layout order).
-// ponytail: tmux picks the most recently active of the candidates; with no
-// per-pane activity history, the centre line stands in.
-fn wrapped_neighbour(
-    rects: Vec<(PaneId, Rect)>,
-    area: Rect,
-    pane: PaneId,
-    edge: Edge,
-) -> Option<PaneId> {
-    let me = rects.iter().find(|(id, _)| *id == pane)?.1;
-    // (start, len) of a rect on the cross axis.
-    let cross = |r: &Rect| match edge {
-        Edge::Left | Edge::Right => (r.y, r.rows),
-        Edge::Up | Edge::Down => (r.x, r.cols),
-    };
-    let on_far_side = |r: &Rect| match edge {
-        Edge::Left => r.x + r.cols == area.cols,
-        Edge::Right => r.x == 0,
-        Edge::Up => r.y + r.rows == area.rows,
-        Edge::Down => r.y == 0,
-    };
-    let (me_start, me_len) = cross(&me);
-    let centre = me_start + me_len / 2;
-    let candidates: Vec<(PaneId, (u16, u16))> = rects
-        .iter()
-        .filter(|(id, r)| *id != pane && on_far_side(r))
-        .map(|(id, r)| (*id, cross(r)))
-        .filter(|(_, (s, l))| *s < me_start + me_len && me_start < s + l)
-        .collect();
-    candidates
-        .iter()
-        .find(|(_, (s, l))| (*s..s + l).contains(&centre))
-        .or(candidates.first())
-        .map(|(id, _)| *id)
 }
 
 /// `resize-pane`. As tmux: `-x`/`-y` first make the pane that wide or
@@ -529,7 +508,7 @@ pub(crate) fn respawn(
         rows: p.rows,
         history_limit: model.history_limit(model.windows[&p.window].session),
         socket: state.socket.clone(),
-        term: state.inner_term,
+        term: state.pane_term(),
         cell_px: clients::cell_px(state, model.windows[&p.window].session),
         graphics_ok: graphics::panes_graphics_ok(state),
         images: graphics::images_enabled(&state.model),
@@ -613,6 +592,34 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         copy::command_in(state, pane, &args)?;
         return Ok(String::new());
     }
+    // `-K`: the keys are typed on the client, bindings and all, whatever
+    // pane they end up in.
+    if c.client_key {
+        let client = match &c.client {
+            Some(name) => clients::client_named(state, name),
+            None => clients::current_client(
+                state,
+                &ClientCtx {
+                    pane: Some(pane),
+                    ..ctx.clone()
+                },
+            ),
+        };
+        let Some(client) = client else {
+            return Ok(String::new());
+        };
+        for _ in 0..repeat.min(copy::MAX_REPEAT) {
+            for item in &c.items {
+                for key in typed_keys(item) {
+                    clients::type_key(state, client, key);
+                }
+            }
+        }
+        return Ok(String::new());
+    }
+    if c.reset {
+        state.model.panes[&pane].handle.reset_state();
+    }
     if c.items.is_empty() {
         return Ok(String::new());
     }
@@ -659,36 +666,45 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         }
         return Ok(String::new());
     }
-    let model = &state.model;
-    let handle = &model.panes[&pane].handle;
-    let modes = handle.modes();
-    let mut bytes = Vec::new();
-    for item in c.items {
-        match item {
-            SendKeysItem::Key(name) => match cmd::key_bytes(&name, &modes) {
-                Some(b) => bytes.extend(b),
-                None => bytes.extend(name.into_bytes()),
-            },
-            SendKeysItem::Literal(text) => bytes.extend(text.into_bytes()),
-            SendKeysItem::Hex(b) => bytes.push(b),
-        }
-    }
-    if bytes.is_empty() {
+    // As tmux's `window_pane_key`: a pane that takes no input drops the
+    // keys, and with `synchronize-panes` they go to the window's other
+    // panes as well, each encoded for its own modes.
+    if state.model.panes[&pane].input_off {
         return Ok(String::new());
     }
-    // The repeats go in bounded chunks, at most `copy::MAX_REPEAT` of them,
-    // so a huge `-N` neither builds every repeat first nor holds the actor
-    // while a fast reader drains billions of them.
-    // ponytail: tmux 3.7b runs every repeat and stops answering; grofe caps.
-    let per_chunk = (SEND_CHUNK / bytes.len()).max(1);
-    let mut left = u64::from(repeat.min(copy::MAX_REPEAT));
-    while left > 0 {
-        let n = left.min(per_chunk as u64);
-        let chunk = bytes.repeat(n as usize);
-        handle
-            .enqueue_input(chunk)
-            .map_err(|e| format!("send-keys: {pane}: {e}"))?;
-        left -= n;
+    let mut targets = vec![pane];
+    targets.extend(clients::sync_targets(state, pane));
+    for target in targets {
+        let handle = &state.model.panes[&target].handle;
+        let modes = handle.modes();
+        let mut bytes = Vec::new();
+        for item in &c.items {
+            match item {
+                SendKeysItem::Key(name) => match cmd::key_bytes(name, &modes) {
+                    Some(b) => bytes.extend(b),
+                    None => bytes.extend(name.as_bytes()),
+                },
+                SendKeysItem::Literal(text) => bytes.extend(text.as_bytes()),
+                SendKeysItem::Hex(b) => bytes.push(*b),
+            }
+        }
+        if bytes.is_empty() {
+            continue;
+        }
+        // The repeats go in bounded chunks, at most `copy::MAX_REPEAT` of
+        // them, so a huge `-N` neither builds every repeat first nor holds
+        // the actor while a fast reader drains billions of them.
+        // ponytail: tmux 3.7b runs every repeat and stops answering; grofe
+        // caps.
+        let per_chunk = (SEND_CHUNK / bytes.len()).max(1);
+        let mut left = u64::from(repeat.min(copy::MAX_REPEAT));
+        while left > 0 {
+            let n = left.min(per_chunk as u64);
+            handle
+                .enqueue_input(bytes.repeat(n as usize))
+                .map_err(|e| format!("send-keys: {target}: {e}"))?;
+            left -= n;
+        }
     }
     Ok(String::new())
 }
@@ -701,6 +717,23 @@ fn item_text(item: SendKeysItem) -> String {
     match item {
         SendKeysItem::Key(s) | SendKeysItem::Literal(s) => s,
         SendKeysItem::Hex(b) => format!("{b:02x}"),
+    }
+}
+
+/// The keys `item` is when typed on a client (`send-keys -K`): a key name
+/// is one key, text one key per character.
+fn typed_keys(item: &SendKeysItem) -> Vec<input::Key> {
+    let chars = |s: &str| {
+        s.chars()
+            .map(|c| input::Key::new(input::KeyCode::Char(c), input::Mods::default()))
+            .collect()
+    };
+    match item {
+        SendKeysItem::Key(name) => input::parse_key(name)
+            .map(|k| vec![k])
+            .unwrap_or_else(|_| chars(name)),
+        SendKeysItem::Literal(text) => chars(text),
+        SendKeysItem::Hex(b) => chars(&char::from(*b).to_string()),
     }
 }
 
@@ -752,17 +785,25 @@ pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<
     Ok(String::new())
 }
 
-/// `capture-pane`: the pane's text between `-S` and `-E`.
-// ponytail: without `-p` tmux fills a paste buffer; there are no buffers
-// before M2, so the text is printed either way.
+/// `capture-pane`: the pane's text between `-S` and `-E`, printed with
+/// `-p`, else stored in a paste buffer: `-b`'s, else a new automatic one.
 fn capture_pane(state: &mut State, ctx: &ClientCtx, c: CapturePane) -> Result<String, String> {
     let pane = state.model.resolve_pane(&c.target, ctx)?;
-    Ok(state.model.panes[&pane].handle.capture_blanks(
+    let text = state.model.panes[&pane].handle.capture_blanks(
         &c.opts,
         c.join,
         c.keep_blanks,
         c.written_only,
-    ))
+    );
+    if c.print {
+        return Ok(text);
+    }
+    let limit = buffers::limit(state);
+    match &c.buffer {
+        Some(name) => state.buffers.set(name, text.into_bytes()),
+        None => state.buffers.add(text.into_bytes(), limit),
+    }?;
+    Ok(String::new())
 }
 
 /// `pipe-pane`, as tmux 3.7b: a pane that has exited refuses; the old

@@ -1,0 +1,14 @@
+# B3 WP-B: capture-pane without -p stores the text in a paste buffer (a new automatic one, or -b's named one, replaced when it exists), keeping the trailing newline that -p prints around.
+$ new-session -d -s main -x 20 -y 5 'printf "alpha\nbeta  \n"; sleep 100000'
+$ run-shell 'sleep 1'
+$ list-buffers
+$ capture-pane -t main
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ show-buffer
+$ capture-pane -b keep -t main
+$ capture-pane -b keep -S 0 -E 0 -t main
+$ show-buffer -b keep
+$ capture-pane -pN -t main
+$ capture-pane -N -b nn -t main
+$ show-buffer -b nn
+$ list-buffers -F '#{buffer_name} #{buffer_size}'

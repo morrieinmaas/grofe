@@ -1,0 +1,112 @@
+$ new-session -d -s main -x 80 -y 24 'sleep 100000'
+? 0
+$ split-window -h -t main 'sleep 100000'
+? 0
+$ split-window -v -t main:.2 'sleep 100000'
+? 0
+$ split-window -v -t main:.2 'sleep 100000'
+? 0
+$ select-pane -t main:.4
+? 0
+$ select-pane -L -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+1
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-pane -t main:.3
+? 0
+$ select-pane -L -t main
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+3
+? 0
+$ select-pane -t main:.2
+? 0
+$ select-pane -L -t main
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+2
+? 0
+$ select-pane -U -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-pane -U -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+3
+? 0
+$ select-pane -D -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+1
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-pane -D -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+2
+? 0
+$ set-option -w -t main pane-border-status top
+? 0
+$ select-pane -t main:.4
+? 0
+$ select-pane -D -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+2
+? 0
+$ select-pane -U -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-pane -L -t main
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0
+$ select-layout -t main main-vertical
+? 0
+$ select-pane -t main:.3
+? 0
+$ select-pane -t main:.1
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+3
+? 0
+$ select-pane -L -t main
+? 0
+$ select-pane -R -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+3
+? 0
+$ select-pane -D -t main
+? 0
+$ display-message -p -t main '#{pane_index}'
+4
+? 0

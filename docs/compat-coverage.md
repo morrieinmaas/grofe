@@ -240,9 +240,25 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   tmux. The default format's `[z]` and `[x]` buttons zoom and offer to kill
   the pane (`MouseDown1Control8` and `Control9`). In a floating pane the
   border lines and the title are drawn the same way. Goldens `b1c/*`. Not
-  done: `select-pane` direction wrapping at the edges with a border status
-  (tmux's `window_pane_find_*` count the title row), `new-pane` and
+  done: `new-pane` and
   `split-window` `-s`/`-S`/`-R`, and window style in the copy-mode overlay.
+- **B3 WP-B, panes and input.** `synchronize-panes` copies what is typed,
+  pasted or sent (`send-keys`, `send-prefix`) into a pane to the other panes
+  of its window that have it on, are alive, visible (not hidden by zoom),
+  show no mode and take input, each key encoded for the receiver's modes.
+  `select-pane -L/-R/-U/-D` is tmux's `window_pane_find_*`: of the panes on
+  the edge (wrapping past the window's edge, border status counted) the most
+  recently active wins (`active_point`, 0 for a pane never made active, the
+  first in pane order on a tie). `capture-pane` without `-p` stores a buffer
+  (`-b` names it). `send-keys -R` (reset the pane's modes, tab stops, scroll
+  region and screen), `-K` and `-c` (type on the client, none: nothing),
+  `select-window -l -n -p -T`, `last-pane -Z -d -e` and `select-pane -d -e`
+  (`#{pane_input_off}`) are native. `default-terminal` is the `TERM` of
+  panes created or respawned after it is set; while it holds its default,
+  grofe keeps its terminfo fallback (`screen-256color`, then
+  `xterm-256color`) for a host without `tmux-256color`. Goldens `b3wpb/*`.
+  Not done: floating panes are never `select-pane` direction candidates, and
+  a pane's `active_point` stays with its window (join-pane resets it).
 - **A sourced tmux file (B1a).** It reads as tmux's `cmd-parse.y` does
   (goldens `fe_3/config-if` and friends). `%if`/`%elif`/`%else`/`%endif`
   take a format expanded for the requester's pane (`#{...}` after the

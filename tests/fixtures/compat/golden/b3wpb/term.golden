@@ -1,0 +1,25 @@
+$ new-session -d -s main -x 60 -y 5 'sleep 100000'
+? 0
+$ set-option -g default-terminal xterm-256color
+? 0
+$ new-window -d -t main:5 'echo TERM=$TERM; sleep 100000'
+? 0
+$ split-window -d -t main:1 'echo TERM=$TERM; sleep 100000'
+? 0
+$ set-option -g default-terminal screen
+? 0
+$ respawn-pane -k -t main:5 'echo TERM=$TERM; sleep 100000'
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:1.2
+TERM=xterm-256color
+
+? 0
+$ capture-pane -p -t main:5
+TERM=screen
+
+
+
+
+? 0

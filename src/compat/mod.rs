@@ -128,7 +128,7 @@ pub fn job_env(state: &State, session: Option<SessionId>) -> Vec<(String, String
         None => format!("{},{},-1", socket.display(), std::process::id()),
     };
     let mut env = vec![
-        ("TERM".to_string(), state.inner_term.to_string()),
+        ("TERM".to_string(), state.pane_term().to_string()),
         ("COLORTERM".to_string(), crate::term::COLORTERM.to_string()),
         ("TMUX".to_string(), tmux),
     ];

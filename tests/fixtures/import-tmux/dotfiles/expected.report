@@ -1,4 +1,3 @@
-~/.tmux.conf:2: note: default-terminal: grofe keeps and shows it, with no effect
 ~/.tmux.conf:3: note: terminal-overrides: grofe keeps and shows it, with no effect
 ~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
 ~/.tmux.conf:32: note: mouse with no value toggles it, as tmux does, to off

@@ -1,0 +1,41 @@
+# B3 WP-B: synchronize-panes copies send-keys typed into one pane to the window's other panes that have it on; a pane with it off, one taking no input (select-pane -d), a dead-end zoomed-away pane and a pane in copy mode get nothing, and the source pane's own option decides whether anything is copied.
+$ new-session -d -s main -x 40 -y 12 cat
+$ split-window -d -t main 'cat'
+$ split-window -d -t main 'cat'
+$ set-option -w -t main synchronize-panes on
+$ send-keys -t main:.1 one Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.1
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ set-option -p -t main:.2 synchronize-panes off
+$ send-keys -t main:.1 two Enter
+$ send-keys -t main:.2 solo Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.1
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ set-option -p -t main:.2 synchronize-panes on
+$ select-pane -d -t main:.3
+$ display-message -p -t main:.3 'off=#{pane_input_off} sync=#{pane_synchronized}'
+$ send-keys -t main:.1 three Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ select-pane -e -t main:.3
+$ display-message -p -t main:.3 'off=#{pane_input_off}'
+$ resize-pane -Z -t main:.1
+$ send-keys -t main:.1 four Enter
+$ run-shell 'sleep 1'
+$ resize-pane -Z -t main:.1
+$ capture-pane -p -t main:.2
+$ copy-mode -t main:.3
+$ send-keys -t main:.1 five Enter
+$ run-shell 'sleep 1'
+$ send-keys -t main:.3 -X cancel
+$ capture-pane -p -t main:.2
+$ capture-pane -p -t main:.3
+$ set-option -w -t main synchronize-panes off
+$ send-keys -t main:.1 six Enter
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:.2

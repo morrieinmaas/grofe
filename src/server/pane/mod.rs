@@ -747,6 +747,31 @@ impl PaneHandle {
         self.dirty.store(true, Ordering::Release);
     }
 
+    /// `send-keys -R`, as tmux's `input_reset` with `screen_write_reset`:
+    /// the parser leaves any half-read sequence, the modes go back to
+    /// their start (cursor shown, wrapping, nothing else), tab stops
+    /// and the scroll region reset, and the screen is cleared (into the
+    /// scrollback) with the cursor home.
+    pub fn reset_state(&self) {
+        const RESET: &[u8] = b"\x18\x1b[?1l\x1b>\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?6l\x1b[?7h\x1b[?25h\x1b[4l\x1b[20l\x1b[r\x1b[0m\x1b[3g";
+        let mut emu = lock(&self.emu);
+        let Emu {
+            term,
+            marks,
+            parser,
+            ..
+        } = &mut *emu;
+        let mut feed = RESET.to_vec();
+        let cols = term.columns();
+        for col in (8..cols).step_by(8) {
+            feed.extend(format!("\x1b[{}G\x1bH", col + 1).bytes());
+        }
+        feed.extend(b"\x1b[2J\x1b[H");
+        parser.advance(&mut written::Written(term, marks, None), &feed);
+        drop(emu);
+        self.dirty.store(true, Ordering::Release);
+    }
+
     /// Tells the pty `size` now, dropping any held size ([`WinsizeGate`]).
     fn set_winsize(&self, size: Size) -> stdio::Result<()> {
         let key = winsize_key(&size.winsize(*lock(&self.cell_px)));

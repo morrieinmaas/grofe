@@ -1,0 +1,10 @@
+# B3 WP-B: default-terminal is the TERM of panes created afterwards (a pane already running keeps its own; the first pane's, from the default, is not looked at), per the option's value at that time.
+$ new-session -d -s main -x 60 -y 5 'sleep 100000'
+$ set-option -g default-terminal xterm-256color
+$ new-window -d -t main:5 'echo TERM=$TERM; sleep 100000'
+$ split-window -d -t main:1 'echo TERM=$TERM; sleep 100000'
+$ set-option -g default-terminal screen
+$ respawn-pane -k -t main:5 'echo TERM=$TERM; sleep 100000'
+$ run-shell 'sleep 1'
+$ capture-pane -p -t main:1.2
+$ capture-pane -p -t main:5

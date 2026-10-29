@@ -158,6 +158,19 @@ pub struct KillWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectWindow {
     pub target: Target,
+    /// `-n`, `-p`, `-l`: the target's session moves to its next, previous
+    /// or last window instead (tmux's order of precedence).
+    pub step: Option<WindowMove>,
+    /// `-T`: selecting the current window goes to the last one instead.
+    pub toggle: bool,
+}
+
+/// Which window `select-window -n/-p/-l` moves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMove {
+    Next,
+    Previous,
+    Last,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,6 +229,9 @@ pub struct SelectPane {
     /// `-T` (M3.6, TC.11): sets the pane's title (expanded as a format)
     /// instead of selecting it, as tmux does.
     pub title: Option<String>,
+    /// `-e` / `-d`: let the pane take input again, or stop it taking any
+    /// (tmux's `PANE_INPUTOFF`), instead of selecting it.
+    pub input: Option<bool>,
     /// `-m` / `-M`: toggle or clear the server's marked pane instead of
     /// selecting.
     pub mark: Mark,
@@ -303,6 +319,13 @@ pub struct SendKeys {
     pub count: Option<String>,
     /// `-F` (M5): the mode command expands its arguments as formats.
     pub format: bool,
+    /// `-R`: the pane's terminal state is reset first (palette, modes,
+    /// screen).
+    pub reset: bool,
+    /// `-K`: the keys go to the client's key tables, as if it typed them.
+    pub client_key: bool,
+    /// `-c`: the client `-K` types on, else the target session's.
+    pub client: Option<String>,
 }
 
 /// `clear-history` (`-H`): drops the pane's scrollback.
@@ -317,6 +340,8 @@ pub struct ClearHistory {
 pub struct CapturePane {
     pub target: Target,
     pub print: bool,
+    /// `-b` (without `-p`): the buffer the text goes to, else a new one.
+    pub buffer: Option<String>,
     pub opts: CaptureOpts,
     /// `-J` (M3.6): join wrapped lines and keep trailing spaces.
     pub join: bool,
@@ -708,6 +733,10 @@ pub struct ResizeWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LastPane {
     pub target: Target,
+    /// `-Z`: a zoomed window stays zoomed on the last pane.
+    pub keep_zoom: bool,
+    /// `-e` / `-d`: let the last pane take input, or stop it, instead.
+    pub input: Option<bool>,
 }
 
 /// `clock-mode [-t pane]` (B1d): the pane shows a clock until a key.

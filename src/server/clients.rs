@@ -2868,6 +2868,64 @@ pub(crate) fn release_input(state: &mut State, id: ClientId) {
     }
 }
 
+/// A key typed on client `id` (`send-keys -K`), through its key tables.
+pub(crate) fn type_key(state: &mut State, id: ClientId, key: crate::server::input::Key) {
+    route(state, id, Input::Key(key), Instant::now());
+}
+
+fn write_input(state: &State, pane: PaneId, bytes: Vec<u8>) {
+    if let Some(p) = state.model.panes.get(&pane)
+        && p.handle.enqueue_input(bytes).is_err()
+    {
+        eprintln!("grofe server: input queue full for {}", p.id);
+    }
+}
+
+/// Whether `pane` shows a mode (copy, clock, a chooser), which takes the
+/// keys instead of the program.
+fn pane_in_mode(state: &State, pane: PaneId) -> bool {
+    state.clocks.is_active(pane)
+        || state.copy.is_active(pane)
+        || crate::server::tree::format_var(state, pane, "pane_in_mode").is_some()
+}
+
+/// The panes that get what is typed, pasted or sent into `pane` as well,
+/// as tmux's `window_pane_copy_key` and `window_pane_copy_paste`: with
+/// `synchronize-panes` on for `pane`, the other panes of its window that
+/// have it on, are visible (not hidden by zoom), are alive, take input and
+/// show no mode. In pane order.
+pub(crate) fn sync_targets(state: &State, pane: PaneId) -> Vec<PaneId> {
+    let model = &state.model;
+    let on = |p: PaneId| {
+        model
+            .options
+            .lookup("synchronize-panes", &options::chain(model, p))
+            == Some("on")
+    };
+    let Some(w) = model
+        .panes
+        .get(&pane)
+        .and_then(|p| model.windows.get(&p.window))
+    else {
+        return Vec::new();
+    };
+    if !on(pane) {
+        return Vec::new();
+    }
+    w.pane_ids()
+        .into_iter()
+        .filter(|p| *p != pane)
+        .filter(|p| !w.zoomed || *p == w.active)
+        .filter(|p| {
+            model
+                .panes
+                .get(p)
+                .is_some_and(|q| q.dead.is_none() && !q.input_off)
+        })
+        .filter(|p| !pane_in_mode(state, *p) && on(*p))
+        .collect()
+}
+
 /// Routes one input: input hooks first (every input), then the client's
 /// key table, reading the active pane's modes now, since a command routed
 /// just before may have changed the active pane. Focus reports go no
@@ -2921,10 +2979,30 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
     };
     match routed {
         Routed::ToPane(bytes) => {
-            if let Some(p) = pane.and_then(|p| state.model.panes.get(&p))
-                && p.handle.enqueue_input(bytes).is_err()
-            {
-                eprintln!("grofe server: input queue full for {}", p.id);
+            let Some(pane) = pane else {
+                return;
+            };
+            if state.model.panes.get(&pane).is_none_or(|p| p.input_off) {
+                return;
+            }
+            let others = match input {
+                Input::Key(_) | Input::Paste { .. } => sync_targets(state, pane),
+                _ => Vec::new(),
+            };
+            write_input(state, pane, bytes.clone());
+            for other in others {
+                let Some(p) = state.model.panes.get(&other) else {
+                    continue;
+                };
+                // A key is encoded for each pane's own modes; a paste
+                // goes through as the active pane got it.
+                let bytes = match &input {
+                    Input::Key(key) => crate::server::input::encode(key, &p.handle.modes()),
+                    _ => bytes.clone(),
+                };
+                if !bytes.is_empty() {
+                    write_input(state, other, bytes);
+                }
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),

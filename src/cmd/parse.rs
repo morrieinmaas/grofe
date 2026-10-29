@@ -21,7 +21,7 @@ use super::{
     SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment, SetHook,
     SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SourceFile,
     SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnlinkWindow, WaitFor, WindowStep,
+    UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -315,8 +315,57 @@ fn parse_kill_window(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_select_window(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('l', FlagKind::Bool),
+        ('n', FlagKind::Bool),
+        ('p', FlagKind::Bool),
+        ('T', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "select-window")?;
+    no_extra_positionals(&flags, "select-window", 0)?;
+    // tmux tries next, then previous, then last.
+    let step = if flags.present.contains(&'n') {
+        Some(WindowMove::Next)
+    } else if flags.present.contains(&'p') {
+        Some(WindowMove::Previous)
+    } else if flags.present.contains(&'l') {
+        Some(WindowMove::Last)
+    } else {
+        None
+    };
     Ok(Command::SelectWindow(SelectWindow {
-        target: parse_target_only(argv, "select-window")?,
+        target: target_or_current(&flags.values, 't')?,
+        step,
+        toggle: flags.present.contains(&'T'),
+    }))
+}
+
+/// `-e` (input on) and `-d` (input off): `-e` wins, as in tmux.
+fn input_flag(flags: &ParsedFlags) -> Option<bool> {
+    if flags.present.contains(&'e') {
+        Some(true)
+    } else if flags.present.contains(&'d') {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+const LAST_PANE_SHORT: &[(char, FlagKind)] = &[
+    ('t', FlagKind::Value),
+    ('Z', FlagKind::Bool),
+    ('d', FlagKind::Bool),
+    ('e', FlagKind::Bool),
+];
+
+fn parse_last_pane(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(argv, LAST_PANE_SHORT, "last-pane")?;
+    no_extra_positionals(&flags, "last-pane", 0)?;
+    Ok(Command::LastPane(LastPane {
+        target: target_or_current(&flags.values, 't')?,
+        keep_zoom: flags.present.contains(&'Z'),
+        input: input_flag(&flags),
     }))
 }
 
@@ -532,6 +581,8 @@ const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
     ('R', FlagKind::Bool),
     ('U', FlagKind::Bool),
     ('D', FlagKind::Bool),
+    ('d', FlagKind::Bool),
+    ('e', FlagKind::Bool),
     ('m', FlagKind::Bool),
     ('M', FlagKind::Bool),
     ('t', FlagKind::Value),
@@ -568,6 +619,7 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
         last: flags.present.contains(&'l'),
         keep_zoom: flags.present.contains(&'Z'),
         title: flags.values.get(&'T').cloned(),
+        input: input_flag(&flags),
         // tmux acts on -m and -M before anything else; -M wins.
         mark: if flags.present.contains(&'M') {
             Mark::Clear
@@ -675,6 +727,9 @@ const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
     ('X', FlagKind::Bool),
     ('N', FlagKind::Value),
     ('F', FlagKind::Bool),
+    ('R', FlagKind::Bool),
+    ('K', FlagKind::Bool),
+    ('c', FlagKind::Value),
 ];
 
 fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
@@ -715,6 +770,9 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
         command,
         count: flags.values.get(&'N').cloned(),
         format: flags.present.contains(&'F'),
+        reset: flags.present.contains(&'R'),
+        client_key: flags.present.contains(&'K'),
+        client: flags.values.get(&'c').cloned(),
     }))
 }
 
@@ -729,6 +787,7 @@ const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('S', FlagKind::Value),
     ('E', FlagKind::Value),
     ('t', FlagKind::Value),
+    ('b', FlagKind::Value),
 ];
 
 fn parse_capture_line(s: &str) -> Result<CaptureBound, ParseError> {
@@ -760,6 +819,7 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::CapturePane(CapturePane {
         target: target_or_current(&flags.values, 't')?,
         print: flags.present.contains(&'p'),
+        buffer: flags.values.get(&'b').cloned(),
         opts: CaptureOpts {
             start,
             end,
@@ -3165,9 +3225,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             target: parse_target_only(rest, "clock-mode")?,
         })),
         "pipe-pane" => parse_pipe_pane(rest),
-        "last-pane" => Ok(Command::LastPane(LastPane {
-            target: parse_target_only(rest, "last-pane")?,
-        })),
+        "last-pane" => parse_last_pane(rest),
         "rotate-window" => parse_rotate_window(rest),
         "move-window" => parse_move_window(rest),
         "link-window" => parse_link_window(rest),
@@ -3679,6 +3737,33 @@ mod tests {
     }
 
     #[test]
+    fn the_b3_pane_and_window_flags_parse() {
+        let Ok(Command::SelectWindow(w)) = parse(&argv(&["select-window", "-nl", "-T"])) else {
+            panic!("select-window");
+        };
+        assert_eq!((w.step, w.toggle), (Some(WindowMove::Next), true));
+        let Ok(Command::LastPane(l)) = parse(&argv(&["last-pane", "-Z", "-d"])) else {
+            panic!("last-pane");
+        };
+        assert_eq!((l.keep_zoom, l.input), (true, Some(false)));
+        let Ok(Command::SelectPane(p)) = parse(&argv(&["select-pane", "-d", "-e"])) else {
+            panic!("select-pane");
+        };
+        assert_eq!(p.input, Some(true));
+        let Ok(Command::SendKeys(k)) = parse(&argv(&["send-keys", "-RK", "-c", "x", "a"])) else {
+            panic!("send-keys");
+        };
+        assert_eq!(
+            (k.reset, k.client_key, k.client.as_deref()),
+            (true, true, Some("x"))
+        );
+        let Ok(Command::CapturePane(c)) = parse(&argv(&["capture-pane", "-b", "n"])) else {
+            panic!("capture-pane");
+        };
+        assert_eq!((c.print, c.buffer.as_deref()), (false, Some("n")));
+    }
+
+    #[test]
     fn select_pane_single_direction() {
         let cmd = parse(&argv(&["select-pane", "-L", "-t", "%3"])).unwrap();
         assert_eq!(
@@ -3693,6 +3778,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                input: None,
                 mark: Mark::No,
             })
         );
@@ -3713,6 +3799,7 @@ mod tests {
                 last: false,
                 keep_zoom: false,
                 title: None,
+                input: None,
                 mark: Mark::No,
             })
         );
@@ -3913,6 +4000,7 @@ mod tests {
             Command::CapturePane(CapturePane {
                 target: Target::Current,
                 print: true,
+                buffer: None,
                 opts: CaptureOpts {
                     start: Some(CaptureBound::HistoryStart),
                     end: Some(CaptureBound::VisibleEnd),
@@ -3933,6 +4021,7 @@ mod tests {
             Command::CapturePane(CapturePane {
                 target: Target::Current,
                 print: false,
+                buffer: None,
                 opts: CaptureOpts {
                     start: Some(CaptureBound::Line(-5)),
                     end: Some(CaptureBound::Line(0)),
@@ -3953,6 +4042,7 @@ mod tests {
             Command::CapturePane(CapturePane {
                 target: Target::Current,
                 print: false,
+                buffer: None,
                 opts: CaptureOpts {
                     start: None,
                     end: None,
@@ -4231,6 +4321,8 @@ mod tests {
             cmd,
             Command::SelectWindow(SelectWindow {
                 target: Target::Window(SessionRef::Current, WindowRef::Id(WindowId(5))),
+                step: None,
+                toggle: false,
             })
         );
     }

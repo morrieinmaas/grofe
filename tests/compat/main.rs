@@ -13,6 +13,7 @@ mod b1d;
 mod b1e;
 mod b2a;
 mod b2b;
+mod b3wpb;
 mod fe_1;
 mod fe_2;
 mod fe_3;

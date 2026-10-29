@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::cmd::{
     self, KillWindow, ListPanes, ListWindows, NewWindow, Rename, Resolve, SelectLayout,
-    SelectWindow, Target, WindowRef, WindowStep,
+    SelectWindow, Target, WindowMove, WindowRef, WindowStep,
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
@@ -14,7 +14,7 @@ use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, MainSize, Preset};
 use crate::server::model::{Model, Window};
 use crate::server::{State, clients};
-use crate::types::WindowId;
+use crate::types::{SessionId, WindowId};
 
 pub(crate) const AUTOMATIC_RENAME: &str = "automatic-rename";
 
@@ -139,6 +139,7 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         silence_flag: false,
         activity: std::time::SystemTime::now(),
         last_panes: Vec::new(),
+        active_points: Default::default(),
         floating: Vec::new(),
         pane_status: Default::default(),
         links: Vec::new(),
@@ -238,6 +239,11 @@ pub fn step_window(
 ) -> Result<String, String> {
     let model = &mut state.model;
     let session = model.resolve_session(&c.target, ctx)?;
+    step_in(model, session, step, c.alert)?;
+    Ok(String::new())
+}
+
+fn step_in(model: &mut Model, session: SessionId, step: Step, alert: bool) -> Result<(), String> {
     let s = &model.sessions[&session];
     let n = s.windows.len();
     let none = || {
@@ -261,7 +267,7 @@ pub fn step_window(
             .get(id)
             .is_some_and(|w| w.bell_flag || w.activity_flag || w.silence_flag)
     };
-    let window = if c.alert {
+    let window = if alert {
         (1..n)
             .map(|k| s.windows[at(k)])
             .find(alerted)
@@ -270,20 +276,24 @@ pub fn step_window(
         s.windows[at(1)]
     };
     model.select_window_in(session, window);
-    Ok(String::new())
+    Ok(())
 }
 
 /// `last-window`: back to the target session's previous window.
 pub fn last_window(state: &mut State, ctx: &ClientCtx, c: WindowStep) -> Result<String, String> {
     let model = &mut state.model;
     let session = model.resolve_session(&c.target, ctx)?;
-    let s = &model.sessions[&session];
-    let last = *s
+    last_in(model, session)?;
+    Ok(String::new())
+}
+
+fn last_in(model: &mut Model, session: SessionId) -> Result<(), String> {
+    let last = *model.sessions[&session]
         .last_windows
         .last()
         .ok_or_else(|| "no last window".to_string())?;
     model.select_window_in(session, last);
-    Ok(String::new())
+    Ok(())
 }
 
 /// `kill-window`; with `-a` every other window of the target's session,
@@ -316,7 +326,15 @@ pub fn select_window(
 ) -> Result<String, String> {
     let model = &mut state.model;
     let (session, window) = model.resolve_winlink(&c.target, ctx)?;
-    model.select_window_in(session, window);
+    // As tmux's `cmd_select_window_exec`: `-n`, `-p` and `-l` move the
+    // target's session, and `-T` on the current window goes back instead.
+    match c.step {
+        Some(WindowMove::Next) => step_in(model, session, Step::Next, false)?,
+        Some(WindowMove::Previous) => step_in(model, session, Step::Previous, false)?,
+        Some(WindowMove::Last) => last_in(model, session)?,
+        None if c.toggle && model.sessions[&session].active == window => last_in(model, session)?,
+        None => model.select_window_in(session, window),
+    }
     Ok(String::new())
 }
 

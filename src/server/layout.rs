@@ -1836,6 +1836,94 @@ fn fix_root_size(g: &mut LayoutGeometry) {
     g.rows = u16::try_from(rows.saturating_sub(1)).unwrap_or(u16::MAX);
 }
 
+/// The pane `select-pane -L/-R/-U/-D` moves to from `pane`: tmux 3.7b's
+/// `window_pane_find_left`/`_right`/`_up`/`_down`. Of the panes touching
+/// the edge across `edge` (past the window's edge it wraps to the far
+/// side) and overlapping `pane` along it, the most recently active wins
+/// (`point` is tmux's `active_point`; the first in list order on a tie).
+/// `panes` are the content rects in the window's pane order, `area` the
+/// window.
+pub fn find_adjacent(
+    panes: &[(PaneId, Rect)],
+    area: Rect,
+    status: PaneStatus,
+    pane: PaneId,
+    edge: Edge,
+    point: impl Fn(PaneId) -> u64,
+) -> Option<PaneId> {
+    let geom = |r: &Rect| {
+        (
+            i32::from(r.x),
+            i32::from(r.y),
+            i32::from(r.cols),
+            i32::from(r.rows),
+        )
+    };
+    let (wx, wy) = (i32::from(area.cols), i32::from(area.rows));
+    let (xoff, yoff, sx, sy) = geom(&panes.iter().find(|(id, _)| *id == pane)?.1);
+    // `touches` says whether another pane sits on the edge; `span` is the
+    // pane's extent along it, and `lo`/`hi` the extent to overlap.
+    let (lo, hi) = match edge {
+        Edge::Up | Edge::Down => (xoff, xoff + sx),
+        Edge::Left | Edge::Right => (yoff, yoff + sy),
+    };
+    let edge_at = match edge {
+        Edge::Up => match status {
+            PaneStatus::Top if yoff == 1 => wy + 1,
+            PaneStatus::Bottom if yoff == 0 => wy,
+            PaneStatus::Off if yoff == 0 => wy + 1,
+            _ => yoff,
+        },
+        Edge::Down => {
+            let e = yoff + sy + 1;
+            match status {
+                PaneStatus::Top if e >= wy => 1,
+                PaneStatus::Bottom if e >= wy - 1 => 0,
+                PaneStatus::Off if e >= wy => 0,
+                _ => e,
+            }
+        }
+        Edge::Left => {
+            if xoff == 0 {
+                wx + 1
+            } else {
+                xoff
+            }
+        }
+        Edge::Right => {
+            let e = xoff + sx + 1;
+            if e >= wx { 0 } else { e }
+        }
+    };
+    let mut best: Option<PaneId> = None;
+    for (id, r) in panes {
+        if *id == pane {
+            continue;
+        }
+        let (x, y, cols, rows) = geom(r);
+        let on_edge = match edge {
+            Edge::Up => y + rows + 1 == edge_at,
+            Edge::Down => y == edge_at,
+            Edge::Left => x + cols + 1 == edge_at,
+            Edge::Right => x == edge_at,
+        };
+        if !on_edge {
+            continue;
+        }
+        let (start, len) = match edge {
+            Edge::Up | Edge::Down => (x, cols),
+            Edge::Left | Edge::Right => (y, rows),
+        };
+        let end = start + len - 1;
+        let overlaps =
+            (start < lo && end > hi) || (start >= lo && start <= hi) || (end >= lo && end <= hi);
+        if overlaps && best.is_none_or(|b| point(*id) > point(b)) {
+            best = Some(*id);
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,6 +2538,64 @@ mod tests {
         assert_eq!(tree.neighbour(area, B, Edge::Up), None);
         assert_eq!(tree.neighbour(area, A, Edge::Left), None);
         assert_eq!(tree.neighbour(area, A, Edge::Up), None);
+    }
+
+    #[test]
+    fn find_adjacent_returns_to_the_most_recently_active() {
+        // A | B over C: the right column B (rows 0..4), C (rows 5..9).
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 21,
+            rows: 10,
+        };
+        let r = |x, y, cols, rows| Rect { x, y, cols, rows };
+        let panes = [
+            (A, r(0, 0, 10, 10)),
+            (B, r(11, 0, 10, 4)),
+            (C, r(11, 5, 10, 5)),
+        ];
+        let points = |p: PaneId| if p == C { 5 } else { 1 };
+        let find = |p, e, pt: &dyn Fn(PaneId) -> u64| {
+            find_adjacent(&panes, area, PaneStatus::Off, p, e, pt)
+        };
+        // Right from A: both touch; the more recent one wins, not the
+        // centre-line one (B).
+        assert_eq!(find(A, Edge::Right, &points), Some(C));
+        assert_eq!(find(A, Edge::Right, &|p| u64::from(p == B)), Some(B));
+        // A tie keeps the first in list order.
+        assert_eq!(find(A, Edge::Right, &|_| 0), Some(B));
+        assert_eq!(find(B, Edge::Left, &points), Some(A));
+        assert_eq!(find(C, Edge::Up, &points), Some(B));
+        // Past the edge it wraps.
+        assert_eq!(find(A, Edge::Left, &points), Some(C));
+        assert_eq!(find(B, Edge::Up, &points), Some(C));
+        assert_eq!(find(C, Edge::Down, &points), Some(B));
+        assert_eq!(find(B, Edge::Right, &points), Some(A));
+        assert_eq!(find(PaneId(99), Edge::Right, &points), None);
+    }
+
+    #[test]
+    fn find_adjacent_with_a_pane_border_status() {
+        // Top status: A's title is row 0, B's is the border row 5.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            cols: 10,
+            rows: 11,
+        };
+        let r = |y, rows| Rect {
+            x: 0,
+            y,
+            cols: 10,
+            rows,
+        };
+        let panes = [(A, r(1, 4)), (B, r(6, 5))];
+        let find = |p, e| find_adjacent(&panes, area, PaneStatus::Top, p, e, |_| 0);
+        assert_eq!(find(A, Edge::Down), Some(B));
+        assert_eq!(find(B, Edge::Up), Some(A));
+        assert_eq!(find(A, Edge::Up), Some(B));
+        assert_eq!(find(B, Edge::Down), Some(A));
     }
 
     #[test]

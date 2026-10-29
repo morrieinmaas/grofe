@@ -1,0 +1,49 @@
+# B3 WP-B: select-pane -L/-R/-U/-D takes the most recently active pane across the edge, so Left then Right comes back to where it started, also past the window's edge (wrapping) and with a border status.
+$ new-session -d -s main -x 80 -y 24 'sleep 100000'
+$ split-window -h -t main 'sleep 100000'
+$ split-window -v -t main:.2 'sleep 100000'
+$ split-window -v -t main:.2 'sleep 100000'
+$ select-pane -t main:.4
+$ select-pane -L -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -t main:.3
+$ select-pane -L -t main
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -t main:.2
+$ select-pane -L -t main
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -U -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -U -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -D -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -D -t main
+$ display-message -p -t main '#{pane_index}'
+$ set-option -w -t main pane-border-status top
+$ select-pane -t main:.4
+$ select-pane -D -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -U -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -L -t main
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-layout -t main main-vertical
+$ select-pane -t main:.3
+$ select-pane -t main:.1
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -L -t main
+$ select-pane -R -t main
+$ display-message -p -t main '#{pane_index}'
+$ select-pane -D -t main
+$ display-message -p -t main '#{pane_index}'

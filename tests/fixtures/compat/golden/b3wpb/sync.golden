@@ -1,0 +1,120 @@
+$ new-session -d -s main -x 40 -y 12 cat
+? 0
+$ split-window -d -t main 'cat'
+? 0
+$ split-window -d -t main 'cat'
+? 0
+$ set-option -w -t main synchronize-panes on
+? 0
+$ send-keys -t main:.1 one Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.1
+one
+one
+
+? 0
+$ capture-pane -p -t main:.2
+one
+
+? 0
+$ capture-pane -p -t main:.3
+one
+one
+
+
+
+? 0
+$ set-option -p -t main:.2 synchronize-panes off
+? 0
+$ send-keys -t main:.1 two Enter
+? 0
+$ send-keys -t main:.2 solo Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.1
+two
+two
+
+? 0
+$ capture-pane -p -t main:.2
+solo
+
+? 0
+$ capture-pane -p -t main:.3
+one
+one
+two
+two
+
+? 0
+$ set-option -p -t main:.2 synchronize-panes on
+? 0
+$ select-pane -d -t main:.3
+? 0
+$ display-message -p -t main:.3 'off=#{pane_input_off} sync=#{pane_synchronized}'
+off=1 sync=1
+? 0
+$ send-keys -t main:.1 three Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.2
+three
+
+? 0
+$ capture-pane -p -t main:.3
+one
+one
+two
+two
+
+? 0
+$ select-pane -e -t main:.3
+? 0
+$ display-message -p -t main:.3 'off=#{pane_input_off}'
+off=0
+? 0
+$ resize-pane -Z -t main:.1
+? 0
+$ send-keys -t main:.1 four Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ resize-pane -Z -t main:.1
+? 0
+$ capture-pane -p -t main:.2
+three
+
+? 0
+$ copy-mode -t main:.3
+? 0
+$ send-keys -t main:.1 five Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ send-keys -t main:.3 -X cancel
+? 0
+$ capture-pane -p -t main:.2
+five
+
+? 0
+$ capture-pane -p -t main:.3
+one
+one
+two
+two
+
+? 0
+$ set-option -w -t main synchronize-panes off
+? 0
+$ send-keys -t main:.1 six Enter
+? 0
+$ run-shell 'sleep 1'
+? 0
+$ capture-pane -p -t main:.2
+five
+
+? 0

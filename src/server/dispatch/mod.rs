@@ -497,7 +497,7 @@ pub(crate) fn spawn_pane(
         rows,
         history_limit: state.model.history_limit(session),
         socket: state.socket.clone(),
-        term: state.inner_term,
+        term: state.pane_term(),
         cell_px,
         graphics_ok: graphics::panes_graphics_ok(state),
         images: graphics::images_enabled(&state.model),
@@ -518,6 +518,7 @@ pub(crate) fn spawn_pane(
             dead: None,
             cols,
             rows,
+            input_off: false,
             handle,
         },
     );

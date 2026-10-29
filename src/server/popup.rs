@@ -907,7 +907,7 @@ mod tests {
             rows: 0,
             history_limit: 10,
             socket: state.socket.clone(),
-            term: state.inner_term,
+            term: state.pane_term(),
             cell_px: None,
             graphics_ok: false,
             images: false,
