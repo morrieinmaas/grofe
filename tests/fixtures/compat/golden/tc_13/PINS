@@ -1,6 +1,6 @@
 # The canopy and athome commits TC.13's goldens were recorded against, and
 # that GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME must name (the suite
 # checks both checkouts' HEAD). Both are local branches, not pushed yet:
-# canopy `m37-gate`, athome `canopy-tmux-unit-on-grofe`.
+# canopy `m37-gate`, athome `grofe-config`.
 canopy 4faa58fff9d83b23b8e90faedb1d67ab3f6a9536
 athome 905f10a0b05764e51fae2a32f0975116c2691815
