@@ -149,6 +149,8 @@ $ kill-session -t other
 $ new-window -d -t main -n brief true
 after-new-window brief
 ? 0
+$ run-shell 'sleep 1'
+? 0
 $ set -g remain-on-exit on
 ? 0
 $ new-window -d -t main -n dies true
