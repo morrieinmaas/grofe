@@ -334,7 +334,7 @@ impl Prompt {
         let escape = key.code == KeyCode::Escape || ctrl('[');
         if !self.command_mode {
             let passes = match key.code {
-                KeyCode::Char(c) if m.ctrl => "acEghknptuvwy".contains(c.to_ascii_lowercase()),
+                KeyCode::Char(c) if m.ctrl => "aceghknptuvwy".contains(c.to_ascii_lowercase()),
                 KeyCode::Tab
                 | KeyCode::Enter
                 | KeyCode::Backspace
@@ -2097,6 +2097,19 @@ mod tests {
 
     fn plain(c: char) -> Key {
         key(KeyCode::Char(c))
+    }
+
+    /// `status_prompt_translate_key` passes `C-e` through in vi's typing
+    /// mode, so it still goes to the end of the line.
+    #[test]
+    fn vi_typing_mode_keeps_ctrl_e() {
+        let mut p = prompt("");
+        p.vi = true;
+        typed(&mut p, "abc");
+        p.key(&ctrl('a'), &[]);
+        assert_eq!(p.cursor, 0);
+        p.key(&ctrl('e'), &[]);
+        assert_eq!((p.cursor, p.line().as_str()), (3, "abc"));
     }
 
     #[test]

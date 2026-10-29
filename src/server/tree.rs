@@ -1186,6 +1186,18 @@ fn set_current(
     (current, offset)
 }
 
+/// Whether line `current` is still on the list and still shows `tag`, so
+/// the current line and the scroll stay as they are.
+fn still_current(lines: &[Line], current: usize, tag: Option<Tag>) -> bool {
+    lines.get(current).is_some_and(|l| Some(l.tag) == tag)
+}
+
+/// The order after `now` in `orders`, wrapping; none when there are none.
+fn next_order(orders: &[Order], now: Order) -> Option<Order> {
+    let i = orders.iter().position(|o| *o == now).map_or(0, |i| i + 1);
+    orders.get(i % orders.len().max(1)).copied()
+}
+
 /// The line key `(0)`..`(9)`, `(M-a)`..`(M-z)` of line `i`.
 fn line_key(i: usize) -> Option<String> {
     match i {
@@ -1205,7 +1217,7 @@ fn view(state: &State, tree: &Tree) -> View {
         .panes
         .get(&tree.pane)
         .map_or(0, |p| usize::from(p.rows));
-    let (current, offset) = if lines.get(tree.current).map(|l| l.tag) == tree.tag {
+    let (current, offset) = if still_current(&lines, tree.current, tree.tag) {
         (tree.current, tree.offset)
     } else {
         set_current(&lines, tree.tag, tree.current, tree.offset, tree.height)
@@ -1894,7 +1906,7 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
                 close(state, client);
             } else if let Some(t) = state.trees.open.get_mut(&client) {
                 t.tag = next;
-                t.current = current.min(n - 2);
+                t.current = current.min(n.saturating_sub(2));
             }
         }
         return Routed::Consumed;
@@ -2010,12 +2022,10 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
         }
         return Routed::Consumed;
     } else if is('O') {
-        let orders = tree.kind.orders();
-        let next = orders
-            .iter()
-            .position(|o| *o == tree.order)
-            .map_or(0, |i| (i + 1) % orders.len());
-        let order = orders[next];
+        // `sort_next_order`: a mode without orders (customize) ignores `O`.
+        let Some(order) = next_order(tree.kind.orders(), tree.order) else {
+            return Routed::Consumed;
+        };
         if let Some(tree) = state.trees.open.get_mut(&client) {
             tree.order = order;
         }
@@ -3210,6 +3220,27 @@ fn draw_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `O` in customize-mode, which has no orders, used to index an
+    /// empty slice and take the server down.
+    #[test]
+    fn o_cycles_the_orders_and_does_nothing_without_any() {
+        let tree = Kind::Clients.orders();
+        assert_eq!(next_order(tree, Order::Name), Some(Order::Size));
+        assert_eq!(next_order(tree, Order::Activity), Some(Order::Name));
+        assert_eq!(next_order(tree, Order::Z), Some(Order::Name));
+        assert_eq!(next_order(&[], Order::Name), None);
+    }
+
+    /// A current line past the end of the list (everything it showed went
+    /// away) is not kept as it is: it is clamped back onto the list.
+    #[test]
+    fn a_stale_current_line_is_clamped() {
+        let lines: Vec<Line> = (0..2).map(|i| line(Tag::Pane(PaneId(i)))).collect();
+        assert!(!still_current(&lines, 5, None));
+        assert!(still_current(&lines, 1, Some(Tag::Pane(PaneId(1)))));
+        assert_eq!(set_current(&lines, None, 5, 0, 10), (1, 0));
+    }
 
     #[test]
     fn line_keys_are_digits_then_meta_letters() {
