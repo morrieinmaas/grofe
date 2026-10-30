@@ -2825,13 +2825,21 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
 /// run `source-file` (its includes are `config::load_one`'s, which refuse
 /// a cycle), so only a tmux file nests this way.
 pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<String, String> {
+    // `-t` can fail quietly: the file then runs for the current pane.
+    let run = match c.target.as_ref().map(|t| state.model.resolve_pane(t, ctx)) {
+        Some(Ok(pane)) => ClientCtx {
+            pane: Some(pane),
+            ..ctx.clone()
+        },
+        _ => ctx.clone(),
+    };
     let mut files = Vec::new();
     let mut errors = Vec::new();
     for given in &c.paths {
         // `-F`: the path is a format, expanded for the requester's pane.
         let given = if c.format {
-            let pane = state.model.resolve_pane(&Target::Current, ctx).ok();
-            super::bindings::expand(state, ctx, pane, given)
+            let pane = state.model.resolve_pane(&Target::Current, &run).ok();
+            super::bindings::expand(state, &run, pane, given)
         } else {
             given.clone()
         };
@@ -2846,7 +2854,7 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let mut refused = String::new();
     let mut files = files.into_iter();
     while let Some(path) = files.next() {
-        match source_one(state, ctx, &path, &c) {
+        match source_one(state, ctx, &run, &path, &c) {
             Ok(text) => out.push_str(&text),
             Err(e) if e.is_empty() => refused.push_str(&std::mem::take(&mut state.failed_out)),
             Err(e) => {
@@ -2965,6 +2973,7 @@ fn glob_escape(path: &Path) -> String {
 fn source_one(
     state: &mut State,
     ctx: &ClientCtx,
+    run: &ClientCtx,
     path: &Path,
     c: &SourceFile,
 ) -> Result<String, String> {
@@ -2978,7 +2987,7 @@ fn source_one(
         return with_source_depth(depth + 1, || {
             let verbose = c.verbose || SOURCE_VERBOSE.get();
             let old = SOURCE_VERBOSE.replace(verbose);
-            let out = source_tmux_file(state, ctx, path, c.parse_only, verbose);
+            let out = source_tmux_file(state, ctx, run, path, c.parse_only, verbose);
             SOURCE_VERBOSE.set(old);
             out
         });
@@ -3224,6 +3233,7 @@ fn read_config(path: &Path) -> Result<String, String> {
 fn source_tmux_file(
     state: &mut State,
     ctx: &ClientCtx,
+    run: &ClientCtx,
     path: &Path,
     parse_only: bool,
     verbose: bool,
@@ -3236,9 +3246,14 @@ fn source_tmux_file(
         state.failed_out = format!("{message}\n");
         Err(String::new())
     };
+    // `%if` reads the client's current pane; the commands run for `-t`'s.
     let ctx = ClientCtx {
         dialect: Dialect::Tmux,
         ..ctx.clone()
+    };
+    let run = ClientCtx {
+        dialect: Dialect::Tmux,
+        ..run.clone()
     };
     let split = {
         let mut host = FileHost {
@@ -3267,7 +3282,7 @@ fn source_tmux_file(
     for (line, cmds) in split {
         let mut group = Vec::new();
         for argv in cmds {
-            match super::parse_split_checked(state, &ctx, &argv) {
+            match super::parse_split_checked(state, &run, &argv) {
                 Ok(parsed) => group.extend(parsed),
                 Err((true, e)) => return refused(state, at(line, &e)),
                 Err((false, e)) => {
@@ -3286,7 +3301,7 @@ fn source_tmux_file(
     let mut errors = Vec::new();
     let mut groups = groups.into_iter();
     while let Some(group) = groups.next() {
-        match super::run_commands(state, &ctx, group) {
+        match super::run_commands(state, &run, group) {
             Ok(text) => out.push_str(&text),
             Err(e) => {
                 out.push_str(&std::mem::take(&mut state.failed_out));
@@ -3298,7 +3313,7 @@ fn source_tmux_file(
             held.errors.append(&mut errors);
             held.frames
                 .extend(groups.by_ref().map(|cmds| super::client::HeldFrame {
-                    ctx: ctx.clone(),
+                    ctx: run.clone(),
                     cmds,
                     keep_going: true,
                     depth: source_depth(),

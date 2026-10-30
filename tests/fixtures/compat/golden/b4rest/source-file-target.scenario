@@ -1,0 +1,32 @@
+# B4 rest: source-file -t is the target for -F's path and for the commands
+# in the file that name no target of their own; a target that does not
+# resolve is not an error.
+$ new-session -d -s main -n w1 -x 60 -y 10 'sleep 100000'
+$ new-window -t main -n w2 'sleep 100000'
+$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -gF @who \"##{window_name}\"\nrename-window fromfile\ndisplay-message -p \"dm=##{window_name}\"\nif-shell -F \"##{==:##{window_name},w1}\" \"set -g @ifs yes\" \"set -g @ifs no\"\nset-option -F @who2 \"##{window_name}\"\nset-window-option -g @who3 \"##{window_name}\"\n" > t.conf && printf "set -g @which w1\n" > w1.conf && printf "set -g @which w2\n" > w2.conf && printf "%%if ##{==:##{window_name},w2}\nset -g @cond yes\n%%else\nset -g @cond no\n%%endif\n" > cond.conf'
+$ source-file c/t.conf
+$ show-options -gv @who
+$ show-options -gv @ifs
+$ show-options -v @who2
+$ show-options -gv @who3
+$ list-windows -F '#{window_index} #{window_name}'
+$ rename-window -t main:2 w2
+$ source-file -t main:1 c/t.conf
+$ show-options -gv @who
+$ show-options -gv @ifs
+$ show-options -v @who2
+$ show-options -gv @who3
+$ list-windows -F '#{window_index} #{window_name}'
+$ rename-window -t main:1 w1
+$ source-file -F -t main:w1 'c/#{window_name}.conf'
+$ show-options -gv @which
+$ source-file -F -t main:w2 'c/#{window_name}.conf'
+$ show-options -gv @which
+$ source-file -t main:1 c/cond.conf
+$ show-options -gv @cond
+$ source-file -t main:2 c/cond.conf
+$ show-options -gv @cond
+$ source-file -t nosuch c/t.conf
+$ source-file -t nosuch:9 c/w1.conf
+$ show-options -gv @which
+$ list-windows -F '#{window_index} #{window_name}'

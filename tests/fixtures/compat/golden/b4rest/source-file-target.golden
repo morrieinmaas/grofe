@@ -1,0 +1,80 @@
+$ new-session -d -s main -n w1 -x 60 -y 10 'sleep 100000'
+? 0
+$ new-window -t main -n w2 'sleep 100000'
+? 0
+$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -gF @who \"##{window_name}\"\nrename-window fromfile\ndisplay-message -p \"dm=##{window_name}\"\nif-shell -F \"##{==:##{window_name},w1}\" \"set -g @ifs yes\" \"set -g @ifs no\"\nset-option -F @who2 \"##{window_name}\"\nset-window-option -g @who3 \"##{window_name}\"\n" > t.conf && printf "set -g @which w1\n" > w1.conf && printf "set -g @which w2\n" > w2.conf && printf "%%if ##{==:##{window_name},w2}\nset -g @cond yes\n%%else\nset -g @cond no\n%%endif\n" > cond.conf'
+? 0
+$ source-file c/t.conf
+dm=fromfile
+? 0
+$ show-options -gv @who
+w2
+? 0
+$ show-options -gv @ifs
+no
+? 0
+$ show-options -v @who2
+fromfile
+? 0
+$ show-options -gv @who3
+! invalid option: @who3
+? 1
+$ list-windows -F '#{window_index} #{window_name}'
+1 w1
+2 fromfile
+? 0
+$ rename-window -t main:2 w2
+? 0
+$ source-file -t main:1 c/t.conf
+dm=fromfile
+? 0
+$ show-options -gv @who
+w1
+? 0
+$ show-options -gv @ifs
+no
+? 0
+$ show-options -v @who2
+fromfile
+? 0
+$ show-options -gv @who3
+! invalid option: @who3
+? 1
+$ list-windows -F '#{window_index} #{window_name}'
+1 fromfile
+2 w2
+? 0
+$ rename-window -t main:1 w1
+? 0
+$ source-file -F -t main:w1 'c/#{window_name}.conf'
+? 0
+$ show-options -gv @which
+w1
+? 0
+$ source-file -F -t main:w2 'c/#{window_name}.conf'
+? 0
+$ show-options -gv @which
+w2
+? 0
+$ source-file -t main:1 c/cond.conf
+? 0
+$ show-options -gv @cond
+yes
+? 0
+$ source-file -t main:2 c/cond.conf
+? 0
+$ show-options -gv @cond
+yes
+? 0
+$ source-file -t nosuch c/t.conf
+dm=fromfile
+? 0
+$ source-file -t nosuch:9 c/w1.conf
+? 0
+$ show-options -gv @which
+w1
+? 0
+$ list-windows -F '#{window_index} #{window_name}'
+1 w1
+2 fromfile
+? 0

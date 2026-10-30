@@ -322,7 +322,10 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   each command read, with the full command name, a flag cluster in letter
   order and an argument that needs it in double quotes, nested files
   included; flags that take a value keep the order typed, which tmux may
-  reorder. Not done: `-` (stdin), `-t`, a `-v` carried into the lines
+  reorder. `-t` is the pane the file's commands, their formats and `-F` run
+  for (`golden/b4rest/source-file-target`); `%if` still reads the current
+  pane, and a target that does not resolve is not an error. Not done: `-`
+  (stdin), a `-v` carried into the lines
   that follow a `run-shell` hold, and tmux's error for a stray `%word` in
   the middle of a line (grofe only reads `%` at the start of a line).
 - **Environment flags and OSC 52 queries (B3 WP-D).**

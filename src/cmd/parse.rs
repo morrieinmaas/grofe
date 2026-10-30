@@ -1343,6 +1343,7 @@ fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
         argv,
         &FlagTable {
             short: &[
+                ('t', FlagKind::Value),
                 ('q', FlagKind::Bool),
                 ('F', FlagKind::Bool),
                 ('n', FlagKind::Bool),
@@ -1357,6 +1358,7 @@ fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.present.contains(&'F'),
         parse_only: flags.present.contains(&'n'),
         verbose: flags.present.contains(&'v'),
+        target: flags.values.get(&'t').map(|t| parse_target(t)).transpose()?,
         paths: at_least_one_positional(&flags, "source-file")?,
     }))
 }
@@ -5033,6 +5035,7 @@ mod tests {
                 format: false,
                 parse_only: false,
                 verbose: false,
+                target: None,
                 paths: vec!["sub.toml".to_string()],
             }))
         );
@@ -5043,6 +5046,7 @@ mod tests {
                 format: false,
                 parse_only: true,
                 verbose: true,
+                target: None,
                 paths: vec!["a.conf".to_string(), "b*.conf".to_string()],
             }))
         );

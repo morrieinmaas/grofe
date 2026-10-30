@@ -8,3 +8,9 @@ use crate::tp::check;
 fn the_mouse_ends_clock_mode() {
     check("b4rest", "clock-mouse", &[]);
 }
+
+/// `source-file -t`: the format and command context of the file.
+#[test]
+fn source_file_target_is_the_context() {
+    check("b4rest", "source-file-target", &[]);
+}

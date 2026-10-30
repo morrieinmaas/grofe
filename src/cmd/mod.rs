@@ -562,6 +562,8 @@ pub struct SourceFile {
     pub parse_only: bool,
     /// `-v`: print each command as it is read.
     pub verbose: bool,
+    /// `-t`: the pane the file's commands and `-F` run for.
+    pub target: Option<Target>,
     /// One or more paths, each possibly a glob.
     pub paths: Vec<String>,
 }
