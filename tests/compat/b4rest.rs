@@ -144,3 +144,9 @@ fn choose_tree_takes_the_mouse() {
 fn chooser_help_popups_match() {
     check("b4rest", "tree-help", &[]);
 }
+
+/// Tab in a command prompt: the candidate menu and target completion.
+#[test]
+fn prompt_tab_completion_matches() {
+    check("b4rest", "prompt-complete", &[]);
+}

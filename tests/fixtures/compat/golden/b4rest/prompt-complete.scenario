@@ -1,0 +1,104 @@
+# B4 rest: Tab in a command prompt (status_prompt_complete): a word with
+# several candidates that share no more shows a menu of them (the last ten,
+# sorted), 0 to 9 or Tab and Enter pick; a -t or -s word completes a
+# session, then the windows of one; window-target prompts complete windows.
+$ new-session -d -s main -n w1 -x 70 -y 20 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ new-window -d -n w2 cat
+$ new-window -d -n w3 cat
+$ new-session -d -s other -x 70 -y 20 cat
+$ new-session -d -s oasis -x 70 -y 20 cat
+client 70x20 attach -t main
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys se
+keys Tab
+screen
+keys Tab
+screen
+keys Tab
+keys Tab
+screen
+keys Enter
+screen
+keys C-g C-g
+# A -t word completes a session: what several share, else a menu of them.
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys -t
+keys Tab
+screen
+keys 1
+screen
+keys C-u
+keys -to
+keys Tab
+screen
+keys Tab
+keys Tab
+screen
+keys Tab
+keys Tab
+screen
+keys C-g C-g
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys -tm
+keys Tab
+screen
+keys Tab
+screen
+keys 1
+screen
+keys Tab
+screen
+keys 1
+screen
+keys C-g C-g
+# A window completes by index; one match completes at once.
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys 'select-window' Space '-tmain:2'
+keys Tab
+screen
+keys C-g C-g
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys 'join-pane' Space '-s:'
+keys Tab
+screen
+keys 2
+screen
+keys C-g C-g
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys 'joinp' Space '-sother:9'
+keys Tab
+screen
+keys C-g C-g
+# A target prompt completes sessions from an empty word; a window-target
+# prompt the windows of the session.
+$& command-prompt -T target
+$ run-shell 'sleep 0.5'
+keys Tab
+screen
+keys 1
+screen
+keys C-g C-g
+$& command-prompt -T window-target
+$ run-shell 'sleep 0.5'
+keys Tab
+screen
+keys 2
+screen
+keys C-g C-g
+# Several options complete to what they share; the menu holds the last ten.
+$& command-prompt
+$ run-shell 'sleep 0.5'
+keys 'set' Space 'mo'
+keys Tab
+screen
+keys 9
+screen
+keys C-g C-g

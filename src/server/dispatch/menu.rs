@@ -92,6 +92,7 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
             mouse: c.mouse,
             start,
             internal: Internal::No,
+            tab: false,
         },
     };
     if menu::open(state, ctx, id, menu) {

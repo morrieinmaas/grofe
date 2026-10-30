@@ -155,6 +155,9 @@ pub struct Look {
     /// A menu of the server's own: choosing a row calls its handler with
     /// the row's command text.
     pub internal: Internal,
+    /// A completion menu (`MENU_TAB`): Tab steps down and closes past the
+    /// last row, Backspace closes.
+    pub tab: bool,
 }
 
 /// Who handles the rows of a menu the server opened itself.
@@ -167,6 +170,8 @@ pub enum Internal {
     Popup,
     /// A chooser's menu, for its line ([`crate::server::tree::menu_done`]).
     Tree(usize),
+    /// A prompt's completion menu ([`prompt::complete_chosen`]).
+    Complete,
 }
 
 /// The row a menu starts on when it takes no mouse (tmux's
@@ -359,6 +364,13 @@ impl Shown {
         let m = key.mods;
         let plain = !m.ctrl && !m.alt;
         match key.code {
+            KeyCode::Backspace if self.look.tab => return Step::Close,
+            KeyCode::Tab if self.look.tab => {
+                if self.choice == Some(self.rows.len().saturating_sub(1)) {
+                    return Step::Close;
+                }
+                self.step(false);
+            }
             KeyCode::Up | KeyCode::BackTab => self.step(true),
             KeyCode::Char('k') if plain => self.step(true),
             KeyCode::Down => self.step(false),
@@ -1115,6 +1127,10 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                 Routed::Consumed
             }
             Internal::Tree(line) => crate::server::tree::menu_done(state, id, line, key),
+            Internal::Complete => {
+                prompt::complete_chosen(state, id, key);
+                Routed::Consumed
+            }
             Internal::No => Routed::Consumed,
         };
     }

@@ -1836,11 +1836,11 @@ fn status_lines(model: &Model, session: SessionId) -> u16 {
 
 /// Where a client's status rows are, for a client `rows` tall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StatusGeometry {
+pub(crate) struct StatusGeometry {
     /// How many rows the status line takes (never more than the client).
-    lines: u16,
+    pub lines: u16,
     /// `status-position top`: the rows are above the window.
-    top: bool,
+    pub top: bool,
     /// The client row of the first status row, where a message or prompt
     /// goes (tmux's `message-line 0`).
     first_row: u16,
@@ -1848,7 +1848,7 @@ struct StatusGeometry {
     window_top: u16,
 }
 
-fn status_geometry(model: &Model, session: SessionId, rows: u16) -> StatusGeometry {
+pub(crate) fn status_geometry(model: &Model, session: SessionId, rows: u16) -> StatusGeometry {
     let lines = status_lines(model, session).min(rows);
     let top = model
         .options

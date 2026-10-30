@@ -1154,11 +1154,12 @@ fn prompt_env(state: &State, id: ClientId) -> (bool, String) {
 }
 
 /// Tab: completes the word at the cursor, as tmux's
-/// `status_prompt_replace_complete`. The first word completes to a command
-/// (or alias), the others to an option or a layout; one candidate
-/// completes it (and a command gets a space), several to what they share.
-// ponytail: no candidates menu when several share nothing more, and `-t`
-// and `-s` words are not completed.
+/// `status_prompt_replace_complete` and `status_prompt_complete`. The first
+/// word completes to a command (or alias), the others to an option or a
+/// layout; a `-t` or `-s` word (and a target prompt's) to a session, then
+/// to a window of one. One candidate completes it (and a command gets a
+/// space), several to what they share; with nothing more to share they
+/// open a menu of the last ten.
 fn complete_word(state: &mut State, client: ClientId) {
     let Some(prompt) = state.prompts.open.get(&client) else {
         return;
@@ -1187,25 +1188,306 @@ fn complete_word(state: &mut State, client: ClientId) {
         return;
     }
     let word: String = text[first..last].iter().collect();
-    // A command or search prompt completes (tmux's target types complete
-    // targets, which grofe lacks); an empty word has nothing to.
-    if word.is_empty() || prompt.kind > 1 || word.starts_with("-t") || word.starts_with("-s") {
+    let Some(out) = complete(state, client, &word, first) else {
         return;
-    }
-    let candidates = completions(state, &word, first == 0);
-    let out = match candidates.len() {
-        0 => return,
-        1 => format!("{} ", candidates[0]),
-        _ => common_prefix(&candidates),
     };
-    if out == word {
-        return;
-    }
+    replace_word(state, client, &out);
+}
+
+/// Puts `out` in place of the word at the cursor (`status_prompt_replace_
+/// complete` with a replacement given).
+fn replace_word(state: &mut State, client: ClientId, out: &str) {
     let Some(prompt) = state.prompts.open.get_mut(&client) else {
         return;
     };
+    let text = &prompt.text;
+    let idx = prompt.cursor.saturating_sub(1);
+    let space = |i: usize| text.get(i).is_some_and(|c| *c == ' ');
+    let mut first = idx.min(text.len());
+    while first > 0 && !space(first) {
+        first -= 1;
+    }
+    while first < text.len() && space(first) {
+        first += 1;
+    }
+    let mut last = idx.min(text.len());
+    while last < text.len() && !space(last) {
+        last += 1;
+    }
+    while last > 0 && space(last) {
+        last -= 1;
+    }
+    if last < text.len() {
+        last += 1;
+    }
+    if last < first {
+        return;
+    }
     prompt.text.splice(first..last, out.chars());
     prompt.cursor = first + out.chars().count();
+}
+
+/// `status_prompt_complete`: what `word`, at `offset` in the line, completes
+/// to. A menu it opens for the candidates (or windows) is not an answer.
+fn complete(state: &mut State, client: ClientId, word: &str, offset: usize) -> Option<String> {
+    let kind = state.prompts.open.get(&client)?.kind;
+    let target_prompt = kind == 2 || kind == 3;
+    if word.is_empty() && !target_prompt {
+        return None;
+    }
+    let mut list: Vec<String> = Vec::new();
+    let mut flag = None;
+    let mut menu_offset = offset;
+    let out: Option<String>;
+    if !target_prompt && !word.starts_with("-t") && !word.starts_with("-s") {
+        list = completions(state, word, offset == 0);
+        out = match list.len() {
+            0 => None,
+            1 => Some(format!("{} ", list[0])),
+            _ => Some(common_prefix(&list)),
+        };
+    } else {
+        let s = if target_prompt { word } else { &word[2..] };
+        if !target_prompt {
+            flag = word.chars().nth(1);
+            menu_offset += 2;
+        }
+        let session = state.clients.get(&client)?.session;
+        if kind == 3 {
+            // A window-target prompt completes a window of the session.
+            out = complete_windows(state, client, session, s, menu_offset, None);
+            return finish(state, client, word, out, Vec::new(), (menu_offset, flag));
+        }
+        out = match s.split_once(':') {
+            None => {
+                list = sessions_matching(state, s);
+                let prefix = (!list.is_empty()).then(|| common_prefix(&list));
+                prefix.map(|p| match flag {
+                    Some(f) => format!("-{f}{p}"),
+                    None => p,
+                })
+            }
+            Some((name, rest)) if !rest.contains('.') => {
+                let target = if s.starts_with(':') {
+                    Some(session)
+                } else {
+                    state
+                        .model
+                        .sessions
+                        .values()
+                        .find(|x| x.name == name)
+                        .map(|x| x.id)
+                };
+                let target = target?;
+                let out = complete_windows(state, client, target, rest, menu_offset, flag);
+                return finish(state, client, word, out, Vec::new(), (menu_offset, flag));
+            }
+            Some(_) => None,
+        };
+    }
+    list.sort();
+    finish(state, client, word, out, list, (menu_offset, flag))
+}
+
+/// The end of `status_prompt_complete`: no progress opens the menu of the
+/// candidates, if there are several.
+fn finish(
+    state: &mut State,
+    client: ClientId,
+    word: &str,
+    out: Option<String>,
+    list: Vec<String>,
+    (offset, flag): (usize, Option<char>),
+) -> Option<String> {
+    let out = out.filter(|o| o != word);
+    if out.is_some() {
+        return out;
+    }
+    open_candidates(state, client, list, offset, flag);
+    None
+}
+
+/// The sessions whose names start with `s` (or whose `$id` does), as
+/// `name:` (`$id:`).
+fn sessions_matching(state: &State, s: &str) -> Vec<String> {
+    let mut list = Vec::new();
+    for session in state.model.sessions.values() {
+        if s.is_empty() || session.name.starts_with(s) {
+            list.push(format!("{}:", session.name));
+        } else if let Some(id) = s.strip_prefix('$') {
+            let n = session.id.0.to_string();
+            if id.is_empty() || n.starts_with(id) {
+                list.push(format!("${n}:"));
+            }
+        }
+    }
+    list.sort();
+    list
+}
+
+/// Where the menu of candidates goes and how tall: above the prompt (or
+/// below it with `status-position top`), at the word, as tmux places it.
+fn menu_spot(state: &State, client: ClientId, offset: usize, height: usize) -> Option<(u16, u16)> {
+    let c = state.clients.get(&client)?;
+    let label = state.prompts.open.get(&client)?.label.chars().count();
+    let geometry = clients::status_geometry(&state.model, c.session, c.size.1);
+    let mut x = offset + label;
+    x = if x > 2 { x - 2 } else { 0 };
+    let y = if geometry.top {
+        usize::from(geometry.lines)
+    } else {
+        usize::from(c.size.1).saturating_sub(3 + height)
+    };
+    Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))
+}
+
+/// `status_prompt_complete_list_menu`: the last ten of `list`, each picked
+/// by its digit.
+fn open_candidates(
+    state: &mut State,
+    client: ClientId,
+    list: Vec<String>,
+    offset: usize,
+    flag: Option<char>,
+) {
+    let Some(rows) = state.clients.get(&client).map(|c| c.size.1) else {
+        return;
+    };
+    let lines = {
+        let Some(c) = state.clients.get(&client) else {
+            return;
+        };
+        usize::from(clients::status_geometry(&state.model, c.session, rows).lines)
+    };
+    if list.len() <= 1 || usize::from(rows).saturating_sub(lines) < 3 {
+        return;
+    }
+    let height = (usize::from(rows) - lines - 2).min(10).min(list.len());
+    let start = list.len() - height;
+    let items: Vec<(String, String)> = list[start..]
+        .iter()
+        .map(|item| {
+            let text = match flag {
+                Some(f) => format!("-{f}{item}"),
+                None => item.clone(),
+            };
+            (item.clone(), text)
+        })
+        .collect();
+    open_complete_menu(state, client, items, offset, height);
+}
+
+/// `status_prompt_complete_window_menu`: the windows of `session` whose
+/// index starts with `word`. One window completes the word at once;
+/// several open a menu.
+fn complete_windows(
+    state: &mut State,
+    client: ClientId,
+    session: crate::types::SessionId,
+    word: &str,
+    offset: usize,
+    flag: Option<char>,
+) -> Option<String> {
+    let window_target = state.prompts.open.get(&client)?.kind == 3;
+    let rows = state.clients.get(&client)?.size.1;
+    let sess = state.model.sessions.get(&session)?;
+    let lines = {
+        let c = state.clients.get(&client)?;
+        usize::from(clients::status_geometry(&state.model, c.session, rows).lines)
+    };
+    if usize::from(rows).saturating_sub(lines) < 3 {
+        return None;
+    }
+    let height = (usize::from(rows) - lines - 2).min(10);
+    let mut items: Vec<(String, String)> = Vec::new();
+    for w in &sess.windows {
+        let Some(window) = state.model.windows.get(w) else {
+            continue;
+        };
+        let index = state.model.index_in(session, *w).unwrap_or(window.index);
+        if !word.is_empty() && !index.to_string().starts_with(word) {
+            continue;
+        }
+        let (label, insert) = if window_target {
+            (format!("{index} ({})", window.name), index.to_string())
+        } else {
+            (
+                format!("{}:{index} ({})", sess.name, window.name),
+                format!("{}:{index}", sess.name),
+            )
+        };
+        let insert = match flag {
+            Some(f) => format!("-{f}{insert}"),
+            None => insert,
+        };
+        items.push((label, insert));
+        if items.len() == height {
+            break;
+        }
+    }
+    match items.len() {
+        0 => None,
+        1 => Some(items.remove(0).1),
+        n => {
+            open_complete_menu(state, client, items, offset, n);
+            None
+        }
+    }
+}
+
+/// Opens the menu of completions: `(label, text to insert)` rows picked by
+/// the digits, Tab stepping down and closing past the last.
+fn open_complete_menu(
+    state: &mut State,
+    client: ClientId,
+    items: Vec<(String, String)>,
+    offset: usize,
+    height: usize,
+) {
+    use crate::server::menu::{self, Internal, Look, Menu, MenuItem, Position};
+    let Some((x, y)) = menu_spot(state, client, offset, height) else {
+        return;
+    };
+    let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
+        return;
+    };
+    let items = items
+        .into_iter()
+        .enumerate()
+        .map(|(i, (label, insert))| MenuItem::Command {
+            label,
+            key: crate::server::input::parse_key(&i.to_string()).ok(),
+            command: insert,
+        })
+        .collect();
+    let menu = Menu {
+        title: None,
+        items,
+        x: Position::Cells(i64::from(x)),
+        // `Cells` gives the row below the menu.
+        y: Position::Cells(i64::from(y) + height as i64 + 2),
+        look: Look {
+            tab: true,
+            internal: Internal::Complete,
+            ..Look::default()
+        },
+    };
+    menu::open(state, &ctx, client, menu);
+}
+
+/// A row of the completion menu was picked: `text` takes the word's place
+/// (a window-target prompt's whole line).
+pub fn complete_chosen(state: &mut State, client: ClientId, text: &str) {
+    let Some(prompt) = state.prompts.open.get_mut(&client) else {
+        return;
+    };
+    if prompt.kind == 3 {
+        prompt.text = text.chars().collect();
+        prompt.cursor = prompt.text.len();
+    } else {
+        replace_word(state, client, text);
+    }
+    clients::mark_dirty(state, client);
 }
 
 /// The candidates for `word` (`status_prompt_complete_list`): commands and
