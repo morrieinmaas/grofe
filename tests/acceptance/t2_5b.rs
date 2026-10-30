@@ -605,7 +605,7 @@ fn capture_pane_e_keeps_colours_and_attributes() {
         .expect("capture -e");
     assert_eq!(
         styled,
-        "plain \x1b[0;31mred\x1b[0m \x1b[0;1;4mbu\x1b[0m end\n\x1b[0;7minv\x1b[0m\n"
+        "plain \x1b[31mred\x1b[39m \x1b[1;4mbu\x1b[0m end\n\x1b[7minv\x1b[0m\n"
     );
 }
 
@@ -632,7 +632,7 @@ fn capture_pane_e_with_a_coloured_cell_in_the_last_column() {
         .cmd(&["capture-pane", "-p", "-e", "-t", "main", "-E", "2"])
         .expect("capture -e");
     let want = format!(
-        "ab{}\x1b[0;41m\n\x1b[0mcd{}\x1b[0;31mX\n\x1b[0mef\n",
+        "ab{}\x1b[41m\n\x1b[49mcd{}\x1b[31mX\n\x1b[39mef\n",
         " ".repeat(77),
         " ".repeat(77)
     );

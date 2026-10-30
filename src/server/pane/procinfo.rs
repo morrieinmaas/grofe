@@ -273,7 +273,7 @@ mod os {
                 size,
             )
         };
-        (n == size).then(|| info.pbi_ppid as i32)
+        (n == size).then_some(info.pbi_ppid as i32)
     }
 
     /// `proc_listpids`'s type for "the members of one process group"

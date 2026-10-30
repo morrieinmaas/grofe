@@ -1570,6 +1570,109 @@ fn spawn_child(
     Ok((pty.master, child, tty))
 }
 
+/// The SGR for a capture with `-e`, as tmux's `grid_string_cells_code`: a
+/// `0` first when an attribute goes away, then each newly set attribute,
+/// then the colours that changed (or all of them after a reset, unless
+/// default).
+fn tmux_sgr(last: &Style, now: &Style) -> String {
+    use alacritty_terminal::term::cell::Flags as F;
+    use alacritty_terminal::vte::ansi::NamedColor as N;
+    // Attributes in tmux's order, by the code they set.
+    const ATTRS: [(u32, F); 13] = [
+        (1, F::BOLD),
+        (2, F::DIM),
+        (3, F::ITALIC),
+        (4, F::UNDERLINE),
+        (5, F::empty()),
+        (7, F::INVERSE),
+        (8, F::HIDDEN),
+        (9, F::STRIKEOUT),
+        (42, F::DOUBLE_UNDERLINE),
+        (43, F::UNDERCURL),
+        (44, F::DOTTED_UNDERLINE),
+        (45, F::DASHED_UNDERLINE),
+        (53, F::empty()),
+    ];
+    let has = |f: F, flag: F| !flag.is_empty() && f.contains(flag);
+    let mut codes: Vec<u32> = Vec::new();
+    let mut last_attrs = last.attrs;
+    if ATTRS
+        .iter()
+        .any(|(_, f)| has(last.attrs, *f) && !has(now.attrs, *f))
+        || (last.underline_color.is_some() && now.underline_color.is_none())
+    {
+        codes.push(0);
+        last_attrs = F::empty();
+    }
+    for (code, f) in ATTRS {
+        if has(now.attrs, f) && !has(last_attrs, f) {
+            codes.push(code);
+        }
+    }
+    let mut out = String::new();
+    let put = |out: &mut String, codes: &[u32], sep: &dyn Fn(u32) -> String| {
+        out.push_str("\x1b[");
+        let n = codes.len();
+        for (i, c) in codes.iter().enumerate() {
+            out.push_str(&sep(*c));
+            if i + 1 < n {
+                out.push(';');
+            }
+        }
+        out.push('m');
+    };
+    if !codes.is_empty() {
+        put(&mut out, &codes, &|c| {
+            if c < 10 {
+                c.to_string()
+            } else {
+                format!("{}:{}", c / 10, c % 10)
+            }
+        });
+    }
+    let colour = |c: Color, base: u32, ext: u32, default: u32| -> Vec<u32> {
+        match c {
+            Color::Spec(Rgb { r, g, b }) => vec![ext, 2, r as u32, g as u32, b as u32],
+            Color::Indexed(n) => vec![ext, 5, n as u32],
+            Color::Named(name) => {
+                let n = name as usize;
+                match name {
+                    N::Foreground | N::Background => vec![default],
+                    _ if n < 8 => vec![base + n as u32],
+                    _ if (8..16).contains(&n) => vec![base + 60 + (n as u32 - 8)],
+                    _ => vec![default],
+                }
+            }
+        }
+    };
+    let underline = |c: Option<Color>| -> Vec<u32> {
+        match c {
+            Some(Color::Spec(Rgb { r, g, b })) => vec![58, 2, r as u32, g as u32, b as u32],
+            Some(Color::Indexed(n)) => vec![58, 5, n as u32],
+            _ => Vec::new(),
+        }
+    };
+    let reset = codes.first() == Some(&0);
+    let layers = [
+        (colour(now.fg, 30, 38, 39), colour(last.fg, 30, 38, 39)),
+        (colour(now.bg, 40, 48, 49), colour(last.bg, 40, 48, 49)),
+        (
+            underline(now.underline_color),
+            underline(last.underline_color),
+        ),
+    ];
+    for (new, old) in layers {
+        if new.is_empty() || (!reset && new == old) {
+            continue;
+        }
+        if reset && (new[0] == 49 || new[0] == 39) {
+            continue;
+        }
+        put(&mut out, &new, &|c| c.to_string());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2157,107 +2260,4 @@ mod tests {
             assert_eq!(exited, Ok(true), "iteration {i}: SIGUSR1 to {pid} was lost");
         }
     }
-}
-
-/// The SGR for a capture with `-e`, as tmux's `grid_string_cells_code`: a
-/// `0` first when an attribute goes away, then each newly set attribute,
-/// then the colours that changed (or all of them after a reset, unless
-/// default).
-fn tmux_sgr(last: &Style, now: &Style) -> String {
-    use alacritty_terminal::term::cell::Flags as F;
-    use alacritty_terminal::vte::ansi::NamedColor as N;
-    // Attributes in tmux's order, by the code they set.
-    const ATTRS: [(u32, F); 13] = [
-        (1, F::BOLD),
-        (2, F::DIM),
-        (3, F::ITALIC),
-        (4, F::UNDERLINE),
-        (5, F::empty()),
-        (7, F::INVERSE),
-        (8, F::HIDDEN),
-        (9, F::STRIKEOUT),
-        (42, F::DOUBLE_UNDERLINE),
-        (43, F::UNDERCURL),
-        (44, F::DOTTED_UNDERLINE),
-        (45, F::DASHED_UNDERLINE),
-        (53, F::empty()),
-    ];
-    let has = |f: F, flag: F| !flag.is_empty() && f.contains(flag);
-    let mut codes: Vec<u32> = Vec::new();
-    let mut last_attrs = last.attrs;
-    if ATTRS
-        .iter()
-        .any(|(_, f)| has(last.attrs, *f) && !has(now.attrs, *f))
-        || (last.underline_color.is_some() && now.underline_color.is_none())
-    {
-        codes.push(0);
-        last_attrs = F::empty();
-    }
-    for (code, f) in ATTRS {
-        if has(now.attrs, f) && !has(last_attrs, f) {
-            codes.push(code);
-        }
-    }
-    let mut out = String::new();
-    let put = |out: &mut String, codes: &[u32], sep: &dyn Fn(u32) -> String| {
-        out.push_str("\x1b[");
-        let n = codes.len();
-        for (i, c) in codes.iter().enumerate() {
-            out.push_str(&sep(*c));
-            if i + 1 < n {
-                out.push(';');
-            }
-        }
-        out.push('m');
-    };
-    if !codes.is_empty() {
-        put(&mut out, &codes, &|c| {
-            if c < 10 {
-                c.to_string()
-            } else {
-                format!("{}:{}", c / 10, c % 10)
-            }
-        });
-    }
-    let colour = |c: Color, base: u32, ext: u32, default: u32| -> Vec<u32> {
-        match c {
-            Color::Spec(Rgb { r, g, b }) => vec![ext, 2, r as u32, g as u32, b as u32],
-            Color::Indexed(n) => vec![ext, 5, n as u32],
-            Color::Named(name) => {
-                let n = name as usize;
-                match name {
-                    N::Foreground | N::Background => vec![default],
-                    _ if n < 8 => vec![base + n as u32],
-                    _ if (8..16).contains(&n) => vec![base + 60 + (n as u32 - 8)],
-                    _ => vec![default],
-                }
-            }
-        }
-    };
-    let underline = |c: Option<Color>| -> Vec<u32> {
-        match c {
-            Some(Color::Spec(Rgb { r, g, b })) => vec![58, 2, r as u32, g as u32, b as u32],
-            Some(Color::Indexed(n)) => vec![58, 5, n as u32],
-            _ => Vec::new(),
-        }
-    };
-    let reset = codes.first() == Some(&0);
-    let layers = [
-        (colour(now.fg, 30, 38, 39), colour(last.fg, 30, 38, 39)),
-        (colour(now.bg, 40, 48, 49), colour(last.bg, 40, 48, 49)),
-        (
-            underline(now.underline_color),
-            underline(last.underline_color),
-        ),
-    ];
-    for (new, old) in layers {
-        if new.is_empty() || (!reset && new == old) {
-            continue;
-        }
-        if reset && (new[0] == 49 || new[0] == 39) {
-            continue;
-        }
-        put(&mut out, &new, &|c| c.to_string());
-    }
-    out
 }
