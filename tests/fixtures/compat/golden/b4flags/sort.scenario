@@ -1,0 +1,106 @@
+# B4: -O order and -r on list-sessions, list-windows, list-panes, list-buffers and list-keys.
+$ new-session -d -s b -n w -x 50 -y 10 'sleep 100000'
+$ run-shell 'sleep 0.2'
+$ new-session -d -s a -n w -x 40 -y 12 'sleep 100000'
+$ run-shell 'sleep 0.2'
+$ new-session -d -s c -n w -x 60 -y 8 'sleep 100000'
+$ list-sessions -F '#{session_name}'
+$ list-sessions -F '#{session_name}' -r
+$ list-sessions -F '#{session_name}' -O name
+$ list-sessions -F '#{session_name}' -O name -r
+$ list-sessions -F '#{session_name}' -O creation
+$ list-sessions -F '#{session_name}' -O creation -r
+$ list-sessions -F '#{session_name}' -O index
+$ list-sessions -F '#{session_name}' -O key
+$ list-sessions -F '#{session_name}' -O activity
+$ list-sessions -F '#{session_name}' -O activity -r
+$ list-sessions -F '#{session_name}' -O size
+$ list-sessions -F '#{session_name}' -O order
+$ list-sessions -F '#{session_name}' -O order -r
+$ list-sessions -F '#{session_name}' -O NAME -r
+$ list-sessions -F '#{session_name}' -O title
+$ list-sessions -F '#{session_name}' -O z
+$ list-sessions -F '#{session_name}' -O modifier
+$ list-sessions -F '#{session_name}' -O bogus
+$ list-sessions -O
+$ list-sessions -f '#{!=:#{session_name},a}' -O name -r -F '#{session_name}'
+$ new-window -d -t b: -n zz 'sleep 100000'
+$ new-window -d -t b: -n yy 'sleep 100000'
+$ new-window -d -t b: -n xx 'sleep 100000'
+$ list-windows -t b -F '#{window_index}:#{window_name}'
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O name
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O name -r
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O creation -r
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O index -r
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O size
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O order -r
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O bogus
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O name
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O size
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O index -r
+$ split-window -d -t a:1 -l 10 'sleep 100000'
+$ split-window -d -h -t a:1.1 -l 7 'sleep 100000'
+$ select-pane -t a:1.2 -T beta
+$ select-pane -t a:1.3 -T alpha
+$ select-pane -t a:1.1 -T gamma
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}:#{pane_width}x#{pane_height}'
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O name
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O title -r
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O size
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O size -r
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O creation -r
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O index -r
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O activity
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O z
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O order -r
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O bogus
+$ list-panes -s -t a -F '#{window_index}.#{pane_index}:#{pane_title}' -O name
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}:#{pane_title}' -O size -r
+$ set-buffer -b zeta 'aaaa'
+$ set-buffer -b alpha 'bb'
+$ set-buffer -b mid 'cccccc'
+$ list-buffers -F '#{buffer_name}:#{buffer_size}'
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O name
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O name -r
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O size
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O size -r
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O creation
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O creation -r
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O order -r
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -r
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O bogus
+$ list-buffers -F '#{buffer_name}' -f '#{>:#{buffer_size},2}'
+$ list-buffers -F '#{buffer_name}' -f '#{>:#{buffer_size},2}' -O name -r
+$ list-buffers -f '#{==:#{buffer_name},alpha}' -F '#{buffer_name} #{buffer_size}'
+$ bind-key -T mytable a display-message x
+$ bind-key -T mytable b display-message y
+$ bind-key -T mytable -N 'note b' c display-message z
+$ bind-key -T mytable -N 'note e' -r e display-message w
+$ bind-key -T mytable M-a display-message ma
+$ bind-key -T mytable C-a display-message ca
+$ bind-key -T mytable F1 display-message f1
+$ bind-key -T mytable Up display-message up
+$ bind-key -T other Z display-message oz
+$ list-keys -T mytable
+$ list-keys -T mytable -r
+$ list-keys -T mytable -O order -r
+$ list-keys -T mytable -O index
+$ list-keys -T mytable -O index -r
+$ list-keys -T mytable -O key
+$ list-keys -T mytable -O modifier
+$ list-keys -T mytable -O modifier -r
+$ list-keys -T mytable -O bogus
+$ list-keys -O bogus nosuchkey
+$ list-keys -T mytable -F '#{key_table}|#{key_string}|#{key_repeat}|#{key_command}'
+$ list-keys -T mytable -F '#{key_string_width}|#{key_table_width}|#{key_has_repeat}|#{notes_only}|#{key_prefix}|#{key_note}'
+$ list-keys -T mytable -N
+$ list-keys -T mytable -N -a
+$ list-keys -T mytable -N -a -P 'PFX'
+$ list-keys -T mytable -N -P ''
+$ list-keys -T mytable -N -F '#{key_prefix}!#{key_string}!#{key_note}!#{key_command}'
+$ list-keys -T mytable -a
+$ list-keys -T nosuchtable
+$ list-keys -F '#{key_table}:#{key_string}' -T other
+$ list-keys -T mytable -F ''
+$ list-keys -T mytable -P x -F '#{key_prefix}'
+$ list-keys -T mytable -1 -F '#{key_string}'

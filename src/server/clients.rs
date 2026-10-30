@@ -1038,8 +1038,13 @@ pub(crate) fn wait_channel(
     channel: &str,
     reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
 ) {
-    if state.registry.waits.get(channel).is_some_and(|wc| wc.woken) {
-        state.registry.waits.remove(channel);
+    if let Some(wc) = state.registry.waits.get(channel)
+        && wc.woken
+    {
+        // As tmux's `cmd_wait_for_remove`: a locked channel stays, woken.
+        if !wc.locked {
+            state.registry.waits.remove(channel);
+        }
         return;
     }
     prune_waits(state);

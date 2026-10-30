@@ -233,6 +233,7 @@ impl Rewriter {
         let set = Command::SetOption(crate::cmd::SetOption {
             scope: Some(crate::cmd::OptionScope::Global),
             unset: false,
+            unset_panes: false,
             persist: false,
             target: crate::cmd::Target::Current,
             name: RBRACE_OPTION.to_string(),
@@ -575,6 +576,9 @@ fn set_window_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 /// (`-s` the server's, `-gw` the global window one, `-g` the session
 /// one), which a tmux-dialect `show` lists as tmux does.
 fn show_value(inv: &Invocation<'_>, window: bool) -> Result<Vec<Command>, TmuxError> {
+    if inv.option_name().is_some_and(names_a_hook) {
+        return show_hook_option(inv);
+    }
     let got = inv.getopt();
     let mut out = super::option_command(inv, "show-options", window)?;
     if inv.option_name().is_none() {
@@ -703,9 +707,17 @@ pub fn hook_event(tmux: &str) -> Result<&'static str, TmuxError> {
 /// -R` runs whatever name it is given and says nothing of an unknown one,
 /// so the name goes through as it is.
 fn hook_args(inv: &Invocation<'_>) -> Result<Vec<String>, TmuxError> {
+    hook_args_of(inv, None)
+}
+
+/// [`hook_args`], with only the flags in `keep` when given.
+fn hook_args_of(inv: &Invocation<'_>, keep: Option<&str>) -> Result<Vec<String>, TmuxError> {
     let got = inv.getopt();
     let mut args = Vec::new();
     for (flag, value) in &got.flags {
+        if keep.is_some_and(|k| !k.contains(*flag)) {
+            continue;
+        }
         args.push(format!("-{flag}"));
         args.extend(value.map(str::to_string));
     }
@@ -754,6 +766,20 @@ fn set_hook(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 fn show_hooks(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
     let args = hook_args(inv)?;
     inv.native("show-hooks", &args)
+}
+
+/// `show-options <hook>`: a hook is an option in tmux, and its elements
+/// are what `show-hooks` of it lists.
+pub(crate) fn show_hook_option(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
+    let args = hook_args_of(inv, Some("gpwt"))?;
+    inv.native("show-hooks", &args)
+}
+
+/// Whether the name `show` or `set` is given is one of tmux's hooks (and no
+/// option of that name).
+pub(crate) fn names_a_hook(name: &str) -> bool {
+    let base = name.split('[').next().unwrap_or(name);
+    super::option_name(base).is_none() && hook_event(base).is_ok()
 }
 
 // ---- tmux's option tables ------------------------------------------------------

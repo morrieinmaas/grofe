@@ -391,6 +391,8 @@ pub enum OptionScope {
 pub struct SetOption {
     pub scope: Option<OptionScope>,
     pub unset: bool,
+    /// `-U`: unset, and for a window option in the window's panes too.
+    pub unset_panes: bool,
     pub persist: bool,
     pub target: Target,
     pub name: String,
@@ -419,6 +421,11 @@ pub struct ShowOptions {
     pub value_only: bool,
     /// `-q`: no error for an unknown option.
     pub quiet: bool,
+    /// `-A`: the options the scope inherits and does not set too, shown
+    /// as `name* value`.
+    pub inherited: bool,
+    /// `-H`: the hooks the scope sets too, in a listing of all of it.
+    pub hooks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -650,6 +657,14 @@ pub struct RunShell {
     pub delay: Option<std::time::Duration>,
     /// `-t` (FE.3): the pane the command's formats expand against.
     pub target: Target,
+    /// `-C`: `cmd` is a command of the server's, not a shell command.
+    pub command: bool,
+    /// `-E`: the shell's stderr is shown with its stdout.
+    pub stderr: bool,
+    /// `-c`: the directory the command starts in, else the client's.
+    pub cwd: Option<String>,
+    /// The arguments after the command: `#{1}`, `#{2}`, ... in it.
+    pub args: Vec<String>,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is

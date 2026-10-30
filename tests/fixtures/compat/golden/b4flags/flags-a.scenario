@@ -1,0 +1,170 @@
+# B4: small flags: join-pane -p, resize-window -L -R -U -D, rotate-window -Z, select-layout -n -p -o, send-prefix -2, set-buffer -w -t, wait-for -L -U, set-option -U, show-options -A -H, run-shell -C -E -c.
+$ new-session -d -s main -x 60 -y 20 'sleep 100000'
+$ new-window -d -t main:2 'sleep 100000'
+$ new-window -d -t main:4 'sleep 100000'
+$ split-window -d -t main:1 'sleep 100000'
+$ split-window -d -t main:1 'sleep 100000'
+$ split-window -d -t main:2 'sleep 100000'
+$ display-message -p -t main:1 '#{window_layout}'
+$ join-pane -d -p 30 -s main:4.1 -t main:1.1
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+$ break-pane -d -s main:1.2 -t main:4
+$ join-pane -d -h -p 30 -s main:4.1 -t main:1.1
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+$ break-pane -d -s main:1.2 -t main:3
+$ join-pane -d -p 200 -s main:3.1 -t main:1.1
+$ join-pane -d -p x -s main:3.1 -t main:1.1
+$ join-pane -d -p -3 -s main:3.1 -t main:1.1
+$ join-pane -d -l 5 -p 70 -s main:3.1 -t main:1.1
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+$ move-pane -d -p 50 -s main:3.1 -t main:1.2
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+$ resize-window -t main:1 -x 50 -y 15
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -L
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -R 5
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -U 3
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -D 4
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -x 30 -L 4
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -LR 2
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -UD 2
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -L 1000
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-window -t main:1 -L 0
+$ resize-window -t main:1 -L x
+$ resize-window -t main:1 -L -2
+$ resize-window -t main:1 -L 1 2
+$ resize-window -t main:1 3
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+$ resize-pane -Z -t main:1.2
+$ rotate-window -t main:1
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+$ resize-pane -Z -t main:1.2
+$ rotate-window -Z -t main:1
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+$ rotate-window -Z -D -t main:1
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+$ resize-pane -Z -t main:1.2
+$ rotate-window -DZ -t main:1
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+$ select-layout -t main:2 tiled
+$ select-layout -t main:1 even-horizontal
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -n
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -n
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -p
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -o
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -o
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 main-v
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 even
+$ select-layout -t main:1 m
+$ select-layout -t main:1 -E
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -n even-vertical
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 -o main-horizontal
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 nosuchlayout
+$ select-layout -t main:1 -o
+$ display-message -p -t main:1 '#{window_layout}'
+$ select-layout -t main:1 a b
+$ select-layout -t main:3 -o
+$ select-layout -t main:3
+$ show-options -gv prefix2
+$ set-option -g prefix2 C-a
+$ send-prefix -2 -t main:1.1
+$ send-prefix -t main:1.1
+$ set-option -g prefix2 None
+$ send-prefix -2 -t main:1.1
+$ set-buffer -w 'clip'
+$ set-buffer -w -t nosuch 'clip2'
+$ list-buffers -F '#{buffer_name}:#{buffer_sample}'
+$ wait-for -L chan
+$ wait-for -U chan
+$ wait-for -U chan
+$ wait-for -U other
+$ wait-for -L chan2
+$ wait-for -S chan2
+$ wait-for chan2
+$ wait-for -U chan2
+$ wait-for -SL chan3
+$ wait-for -U chan3
+$ wait-for -LU chan3
+$ wait-for -U chan3
+$ set-option -g @gopt gval
+$ set-option -w -t main:1 @wopt wval
+$ set-option -p -t main:1.1 @popt pval
+$ set-option -p -t main:1.1 window-style 'bg=red'
+$ set-option -w -t main:1 window-style 'bg=blue'
+$ show-options -p -t main:1.1 window-style
+$ show-options -w -t main:1 window-style
+$ set-option -w -U -t main:1 window-style
+$ show-options -p -t main:1.1 window-style
+$ show-options -w -t main:1 window-style
+$ set-option -p -t main:1.1 window-style 'bg=red'
+$ set-option -w -u -t main:1 window-style
+$ show-options -p -t main:1.1 window-style
+$ set-option -p -U -t main:1.1 window-style
+$ show-options -p -t main:1.1 window-style
+$ set-option -U -t main:1 @wopt
+$ show-options -w -t main:1 @wopt
+$ set-option -w -t main:1 mode-keys emacs
+$ show-options -w -A -t main:1 mode-keys
+$ show-options -w -t main:1 mode-keys
+$ show-options -w -A -t main:2 mode-keys
+$ show-options -w -t main:2 mode-keys
+$ show-options -wA -t main:2 aggressive-resize
+$ show-options -wAv -t main:2 aggressive-resize
+$ show-options -wA -t main:2 nosuchoption
+$ show-options -wAq -t main:2 nosuchoption
+$ show-options -A -t main:2 status
+$ show-options -A -t main status
+$ show-options -g -A status
+$ show-options -s -A escape-time
+$ show-options -p -A -t main:1.1 window-style
+$ show-options -p -A -t main:1.2 window-style
+$ show-options -p -A -t main:1.2 @popt
+$ show-options -w -A -t main:2
+$ show-options -w -t main:1
+$ set-hook -g after-new-window 'set -g @hooked yes'
+$ set-hook -w -t main:2 pane-focus-in 'set -g @focus yes'
+$ show-options -gH
+$ show-options -H -t main:2 -w
+$ show-options -g
+$ show-options -gH after-new-window
+$ show-options -g -H
+$ show-hooks -g
+$ run-shell -C 'display-message -p hello'
+$ run-shell -C 'set -g @runc 1 ; display-message -p "#{@runc}"'
+$ run-shell -C display-message -p 'two words'
+$ run-shell -C -b 'display-message -p bg'
+$ run-shell -C 'nosuchcommand'
+$ run-shell -C ''
+$ run-shell -C
+$ run-shell -C -d 0.2 'display-message -p delayed'
+$ run-shell
+$ run-shell -b
+$ run-shell 'echo out; echo err >&2'
+$ run-shell -E 'echo out; echo err >&2'
+$ run-shell -E 'echo only-err >&2; exit 3'
+$ run-shell -c / 'pwd'
+$ run-shell -c /nonexistent 'pwd'
+$ run-shell -s x 'echo hidden-s'
+$ run-shell 'echo #{1}-#{2}-#{0}' first 'sec#ond'
+$ run-shell -t main:1.1 'echo #{pane_index} #{1}' arg
+$ run-shell 'echo $0' a b

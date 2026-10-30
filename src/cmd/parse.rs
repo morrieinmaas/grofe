@@ -883,6 +883,7 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
     ('F', FlagKind::Bool),
     ('q', FlagKind::Bool),
     ('o', FlagKind::Bool),
+    ('U', FlagKind::Bool),
 ];
 const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
 
@@ -935,7 +936,8 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
     }
     Ok(Command::SetOption(SetOption {
         scope,
-        unset: flags.present.contains(&'u'),
+        unset: flags.present.contains(&'u') || flags.present.contains(&'U'),
+        unset_panes: flags.present.contains(&'U'),
         persist: flags.long_present.contains("persist"),
         target: target_or_current(&flags.values, 't')?,
         name,
@@ -956,6 +958,8 @@ const SHOW_OPTIONS_SHORT: &[(char, FlagKind)] = &[
     ('t', FlagKind::Value),
     ('v', FlagKind::Bool),
     ('q', FlagKind::Bool),
+    ('A', FlagKind::Bool),
+    ('H', FlagKind::Bool),
 ];
 
 fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
@@ -979,6 +983,8 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
         name,
         value_only: flags.present.contains(&'v'),
         quiet: flags.present.contains(&'q'),
+        inherited: flags.present.contains(&'A'),
+        hooks: flags.present.contains(&'H'),
     }))
 }
 
@@ -1504,6 +1510,11 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
                 ('b', FlagKind::Bool),
                 ('d', FlagKind::Value),
                 ('t', FlagKind::Value),
+                ('C', FlagKind::Bool),
+                ('E', FlagKind::Bool),
+                ('c', FlagKind::Value),
+                // In tmux's args template and read by nothing.
+                ('s', FlagKind::Value),
             ],
             long: &[],
         },
@@ -1521,15 +1532,31 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
         ),
         None => None,
     };
+    let command = flags.present.contains(&'C');
+    // A shell command is the first word, the others its `#{1}`, `#{2}`; a
+    // command (`-C`) is all of them, quoted into one command line.
+    let mut words = flags.positionals.iter();
     let cmd = match (&delay, flags.positionals.is_empty()) {
         (Some(_), true) => String::new(),
-        _ => one_positional(&flags, "run-shell")?,
+        // The command line is the first word, as tmux reads it; the others
+        // are nothing to it.
+        _ if command => {
+            let first = words.next().cloned().unwrap_or_default();
+            words.by_ref().for_each(drop);
+            first
+        }
+        // tmux runs nothing for a bare `run-shell`.
+        _ => words.next().cloned().unwrap_or_default(),
     };
     Ok(Command::RunShell(RunShell {
         cmd,
         delay,
         background: flags.present.contains(&'b'),
         target: target_or_current(&flags.values, 't')?,
+        command,
+        stderr: flags.present.contains(&'E'),
+        cwd: flags.values.get(&'c').cloned(),
+        args: words.cloned().collect(),
     }))
 }
 
@@ -4421,6 +4448,7 @@ mod tests {
             Command::SetOption(SetOption {
                 scope: Some(OptionScope::Global),
                 unset: false,
+                unset_panes: false,
                 persist: true,
                 target: Target::Current,
                 name: "history-limit".to_string(),
@@ -4442,6 +4470,7 @@ mod tests {
             Command::SetOption(SetOption {
                 scope: None,
                 unset: true,
+                unset_panes: false,
                 persist: false,
                 target: Target::Current,
                 name: "@my-opt".to_string(),
@@ -4556,6 +4585,8 @@ mod tests {
                 name: None,
                 value_only: false,
                 quiet: false,
+                inherited: false,
+                hooks: false,
             })
         );
     }
@@ -4571,6 +4602,8 @@ mod tests {
                 name: None,
                 value_only: false,
                 quiet: false,
+                inherited: false,
+                hooks: false,
             })
         );
     }
@@ -5317,9 +5350,14 @@ mod tests {
                 background: false,
                 delay: None,
                 target: Target::Current,
+                command: false,
+                stderr: false,
+                cwd: None,
+                args: Vec::new(),
             }))
         );
-        assert!(parse(&argv(&["run-shell"])).is_err());
+        // tmux takes none: a `run-shell` with nothing to run runs nothing.
+        assert!(parse(&argv(&["run-shell"])).is_ok());
     }
 
     #[test]

@@ -70,6 +70,16 @@ impl Sort {
         }
     }
 
+    /// The order asked for, `None` for none.
+    pub fn order(&self) -> Option<Order> {
+        self.order
+    }
+
+    /// Whether `-r` was given.
+    pub fn reversed(&self) -> bool {
+        self.reversed
+    }
+
     /// Sorts `items`; `cmp` compares two of them by an order other than
     /// [`Order::Natural`], its ties already settled.
     pub fn apply<T>(&self, items: &mut [T], cmp: impl Fn(Order, &T, &T) -> Ordering) {
@@ -90,6 +100,35 @@ impl Sort {
             }),
         }
     }
+}
+
+/// glibc's `qsort` for a small array (`msort_with_tmp`): halves sorted,
+/// then merged taking the left item when `cmp` says it is not greater. Used
+/// where tmux's comparator is no total order (`list-keys -O`), so the
+/// result has to come from the same algorithm to be the same.
+pub fn merge_sort<T: Clone>(items: &mut [T], cmp: &impl Fn(&T, &T) -> i32) {
+    let n = items.len();
+    if n <= 1 {
+        return;
+    }
+    let n1 = n / 2;
+    let (left, right) = items.split_at_mut(n1);
+    merge_sort(left, cmp);
+    merge_sort(right, cmp);
+    let mut merged: Vec<T> = Vec::with_capacity(n);
+    let (mut i, mut j) = (0, 0);
+    while i < left.len() && j < right.len() {
+        if cmp(&left[i], &right[j]) <= 0 {
+            merged.push(left[i].clone());
+            i += 1;
+        } else {
+            merged.push(right[j].clone());
+            j += 1;
+        }
+    }
+    merged.extend_from_slice(&left[i..]);
+    merged.extend_from_slice(&right[j..]);
+    items.clone_from_slice(&merged);
 }
 
 /// `strcmp` on names: by bytes.
