@@ -5436,6 +5436,7 @@ mod tests {
             pane_cell: Some((3, 4)),
             report: (3, 4),
             wheel: false,
+            action: None,
             event: crate::server::input::Mouse {
                 kind: crate::server::input::MouseKind::Move,
                 col: 3,

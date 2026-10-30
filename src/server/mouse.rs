@@ -174,6 +174,8 @@ pub struct MouseTarget {
     /// The report the key is for (a double click's is its second press),
     /// which `send-keys -M` sends on to the pane.
     pub event: Mouse,
+    /// The mouse key fired (a double click's is `DoubleClick`), if one did.
+    pub action: Option<MouseAction>,
 }
 
 impl MouseState {
@@ -441,6 +443,7 @@ fn target(
                 | MouseKind::WheelRight
         ),
         event: *m,
+        action: None,
     })
 }
 
@@ -657,9 +660,10 @@ fn fire(
     let Some(place) = place(&hit) else {
         return;
     };
-    let Some(target) = target(state, client, m, at, &hit) else {
+    let Some(mut target) = target(state, client, m, at, &hit) else {
         return;
     };
+    target.action = Some(action);
     let key = Key::new(
         KeyCode::Mouse(MouseKey {
             action,
@@ -677,7 +681,7 @@ fn fire(
         // Bound nowhere: the report goes to the pane it is over, as
         // tmux's `forward_key`.
         None => {
-            send_event(state, client, m, target.pane);
+            send_event(state, client, m, target.pane, Some(action));
         }
     }
 }
@@ -774,7 +778,7 @@ pub fn send_current(state: &mut State) -> Result<String, String> {
     let Some(t) = state.mouse.current.clone() else {
         return Err(crate::cmd::target::NO_MOUSE_TARGET.to_string());
     };
-    send_event(state, t.client, &t.event, t.pane);
+    send_event(state, t.client, &t.event, t.pane, t.action);
     Ok(String::new())
 }
 
@@ -783,11 +787,17 @@ pub fn send_current(state: &mut State) -> Result<String, String> {
 /// event.
 // ponytail: a drag that leaves its pane is dropped rather than following
 // the pane it started in.
-fn send_event(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) {
+fn send_event(
+    state: &mut State,
+    client: ClientId,
+    m: &Mouse,
+    pane: PaneId,
+    action: Option<MouseAction>,
+) {
     if let Hit::Pane(over, x, y) = hit(state, client, (m.col, m.row))
         && over == pane
     {
-        send_to(state, pane, m, (x, y));
+        send_to(state, (client, pane), m, action, (x, y));
     }
 }
 
@@ -795,17 +805,27 @@ fn send_event(state: &mut State, client: ClientId, m: &Mouse, pane: PaneId) {
 /// kind of event and is in no mode.
 fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
     if let Hit::Pane(pane, x, y) = hit(state, client, (m.col, m.row)) {
-        send_to(state, pane, m, (x, y));
+        send_to(state, (client, pane), m, None, (x, y));
     }
     Routed::Consumed
 }
 
 /// Report `m`, at 0-based cell `(x, y)` of `pane`, goes to the pane's
 /// process if its mouse mode asks for it.
-fn send_to(state: &mut State, pane: PaneId, m: &Mouse, (x, y): (u16, u16)) {
+fn send_to(
+    state: &mut State,
+    (client, pane): (ClientId, PaneId),
+    m: &Mouse,
+    action: Option<MouseAction>,
+    (x, y): (u16, u16),
+) {
     // A pane in a mode gives its app nothing (tmux's `window_pane_key`);
     // any mouse report ends the clock, as any key does.
-    if state.copy.is_active(pane) || crate::server::tree::is_over(state, pane) {
+    if state.copy.is_active(pane) {
+        return;
+    }
+    if crate::server::tree::is_over(state, pane) {
+        crate::server::tree::mouse(state, client, pane, m, action, (x, y));
         return;
     }
     if state.clocks.is_active(pane) {
@@ -1608,6 +1628,7 @@ mod tests {
             report: (5, 23),
             wheel: false,
             event: mouse(MouseKind::Move),
+            action: None,
         }
     }
 

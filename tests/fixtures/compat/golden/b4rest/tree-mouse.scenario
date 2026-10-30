@@ -1,0 +1,83 @@
+# B4 rest: the mouse in choose-tree (mode_tree_key): a press picks the
+# line, a double click chooses it, the wheel does nothing, a right press
+# picks the line and opens the mode's menu (outside the list: the scroll
+# menu), and a press in the preview below the list picks a window or pane
+# of the strip. The pane is 29 rows, the list 14 of them.
+$ new-session -d -s main -n w1 -x 60 -y 30 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g mouse on
+$ new-window -d -n w2 cat
+$ split-window -d -t main:w2 cat
+$ new-window -d -n w3 cat
+$ new-session -d -s other -n ow -x 60 -y 30 cat
+$ select-pane -t %0 -T t0
+$ select-pane -t %1 -T t1
+$ select-pane -t %2 -T t2
+$ select-pane -t %3 -T t3
+$ select-pane -t %4 -T t4
+client 60x30 attach -t main
+$ choose-tree -w "set -g @picked '%%'"
+screen (0)
+styles 0-5
+# A press picks the line under it.
+keys Escape '[<0;5;5M' Escape '[<0;5;5m'
+styles 0-6
+# The wheel changes nothing.
+keys Escape '[<65;5;3M'
+keys Escape '[<64;5;3M'
+styles 0-6
+# A press below the last line changes nothing.
+keys Escape '[<0;5;9M' Escape '[<0;5;9m'
+styles 0-6
+# A right press picks the line and opens the menu.
+keys Escape '[<2;5;3M'
+screen Cancel
+styles 0-6
+keys Escape '[<2;5;3m'
+screen
+# Its Cancel is the mode's q, which leaves the mode.
+keys q
+$ display -p '[#{pane_mode}]'
+$ choose-tree -w "set -g @picked '%%'"
+screen (0)
+# A right press in the preview opens the scroll menu.
+keys Escape '[<2;20;20M'
+screen Scroll Left
+keys Escape '[<2;20;20m'
+screen
+styles 0-6
+keys q
+$ display -p '[#{pane_mode}]'
+# A press in the preview of a window picks one of its panes.
+$ choose-tree -w "set -g @picked '%%'"
+screen (0)
+keys Escape '[<0;5;3M' Escape '[<0;5;3m'
+screen (0)
+keys Escape '[<0;40;22M' Escape '[<0;40;22m'
+$ show -gv @picked
+$ display -p '[#{pane_mode}]'
+# A double click chooses the line.
+$ choose-tree -w "set -g @picked '%%'"
+screen (0)
+keys Escape '[<0;5;2M' Escape '[<0;5;2m' Escape '[<0;5;2M' Escape '[<0;5;2m'
+$ run-shell 'sleep 0.6'
+$ show -gv @picked
+$ display -p '[#{pane_mode}]'
+# A session line shows its windows, two of three at a time: a press on the
+# right arrow's column scrolls the strip, the left's scrolls it back, and a
+# press on a window picks it.
+$ choose-tree -w "set -g @picked '%%'"
+screen (0)
+keys Escape '[<0;5;1M' Escape '[<0;5;1m'
+screen
+keys Escape '[<0;58;24M' Escape '[<0;58;24m'
+screen
+keys Escape '[<0;3;24M' Escape '[<0;3;24m'
+screen
+keys Escape '[<0;58;24M' Escape '[<0;58;24m'
+screen
+$ run-shell 'sleep 0.5'
+keys Escape '[<0;40;24M' Escape '[<0;40;24m'
+$ show -gv @picked
+$ display -p '[#{pane_mode}]'

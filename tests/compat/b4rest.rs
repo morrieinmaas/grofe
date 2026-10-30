@@ -132,3 +132,9 @@ fn source_file_v_goes_on_after_a_hold() {
 fn a_burst_of_bells_rings_once() {
     check("b4rest", "bell-burst", &[]);
 }
+
+/// The mouse in `choose-tree`.
+#[test]
+fn choose_tree_takes_the_mouse() {
+    check("b4rest", "tree-mouse", &[]);
+}

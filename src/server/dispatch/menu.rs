@@ -5,7 +5,7 @@
 use crate::cmd::{self, ConfirmBefore, DisplayMenu, DisplayPanes, MenuEntry, Resolve};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::input::parse_key;
-use crate::server::menu::{self, Look, Menu, MenuItem, PanesArgs, Position, Start};
+use crate::server::menu::{self, Internal, Look, Menu, MenuItem, PanesArgs, Position, Start};
 use crate::server::popup::Lines;
 use crate::server::{State, clients, prompt};
 
@@ -91,7 +91,7 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
             stay_open: c.stay_open,
             mouse: c.mouse,
             start,
-            popup: false,
+            internal: Internal::No,
         },
     };
     if menu::open(state, ctx, id, menu) {

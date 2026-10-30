@@ -837,7 +837,7 @@ fn resize_pty(state: &mut State, id: ClientId) {
 
 /// Opens the popup's menu at the pointer (`popup_menu_items`).
 fn open_menu(state: &mut State, id: ClientId, m: &input::Mouse) {
-    use crate::server::menu::{self, Look, Menu, MenuItem, Position};
+    use crate::server::menu::{self, Internal, Look, Menu, MenuItem, Position};
     let Some(ctx) = state.clients.get(&id).map(|c| c.ctx.clone()) else {
         return;
     };
@@ -861,7 +861,7 @@ fn open_menu(state: &mut State, id: ClientId, m: &input::Mouse) {
         y: Position::Pointer(m.row),
         look: Look {
             mouse: true,
-            popup: true,
+            internal: Internal::Popup,
             ..Look::default()
         },
     };

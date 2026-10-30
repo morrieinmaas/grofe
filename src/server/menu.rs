@@ -152,9 +152,21 @@ pub struct Look {
     pub mouse: bool,
     /// `-C`.
     pub start: Start,
-    /// A popup's own menu: choosing a row calls [`popup::menu_done`] with
+    /// A menu of the server's own: choosing a row calls its handler with
     /// the row's command text.
-    pub popup: bool,
+    pub internal: Internal,
+}
+
+/// Who handles the rows of a menu the server opened itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Internal {
+    /// `display-menu`: rows are commands.
+    #[default]
+    No,
+    /// A popup's menu ([`popup::menu_done`]).
+    Popup,
+    /// A chooser's menu, for its line ([`crate::server::tree::menu_done`]).
+    Tree(usize),
 }
 
 /// The row a menu starts on when it takes no mouse (tmux's
@@ -1094,11 +1106,17 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
     let Some(Some(row)) = shown.rows.get_mut(i).map(Option::take) else {
         return Routed::Consumed;
     };
-    if shown.look.popup {
-        if let Action::Run(key) = row.action {
-            popup::menu_done(state, id, &key);
-        }
-        return Routed::Consumed;
+    if let Action::Run(key) = &row.action
+        && shown.look.internal != Internal::No
+    {
+        return match shown.look.internal {
+            Internal::Popup => {
+                popup::menu_done(state, id, key);
+                Routed::Consumed
+            }
+            Internal::Tree(line) => crate::server::tree::menu_done(state, id, line, key),
+            Internal::No => Routed::Consumed,
+        };
     }
     match row.action {
         // As tmux appends the item's command to the client's queue: behind
