@@ -431,6 +431,15 @@ pub fn replay(cli: &Cli, steps: &[Step]) -> Transcript {
                 thread::sleep(KEYS_PAUSE);
                 out.push_str(&format!("{line}\n"));
             }
+            Step::Bells => {
+                let client = live
+                    .client
+                    .as_ref()
+                    .expect("bells needs a client step first");
+                // Let the last of the output arrive.
+                let _ = client.settled(None);
+                out.push_str(&format!("bells {}\n", client.bells()));
+            }
             Step::Screen { until } => {
                 let client = live
                     .client
@@ -490,6 +499,8 @@ pub enum Step {
         rows: u16,
         argv: Vec<String>,
     },
+    /// The bell the client rang since the last `bells` step.
+    Bells,
     Screen {
         until: Option<String>,
     },
@@ -597,6 +608,8 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, String> {
                 line: line.to_string(),
                 bytes,
             });
+        } else if line == "bells" {
+            steps.push(Step::Bells);
         } else if line == "screen" {
             steps.push(Step::Screen { until: None });
         } else if let Some(text) = line.strip_prefix("screen ") {
@@ -705,6 +718,8 @@ struct PtyClient {
     tty: PathBuf,
     input: File,
     output: Arc<Mutex<(Vec<u8>, Instant)>>,
+    /// How many bytes of output `bells` has counted.
+    counted: std::cell::Cell<usize>,
     cols: u16,
     rows: u16,
 }
@@ -756,6 +771,7 @@ impl PtyClient {
             tty,
             input,
             output,
+            counted: std::cell::Cell::new(0),
             cols,
             rows,
         }
@@ -822,6 +838,36 @@ impl PtyClient {
         }
     }
 
+
+    /// How many times the terminal rang since the last call: BEL as the
+    /// emulator reads it, not as a sequence's terminator.
+    fn bells(&self) -> usize {
+        use alacritty_terminal::event::{Event, EventListener};
+        #[derive(Clone)]
+        struct Count(Arc<Mutex<usize>>);
+        impl EventListener for Count {
+            fn send_event(&self, event: Event) {
+                if matches!(event, Event::Bell) {
+                    *self.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+                }
+            }
+        }
+        let bytes = self
+            .output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .clone();
+        let counter = Count(Arc::default());
+        let size = TermSize::new(self.cols.into(), self.rows.into());
+        let mut term = Term::new(Config::default(), &size, counter.clone());
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, &bytes[..self.counted.get().min(bytes.len())]);
+        let before = *counter.0.lock().unwrap_or_else(|e| e.into_inner());
+        parser.advance(&mut term, &bytes[self.counted.get().min(bytes.len())..]);
+        self.counted.set(bytes.len());
+        *counter.0.lock().unwrap_or_else(|e| e.into_inner()) - before
+    }
     /// Replay everything the client printed into a fresh emulator.
     fn term(&self, bytes: &[u8]) -> Term<VoidListener> {
         let size = TermSize::new(self.cols.into(), self.rows.into());

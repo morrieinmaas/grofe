@@ -1,0 +1,66 @@
+$ new-session -d -s main -n first -x 40 -y 8 "sh -c 'while read x; do case \$x in one) printf \"\\a\";; three) printf \"\\a\\a\\a\";; esac; done'"
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g @n 0
+? 0
+$ set-hook -g alert-bell 'set -gF @n "#{e|+:#{@n},1}"'
+? 0
+$ new-window -d -n other "sh -c 'while read x; do case \$x in one) printf \"\\a\";; three) printf \"\\a\\a\\a\";; esac; done'"
+? 0
+client 40x8 attach -t main
+screen first
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first* 2:other
+bells 0
+$ send-keys -t main:1 one Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 1
+$ send-keys -t main:1 three Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 1
+$ show -gv @n
+2
+? 0
+$ send-keys -t main:2 three Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 1
+$ show -gv @n
+3
+? 0
+$ set -g visual-bell both
+? 0
+$ send-keys -t main:2 three Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 1
+$ send-keys -t main:1 three Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 1
+$ show -gv @n
+5
+? 0
+$ set -g bell-action none
+? 0
+$ send-keys -t main:1 three Enter
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+bells 0

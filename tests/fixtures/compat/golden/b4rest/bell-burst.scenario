@@ -1,0 +1,35 @@
+# B4 rest: the bells of one burst of output are one alert: the terminal
+# rings once for printf '\a\a\a', and once more for a later burst. The
+# alert-bell hook runs once per alert too.
+$ new-session -d -s main -n first -x 40 -y 8 "sh -c 'while read x; do case \$x in one) printf \"\\a\";; three) printf \"\\a\\a\\a\";; esac; done'"
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g @n 0
+$ set-hook -g alert-bell 'set -gF @n "#{e|+:#{@n},1}"'
+$ new-window -d -n other "sh -c 'while read x; do case \$x in one) printf \"\\a\";; three) printf \"\\a\\a\\a\";; esac; done'"
+client 40x8 attach -t main
+screen first
+bells
+$ send-keys -t main:1 one Enter
+$ run-shell 'sleep 0.5'
+bells
+$ send-keys -t main:1 three Enter
+$ run-shell 'sleep 0.5'
+bells
+$ show -gv @n
+$ send-keys -t main:2 three Enter
+$ run-shell 'sleep 0.5'
+bells
+$ show -gv @n
+$ set -g visual-bell both
+$ send-keys -t main:2 three Enter
+$ run-shell 'sleep 0.5'
+bells
+$ send-keys -t main:1 three Enter
+$ run-shell 'sleep 0.5'
+bells
+$ show -gv @n
+$ set -g bell-action none
+$ send-keys -t main:1 three Enter
+$ run-shell 'sleep 0.5'
+bells

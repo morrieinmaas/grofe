@@ -89,6 +89,9 @@ impl Alert {
 #[derive(Default)]
 pub struct Alerts {
     silence: BTreeMap<WindowId, Silence>,
+    /// Windows with a bell waiting for the alerts pass (tmux's
+    /// `alerts_queued`): bells in a window before it runs ring once.
+    bell_queued: BTreeSet<WindowId>,
 }
 
 struct Silence {
@@ -117,10 +120,24 @@ fn applies(action: &str, current: bool) -> bool {
     }
 }
 
-/// A bell rang in `window`.
+/// A bell rang in `window`. Like tmux's `alerts_queue`, the bells of one
+/// burst are one alert: the window is checked once, behind the events
+/// already waiting.
 pub fn bell(state: &mut State, window: WindowId) {
-    if monitored(state, window, Alert::Bell) {
-        raise(state, window, Alert::Bell);
+    if !state.alerts.bell_queued.insert(window) {
+        return;
+    }
+    let job: Job = Box::new(move |state: &mut State| {
+        state.alerts.bell_queued.remove(&window);
+        if monitored(state, window, Alert::Bell) {
+            raise(state, window, Alert::Bell);
+        }
+    });
+    if let Err(e) = state.jobs.try_send(job) {
+        // No room to queue it: the alert runs now.
+        use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
+        let (Full(job) | Closed(job)) = e;
+        job(state);
     }
 }
 

@@ -21,6 +21,7 @@ pub fn steps(transcript: &str) -> Vec<String> {
             || line.starts_with("client ")
             || line.starts_with("keys ")
             || line == "screen\n"
+            || line.starts_with("bells ")
             || line.starts_with("screen ");
         match out.last_mut() {
             Some(step) if !starts => step.push_str(line),

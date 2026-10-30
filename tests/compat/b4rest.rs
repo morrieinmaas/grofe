@@ -126,3 +126,9 @@ fn source_file_v_quotes_as_args_escape() {
 fn source_file_v_goes_on_after_a_hold() {
     crate::tp::check_with("b4rest", "source-v-hold", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
 }
+
+/// A burst of bells rings the terminal once.
+#[test]
+fn a_burst_of_bells_rings_once() {
+    check("b4rest", "bell-burst", &[]);
+}
