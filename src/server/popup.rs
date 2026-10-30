@@ -200,6 +200,8 @@ pub struct Frame {
     pub style: Option<String>,
     /// `-E`: close when the command exits.
     pub close_on_exit: bool,
+    /// `-EE`: only when the command exited with status 0.
+    pub close_on_zero: bool,
     /// `-k`: any key closes the popup once its command has exited.
     pub any_key: bool,
 }
@@ -447,7 +449,7 @@ fn exited(state: &mut State, id: ClientId, generation: u64, status: Option<i32>)
         return;
     };
     popup.exited = Some(status);
-    if popup.frame.close_on_exit {
+    if popup.frame.close_on_exit && (!popup.frame.close_on_zero || status == Some(0)) {
         close(state, id);
     } else {
         clients::mark_dirty(state, id);
@@ -532,7 +534,7 @@ pub struct Change {
     pub border_style: Option<String>,
     pub lines: Option<Option<Lines>>,
     /// `close_on_exit` and `any_key`, replacing both.
-    pub flags: Option<(bool, bool)>,
+    pub flags: Option<(bool, bool, bool)>,
 }
 
 /// Changes client `id`'s open popup as `change` says. Taking the border
@@ -555,8 +557,9 @@ pub fn modify(state: &mut State, id: ClientId, change: Change) {
     if let Some(lines) = change.lines {
         frame.lines = lines;
     }
-    if let Some((close_on_exit, any_key)) = change.flags {
+    if let Some((close_on_exit, close_on_zero, any_key)) = change.flags {
         frame.close_on_exit = close_on_exit;
+        frame.close_on_zero = close_on_zero;
         frame.any_key = any_key;
     }
     if let Some(size) = size {
@@ -950,6 +953,7 @@ mod tests {
             border_style: None,
             style: None,
             close_on_exit: false,
+            close_on_zero: false,
             any_key: false,
         };
         draw_box(&mut screen, &frame, Lines::Double, &Style::default());
@@ -979,6 +983,7 @@ mod tests {
             border_style: None,
             style: None,
             close_on_exit: false,
+            close_on_zero: false,
             any_key: false,
         };
         draw_box(&mut screen, &frame, Lines::Single, &Style::default());
@@ -1025,6 +1030,7 @@ mod tests {
             border_style: None,
             style: None,
             close_on_exit: false,
+            close_on_zero: false,
             any_key: false,
         };
         let spawn = PaneSpawn {

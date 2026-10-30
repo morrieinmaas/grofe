@@ -1,0 +1,190 @@
+$ new-session -d -s main -n first -x 60 -y 12 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+client 60x12 attach -t main
+$& display-popup -EE -T Fail -w 30 -h 5 'echo failed; exit 3'
+screen failed
+|
+|
+|               ┌─Fail───────────────────────┐
+|               │failed                      │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+$ run-shell 'sleep 1'
+? 0
+screen failed
+|
+|
+|               ┌─Fail───────────────────────┐
+|               │failed                      │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+keys Escape
+$ run-shell 'sleep 1'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -EE -T Ok -w 30 -h 5 'echo fine; exit 0'
+$ run-shell 'sleep 1'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -E -T Plain -w 30 -h 5 'echo plain; exit 4'
+$ run-shell 'sleep 1'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -E -E -T Twice -w 30 -h 5 'echo twice; exit 5'
+screen twice
+|
+|
+|               ┌─Twice──────────────────────┐
+|               │twice                       │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+$ run-shell 'sleep 1'
+? 0
+screen twice
+|
+|
+|               ┌─Twice──────────────────────┐
+|               │twice                       │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+keys Escape
+$ run-shell 'sleep 1'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -EE -T Sig -w 30 -h 5 'echo sig; kill -TERM $$'
+$ run-shell 'sleep 1'
+? 0
+screen sig
+|
+|
+|               ┌─Sig────────────────────────┐
+|               │sig                         │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+keys Escape
+$ run-shell 'sleep 1'
+? 0
+screen
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| [main] 1:first*
+$& display-popup -EE -T Cat -w 30 -h 5 cat
+screen Cat
+|
+|
+|               ┌─Cat────────────────────────┐
+|               │                            │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*
+$ display-popup -c {client} -EE -T Change -w 30 -h 5
+? 0
+screen Change
+|
+|
+|               ┌─Change─────────────────────┐
+|               │                            │
+|               │                            │
+|               │                            │
+|               └────────────────────────────┘
+|
+|
+|
+|
+| [main] 1:first*

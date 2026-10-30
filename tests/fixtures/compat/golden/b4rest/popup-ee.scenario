@@ -1,0 +1,37 @@
+# B4 rest: display-popup -EE closes the popup when the command exits with
+# status 0 only; after a failure it stays until Escape, like a popup
+# without -E that has finished. -E closes on any exit.
+$ new-session -d -s main -n first -x 60 -y 12 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+client 60x12 attach -t main
+$& display-popup -EE -T Fail -w 30 -h 5 'echo failed; exit 3'
+screen failed
+$ run-shell 'sleep 1'
+screen failed
+keys Escape
+$ run-shell 'sleep 1'
+screen
+$& display-popup -EE -T Ok -w 30 -h 5 'echo fine; exit 0'
+$ run-shell 'sleep 1'
+screen
+$& display-popup -E -T Plain -w 30 -h 5 'echo plain; exit 4'
+$ run-shell 'sleep 1'
+screen
+$& display-popup -E -E -T Twice -w 30 -h 5 'echo twice; exit 5'
+screen twice
+$ run-shell 'sleep 1'
+screen twice
+keys Escape
+$ run-shell 'sleep 1'
+screen
+$& display-popup -EE -T Sig -w 30 -h 5 'echo sig; kill -TERM $$'
+$ run-shell 'sleep 1'
+screen sig
+keys Escape
+$ run-shell 'sleep 1'
+screen
+$& display-popup -EE -T Cat -w 30 -h 5 cat
+screen Cat
+$ display-popup -c {client} -EE -T Change -w 30 -h 5
+screen Change

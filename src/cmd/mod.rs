@@ -950,6 +950,8 @@ pub struct WaitFor {
 pub struct DisplayPopup {
     /// `-E`: close when the command exits.
     pub close_on_exit: bool,
+    /// `-EE`: only when the command exited with status 0.
+    pub close_on_zero: bool,
     /// `-B`: no border.
     pub no_border: bool,
     /// `-b`: the border lines style (cosmetic).

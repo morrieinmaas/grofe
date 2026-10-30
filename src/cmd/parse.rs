@@ -48,6 +48,8 @@ const NO_FLAGS: FlagTable = FlagTable {
 #[derive(Default)]
 struct ParsedFlags {
     present: BTreeSet<char>,
+    /// How many times each bool flag was given (`-EE`).
+    counts: BTreeMap<char, u32>,
     values: BTreeMap<char, String>,
     /// Every value flag's value in order, repeats included (`-e A -e B`).
     repeated: Vec<(char, String)>,
@@ -118,6 +120,7 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
                     None => return Err(ParseError::UnknownFlag(cmd_name.to_string(), c)),
                     Some(FlagKind::Bool) => {
                         flags.present.insert(c);
+                        *flags.counts.entry(c).or_default() += 1;
                         ci += 1;
                     }
                     Some(FlagKind::Value) => {
@@ -2063,6 +2066,7 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
     let flags = flags_for(argv, SHORT, "display-popup")?;
     Ok(Command::DisplayPopup(DisplayPopup {
         close_on_exit: flags.present.contains(&'E'),
+        close_on_zero: flags.counts.get(&'E').is_some_and(|n| *n > 1),
         no_border: flags.present.contains(&'B'),
         border: flags.values.get(&'b').cloned(),
         client: flags.values.get(&'c').cloned(),

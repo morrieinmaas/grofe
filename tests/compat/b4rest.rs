@@ -78,3 +78,9 @@ fn source_file_dash_reads_what_the_cli_pipes() {
 fn menu_items_run_for_the_pane_the_menu_was_opened_for() {
     check("b4rest", "menu-target", &[]);
 }
+
+/// `display-popup -EE` closes the popup only after a zero exit.
+#[test]
+fn popup_ee_closes_on_a_zero_exit_only() {
+    check("b4rest", "popup-ee", &[]);
+}
