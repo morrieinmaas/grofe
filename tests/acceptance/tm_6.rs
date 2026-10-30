@@ -371,8 +371,11 @@ fn the_mouse_over_a_mode_never_reaches_the_app_below() {
         srv.cmd(&[mode]).expect(mode);
         wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") != "0", WAIT).expect(mode);
         a.send(sgr(WHEEL_UP, 10, 5, false));
-        a.send(sgr(0, 10, 5, false));
-        a.send(sgr(0, 10, 5, true));
+        if mode == "choose-tree" {
+            // A click leaves the clock (as tmux), so only a chooser holds it.
+            a.send(sgr(0, 10, 5, false));
+            a.send(sgr(0, 10, 5, true));
+        }
         a.send("q");
         wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT).expect(mode);
     }

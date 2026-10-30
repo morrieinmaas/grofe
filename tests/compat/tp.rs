@@ -91,8 +91,7 @@ pub fn check_in(
     let mut cli = grofe_cli(dir.path());
     cli.env
         .extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    let got = crate::fe_3::exact_pids(replay(&cli, &parsed))
-        .normalized(&Normalizer::load());
+    let got = crate::fe_3::exact_pids(replay(&cli, &parsed)).normalized(&Normalizer::load());
     let (want, steps) = (steps(&golden), steps(&got));
     assert_eq!(want.len(), steps.len(), "{task}/{name}: step count\n{got}");
     let listed: BTreeMap<&str, &str> = diverges.iter().copied().collect();

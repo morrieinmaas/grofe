@@ -2900,14 +2900,15 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
                             verbose,
                             ..
                         } = parsed;
-                        held.frames
-                            .extend(groups.into_iter().map(|cmds| super::client::HeldFrame {
+                        held.frames.extend(groups.into_iter().map(|cmds| {
+                            super::client::HeldFrame {
                                 ctx: run.clone(),
                                 cmds,
                                 keep_going: true,
                                 depth,
                                 verbose,
-                            }));
+                            }
+                        }));
                     }
                     Loaded::Toml(_) => {
                         let rest = SourceFile {
@@ -3210,7 +3211,9 @@ fn parse_tmux_file(
     let text = if path == Path::new("-") {
         // The CLI client's stdin; an attached client has none (tmux's EBADF).
         match &state.cli_io {
-            Some(crate::server::CliIo { stdin: Some(data), .. }) => String::from_utf8_lossy(data).into_owned(),
+            Some(crate::server::CliIo {
+                stdin: Some(data), ..
+            }) => String::from_utf8_lossy(data).into_owned(),
             _ => return Err("Bad file descriptor: -".to_string()),
         }
     } else {
@@ -4671,7 +4674,11 @@ const LISTS: &[ListBuiltin] = &[
     ListBuiltin {
         name: "status-format",
         scope: OptionScope::Session,
-        default: &[""],
+        default: &[
+            "",
+            "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }",
+            "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#{session_name}#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#{session_name}*#{session_alert}#[pop-default]#[norange list=on default] }",
+        ],
     },
     // TC.5: the client variables a session takes at new-session, attach
     // and switch-client, tmux 3.7b's default (recorded).
@@ -4783,35 +4790,21 @@ const NO_EFFECT: &[&str] = &[
     "key-table",
     "lock-after-time",
     "lock-command",
-    "message-format",
-    "message-line",
     "prompt-cursor-colour",
     "prompt-cursor-style",
     "prompt-command-cursor-style",
     "cursor-colour",
     "cursor-style",
-    "pane-status-current-style",
-    "pane-status-style",
-    "session-status-current-style",
-    "session-status-style",
     "alternate-screen",
     "copy-mode-mark-style",
     "copy-mode-selection-style",
     "copy-mode-current-line-number-style",
     "copy-mode-line-number-style",
     "copy-mode-line-numbers",
-    "fill-character",
-    "other-pane-height",
-    "other-pane-width",
     "pane-scrollbars",
     "pane-scrollbars-style",
     "pane-scrollbars-position",
-    "remain-on-exit-format",
     "scroll-on-clear",
-    "tree-mode-preview-format",
-    "tree-mode-preview-style",
-    "window-pane-current-status-format",
-    "window-pane-status-format",
     "xterm-keys",
     "backspace",
     "default-client-command",
@@ -5765,10 +5758,9 @@ mod tests {
         o.edit_list(Owner::Global, "status-format", set(1, "g"), false)
             .unwrap();
         let global = o.lookup_list("status-format", &[s]).cloned();
-        assert_eq!(
-            global,
-            Some(BTreeMap::from([(0, String::new()), (1, "g".to_string())]))
-        );
+        let rows = global.clone().expect("a list");
+        assert_eq!(rows[&0], "");
+        assert_eq!(rows[&1], "g");
         assert_eq!(o.edit_list(s, "status-format", set(1, "s"), true), Ok(true));
         assert_eq!(
             o.edit_list(s, "status-format", set(1, "s"), true),

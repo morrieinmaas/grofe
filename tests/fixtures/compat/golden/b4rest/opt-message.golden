@@ -1,0 +1,112 @@
+$ new-session -d -s main -n w0 -x 40 -y 8 cat
+? 0
+$ select-pane -t %0 -T t0
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g status 3
+? 0
+$ set -g display-time 60000
+? 0
+client 40x8 attach -t main
+$ display-message -d 60000 'plain'
+? 0
+screen plain
+|
+|
+|
+|
+|
+| plain
+|     P: 1:[t0]*
+|     S: main*
+$ set -g message-line 2
+? 0
+$ display-message -d 60000 'second'
+? 0
+screen second
+|
+|
+|
+|
+|
+| [main] 1:w0*
+|     P: 1:[t0]*
+| second
+$ set -g message-line 4
+? 0
+$ display-message -d 60000 'fifth'
+? 0
+screen fifth
+|
+|
+|
+|
+|
+| [main] 1:w0*
+|     P: 1:[t0]*
+| fifth
+$ set -g message-line 1
+? 0
+$ set -g message-format '<<#{message}>>'
+? 0
+$ display-message -d 60000 'formatted'
+? 0
+screen formatted
+|
+|
+|
+|
+|
+| [main] 1:w0*
+| <<formatted>>*
+|     S: main*
+$ set -g message-format 'x#[fg=red]#{message}'
+? 0
+$ display-message -d 60000 'styled'
+? 0
+styles 0-3 styled
+$ set -g message-line 1
+? 0
+$ set -g message-format '[#{message}]#[fill=blue]'
+? 0
+$& command-prompt -p 'say:'
+$ run-shell 'sleep 0.5'
+? 0
+keys abc
+screen say:
+|
+|
+|
+|
+|
+| [main] 1:w0*
+| [say: ]abc
+|     S: main*
+keys C-g C-g
+$ set -g message-line 2
+? 0
+$ set -g message-format '#[#{?#{command_prompt},bg=red,bg=blue}]#{message}'
+? 0
+$& command-prompt -p 'say:'
+$ run-shell 'sleep 0.5'
+? 0
+keys def
+styles 0-7 def
+~ 5 0-5 fg=black bg=green
+~ 5 6-6 fg=default bg=green
+~ 5 7-11 fg=black bg=green
+~ 5 12-39 fg=default bg=green
+~ 6 0-3 fg=default bg=green
+~ 6 4-5 fg=black bg=green
+~ 6 6-6 fg=default bg=green
+~ 6 7-13 fg=black bg=green
+~ 6 14-39 fg=default bg=green
+~ 7 0-3 fg=black bg=blue
+~ 7 4-4 fg=default bg=blue
+~ 7 5-7 fg=black bg=yellow
+~ 7 8-11 fg=black bg=green
+~ 7 12-39 fg=default bg=green
+keys C-g C-g

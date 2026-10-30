@@ -1,0 +1,43 @@
+$ new-session -d -s main -n w0 -x 80 -y 24 cat
+? 0
+$ split-window -t main cat
+? 0
+$ split-window -t main cat
+? 0
+$ split-window -t main cat
+? 0
+$ set -g other-pane-height 4
+? 0
+$ select-layout main-horizontal
+? 0
+$ list-windows -F '#{window_layout}'
+4317,80x24,0,0[80x22,0,0,0,80x1,0,23{26x1,0,23,1,26x1,27,23,2,26x1,54,23,3}]
+? 0
+$ set -g main-pane-height 10
+? 0
+$ select-layout main-horizontal
+? 0
+$ list-windows -F '#{window_layout}'
+fd61,80x24,0,0[80x19,0,0,0,80x4,0,20{26x4,0,20,1,26x4,27,20,2,26x4,54,20,3}]
+? 0
+$ set -g other-pane-height 0
+? 0
+$ select-layout main-horizontal
+? 0
+$ list-windows -F '#{window_layout}'
+5624,80x24,0,0[80x10,0,0,0,80x13,0,11{26x13,0,11,1,26x13,27,11,2,26x13,54,11,3}]
+? 0
+$ set -g other-pane-width 20
+? 0
+$ select-layout main-vertical
+? 0
+$ list-windows -F '#{window_layout}'
+65e6,80x24,0,0{78x24,0,0,0,1x24,79,0[1x8,79,0,1,1x7,79,9,2,1x7,79,17,3]}
+? 0
+$ set -g main-pane-width 30
+? 0
+$ select-layout main-vertical
+? 0
+$ list-windows -F '#{window_layout}'
+f09a,80x24,0,0{59x24,0,0,0,20x24,60,0[20x8,60,0,1,20x7,60,9,2,20x7,60,17,3]}
+? 0

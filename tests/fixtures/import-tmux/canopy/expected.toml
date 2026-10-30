@@ -56,7 +56,7 @@ interval = 5
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:73
 justify = "left"
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:71
-rows = ["", ""]
+rows = ["", "", "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#{session_name}#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#{session_name}*#{session_alert}#[pop-default]#[norange list=on default] }"]
 
 [status.window]
 # ~/.local/share/canopy/tmux/conf.d/20-status.conf:86

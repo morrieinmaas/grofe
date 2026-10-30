@@ -65,8 +65,9 @@ pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// How long a status-line message stays up (tmux's `display-time`), when
 /// the session has no `display-time` option.
 pub const DISPLAY_TIME: Duration = Duration::from_millis(750);
-/// tmux 3.7b's `message-style`, when the session has no such option.
-const MESSAGE_STYLE: &str = "bg=yellow,fg=black,fill=yellow";
+/// tmux 3.7b's default `message-format`.
+pub(crate) const MESSAGE_FORMAT: &str =
+    "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}";
 
 /// How soon after a pane changed its window's name is checked for
 /// `automatic-rename` (tmux's `NAME_INTERVAL`).
@@ -745,7 +746,11 @@ pub(crate) fn log_key_command(state: &mut State, ctx: &ClientCtx, cmd: &[String]
     let Some(key) = state.event_key.clone() else {
         return;
     };
-    let Some(who) = ctx.client.and_then(|id| state.clients.get(&id)).map(|c| c.name.clone()) else {
+    let Some(who) = ctx
+        .client
+        .and_then(|id| state.clients.get(&id))
+        .map(|c| c.name.clone())
+    else {
         return;
     };
     let printed = print_for_log(ctx.dialect, cmd);
@@ -1670,10 +1675,17 @@ fn status_is_static(model: &Model, session: SessionId) -> bool {
     let session_ok = SESSION
         .iter()
         .all(|n| model.options.lookup(n, &own).is_none_or(format_is_static));
+    // Only the rows the status line draws; the defaults of the others
+    // (the `P:`/`S:` rows) use loops and are not static.
+    let rows = status_lines(model, session);
     let formats_ok = model
         .options
         .lookup_list("status-format", &own)
-        .is_none_or(|f| f.values().all(|t| format_is_static(t)));
+        .is_none_or(|f| {
+            f.iter()
+                .filter(|(i, _)| (**i as usize) < usize::from(rows))
+                .all(|(_, t)| format_is_static(t))
+        });
     let windows_ok = |chain: &[Owner]| {
         WINDOW
             .iter()
@@ -2224,6 +2236,11 @@ fn pane_looks(
         status,
         lines: PaneLines::parse(wopt("pane-border-lines")),
         indicators: Indicators::parse(wopt("pane-border-indicators")),
+        // `fill-character`: its first character, if one cell wide.
+        fill: wopt("fill-character")
+            .chars()
+            .next()
+            .filter(|c| unicode_width::UnicodeWidthChar::width(*c) == Some(1)),
         panes: Default::default(),
     };
     let order = w.pane_ids();
@@ -2386,16 +2403,16 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     screenimg::hide_covered(&mut window);
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
-    let mut screen = if let Some(first) = lines.first_mut() {
-        if let Some(m) = &message {
-            *first = m.line.clone();
+    let mut screen = if !lines.is_empty() {
+        if let Some((line, m)) = &message {
+            lines[*line] = m.line.clone();
         }
         render::with_status(window, &lines, geom.top)
     } else {
         // ponytail: with `status off` a message still takes the last row,
         // drawn over the window's last row while it shows.
         let mut window = window;
-        if let Some(m) = &message
+        if let Some((_, m)) = &message
             && let Some(last) = window.rows.checked_sub(1)
         {
             screenimg::mark_covered(&mut window, 0);
@@ -2432,7 +2449,7 @@ fn status_rows(
     c: &ClientEntry,
     s: &Session,
     lines: u16,
-) -> (Vec<StatusRow>, Option<StatusRow>) {
+) -> (Vec<StatusRow>, Option<(usize, StatusRow)>) {
     let model = &state.model;
     let width = c.size.0;
     let active = model.windows.get(&s.active).map(|w| w.active);
@@ -2456,22 +2473,66 @@ fn status_rows(
     };
     let style = status_style(opt);
     let style = style.as_str();
-    let message = c.message.as_ref().map(|(text, _)| {
-        status::message_row(text, opt("message-style", MESSAGE_STYLE), vars, width)
-    });
-    if lines == 0 {
-        return (Vec::new(), message);
-    }
     let now = local_now();
+    // The message, formatted by `message-format` (`#{message}` and
+    // `#{command_prompt}` set), drawn over the status line `message-line`
+    // names (clamped to the last), whose cells it keeps where it writes none.
+    let message_format = |under: Option<&StatusRow>| {
+        let (text, _) = c.message.as_ref()?;
+        let vars = MessageVars {
+            inner: vars,
+            message: text,
+            command_prompt: false,
+        };
+        let expanded = status::expand_time(opt("message-format", MESSAGE_FORMAT), &vars, &now);
+        Some(match under {
+            Some(row) => {
+                let cells: Vec<(char, status::Style)> = row
+                    .line
+                    .spans
+                    .iter()
+                    .flat_map(|span| span.text.chars().map(move |ch| (ch, span.style)))
+                    .collect();
+                status::draw_over(&expanded, status::Style::default(), &cells)
+            }
+            None => status::draw(&expanded, status::Style::default(), width),
+        })
+    };
+    if lines == 0 {
+        return (Vec::new(), message_format(None).map(|m| (0, m)));
+    }
     let formats = model.options.lookup_list("status-format", &chain);
-    let rows = (0..u32::from(lines))
+    let rows: Vec<StatusRow> = (0..u32::from(lines))
         .map(|i| match formats.and_then(|f| f.get(&i)) {
             Some(t) if t.is_empty() && i == 0 => default_row(state, c, s, &chain, vars, now),
             Some(t) => status::draw_row(t, style, vars, width, &now),
             None => status::blank_row(style, vars, width),
         })
         .collect();
+    let line = opt("message-line", "0")
+        .parse::<usize>()
+        .unwrap_or(0)
+        .min(usize::from(lines) - 1);
+    let message = message_format(rows.get(line)).map(|m| (line, m));
     (rows, message)
+}
+
+/// The format variables a message or prompt label is drawn with.
+pub(crate) struct MessageVars<'a> {
+    pub inner: &'a dyn FormatVars,
+    pub message: &'a str,
+    /// `#{command_prompt}`: the prompt is in vi's command mode.
+    pub command_prompt: bool,
+}
+
+impl FormatVars for MessageVars<'_> {
+    fn get(&self, name: &str) -> Option<String> {
+        match name {
+            "message" => Some(self.message.to_string()),
+            "command_prompt" => Some(u8::from(self.command_prompt).to_string()),
+            _ => self.inner.get(name),
+        }
+    }
 }
 
 /// tmux's default status row for client `c` on session `s`: status-left,
@@ -3245,7 +3306,10 @@ fn run_from(state: &mut State, mut run: BindingRun) {
         if let Some(key) = &run.key {
             let who = state.clients.get(&id).map(|c| c.name.clone());
             let printed = print_for_log(run.dialect, &argv);
-            push_message(state, format!("{} key {key}: {printed}", who.unwrap_or_default()));
+            push_message(
+                state,
+                format!("{} key {key}: {printed}", who.unwrap_or_default()),
+            );
         }
         let saved = std::mem::replace(&mut state.event_key, run.key.clone());
         let result = match &run.mouse {

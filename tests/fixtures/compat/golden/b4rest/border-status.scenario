@@ -1,0 +1,27 @@
+# B4 rest: pane-border-status labels that do not fit their border.
+$ new-session -d -s main -n w0 -x 30 -y 12 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ split-window -h -t main cat
+$ split-window -v -t main cat
+$ set -g pane-border-status top
+$ set -g pane-border-format 'abcdefghijklmnopqrstuvwxyz0123456789'
+client 30x12 attach -t main
+screen
+$ set -g pane-border-status bottom
+screen
+$ set -g pane-border-format '#{pane_index} 你好你好你好你好你好你好你好'
+screen
+$ set -g pane-border-format '#[align=right]right-aligned label'
+screen
+$ set -g pane-border-format '#[align=centre]centred label here'
+screen
+$ set -g pane-border-format ''
+screen
+$ set -g pane-border-lines heavy
+$ set -g pane-border-format '#{pane_index}'
+screen
+$ set -g pane-border-lines number
+screen
+$ set -g pane-border-lines double
+screen

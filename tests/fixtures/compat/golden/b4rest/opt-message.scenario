@@ -1,0 +1,39 @@
+# B4 rest: message-line picks the status row a message shows on and
+# message-format is its text.
+$ new-session -d -s main -n w0 -x 40 -y 8 cat
+$ select-pane -t %0 -T t0
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g status 3
+$ set -g display-time 60000
+client 40x8 attach -t main
+$ display-message -d 60000 'plain'
+screen plain
+$ set -g message-line 2
+$ display-message -d 60000 'second'
+screen second
+$ set -g message-line 4
+$ display-message -d 60000 'fifth'
+screen fifth
+$ set -g message-line 1
+$ set -g message-format '<<#{message}>>'
+$ display-message -d 60000 'formatted'
+screen formatted
+$ set -g message-format 'x#[fg=red]#{message}'
+$ display-message -d 60000 'styled'
+styles 0-3 styled
+# The prompt takes the same line and format.
+$ set -g message-line 1
+$ set -g message-format '[#{message}]#[fill=blue]'
+$& command-prompt -p 'say:'
+$ run-shell 'sleep 0.5'
+keys abc
+screen say:
+keys C-g C-g
+$ set -g message-line 2
+$ set -g message-format '#[#{?#{command_prompt},bg=red,bg=blue}]#{message}'
+$& command-prompt -p 'say:'
+$ run-shell 'sleep 0.5'
+keys def
+styles 0-7 def
+keys C-g C-g

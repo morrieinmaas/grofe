@@ -69,8 +69,11 @@ pub fn display_popup(
             style: c.style,
             border_style: c.border_style,
             lines,
-            flags: (c.reset_flags || c.close_on_exit || c.any_key)
-                .then_some((c.close_on_exit, c.close_on_zero, c.any_key)),
+            flags: (c.reset_flags || c.close_on_exit || c.any_key).then_some((
+                c.close_on_exit,
+                c.close_on_zero,
+                c.any_key,
+            )),
         };
         popup::modify(state, id, change);
         return Ok(String::new());

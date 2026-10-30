@@ -3,7 +3,7 @@
 # resolve is not an error.
 $ new-session -d -s main -n w1 -x 60 -y 10 'sleep 100000'
 $ new-window -t main -n w2 'sleep 100000'
-$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -gF @who \"##{window_name}\"\nrename-window fromfile\ndisplay-message -p \"dm=##{window_name}\"\nif-shell -F \"##{==:##{window_name},w1}\" \"set -g @ifs yes\" \"set -g @ifs no\"\nset-option -F @who2 \"##{window_name}\"\nset-window-option -g @who3 \"##{window_name}\"\n" > t.conf && printf "set -g @which w1\n" > w1.conf && printf "set -g @which w2\n" > w2.conf && printf "%%if ##{==:##{window_name},w2}\nset -g @cond yes\n%%else\nset -g @cond no\n%%endif\n" > cond.conf'
+$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -gF @who \"##{window_name}\"\nrename-window fromfile\ndisplay-message -p \"dm=##{window_name}\"\nif-shell -F \"##{==:##{window_name},w1}\" \"set -g @ifs yes\" \"set -g @ifs no\"\nset-option -F @who2 \"##{window_name}\"\nset-window-option -g @who3 \"##{window_name}\"\n" > t.conf && printf "set -g @which w1\n" > w1.conf && printf "set -g @which w2\n" > w2.conf && printf "\045if ##{==:##{window_name},w2}\nset -g @cond yes\n\045else\nset -g @cond no\n\045endif\n" > cond.conf'
 $ source-file c/t.conf
 $ show-options -gv @who
 $ show-options -gv @ifs

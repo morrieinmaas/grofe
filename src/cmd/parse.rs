@@ -1360,7 +1360,11 @@ fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.present.contains(&'F'),
         parse_only: flags.present.contains(&'n'),
         verbose: flags.present.contains(&'v'),
-        target: flags.values.get(&'t').map(|t| parse_target(t)).transpose()?,
+        target: flags
+            .values
+            .get(&'t')
+            .map(|t| parse_target(t))
+            .transpose()?,
         paths: at_least_one_positional(&flags, "source-file")?,
     }))
 }

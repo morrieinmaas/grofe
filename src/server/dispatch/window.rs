@@ -496,7 +496,8 @@ pub(crate) fn tiled_max_columns(model: &Model, window: WindowId) -> u16 {
 }
 
 /// `window`'s `main-pane-width` and `main-pane-height`, or tmux's defaults
-/// where not a size.
+/// where not a size, each given the room `other-pane-width` or
+/// `other-pane-height` leaves the rest (`layout_set_main_v` and `_h`).
 pub(crate) fn main_sizes(model: &Model, window: WindowId) -> (MainSize, MainSize) {
     let Some(w) = model.windows.get(&window) else {
         return (MainSize::WIDTH, MainSize::HEIGHT);
@@ -509,8 +510,47 @@ pub(crate) fn main_sizes(model: &Model, window: WindowId) -> (MainSize, MainSize
             .and_then(MainSize::parse)
             .unwrap_or(default)
     };
+    // The cells of `main` out of `room`, the border taken off, and then the
+    // main pane's size when `other` is set: `room - other` unless that
+    // leaves the main pane less than it asked for.
+    let adjusted = |main: MainSize, other: &str, room: u16, fallback: MainSize| {
+        let cells = |m: MainSize| match m {
+            MainSize::Cells(c) => u32::from(c),
+            MainSize::Percent(p) => u32::from(room) * u32::from(p.min(100)) / 100,
+        };
+        let room = u32::from(room);
+        let mainw = match main {
+            MainSize::Cells(c) if u32::from(c) > room => cells(fallback),
+            m => cells(m),
+        };
+        // `PANE_MINIMUM` is 1.
+        if mainw + 1 >= room {
+            return main;
+        }
+        let other = model
+            .options
+            .lookup(other, &chain)
+            .and_then(MainSize::parse)
+            .map_or(0, cells);
+        if other == 0 || other > room || room - other < mainw {
+            return main;
+        }
+        MainSize::Cells((room - other) as u16)
+    };
+    let width = size("main-pane-width", MainSize::WIDTH);
+    let height = size("main-pane-height", MainSize::HEIGHT);
     (
-        size("main-pane-width", MainSize::WIDTH),
-        size("main-pane-height", MainSize::HEIGHT),
+        adjusted(
+            width,
+            "other-pane-width",
+            w.cols.saturating_sub(1),
+            MainSize::WIDTH,
+        ),
+        adjusted(
+            height,
+            "other-pane-height",
+            w.rows.saturating_sub(1),
+            MainSize::HEIGHT,
+        ),
     )
 }

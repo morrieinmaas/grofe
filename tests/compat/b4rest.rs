@@ -59,9 +59,15 @@ fn source_file_dash_reads_what_the_cli_pipes() {
         pipe(&["source-file", "-"], "set -g @a one\nset -g @b two\n"),
         (Some(0), String::new(), String::new())
     );
-    assert_eq!((show("@a").as_str(), show("@b").as_str()), ("one\n", "two\n"));
+    assert_eq!(
+        (show("@a").as_str(), show("@b").as_str()),
+        ("one\n", "two\n")
+    );
     let (code, out, _) = pipe(&["source-file", "-v", "-"], "set -g @c three\n");
-    assert_eq!((code, out.as_str()), (Some(0), "-:1: set-option -g @c three\n"));
+    assert_eq!(
+        (code, out.as_str()),
+        (Some(0), "-:1: set-option -g @c three\n")
+    );
     assert_eq!(show("@c"), "three\n");
     let (code, out, _) = pipe(&["source-file", "-n", "-"], "set -g @d four\n");
     assert_eq!((code, out.as_str()), (Some(0), ""));
@@ -118,13 +124,25 @@ fn capture_pane_from_a_binding_shows_in_view_mode() {
 /// `source-file -v` prints arguments as `args_escape` does.
 #[test]
 fn source_file_v_quotes_as_args_escape() {
-    crate::tp::check_with("b4rest", "source-v-quoting", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
+    crate::tp::check_with(
+        "b4rest",
+        "source-v-quoting",
+        &[],
+        |s| s.to_string(),
+        crate::b3wpd::real_tmpdir,
+    );
 }
 
 /// `source-file -v` across a `run-shell` that holds the queue.
 #[test]
 fn source_file_v_goes_on_after_a_hold() {
-    crate::tp::check_with("b4rest", "source-v-hold", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
+    crate::tp::check_with(
+        "b4rest",
+        "source-v-hold",
+        &[],
+        |s| s.to_string(),
+        crate::b3wpd::real_tmpdir,
+    );
 }
 
 /// A burst of bells rings the terminal once.
@@ -151,7 +169,6 @@ fn prompt_tab_completion_matches() {
     check("b4rest", "prompt-complete", &[]);
 }
 
-
 #[test]
 fn new_hooks_fire() {
     check("b4rest", "hooks-new", &[]);
@@ -159,7 +176,13 @@ fn new_hooks_fire() {
 
 #[test]
 fn config_escapes_match() {
-    crate::tp::check_with("b4rest", "config-escapes", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
+    crate::tp::check_with(
+        "b4rest",
+        "config-escapes",
+        &[],
+        |s| s.to_string(),
+        crate::b3wpd::real_tmpdir,
+    );
 }
 
 #[test]
@@ -207,4 +230,34 @@ fn capture_pane_e_matches() {
 #[test]
 fn a_paste_into_a_prompt_matches() {
     check("b4rest", "prompt-paste", &[]);
+}
+
+#[test]
+fn option_remain_format_matches() {
+    check("b4rest", "opt-remain-format", &[]);
+}
+
+#[test]
+fn option_fill_character_matches() {
+    check("b4rest", "opt-fill-character", &[]);
+}
+
+#[test]
+fn option_message_matches() {
+    check("b4rest", "opt-message", &[]);
+}
+
+#[test]
+fn option_other_pane_matches() {
+    check("b4rest", "opt-other-pane", &[]);
+}
+
+#[test]
+fn option_tree_preview_matches() {
+    check("b4rest", "opt-tree-preview", &[]);
+}
+
+#[test]
+fn long_border_labels_match() {
+    check("b4rest", "border-status", &[]);
 }

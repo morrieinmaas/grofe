@@ -1,0 +1,53 @@
+$ new-session -d -s main -n w0 -x 60 -y 8 'sh -c "echo hello; exit 3"'
+? 0
+$ set -g remain-on-exit on
+! no server running on <SOCKET>
+? 1
+$ new-window -d -n w1 'sh -c "echo hi; exit 5"'
+! no server running on <SOCKET>
+? 1
+$ run-shell 'sleep 0.5'
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p -t main:w1
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p -t main:w0
+! no server running on <SOCKET>
+? 1
+$ set -g remain-on-exit-format 'gone: #{pane_dead_status} (#{pane_index})'
+! no server running on <SOCKET>
+? 1
+$ new-window -d -n w2 'sh -c "echo yo; exit 7"'
+! no server running on <SOCKET>
+? 1
+$ run-shell 'sleep 0.5'
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p -t main:w2
+! no server running on <SOCKET>
+? 1
+$ set -g remain-on-exit-format ''
+! no server running on <SOCKET>
+? 1
+$ new-window -d -n w3 'sh -c "echo yo; exit 7"'
+! no server running on <SOCKET>
+? 1
+$ run-shell 'sleep 0.5'
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p -t main:w3
+! no server running on <SOCKET>
+? 1
+$ list-panes -a -F '#{pane_id} #{pane_dead} #{pane_dead_status}'
+! no server running on <SOCKET>
+? 1
+$ respawn-pane -k -t main:w1
+! no server running on <SOCKET>
+? 1
+$ run-shell 'sleep 0.5'
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p -t main:w1
+! no server running on <SOCKET>
+? 1

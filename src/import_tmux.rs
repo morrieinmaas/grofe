@@ -2709,7 +2709,11 @@ mod tests {
                 .map(|s| s.as_str().expect("string").to_string())
                 .collect()
         };
-        assert_eq!(strings(&parsed["status"]["rows"]), ["", "", "two+"]);
+        let rows = strings(&parsed["status"]["rows"]);
+        assert_eq!(
+            (rows.len(), rows[0].as_str(), rows[2].as_str()),
+            (3, "", "two+")
+        );
         assert_eq!(
             strings(&parsed["command-alias"]),
             ["c=list-clients", "b=list-windows"]

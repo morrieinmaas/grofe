@@ -1,0 +1,24 @@
+# B4 rest: tree-mode-preview-format and -style draw the previews' labels.
+$ new-session -d -s main -n w0 -x 70 -y 30 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ select-pane -t %0 -T t0
+$ new-window -d -n w1 cat
+$ select-pane -t %1 -T t1
+client 70x30 attach -t main
+$ choose-tree -w
+screen (0)
+styles 17-25
+$ set -g tree-mode-preview-format 'LBL-#{pane_title}'
+$ copy-mode -q
+$ choose-tree -w
+screen (0)
+$ set -g tree-mode-preview-style 'fg=green'
+$ copy-mode -q
+$ choose-tree -w
+screen (0)
+styles 17-25
+$ set -g tree-mode-preview-format ''
+$ copy-mode -q
+$ choose-tree -w
+screen (0)

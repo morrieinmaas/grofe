@@ -350,7 +350,11 @@ fn diff(state: &State, before: &Snap, now: &Snap) -> Vec<Fired> {
         let Some(was) = before.modes.get(pane) else {
             continue;
         };
-        let kept = was.iter().zip(now_modes).take_while(|(a, b)| a == b).count();
+        let kept = was
+            .iter()
+            .zip(now_modes)
+            .take_while(|(a, b)| a == b)
+            .count();
         let changes = (was.len() - kept) + (now_modes.len() - kept);
         for _ in 0..changes {
             out.extend(pane_fired(state, "pane-mode-changed", *pane));

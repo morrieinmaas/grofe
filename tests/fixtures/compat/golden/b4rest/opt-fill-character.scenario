@@ -1,0 +1,16 @@
+# B4 rest: fill-character is drawn where the window is smaller than the client.
+$ new-session -d -s main -n w0 -x 20 -y 5 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g window-size manual
+client 40x12 attach -t main
+$ resize-window -t main -x 20 -y 5
+screen w0
+$ set -g fill-character '.'
+screen w0
+$ set -g fill-character 'xy'
+screen w0
+$ set -g fill-character 'é'
+screen w0
+$ set -g fill-character ''
+screen w0

@@ -1,0 +1,19 @@
+# B4 rest: remain-on-exit-format is the text of a dead pane.
+$ new-session -d -s main -n w0 -x 60 -y 8 'sh -c "echo hello; exit 3"'
+$ set -g remain-on-exit on
+$ new-window -d -n w1 'sh -c "echo hi; exit 5"'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:w1
+$ capture-pane -p -t main:w0
+$ set -g remain-on-exit-format 'gone: #{pane_dead_status} (#{pane_index})'
+$ new-window -d -n w2 'sh -c "echo yo; exit 7"'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:w2
+$ set -g remain-on-exit-format ''
+$ new-window -d -n w3 'sh -c "echo yo; exit 7"'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:w3
+$ list-panes -a -F '#{pane_id} #{pane_dead} #{pane_dead_status}'
+$ respawn-pane -k -t main:w1
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:w1

@@ -274,7 +274,6 @@ pub struct Mouse {
     pub mods: Mods,
 }
 
-
 impl Mouse {
     /// tmux's `m->b`: the button (0 to 2, 3 for a release), 32 for motion,
     /// 64 for the wheel, and 4, 8, 16 for Shift, Meta and Ctrl.
@@ -295,7 +294,9 @@ impl Mouse {
             MouseKind::WheelLeft => 66,
             MouseKind::WheelRight => 67,
         };
-        base + 4 * u32::from(self.mods.shift) + 8 * u32::from(self.mods.alt) + 16 * u32::from(self.mods.ctrl)
+        base + 4 * u32::from(self.mods.shift)
+            + 8 * u32::from(self.mods.alt)
+            + 16 * u32::from(self.mods.ctrl)
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

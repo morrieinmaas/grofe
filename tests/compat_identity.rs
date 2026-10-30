@@ -569,7 +569,8 @@ fn foreign_sockets_are_never_taken_over() {
     // A socket grofe did create, left stale by a crash, is still replaced.
     assert!(tmux(&srv, &["start-server"]).status.success());
     assert!(grofe(&srv, &["kill-server"]).is_ok());
-    drop(UnixListener::bind(&srv.socket).unwrap());
+    // As tmux, a stopped server leaves its socket behind; that is stale too.
+    assert!(srv.socket.exists(), "a stopped tmux leaves its socket");
     let out = tmux(&srv, &["start-server"]);
     assert!(out.status.success(), "{}", out.stderr);
 }

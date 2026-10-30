@@ -838,7 +838,6 @@ impl PtyClient {
         }
     }
 
-
     /// How many times the terminal rang since the last call: BEL as the
     /// emulator reads it, not as a sequence's terminator.
     fn bells(&self) -> usize {

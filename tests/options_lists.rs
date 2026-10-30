@@ -12,6 +12,16 @@ fn server() -> TestServer {
     srv
 }
 
+/// A `show` of `status-format` without the stock `P:` and `S:` rows, which
+/// are long and not what these tests are about.
+fn custom(shown: String) -> String {
+    shown
+        .lines()
+        .filter(|l| !l.contains("#{R:"))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 fn err(srv: &TestServer, args: &[&str]) -> String {
     srv.cmd(args)
         .expect_err("should fail")
@@ -37,7 +47,7 @@ fn setting_index_1_leaves_index_0_at_its_default() {
         "X\n"
     );
     assert_eq!(
-        srv.cmd(&["show", "-g", "status-format"]).unwrap(),
+        custom(srv.cmd(&["show", "-g", "status-format"]).unwrap()),
         "status-format[0] ''\nstatus-format[1] X\n"
     );
 }
@@ -185,7 +195,7 @@ fn bad_indices_are_refused_with_tmuxs_errors() {
     srv.cmd(&["set", "-g", "status-format[4294967296]", "wrapped"])
         .unwrap();
     assert_eq!(
-        srv.cmd(&["show", "-gv", "status-format"]).unwrap(),
+        custom(srv.cmd(&["show", "-gv", "status-format"]).unwrap()),
         "wrapped\np3\nz4\n"
     );
     // A large index is only a key, not a length.
@@ -278,7 +288,7 @@ fn a_toml_array_sets_a_list_and_reload_puts_back_the_default() {
     );
     srv.cmd(&["reload"]).unwrap();
     assert_eq!(
-        srv.cmd(&["show", "-g", "status-format"]).unwrap(),
+        custom(srv.cmd(&["show", "-g", "status-format"]).unwrap()),
         "status-format[0] ''\nstatus-format[1] two\n"
     );
     assert_eq!(
@@ -288,7 +298,7 @@ fn a_toml_array_sets_a_list_and_reload_puts_back_the_default() {
     write_config(&srv, "");
     srv.cmd(&["reload"]).unwrap();
     assert_eq!(
-        srv.cmd(&["show", "-g", "status-format"]).unwrap(),
+        custom(srv.cmd(&["show", "-g", "status-format"]).unwrap()),
         "status-format[0] ''\n"
     );
     assert_eq!(
@@ -332,7 +342,7 @@ fn a_runtime_list_survives_reload() {
     write_config(&srv, "[status]\nrows = [\"cfg\"]\n");
     srv.cmd(&["reload"]).unwrap();
     assert_eq!(
-        srv.cmd(&["show", "-g", "status-format"]).unwrap(),
+        custom(srv.cmd(&["show", "-g", "status-format"]).unwrap()),
         "status-format[0] ''\nstatus-format[1] mine\n"
     );
 }

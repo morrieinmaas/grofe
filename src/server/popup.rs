@@ -623,7 +623,9 @@ impl InputHook for PopupHook {
         _now: Instant,
     ) -> Option<Routed> {
         state.popups.open.get(&client)?;
-        if let Input::Mouse(m) = input && mouse_event(state, client, m) {
+        if let Input::Mouse(m) = input
+            && mouse_event(state, client, m)
+        {
             return Some(Routed::Consumed);
         }
         let popup = state.popups.open.get(&client)?;

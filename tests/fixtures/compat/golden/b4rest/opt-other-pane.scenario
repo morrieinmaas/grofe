@@ -1,0 +1,20 @@
+# B4 rest: other-pane-height and other-pane-width in the main layouts.
+$ new-session -d -s main -n w0 -x 80 -y 24 cat
+$ split-window -t main cat
+$ split-window -t main cat
+$ split-window -t main cat
+$ set -g other-pane-height 4
+$ select-layout main-horizontal
+$ list-windows -F '#{window_layout}'
+$ set -g main-pane-height 10
+$ select-layout main-horizontal
+$ list-windows -F '#{window_layout}'
+$ set -g other-pane-height 0
+$ select-layout main-horizontal
+$ list-windows -F '#{window_layout}'
+$ set -g other-pane-width 20
+$ select-layout main-vertical
+$ list-windows -F '#{window_layout}'
+$ set -g main-pane-width 30
+$ select-layout main-vertical
+$ list-windows -F '#{window_layout}'

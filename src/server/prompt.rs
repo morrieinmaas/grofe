@@ -791,12 +791,12 @@ impl Prompt {
         } else {
             0
         };
+        // Only the text is written: what the format or the status line has
+        // after it stays, as tmux's `status_prompt_redraw` leaves it.
         for x in 0..left {
-            let c = cells
-                .get(offset + x)
-                .cloned()
-                .unwrap_or_else(|| blank.clone());
-            base[start + x] = c;
+            if let Some(c) = cells.get(offset + x) {
+                base[start + x] = c.clone();
+            }
         }
         (base, start + pcursor - offset)
     }
@@ -1252,6 +1252,7 @@ fn complete(state: &mut State, client: ClientId, word: &str, offset: usize) -> O
     let mut list: Vec<String> = Vec::new();
     let mut flag = None;
     let mut menu_offset = offset;
+    #[allow(clippy::needless_late_init)] // each branch can return early
     let out: Option<String>;
     if !target_prompt && !word.starts_with("-t") && !word.starts_with("-s") {
         list = completions(state, word, offset == 0);
@@ -1346,7 +1347,7 @@ fn menu_spot(state: &State, client: ClientId, offset: usize, height: usize) -> O
     let label = state.prompts.open.get(&client)?.label.chars().count();
     let geometry = clients::status_geometry(&state.model, c.session, c.size.1);
     let mut x = offset + label;
-    x = if x > 2 { x - 2 } else { 0 };
+    x = x.saturating_sub(2);
     let y = if geometry.top {
         usize::from(geometry.lines)
     } else {
@@ -1606,10 +1607,46 @@ impl Overlay for PromptOverlay {
             Some(v) => v,
             None => &client_vars,
         };
-        let drawn = status::message_row(&prompt.label, style_text, vars, screen.cols);
-        let base = line_cells(&drawn.line, cols);
+        // The label is `message-format` with `#{message}` the label, on the
+        // status line `message-line` names (clamped to the last).
+        let lines = clients::status_geometry(model, c.session, screen.rows).lines;
+        let line = model
+            .options
+            .lookup("message-line", &chain)
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(0)
+            .min(lines.saturating_sub(1));
+        let row = row.saturating_add(line).min(screen.rows - 1);
+        let label_vars = clients::MessageVars {
+            inner: vars,
+            message: &prompt.label,
+            command_prompt: prompt.command_mode,
+        };
+        let format = model
+            .options
+            .lookup("message-format", &chain)
+            .unwrap_or(clients::MESSAGE_FORMAT);
+        let expanded = cmd::expand(format, &label_vars);
         let style = status::base_style(style_text, vars);
-        let start = visible_width(&prompt.label).min(cols);
+        // Drawn over the status line it takes the place of.
+        let under: Vec<(char, status::Style)> = screen.cells
+            [usize::from(row) * cols..(usize::from(row) + 1) * cols]
+            .iter()
+            .map(|cell| {
+                (
+                    cell.c,
+                    status::Style {
+                        fg: cell.fg,
+                        bg: cell.bg,
+                        attrs: cell.flags,
+                        underline_color: cell.underline_color,
+                    },
+                )
+            })
+            .collect();
+        let drawn = status::draw_over(&expanded, style, &under);
+        let base = line_cells(&drawn.line, cols);
+        let start = visible_width(&expanded).min(cols);
         let (cells, col) = prompt.row_over(base, start, &style);
         let at = usize::from(row) * cols;
         screen.cells[at..at + cells.len()].clone_from_slice(&cells);

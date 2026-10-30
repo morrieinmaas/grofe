@@ -587,7 +587,10 @@ const NAMES: &[(&str, u32)] = &[
 /// to 100, or an X11 name, case folded.
 pub fn by_name(name: &str) -> Option<Rgb> {
     let lower = name.to_ascii_lowercase();
-    if let Some(rest) = lower.strip_prefix("grey").or_else(|| lower.strip_prefix("gray")) {
+    if let Some(rest) = lower
+        .strip_prefix("grey")
+        .or_else(|| lower.strip_prefix("gray"))
+    {
         if rest.is_empty() {
             return Some(rgb(0xbebebe));
         }

@@ -39,14 +39,7 @@ fn options_with_an_effect_do_what_tmux_does() {
 
 #[test]
 fn destroy_unattached_and_exit_unattached_end_what_tmux_ends() {
-    check(
-        "b2a",
-        "options-sessions",
-        &[(
-            "$ list-sessions",
-            "the server is gone; the words for the dead socket differ (timing in tmux)",
-        )],
-    );
+    check("b2a", "options-sessions", &[]);
 }
 
 #[test]

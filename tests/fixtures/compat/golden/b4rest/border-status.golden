@@ -1,0 +1,150 @@
+$ new-session -d -s main -n w0 -x 30 -y 12 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ split-window -h -t main cat
+? 0
+$ split-window -v -t main cat
+? 0
+$ set -g pane-border-status top
+? 0
+$ set -g pane-border-format 'abcdefghijklmnopqrstuvwxyz0123456789'
+? 0
+client 30x12 attach -t main
+screen
+| ──abcdefghijklm┬──abcdefghijkl
+|                │
+|                │
+|                │
+|                │
+|                ├──abcdefghijkl
+|                │
+|                │
+|                │
+|                │
+|                │
+| [main] 1:w0*
+$ set -g pane-border-status bottom
+? 0
+screen
+|                │
+|                │
+|                │
+|                │
+|                │
+|                ├──abcdefghijkl
+|                │
+|                │
+|                │
+|                │
+| ──abcdefghijklm┴──abcdefghijkl
+| [main] 1:w0*
+$ set -g pane-border-format '#{pane_index} 你好你好你好你好你好你好你好'
+? 0
+screen
+|                │
+|                │
+|                │
+|                │
+|                │
+|                ├──2 你 好 你 好 你
+|                │
+|                │
+|                │
+|                │
+| ──1 你 好 你 好 你 ─┴──3 你 好 你 好 你
+| [main] 1:w0*
+$ set -g pane-border-format '#[align=right]right-aligned label'
+? 0
+screen
+|                │
+|                │
+|                │
+|                │
+|                │
+|                ├──ligned label
+|                │
+|                │
+|                │
+|                │
+| ──aligned label┴──ligned label
+| [main] 1:w0*
+$ set -g pane-border-format '#[align=centre]centred label here'
+? 0
+screen
+|                │
+|                │
+|                │
+|                │
+|                │
+|                ├──tred label h
+|                │
+|                │
+|                │
+|                │
+| ──tred label he┴──tred label h
+| [main] 1:w0*
+$ set -g pane-border-format ''
+? 0
+screen
+|                │
+|                │
+|                │
+|                │
+|                │
+|                ├──────────────
+|                │
+|                │
+|                │
+|                │
+| ───────────────┴──────────────
+| [main] 1:w0*
+$ set -g pane-border-lines heavy
+? 0
+$ set -g pane-border-format '#{pane_index}'
+? 0
+screen
+|                ┃
+|                ┃
+|                ┃
+|                ┃
+|                ┃
+|                ┣━━2━━━━━━━━━━━
+|                ┃
+|                ┃
+|                ┃
+|                ┃
+| ━━1━━━━━━━━━━━━┻━━3━━━━━━━━━━━
+| [main] 1:w0*
+$ set -g pane-border-lines number
+? 0
+screen
+|                1
+|                1
+|                1
+|                1
+|                1
+|                122222222222222
+|                1
+|                1
+|                1
+|                1
+| 111111111111111133333333333333
+| [main] 1:w0*
+$ set -g pane-border-lines double
+? 0
+screen
+|                ║
+|                ║
+|                ║
+|                ║
+|                ║
+|                ╠══2═══════════
+|                ║
+|                ║
+|                ║
+|                ║
+| ══1════════════╩══3═══════════
+| [main] 1:w0*

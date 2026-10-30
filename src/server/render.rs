@@ -135,6 +135,9 @@ pub struct PaneLooks {
     pub status: PaneStatus,
     pub lines: PaneLines,
     pub indicators: Indicators,
+    /// `fill-character`, for the part of the client the window does not
+    /// reach; the middle dot without one.
+    pub fill: Option<char>,
     pub panes: HashMap<PaneId, PaneLook>,
 }
 
@@ -237,7 +240,7 @@ pub fn compose(inputs: &FrameInputs) -> Screen {
     };
     let (vx, vy) = inputs.viewport;
     let letterbox = SnapCell {
-        c: LETTERBOX,
+        c: inputs.look.fill.unwrap_or(LETTERBOX),
         flags: CellFlags::DIM,
         ..Screen::new(1, 1).cells[0].clone()
     };

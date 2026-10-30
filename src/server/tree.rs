@@ -49,10 +49,6 @@ use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
 /// tmux's `mode-style` default.
 const MODE_STYLE: &str = "bg=yellow,fg=black";
-/// `tree-mode-preview-style`'s default: `display-panes-active-colour` for
-/// the active window or pane, else `display-panes-colour`.
-const PREVIEW_STYLE: &str = "fg=blue";
-const PREVIEW_ACTIVE_STYLE: &str = "fg=red";
 
 /// What `choose-tree` and `find-window` open with.
 pub struct Opts {
@@ -2587,9 +2583,10 @@ fn run_chosen(state: &mut State, client: ClientId, names: Vec<String>) -> Routed
     Routed::Command(cmds, dialect)
 }
 
-/// One preview in a strip: the pane shown, its label, and whether it is
-/// the current window or active pane (the label's colour).
-type Preview = (PaneId, String, bool);
+/// One preview in a strip: the pane shown, the window or pane it stands
+/// for (what its label and colour are formats of), and whether it is the
+/// current window or active pane.
+type Preview = (PaneId, Tag, bool);
 
 /// The previews a session or window line shows side by side, and which
 /// is its current window or active pane.
@@ -2602,32 +2599,17 @@ fn strip_of(state: &State, tag: Tag) -> Option<(Vec<Preview>, usize)> {
                 .windows
                 .iter()
                 .filter_map(|w| model.windows.get(w))
-                .map(|w| {
-                    (
-                        w.active,
-                        format!(
-                            "{}:{}",
-                            model.index_in(s.id, w.id).unwrap_or(w.index),
-                            w.name
-                        ),
-                        w.id == s.active,
-                    )
-                })
+                .map(|w| (w.active, Tag::Window(w.id), w.id == s.active))
                 .collect();
             let current = entries.iter().position(|e| e.2).unwrap_or(0);
             Some((entries, current))
         }
         Tag::Window(w) => {
             let w = model.windows.get(&w)?;
-            let base = model.pane_base_index(w.id);
             let entries: Vec<_> = w
                 .pane_ids()
                 .into_iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let label = format!("{}:{}", base + i as u32, state.passthrough.title(p));
-                    (p, label, p == w.active)
-                })
+                .map(|p| (p, Tag::Pane(p), p == w.active))
                 .collect();
             let current = entries.iter().position(|e| e.2).unwrap_or(0);
             Some((entries, current))
@@ -2815,7 +2797,11 @@ fn help_of(kind: &Kind) -> (usize, &'static str, &'static [(&'static str, &'stat
 /// `mode_tree_display_help`'s popup: its box on a client of `size`, and the
 /// lines it is written with. tmux writes every line into a popup of the
 /// lines' count less its border, so the first two scroll off the top.
-fn help_box(kind: &Kind, size: (u16, u16)) -> Option<((u16, u16), (u16, u16), Vec<(String, String)>)> {
+#[allow(clippy::type_complexity)] // (origin, size, lines)
+fn help_box(
+    kind: &Kind,
+    size: (u16, u16),
+) -> Option<((u16, u16), (u16, u16), Vec<(String, String)>)> {
     let (width, item, extra) = help_of(kind);
     let width = width.max(39);
     let lines: Vec<(String, String)> = HELP_START
@@ -2873,11 +2859,18 @@ fn draw_help(state: &State, client: ClientId, tree: &Tree, screen: &mut Screen) 
     let (fill, border) = popup::styles(state, client, &frame);
     let ((ix, iy), (iw, ih)) = (
         (i32::from(px) + 1, i32::from(py) + 1),
-        (usize::from(w).saturating_sub(2), usize::from(h).saturating_sub(2)),
+        (
+            usize::from(w).saturating_sub(2),
+            usize::from(h).saturating_sub(2),
+        ),
     );
     for y in 0..ih {
         for x in 0..iw {
-            popup::set(screen, (ix + x as i32, iy + y as i32), popup::cell(' ', &fill));
+            popup::set(
+                screen,
+                (ix + x as i32, iy + y as i32),
+                popup::cell(' ', &fill),
+            );
         }
     }
     if let Some(l) = frame.lines {
@@ -2984,7 +2977,11 @@ pub fn mouse(
         return;
     }
     let n = v.lines.len();
-    let cols = state.model.panes.get(&pane).map_or(0, |p| usize::from(p.cols));
+    let cols = state
+        .model
+        .panes
+        .get(&pane)
+        .map_or(0, |p| usize::from(p.cols));
     let (xu, yu) = (usize::from(x), usize::from(y));
     if xu > cols || yu > v.height {
         let line = if v.offset + yu > n - 1 {
@@ -3185,7 +3182,10 @@ fn open_menu(state: &mut State, client: ClientId, line: usize, (x, y): (u16, u16
             let (text, shown) = if *key == "C-t" {
                 (format!("{label}#[default] #[align=right]([DC4])"), None)
             } else {
-                ((*label).to_string(), crate::server::input::parse_key(key).ok())
+                (
+                    (*label).to_string(),
+                    crate::server::input::parse_key(key).ok(),
+                )
             };
             MenuItem::Command {
                 label: text,
@@ -3538,6 +3538,7 @@ fn draw(state: &State, tree: &Tree, v: &View, cv: &mut Canvas) {
                     &entries,
                     current,
                     tree.preview_offset,
+                    line.session,
                 );
             }
         }
@@ -3607,6 +3608,7 @@ fn draw_strip(
     entries: &[Preview],
     current: usize,
     offset: i32,
+    session: Option<SessionId>,
 ) {
     let Some(g) = strip(entries.len(), current, sx, offset) else {
         return;
@@ -3620,7 +3622,7 @@ fn draw_strip(
         cv.vline(cx + sx - 3, cy, sy);
         cv.put(cx + sx - 1, cy + sy / 2, '>', &plain);
     }
-    for (i, (pane, label, active)) in entries[g.start..g.end].iter().enumerate() {
+    for (i, (pane, tag, _active)) in entries[g.start..g.end].iter().enumerate() {
         let x = if g.left { 3 } else { 0 } + i * g.each;
         let last = g.start + i + 1 == g.end;
         let width = if last {
@@ -3629,12 +3631,21 @@ fn draw_strip(
             g.each - 1
         };
         preview(state, cv, *pane, (cx + x, cy, width, sy));
-        let style = status::parse_style(if *active {
-            PREVIEW_ACTIVE_STYLE
+        // The label and its style are formats of the window or pane, from
+        // the options it sees.
+        let chain = options::chain(&state.model, *pane);
+        let option = |name: &str| state.model.options.lookup(name, &chain).unwrap_or("");
+        let expand = |text: &str| expand_tag(state, *pane, session, *tag, text, None);
+        let style = status::parse_style(&expand(option("tree-mode-preview-style")));
+        let format = option("tree-mode-preview-format");
+        let label = if format.is_empty() {
+            String::new()
         } else {
-            PREVIEW_STYLE
-        });
-        draw_label(cv, (cx + x, cy, width, sy), &style, label);
+            expand(format)
+        };
+        if !label.is_empty() {
+            draw_label(cv, (cx + x, cy, width, sy), &style, &label);
+        }
         if !last {
             cv.vline(cx + x + width, cy, sy);
         }

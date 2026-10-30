@@ -11,7 +11,6 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod alerts;
-pub mod x11;
 pub mod borders;
 pub mod buffers;
 pub mod clients;
@@ -42,6 +41,7 @@ pub mod sixel;
 pub mod sources;
 pub mod status;
 pub mod tree;
+pub mod x11;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};

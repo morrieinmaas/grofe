@@ -8,7 +8,7 @@ lines = 2
 position = "top"
 # ~/.tmux.conf:4
 # ~/.tmux.conf:5
-rows = ["#[align=left]#{session_name} #[align=right]#{host_short}", "#{@src-ebf9f448e8a61414} #{session_name} #{window_index}"]
+rows = ["#[align=left]#{session_name} #[align=right]#{host_short}", "#{@src-ebf9f448e8a61414} #{session_name} #{window_index}", "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#{session_name}#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#{session_name}*#{session_alert}#[pop-default]#[norange list=on default] }"]
 
 [status.sources.src-ebf9f448e8a61414]
 # ~/.tmux.conf:5
