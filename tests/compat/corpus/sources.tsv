@@ -1410,6 +1410,17 @@ static-conf.argv	bind l select-pane -R	canopy:tmux/keys.tsv
 static-conf.argv	bind r source-file <$CANOPY_STORE>/tmux/tmux.conf \; display-message 'canopy: reloaded'	canopy:tmux/keys.tsv
 static-conf.argv	bind t switch-client -l	canopy:tmux/keys.tsv
 static-conf.argv	bind | split-window -h -c #{pane_current_path}	canopy:tmux/keys.tsv
+static-conf.argv	bind-key -T copy-mode-vi 'C-\' if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -l'	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -T copy-mode-vi C-h if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -L'	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -T copy-mode-vi C-j if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -D'	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -T copy-mode-vi C-k if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -U'	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -T copy-mode-vi C-l if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -R'	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -n 'C-\' if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-\'"'"'' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -l'"'"''	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -n C-h if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-h' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -L'"'"''	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -n C-j if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-j' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -D'"'"''	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -n C-k if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-k' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -U'"'"''	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key -n C-l if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-l' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -R'"'"''	canopy:tmux/conf.d/40-nav.conf
+static-conf.argv	bind-key C-l send-keys C-l	canopy:tmux/conf.d/40-nav.conf
 static-conf.argv	display -p '[tmux-which-key] Binding prefix table key to #{@wk_cfg_key_prefix_table} ...'	plugin:tmux-which-key/plugin/init.tmux
 static-conf.argv	display -p '[tmux-which-key] Done'	plugin:tmux-which-key/plugin/init.tmux
 static-conf.argv	display -p '[tmux-which-key] Loading plugin ...'	plugin:tmux-which-key/plugin/init.tmux

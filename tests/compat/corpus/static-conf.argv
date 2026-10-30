@@ -32,6 +32,17 @@ bind l select-pane -R
 bind r source-file <$CANOPY_STORE>/tmux/tmux.conf \; display-message 'canopy: reloaded'
 bind t switch-client -l
 bind | split-window -h -c #{pane_current_path}
+bind-key -T copy-mode-vi 'C-\' if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -l'
+bind-key -T copy-mode-vi C-h if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -L'
+bind-key -T copy-mode-vi C-j if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -D'
+bind-key -T copy-mode-vi C-k if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -U'
+bind-key -T copy-mode-vi C-l if-shell -F #{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}} '' 'select-pane -R'
+bind-key -n 'C-\' if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys '"'"'C-\'"'"'' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -l'"'"''
+bind-key -n C-h if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-h' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -L'"'"''
+bind-key -n C-j if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-j' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -D'"'"''
+bind-key -n C-k if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-k' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -U'"'"''
+bind-key -n C-l if-shell 'ps -o state= -o comm= -t '"'"'#{s|/dev/||:pane_tty}'"'"' | grep -iqE '"'"'^[^TXZ ]+ +([^ ]*/)?g?[.]?(view|l?n?vim?x?|fzf)(diff)?(-wrapped)?$'"'"'' 'send-keys C-l' 'if-shell -F '"'"'#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}'"'"' '"'"''"'"' '"'"'select-pane -R'"'"''
+bind-key C-l send-keys C-l
 display -p '[tmux-which-key] Binding prefix table key to #{@wk_cfg_key_prefix_table} ...'
 display -p '[tmux-which-key] Done'
 display -p '[tmux-which-key] Loading plugin ...'

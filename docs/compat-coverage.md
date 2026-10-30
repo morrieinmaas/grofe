@@ -578,12 +578,11 @@ read back what tmux did.
 | `root` | `C-MouseDown1Status` | mouse | grofe | tmux identity only: `swap-window -t @`, the same for the window clicked |
 | `root` | `MouseDown1ScrollbarUp` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
 | `root` | `MouseDown1ScrollbarDown` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
-| `root` | `C-h` | native | both | vim-tmux-navigator, bound on tmux as TC.0's container recorded it, is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
+| `root` | `C-h` | native | both | vim-tmux-navigator, bound on tmux by canopy's `conf.d/40-nav.conf` (a `ps` fork per key), is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
 | `root` | `C-j` | native | both | the same |
 | `root` | `C-k` | native | both | the same |
 | `root` | `C-l` | native | both | the same |
 | `root` | `C-\\` | native | both | the same |
-| `prefix` | `C-l` | native | both | the same fragment gives clearing the screen to the prefix |
 | `prefix` | `r` | native | both | canopy-reload runs grofe's `reload`, which validates every layer first (canopy `grofe/keys.tsv`) |
 | `prefix` | `M-s` | native | both | the grofe fragment runs `"$CANOPY_STORE/..."`, which the shell expands from the server's environment; tmux expanded the same path when it read the config |
 | `prefix` | `\"` | native | grofe | grofe's own default table splits in the active pane's directory (spec §5.3); under the tmux name it is tmux's stock `split-window` |
@@ -609,11 +608,6 @@ read back what tmux did.
 | `prefix` | `*` | gap | grofe | a gap, not a choice: grofe's own default table leaves out tmux 3.7's stock `* new-pane`, though the verb exists (TC.6, built to fzf's recorded form). Under the tmux name the stock binding is there; what a bare `new-pane` does on grofe is not checked here |
 | `prefix` | `<` | oos | grofe | out of scope: tmux's window menu opens at `-x W -y W`, a mouse position form (spec §4.5, mouse argv forms), so grofe's own default table leaves it unbound |
 | `prefix` | `>` | oos | grofe | out of scope: tmux's pane menu opens at `-x P -y P`, but its items are mouse argv forms (`copy-mode -t=`, `send-keys -X -t =`, `#{mouse_word}`; spec §4.5), so grofe's own default table leaves it unbound |
-| `copy-mode-vi` | `C-h` | native | both | vim-tmux-navigator's copy-mode-vi rows (`select-pane -L`, and `-D -U -R -l` below): canopy's `40-canopy-nav.toml` binds the same move behind the plugin's `@tmux_navigator_disable_when_zoomed` check, an `if-shell -F` |
-| `copy-mode-vi` | `C-j` | native | both | the same (`select-pane -D`) |
-| `copy-mode-vi` | `C-k` | native | both | the same (`select-pane -U`) |
-| `copy-mode-vi` | `C-l` | native | both | the same (`select-pane -R`) |
-| `copy-mode-vi` | `C-\\` | native | both | the same (`select-pane -l`) |
 | `copy-mode-vi` | `/` | native | grofe | grofe's own default table writes the prompt's template as a quoted string, not a `{ }` block: the same command. Under the tmux name it is printed as tmux prints it |
 | `copy-mode-vi` | `?` | native | grofe | the same |
 | `copy-mode-vi` | `:` | native | grofe | the same |
@@ -659,12 +653,12 @@ coverage`; do not edit them by hand.
 | File | Lines |
 |---|---|
 | `tests/compat/corpus/static-cli.argv` | 494 |
-| `tests/compat/corpus/static-conf.argv` | 154 |
+| `tests/compat/corpus/static-conf.argv` | 165 |
 | `tests/compat/corpus/container-cli.argv` | 62 |
 | `tests/compat/corpus/container-pane.argv` | 47 |
 | `tests/compat/corpus/container-job.argv` | 332 |
 | `tests/compat/corpus/container-stored.argv` | 343 |
-| total | 1432 |
+| total | 1443 |
 
 Distinct forms (verb plus flag set, stored commands included): **287**.
 
@@ -680,10 +674,10 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `attach-session` | 1 | 0 | sc1 | cmd:M2 | yes |  | athome:home/dot_zsh/aliases.zsh |
 | `attach-session -d -t` | 1 | 0 | cc1 | cmd:M2 | yes | `-d`, `-t` | container:cli |
 | `attach-session -t` | 5 | 0 | cc1 cp1 sc3 | cmd:M2 | yes | `-t` | athome:home/dot_zsh/functions.zsh, container:cli, container:pane (+2) |
-| `bind-key` | 71 | 0 | cj25 sc22 sf24 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:tmux/keys.tsv (+10) |
+| `bind-key` | 72 | 0 | cj25 sc22 sf25 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:tmux/conf.d/40-nav.conf (+11) |
 | `bind-key -N` | 1 | 0 | cj1 | area:Bindings | yes |  | container:job |
-| `bind-key -T` | 356 | 0 | cj24 cs311 sc21 | area:Bindings | yes |  | athome:home/dot_config/tmux/executable_wk-keys-fix.sh, container:job, container:list-keys (+6) |
-| `bind-key -n` | 10 | 0 | cj5 sc4 sf1 | area:Bindings | yes | `-n` | athome:home/dot_config/canopy/user.conf.tmpl, container:job, plugin:opensessions/opensessions.tmux (+2) |
+| `bind-key -T` | 361 | 0 | cj24 cs311 sc21 sf5 | area:Bindings | yes |  | athome:home/dot_config/tmux/executable_wk-keys-fix.sh, canopy:tmux/conf.d/40-nav.conf, container:job (+7) |
+| `bind-key -n` | 15 | 0 | cj5 sc4 sf6 | area:Bindings | yes | `-n` | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/40-nav.conf, container:job (+3) |
 | `bind-key -r` | 6 | 0 | sf6 | area:Bindings | yes |  | canopy:tmux/keys.tsv |
 | `bind-key -r -T` | 22 | 0 | cs22 | area:Bindings | yes |  | container:list-keys |
 | `break-pane` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
@@ -744,8 +738,8 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `display-popup -h -w -x[C] -y[C]` | 1 | 0 | sc1 | area:Overlays | yes |  | plugin:tmux-fzf/scripts/menu.sh |
 | `find-window -Z` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `has-session -t` | 14 | 0 | cc1 cj1 cp2 sc10 | area:Sessions and clients | yes |  | athome:home/dot_local/bin/executable_cockpit, athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh (+8) |
-| `if-shell` | 16 | 11 | cj5 cs5 sc1 sf5 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/30-plugins.conf, container:job (+2) |
-| `if-shell -F` | 11 | 7 | cs9 sc1 sf1 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
+| `if-shell` | 21 | 16 | cj5 cs5 sc1 sf10 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/30-plugins.conf, canopy:tmux/conf.d/40-nav.conf (+3) |
+| `if-shell -F` | 21 | 17 | cs9 sc1 sf11 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/40-nav.conf, container:list-keys (+1) |
 | `if-shell -F -t` | 1 | 0 | cp1 | area:Bindings | yes |  | container:pane |
 | `if-shell -F -t[=]` | 4 | 4 | cs4 | oos:Mouse argv forms |  |  | container:list-keys |
 | `join-pane` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
@@ -852,17 +846,17 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `select-layout -E` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `select-layout -t` | 12 | 0 | cc2 cj7 sc3 | cmd:M3 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
 | `select-pane` | 12 | 12 | cs12 | cmd:M1 | yes |  | container:list-keys |
-| `select-pane -D` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
+| `select-pane -D` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
 | `select-pane -D -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -L` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
+| `select-pane -L` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
 | `select-pane -L -t` | 2 | 1 | sc2 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -L -t -Z` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -M` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `select-pane -P! -t` | 2 | 0 | sc2 | cmd:M1 | yes | `-P!` | plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `select-pane -R` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
+| `select-pane -R` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
 | `select-pane -R -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -U` | 7 | 7 | cj2 cs4 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:job, container:list-keys |
-| `select-pane -l` | 4 | 4 | cj2 cs2 | cmd:M1 | yes |  | container:job, container:list-keys |
+| `select-pane -U` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
+| `select-pane -l` | 6 | 6 | cj2 cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, container:job, container:list-keys |
 | `select-pane -l -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -m` | 7 | 7 | cs7 | area:Windows and panes | yes |  | container:list-keys |
 | `select-pane -t` | 14 | 0 | cj2 cp1 cs1 sc9 sf1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh, canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:tmux/keys.tsv (+10) |
@@ -870,7 +864,7 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `select-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -t[=]` | 5 | 5 | cs5 | oos:Mouse argv forms |  |  | container:list-keys |
 | `select-window -t` | 17 | 11 | cs11 sc6 | area:Windows and panes | yes |  | athome:home/dot_local/bin/executable_tsess, container:list-keys, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+4) |
-| `send-keys` | 31 | 15 | cj6 cs6 sc19 | cmd:M1 | yes |  | container:job, container:list-keys, plugin:tmux-yank/scripts/copy_line.sh (+2) |
+| `send-keys` | 37 | 21 | cj6 cs6 sc19 sf6 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, container:job, container:list-keys (+3) |
 | `send-keys -F -X` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
 | `send-keys -M` | 7 | 6 | cs7 | oos:Mouse argv forms |  |  | container:list-keys |
 | `send-keys -N` | 18 | 18 | cs18 | cmd:M1 | yes | `-N` | container:list-keys |
@@ -1042,7 +1036,7 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 
 | Token | Uses | Named in 4.5 |
 |---|---|---|
-| `#{@user_option}` | 146 | yes |
+| `#{@user_option}` | 156 | yes |
 | `#{alternate_on}` | 1 | yes |
 | `#{buffer_size}` | 3 | no |
 | `#{client_last_session}` | 4 | yes |
@@ -1104,13 +1098,13 @@ Variables, modifiers, short forms and styles found in corpus tokens (a regex sca
 | `#{window_name}` | 15 | yes |
 | `#{window_panes}` | 29 | yes |
 | `#{window_width}` | 1 | no |
-| `#{window_zoomed_flag}` | 7 | yes |
+| `#{window_zoomed_flag}` | 17 | yes |
 | `conditions on bare names` | 46 | yes |
 | `escape ##` | 103 | yes |
 | `job #(cmd)` | 10 | yes |
 | `modifier !=:` | 13 | yes |
-| `modifier &&:` | 38 | yes |
-| `modifier ==:` | 23 | yes |
+| `modifier &&:` | 48 | yes |
+| `modifier ==:` | 33 | yes |
 | `modifier >:` | 26 | yes |
 | `modifier >=:` | 1 | yes |
 | `modifier ?` | 80 | yes |

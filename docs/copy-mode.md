@@ -134,16 +134,16 @@ TM.2 selection; TM.3 search and jumps; TM.5 copy targets; TM.6 the mouse.
 | `M-x` | `send-keys -X jump-to-mark` | `jump-to-mark` | TM.1 | `copy_mode/m-x` |
 | `M-y` | `send-keys -X copy-pipe-and-cancel "pbcopy; tmux paste-buffer -p"` | `copy-pipe-and-cancel` | TM.5 | `copy_mode/m-y` |
 | `C-[` | `send-keys -X clear-selection` | `clear-selection` | TM.2 | `copy_mode/c-lbracket` |
-| `C-\\` | `select-pane -l` | none (`select-pane`) | TM.1 | `copy_mode/c-backslash` |
+| `C-\\` | `if-shell -F "#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}" '' "select-pane -l"` | none (`select-pane`) | TM.1 | `copy_mode/c-backslash` |
 | `C-b` | `send-keys -X page-up` | `page-up` | TM.1 | `copy_mode/c-b` |
 | `C-c` | `send-keys -X cancel` | `cancel` | TM.1 | `copy_mode/c-c` |
 | `C-d` | `send-keys -X halfpage-down` | `halfpage-down` | TM.1 | `copy_mode/c-d` |
 | `C-e` | `send-keys -X scroll-down` | `scroll-down` | TM.1 | `copy_mode/c-e` |
 | `C-f` | `send-keys -X page-down` | `page-down` | TM.1 | `copy_mode/c-f` |
-| `C-h` | `select-pane -L` | none (`select-pane`) | TM.1 | `copy_mode/c-h` |
-| `C-j` | `select-pane -D` | none (`select-pane`) | TM.1 | `copy_mode/c-j` |
-| `C-k` | `select-pane -U` | none (`select-pane`) | TM.1 | `copy_mode/c-k` |
-| `C-l` | `select-pane -R` | none (`select-pane`) | TM.1 | `copy_mode/c-l` |
+| `C-h` | `if-shell -F "#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}" '' "select-pane -L"` | none (`select-pane`) | TM.1 | `copy_mode/c-h` |
+| `C-j` | `if-shell -F "#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}" '' "select-pane -D"` | none (`select-pane`) | TM.1 | `copy_mode/c-j` |
+| `C-k` | `if-shell -F "#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}" '' "select-pane -U"` | none (`select-pane`) | TM.1 | `copy_mode/c-k` |
+| `C-l` | `if-shell -F "#{&&:#{window_zoomed_flag},#{==:#{@tmux_navigator_disable_when_zoomed},1}}" '' "select-pane -R"` | none (`select-pane`) | TM.1 | `copy_mode/c-l` |
 | `C-u` | `send-keys -X halfpage-up` | `halfpage-up` | TM.1 | `copy_mode/c-u` |
 | `C-v` | `send-keys -X rectangle-toggle` | `rectangle-toggle` | TM.2 | `copy_mode/c-v` |
 | `C-y` | `send-keys -X scroll-up` | `scroll-up` | TM.1 | `copy_mode/c-y` |
