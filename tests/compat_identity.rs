@@ -797,3 +797,23 @@ fn plugin_verbs_are_unknown_commands_under_the_tmux_name() {
     assert_eq!(grofe(&srv, &["list-plugins"]), Ok(String::new()));
     let _ = tmux(&srv, &["kill-server"]);
 }
+
+/// B4 review: `tmux -D` against a server already running is a client with
+/// no command, which tmux's server makes `new-session` (as bare `tmux`),
+/// not grofe's usage text.
+#[test]
+fn tmux_dash_d_with_a_running_server_runs_new_session() {
+    let srv = start_as_tmux();
+    let bare = tmux(&srv, &[]);
+    let foreground = tmux(&srv, &["-D"]);
+    assert!(
+        !foreground.stdout.contains("usage"),
+        "{}",
+        foreground.stdout
+    );
+    assert_eq!(
+        (foreground.status.code(), foreground.stderr),
+        (bare.status.code(), bare.stderr)
+    );
+    let _ = tmux(&srv, &["kill-server"]);
+}

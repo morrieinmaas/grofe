@@ -1920,8 +1920,9 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
     if size > 16364 {
         return Err("failed to send command".to_string());
     }
-    // Bare `tmux` is `new-session`, as in tmux 3.7b; `-D` is the server.
-    if out.argv.is_empty() && !out.foreground {
+    // Bare `tmux` is `new-session`, as in tmux 3.7b. So is `-D` against a
+    // server already running: its server makes an empty command that.
+    if out.argv.is_empty() {
         out.argv.push("new-session".to_string());
     }
     if let Ok(spec) = resolve(&out.argv[0]) {
