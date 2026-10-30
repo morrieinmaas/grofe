@@ -18,8 +18,6 @@
 use super::{FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Row, TmuxError};
 use crate::cmd::Command;
 
-const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
-
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 
 const fn row(
@@ -47,18 +45,6 @@ const fn pass(verb: &'static str, golden_id: &'static str) -> Row {
         &[],
         golden_id,
     )
-}
-
-/// Refused for good: [`super::Row::refuses`] is true with no milestone.
-const fn refuse(tmux_form: &'static str, reason: &'static str) -> Row {
-    Row {
-        tmux_form,
-        kind: MappingKind::Behaviour,
-        target: GrofeTarget::Unsupported(reason),
-        flags: SEMANTIC,
-        milestone: "",
-        golden_id: "",
-    }
 }
 
 /// `inv`'s arguments without the flags in `cosmetic`, each one given noted
@@ -164,8 +150,6 @@ pub(crate) fn rows() -> Vec<Row> {
             "tc_6/new-pane-fzf",
         ),
         pass("wait-for", "fe_4/fzf"),
-        refuse("wait-for -L", UNUSED),
-        refuse("wait-for -U", UNUSED),
         // Menus, prompts and the pane labels (TC.7).
         row(
             "display-menu",

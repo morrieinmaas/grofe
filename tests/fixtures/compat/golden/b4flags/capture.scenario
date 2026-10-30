@@ -1,0 +1,27 @@
+# B4: capture-pane -C -L -F -H -a -q -P -M.
+$ new-session -d -s main -x 40 -y 8 'printf "a\\\\b c\n\033[31mred\033[0m \033[1mbold\033[0m\n\033]8;;http://x.example/\033\\\\link\033]8;;\033\\\\ plain\n"; printf "\033]8;;http://y.example/\033\\\\two\033]8;;\033\\\\\n\n\n"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:1
+$ capture-pane -p -C -t main:1
+$ capture-pane -p -e -t main:1
+$ capture-pane -p -e -C -t main:1
+$ capture-pane -p -L -t main:1
+$ capture-pane -p -F -t main:1
+$ capture-pane -p -L -F -t main:1
+$ capture-pane -p -LF -S -2 -E 3 -t main:1
+$ capture-pane -p -H -t main:1
+$ capture-pane -p -H -L -t main:1
+$ capture-pane -p -H -F -t main:1
+$ capture-pane -p -a -t main:1
+$ capture-pane -p -a -q -t main:1
+$ capture-pane -p -P -t main:1
+$ capture-pane -p -P -C -t main:1
+$ capture-pane -p -P -H -t main:1
+$ capture-pane -p -M -t main:1
+$ capture-pane -b cap -C -t main:1
+$ show-buffer -b cap
+$ capture-pane -b capq -a -q -t main:1
+$ show-buffer -b capq
+$ capture-pane -b capp -P -t main:1
+$ show-buffer -b capp
+$ list-buffers -F '#{buffer_name}'

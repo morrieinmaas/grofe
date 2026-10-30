@@ -1,0 +1,350 @@
+$ new-session -d -s main -x 60 -y 12 "sh -c 'stty -icanon -echo; cat -v'"
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ send-keys -t main:1 KP0 KP1 KP2 KP3 KP4 KP5 KP6 KP7 KP8 KP9
+? 0
+$ send-keys -t main:1 KP/ 'KP*' KP- KP+ KP. KPEnter
+? 0
+$ send-keys -t main:1 M-KP5 C-KP5 S-KP5
+? 0
+$ send-keys -t main:1 kp5 Kpenter
+? 0
+$ send-keys -t main:1 '[SOH]' '[STX]' '[NUL]' '[LF]' '[DEL]' '[BEL]'
+? 0
+$ send-keys -t main:1 0x41 0x42 0x20 0x7f 0x01 0x1b
+? 0
+$ send-keys -t main:1 User0 User1 User1000 User1001
+? 0
+$ send-keys -t main:1 'KPx' 'KP55' 'KP'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:1
+0123456789/*-+.
+^[55
+^A^B^@
+[DEL]^GAB ^?^A^[User1001KPxKP55KP
+
+
+
+
+
+
+
+
+? 0
+$ send-keys -t main:1 -l KP5 '[SOH]' 0x41
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ capture-pane -p -t main:1
+0123456789/*-+.
+^[55
+^A^B^@
+[DEL]^GAB ^?^A^[User1001KPxKP55KPKP5[SOH]0x41
+
+
+
+
+
+
+
+
+? 0
+$ send-keys -t main:1 -H 01 41 7f
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ capture-pane -p -t main:1
+0123456789/*-+.
+^[55
+^A^B^@
+[DEL]^GAB ^?^A^[User1001KPxKP55KPKP5[SOH]0x41^AA^?
+
+
+
+
+
+
+
+
+? 0
+$ bind-key -n KP5 display-message kp5
+? 0
+$ bind-key -n M-KP5 display-message mkp5
+? 0
+$ bind-key -n C-KP5 display-message ckp5
+? 0
+$ bind-key -n KP/ display-message kpslash
+? 0
+$ bind-key -n 'KP*' display-message kpstar
+? 0
+$ bind-key -n KPEnter display-message kpenter
+? 0
+$ bind-key -n kp0 display-message kp0
+? 0
+$ bind-key -T prefix KP1 display-message pkp1
+? 0
+$ bind-key -n User0 display-message user0
+? 0
+$ bind-key -n User999 display-message user999
+? 0
+$ bind-key -n User1000 display-message user1000
+? 0
+$ bind-key -n User1001 display-message user1001
+! unknown key: User1001
+? 1
+$ bind-key -n User display-message user
+! unknown key: User
+? 1
+$ bind-key -n 0x41 display-message hexA
+? 0
+$ bind-key -n 0x7f display-message hex7f
+? 0
+$ bind-key -n 0x20 display-message hex20
+? 0
+$ bind-key -n 0xe9 display-message hexe9
+? 0
+$ bind-key -n 0x1F600 display-message hexemoji
+? 0
+$ bind-key -n 0x0 display-message hex0
+? 0
+$ bind-key -n 0x01 display-message hex01
+? 0
+$ bind-key -n 0x09 display-message hex09
+? 0
+$ bind-key -n 0x0d display-message hex0d
+? 0
+$ bind-key -n 0x1b display-message hex1b
+? 0
+$ bind-key -n 0x1f display-message hex1f
+? 0
+$ bind-key -n 0x display-message hexnone
+! unknown key: 0x
+? 1
+$ bind-key -n 0xzz display-message hexzz
+! unknown key: 0xzz
+? 1
+$ bind-key -n '[NUL]' display-message nul
+? 0
+$ bind-key -n '[soh]' display-message soh
+? 0
+$ bind-key -n '[ASC]' display-message asc
+? 0
+$ bind-key -n '[ACK]' display-message ack
+! unknown key: [ACK]
+? 1
+$ bind-key -n 'M-[LF]' display-message mlf
+? 0
+$ bind-key -n 'C-[LF]' display-message clf
+? 0
+$ bind-key -n '[US]' display-message us
+? 0
+$ bind-key -n '[DEL]' display-message del
+! unknown key: [DEL]
+? 1
+$ bind-key -n KPx display-message x
+! unknown key: KPx
+? 1
+$ bind-key -n KP display-message x
+! unknown key: KP
+? 1
+$ bind-key -n 'C-S-KP5' display-message csk
+? 0
+$ list-keys -T root
+bind-key  -T root [NUL]                     display-message nul
+bind-key  -T root [SOH]                     display-message soh
+bind-key  -T root [ASC]                     display-message asc
+bind-key  -T root Tab                       display-message hex09
+bind-key  -T root Enter                     display-message hex0d
+bind-key  -T root Escape                    display-message hex1b
+bind-key  -T root [US]                      display-message us
+bind-key  -T root " "                       display-message hex20
+bind-key  -T root A                         display-message hexA
+bind-key  -T root \177                      display-message hex7f
+bind-key  -T root é                         display-message hexe9
+bind-key  -T root 😀                        display-message hexemoji
+bind-key  -T root User0                     display-message user0
+bind-key  -T root User999                   display-message user999
+bind-key  -T root User100                   display-message user1000
+bind-key  -T root KP/                       display-message kpslash
+bind-key  -T root KP*                       display-message kpstar
+bind-key  -T root KP5                       display-message kp5
+bind-key  -T root KPEnter                   display-message kpenter
+bind-key  -T root KP0                       display-message kp0
+bind-key  -T root MouseDown1Pane            select-pane -t = \; send-keys -M
+bind-key  -T root MouseDown1Status          switch-client -t =
+bind-key  -T root MouseDown1Border          select-pane -M
+bind-key  -T root MouseDown1ScrollbarUp     if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-up } { copy-mode -u }
+bind-key  -T root MouseDown1ScrollbarDown   if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-down } { copy-mode -d }
+bind-key  -T root MouseDown1Control8        resize-pane -Z
+bind-key  -T root MouseDown1Control9        display-menu -O -T "Kill pane #{pane_index}?" -t = -x M -y M Yes y { kill-pane -t = } No n {  }
+bind-key  -T root MouseDown2Pane            select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { paste-buffer -p }
+bind-key  -T root MouseDown3Pane            if-shell -F -t = "#{||:#{mouse_any_flag},#{&&:#{pane_in_mode},#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}}}" { select-pane -t = ; send-keys -M } { display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z } }
+bind-key  -T root MouseDown3Status          display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+bind-key  -T root MouseDown3StatusLeft      display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }
+bind-key  -T root MouseDrag1Pane            if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -M }
+bind-key  -T root MouseDrag1Border          resize-pane -M
+bind-key  -T root MouseDrag1ScrollbarSlider if-shell -F -t = "#{pane_in_mode}" { send-keys -X scroll-to-mouse } { copy-mode -S }
+bind-key  -T root WheelDownStatus           next-window
+bind-key  -T root WheelUpPane               if-shell -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }
+bind-key  -T root WheelUpStatus             previous-window
+bind-key  -T root DoubleClick1Pane          select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }
+bind-key  -T root TripleClick1Pane          select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }
+bind-key  -T root M-[LF]                    display-message mlf
+bind-key  -T root M-KP5                     display-message mkp5
+bind-key  -T root M-MouseDown3Pane          display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+bind-key  -T root M-MouseDown3Status        display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+bind-key  -T root M-MouseDown3StatusLeft    display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }
+bind-key  -T root C-[LF]                    display-message clf
+bind-key  -T root C-KP5                     display-message ckp5
+bind-key  -T root C-MouseDown1Pane          swap-pane -s @
+bind-key  -T root C-MouseDown1Status        swap-window -t @
+bind-key  -T root C-S-KP5                   display-message csk
+? 0
+$ list-keys -T prefix KP1
+? 0
+$ list-keys KP5
+? 0
+$ list-keys kp5
+? 0
+$ list-keys -T root User0
+? 0
+$ list-keys -T root 0x41
+? 0
+$ list-keys -T root A
+? 0
+$ list-keys -T root '[NUL]'
+? 0
+$ list-keys -T root '[LF]'
+? 0
+$ list-keys -T root 0x01
+? 0
+$ list-keys -T root nosuchkey
+! invalid key: nosuchkey
+? 1
+$ list-keys -T root User1001
+! invalid key: User1001
+? 1
+$ list-keys -T root -N
+? 0
+$ list-keys -T root -1
+? 0
+$ unbind-key -n KP5
+? 0
+$ unbind-key -n 0x41
+? 0
+$ unbind-key -n User0
+? 0
+$ unbind-key -n '[NUL]'
+? 0
+$ unbind-key -n KP5
+? 0
+$ unbind-key -n Nosuch
+! unknown key: Nosuch
+? 1
+$ list-keys -T root
+bind-key  -T root [SOH]                     display-message soh
+bind-key  -T root [ASC]                     display-message asc
+bind-key  -T root Tab                       display-message hex09
+bind-key  -T root Enter                     display-message hex0d
+bind-key  -T root Escape                    display-message hex1b
+bind-key  -T root [US]                      display-message us
+bind-key  -T root " "                       display-message hex20
+bind-key  -T root \177                      display-message hex7f
+bind-key  -T root é                         display-message hexe9
+bind-key  -T root 😀                        display-message hexemoji
+bind-key  -T root User999                   display-message user999
+bind-key  -T root User100                   display-message user1000
+bind-key  -T root KP/                       display-message kpslash
+bind-key  -T root KP*                       display-message kpstar
+bind-key  -T root KPEnter                   display-message kpenter
+bind-key  -T root KP0                       display-message kp0
+bind-key  -T root MouseDown1Pane            select-pane -t = \; send-keys -M
+bind-key  -T root MouseDown1Status          switch-client -t =
+bind-key  -T root MouseDown1Border          select-pane -M
+bind-key  -T root MouseDown1ScrollbarUp     if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-up } { copy-mode -u }
+bind-key  -T root MouseDown1ScrollbarDown   if-shell -F -t = "#{pane_in_mode}" { send-keys -X page-down } { copy-mode -d }
+bind-key  -T root MouseDown1Control8        resize-pane -Z
+bind-key  -T root MouseDown1Control9        display-menu -O -T "Kill pane #{pane_index}?" -t = -x M -y M Yes y { kill-pane -t = } No n {  }
+bind-key  -T root MouseDown2Pane            select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { paste-buffer -p }
+bind-key  -T root MouseDown3Pane            if-shell -F -t = "#{||:#{mouse_any_flag},#{&&:#{pane_in_mode},#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}}}" { select-pane -t = ; send-keys -M } { display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z } }
+bind-key  -T root MouseDown3Status          display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+bind-key  -T root MouseDown3StatusLeft      display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }
+bind-key  -T root MouseDrag1Pane            if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -M }
+bind-key  -T root MouseDrag1Border          resize-pane -M
+bind-key  -T root MouseDrag1ScrollbarSlider if-shell -F -t = "#{pane_in_mode}" { send-keys -X scroll-to-mouse } { copy-mode -S }
+bind-key  -T root WheelDownStatus           next-window
+bind-key  -T root WheelUpPane               if-shell -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }
+bind-key  -T root WheelUpStatus             previous-window
+bind-key  -T root DoubleClick1Pane          select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }
+bind-key  -T root TripleClick1Pane          select-pane -t = \; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -H ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel }
+bind-key  -T root M-[LF]                    display-message mlf
+bind-key  -T root M-KP5                     display-message mkp5
+bind-key  -T root M-MouseDown3Pane          display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -t = -x M -y M "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}" p { paste-buffer } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward -- "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "#{?#{!:#{pane_floating_flag}},Horizontal Split,}" h { split-window -h } "#{?#{!:#{pane_floating_flag}},Vertical Split,}" v { split-window -v } '' "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Up,}" u { swap-pane -U } "#{?#{&&:#{!:#{pane_floating_flag}},#{>:#{window_panes},1}},Swap Down,}" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+bind-key  -T root M-MouseDown3Status        display-menu -T "#[align=centre]#{window_index}:#{window_name}" -t = -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+bind-key  -T root M-MouseDown3StatusLeft    display-menu -T "#[align=centre]#{session_name}" -t = -x M -y W Next n { switch-client -n } Previous p { switch-client -p } '' Renumber N { move-window -r } Rename r { command-prompt -I "#S" { rename-session "%%" } } Detach d { detach-client } '' "New Session" s { new-session } "New Window" w { new-window }
+bind-key  -T root C-[LF]                    display-message clf
+bind-key  -T root C-KP5                     display-message ckp5
+bind-key  -T root C-MouseDown1Pane          swap-pane -s @
+bind-key  -T root C-MouseDown1Status        swap-window -t @
+bind-key  -T root C-S-KP5                   display-message csk
+? 0
+$ set-option -g prefix KP5
+? 0
+$ show-options -gv prefix
+KP5
+? 0
+$ set-option -g prefix2 User3
+? 0
+$ show-options -gv prefix2
+User3
+? 0
+$ set-option -g prefix 0x41
+? 0
+$ show-options -gv prefix
+A
+? 0
+$ set-option -g prefix '[NUL]'
+? 0
+$ show-options -gv prefix
+[NUL]
+? 0
+$ set-option -g prefix KPx
+! bad key: KPx
+? 1
+$ set-option -g prefix None
+? 0
+$ show-options -gv prefix
+None
+? 0
+$ set-option -g prefix 0x7f
+? 0
+$ show-options -gv prefix
+
+? 0
+$ set-option -g prefix 0x1F600
+? 0
+$ show-options -gv prefix
+😀
+? 0
+$ set-option -g prefix 'M-KP5'
+? 0
+$ show-options -gv prefix
+M-KP5
+? 0
+$ set-option -g user-keys '\e[1;5A,\e[1;5B'
+? 0
+$ show-options -gv user-keys
+\e[1;5A
+\e[1;5B
+? 0
+$ show-options -g user-keys
+user-keys[0] "\\e[1;5A"
+user-keys[1] "\\e[1;5B"
+? 0
+$ bind-key -T copy-mode-vi KP5 send-keys -X cursor-down
+? 0
+$ list-keys -T copy-mode-vi KP5
+? 0

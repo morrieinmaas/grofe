@@ -1,0 +1,185 @@
+$ new-session -d -s main -x 60 -y 12 'sleep 100000'
+? 0
+$ new-session -d -s other -x 60 -y 12 'sleep 100000'
+? 0
+$ lock-server
+? 0
+$ lock-session -t main
+? 0
+$ lock-session -t nosuch
+! can't find session: nosuch
+? 1
+$ lock-client
+! no current client
+? 1
+$ lock-client -t nosuch
+! can't find client: nosuch
+? 1
+$ lock-server extra
+! command lock-server: too many arguments (need at most 0)
+? 1
+$ lock-session -z
+! command lock-session: unknown flag -z
+? 1
+$ set-hook -g after-lock-server 'set -g @locked yes'
+? 0
+$ lock-server
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ show-options -gv @locked
+yes
+? 0
+$ show-options -gv lock-command
+lock -np
+? 0
+$ show-options -gv lock-after-time
+0
+? 0
+$ show-options -sv lock-after-time
+? 0
+$ split-window -d -t main 'sleep 100000'
+? 0
+$ split-window -d -t main 'sleep 100000'
+? 0
+$ select-layout -t main even-horizontal
+? 0
+$ display-message -p -t main '#{window_layout}'
+4bb3,60x12,0,0{20x12,0,0,0,19x12,21,0,3,19x12,41,0,2}
+? 0
+$ previous-layout -t main
+? 0
+$ display-message -p -t main '#{window_layout}'
+efd9,60x12,0,0[60x5,0,0{29x5,0,0,0,30x5,30,0,3},60x6,0,6,2]
+? 0
+$ previous-layout -t main
+? 0
+$ display-message -p -t main '#{window_layout}'
+ffac,60x12,0,0{1x12,0,0[1x6,0,0,3,1x5,0,7,2],58x12,2,0,0}
+? 0
+$ previous-layout -t main:9
+! can't find window: 9
+? 1
+$ previous-layout -x
+! command previous-layout: unknown flag -x
+? 1
+$ previous-layout extra
+! command previous-layout: too many arguments (need at most 0)
+? 1
+$ next-layout -t main
+? 0
+$ display-message -p -t main '#{window_layout}'
+efd9,60x12,0,0[60x5,0,0{29x5,0,0,0,30x5,30,0,3},60x6,0,6,2]
+? 0
+$ server-access -l
+<USER> (W)
+? 0
+$ server-access
+! missing user argument
+? 1
+$ server-access nosuchuser
+! unknown user: nosuchuser
+? 1
+$ server-access -a root
+! root owns the server, can't change access
+? 1
+$ server-access -a -d nobody
+! -a and -d cannot be used together
+? 1
+$ server-access -r -w nobody
+! -r and -w cannot be used together
+? 1
+$ server-access -l extra
+<USER> (W)
+? 0
+$ server-access -t %1 -l
+! command server-access: unknown flag -t
+? 1
+$ server-access -a nobody
+? 0
+$ server-access -l
+<USER> (W)
+nobody (W)
+? 0
+$ server-access -a nobody
+! user nobody is already added
+? 1
+$ server-access -r nobody
+? 0
+$ server-access -l
+<USER> (W)
+nobody (R)
+? 0
+$ server-access -w nobody
+? 0
+$ server-access -l
+<USER> (W)
+nobody (W)
+? 0
+$ server-access -d nobody
+? 0
+$ server-access -d nobody
+! user nobody not found
+? 1
+$ server-access -l
+<USER> (W)
+? 0
+$ server-access -r daemon
+? 0
+$ server-access -l
+daemon (R)
+<USER> (W)
+? 0
+$ server-access -w daemon
+? 0
+$ server-access -l
+daemon (W)
+<USER> (W)
+? 0
+$ server-access -d daemon
+? 0
+$ server-access -l
+<USER> (W)
+? 0
+$ show-prompt-history
+History for command:
+
+
+History for search:
+
+
+History for target:
+
+
+History for window-target:
+
+
+? 0
+$ show-prompt-history -T command
+History for command:
+
+
+? 0
+$ show-prompt-history -T search
+History for search:
+
+
+? 0
+$ show-prompt-history -T nosuch
+! invalid type: nosuch
+? 1
+$ clear-prompt-history -T nosuch
+! invalid type: nosuch
+? 1
+$ clear-prompt-history
+? 0
+$ clear-prompt-history -T window-target
+? 0
+$ show-prompt-history -T window-target
+History for window-target:
+
+
+? 0
+$ show-prompt-history extra
+! command show-prompt-history: too many arguments (need at most 0)
+? 1

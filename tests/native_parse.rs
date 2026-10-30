@@ -179,6 +179,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 height: Some(50),
                 largest: false,
                 smallest: false,
+                direction: None,
+                adjust: 1,
             }),
         ),
         (
@@ -189,6 +191,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 height: None,
                 largest: true,
                 smallest: false,
+                direction: None,
+                adjust: 1,
             }),
         ),
         (
@@ -199,6 +203,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 height: None,
                 largest: false,
                 smallest: true,
+                direction: None,
+                adjust: 1,
             }),
         ),
         (
@@ -215,6 +221,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: Target::Current,
                 up: false,
                 down: true,
+                keep_zoom: false,
             }),
         ),
         (
@@ -223,6 +230,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: t("@1"),
                 up: true,
                 down: false,
+                keep_zoom: false,
             }),
         ),
         (
@@ -309,6 +317,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: t("@1"),
                 command: Some(argv(&["htop"])),
                 cwd: None,
+                env: Vec::new(),
             }),
         ),
         (
@@ -318,6 +327,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: true,
                 pan: None,
                 adjustment: None,
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -327,6 +337,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: false,
                 pan: None,
                 adjustment: None,
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -336,6 +347,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: false,
                 pan: Some(Pan::Left),
                 adjustment: s("10"),
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -363,6 +375,11 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: Target::Current,
                 zoom: true,
                 pattern: s("foo"),
+                content: false,
+                name: false,
+                title: false,
+                regex: false,
+                ignore: false,
             }),
         ),
         (
@@ -379,6 +396,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::WaitFor(WaitFor {
                 channel: s("fzf-1"),
                 signal: false,
+                lock: false,
+                unlock: false,
             }),
         ),
         (
@@ -386,6 +405,8 @@ fn every_new_verb_parses_with_its_rows_flags() {
             Command::WaitFor(WaitFor {
                 channel: s("fzf-1"),
                 signal: true,
+                lock: false,
+                unlock: false,
             }),
         ),
         (
@@ -999,12 +1020,12 @@ fn bad_values_and_argument_counts_are_errors() {
     }
     // Flags no §4.5 row names stay unknown natively.
     assert_eq!(
-        err(&["wait-for", "-L", "a"]),
-        "command wait-for: unknown flag -L"
+        err(&["wait-for", "-Z", "a"]),
+        "command wait-for: unknown flag -Z"
     );
     assert_eq!(
-        err(&["refresh-client", "-A", "%1:on"]),
-        "command refresh-client: unknown flag -A"
+        err(&["refresh-client", "-Z", "%1:on"]),
+        "command refresh-client: unknown flag -Z"
     );
 }
 
@@ -1016,7 +1037,9 @@ fn a_bare_verb_parses_with_its_positional_missing() {
         p(&["wait-for"]),
         Ok(Command::WaitFor(WaitFor {
             channel: None,
-            signal: false
+            signal: false,
+            lock: false,
+            unlock: false,
         }))
     );
     assert_eq!(p(&["set-hook"]), Ok(Command::SetHook(SetHook::default())));
@@ -1067,7 +1090,6 @@ fn tmux_only_names_are_unknown_natively() {
         "movew",
         "rotatew",
         "lastp",
-        "nextl",
         "newp",
         "wait",
         "confirm",

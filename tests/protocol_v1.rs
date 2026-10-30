@@ -78,6 +78,7 @@ fn hellos() -> Vec<(&'static str, Hello)> {
                 nest: false,
                 tty: Some("/dev/ttys004".into()),
                 created: false,
+                extras: Default::default(),
             },
         ),
     ]

@@ -408,13 +408,14 @@ impl Spec {
     /// Whether tmux takes `flag` for this command: its usage lists it, or
     /// it is one of the hidden ones.
     fn lists(&self, flag: char) -> bool {
-        self.takes_value(flag)
-            || HIDDEN_BOOL_FLAGS.contains(&(self.name, flag))
-            || self.usage.split("[-").skip(1).any(|part| {
-                part.split([']', ' '])
-                    .next()
-                    .is_some_and(|l| l.contains(flag))
-            })
+        !UNPARSED_FLAGS.contains(&(self.name, flag))
+            && (self.takes_value(flag)
+                || HIDDEN_BOOL_FLAGS.contains(&(self.name, flag))
+                || self.usage.split("[-").skip(1).any(|part| {
+                    part.split([']', ' '])
+                        .next()
+                        .is_some_and(|l| l.contains(flag))
+                }))
     }
 
     /// How many positionals the usage requires: its words outside any
@@ -444,11 +445,34 @@ const HIDDEN: &[&str] = &["server-info (info) [-JT] [-t target-client]"];
 
 /// Value flags tmux 3.7b accepts but its usage leaves out (recorded:
 /// `select-pane -t x -P` fails `-P expects an argument`).
-const HIDDEN_VALUE_FLAGS: &[(&str, char)] = &[("select-pane", 'P')];
+const HIDDEN_VALUE_FLAGS: &[(&str, char)] = &[
+    ("select-pane", 'P'),
+    ("join-pane", 'p'),
+    ("move-pane", 'p'),
+    ("refresh-client", 'F'),
+    ("run-shell", 's'),
+];
+
+/// Flags a usage lists that the command's args template does not take
+/// (`server-access [-t target-pane]` is `unknown flag -t`).
+const UNPARSED_FLAGS: &[(&str, char)] = &[("server-access", 't')];
 
 /// Flags with no value tmux 3.7b accepts but its usage leaves out
 /// (recorded: `load-buffer -w path` loads and exits 0).
-const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[("load-buffer", 'w'), ("select-pane", 'g')];
+const HIDDEN_BOOL_FLAGS: &[(&str, char)] = &[
+    ("load-buffer", 'w'),
+    ("select-pane", 'g'),
+    ("choose-buffer", 'y'),
+    ("choose-client", 'y'),
+    ("choose-tree", 'y'),
+    ("customize-mode", 'y'),
+    ("list-buffers", 'r'),
+    ("list-clients", 'r'),
+    ("new-pane", 'E'),
+    ("new-pane", 'L'),
+    ("split-window", 'E'),
+    ("switch-client", 'F'),
+];
 
 fn parse_spec(line: &'static str, hidden: bool) -> Spec {
     let (name, rest) = line.split_once(' ').unwrap_or((line, ""));
@@ -1287,6 +1311,7 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         all: false,
         literal: false,
         verbose: false,
+        ignore_keys: false,
     })])
 }
 
@@ -1388,8 +1413,6 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 }
 
 // ---- The core rows -------------------------------------------------------
-
-const UNUSED: &str = "nothing the owner runs sends it (spec 4.5)";
 
 const fn row(
     tmux_form: &'static str,
@@ -1557,8 +1580,58 @@ fn core_rows() -> Vec<Row> {
             "M3.6",
             "fe_4/mouse-forms",
         ),
-        unsupported("lock-server", UNUSED, &[]),
-        unsupported("server-access", UNUSED, &[]),
+        // The client would have to run the command after it is let go, which
+        // takes an attach frame the frozen protocol has none of
+        // (`docs/protocol-v1.md`, section 8).
+        unsupported(
+            "detach-client -E",
+            "it needs a new attach frame; protocol v1 is frozen",
+            SEMANTIC,
+        ),
+        // A pane with no process, which a client fills (`-E`) or whose
+        // output the CLI's stdin is (`-I`); every grofe pane has a process
+        // on a pty, and the pane emulator takes bytes only from there.
+        unsupported(
+            "split-window -E",
+            "a pane with no process is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "split-window -I",
+            "a pane fed from the client's stdin is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "new-pane -E",
+            "a pane with no process is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "new-pane -I",
+            "a pane fed from the client's stdin is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "display-message -I",
+            "text from the client's stdin cannot be fed to a pane's screen",
+            SEMANTIC,
+        ),
+        // tmux takes the lines under the cursor back out of the history;
+        // alacritty's grid can only push lines into it.
+        unsupported(
+            "resize-pane -T",
+            "the emulator cannot take lines back out of the history",
+            SEMANTIC,
+        ),
+        // B4: the lock commands run `lock-command` in a popup over the
+        // client; `server-access` keeps the user list tmux keeps.
+        pass("lock-server", "B4"),
+        pass("lock-session", "B4"),
+        pass("lock-client", "B4"),
+        pass("previous-layout", "B4"),
+        pass("server-access", "B4"),
+        pass("show-prompt-history", "B4"),
+        pass("clear-prompt-history", "B4"),
         // Front-end rows.
         row(
             "display-message -F",
@@ -1717,16 +1790,26 @@ pub struct TmuxCli {
     /// `-c <shell-command>`: run it with the default shell instead of a
     /// command (tmux-fzf's `menu.sh`). The last `-c` wins, as in tmux.
     pub shell_command: Option<String>,
+    /// `-h`: print the usage and exit 0, as soon as it is read.
+    pub help: bool,
+    /// `-D`: run the server in the foreground, with no command.
+    pub foreground: bool,
+    /// `-N`: never start a server for this call.
+    pub no_start: bool,
+    /// `-l`: the shell `-c` runs is a login shell.
+    pub login: bool,
+    /// `-T`: terminal features to add, one per flag, in order.
+    pub features: Vec<String>,
+    /// `-v`: how many times (the log level; grofe logs nothing more).
+    pub verbose: u8,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
-const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+pub const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
             [-S socket-path] [-T features] [command [flags]]";
 
-/// tmux's other global flags, those taking a value first. Valid for tmux,
-/// not implemented in grofe.
-const OTHER_WITH_VALUE: &[char] = &['T'];
-const OTHER_FLAGS: &[char] = &['C', 'D', 'h', 'l', 'N', 'q', 'U', 'v'];
+/// `-C` is control mode, which grofe does not have.
+const NOT_IMPLEMENTED: &[char] = &['C'];
 
 /// Reads the argv of the CLI run as `tmux` (`args` follow `argv[0]`), or
 /// the error to print and exit 1 with. Global flags are read as tmux's
@@ -1745,6 +1828,12 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         version: false,
         files: Vec::new(),
         shell_command: None,
+        help: false,
+        foreground: false,
+        no_start: false,
+        login: false,
+        features: Vec::new(),
+        verbose: 0,
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1758,7 +1847,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         };
         for (at, flag) in flags.char_indices() {
             match flag {
-                'L' | 'S' | 'f' | 'c' => {
+                'L' | 'S' | 'f' | 'c' | 'T' => {
                     let attached = &flags[at + 1..];
                     let value = if attached.is_empty() {
                         i += 1;
@@ -1779,6 +1868,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                         'L' => out.name = Some(value),
                         'S' => out.socket = Some(PathBuf::from(value)),
                         'c' => out.shell_command = Some(value),
+                        'T' => out.features.push(value),
                         _ => out.files.push(PathBuf::from(value)),
                     }
                     continue 'args;
@@ -1788,8 +1878,20 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                     out.version = true;
                     return Ok(out);
                 }
-                '2' | 'u' => {}
-                c if OTHER_WITH_VALUE.contains(&c) || OTHER_FLAGS.contains(&c) => {
+                '2' | 'u' | 'q' => {}
+                // tmux prints the usage and exits as soon as it meets `-h`.
+                'h' => {
+                    out.help = true;
+                    return Ok(out);
+                }
+                'D' => out.foreground = true,
+                'l' => out.login = true,
+                'N' => out.no_start = true,
+                'v' => out.verbose = out.verbose.saturating_add(1),
+                // In tmux's getopt string, with no case of their own: the
+                // usage alone, with no complaint about the option.
+                'd' | 'U' => return Err(USAGE.to_string()),
+                c if NOT_IMPLEMENTED.contains(&c) => {
                     return Err(format!("tmux front end is not implemented: -{c}"));
                 }
                 c => return Err(format!("tmux: unknown option -- {c}\n{USAGE}")),
@@ -1797,6 +1899,10 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         }
     }
     out.argv = args[i..].to_vec();
+    // `-D` takes no command either.
+    if out.foreground && !out.argv.is_empty() {
+        return Err(USAGE.to_string());
+    }
     // tmux 3.7b: `-c` takes no command after it (recorded: usage, exit 1).
     if out.shell_command.is_some() {
         if !out.argv.is_empty() {
@@ -1814,7 +1920,8 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
     if size > 16364 {
         return Err("failed to send command".to_string());
     }
-    // Bare `tmux` is `new-session`, as in tmux 3.7b.
+    // Bare `tmux` is `new-session`, as in tmux 3.7b. So is `-D` against a
+    // server already running: its server makes an empty command that.
     if out.argv.is_empty() {
         out.argv.push("new-session".to_string());
     }
@@ -2332,16 +2439,16 @@ mod tests {
         let err = translate_with(&args(&["resize-pane", "-M"]), &ctx(), &rows, &[]);
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
-            "lock-server",
+            "detach-client -E",
             MappingKind::PassThrough,
-            GrofeTarget::Native("lock-server"),
+            GrofeTarget::Native("detach-client"),
             SEMANTIC,
             "M3.6",
             "",
         );
         let mut rows = vec![map];
         rows.extend(core_rows());
-        let err = translate_with(&args(&["lock-server"]), &ctx(), &rows, &[]);
+        let err = translate_with(&args(&["detach-client", "-E", "x"]), &ctx(), &rows, &[]);
         assert!(err.unwrap_err().0.contains("not supported"));
         // tmux 3.7b's own answer to these outside a mouse event: nothing.
         assert_eq!(one_or_none(&["resize-pane", "-M"]), Ok(Vec::new()));
@@ -2470,8 +2577,8 @@ mod tests {
         assert!(err.starts_with("tmux: unknown option -- Z\nusage: tmux [-2CDhlNuVv]"));
         let err = cli(&args(&["-L"])).unwrap_err();
         assert!(err.starts_with("tmux: option requires an argument -- L\nusage: tmux"));
-        let err = cli(&args(&["-T", "x"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: -T");
+        let err = cli(&args(&["-C"])).unwrap_err();
+        assert_eq!(err, "tmux front end is not implemented: -C");
         let got = cli(&args(&["-c", "echo a", "-cecho b"])).unwrap();
         assert_eq!(got.shell_command.as_deref(), Some("echo b"));
         assert!(got.argv.is_empty());

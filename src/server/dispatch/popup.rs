@@ -205,6 +205,7 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
     if !c.detached {
         w.set_active(new);
     }
+    crate::server::dispatch::pane::apply_setup(state, ctx, new, &c.setup)?;
     if !c.print {
         return Ok(String::new());
     }
@@ -292,7 +293,7 @@ pub fn place_pane(state: &mut State, ctx: &ClientCtx, c: PlacePane) -> Result<St
 
 /// The spawn for a popup's command: `GROFE_PANE` is `pane`'s id, `env` the
 /// whole environment. The popup sets the size.
-fn spawn_for(
+pub(crate) fn spawn_for(
     state: &State,
     session: crate::types::SessionId,
     pane: PaneId,

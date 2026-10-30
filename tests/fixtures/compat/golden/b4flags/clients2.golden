@@ -1,0 +1,18 @@
+$ new-session -d -s a -x 60 -y 10 'cat'
+? 0
+$ new-session -d -s b -x 60 -y 10 'cat'
+? 0
+client 60x12 attach -t a -f no-detach-on-destroy
+$ list-clients -F '#{session_name} #{client_flags}'
+a attached,focused,no-detach-on-destroy,UTF-8
+? 0
+$ kill-session -t a
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ list-clients -F '#{session_name} #{client_flags}'
+b attached,focused,no-detach-on-destroy,UTF-8
+? 0
+$ list-sessions -F '#{session_name}'
+b
+? 0

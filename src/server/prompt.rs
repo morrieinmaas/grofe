@@ -55,6 +55,14 @@ const WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
 /// of its own; a prompt is `command` unless `-T` says otherwise.
 const PROMPT_TYPES: [&str; 4] = ["command", "search", "target", "window-target"];
 
+/// [`PROMPT_TYPES`], for `show-prompt-history`.
+pub(crate) const KIND_NAMES: [&str; 4] = PROMPT_TYPES;
+
+/// Which of [`KIND_NAMES`] `name` is.
+pub(crate) fn kind_index(name: &str) -> Option<usize> {
+    PROMPT_TYPES.iter().position(|k| *k == name)
+}
+
 /// Every client's open prompt and the server-wide histories.
 #[derive(Debug, Default)]
 pub struct Prompts {
@@ -68,6 +76,16 @@ pub struct Prompts {
 }
 
 impl Prompts {
+    /// The lines entered at prompts of type `kind`, oldest first.
+    pub(crate) fn history(&self, kind: usize) -> &[String] {
+        &self.history[kind]
+    }
+
+    /// Forgets the history of prompt type `kind`.
+    pub(crate) fn clear_history(&mut self, kind: usize) {
+        self.history[kind].clear();
+    }
+
     /// Whether client `id` has a prompt open.
     pub fn is_open(&self, id: ClientId) -> bool {
         self.open.contains_key(&id)
@@ -1989,8 +2007,16 @@ fn verb(template: &str) -> String {
 /// gets the server environment and the session's (`hooks::shell_env`).
 /// A failing command's output and tmux's message go to the CLI's stdout,
 /// and the CLI exits with the command's status (D20, as tmux 3.7b).
-// ponytail: no `-C`.
+/// With `-C` the command is one of the server's, run in the request's
+/// dialect where `run-shell` is, after `-d`'s delay.
 pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
+    // tmux runs nothing for a `run-shell` with nothing to run.
+    if c.cmd.is_empty() && c.delay.is_none() {
+        return Ok(String::new());
+    }
+    if c.command {
+        return run_server_command(state, ctx, c);
+    }
     let client_session = ctx
         .client
         .and_then(|id| state.clients.get(&id))
@@ -1998,22 +2024,29 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
     let session_cwd = client_session
         .and_then(|s| state.model.sessions.get(&s))
         .map(|s| s.cwd.clone());
-    let cwd = pane::usable_cwd(session_cwd.unwrap_or_else(|| ctx.cwd.clone()));
+    // `-c` starts the command there; relative to the request's directory.
+    let cwd = match &c.cwd {
+        Some(dir) => pane::usable_cwd(ctx.cwd.join(dir)),
+        None => pane::usable_cwd(session_cwd.unwrap_or_else(|| ctx.cwd.clone())),
+    };
     let session =
         client_session.or_else(|| state.model.resolve_session(&cmd::Target::Current, ctx).ok());
     let env = hooks::shell_env(state, session);
+    // The words after the command are its `#{1}`, `#{2}`, ...
+    let text = with_arguments(&c.cmd, &c.args);
     // `-t` (FE.3): the formats expand against that pane, as in tmux.
     let script = match c.target {
-        cmd::Target::Current => expand_command(state, ctx, &c.cmd),
+        cmd::Target::Current => expand_command(state, ctx, &text),
         ref target => {
             let pane = state.model.resolve_pane(target, ctx)?;
             let at = ClientCtx {
                 pane: Some(pane),
                 ..ctx.clone()
             };
-            expand_command(state, &at, &c.cmd)
+            expand_command(state, &at, &text)
         }
     };
+    let stderr = c.stderr;
     // Its output is the reply (the CLI prints it, a binding shows it in
     // view mode), except with `-t`, where tmux prints it in that pane's
     // view mode, as it does for `-b` (the pane `cmd_find_from_nothing`
@@ -2038,7 +2071,7 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         }
         let mut result = match script.is_empty() && delay.is_some() {
             true => Ok(String::new()),
-            false => shell(&script, cwd, env, socket, true, &jobs).await,
+            false => shell_with(&script, cwd, env, socket, true, stderr, &jobs).await,
         };
         if reply.is_none() || to_pane || viewer.is_some() {
             let printed = match &mut result {
@@ -2055,6 +2088,75 @@ pub fn run_shell(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<Stri
         if let Some(reply) = reply {
             let _ = reply.send(result);
         }
+    });
+    Ok(String::new())
+}
+
+/// `command` with `#{1}`, `#{2}`, ... replaced by the `args` after it, as
+/// text, not as formats (a `#` in one stays a `#`).
+fn with_arguments(command: &str, args: &[String]) -> String {
+    let mut out = command.to_string();
+    for (i, arg) in args.iter().enumerate() {
+        let name = format!("#{{{}}}", i + 1);
+        let literal = arg.replace('#', "##");
+        let mut at = 0;
+        while let Some(found) = out[at..].find(&name) {
+            let start = at + found;
+            // `##{1}` is a `#` and `{1}`.
+            let escaped = out[..start]
+                .bytes()
+                .rev()
+                .take_while(|b| *b == b'#')
+                .count()
+                % 2
+                == 1;
+            if escaped {
+                at = start + name.len();
+                continue;
+            }
+            out.replace_range(start..start + name.len(), &literal);
+            at = start + literal.len();
+        }
+    }
+    out
+}
+
+/// `run-shell -C`: the command, expanded as a format, run by the server
+/// (after `-d`'s delay), its output the reply.
+fn run_server_command(state: &mut State, ctx: &ClientCtx, c: RunShell) -> Result<String, String> {
+    let at = match c.target {
+        cmd::Target::Current => ctx.clone(),
+        ref target => ClientCtx {
+            pane: Some(state.model.resolve_pane(target, ctx)?),
+            ..ctx.clone()
+        },
+    };
+    let text = expand_command(state, &at, &c.cmd);
+    let Some(delay) = c.delay else {
+        let out = crate::server::dispatch::bindings::run_branch(state, &at, &text);
+        // `-b` does not wait for the command, so there is no one to print to.
+        return if c.background {
+            out.map(|_| String::new())
+        } else {
+            out
+        };
+    };
+    let reply = (!c.background).then(|| dispatch::defer_reply(state));
+    let jobs = state.jobs.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let job: crate::server::Job = Box::new(move |state: &mut State| {
+            let result = if text.is_empty() {
+                Ok(String::new())
+            } else {
+                crate::server::dispatch::bindings::run_branch(state, &at, &text)
+            };
+            clients::changed(state);
+            if let Some(reply) = reply {
+                let _ = reply.send(result.map_err(Failure::from));
+            }
+        });
+        let _ = jobs.send(job).await;
     });
     Ok(String::new())
 }
@@ -2112,6 +2214,20 @@ pub(crate) async fn shell(
     capture: bool,
     jobs: &ShellJobs,
 ) -> Result<String, Failure> {
+    shell_with(script, cwd, env, socket, capture, false, jobs).await
+}
+
+/// [`shell`], with `merge_stderr` (`run-shell -E`) the command's stderr
+/// goes where its stdout does.
+pub(crate) async fn shell_with(
+    script: &str,
+    cwd: PathBuf,
+    env: Vec<(String, String)>,
+    socket: PathBuf,
+    capture: bool,
+    merge_stderr: bool,
+    jobs: &ShellJobs,
+) -> Result<String, Failure> {
     let stdout = if capture {
         Stdio::piped()
     } else {
@@ -2123,7 +2239,12 @@ pub(crate) async fn shell(
             // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
             .arg0("sh")
             .arg("-c")
-            .arg(script)
+            // `-E`: tmux's job writes stderr to the pipe stdout goes to.
+            .arg(if merge_stderr && capture {
+                format!("exec 2>&1\n{script}")
+            } else {
+                script.to_string()
+            })
             .current_dir(cwd)
             .env_clear()
             .envs(env)

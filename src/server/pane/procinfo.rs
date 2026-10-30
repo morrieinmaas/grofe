@@ -118,6 +118,11 @@ pub fn argv_lines(members: &[Vec<String>]) -> String {
         .join("\n")
 }
 
+/// The parent of process `pid`.
+pub fn parent(pid: i32) -> Option<i32> {
+    os::parent(pid)
+}
+
 /// How many times [`sample`] reads again after the name changed under it.
 const SAMPLE_TRIES: usize = 4;
 
@@ -172,6 +177,13 @@ mod os {
         dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
             .filter(|pid| stat_pgrp(*pid) == Some(pgrp))
             .collect()
+    }
+
+    /// Field 4 of `/proc/<pid>/stat`.
+    pub fn parent(pid: i32) -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rest = stat.get(stat.rfind(')')? + 2..)?;
+        rest.split(' ').nth(1)?.parse().ok()
     }
 
     /// Field 5 of `/proc/<pid>/stat`, after the parenthesised name, which
@@ -244,6 +256,24 @@ mod os {
             return None;
         }
         Some(PathBuf::from(std::ffi::OsStr::from_bytes(path)))
+    }
+
+    /// The parent pid, from `proc_pidinfo`'s `PROC_PIDTBSDINFO`.
+    pub fn parent(pid: i32) -> Option<i32> {
+        // SAFETY: an all-zero proc_bsdinfo is a valid value.
+        let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
+        let size = mem::size_of::<libc::proc_bsdinfo>() as i32;
+        // SAFETY: `info` is valid for `size` bytes.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast::<c_void>(),
+                size,
+            )
+        };
+        (n == size).then_some(info.pbi_ppid as i32)
     }
 
     /// `proc_listpids`'s type for "the members of one process group"

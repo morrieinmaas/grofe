@@ -1,0 +1,44 @@
+# B4: client flags: attach -r -f -c, refresh-client -f -F -A -B -C -r, switch-client -r -E -O.
+$ new-session -d -s main -x 60 -y 10 'cat'
+$ new-session -d -s other -x 50 -y 8 'cat'
+client 60x12 attach -t main -r -c /
+$ display-message -p -t main '#{session_path}'
+$ list-clients -F '#{client_flags}'
+keys a b
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t main:1
+$ refresh-client -t {client} -f '!read-only'
+$ list-clients -F '#{client_flags}'
+keys c
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t main:1
+$ refresh-client -t {client} -f ignore-size,active-pane,no-detach-on-destroy
+$ list-clients -F '#{client_flags}'
+$ refresh-client -t {client} -F '!ignore-size,bogus,!active-pane'
+$ list-clients -F '#{client_flags}'
+$ refresh-client -t {client} -A '%1:on'
+$ refresh-client -t {client} -B 'x:%1:#{pane_id}'
+$ refresh-client -t {client} -C 80x24
+$ refresh-client -t {client} -r '%1:rgb:ff/00/00'
+$ refresh-client -t {client} -f read-only -A '%1:on'
+$ list-clients -F '#{client_flags}'
+$ switch-client -r -c {client}
+$ list-clients -F '#{client_flags}'
+$ switch-client -r -c {client}
+$ list-clients -F '#{client_flags}'
+$ switch-client -n -c {client}
+$ list-clients -F '#{session_name} #{client_flags}'
+$ switch-client -p -c {client}
+$ list-clients -F '#{session_name}'
+$ switch-client -n -O name -c {client}
+$ list-clients -F '#{session_name}'
+$ switch-client -n -O name -r -c {client}
+$ list-clients -F '#{session_name} #{client_flags}'
+$ switch-client -n -O bogus -c {client}
+$ switch-client -l -c {client}
+$ list-clients -F '#{session_name}'
+$ switch-client -E -t main -c {client}
+$ switch-client -F -t other -c {client}
+$ list-clients -F '#{session_name}'
+$ refresh-client -t {client} -f ''
+$ refresh-client -t nosuch -f read-only

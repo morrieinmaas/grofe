@@ -1,0 +1,86 @@
+$ -h
+usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+            [-S socket-path] [-T features] [command [flags]]
+? 0
+$ -d
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -U
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -dh
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -hZ
+usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+            [-S socket-path] [-T features] [command [flags]]
+? 0
+$ -ZD
+! tmux: unknown option -- Z
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -N new-session -d -s main
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ -N start-server
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ -N has-session -t main
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ -N list-sessions
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ new-session -d -s main -x 40 -y 12 'sleep 100000'
+? 0
+$ -N has-session -t main
+? 0
+$ -N new-session -d -s two 'sleep 100000'
+? 0
+$ -q has-session -t main
+? 0
+$ -v has-session -t main
+? 0
+$ -vv list-sessions -F '#{session_name}'
+main
+two
+? 0
+$ -T RGB,256 list-sessions -F '#{session_name}'
+main
+two
+? 0
+$ -T nope list-sessions -F '#{session_name}'
+main
+two
+? 0
+$ -T clipboard:title -q list-sessions -F '#{session_name}'
+main
+two
+? 0
+$ -l has-session -t main
+? 0
+$ -c 'echo $0'
+sh
+? 0
+$ -l -c 'echo $0'
+-sh
+? 0
+$ -lc 'echo $0'
+-sh
+? 0
+$ -c 'echo hi' list-sessions
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -D list-sessions
+! usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
+!             [-S socket-path] [-T features] [command [flags]]
+? 1
+$ -2 -u list-sessions -F '#{session_name}'
+main
+two
+? 0

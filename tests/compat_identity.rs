@@ -407,14 +407,14 @@ fn a_refused_line_of_a_sourced_file_is_noted() {
     let new = tmux(&srv, &["new-session", "-d", "-s", "main", "sleep 100000"]);
     assert!(new.status.success(), "{}", new.stderr);
     let file = srv.home.join("lack.conf");
-    fs::write(&file, "set -g @a 1\nlock-server\nset -g @b 2\n").unwrap();
+    fs::write(&file, "set -g @a 1\ndetach-client -E true\nset -g @b 2\n").unwrap();
     let out = tmux(&srv, &["source-file", file.to_str().unwrap()]);
     assert!(!out.status.success());
     let value = |name: &str| tmux(&srv, &["show-options", "-gqv", name]).stdout;
     assert_eq!((value("@a").trim(), value("@b").trim()), ("1", "2"));
     let lines = miss_lines(&srv);
     assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].contains("lock-server"), "{lines:?}");
+    assert!(lines[0].contains("detach-client -E"), "{lines:?}");
 }
 
 /// A copy-mode command grofe does not know does nothing, as in tmux (which
@@ -796,5 +796,25 @@ fn plugin_verbs_are_unknown_commands_under_the_tmux_name() {
         );
     }
     assert_eq!(grofe(&srv, &["list-plugins"]), Ok(String::new()));
+    let _ = tmux(&srv, &["kill-server"]);
+}
+
+/// B4 review: `tmux -D` against a server already running is a client with
+/// no command, which tmux's server makes `new-session` (as bare `tmux`),
+/// not grofe's usage text.
+#[test]
+fn tmux_dash_d_with_a_running_server_runs_new_session() {
+    let srv = start_as_tmux();
+    let bare = tmux(&srv, &[]);
+    let foreground = tmux(&srv, &["-D"]);
+    assert!(
+        !foreground.stdout.contains("usage"),
+        "{}",
+        foreground.stdout
+    );
+    assert_eq!(
+        (foreground.status.code(), foreground.stderr),
+        (bare.status.code(), bare.stderr)
+    );
     let _ = tmux(&srv, &["kill-server"]);
 }

@@ -254,7 +254,7 @@ pub const EVENTS: &[EventSpec] = &[
     },
     EventSpec {
         name: "after-lock-server",
-        fires: "never: grofe has no lock-server (accepted so a tmux config loads)",
+        fires: "lock-server ran",
         tmux: "after-lock-server",
         kind: HookKind::Session,
     },
@@ -1279,6 +1279,10 @@ fn after_verb(cmd: &Command) -> Option<(&'static str, Option<&Target>)> {
         Command::ListSessions(_) => ("after-list-sessions", None),
         Command::ListWindows(c) => ("after-list-windows", Some(&c.target)),
         Command::LoadBuffer(_) => ("after-load-buffer", None),
+        // Only the server form has a hook of its name in tmux's table.
+        Command::Lock(crate::cmd::Lock {
+            scope: crate::cmd::LockScope::Server,
+        }) => ("after-lock-server", None),
         Command::PasteBuffer(c) => ("after-paste-buffer", Some(&c.target)),
         Command::RefreshClient(_) => ("after-refresh-client", None),
         Command::RenameSession(c) => ("after-rename-session", Some(&c.target)),
@@ -1520,7 +1524,9 @@ fn reported_window(
             Some(("window-layout-changed", m.panes.get(&pane)?.window, 1))
         }
         Command::SelectLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
-        Command::NextLayout(c) => Some(("window-layout-changed", as_pane(&c.target)?, 2)),
+        Command::NextLayout(c) | Command::PreviousLayout(c) => {
+            Some(("window-layout-changed", as_pane(&c.target)?, 2))
+        }
         _ => None,
     }
 }
@@ -2015,6 +2021,14 @@ pub fn session_environment(
     state.hooks.session_removed.insert(session, removed);
     state.hooks.session_hidden.remove(&session);
     env
+}
+
+/// A session's environment when `new-session -E` takes nothing from the
+/// client: empty, and no variable marked removed.
+pub fn blank_session_environment(state: &mut State, session: SessionId) -> Vec<(String, String)> {
+    state.hooks.session_removed.insert(session, BTreeSet::new());
+    state.hooks.session_hidden.remove(&session);
+    Vec::new()
 }
 
 /// Attach and switch-client: `session` takes the `update-environment`

@@ -1,0 +1,10 @@
+# B4: remain-on-exit key (split-window -k): a key pressed over the dead pane closes it.
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+$ split-window -d -k -t main:1 'echo gone; exit 0'
+client 60x12 attach -t main
+$ run-shell 'sleep 0.5'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{remain-on-exit}'
+$ select-pane -t main:1.2
+keys x
+$ run-shell 'sleep 0.3'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead}'

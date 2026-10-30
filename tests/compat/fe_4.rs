@@ -1257,10 +1257,6 @@ fn mouse_positions_are_semantic_and_the_other_letters_map() {
         ])
         .is_ok()
     );
-    assert!(
-        run(&["wait-for", "-L", "x"])
-            .unwrap_err()
-            .0
-            .contains("not supported")
-    );
+    // `wait-for -L` is a lock now (B4).
+    assert!(run(&["wait-for", "-L", "x"]).is_ok());
 }

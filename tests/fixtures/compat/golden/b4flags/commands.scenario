@@ -1,0 +1,63 @@
+# B4: the commands grofe lacked: lock-server, lock-session, lock-client, previous-layout, server-access, show-prompt-history, clear-prompt-history.
+$ new-session -d -s main -x 60 -y 12 'sleep 100000'
+$ new-session -d -s other -x 60 -y 12 'sleep 100000'
+$ lock-server
+$ lock-session -t main
+$ lock-session -t nosuch
+$ lock-client
+$ lock-client -t nosuch
+$ lock-server extra
+$ lock-session -z
+$ set-hook -g after-lock-server 'set -g @locked yes'
+$ lock-server
+$ run-shell 'sleep 0.3'
+$ show-options -gv @locked
+$ show-options -gv lock-command
+$ show-options -gv lock-after-time
+$ show-options -sv lock-after-time
+$ split-window -d -t main 'sleep 100000'
+$ split-window -d -t main 'sleep 100000'
+$ select-layout -t main even-horizontal
+$ display-message -p -t main '#{window_layout}'
+$ previous-layout -t main
+$ display-message -p -t main '#{window_layout}'
+$ previous-layout -t main
+$ display-message -p -t main '#{window_layout}'
+$ previous-layout -t main:9
+$ previous-layout -x
+$ previous-layout extra
+$ next-layout -t main
+$ display-message -p -t main '#{window_layout}'
+$ server-access -l
+$ server-access
+$ server-access nosuchuser
+$ server-access -a root
+$ server-access -a -d nobody
+$ server-access -r -w nobody
+$ server-access -l extra
+$ server-access -t %1 -l
+$ server-access -a nobody
+$ server-access -l
+$ server-access -a nobody
+$ server-access -r nobody
+$ server-access -l
+$ server-access -w nobody
+$ server-access -l
+$ server-access -d nobody
+$ server-access -d nobody
+$ server-access -l
+$ server-access -r daemon
+$ server-access -l
+$ server-access -w daemon
+$ server-access -l
+$ server-access -d daemon
+$ server-access -l
+$ show-prompt-history
+$ show-prompt-history -T command
+$ show-prompt-history -T search
+$ show-prompt-history -T nosuch
+$ clear-prompt-history -T nosuch
+$ clear-prompt-history
+$ clear-prompt-history -T window-target
+$ show-prompt-history -T window-target
+$ show-prompt-history extra

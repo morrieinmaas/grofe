@@ -14,14 +14,15 @@ use super::{
     CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes,
     DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
-    ListPlugins, ListSessions, ListWindows, LoadBuffer, Mark, MenuEntry, MoveWindow, NewPane,
-    NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, ParseError, PasteBuffer, PipePane,
-    PlacePane, PluginRestart, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
-    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
-    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, SetBuffer, SetEnvironment,
-    SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions,
-    SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target,
-    UnbindKey, UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
+    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, PaneSetup,
+    ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart, PromptHistory, RefreshClient,
+    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
+    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile,
+    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
+    UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -153,6 +154,14 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
     Ok(flags)
 }
 
+/// The `-O order` and `-r` of a listing command.
+fn sort_flags(flags: &ParsedFlags) -> SortFlags {
+    SortFlags {
+        order: flags.values.get(&'O').cloned(),
+        reversed: flags.present.contains(&'r'),
+    }
+}
+
 fn target_or_current(values: &BTreeMap<char, String>, key: char) -> Result<Target, ParseError> {
     match values.get(&key) {
         Some(s) => parse_target(s),
@@ -225,6 +234,10 @@ const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
     ('F', FlagKind::Value),
     ('t', FlagKind::Value),
     ('e', FlagKind::Value),
+    ('D', FlagKind::Bool),
+    ('X', FlagKind::Bool),
+    ('E', FlagKind::Bool),
+    ('f', FlagKind::Value),
 ];
 
 fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
@@ -260,6 +273,10 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         window_name: flags.values.get(&'n').cloned(),
         group: flags.values.get(&'t').cloned(),
         env,
+        detach_others: flags.present.contains(&'D') || flags.present.contains(&'X'),
+        kill_parent: flags.present.contains(&'X'),
+        no_env: flags.present.contains(&'E'),
+        flags: flags.values.get(&'f').cloned(),
     }))
 }
 
@@ -382,7 +399,12 @@ fn parse_kill_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-const LIST_SESSIONS_SHORT: &[(char, FlagKind)] = &[('F', FlagKind::Value), ('f', FlagKind::Value)];
+const LIST_SESSIONS_SHORT: &[(char, FlagKind)] = &[
+    ('F', FlagKind::Value),
+    ('f', FlagKind::Value),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
+];
 
 fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -397,6 +419,7 @@ fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ListSessions(ListSessions {
         format: flags.values.get(&'F').cloned(),
         filter: flags.values.get(&'f').cloned(),
+        sort: sort_flags(&flags),
     }))
 }
 
@@ -405,6 +428,8 @@ const LIST_WINDOWS_SHORT: &[(char, FlagKind)] = &[
     ('F', FlagKind::Value),
     ('a', FlagKind::Bool),
     ('f', FlagKind::Value),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
 ];
 
 fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
@@ -422,6 +447,7 @@ fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.values.get(&'F').cloned(),
         all: flags.present.contains(&'a'),
         filter: flags.values.get(&'f').cloned(),
+        sort: sort_flags(&flags),
     }))
 }
 
@@ -431,6 +457,8 @@ const LIST_PANES_SHORT: &[(char, FlagKind)] = &[
     ('a', FlagKind::Bool),
     ('s', FlagKind::Bool),
     ('f', FlagKind::Value),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
 ];
 
 fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
@@ -449,6 +477,7 @@ fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
         all: flags.present.contains(&'a'),
         session: flags.present.contains(&'s'),
         filter: flags.values.get(&'f').cloned(),
+        sort: sort_flags(&flags),
     }))
 }
 
@@ -506,7 +535,23 @@ const SPLIT_WINDOW_SHORT: &[(char, FlagKind)] = &[
     ('t', FlagKind::Value),
     ('e', FlagKind::Value),
     ('Z', FlagKind::Bool),
+    ('s', FlagKind::Value),
+    ('S', FlagKind::Value),
+    ('R', FlagKind::Value),
+    ('k', FlagKind::Bool),
+    ('m', FlagKind::Value),
 ];
+
+/// The styles and the staying of a new pane (`-s -S -R -k -m`).
+fn pane_setup(flags: &ParsedFlags) -> PaneSetup {
+    PaneSetup {
+        style: flags.values.get(&'s').cloned(),
+        active_border: flags.values.get(&'S').cloned(),
+        inactive_border: flags.values.get(&'R').cloned(),
+        keep: flags.present.contains(&'k') || flags.present.contains(&'m'),
+        message: flags.values.get(&'m').cloned(),
+    }
+}
 
 fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -517,6 +562,11 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         },
         "split-window",
     )?;
+    split_window_of(flags).map(Command::SplitWindow)
+}
+
+/// The `split-window` the parsed flags mean (`new-pane -L` shares them).
+fn split_window_of(flags: ParsedFlags) -> Result<SplitWindow, ParseError> {
     let dir = match (flags.present.contains(&'h'), flags.present.contains(&'v')) {
         (true, true) => {
             return Err(ParseError::Other(
@@ -560,7 +610,8 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         (None, None, None) => SplitSize::Half,
     };
     let env = env_values(&flags);
-    Ok(Command::SplitWindow(SplitWindow {
+    Ok(SplitWindow {
+        setup: pane_setup(&flags),
         dir,
         cwd: flags.values.get(&'c').cloned(),
         size,
@@ -573,7 +624,7 @@ fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.values.get(&'F').cloned(),
         env,
         zoom: flags.present.contains(&'Z'),
-    }))
+    })
 }
 
 const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
@@ -703,6 +754,7 @@ const RESPAWN_PANE_SHORT: &[(char, FlagKind)] = &[
     ('k', FlagKind::Bool),
     ('t', FlagKind::Value),
     ('c', FlagKind::Value),
+    ('e', FlagKind::Value),
 ];
 
 /// `respawn-pane`, and `respawn-window` (M36-R6), which has its shape.
@@ -718,8 +770,9 @@ fn parse_respawn(argv: &[String], cmd_name: &str) -> Result<RespawnPane, ParseEr
     Ok(RespawnPane {
         kill: flags.present.contains(&'k'),
         target: target_or_current(&flags.values, 't')?,
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
         cwd: flags.values.get(&'c').cloned(),
+        env: env_values(&flags),
+        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
     })
 }
 
@@ -789,6 +842,13 @@ const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
     ('T', FlagKind::Bool),
     // Only for `-a`, which says "no alternate screen" without it.
     ('q', FlagKind::Bool),
+    ('a', FlagKind::Bool),
+    ('C', FlagKind::Bool),
+    ('F', FlagKind::Bool),
+    ('H', FlagKind::Bool),
+    ('L', FlagKind::Bool),
+    ('M', FlagKind::Bool),
+    ('P', FlagKind::Bool),
     ('S', FlagKind::Value),
     ('E', FlagKind::Value),
     ('t', FlagKind::Value),
@@ -833,6 +893,14 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
         join: flags.present.contains(&'J'),
         keep_blanks: flags.present.contains(&'N'),
         written_only: flags.present.contains(&'T'),
+        numbered: flags.present.contains(&'L'),
+        flags: flags.present.contains(&'F'),
+        escaped: flags.present.contains(&'C'),
+        links: flags.present.contains(&'H'),
+        alternate: flags.present.contains(&'a'),
+        mode: flags.present.contains(&'M'),
+        pending: flags.present.contains(&'P'),
+        quiet: flags.present.contains(&'q'),
     }))
 }
 
@@ -865,6 +933,7 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
     ('F', FlagKind::Bool),
     ('q', FlagKind::Bool),
     ('o', FlagKind::Bool),
+    ('U', FlagKind::Bool),
 ];
 const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
 
@@ -917,7 +986,8 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
     }
     Ok(Command::SetOption(SetOption {
         scope,
-        unset: flags.present.contains(&'u'),
+        unset: flags.present.contains(&'u') || flags.present.contains(&'U'),
+        unset_panes: flags.present.contains(&'U'),
         persist: flags.long_present.contains("persist"),
         target: target_or_current(&flags.values, 't')?,
         name,
@@ -938,6 +1008,8 @@ const SHOW_OPTIONS_SHORT: &[(char, FlagKind)] = &[
     ('t', FlagKind::Value),
     ('v', FlagKind::Bool),
     ('q', FlagKind::Bool),
+    ('A', FlagKind::Bool),
+    ('H', FlagKind::Bool),
 ];
 
 fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
@@ -961,6 +1033,8 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
         name,
         value_only: flags.present.contains(&'v'),
         quiet: flags.present.contains(&'q'),
+        inherited: flags.present.contains(&'A'),
+        hooks: flags.present.contains(&'H'),
     }))
 }
 
@@ -973,6 +1047,11 @@ const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
     ('c', FlagKind::Value),
     ('d', FlagKind::Value),
     ('F', FlagKind::Value),
+    ('N', FlagKind::Bool),
+    // The message of `display-message` freezes the terminal's pane output
+    // while it shows in tmux; here nothing does, so `-C` has nothing to
+    // switch off.
+    ('C', FlagKind::Bool),
 ];
 
 fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
@@ -1004,6 +1083,7 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         all: flags.present.contains(&'a'),
         literal: flags.present.contains(&'l'),
         verbose: flags.present.contains(&'v'),
+        ignore_keys: flags.present.contains(&'N'),
     }))
 }
 
@@ -1063,7 +1143,15 @@ fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::Subscribe(Subscribe { events, target }))
 }
 
-const ATTACH_SESSION_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('d', FlagKind::Bool)];
+const ATTACH_SESSION_SHORT: &[(char, FlagKind)] = &[
+    ('t', FlagKind::Value),
+    ('d', FlagKind::Bool),
+    ('c', FlagKind::Value),
+    ('E', FlagKind::Bool),
+    ('r', FlagKind::Bool),
+    ('x', FlagKind::Bool),
+    ('f', FlagKind::Value),
+];
 const ATTACH_SESSION_LONG: &[(&str, FlagKind)] = &[("nest", FlagKind::Bool)];
 
 fn parse_attach_session(argv: &[String]) -> Result<Command, ParseError> {
@@ -1078,8 +1166,33 @@ fn parse_attach_session(argv: &[String]) -> Result<Command, ParseError> {
     no_extra_positionals(&flags, "attach-session", 0)?;
     Ok(Command::AttachSession(AttachSession {
         target: target_or_current(&flags.values, 't')?,
-        detach_others: flags.present.contains(&'d'),
+        detach_others: flags.present.contains(&'d') || flags.present.contains(&'x'),
         nest: flags.long_present.contains("nest"),
+        cwd: flags.values.get(&'c').cloned(),
+        no_env: flags.present.contains(&'E'),
+        read_only: flags.present.contains(&'r'),
+        kill_parent: flags.present.contains(&'x'),
+        flags: flags.values.get(&'f').cloned(),
+    }))
+}
+
+fn parse_server_access(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('a', FlagKind::Bool),
+        ('d', FlagKind::Bool),
+        ('l', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+        ('w', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "server-access")?;
+    no_extra_positionals(&flags, "server-access", 1)?;
+    Ok(Command::ServerAccess(ServerAccess {
+        add: flags.present.contains(&'a'),
+        deny: flags.present.contains(&'d'),
+        list: flags.present.contains(&'l'),
+        read_only: flags.present.contains(&'r'),
+        write: flags.present.contains(&'w'),
+        user: flags.positionals.first().cloned(),
     }))
 }
 
@@ -1087,6 +1200,7 @@ const DETACH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('s', FlagKind::Value),
     ('t', FlagKind::Value),
     ('a', FlagKind::Bool),
+    ('P', FlagKind::Bool),
 ];
 
 fn parse_detach_client(argv: &[String]) -> Result<Command, ParseError> {
@@ -1107,6 +1221,7 @@ fn parse_detach_client(argv: &[String]) -> Result<Command, ParseError> {
             .transpose()?,
         client: flags.values.get(&'t').cloned(),
         all_others: flags.present.contains(&'a'),
+        kill_parent: flags.present.contains(&'P'),
     }))
 }
 
@@ -1114,6 +1229,8 @@ const LIST_CLIENTS_SHORT: &[(char, FlagKind)] = &[
     ('F', FlagKind::Value),
     ('f', FlagKind::Value),
     ('t', FlagKind::Value),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
 ];
 
 fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
@@ -1134,6 +1251,7 @@ fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
         format: flags.values.get(&'F').cloned(),
         target,
         filter: flags.values.get(&'f').cloned(),
+        sort: sort_flags(&flags),
     }))
 }
 
@@ -1192,6 +1310,11 @@ const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('T', FlagKind::Value),
     ('c', FlagKind::Value),
     ('Z', FlagKind::Bool),
+    ('E', FlagKind::Bool),
+    ('r', FlagKind::Bool),
+    ('O', FlagKind::Value),
+    // In tmux's args template and read by nothing.
+    ('F', FlagKind::Bool),
 ];
 
 fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
@@ -1216,12 +1339,22 @@ fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
         key_table: flags.values.get(&'T').cloned(),
         client: flags.values.get(&'c').cloned(),
         keep_zoom: flags.present.contains(&'Z'),
+        no_env: flags.present.contains(&'E'),
+        toggle_read_only: flags.present.contains(&'r'),
+        order: flags.values.get(&'O').cloned(),
     }))
 }
 
 fn parse_send_prefix(argv: &[String]) -> Result<Command, ParseError> {
+    let flags = flags_for(
+        argv,
+        &[('t', FlagKind::Value), ('2', FlagKind::Bool)],
+        "send-prefix",
+    )?;
+    no_extra_positionals(&flags, "send-prefix", 0)?;
     Ok(Command::SendPrefix(SendPrefix {
-        target: parse_target_only(argv, "send-prefix")?,
+        target: target_or_current(&flags.values, 't')?,
+        second: flags.present.contains(&'2'),
     }))
 }
 
@@ -1303,6 +1436,11 @@ const LIST_KEYS_SHORT: &[(char, FlagKind)] = &[
     ('T', FlagKind::Value),
     ('1', FlagKind::Bool),
     ('N', FlagKind::Bool),
+    ('a', FlagKind::Bool),
+    ('F', FlagKind::Value),
+    ('P', FlagKind::Value),
+    ('O', FlagKind::Value),
+    ('r', FlagKind::Bool),
 ];
 
 fn parse_list_keys(argv: &[String]) -> Result<Command, ParseError> {
@@ -1320,6 +1458,10 @@ fn parse_list_keys(argv: &[String]) -> Result<Command, ParseError> {
         first: flags.present.contains(&'1'),
         notes: flags.present.contains(&'N'),
         key: flags.positionals.first().cloned(),
+        all: flags.present.contains(&'a'),
+        format: flags.values.get(&'F').cloned(),
+        prefix: flags.values.get(&'P').cloned(),
+        sort: sort_flags(&flags),
     }))
 }
 
@@ -1452,6 +1594,11 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
                 ('b', FlagKind::Bool),
                 ('d', FlagKind::Value),
                 ('t', FlagKind::Value),
+                ('C', FlagKind::Bool),
+                ('E', FlagKind::Bool),
+                ('c', FlagKind::Value),
+                // In tmux's args template and read by nothing.
+                ('s', FlagKind::Value),
             ],
             long: &[],
         },
@@ -1469,15 +1616,31 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
         ),
         None => None,
     };
+    let command = flags.present.contains(&'C');
+    // A shell command is the first word, the others its `#{1}`, `#{2}`; a
+    // command (`-C`) is the first word alone.
+    let mut words = flags.positionals.iter();
     let cmd = match (&delay, flags.positionals.is_empty()) {
         (Some(_), true) => String::new(),
-        _ => one_positional(&flags, "run-shell")?,
+        // The command line is the first word, as tmux reads it; the others
+        // are nothing to it.
+        _ if command => {
+            let first = words.next().cloned().unwrap_or_default();
+            words.by_ref().for_each(drop);
+            first
+        }
+        // tmux runs nothing for a bare `run-shell`.
+        _ => words.next().cloned().unwrap_or_default(),
     };
     Ok(Command::RunShell(RunShell {
         cmd,
         delay,
         background: flags.present.contains(&'b'),
         target: target_or_current(&flags.values, 't')?,
+        command,
+        stderr: flags.present.contains(&'E'),
+        cwd: flags.values.get(&'c').cloned(),
+        args: words.cloned().collect(),
     }))
 }
 
@@ -1501,22 +1664,34 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
         argv,
         &FlagTable {
-            short: &[('t', FlagKind::Value), ('E', FlagKind::Bool)],
+            short: &[
+                ('t', FlagKind::Value),
+                ('E', FlagKind::Bool),
+                ('n', FlagKind::Bool),
+                ('o', FlagKind::Bool),
+                ('p', FlagKind::Bool),
+            ],
             long: &[],
         },
         "select-layout",
     )?;
-    let spread = flags.present.contains(&'E');
-    let name = if spread {
-        no_extra_positionals(&flags, "select-layout", 1)?;
-        flags.positionals.first().cloned().unwrap_or_default()
-    } else {
-        one_positional(&flags, "select-layout")?
-    };
+    let (next, previous, undo, spread) = (
+        flags.present.contains(&'n'),
+        flags.present.contains(&'p'),
+        flags.present.contains(&'o'),
+        flags.present.contains(&'E'),
+    );
+    // A layout name is optional: tmux takes none to mean the last preset
+    // used (`-o`: the layout before the last change).
+    no_extra_positionals(&flags, "select-layout", 1)?;
+    let name = flags.positionals.first().cloned().unwrap_or_default();
     Ok(Command::SelectLayout(SelectLayout {
         target: target_or_current(&flags.values, 't')?,
         name,
         spread,
+        next,
+        previous,
+        undo,
     }))
 }
 
@@ -1656,14 +1831,32 @@ const JOIN_PANE_SHORT: &[(char, FlagKind)] = &[
     ('h', FlagKind::Bool),
     ('v', FlagKind::Bool),
     ('l', FlagKind::Value),
+    ('p', FlagKind::Value),
     ('s', FlagKind::Value),
     ('t', FlagKind::Value),
 ];
 
-/// `join-pane` and `move-pane`, which share tmux's flags.
+/// `join-pane` and `move-pane`, which share tmux's flags. `-p` is the
+/// hidden one (in the args template, not the usage): a percentage, which
+/// `-l` overrides when both are given (`layout_get_tiled_cell`).
 fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseError> {
     let flags = flags_for(argv, JOIN_PANE_SHORT, cmd_name)?;
     no_extra_positionals(&flags, cmd_name, 0)?;
+    let invalid = || ParseError::Other("size or position invalid tiled geometry".to_string());
+    let size = match (flags.values.get(&'l'), flags.values.get(&'p')) {
+        (Some(_), _) | (None, None) => extent_value(
+            &flags,
+            'l',
+            0,
+            SizeWords::Fixed("size or position invalid tiled geometry"),
+        )?,
+        (None, Some(p)) => Some(SplitSize::Percent(
+            p.parse::<u8>()
+                .ok()
+                .filter(|p| *p <= 100)
+                .ok_or_else(invalid)?,
+        )),
+    };
     Ok(JoinPane {
         src: target_or_current(&flags.values, 's')?,
         dst: target_or_current(&flags.values, 't')?,
@@ -1672,12 +1865,7 @@ fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseErr
         full: flags.present.contains(&'f'),
         horizontal: flags.present.contains(&'h'),
         vertical: flags.present.contains(&'v'),
-        size: extent_value(
-            &flags,
-            'l',
-            0,
-            SizeWords::Fixed("size or position invalid tiled geometry"),
-        )?,
+        size,
     })
 }
 
@@ -1749,10 +1937,34 @@ fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
         ('y', FlagKind::Value),
         ('A', FlagKind::Bool),
         ('a', FlagKind::Bool),
+        ('L', FlagKind::Bool),
+        ('R', FlagKind::Bool),
+        ('U', FlagKind::Bool),
+        ('D', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "resize-window")?;
-    no_extra_positionals(&flags, "resize-window", 0)?;
+    no_extra_positionals(&flags, "resize-window", 1)?;
+    let adjust = match flags.positionals.first() {
+        Some(s) => s
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=i32::MAX as u32).contains(n))
+            .ok_or_else(|| ParseError::Other(format!("adjustment {}", adjustment_why(s))))?,
+        None => 1,
+    };
+    // tmux tries -L, -R, -U, then -D.
+    let direction = [
+        ('L', Edge::Left),
+        ('R', Edge::Right),
+        ('U', Edge::Up),
+        ('D', Edge::Down),
+    ]
+    .into_iter()
+    .find(|(c, _)| flags.present.contains(c))
+    .map(|(_, e)| e);
     Ok(Command::ResizeWindow(ResizeWindow {
+        direction,
+        adjust,
         target: target_or_current(&flags.values, 't')?,
         width: flags
             .values
@@ -1769,11 +1981,28 @@ fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+/// Why `strtonum(s, 1, INT_MAX)` fails, as tmux words it after
+/// `adjustment `.
+fn adjustment_why(s: &str) -> &'static str {
+    match s.parse::<i64>() {
+        Ok(n) if n < 1 => "too small",
+        Ok(_) => "too large",
+        Err(_)
+            if s.starts_with('-') && s[1..].bytes().all(|b| b.is_ascii_digit()) && s.len() > 1 =>
+        {
+            "too small"
+        }
+        Err(_) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => "too large",
+        Err(_) => "invalid",
+    }
+}
+
 fn parse_rotate_window(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('t', FlagKind::Value),
         ('U', FlagKind::Bool),
         ('D', FlagKind::Bool),
+        ('Z', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "rotate-window")?;
     no_extra_positionals(&flags, "rotate-window", 0)?;
@@ -1781,6 +2010,7 @@ fn parse_rotate_window(argv: &[String]) -> Result<Command, ParseError> {
         target: target_or_current(&flags.values, 't')?,
         up: flags.present.contains(&'U'),
         down: flags.present.contains(&'D'),
+        keep_zoom: flags.present.contains(&'Z'),
     }))
 }
 
@@ -1847,6 +2077,13 @@ fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
         ('R', FlagKind::Bool),
         ('U', FlagKind::Bool),
         ('D', FlagKind::Bool),
+        ('F', FlagKind::Value),
+        ('f', FlagKind::Value),
+        ('l', FlagKind::Bool),
+        ('r', FlagKind::Value),
+        ('A', FlagKind::Value),
+        ('B', FlagKind::Value),
+        ('C', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "refresh-client")?;
     no_extra_positionals(&flags, "refresh-client", 1)?;
@@ -1865,6 +2102,14 @@ fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
         status: flags.present.contains(&'S'),
         pan,
         adjustment: flags.positionals.first().cloned(),
+        // `-F` is `-f`'s alias, and goes first.
+        flags: ['F', 'f']
+            .iter()
+            .filter_map(|f| flags.values.get(f).cloned())
+            .collect(),
+        clipboard: flags.present.contains(&'l'),
+        report: flags.values.get(&'r').cloned(),
+        control: ['A', 'B', 'C'].iter().any(|f| flags.present.contains(f)),
     }))
 }
 
@@ -1962,7 +2207,15 @@ fn parse_suspend_client(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('Z', FlagKind::Bool)];
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('Z', FlagKind::Bool),
+        ('C', FlagKind::Bool),
+        ('N', FlagKind::Bool),
+        ('T', FlagKind::Bool),
+        ('r', FlagKind::Bool),
+        ('i', FlagKind::Bool),
+    ];
     let flags = flags_for(argv, SHORT, "find-window")?;
     needs_positionals(argv, &flags, "find-window", 1)?;
     no_extra_positionals(&flags, "find-window", 1)?;
@@ -1970,6 +2223,11 @@ fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
         target: target_or_current(&flags.values, 't')?,
         zoom: flags.present.contains(&'Z'),
         pattern: flags.positionals.first().cloned(),
+        content: flags.present.contains(&'C'),
+        name: flags.present.contains(&'N'),
+        title: flags.present.contains(&'T'),
+        regex: flags.present.contains(&'r'),
+        ignore: flags.present.contains(&'i'),
     }))
 }
 
@@ -1998,12 +2256,22 @@ fn parse_choose_tree(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_wait_for(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('S', FlagKind::Bool)], "wait-for")?;
+    let flags = flags_for(
+        argv,
+        &[
+            ('S', FlagKind::Bool),
+            ('L', FlagKind::Bool),
+            ('U', FlagKind::Bool),
+        ],
+        "wait-for",
+    )?;
     needs_positionals(argv, &flags, "wait-for", 1)?;
     no_extra_positionals(&flags, "wait-for", 1)?;
     Ok(Command::WaitFor(WaitFor {
         channel: flags.positionals.first().cloned(),
         signal: flags.present.contains(&'S'),
+        lock: flags.present.contains(&'L'),
+        unlock: flags.present.contains(&'U'),
     }))
 }
 
@@ -2012,6 +2280,8 @@ fn parse_set_buffer(argv: &[String]) -> Result<Command, ParseError> {
         ('a', FlagKind::Bool),
         ('b', FlagKind::Value),
         ('n', FlagKind::Value),
+        ('t', FlagKind::Value),
+        ('w', FlagKind::Bool),
     ];
     let flags = flags_for(argv, SHORT, "set-buffer")?;
     no_extra_positionals(&flags, "set-buffer", 1)?;
@@ -2020,6 +2290,8 @@ fn parse_set_buffer(argv: &[String]) -> Result<Command, ParseError> {
         name: flags.values.get(&'b').cloned(),
         rename: flags.values.get(&'n').cloned(),
         data: flags.positionals.first().cloned(),
+        clipboard: flags.present.contains(&'w'),
+        client: flags.values.get(&'t').cloned(),
     }))
 }
 
@@ -2109,8 +2381,25 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
         ('e', FlagKind::Value),
         ('Z', FlagKind::Bool),
         ('d', FlagKind::Bool),
+        // `-L` makes it a tiled pane, which `split-window` has the rest of
+        // the flags for; for a floating one tmux reads and ignores them.
+        ('L', FlagKind::Bool),
+        ('b', FlagKind::Bool),
+        ('f', FlagKind::Bool),
+        ('h', FlagKind::Bool),
+        ('v', FlagKind::Bool),
+        ('l', FlagKind::Value),
+        ('p', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('S', FlagKind::Value),
+        ('R', FlagKind::Value),
+        ('k', FlagKind::Bool),
+        ('m', FlagKind::Value),
     ];
     let flags = flags_for(argv, SHORT, "new-pane")?;
+    if flags.present.contains(&'L') {
+        return split_window_of(flags).map(Command::SplitWindow);
+    }
     let env = env_values(&flags);
     Ok(Command::NewPane(NewPane {
         print: flags.present.contains(&'P'),
@@ -2124,6 +2413,7 @@ fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
         env,
         zoom: flags.present.contains(&'Z'),
         detached: flags.present.contains(&'d'),
+        setup: pane_setup(&flags),
         command: (!flags.positionals.is_empty()).then_some(flags.positionals),
     }))
 }
@@ -3365,6 +3655,13 @@ pub fn canonical_name(name: &str) -> &str {
         "source" => "source-file",
         "run" => "run-shell",
         "selectl" => "select-layout",
+        "prevl" => "previous-layout",
+        "nextl" => "next-layout",
+        "lock" => "lock-server",
+        "locks" => "lock-session",
+        "lockc" => "lock-client",
+        "showphist" => "show-prompt-history",
+        "clearphist" => "clear-prompt-history",
         other => other,
     }
 }
@@ -3440,6 +3737,36 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "next-layout" => Ok(Command::NextLayout(NextLayout {
             target: parse_target_only(rest, "next-layout")?,
         })),
+        "previous-layout" => Ok(Command::PreviousLayout(NextLayout {
+            target: parse_target_only(rest, "previous-layout")?,
+        })),
+        "lock-server" => {
+            let flags = flags_for(rest, &[], "lock-server")?;
+            no_extra_positionals(&flags, "lock-server", 0)?;
+            Ok(Command::Lock(Lock {
+                scope: LockScope::Server,
+            }))
+        }
+        "lock-session" => Ok(Command::Lock(Lock {
+            scope: LockScope::Session(parse_target_only(rest, "lock-session")?),
+        })),
+        "lock-client" => {
+            let flags = flags_for(rest, &[('t', FlagKind::Value)], "lock-client")?;
+            no_extra_positionals(&flags, "lock-client", 0)?;
+            Ok(Command::Lock(Lock {
+                scope: LockScope::Client(flags.values.get(&'t').cloned()),
+            }))
+        }
+        "server-access" => parse_server_access(rest),
+        "show-prompt-history" | "clear-prompt-history" => {
+            let name = canonical_name(name);
+            let flags = flags_for(rest, &[('T', FlagKind::Value)], name)?;
+            no_extra_positionals(&flags, name, 0)?;
+            Ok(Command::PromptHistory(PromptHistory {
+                clear: name == "clear-prompt-history",
+                kind: flags.values.get(&'T').cloned(),
+            }))
+        }
         "respawn-window" => Ok(Command::RespawnWindow(parse_respawn(
             rest,
             "respawn-window",
@@ -3506,10 +3833,21 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             }))
         }
         "list-buffers" => {
-            let flags = flags_for(rest, &[('F', FlagKind::Value)], "list-buffers")?;
+            let flags = flags_for(
+                rest,
+                &[
+                    ('F', FlagKind::Value),
+                    ('f', FlagKind::Value),
+                    ('O', FlagKind::Value),
+                    ('r', FlagKind::Bool),
+                ],
+                "list-buffers",
+            )?;
             no_extra_positionals(&flags, "list-buffers", 0)?;
             Ok(Command::ListBuffers(ListBuffers {
                 format: flags.values.get(&'F').cloned(),
+                filter: flags.values.get(&'f').cloned(),
+                sort: sort_flags(&flags),
             }))
         }
         "delete-buffer" => {
@@ -3723,6 +4061,7 @@ mod tests {
                 all: false,
                 literal: false,
                 verbose: false,
+                ignore_keys: false,
             })
         );
         assert_eq!(
@@ -3778,6 +4117,7 @@ mod tests {
             Command::ListSessions(ListSessions {
                 format: Some("#{session_name}".to_string()),
                 filter: None,
+                sort: SortFlags::default(),
             })
         );
     }
@@ -3793,6 +4133,7 @@ mod tests {
                 all: false,
                 session: false,
                 filter: None,
+                sort: SortFlags::default(),
             })
         );
     }
@@ -4140,6 +4481,7 @@ mod tests {
                 }),
                 command: Some(vec!["bash".to_string()]),
                 cwd: None,
+                env: Vec::new(),
             })
         );
     }
@@ -4232,6 +4574,14 @@ mod tests {
                 join: false,
                 keep_blanks: false,
                 written_only: false,
+                numbered: false,
+                flags: false,
+                escaped: false,
+                links: false,
+                alternate: false,
+                mode: false,
+                pending: false,
+                quiet: false,
             })
         );
     }
@@ -4253,6 +4603,14 @@ mod tests {
                 join: false,
                 keep_blanks: false,
                 written_only: false,
+                numbered: false,
+                flags: false,
+                escaped: false,
+                links: false,
+                alternate: false,
+                mode: false,
+                pending: false,
+                quiet: false,
             })
         );
     }
@@ -4274,6 +4632,14 @@ mod tests {
                 join: false,
                 keep_blanks: false,
                 written_only: false,
+                numbered: false,
+                flags: false,
+                escaped: false,
+                links: false,
+                alternate: false,
+                mode: false,
+                pending: false,
+                quiet: false,
             })
         );
     }
@@ -4295,6 +4661,7 @@ mod tests {
             Command::SetOption(SetOption {
                 scope: Some(OptionScope::Global),
                 unset: false,
+                unset_panes: false,
                 persist: true,
                 target: Target::Current,
                 name: "history-limit".to_string(),
@@ -4316,6 +4683,7 @@ mod tests {
             Command::SetOption(SetOption {
                 scope: None,
                 unset: true,
+                unset_panes: false,
                 persist: false,
                 target: Target::Current,
                 name: "@my-opt".to_string(),
@@ -4430,6 +4798,8 @@ mod tests {
                 name: None,
                 value_only: false,
                 quiet: false,
+                inherited: false,
+                hooks: false,
             })
         );
     }
@@ -4445,6 +4815,8 @@ mod tests {
                 name: None,
                 value_only: false,
                 quiet: false,
+                inherited: false,
+                hooks: false,
             })
         );
     }
@@ -4463,6 +4835,7 @@ mod tests {
                 all: false,
                 literal: false,
                 verbose: false,
+                ignore_keys: false,
             })
         );
     }
@@ -4594,6 +4967,7 @@ mod tests {
             target: session("work"),
             detach_others: true,
             nest: true,
+            ..AttachSession::default()
         });
         let full = ["attach-session", "-d", "-t", "work", "--nest"];
         assert_eq!(parse(&argv(&full)), Ok(want.clone()));
@@ -4603,18 +4977,30 @@ mod tests {
             parse(&argv(&["attach"])),
             Ok(Command::AttachSession(AttachSession {
                 target: Target::Current,
-                detach_others: false,
-                nest: false,
+                ..AttachSession::default()
             }))
         );
     }
 
-    /// tmux's `-f` takes client flags; natively it is not a flag at all
-    /// (`--nest` forces nesting), so the tmux front end can own it.
+    /// tmux's `-c -E -f -r -x`: the session's directory, no environment
+    /// update, client flags, a read-only client, and `-d` with a hangup.
     #[test]
-    fn attach_session_rejects_dash_f() {
-        let err = parse(&argv(&["attach", "-f"])).unwrap_err();
-        assert_eq!(err.to_string(), "command attach-session: unknown flag -f");
+    fn attach_session_takes_tmux_s_other_flags() {
+        let Ok(Command::AttachSession(a)) = parse(&argv(&[
+            "attach",
+            "-r",
+            "-E",
+            "-c",
+            "/w",
+            "-f",
+            "ignore-size",
+            "-x",
+        ])) else {
+            panic!("attach")
+        };
+        assert!(a.read_only && a.no_env && a.kill_parent && a.detach_others);
+        assert_eq!(a.cwd.as_deref(), Some("/w"));
+        assert_eq!(a.flags.as_deref(), Some("ignore-size"));
     }
 
     #[test]
@@ -4625,6 +5011,7 @@ mod tests {
                 session: Some(session("work")),
                 client: Some("c1".to_string()),
                 all_others: true,
+                kill_parent: false,
             }))
         );
         assert_eq!(
@@ -4633,6 +5020,7 @@ mod tests {
                 session: None,
                 client: None,
                 all_others: false,
+                kill_parent: false,
             }))
         );
     }
@@ -4652,6 +5040,7 @@ mod tests {
                 format: None,
                 target: Some(Target::Session(SessionRef::Bare("main".to_string()))),
                 filter: Some("1".to_string()),
+                sort: SortFlags::default(),
             }))
         );
     }
@@ -4722,6 +5111,9 @@ mod tests {
                 key_table: Some("prefix".to_string()),
                 client: None,
                 keep_zoom: false,
+                no_env: false,
+                toggle_read_only: false,
+                order: None,
             }))
         );
         assert_eq!(
@@ -4734,6 +5126,9 @@ mod tests {
                 key_table: None,
                 client: None,
                 keep_zoom: false,
+                no_env: false,
+                toggle_read_only: false,
+                order: None,
             }))
         );
     }
@@ -4744,8 +5139,13 @@ mod tests {
             parse(&argv(&["send-prefix"])),
             Ok(Command::SendPrefix(SendPrefix {
                 target: Target::Current,
+                second: false,
             }))
         );
+        let Ok(Command::SendPrefix(c)) = parse(&argv(&["send-prefix", "-2"])) else {
+            panic!("send-prefix -2");
+        };
+        assert!(c.second);
     }
 
     #[test]
@@ -5091,6 +5491,10 @@ mod tests {
                 first: false,
                 notes: false,
                 key: None,
+                all: false,
+                format: None,
+                prefix: None,
+                sort: SortFlags::default(),
             }))
         );
         assert_eq!(
@@ -5185,9 +5589,14 @@ mod tests {
                 background: false,
                 delay: None,
                 target: Target::Current,
+                command: false,
+                stderr: false,
+                cwd: None,
+                args: Vec::new(),
             }))
         );
-        assert!(parse(&argv(&["run-shell"])).is_err());
+        // tmux takes none: a `run-shell` with nothing to run runs nothing.
+        assert!(parse(&argv(&["run-shell"])).is_ok());
     }
 
     #[test]
@@ -5198,9 +5607,20 @@ mod tests {
                 target: parse_target("%1").expect("target"),
                 name: "main-vertical".to_string(),
                 spread: false,
+                next: false,
+                previous: false,
+                undo: false,
             }))
         );
-        assert!(parse(&argv(&["select-layout"])).is_err());
+        // The name is optional: no name is the last preset again.
+        let Ok(Command::SelectLayout(c)) = parse(&argv(&["select-layout", "-o"])) else {
+            panic!("select-layout -o");
+        };
+        assert!(c.undo && c.name.is_empty());
+        let Ok(Command::SelectLayout(c)) = parse(&argv(&["select-layout"])) else {
+            panic!("select-layout");
+        };
+        assert!(c.name.is_empty() && !c.undo);
     }
 
     fn lines(text: &str) -> Vec<(usize, Vec<Vec<&'static str>>)> {

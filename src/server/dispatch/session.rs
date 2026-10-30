@@ -7,7 +7,8 @@ use crate::cmd::{
     SwitchClient, Target,
 };
 use crate::protocol::ClientCtx;
-use crate::server::dispatch::options::{FormatCtx, Owner, ServerVars};
+use crate::server::dispatch::options::{self, FormatCtx, Owner, ServerVars};
+use crate::server::dispatch::sorting::Sort;
 use crate::server::dispatch::{resolve_cwd, spawn_pane, window::default_name};
 use crate::server::layout::LayoutTree;
 use crate::server::model::Model;
@@ -85,7 +86,12 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
     let size = cap_size(c.width.unwrap_or(default.0), c.height.unwrap_or(default.1));
     let window = model.alloc_window_id();
     // Only what `update-environment` names comes from the client (TC.5).
-    let mut env = crate::server::hooks::session_environment(state, id, &ctx.env);
+    // `-E` takes nothing from the client, and marks nothing removed.
+    let mut env = if c.no_env {
+        crate::server::hooks::blank_session_environment(state, id)
+    } else {
+        crate::server::hooks::session_environment(state, id, &ctx.env)
+    };
     // `-e` variables belong to the session, so its later panes get them.
     env.extend(c.env);
     let pane = spawn_pane(
@@ -281,11 +287,13 @@ pub fn has_session(state: &mut State, ctx: &ClientCtx, c: HasSession) -> Result<
 /// tmux sorts sessions by name, not by id.
 pub fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let model = &state.model;
-    Ok(crate::server::dispatch::options::listed_sessions(state, &c)
-        .into_iter()
-        .filter_map(|id| model.sessions.get(&id))
-        .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
-        .collect())
+    Ok(
+        crate::server::dispatch::options::listed_sessions(state, &c)?
+            .into_iter()
+            .filter_map(|id| model.sessions.get(&id))
+            .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
+            .collect(),
+    )
 }
 
 /// A new session name, checked and cleaned. tmux 3.7b (recorded) accepts
@@ -362,6 +370,11 @@ pub fn switch_client(
     c: SwitchClient,
 ) -> Result<String, String> {
     let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    // `-r` flips the client between read-only and not (with its size
+    // ignored while it is).
+    if c.toggle_read_only {
+        clients::toggle_read_only(state, id);
+    }
     if let Some(table) = &c.key_table {
         if !state.registry.key_tables.exists(table) {
             return Err(format!("table {table} doesn't exist"));
@@ -369,6 +382,11 @@ pub fn switch_client(
         clients::set_key_table(state, id, table);
         return Ok(String::new());
     }
+    // `-n` and `-p` walk the sessions in `-O`'s order, `-r` reversing it.
+    let sort = Sort::new(&crate::cmd::SortFlags {
+        order: c.order.clone(),
+        reversed: c.toggle_read_only,
+    })?;
     let current = state.clients[&id].session;
     let model = &mut state.model;
     let session = if c.last {
@@ -379,31 +397,35 @@ pub fn switch_client(
             .filter(|s| model.sessions.contains_key(s))
             .ok_or_else(|| "can't find last session".to_string())?
     } else if c.next || c.previous {
-        neighbour_session(model, current, c.next)
+        neighbour_session(model, current, c.next, &sort).ok_or_else(|| {
+            format!(
+                "can't find {} session",
+                if c.next { "next" } else { "previous" }
+            )
+        })?
     } else {
         let target = c.target.unwrap_or(Target::Current);
         clients::select_target(model, &target, ctx, c.keep_zoom)?
     };
-    clients::show_session(state, id, session);
+    clients::show_session_with(state, id, session, !c.no_env);
     Ok(String::new())
 }
 
-/// The session after (or before) `current` in name order, wrapping.
-fn neighbour_session(model: &Model, current: SessionId, next: bool) -> SessionId {
-    let mut sessions: Vec<(&str, SessionId)> = model
-        .sessions
-        .values()
-        .map(|s| (s.name.as_str(), s.id))
-        .collect();
-    sessions.sort();
+/// The session after (or before) `current` in `sort`'s order (by name, with
+/// none), wrapping.
+fn neighbour_session(
+    model: &Model,
+    current: SessionId,
+    next: bool,
+    sort: &Sort,
+) -> Option<SessionId> {
+    let sessions = options::sessions_sorted(model, sort);
     let n = sessions.len();
-    let Some(pos) = sessions.iter().position(|(_, id)| *id == current) else {
-        return current;
-    };
+    let pos = sessions.iter().position(|id| *id == current)?;
     let pos = if next {
         (pos + 1) % n
     } else {
         (pos + n - 1) % n
     };
-    sessions[pos].1
+    Some(sessions[pos])
 }

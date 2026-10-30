@@ -17,12 +17,10 @@ use crate::server::State;
 use crate::server::dispatch::options::Owner;
 use crate::server::dispatch::pane::{print_pane, respawn, select_last, toggle_zoom, unzoom};
 use crate::server::dispatch::resolve_cwd;
-use crate::server::dispatch::window::{
-    AUTOMATIC_RENAME, apply_preset, default_name, main_sizes, tiled_max_columns,
-};
+use crate::server::dispatch::window::{AUTOMATIC_RENAME, default_name};
 use crate::server::layout::{Insert, LayoutTree, Preset};
 use crate::server::model::{HOLE, Model, Window};
-use crate::types::{Dir, PaneId, SessionId, SplitSize, WindowId, cap_size};
+use crate::types::{Dir, Edge, PaneId, SessionId, SplitSize, WindowId, cap_size};
 
 /// A placeholder id for a pane being moved within its own window, which
 /// is in the tree twice for a moment (tmux splits before it closes).
@@ -744,9 +742,20 @@ pub fn resize_window(
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };
+    // `-L`/`-R`/`-U`/`-D` adjust what `-x`/`-y` left (a shrink past zero is
+    // skipped); `-A`/`-a` then replace both.
+    let (cols, rows) = (c.width.unwrap_or(w.cols), c.height.unwrap_or(w.rows));
+    let adjust = u16::try_from(c.adjust).unwrap_or(u16::MAX);
+    let (cols, rows) = match c.direction {
+        Some(Edge::Left) if cols >= adjust => (cols - adjust, rows),
+        Some(Edge::Right) => (cols.saturating_add(adjust), rows),
+        Some(Edge::Up) if rows >= adjust => (cols, rows - adjust),
+        Some(Edge::Down) => (cols, rows.saturating_add(adjust)),
+        _ => (cols, rows),
+    };
     let (cols, rows) = match by_client {
         Some(size) => size.unwrap_or(session_size),
-        None => (c.width.unwrap_or(w.cols), c.height.unwrap_or(w.rows)),
+        None => (cols, rows),
     };
     (w.cols, w.rows) = cap_size(cols, rows);
     let (zoomed, active, size) = (w.zoomed, w.active, (w.cols, w.rows));
@@ -779,6 +788,7 @@ pub fn rotate_window(
 ) -> Result<String, String> {
     let model = &mut state.model;
     let window = model.resolve_window(&c.target, ctx)?;
+    let rezoom = c.keep_zoom && model.windows.get(&window).is_some_and(|w| w.zoomed);
     unzoom(model, window);
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
@@ -794,6 +804,9 @@ pub fn rotate_window(
         w.set_active(next);
     }
     model.relayout(window);
+    if rezoom && let Some(active) = model.windows.get(&window).map(|w| w.active) {
+        toggle_zoom(model, window, active);
+    }
     Ok(String::new())
 }
 
@@ -827,19 +840,32 @@ fn rotate_slots(w: &mut Window, order: &[PaneId], down: bool) {
 /// `next-layout`: the preset after the last one applied to the window
 /// (the first, `even-horizontal`, if none was), in tmux's order.
 pub fn next_layout(state: &mut State, ctx: &ClientCtx, c: NextLayout) -> Result<String, String> {
+    step_layout(state, ctx, &c, 1)
+}
+
+/// `previous-layout`: the preset before the last one applied (the last,
+/// `tiled`, if none was).
+pub fn previous_layout(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: NextLayout,
+) -> Result<String, String> {
+    step_layout(state, ctx, &c, Preset::NAMES.len() - 1)
+}
+
+fn step_layout(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: &NextLayout,
+    step: usize,
+) -> Result<String, String> {
     let model = &mut state.model;
     // tmux finds `-t` as a pane (cmd-select-layout.c).
     let window = model.resolve_window(&model.pane_type(&c.target, ctx)?, ctx)?;
     unzoom(model, window);
-    let (width, height) = main_sizes(model, window);
-    let next = model.windows[&window]
-        .layout
-        .last_preset()
-        .map_or(0, |i| (i + 1) % Preset::NAMES.len());
-    let columns = tiled_max_columns(model, window);
-    let preset = Preset::from_name(Preset::NAMES[next], width, height, columns)
-        .ok_or_else(|| format!("invalid layout: {}", Preset::NAMES[next]))?;
-    apply_preset(model, window, preset);
+    let was = crate::server::dispatch::options::window_layout(&model.windows[&window]);
+    model.old_layouts.insert(window, was);
+    crate::server::dispatch::window::step_preset(model, window, step);
     Ok(String::new())
 }
 
@@ -877,7 +903,8 @@ pub fn respawn_window(
         let removed = state.model.remove_pane(*pane);
         state.events.panes_killed(removed);
     }
-    respawn(state, first, c.command, cwd).map_err(|e| format!("respawn window failed: {e}"))?;
+    respawn(state, first, c.command, cwd, c.env)
+        .map_err(|e| format!("respawn window failed: {e}"))?;
     if let Some(w) = state.model.windows.get_mut(&window) {
         w.set_active(first);
     }

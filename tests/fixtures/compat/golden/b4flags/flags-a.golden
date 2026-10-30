@@ -1,0 +1,879 @@
+$ new-session -d -s main -x 60 -y 20 'sleep 100000'
+? 0
+$ new-window -d -t main:2 'sleep 100000'
+? 0
+$ new-window -d -t main:4 'sleep 100000'
+? 0
+$ split-window -d -t main:1 'sleep 100000'
+? 0
+$ split-window -d -t main:1 'sleep 100000'
+? 0
+$ split-window -d -t main:2 'sleep 100000'
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+54fb,60x20,0,0[60x5,0,0,0,60x4,0,6,4,60x9,0,11,3]
+? 0
+$ join-pane -d -p 30 -s main:4.1 -t main:1.1
+? 0
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+4 a051,60x20,0,0[60x3,0,0,0,60x1,0,4,2,60x4,0,6,4,60x9,0,11,3]
+? 0
+$ break-pane -d -s main:1.2 -t main:4
+? 0
+$ join-pane -d -h -p 30 -s main:4.1 -t main:1.1
+? 0
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+4 2a3e,60x20,0,0[60x5,0,0{41x5,0,0,0,18x5,42,0,2},60x4,0,6,4,60x9,0,11,3]
+? 0
+$ break-pane -d -s main:1.2 -t main:3
+? 0
+$ join-pane -d -p 200 -s main:3.1 -t main:1.1
+! size or position invalid tiled geometry
+? 1
+$ join-pane -d -p x -s main:3.1 -t main:1.1
+! size or position invalid tiled geometry
+? 1
+$ join-pane -d -p -3 -s main:3.1 -t main:1.1
+! size or position invalid tiled geometry
+? 1
+$ join-pane -d -l 5 -p 70 -s main:3.1 -t main:1.1
+? 0
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+4 9ed9,60x20,0,0[60x1,0,0,0,60x3,0,2,2,60x4,0,6,4,60x9,0,11,3]
+? 0
+$ move-pane -d -p 50 -s main:3.1 -t main:1.2
+! can't find window: 3
+? 1
+$ display-message -p -t main:1 '#{window_panes} #{window_layout}'
+4 9ed9,60x20,0,0[60x1,0,0,0,60x3,0,2,2,60x4,0,6,4,60x9,0,11,3]
+? 0
+$ resize-window -t main:1 -x 50 -y 15
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+50x15
+? 0
+$ resize-window -t main:1 -L
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+49x15
+? 0
+$ resize-window -t main:1 -R 5
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+54x15
+? 0
+$ resize-window -t main:1 -U 3
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+54x12
+? 0
+$ resize-window -t main:1 -D 4
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+54x16
+? 0
+$ resize-window -t main:1 -x 30 -L 4
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+26x16
+? 0
+$ resize-window -t main:1 -LR 2
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+24x16
+? 0
+$ resize-window -t main:1 -UD 2
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+24x14
+? 0
+$ resize-window -t main:1 -L 1000
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+24x14
+? 0
+$ resize-window -t main:1 -L 0
+! adjustment too small
+? 1
+$ resize-window -t main:1 -L x
+! adjustment invalid
+? 1
+$ resize-window -t main:1 -L -2
+! command resize-window: unknown flag -2
+? 1
+$ resize-window -t main:1 -L 1 2
+! command resize-window: too many arguments (need at most 1)
+? 1
+$ resize-window -t main:1 3
+? 0
+$ display-message -p -t main:1 '#{window_width}x#{window_height}'
+24x14
+? 0
+$ resize-pane -Z -t main:1.2
+? 0
+$ rotate-window -t main:1
+? 0
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+0 2
+? 0
+$ resize-pane -Z -t main:1.2
+? 0
+$ rotate-window -Z -t main:1
+? 0
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+1 2
+? 0
+$ rotate-window -Z -D -t main:1
+? 0
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+1 2
+? 0
+$ resize-pane -Z -t main:1.2
+? 0
+$ rotate-window -DZ -t main:1
+? 0
+$ display-message -p -t main:1 '#{window_zoomed_flag} #{pane_index}'
+0 2
+? 0
+$ select-layout -t main:2 tiled
+? 0
+$ select-layout -t main:1 even-horizontal
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+6aab,24x14,0,0{6x14,0,0,0,5x14,7,0,2,5x14,13,0,4,5x14,19,0,3}
+? 0
+$ select-layout -t main:1 -n
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 -n
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+8fe8,24x14,0,0[24x12,0,0,0,24x1,0,13{8x1,0,13,2,7x1,9,13,4,7x1,17,13,3}]
+? 0
+$ select-layout -t main:1 -p
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 -o
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+8fe8,24x14,0,0[24x12,0,0,0,24x1,0,13{8x1,0,13,2,7x1,9,13,4,7x1,17,13,3}]
+? 0
+$ select-layout -t main:1 -o
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 main-v
+! invalid layout: main-v
+? 1
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 even
+! invalid layout: even
+? 1
+$ select-layout -t main:1 m
+! invalid layout: m
+? 1
+$ select-layout -t main:1 -E
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 -n even-vertical
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+8fe8,24x14,0,0[24x12,0,0,0,24x1,0,13{8x1,0,13,2,7x1,9,13,4,7x1,17,13,3}]
+? 0
+$ select-layout -t main:1 -o main-horizontal
+! invalid layout: main-horizontal
+? 1
+$ display-message -p -t main:1 '#{window_layout}'
+8fe8,24x14,0,0[24x12,0,0,0,24x1,0,13{8x1,0,13,2,7x1,9,13,4,7x1,17,13,3}]
+? 0
+$ select-layout -t main:1 nosuchlayout
+! invalid layout: nosuchlayout
+? 1
+$ select-layout -t main:1 -o
+? 0
+$ display-message -p -t main:1 '#{window_layout}'
+9a20,24x14,0,0[24x3,0,0,0,24x3,0,4,2,24x3,0,8,4,24x2,0,12,3]
+? 0
+$ select-layout -t main:1 a b
+! command select-layout: too many arguments (need at most 1)
+? 1
+$ select-layout -t main:3 -o
+! can't find window: 3
+? 1
+$ select-layout -t main:3
+! can't find window: 3
+? 1
+$ show-options -gv prefix2
+None
+? 0
+$ set-option -g prefix2 C-a
+? 0
+$ send-prefix -2 -t main:1.1
+? 0
+$ send-prefix -t main:1.1
+? 0
+$ set-option -g prefix2 None
+? 0
+$ send-prefix -2 -t main:1.1
+? 0
+$ set-buffer -w 'clip'
+? 0
+$ set-buffer -w -t nosuch 'clip2'
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_sample}'
+buffer1:clip2
+buffer0:clip
+? 0
+$ wait-for -L chan
+? 0
+$ wait-for -U chan
+? 0
+$ wait-for -U chan
+! channel chan not locked
+? 1
+$ wait-for -U other
+! channel other not locked
+? 1
+$ wait-for -L chan2
+? 0
+$ wait-for -S chan2
+? 0
+$ wait-for chan2
+? 0
+$ wait-for -U chan2
+? 0
+$ wait-for -SL chan3
+? 0
+$ wait-for -U chan3
+! channel chan3 not locked
+? 1
+$ wait-for -LU chan3
+? 0
+$ wait-for -U chan3
+? 0
+$ set-option -g @gopt gval
+? 0
+$ set-option -w -t main:1 @wopt wval
+? 0
+$ set-option -p -t main:1.1 @popt pval
+? 0
+$ set-option -p -t main:1.1 window-style 'bg=red'
+? 0
+$ set-option -w -t main:1 window-style 'bg=blue'
+? 0
+$ show-options -p -t main:1.1 window-style
+window-style bg=red
+? 0
+$ show-options -w -t main:1 window-style
+window-style bg=blue
+? 0
+$ set-option -w -U -t main:1 window-style
+? 0
+$ show-options -p -t main:1.1 window-style
+? 0
+$ show-options -w -t main:1 window-style
+? 0
+$ set-option -p -t main:1.1 window-style 'bg=red'
+? 0
+$ set-option -w -u -t main:1 window-style
+? 0
+$ show-options -p -t main:1.1 window-style
+window-style bg=red
+? 0
+$ set-option -p -U -t main:1.1 window-style
+? 0
+$ show-options -p -t main:1.1 window-style
+? 0
+$ set-option -U -t main:1 @wopt
+? 0
+$ show-options -w -t main:1 @wopt
+@wopt wval
+? 0
+$ set-option -w -t main:1 mode-keys emacs
+? 0
+$ show-options -w -A -t main:1 mode-keys
+mode-keys emacs
+? 0
+$ show-options -w -t main:1 mode-keys
+mode-keys emacs
+? 0
+$ show-options -w -A -t main:2 mode-keys
+mode-keys* vi
+? 0
+$ show-options -w -t main:2 mode-keys
+? 0
+$ show-options -wA -t main:2 aggressive-resize
+aggressive-resize* off
+? 0
+$ show-options -wAv -t main:2 aggressive-resize
+off
+? 0
+$ show-options -wA -t main:2 nosuchoption
+! invalid option: nosuchoption
+? 1
+$ show-options -wAq -t main:2 nosuchoption
+? 0
+$ show-options -A -t main:2 status
+status* on
+? 0
+$ show-options -A -t main status
+status* on
+? 0
+$ show-options -g -A status
+status on
+? 0
+$ show-options -s -A escape-time
+escape-time 25
+? 0
+$ show-options -p -A -t main:1.1 window-style
+window-style* default
+? 0
+$ show-options -p -A -t main:1.2 window-style
+window-style* default
+? 0
+$ show-options -p -A -t main:1.2 @popt
+! invalid option: @popt
+? 1
+$ show-options -w -A -t main:2
+cursor-colour* none
+cursor-style* default
+menu-style* default
+menu-selected-style* bg=yellow,fg=black
+menu-border-style* default
+menu-border-lines* single
+pane-status-current-style* default
+pane-status-style* default
+session-status-current-style* default
+session-status-style* default
+aggressive-resize* off
+allow-passthrough* off
+allow-rename* off
+allow-set-title* on
+alternate-screen* on
+automatic-rename* on
+automatic-rename-format* "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}"
+clock-mode-colour* blue
+clock-mode-style* 24
+copy-mode-match-style* bg=cyan,fg=black
+copy-mode-current-match-style* bg=magenta,fg=black
+copy-mode-mark-style* bg=red,fg=black
+copy-mode-position-format* "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}"
+copy-mode-position-style* "#{E:mode-style}"
+copy-mode-selection-style* "#{E:mode-style}"
+copy-mode-current-line-number-style* fg=yellow
+copy-mode-line-number-style* fg=white,dim
+copy-mode-line-numbers* off
+fill-character* ''
+main-pane-height* 24
+main-pane-width* 80
+mode-keys* vi
+mode-style* noattr,bg=yellow,fg=black
+monitor-activity* off
+monitor-bell* on
+monitor-silence* 0
+other-pane-height* 0
+other-pane-width* 0
+pane-active-border-style* "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}"
+pane-base-index* 1
+pane-border-format* "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"#{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]#[norange]#[range=control|9][x]#[norange],}"
+pane-border-indicators* colour
+pane-border-lines* single
+pane-border-status* off
+pane-border-style* default
+pane-colours*
+pane-scrollbars* off
+pane-scrollbars-style* bg=black,fg=white,width=1,pad=0
+pane-scrollbars-position* right
+popup-style* default
+popup-border-style* default
+popup-border-lines* single
+remain-on-exit* off
+remain-on-exit-format* "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})"
+scroll-on-clear* on
+synchronize-panes* off
+tiled-layout-max-columns* 0
+tree-mode-preview-format* "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}"
+tree-mode-preview-style* "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}"
+window-active-style* default
+window-pane-current-status-format* "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+window-pane-status-format* "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+window-size* latest
+window-style* default
+window-status-activity-style* reverse
+window-status-bell-style* reverse
+window-status-current-format* "#I:#W#{?window_flags,#{window_flags}, }"
+window-status-current-style* default
+window-status-format* "#I:#W#{?window_flags,#{window_flags}, }"
+window-status-last-style* default
+window-status-separator* " "
+window-status-style* default
+wrap-search* on
+xterm-keys* on
+? 0
+$ show-options -w -t main:1
+@wopt wval
+mode-keys emacs
+window-size manual
+? 0
+$ set-hook -g after-new-window 'set -g @hooked yes'
+? 0
+$ set-hook -w -t main:2 pane-focus-in 'set -g @focus yes'
+? 0
+$ show-options -gH
+@gopt gval
+activity-action other
+assume-paste-time 1
+base-index 1
+bell-action any
+default-command ''
+default-shell /bin/sh
+default-size 80x24
+destroy-unattached off
+detach-on-destroy on
+display-panes-active-colour red
+display-panes-colour blue
+display-panes-time 1000
+display-time 750
+focus-follows-mouse off
+history-limit 50000
+initial-repeat-time 0
+key-table root
+lock-after-time 0
+lock-command "lock -np"
+message-command-style bg=black,fg=yellow,fill=black
+message-format "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}"
+message-line 0
+message-style bg=yellow,fg=black,fill=yellow
+mouse on
+prefix C-b
+prefix2 None
+renumber-windows on
+repeat-time 500
+set-titles off
+set-titles-string "#S:#I:#W - \"#T\" #{session_alerts}"
+silence-action other
+status on
+status-bg default
+status-fg default
+status-format[0] "#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?loop_last_flag,,#{E:window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?loop_last_flag,,#{E:window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]"
+status-format[1] "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }"
+status-format[2] "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
+status-interval 15
+status-justify left
+status-keys emacs
+status-left "[#{session_name}] "
+status-left-length 10
+status-left-style default
+status-position bottom
+status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+status-right-length 40
+status-right-style default
+status-style bg=green,fg=black
+prompt-cursor-colour none
+prompt-cursor-style default
+prompt-command-cursor-style default
+update-environment[0] DISPLAY
+update-environment[1] KRB5CCNAME
+update-environment[2] MSYSTEM
+update-environment[3] SSH_ASKPASS
+update-environment[4] SSH_AUTH_SOCK
+update-environment[5] SSH_AGENT_PID
+update-environment[6] SSH_CONNECTION
+update-environment[7] WAYLAND_DISPLAY
+update-environment[8] WINDOWID
+update-environment[9] XAUTHORITY
+update-environment[10] XDG_CURRENT_DESKTOP
+update-environment[11] XDG_SESSION_DESKTOP
+update-environment[12] XDG_SESSION_TYPE
+visual-activity off
+visual-bell off
+visual-silence off
+word-separators "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+after-bind-key
+after-capture-pane
+after-copy-mode
+after-display-message
+after-display-panes
+after-kill-pane
+after-list-buffers
+after-list-clients
+after-list-keys
+after-list-panes
+after-list-sessions
+after-list-windows
+after-load-buffer
+after-lock-server
+after-new-session
+after-new-window[0] set-option -g @hooked yes
+after-paste-buffer
+after-pipe-pane
+after-queue
+after-refresh-client
+after-rename-session
+after-rename-window
+after-resize-pane
+after-resize-window
+after-save-buffer
+after-select-layout
+after-select-pane
+after-select-window
+after-send-keys
+after-set-buffer
+after-set-environment
+after-set-hook
+after-set-option
+after-show-environment
+after-show-messages
+after-show-options
+after-split-window
+after-unbind-key
+alert-activity
+alert-bell
+alert-silence
+client-active
+client-attached
+client-detached
+client-focus-in
+client-focus-out
+client-resized
+client-session-changed
+client-light-theme
+client-dark-theme
+command-error
+session-closed
+session-created
+session-renamed
+session-window-changed
+window-linked
+window-unlinked
+? 0
+$ show-options -H -t main:2 -w
+pane-focus-in[0] set-option -g @focus yes
+? 0
+$ show-options -g
+@gopt gval
+activity-action other
+assume-paste-time 1
+base-index 1
+bell-action any
+default-command ''
+default-shell /bin/sh
+default-size 80x24
+destroy-unattached off
+detach-on-destroy on
+display-panes-active-colour red
+display-panes-colour blue
+display-panes-time 1000
+display-time 750
+focus-follows-mouse off
+history-limit 50000
+initial-repeat-time 0
+key-table root
+lock-after-time 0
+lock-command "lock -np"
+message-command-style bg=black,fg=yellow,fill=black
+message-format "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}"
+message-line 0
+message-style bg=yellow,fg=black,fill=yellow
+mouse on
+prefix C-b
+prefix2 None
+renumber-windows on
+repeat-time 500
+set-titles off
+set-titles-string "#S:#I:#W - \"#T\" #{session_alerts}"
+silence-action other
+status on
+status-bg default
+status-fg default
+status-format[0] "#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?loop_last_flag,,#{E:window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?loop_last_flag,,#{E:window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]"
+status-format[1] "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }"
+status-format[2] "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
+status-interval 15
+status-justify left
+status-keys emacs
+status-left "[#{session_name}] "
+status-left-length 10
+status-left-style default
+status-position bottom
+status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+status-right-length 40
+status-right-style default
+status-style bg=green,fg=black
+prompt-cursor-colour none
+prompt-cursor-style default
+prompt-command-cursor-style default
+update-environment[0] DISPLAY
+update-environment[1] KRB5CCNAME
+update-environment[2] MSYSTEM
+update-environment[3] SSH_ASKPASS
+update-environment[4] SSH_AUTH_SOCK
+update-environment[5] SSH_AGENT_PID
+update-environment[6] SSH_CONNECTION
+update-environment[7] WAYLAND_DISPLAY
+update-environment[8] WINDOWID
+update-environment[9] XAUTHORITY
+update-environment[10] XDG_CURRENT_DESKTOP
+update-environment[11] XDG_SESSION_DESKTOP
+update-environment[12] XDG_SESSION_TYPE
+visual-activity off
+visual-bell off
+visual-silence off
+word-separators "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+? 0
+$ show-options -gH after-new-window
+after-new-window[0] set-option -g @hooked yes
+? 0
+$ show-options -g -H
+@gopt gval
+activity-action other
+assume-paste-time 1
+base-index 1
+bell-action any
+default-command ''
+default-shell /bin/sh
+default-size 80x24
+destroy-unattached off
+detach-on-destroy on
+display-panes-active-colour red
+display-panes-colour blue
+display-panes-time 1000
+display-time 750
+focus-follows-mouse off
+history-limit 50000
+initial-repeat-time 0
+key-table root
+lock-after-time 0
+lock-command "lock -np"
+message-command-style bg=black,fg=yellow,fill=black
+message-format "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}"
+message-line 0
+message-style bg=yellow,fg=black,fill=yellow
+mouse on
+prefix C-b
+prefix2 None
+renumber-windows on
+repeat-time 500
+set-titles off
+set-titles-string "#S:#I:#W - \"#T\" #{session_alerts}"
+silence-action other
+status on
+status-bg default
+status-fg default
+status-format[0] "#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?loop_last_flag,,#{E:window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?loop_last_flag,,#{E:window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]"
+status-format[1] "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }"
+status-format[2] "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#S#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#S*#{session_alert}#[pop-default]#[norange list=on default] }"
+status-interval 15
+status-justify left
+status-keys emacs
+status-left "[#{session_name}] "
+status-left-length 10
+status-left-style default
+status-position bottom
+status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+status-right-length 40
+status-right-style default
+status-style bg=green,fg=black
+prompt-cursor-colour none
+prompt-cursor-style default
+prompt-command-cursor-style default
+update-environment[0] DISPLAY
+update-environment[1] KRB5CCNAME
+update-environment[2] MSYSTEM
+update-environment[3] SSH_ASKPASS
+update-environment[4] SSH_AUTH_SOCK
+update-environment[5] SSH_AGENT_PID
+update-environment[6] SSH_CONNECTION
+update-environment[7] WAYLAND_DISPLAY
+update-environment[8] WINDOWID
+update-environment[9] XAUTHORITY
+update-environment[10] XDG_CURRENT_DESKTOP
+update-environment[11] XDG_SESSION_DESKTOP
+update-environment[12] XDG_SESSION_TYPE
+visual-activity off
+visual-bell off
+visual-silence off
+word-separators "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+after-bind-key
+after-capture-pane
+after-copy-mode
+after-display-message
+after-display-panes
+after-kill-pane
+after-list-buffers
+after-list-clients
+after-list-keys
+after-list-panes
+after-list-sessions
+after-list-windows
+after-load-buffer
+after-lock-server
+after-new-session
+after-new-window[0] set-option -g @hooked yes
+after-paste-buffer
+after-pipe-pane
+after-queue
+after-refresh-client
+after-rename-session
+after-rename-window
+after-resize-pane
+after-resize-window
+after-save-buffer
+after-select-layout
+after-select-pane
+after-select-window
+after-send-keys
+after-set-buffer
+after-set-environment
+after-set-hook
+after-set-option
+after-show-environment
+after-show-messages
+after-show-options
+after-split-window
+after-unbind-key
+alert-activity
+alert-bell
+alert-silence
+client-active
+client-attached
+client-detached
+client-focus-in
+client-focus-out
+client-resized
+client-session-changed
+client-light-theme
+client-dark-theme
+command-error
+session-closed
+session-created
+session-renamed
+session-window-changed
+window-linked
+window-unlinked
+? 0
+$ show-hooks -g
+after-bind-key
+after-capture-pane
+after-copy-mode
+after-display-message
+after-display-panes
+after-kill-pane
+after-list-buffers
+after-list-clients
+after-list-keys
+after-list-panes
+after-list-sessions
+after-list-windows
+after-load-buffer
+after-lock-server
+after-new-session
+after-new-window[0] set-option -g @hooked yes
+after-paste-buffer
+after-pipe-pane
+after-queue
+after-refresh-client
+after-rename-session
+after-rename-window
+after-resize-pane
+after-resize-window
+after-save-buffer
+after-select-layout
+after-select-pane
+after-select-window
+after-send-keys
+after-set-buffer
+after-set-environment
+after-set-hook
+after-set-option
+after-show-environment
+after-show-messages
+after-show-options
+after-split-window
+after-unbind-key
+alert-activity
+alert-bell
+alert-silence
+client-active
+client-attached
+client-detached
+client-focus-in
+client-focus-out
+client-resized
+client-session-changed
+client-light-theme
+client-dark-theme
+command-error
+session-closed
+session-created
+session-renamed
+session-window-changed
+window-linked
+window-unlinked
+? 0
+$ run-shell -C 'display-message -p hello'
+hello
+? 0
+$ run-shell -C 'set -g @runc 1 ; display-message -p "#{@runc}"'
+
+? 0
+$ run-shell -C display-message -p 'two words'
+? 0
+$ run-shell -C -b 'display-message -p bg'
+? 0
+$ run-shell -C 'nosuchcommand'
+! unknown command: nosuchcommand
+? 1
+$ run-shell -C ''
+? 0
+$ run-shell -C
+? 0
+$ run-shell -C -d 0.2 'display-message -p delayed'
+delayed
+? 0
+$ run-shell
+? 0
+$ run-shell -b
+? 0
+$ run-shell 'echo out; echo err >&2'
+out
+? 0
+$ run-shell -E 'echo out; echo err >&2'
+out
+err
+? 0
+$ run-shell -E 'echo only-err >&2; exit 3'
+only-err
+'echo only-err >&2; exit 3' returned 3
+? 3
+$ run-shell -c / 'pwd'
+/
+? 0
+$ run-shell -c /nonexistent 'pwd'
+<TMPDIR>/home
+? 0
+$ run-shell -s x 'echo hidden-s'
+hidden-s
+? 0
+$ run-shell 'echo #{1}-#{2}-#{0}' first 'sec#ond'
+first-sec#ond-
+? 0
+$ run-shell -t main:1.1 'echo #{pane_index} #{1}' arg
+? 0
+$ run-shell 'echo $0' a b
+sh
+? 0

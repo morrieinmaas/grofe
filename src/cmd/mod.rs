@@ -98,6 +98,14 @@ pub struct NewSession {
     pub group: Option<String>,
     /// `-e`: variables of the session's environment, which its panes get.
     pub env: Vec<(String, String)>,
+    /// `-D`: with `-A`, detach the other clients of the session found.
+    pub detach_others: bool,
+    /// `-X`: like `-D`, and the detached clients' parents get SIGHUP.
+    pub kill_parent: bool,
+    /// `-E`: the session's environment is not taken from the client's.
+    pub no_env: bool,
+    /// `-f`: client flags for the client this attaches.
+    pub flags: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -121,6 +129,16 @@ pub struct ListSessions {
     pub format: Option<String>,
     /// `-f` (M3.6): a format; only sessions it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
+}
+
+/// The `-O order` and `-r` of the commands that list things (tmux 3.7b's
+/// `sort.c`), as given: the order is checked when the command runs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SortFlags {
+    pub order: Option<String>,
+    pub reversed: bool,
 }
 
 /// `new-window` (`-d -t -n -c`, plus a trailing shell command; from M3.6
@@ -181,6 +199,25 @@ pub struct ListWindows {
     pub all: bool,
     /// `-f` (M3.6): a format; only windows it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
+}
+
+/// What `split-window` and `new-pane` set on the pane they make: its styles
+/// (`-s`, `-S`, `-R`) and whether it stays when its command exits (`-k`, or
+/// `-m` with the message it shows).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PaneSetup {
+    /// `-s`: the pane's `window-style` and `window-active-style`.
+    pub style: Option<String>,
+    /// `-S`: its `pane-active-border-style`.
+    pub active_border: Option<String>,
+    /// `-R`: its `pane-border-style`.
+    pub inactive_border: Option<String>,
+    /// `-k` or `-m`: `remain-on-exit key`.
+    pub keep: bool,
+    /// `-m`: its `remain-on-exit-format`.
+    pub message: Option<String>,
 }
 
 /// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command;
@@ -206,6 +243,8 @@ pub struct SplitWindow {
     pub env: Vec<(String, String)>,
     /// `-Z`: the new pane fills the window.
     pub zoom: bool,
+    /// `-s -S -R -k -m`.
+    pub setup: PaneSetup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -284,6 +323,8 @@ pub struct RespawnPane {
     pub command: Option<Vec<String>>,
     /// `-c` (M3.6, TC.8): the start directory, raw (a format).
     pub cwd: Option<String>,
+    /// `-e`: variables for the new process's environment.
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +337,8 @@ pub struct ListPanes {
     pub session: bool,
     /// `-f` (M3.6): a format; only panes it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// A single `send-keys` argument, already classified (spec §4.5): a key
@@ -352,6 +395,22 @@ pub struct CapturePane {
     pub keep_blanks: bool,
     /// `-T` (B2b): stop each line at the last cell the program wrote.
     pub written_only: bool,
+    /// `-L`: each line starts with its number.
+    pub numbered: bool,
+    /// `-F`: each line starts with its flags.
+    pub flags: bool,
+    /// `-C`: backslashes, and the ESC of `-e`, are written out.
+    pub escaped: bool,
+    /// `-H`: the hyperlinks of the lines, not their text.
+    pub links: bool,
+    /// `-a`: the alternate screen's saved text.
+    pub alternate: bool,
+    /// `-M`: the screen of the pane's mode.
+    pub mode: bool,
+    /// `-P`: the output not yet parsed.
+    pub pending: bool,
+    /// `-q`: with `-a`, no error without an alternate screen.
+    pub quiet: bool,
 }
 
 /// `set-option`/`show-options` scope flags (`-g -s -w -p`).
@@ -377,6 +436,8 @@ pub enum OptionScope {
 pub struct SetOption {
     pub scope: Option<OptionScope>,
     pub unset: bool,
+    /// `-U`: unset, and for a window option in the window's panes too.
+    pub unset_panes: bool,
     pub persist: bool,
     pub target: Target,
     pub name: String,
@@ -405,6 +466,11 @@ pub struct ShowOptions {
     pub value_only: bool,
     /// `-q`: no error for an unknown option.
     pub quiet: bool,
+    /// `-A`: the options the scope inherits and does not set too, shown
+    /// as `name* value`.
+    pub inherited: bool,
+    /// `-H`: the hooks the scope sets too, in a listing of all of it.
+    pub hooks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,6 +492,8 @@ pub struct DisplayMessage {
     pub literal: bool,
     /// `-v` (B2b): print how the format expanded, step by step.
     pub verbose: bool,
+    /// `-N`: keys do not take the message down (only its time does).
+    pub ignore_keys: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -443,12 +511,22 @@ pub struct Subscribe {
 /// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for
 /// self-nesting (spec §4.6); tmux's `-f` (client flags) is reserved for the
 /// tmux front end (M3.6).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AttachSession {
     pub target: Target,
     /// `-d`: detach other clients attached to the session.
     pub detach_others: bool,
     pub nest: bool,
+    /// `-c`: the session's directory for new windows from now on.
+    pub cwd: Option<String>,
+    /// `-E`: do not update the session's environment from the client's.
+    pub no_env: bool,
+    /// `-r`: a read-only client.
+    pub read_only: bool,
+    /// `-x`: like `-d`, and the detached clients' parents get SIGHUP.
+    pub kill_parent: bool,
+    /// `-f`: client flags (`read-only`, `ignore-size`, ...).
+    pub flags: Option<String>,
 }
 
 /// `detach-client` (`-s -t -a`).
@@ -461,6 +539,8 @@ pub struct DetachClient {
     pub client: Option<String>,
     /// `-a`: detach every client except the target one.
     pub all_others: bool,
+    /// `-P`: the detached clients' parents are sent SIGHUP.
+    pub kill_parent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -471,6 +551,8 @@ pub struct ListClients {
     /// `-f` (M3.6, FE.2): a format; only clients it expands true for are
     /// listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `next-window`, `previous-window`, `last-window` (`-t` session).
@@ -507,11 +589,19 @@ pub struct SwitchClient {
     pub client: Option<String>,
     /// `-Z`: a zoomed window stays zoomed on the pane switched to.
     pub keep_zoom: bool,
+    /// `-E`: the session's environment is not updated from the client's.
+    pub no_env: bool,
+    /// `-r`: toggles the client's read-only flag, and reverses `-n`/`-p`.
+    pub toggle_read_only: bool,
+    /// `-O`: the order `-n` and `-p` walk the sessions in.
+    pub order: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendPrefix {
     pub target: Target,
+    /// `-2`: the `prefix2` key instead of `prefix`.
+    pub second: bool,
 }
 
 /// `bind-key` (`-n -r -T -N`, then a key and its command).
@@ -552,6 +642,14 @@ pub struct ListKeys {
     pub notes: bool,
     /// The one key to list, raw.
     pub key: Option<String>,
+    /// `-a`: with `-N`, the bindings that have no note too.
+    pub all: bool,
+    /// `-F`: the format of a line.
+    pub format: Option<String>,
+    /// `-P`: the prefix string `-N` lines start with.
+    pub prefix: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `source-file` (`-q`, `-F`, `-n`, `-v`, a path).
@@ -628,6 +726,14 @@ pub struct RunShell {
     pub delay: Option<std::time::Duration>,
     /// `-t` (FE.3): the pane the command's formats expand against.
     pub target: Target,
+    /// `-C`: `cmd` is a command of the server's, not a shell command.
+    pub command: bool,
+    /// `-E`: the shell's stderr is shown with its stdout.
+    pub stderr: bool,
+    /// `-c`: the directory the command starts in, else the client's.
+    pub cwd: Option<String>,
+    /// The arguments after the command: `#{1}`, `#{2}`, ... in it.
+    pub args: Vec<String>,
 }
 
 /// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is
@@ -638,6 +744,12 @@ pub struct SelectLayout {
     pub name: String,
     /// `-E`: spread the panes out evenly.
     pub spread: bool,
+    /// `-n`: the preset after the last one, as `next-layout`.
+    pub next: bool,
+    /// `-p`: the preset before the last one, as `previous-layout`.
+    pub previous: bool,
+    /// `-o`: the layout the window had before the last `select-layout`.
+    pub undo: bool,
 }
 
 // M3.6 verbs (spec §4.5's rows, native forms; TC.2 parses them). Each
@@ -742,6 +854,11 @@ pub struct ResizeWindow {
     pub largest: bool,
     /// `-a`: the size of the smallest attached client.
     pub smallest: bool,
+    /// `-L`, `-R`, `-U`, `-D`: the width or height, after `-x`/`-y`, less
+    /// or more by `adjust` cells (tmux checks them in that order).
+    pub direction: Option<Edge>,
+    /// The `adjustment`, in cells (1 when not given).
+    pub adjust: u32,
 }
 
 /// `last-pane` (TC.8).
@@ -783,6 +900,8 @@ pub struct RotateWindow {
     pub up: bool,
     /// `-D`: panes move down.
     pub down: bool,
+    /// `-Z`: a zoomed window stays zoomed, on the new active pane.
+    pub keep_zoom: bool,
 }
 
 /// `move-window` (TC.8).
@@ -835,6 +954,46 @@ pub struct NextLayout {
     pub target: Target,
 }
 
+/// `lock-server`, `lock-session` and `lock-client` (B4): the lock command
+/// runs on every client of the server, of the session, or on one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lock {
+    pub scope: LockScope,
+}
+
+/// Whose clients a [`Lock`] locks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockScope {
+    Server,
+    Session(Target),
+    /// `-t`: the client, raw; `None` is the requesting client.
+    Client(Option<String>),
+}
+
+/// `server-access [-adlrw] [user]` (B4): who else may use the server.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServerAccess {
+    /// `-a`: allow the user.
+    pub add: bool,
+    /// `-d`: deny the user.
+    pub deny: bool,
+    /// `-l`: list the users.
+    pub list: bool,
+    /// `-r`: read-only access.
+    pub read_only: bool,
+    /// `-w`: read-write access.
+    pub write: bool,
+    pub user: Option<String>,
+}
+
+/// `show-prompt-history` and `clear-prompt-history` (B4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PromptHistory {
+    pub clear: bool,
+    /// `-T`: one prompt type's history; `None` is every type's.
+    pub kind: Option<String>,
+}
+
 /// `refresh-client` (TC.9).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RefreshClient {
@@ -848,6 +1007,15 @@ pub struct RefreshClient {
     pub pan: Option<Pan>,
     /// The pan's cells, raw (tmux checks it is 1 or more when it runs).
     pub adjustment: Option<String>,
+    /// `-F` then `-f`: client flags, applied in that order.
+    pub flags: Vec<String>,
+    /// `-l`: ask the terminal for its clipboard.
+    pub clipboard: bool,
+    /// `-r`: a pane's colour report; only a control client's panes use it.
+    pub report: Option<String>,
+    /// `-A`, `-B` or `-C`: control mode's, which a client that is not in it
+    /// is refused.
+    pub control: bool,
 }
 
 /// `refresh-client`'s pan flags.
@@ -921,6 +1089,16 @@ pub struct FindWindow {
     pub zoom: bool,
     /// The text to match (required; `None` only for a bare `find-window`).
     pub pattern: Option<String>,
+    /// `-C`: look in the text of the panes.
+    pub content: bool,
+    /// `-N`: look in the windows' names.
+    pub name: bool,
+    /// `-T`: look in the panes' titles.
+    pub title: bool,
+    /// `-r`: the pattern is a regular expression.
+    pub regex: bool,
+    /// `-i`: case does not matter.
+    pub ignore: bool,
 }
 
 /// `choose-tree` (TC.9).
@@ -943,6 +1121,11 @@ pub struct WaitFor {
     pub channel: Option<String>,
     /// `-S`.
     pub signal: bool,
+    /// `-L`: take the channel's lock, waiting for whoever holds it (`-S`
+    /// wins over it).
+    pub lock: bool,
+    /// `-U`: let go of the channel's lock (`-S` and `-L` win over it).
+    pub unlock: bool,
 }
 
 /// `display-popup` (TC.6). Positions stay raw: numbers, tmux's position
@@ -1032,6 +1215,8 @@ pub struct NewPane {
     pub zoom: bool,
     /// `-d`: the new pane does not become active.
     pub detached: bool,
+    /// `-s -S -R -k -m`.
+    pub setup: PaneSetup,
 }
 
 /// `float-pane` (grofe's own; tmux 3.7b has no such verb): a tiled pane
@@ -1270,6 +1455,11 @@ pub struct SetBuffer {
     /// `-n`: rename the buffer (the data, if any, is ignored).
     pub rename: Option<String>,
     pub data: Option<String>,
+    /// `-w`: also send the data to the `-t` client's clipboard (the
+    /// current client's, else).
+    pub clipboard: bool,
+    /// `-t`: the client `-w` sends to, raw.
+    pub client: Option<String>,
 }
 
 /// `show-buffer [-b name]` (TM.4).
@@ -1302,6 +1492,10 @@ pub struct SaveBuffer {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListBuffers {
     pub format: Option<String>,
+    /// `-f`: a format; only buffers it expands true for are listed.
+    pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `delete-buffer [-b name]` (TM.4).
@@ -1432,6 +1626,10 @@ pub enum Command {
     UnlinkWindow(UnlinkWindow),
     MovePane(MovePane),
     NextLayout(NextLayout),
+    PreviousLayout(NextLayout),
+    Lock(Lock),
+    ServerAccess(ServerAccess),
+    PromptHistory(PromptHistory),
     /// `respawn-window` (TC.8): `respawn-pane`'s shape with a window target.
     RespawnWindow(RespawnPane),
     RefreshClient(RefreshClient),

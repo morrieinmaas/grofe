@@ -177,7 +177,38 @@ pub enum Hello {
         /// `attach-session`. Sent only when `true`.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         created: bool,
+        /// The rest of `attach-session`'s flags (`-c -E -f -r -x`), sent
+        /// only when one is given.
+        #[serde(default, skip_serializing_if = "AttachExtras::is_default")]
+        extras: AttachExtras,
     },
+}
+
+/// What `attach-session -c -E -f -r -x` ask for, in the attach hello.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AttachExtras {
+    /// `-c`: the session's directory for new windows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// `-r`: a read-only client.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// `-f`: client flags, as `refresh-client -f` takes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<String>,
+    /// `-E`: the session's environment is not updated from the client's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_env: bool,
+    /// `-x`: with `-d`, the detached clients' parents are sent SIGHUP.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub kill_parent: bool,
+}
+
+impl AttachExtras {
+    pub fn is_default(&self) -> bool {
+        *self == AttachExtras::default()
+    }
 }
 
 /// The protocol version this build speaks: the `"grofe"` field of a hello
@@ -616,6 +647,7 @@ mod tests {
             nest: true,
             tty: None,
             created: false,
+            extras: AttachExtras::default(),
         };
         let line = encode_hello(&hello).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), hello);
@@ -650,6 +682,7 @@ mod tests {
             nest: false,
             tty: None,
             created: false,
+            extras: AttachExtras::default(),
         };
         let line = encode_hello(&attach).unwrap();
         assert_eq!(decode_hello(&line).unwrap(), attach);
@@ -680,6 +713,7 @@ mod tests {
             nest: false,
             tty: None,
             created: false,
+            extras: AttachExtras::default(),
         };
         let line = encode_hello(&hello).unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -810,6 +844,7 @@ mod tests {
             nest: true,
             tty: None,
             created: false,
+            extras: AttachExtras::default(),
         };
         let decoded = decode_hello(&encode_hello(&hello).unwrap()).unwrap();
         match decoded {

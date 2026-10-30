@@ -130,6 +130,9 @@ pub(crate) struct Reader {
     pub(crate) id: PaneId,
     pub(crate) generation: u64,
     pub(crate) master: Arc<AsyncFd<OwnedFd>>,
+    /// A slave fd, held until the child has exited and the master is
+    /// empty: macOS drops a pty's unread output when its last slave closes.
+    pub(crate) slave: Option<OwnedFd>,
     /// `None` when the program failed to exec: the pane is born dead.
     pub(crate) child: Option<tokio::process::Child>,
     pub(crate) emu: Arc<Mutex<Emu>>,
@@ -197,23 +200,39 @@ pub(crate) async fn reader(mut r: Reader) {
                 }) {
                     Ok(Ok(0)) => drained = true,
                     Ok(Ok(n)) => {
-                        r.pipe.tee(&buf[..n]);
-                        found = r.feed(&buf[..n]);
+                        (found, tapped) = r.take(&buf[..n]);
                         quiet_since = Instant::now();
                         read = true;
-                        if OUTPUT_TAP.load(Ordering::Relaxed) {
-                            tapped = Some(buf[..n].to_vec());
-                        }
                     }
                     Ok(Err(e)) if e.raw_os_error() == Some(Errno::EINTR as i32) => {}
                     // EIO once every slave holder has gone.
                     Ok(Err(_)) => drained = true,
-                    Err(_would_block) => {}
+                    Err(_would_block) => {
+                        if exit.is_some() {
+                            r.slave = None;
+                        }
+                    }
                 }
             }
             status = wait_exit(&mut r.child), if exit.is_none() => {
                 exit = Some(status);
                 quiet_since = quiet_since.max(Instant::now());
+                // An empty master never turns readable while the slave is
+                // held, so look now: if it is empty the slave can go, and
+                // EOF follows without waiting out the grace.
+                if !drained {
+                    match nix::unistd::read(r.master.get_ref(), &mut buf) {
+                        Ok(0) => drained = true,
+                        Ok(n) => {
+                            (found, tapped) = r.take(&buf[..n]);
+                            quiet_since = Instant::now();
+                            read = true;
+                        }
+                        Err(Errno::EAGAIN) => r.slave = None,
+                        Err(Errno::EINTR) => {}
+                        Err(_) => drained = true,
+                    }
+                }
             }
             _ = tokio::time::sleep_until(sync.unwrap_or(grace)), if sync.is_some() => {
                 r.flush_sync();
@@ -267,6 +286,15 @@ impl Reader {
             generation: self.generation,
             kind,
         }
+    }
+
+    /// One read's bytes, to `pipe-pane` and then the emulator. Returns what
+    /// the scanner found and, with the output tap on, a copy of the bytes.
+    fn take(&mut self, bytes: &[u8]) -> (Vec<PaneEventKind>, Option<Vec<u8>>) {
+        self.pipe.tee(bytes);
+        let found = self.feed(bytes);
+        let tapped = OUTPUT_TAP.load(Ordering::Relaxed).then(|| bytes.to_vec());
+        (found, tapped)
     }
 
     /// End a pending synchronized update, if any, and handle its events.

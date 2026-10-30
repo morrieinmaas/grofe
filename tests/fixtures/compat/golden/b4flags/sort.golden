@@ -1,0 +1,508 @@
+$ new-session -d -s b -n w -x 50 -y 10 'sleep 100000'
+? 0
+$ run-shell 'sleep 0.2'
+? 0
+$ new-session -d -s a -n w -x 40 -y 12 'sleep 100000'
+? 0
+$ run-shell 'sleep 0.2'
+? 0
+$ new-session -d -s c -n w -x 60 -y 8 'sleep 100000'
+? 0
+$ list-sessions -F '#{session_name}'
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -r
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O name
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O name -r
+c
+b
+a
+? 0
+$ list-sessions -F '#{session_name}' -O creation
+b
+a
+c
+? 0
+$ list-sessions -F '#{session_name}' -O creation -r
+c
+a
+b
+? 0
+$ list-sessions -F '#{session_name}' -O index
+b
+a
+c
+? 0
+$ list-sessions -F '#{session_name}' -O key
+b
+a
+c
+? 0
+$ list-sessions -F '#{session_name}' -O activity
+c
+a
+b
+? 0
+$ list-sessions -F '#{session_name}' -O activity -r
+b
+a
+c
+? 0
+$ list-sessions -F '#{session_name}' -O size
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O order
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O order -r
+c
+b
+a
+? 0
+$ list-sessions -F '#{session_name}' -O NAME -r
+c
+b
+a
+? 0
+$ list-sessions -F '#{session_name}' -O title
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O z
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O modifier
+a
+b
+c
+? 0
+$ list-sessions -F '#{session_name}' -O bogus
+! invalid sort order
+? 1
+$ list-sessions -O
+! command list-sessions: -O expects an argument
+? 1
+$ list-sessions -f '#{!=:#{session_name},a}' -O name -r -F '#{session_name}'
+c
+b
+? 0
+$ new-window -d -t b: -n zz 'sleep 100000'
+? 0
+$ new-window -d -t b: -n yy 'sleep 100000'
+? 0
+$ new-window -d -t b: -n xx 'sleep 100000'
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}'
+1:w
+2:zz
+3:yy
+4:xx
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O name
+1:w
+4:xx
+3:yy
+2:zz
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O name -r
+2:zz
+3:yy
+4:xx
+1:w
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O creation -r
+4:xx
+3:yy
+2:zz
+1:w
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O index -r
+4:xx
+3:yy
+2:zz
+1:w
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O size
+1:w
+4:xx
+3:yy
+2:zz
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O order -r
+4:xx
+3:yy
+2:zz
+1:w
+? 0
+$ list-windows -t b -F '#{window_index}:#{window_name}' -O bogus
+! invalid sort order
+? 1
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O name
+a:1:w
+b:1:w
+c:1:w
+b:4:xx
+b:3:yy
+b:2:zz
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O size
+a:1:w
+c:1:w
+b:1:w
+b:4:xx
+b:3:yy
+b:2:zz
+? 0
+$ list-windows -a -F '#{session_name}:#{window_index}:#{window_name}' -O index -r
+b:4:xx
+b:3:yy
+b:2:zz
+a:1:w
+b:1:w
+c:1:w
+? 0
+$ split-window -d -t a:1 -l 10 'sleep 100000'
+? 0
+$ split-window -d -h -t a:1.1 -l 7 'sleep 100000'
+? 0
+$ select-pane -t a:1.2 -T beta
+? 0
+$ select-pane -t a:1.3 -T alpha
+? 0
+$ select-pane -t a:1.1 -T gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}:#{pane_width}x#{pane_height}'
+1:%1:gamma:32x1
+2:%7:beta:7x1
+3:%6:alpha:40x10
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O name
+3:%6:alpha
+2:%7:beta
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O title -r
+1:%1:gamma
+2:%7:beta
+3:%6:alpha
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O size
+2:%7:beta
+1:%1:gamma
+3:%6:alpha
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O size -r
+3:%6:alpha
+1:%1:gamma
+2:%7:beta
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O creation -r
+2:%7:beta
+3:%6:alpha
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O index -r
+3:%6:alpha
+2:%7:beta
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O activity
+3:%6:alpha
+2:%7:beta
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O z
+3:%6:alpha
+2:%7:beta
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O order -r
+3:%6:alpha
+2:%7:beta
+1:%1:gamma
+? 0
+$ list-panes -t a:1 -F '#{pane_index}:#{pane_id}:#{pane_title}' -O bogus
+! invalid sort order
+? 1
+$ list-panes -s -t a -F '#{window_index}.#{pane_index}:#{pane_title}' -O name
+1.3:alpha
+1.2:beta
+1.1:gamma
+? 0
+$ list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}:#{pane_title}' -O size -r
+a:1.3:alpha
+a:1.1:gamma
+a:1.2:beta
+b:1.1:<HOST>
+b:2.1:<HOST>
+b:3.1:<HOST>
+b:4.1:<HOST>
+c:1.1:<HOST>
+? 0
+$ set-buffer -b zeta 'aaaa'
+? 0
+$ set-buffer -b alpha 'bb'
+? 0
+$ set-buffer -b mid 'cccccc'
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}'
+mid:6
+alpha:2
+zeta:4
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O name
+alpha:2
+mid:6
+zeta:4
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O name -r
+zeta:4
+mid:6
+alpha:2
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O size
+alpha:2
+zeta:4
+mid:6
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O size -r
+mid:6
+zeta:4
+alpha:2
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O creation
+mid:6
+alpha:2
+zeta:4
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O creation -r
+zeta:4
+alpha:2
+mid:6
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O order -r
+zeta:4
+alpha:2
+mid:6
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -r
+mid:6
+alpha:2
+zeta:4
+? 0
+$ list-buffers -F '#{buffer_name}:#{buffer_size}' -O bogus
+! invalid sort order
+? 1
+$ list-buffers -F '#{buffer_name}' -f '#{>:#{buffer_size},2}'
+mid
+zeta
+? 0
+$ list-buffers -F '#{buffer_name}' -f '#{>:#{buffer_size},2}' -O name -r
+zeta
+mid
+? 0
+$ list-buffers -f '#{==:#{buffer_name},alpha}' -F '#{buffer_name} #{buffer_size}'
+alpha 2
+? 0
+$ bind-key -T mytable a display-message x
+? 0
+$ bind-key -T mytable b display-message y
+? 0
+$ bind-key -T mytable -N 'note b' c display-message z
+? 0
+$ bind-key -T mytable -N 'note e' -r e display-message w
+? 0
+$ bind-key -T mytable M-a display-message ma
+? 0
+$ bind-key -T mytable C-a display-message ca
+? 0
+$ bind-key -T mytable F1 display-message f1
+? 0
+$ bind-key -T mytable Up display-message up
+? 0
+$ bind-key -T other Z display-message oz
+? 0
+$ list-keys -T mytable
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable C-a display-message ca
+? 0
+$ list-keys -T mytable -r
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable C-a display-message ca
+? 0
+$ list-keys -T mytable -O order -r
+bind-key    -T mytable C-a display-message ca
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable F1  display-message f1
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable c   display-message z
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable a   display-message x
+? 0
+$ list-keys -T mytable -O index
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable C-a display-message ca
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+? 0
+$ list-keys -T mytable -O index -r
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable c   display-message z
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable C-a display-message ca
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable F1  display-message f1
+? 0
+$ list-keys -T mytable -O key
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable C-a display-message ca
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+? 0
+$ list-keys -T mytable -O modifier
+bind-key    -T mytable C-a display-message ca
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable F1  display-message f1
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable c   display-message z
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable a   display-message x
+? 0
+$ list-keys -T mytable -O modifier -r
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable C-a display-message ca
+? 0
+$ list-keys -T mytable -O bogus
+! invalid sort order
+? 1
+$ list-keys -O bogus nosuchkey
+! invalid key: nosuchkey
+? 1
+$ list-keys -T mytable -F '#{key_table}|#{key_string}|#{key_repeat}|#{key_command}'
+mytable|a|0|display-message x
+mytable|b|0|display-message y
+mytable|c|0|display-message z
+mytable|e|1|display-message w
+mytable|F1|0|display-message f1
+mytable|Up|0|display-message up
+mytable|M-a|0|display-message ma
+mytable|C-a|0|display-message ca
+? 0
+$ list-keys -T mytable -F '#{key_string_width}|#{key_table_width}|#{key_has_repeat}|#{notes_only}|#{key_prefix}|#{key_note}'
+3|7|1|0|C-b|
+3|7|1|0|C-b|
+3|7|1|0|C-b|note b
+3|7|1|0|C-b|note e
+3|7|1|0|C-b|
+3|7|1|0|C-b|
+3|7|1|0|C-b|
+3|7|1|0|C-b|
+? 0
+$ list-keys -T mytable -N
+C-b c note b
+C-b e note e
+? 0
+$ list-keys -T mytable -N -a
+C-b a   display-message x
+C-b b   display-message y
+C-b c   note b
+C-b e   note e
+C-b F1  display-message f1
+C-b Up  display-message up
+C-b M-a display-message ma
+C-b C-a display-message ca
+? 0
+$ list-keys -T mytable -N -a -P 'PFX'
+PFX a   display-message x
+PFX b   display-message y
+PFX c   note b
+PFX e   note e
+PFX F1  display-message f1
+PFX Up  display-message up
+PFX M-a display-message ma
+PFX C-a display-message ca
+? 0
+$ list-keys -T mytable -N -P ''
+ c note b
+ e note e
+? 0
+$ list-keys -T mytable -N -F '#{key_prefix}!#{key_string}!#{key_note}!#{key_command}'
+C-b!c!note b!display-message z
+C-b!e!note e!display-message w
+? 0
+$ list-keys -T mytable -a
+bind-key    -T mytable a   display-message x
+bind-key    -T mytable b   display-message y
+bind-key    -T mytable c   display-message z
+bind-key -r -T mytable e   display-message w
+bind-key    -T mytable F1  display-message f1
+bind-key    -T mytable Up  display-message up
+bind-key    -T mytable M-a display-message ma
+bind-key    -T mytable C-a display-message ca
+? 0
+$ list-keys -T nosuchtable
+! table nosuchtable doesn't exist
+? 1
+$ list-keys -F '#{key_table}:#{key_string}' -T other
+? 0
+$ list-keys -T mytable -F ''
+? 0
+$ list-keys -T mytable -P x -F '#{key_prefix}'
+x
+x
+x
+x
+x
+x
+x
+x
+? 0
+$ list-keys -T mytable -1 -F '#{key_string}'
+? 0

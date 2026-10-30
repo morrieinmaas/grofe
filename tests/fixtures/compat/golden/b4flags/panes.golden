@@ -1,0 +1,427 @@
+$ new-session -d -s main -x 100 -y 50 'sleep 100000'
+? 0
+$ split-window -d -t main:1 -s 'bg=red' -S 'fg=blue' -R 'fg=green' 'sleep 100000'
+? 0
+$ show-options -p -t main:1.2
+pane-active-border-style fg=blue
+pane-border-style fg=green
+window-active-style bg=red
+window-style bg=red
+? 0
+$ show-options -pv -t main:1.2 window-style
+bg=red
+? 0
+$ show-options -pv -t main:1.2 window-active-style
+bg=red
+? 0
+$ show-options -pv -t main:1.2 pane-active-border-style
+fg=blue
+? 0
+$ show-options -pv -t main:1.2 pane-border-style
+fg=green
+? 0
+$ split-window -d -t main:1 -s 'bg=nosuchcolour' 'sleep 100000'
+? 0
+$ split-window -d -t main:1 -S 'bg=nosuchcolour' 'sleep 100000'
+? 0
+$ split-window -d -t main:1 -R 'bg=nosuchcolour' 'sleep 100000'
+? 0
+$ list-panes -t main:1 -F '#{pane_index}'
+1
+2
+3
+4
+5
+? 0
+$ select-layout -t main:1 even-vertical
+? 0
+$ split-window -d -k -t main:1 'echo gone; exit 0'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{remain-on-exit}'
+1 0 off
+2 1 key
+3 0 off
+4 0 off
+5 0 off
+6 0 off
+? 0
+$ show-options -pv -t main:1.6 remain-on-exit
+? 0
+$ capture-pane -p -t main:1.6
+
+
+
+
+
+
+
+
+
+? 0
+$ split-window -d -m 'bye now' -t main:1 'exit 3'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{pane_dead_status}'
+1 0 
+2 1 3
+3 1 0
+4 0 
+5 0 
+6 0 
+7 0 
+? 0
+$ show-options -pv -t main:1.7 remain-on-exit-format
+? 0
+$ show-options -pv -t main:1.7 remain-on-exit
+? 0
+$ new-pane -d -k -t main:1 'echo float; exit 0'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{pane_floating_flag}'
+1 0 0
+2 1 0
+3 1 0
+4 0 0
+5 0 0
+6 0 0
+7 0 0
+8 1 1
+? 0
+$ new-pane -d -s 'bg=blue' -S 'fg=red' -R 'fg=white' -t main:1 'sleep 100000'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag}'
+1 0
+2 0
+3 0
+4 0
+5 0
+6 0
+7 0
+8 1
+9 1
+? 0
+$ new-pane -L -d -t main:1 'sleep 100000'
+! size or position no space for a new pane
+? 1
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag}'
+1 0
+2 0
+3 0
+4 0
+5 0
+6 0
+7 0
+8 1
+9 1
+? 0
+$ new-pane -L -d -h -l 10 -t main:1 'sleep 100000'
+? 0
+$ new-pane -L -d -b -p 20 -t main:1 -s 'bg=green' 'sleep 100000'
+! size or position no space for a new pane
+? 1
+$ show-options -pv -t main:1.1 window-style
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag} #{pane_width}x#{pane_height}'
+1 0 89x2
+2 0 10x2
+3 0 100x2
+4 0 100x4
+5 0 100x9
+6 0 100x9
+7 0 100x9
+8 0 100x9
+9 1 50x12
+10 1 50x12
+? 0
+$ new-pane -f -h -v -l 5 -p 5 -d -t main:1 'sleep 100000'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag} before'
+1 0 before
+2 0 before
+3 0 before
+4 0 before
+5 0 before
+6 0 before
+7 0 before
+8 0 before
+9 1 before
+10 1 before
+11 1 before
+? 0
+$ new-pane -L -Z -d -t main:1 'sleep 100000'
+! size or position no space for a new pane
+? 1
+$ new-window -d -t main:5 'sleep 100000'
+? 0
+$ respawn-pane -k -t main:5.1 -e FOO=bar 'echo "FOO=$FOO"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:5.1
+FOO=bar
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ respawn-pane -k -t main:5.1 -e A=1 -e B=2 -e A=3 'echo "$A $B"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:5.1
+3 2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ respawn-window -k -t main:5 -e Z=zed 'echo "Z=$Z"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:5.1
+Z=zed
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ respawn-pane -k -t main:5.1 -e NOEQ 'echo "[$NOEQ]"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:5.1
+[]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ new-session -d -s two -x 40 -y 5 -e S1=one 'echo "$S1 [$LANG]"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t two:1.1
+one [C.UTF-8]
+
+
+
+
+? 0
+$ set-environment -g CLIENTVAR fromserver
+? 0
+$ new-session -d -s three -x 40 -y 5 -E 'echo "[$CLIENTVAR]"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t three:1.1
+[fromserver]
+
+
+
+
+? 0
+$ new-session -d -s four -x 40 -y 5 -f read-only 'sleep 100000'
+? 0
+$ new-session -d -s five -x 40 -y 5 -D 'sleep 100000'
+? 0
+$ new-session -d -s six -x 40 -y 5 -X 'sleep 100000'
+? 0
+$ list-sessions -F '#{session_name}'
+five
+four
+main
+six
+three
+two
+? 0
+$ new-session -A -D -d -s four 'sleep 100000'
+! open terminal failed: not a terminal
+? 1
+$ new-session -A -X -d -s four
+! open terminal failed: not a terminal
+? 1

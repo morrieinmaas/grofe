@@ -12,6 +12,7 @@
 //! window and its session.
 
 use std::cell::OnceCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::borders::PaneStatus;
+use crate::server::dispatch::sorting::{Order, Sort, by_name};
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
@@ -188,8 +190,9 @@ const BUILTINS: &[Builtin] = &[
         name: REMAIN_ON_EXIT,
         // A choice in tmux 3.7b, so `yes` is refused and a bad value is
         // `unknown value`; `failed` keeps a pane only when its command
-        // failed (Claude Code's agent teams set it).
-        kind: Kind::Choice(&["off", "on", "failed"]),
+        // failed (Claude Code's agent teams set it); `key` keeps it until
+        // a key is pressed (`split-window -k`).
+        kind: Kind::Choice(&["off", "on", "failed", "key"]),
         scope: OptionScope::Window,
         default: "off",
     },
@@ -1678,7 +1681,45 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
             }
             set_option(&mut state.model, &mut state.events, ctx, c)
         }
-        Command::ShowOptions(c) => show_options(model, ctx, c),
+        // A hook is an option in tmux: asked for by name, its elements.
+        Command::ShowOptions(c)
+            if c.name.as_deref().is_some_and(|n| {
+                split_index(n).is_ok_and(|(base, _)| {
+                    builtin(base).is_none() && crate::server::hooks::event(base).is_some()
+                })
+            }) =>
+        {
+            crate::server::dispatch::hooks::show_hooks(
+                state,
+                ctx,
+                crate::cmd::ShowHooks {
+                    global: c.scope == Some(OptionScope::Global),
+                    window: c.scope == Some(OptionScope::Window),
+                    pane: c.scope == Some(OptionScope::Pane),
+                    target: c.target.clone(),
+                    hook: c.name.clone(),
+                    ..Default::default()
+                },
+            )
+        }
+        Command::ShowOptions(c) => {
+            // `-H`: the hooks a whole listing of the scope has, after the
+            // rest, as tmux's table keeps them last.
+            let hooks = (c.hooks && c.name.is_none()).then(|| crate::cmd::ShowHooks {
+                global: c.scope == Some(OptionScope::Global),
+                window: c.scope == Some(OptionScope::Window),
+                pane: c.scope == Some(OptionScope::Pane),
+                target: c.target.clone(),
+                ..Default::default()
+            });
+            let mut out = show_options(&state.model, ctx, c)?;
+            if let Some(hooks) = hooks
+                && let Ok(more) = crate::server::dispatch::hooks::show_hooks(state, ctx, hooks)
+            {
+                out.push_str(&more);
+            }
+            Ok(out)
+        }
         Command::DisplayMessage(c) => display_message(state, ctx, c),
         Command::ListSessions(c) => list_sessions(state, c),
         Command::ListWindows(c) => list_windows(state, ctx, c),
@@ -1744,6 +1785,18 @@ fn set_option(
         }
     };
     if c.unset {
+        // `-U`: a window option goes from its panes too.
+        if c.unset_panes
+            && let Owner::Window(window) = owner
+            && let Some(w) = model.windows.get(&window)
+        {
+            for pane in w.pane_ids() {
+                let _ = model.options.unset(Owner::Pane(pane), &c.name);
+                model
+                    .options
+                    .set_shown(Owner::Pane(pane), &c.name, "", None);
+            }
+        }
         let did = model.options.unset(owner, &c.name)?;
         model.options.set_shown(owner, &c.name, "", None);
         changed(model, events, did);
@@ -1894,9 +1947,17 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
     {
         return Ok(tmux_listing(model, owner, c.value_only));
     }
+    // `-A` on a whole session or window table, in tmux's order.
+    if tmux
+        && c.inherited
+        && c.name.is_none()
+        && matches!(owner, Owner::Session(_) | Owner::Window(_))
+    {
+        return Ok(tmux_inherited_listing(model, owner, c.value_only));
+    }
     // `-v` (tmux 3.7b): each value alone and unquoted; in the tmux
-    // dialect, a value as it was sent.
-    let line = |name: &str, value: &str| {
+    // dialect, a value as it was sent. `inherited` is `-A`'s `name*`.
+    let line = |name: &str, value: &str, inherited: bool| {
         let value = if tmux {
             tmux_text(&model.options, owner, name, value)
         } else {
@@ -1913,7 +1974,8 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             } else {
                 quote(value)
             };
-            format!("{name} {shown}\n")
+            let star = if inherited { "*" } else { "" };
+            format!("{name}{star} {shown}\n")
         }
     };
     // The server table listed whole (tmux's bare `show -s`) is the
@@ -1929,7 +1991,7 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         .options
         .at(listed)
         .filter(|(name, _)| c.name.as_ref().is_none_or(|n| n == *name) && wanted(name))
-        .map(|(name, e)| (name.as_str(), line(name, &e.value)))
+        .map(|(name, e)| (name.as_str(), line(name, &e.value, false)))
         .collect();
     if only_server {
         lines.extend(
@@ -1937,8 +1999,35 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
                 .options
                 .at(Owner::Server)
                 .filter(|(name, _)| name.starts_with('@'))
-                .map(|(name, e)| (name.as_str(), line(name, &e.value))),
+                .map(|(name, e)| (name.as_str(), line(name, &e.value, false))),
         );
+    }
+    // `-A`: what the scope does not set and inherits, from its parents, at
+    // the scope's own table (tmux's table scopes for a pane or window).
+    if c.inherited {
+        let mine = match owner {
+            Owner::Session(_) => Some(OptionScope::Session),
+            Owner::Window(_) => Some(OptionScope::Window),
+            Owner::Pane(_) => Some(OptionScope::Pane),
+            _ => None,
+        };
+        if let Some(mine) = mine {
+            let parents = &owner_chain(model, owner)[1..];
+            let names: Vec<&str> = match &c.name {
+                Some(n) => vec![n.as_str()],
+                None => builtin_names()
+                    .filter(|n| builtin_scope(n) == Some(mine))
+                    .collect(),
+            };
+            for name in names {
+                if model.options.get(owner, name).is_some() {
+                    continue;
+                }
+                if let Some(value) = model.options.lookup(name, parents) {
+                    lines.push((name, line(name, value, true)));
+                }
+            }
+        }
     }
     if c.name.is_none() {
         lines.extend(
@@ -2064,6 +2153,61 @@ fn list_rows(table: crate::compat::tmux::formats::Table, base: &str) -> Vec<u32>
             (b == base).then_some(i).flatten()
         })
         .collect()
+}
+
+/// tmux 3.7b's `show -A` of a session or a window (`owner`), with no name:
+/// its user options first, then tmux's table in its order, each option the
+/// scope sets with its value and each it inherits as `name* value`.
+fn tmux_inherited_listing(model: &Model, owner: Owner, value_only: bool) -> String {
+    use crate::compat::tmux::formats::{Table, tmux_table, unquote};
+    let table = match owner {
+        Owner::Window(_) => Table::Window,
+        _ => Table::Session,
+    };
+    let o = &model.options;
+    let parents = &owner_chain(model, owner)[1..];
+    let star = |name: &str, text: &str| match value_only {
+        true => format!("{text}\n"),
+        false => format!("{name}* {}\n", quote(text)),
+    };
+    let mut out = String::new();
+    for (name, e) in o.at(owner) {
+        if name.starts_with('@') && !name.starts_with("@src-") {
+            out.push_str(&line_raw(
+                name,
+                &tmux_text(o, owner, name, &e.value),
+                value_only,
+            ));
+        }
+    }
+    let mut lists_done: BTreeSet<&str> = BTreeSet::new();
+    for (name, text) in tmux_table(table) {
+        let Ok((base, index)) = split_index(name) else {
+            continue;
+        };
+        if list_builtin(base).is_some() {
+            // An array nobody set here shows by name, starred.
+            if lists_done.insert(base) && o.list(owner, base).is_none() && !value_only {
+                out.push_str(&format!("{base}*\n"));
+            }
+            continue;
+        }
+        if index.is_some() {
+            continue;
+        }
+        match (o.get(owner, base), o.lookup(base, parents)) {
+            (Some(own), _) => out.push_str(&line_raw(
+                base,
+                &tmux_text(o, owner, base, &own.value),
+                value_only,
+            )),
+            (None, Some(inherited)) => {
+                out.push_str(&star(base, &tmux_text(o, Owner::Global, base, inherited)));
+            }
+            (None, None) => out.push_str(&star(base, &unquote(text))),
+        }
+    }
+    out
 }
 
 /// tmux 3.7b's `show -g`, `show -gw` or `show -s` (`owner` Global,
@@ -2432,14 +2576,17 @@ pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<Stri
         Some(name) => Some(parse_key(name).map_err(|_| format!("invalid key: {name}"))?),
         None => None,
     };
+    let sort = Sort::new(&c.sort)?;
     let tables = &state.registry.key_tables;
     if let Some(t) = &c.table
         && !tables.exists(t)
     {
         return Err(format!("table {t} doesn't exist"));
     }
-    if ctx.dialect == crate::protocol::Dialect::Tmux {
-        return list_keys_tmux(state, ctx, &c, only);
+    // The flags only the tmux listing has choose it in either dialect.
+    let tmux_listing = c.format.is_some() || c.prefix.is_some() || c.all || c.sort.order.is_some();
+    if ctx.dialect == crate::protocol::Dialect::Tmux || tmux_listing {
+        return list_keys_tmux(state, ctx, &c, only, sort);
     }
     if c.notes {
         return list_notes(state, ctx, &c, only);
@@ -2528,28 +2675,48 @@ fn list_notes(
         .collect())
 }
 
-/// `list-keys` for a tmux-dialect request, as tmux 3.7b prints it
-/// (`cmd-list-keys.c`, recorded on `-L grofe-fe4 -f /dev/null`):
+/// tmux 3.7b's `LIST_KEYS_TEMPLATE`, a line of `list-keys`.
+const TMUX_LIST_KEYS: &str = "#{?notes_only,\
+#{key_prefix} #{p|#{key_string_width}:key_string} #{?key_note,#{key_note},#{key_command}},\
+bind-key #{?key_has_repeat,#{?key_repeat,-r,  },} \
+-T #{p|#{key_table_width}:key_table} #{p|#{key_string_width}:#{q|a:key_string}} #{key_command}}";
+
+/// The variables of one `list-keys` line (`cmd_list_keys_format_add_key_binding`).
+struct KeyVars(BTreeMap<&'static str, String>);
+
+impl FormatVars for KeyVars {
+    fn get(&self, name: &str) -> Option<String> {
+        self.0.get(name).cloned()
+    }
+}
+
+/// `list-keys` as tmux 3.7b prints it (`cmd-list-keys.c`, recorded):
 ///
 /// - which bindings: `-T`'s table, or with `-N` the prefix then the root
 ///   table, or every table by name; each table in tmux's key order
-///   ([`tmux_key_order`]); a key given keeps only its binding, `-N` only
-///   bindings with a note, `-1` only the first;
-/// - a line: `bind-key [-r] -T <table> <key> <commands>`, the table and
-///   the key (escaped as tmux escapes an argument) padded to the widest,
-///   `-r` or two blanks only when some binding repeats; with `-N`,
-///   `<prefix> <key> <note>`;
+///   ([`tmux_key_order`]) or the order `-O` asks for (`-r` reversing it); a
+///   key given keeps only its binding, `-N` only bindings with a note
+///   (`-a`: every one), `-1` only the first;
+/// - a line is `-F`'s format, else tmux's template, over the line's key
+///   variables: by default `bind-key [-r] -T <table> <key> <commands>`, the
+///   table and the key (escaped as tmux escapes an argument) padded to the
+///   widest, `-r` or two blanks only when some binding repeats; with `-N`,
+///   `<prefix> <key> <note>` (`-P`'s prefix, else the `prefix` key);
 /// - one binding (a key given, or `-1`) goes to the current client's
 ///   status line, not to the output.
 ///
 /// The commands are tmux's stock text for a stock binding, else each one
 /// printed as tmux prints a parsed command ([`tmux_command_line`]).
-// ponytail: no `-a`, `-F`, `-O`, `-P` or `-r` (none parse natively).
+// ponytail: tmux compares key codes as `int`s, so its `-O index` and
+// `-O modifier` order the keys it cannot tell apart by the low bits of the
+// difference of their codes; here they order by the key's place in tmux's
+// key table (index) or its modifiers (modifier), and `-O name` is by table.
 fn list_keys_tmux(
     state: &mut State,
     ctx: &ClientCtx,
     c: &ListKeys,
     only: Option<Key>,
+    sort: Sort,
 ) -> Result<String, String> {
     let tables = &state.registry.key_tables;
     let names: Vec<String> = match &c.table {
@@ -2557,41 +2724,86 @@ fn list_keys_tmux(
         None if c.notes => vec!["prefix".to_string(), "root".to_string()],
         None => tables.table_names().map(str::to_string).collect(),
     };
-    let mut rows: Vec<(String, Key, Binding)> = Vec::new();
+    // Each table, in key order; sorted as a whole unless a table or `-N`
+    // names the tables to sort one by one.
+    let mut groups: Vec<Vec<(String, Key, Binding)>> = Vec::new();
     for table in &names {
         let mut keys = tables.keys(table);
         keys.sort_by_key(tmux_key_order);
-        for key in keys {
-            if only.is_some_and(|k| !k.matches(&key)) {
-                continue;
-            }
-            let Some(b) = tables.exact(table, &key) else {
-                continue;
-            };
-            if c.notes && b.desc.as_deref().is_none_or(str::is_empty) {
-                continue;
-            }
-            rows.push((table.clone(), key, b.clone()));
-        }
+        groups.push(
+            keys.into_iter()
+                .filter_map(|key| Some((table.clone(), key, tables.exact(table, &key)?.clone())))
+                .collect(),
+        );
     }
+    // tmux's `sort_key_binding_cmp` is no total order (it takes the
+    // difference of two 64 bit key codes as an `int`, and a tie as "greater"
+    // when the tables are the same), so its order is the one its `qsort`
+    // makes of it: the same merge sort here.
+    type Row = (String, Key, Binding);
+    let compare = |order: Order, a: &Row, b: &Row| -> i32 {
+        let same_table = a.0.eq_ignore_ascii_case(&b.0);
+        let first = match order {
+            Order::Index => tmux_key_low32(&a.1).wrapping_sub(tmux_key_low32(&b.1)) as i32,
+            Order::Name => i32::from(same_table),
+            _ => 0,
+        };
+        let result = if first == 0 {
+            i32::from(same_table)
+        } else {
+            first
+        };
+        if sort.reversed() { -result } else { result }
+    };
+    let sort_rows = |rows: &mut [Row]| match sort.order() {
+        None => {}
+        Some(Order::Natural) => {
+            if sort.reversed() {
+                rows.reverse();
+            }
+        }
+        Some(order) => {
+            crate::server::dispatch::sorting::merge_sort(rows, &|a, b| compare(order, a, b))
+        }
+    };
+    let mut rows: Vec<Row> = Vec::new();
+    if c.table.is_some() || c.notes {
+        for group in &mut groups {
+            sort_rows(group);
+        }
+        rows.extend(groups.into_iter().flatten());
+    } else {
+        rows.extend(groups.into_iter().flatten());
+        sort_rows(&mut rows);
+    }
+    let filter_notes = c.notes && !c.all;
+    rows.retain(|(_, key, b)| {
+        only.is_none_or(|k| k.matches(key)) && (!filter_notes || b.desc.is_some())
+    });
     if c.first {
         rows.truncate(1);
     }
-    let prefix = match state.model.options.lookup("prefix", &[]) {
-        Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
-        _ => String::new(),
+    let prefix = match &c.prefix {
+        Some(p) => p.clone(),
+        None => match state.model.options.lookup("prefix", &[]) {
+            Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
+            _ => String::new(),
+        },
     };
+    let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
     let key_width = rows
         .iter()
-        .map(|(_, k, _)| k.to_string().chars().count())
+        .map(|(_, k, _)| width(&k.to_string()))
         .max()
         .unwrap_or(0);
-    let table_width = rows
-        .iter()
-        .map(|(t, _, _)| t.chars().count())
-        .max()
-        .unwrap_or(0);
+    let table_width = rows.iter().map(|(t, _, _)| width(t)).max().unwrap_or(0);
     let has_repeat = rows.iter().any(|(_, _, b)| b.repeat);
+    let template = match &c.format {
+        Some(f) if ctx.dialect == crate::protocol::Dialect::Tmux => tmux_template(f),
+        Some(f) => f.clone(),
+        None => tmux_template(TMUX_LIST_KEYS),
+    };
+    let flag = |on: bool| if on { "1" } else { "0" }.to_string();
     let lines: Vec<String> = rows
         .iter()
         .map(|(table, key, b)| {
@@ -2599,18 +2811,19 @@ fn list_keys_tmux(
                 .shown
                 .clone()
                 .unwrap_or_else(|| tmux_command_line(&b.cmds));
-            if c.notes {
-                let key = key.to_string();
-                let note = b.desc.clone().unwrap_or(command);
-                return format!("{prefix} {key:<key_width$} {note}");
-            }
-            let repeat = match (has_repeat, b.repeat) {
-                (false, _) => "",
-                (true, true) => "-r",
-                (true, false) => "  ",
-            };
-            let key = crate::cmd::parse::escape_arg(&key.to_string());
-            format!("bind-key {repeat} -T {table:<table_width$} {key:<key_width$} {command}")
+            let vars = KeyVars(BTreeMap::from([
+                ("notes_only", flag(c.notes)),
+                ("key_has_repeat", flag(has_repeat)),
+                ("key_string_width", key_width.to_string()),
+                ("key_table_width", table_width.to_string()),
+                ("key_repeat", flag(b.repeat)),
+                ("key_note", b.desc.clone().unwrap_or_default()),
+                ("key_prefix", prefix.clone()),
+                ("key_table", table.clone()),
+                ("key_string", key.to_string()),
+                ("key_command", command),
+            ]));
+            expand(&template, &vars)
         })
         .collect();
     if lines.len() == 1 || c.first {
@@ -2619,7 +2832,74 @@ fn list_keys_tmux(
         }
         return Ok(String::new());
     }
-    Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+    Ok(lines
+        .iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("{l}\n"))
+        .collect())
+}
+
+/// The low 32 bits of tmux's key code for `key` (`key_code`): what is left
+/// of a key code once its type and modifier bits are out of the way, and
+/// all `-O index` sees of it (it compares the difference as an `int`).
+// ponytail: a character of four UTF-8 bytes is an index into tmux's table of
+// them, which is not reproduced; its bytes stand in.
+fn tmux_key_low32(key: &Key) -> u32 {
+    use crate::server::input::{KeyCode, MousePlace};
+    use unicode_width::UnicodeWidthChar;
+    let packed = |c: char| {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+        let width = c.width().unwrap_or(0) as u32;
+        let data = bytes
+            .iter()
+            .take(3)
+            .enumerate()
+            .fold(0u32, |acc, (i, b)| acc | u32::from(*b) << (8 * i));
+        (bytes.len() as u32) << 24 | (width + 1) << 29 | data
+    };
+    // Past KEYC_NONE: the functional keys, in tmux's order.
+    let function = |n: u32| n;
+    match key.code {
+        KeyCode::Char(c) if c.is_ascii() => c as u32,
+        KeyCode::Char(c) => packed(c),
+        KeyCode::Literal(c) => packed(c),
+        KeyCode::Control(c) => u32::from(c),
+        KeyCode::Tab => 9,
+        KeyCode::Enter => 13,
+        KeyCode::Escape => 27,
+        KeyCode::User(n) => u32::from(n),
+        KeyCode::Any => function(4),
+        KeyCode::Backspace => function(7),
+        KeyCode::F(n) => function(7 + u32::from(n)),
+        KeyCode::Insert => function(20),
+        KeyCode::Delete => function(21),
+        KeyCode::Home => function(22),
+        KeyCode::End => function(23),
+        KeyCode::PageDown => function(24),
+        KeyCode::PageUp => function(25),
+        KeyCode::BackTab => function(26),
+        KeyCode::Up => function(27),
+        KeyCode::Down => function(28),
+        KeyCode::Left => function(29),
+        KeyCode::Right => function(30),
+        KeyCode::Keypad(k) => function(31 + k.order()),
+        KeyCode::Mouse(m) => {
+            let place = match m.place {
+                MousePlace::Pane => 0,
+                MousePlace::Status => 1,
+                MousePlace::StatusLeft => 2,
+                MousePlace::StatusRight => 3,
+                MousePlace::StatusDefault => 4,
+                MousePlace::Border => 5,
+                MousePlace::ScrollbarUp => 6,
+                MousePlace::ScrollbarSlider => 7,
+                MousePlace::ScrollbarDown => 8,
+                MousePlace::Control(n) => 9 + u32::from(n),
+            };
+            u32::from(m.button) << 8 | place
+        }
+    }
 }
 
 /// Where tmux 3.7b's key codes put `key` (its key tables are ordered by
@@ -2645,18 +2925,28 @@ pub(crate) fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
         KeyCode::Left,
         KeyCode::Right,
     ];
+    // tmux orders by the key code: the characters and C0 codes, the user
+    // keys, the functional keys, then the mouse keys.
     match key.code {
-        KeyCode::Char(c) => (mods, 0, c as u32, String::new()),
+        // The characters tmux packs as UTF-8 (those past ASCII, and those a
+        // `0xNN` made) come after the C0 codes and ASCII, in that order.
+        KeyCode::Char(c) if c.is_ascii() => (mods, 0, c as u32, String::new()),
+        KeyCode::Literal(c) => (mods, 0, 0x80 + c as u32, String::new()),
+        KeyCode::Char(c) => (mods, 0, 0x1000 + c as u32, String::new()),
         KeyCode::Enter => (mods, 0, 13, String::new()),
         KeyCode::Tab => (mods, 0, 9, String::new()),
         KeyCode::Escape => (mods, 0, 27, String::new()),
+        KeyCode::Control(c) => (mods, 0, u32::from(c), String::new()),
+        KeyCode::User(n) => (mods, 1, u32::from(n), String::new()),
         // F1 to F12 sit between BSpace and IC.
-        KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
-        KeyCode::Mouse(m) => (mods, 2, mouse_order(m), String::new()),
+        KeyCode::F(n) => (mods, 2, u32::from(n), String::new()),
+        // The keypad follows the arrows.
+        KeyCode::Keypad(k) => (mods, 2, 25 + k.order(), String::new()),
+        KeyCode::Mouse(m) => (mods, 3, mouse_order(m), String::new()),
         code => {
             let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
             let at = if at == 0 { 0 } else { at + 12 };
-            (mods, 1, at, String::new())
+            (mods, 2, at, String::new())
         }
     }
 }
@@ -3455,7 +3745,7 @@ fn display_message(
         return Ok(format!("{trace}{out}\n"));
     }
     if let Some(id) = current {
-        clients::display_message(state, id, &out, delay);
+        clients::display_message(state, id, &out, delay, c.ignore_keys);
     }
     Ok(trace)
 }
@@ -3550,7 +3840,7 @@ fn list_format(format: Option<String>, template: impl FnOnce() -> String) -> Str
 
 fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let fmt = list_format(c.format.clone(), || TMUX_LIST_SESSIONS.to_string());
-    let sessions = listed_sessions(state, &c);
+    let sessions = listed_sessions(state, &c)?;
     let panes = sessions
         .into_iter()
         .filter_map(|s| Some((Some(s), session_pane(&state.model, s)?)));
@@ -3620,34 +3910,85 @@ fn sessions_by_name(model: &Model) -> Vec<SessionId> {
     sessions.into_iter().map(|(_, id)| id).collect()
 }
 
-/// The sessions `list-sessions` lists: all of them, by name, that `-f`
-/// keeps.
-pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Vec<SessionId> {
-    sessions_by_name(&state.model)
+/// The sessions `list-sessions` lists: all of them, by name or in the order
+/// `-O` asks for, that `-f` keeps.
+pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Result<Vec<SessionId>, String> {
+    let sort = Sort::new(&c.sort)?;
+    Ok(sessions_sorted(&state.model, &sort)
         .into_iter()
         .filter(|s| {
             session_pane(&state.model, *s)
                 .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Session, Some(*s), p))
         })
-        .collect()
+        .collect())
+}
+
+/// Every session, by name, or in the order `sort` asks for.
+pub(crate) fn sessions_sorted(model: &Model, sort: &Sort) -> Vec<SessionId> {
+    let mut all = sessions_by_name(model);
+    sort.apply(&mut all, |order, a, b| {
+        let (sa, sb) = (&model.sessions[a], &model.sessions[b]);
+        let first = match order {
+            Order::Index => sa.id.cmp(&sb.id),
+            Order::Creation => sa.created.cmp(&sb.created),
+            Order::Activity => sb.activity.cmp(&sa.activity),
+            Order::Name => by_name(&sa.name, &sb.name),
+            _ => Ordering::Equal,
+        };
+        first.then_with(|| by_name(&sa.name, &sb.name))
+    });
+    all
+}
+
+/// How tmux's `sort_winlink_cmp` compares two windows of `model` as the
+/// sessions `a` and `b` have them.
+fn compare_windows(
+    model: &Model,
+    order: Order,
+    a: (SessionId, WindowId),
+    b: (SessionId, WindowId),
+) -> Ordering {
+    let (wa, wb) = (&model.windows[&a.1], &model.windows[&b.1]);
+    let first = match order {
+        Order::Index => {
+            let index = |(s, w): (SessionId, WindowId)| {
+                model.index_in(s, w).unwrap_or(model.windows[&w].index)
+            };
+            index(a).cmp(&index(b))
+        }
+        Order::Creation => a.1.cmp(&b.1),
+        Order::Activity => wb.activity.cmp(&wa.activity),
+        Order::Name => by_name(&wa.name, &wb.name),
+        Order::Size => (u32::from(wa.cols) * u32::from(wa.rows))
+            .cmp(&(u32::from(wb.cols) * u32::from(wb.rows))),
+        _ => Ordering::Equal,
+    };
+    first.then_with(|| by_name(&wa.name, &wb.name))
 }
 
 /// The windows `list-windows` lists: the target session's, or with `-a`
-/// every session's (by name), in index order, that `-f` keeps. Each comes
-/// with the session it is listed in.
+/// every session's (by name), in index order or the order `-O` asks for,
+/// that `-f` keeps. Each comes with the session it is listed in.
 pub(crate) fn listed_windows(
     state: &State,
     ctx: &ClientCtx,
     c: &ListWindows,
 ) -> Result<Vec<(SessionId, WindowId)>, String> {
+    let sort = Sort::new(&c.sort)?;
     let model = &state.model;
     let sessions = match c.all {
         true => sessions_by_name(model),
         false => vec![model.resolve_session(&c.target, ctx)?],
     };
-    Ok(sessions
+    let mut all: Vec<(SessionId, WindowId)> = sessions
         .iter()
         .flat_map(|s| model.sessions[s].windows.iter().map(|w| (*s, *w)))
+        .collect();
+    sort.apply(&mut all, |order, a, b| {
+        compare_windows(model, order, *a, *b)
+    });
+    Ok(all
+        .into_iter()
         .filter(|(s, w)| {
             active_pane(model, *w)
                 .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Window, Some(*s), p))
@@ -3655,14 +3996,60 @@ pub(crate) fn listed_windows(
         .collect())
 }
 
+/// How tmux's `sort_pane_cmp` compares two panes of one window.
+fn compare_panes(state: &State, order: Order, a: PaneId, b: PaneId) -> Ordering {
+    let model = &state.model;
+    let title = |p: PaneId| state.passthrough.title(p);
+    let Some(window) = model
+        .panes
+        .get(&a)
+        .and_then(|p| model.windows.get(&p.window))
+    else {
+        return Ordering::Equal;
+    };
+    let size = |p: PaneId| {
+        model
+            .panes
+            .get(&p)
+            .map_or(0, |p| u32::from(p.cols) * u32::from(p.rows))
+    };
+    let ids = window.pane_ids();
+    let index = |p: PaneId| ids.iter().position(|i| *i == p).unwrap_or(0);
+    let first = match order {
+        Order::Activity => window
+            .active_points
+            .get(a)
+            .cmp(&window.active_points.get(b)),
+        Order::Creation => a.cmp(&b),
+        Order::Size => size(a).cmp(&size(b)),
+        Order::Index => index(a).cmp(&index(b)),
+        Order::Name => by_name(&title(a), &title(b)),
+        // tmux's `z_index` list, the top pane first: the floating panes by
+        // height, then the tiled ones, the last in pane order first.
+        Order::Z => {
+            let z = |p: PaneId| match window.floating(p) {
+                Some(f) => (0u8, -i64::from(f.z)),
+                None => (1u8, -(index(p) as i64)),
+            };
+            z(a).cmp(&z(b))
+        }
+        _ => Ordering::Equal,
+    };
+    first.then_with(|| by_name(&title(a), &title(b)))
+}
+
 /// The panes `list-panes` lists: the target window's, with `-s` its
-/// session's, with `-a` every session's, that `-f` keeps. Each comes with
-/// the session it is listed in.
+/// session's, with `-a` every session's, that `-f` keeps; each window's
+/// panes in pane order or the order `-O` asks for. Each comes with the
+/// session it is listed in.
 pub(crate) fn listed_panes(
     state: &State,
     ctx: &ClientCtx,
     c: &ListPanes,
 ) -> Result<Vec<(SessionId, PaneId)>, String> {
+    // The order is checked once; each window is sorted on its own.
+    Sort::new(&c.sort)?;
+    let sort = Sort::lenient(&c.sort);
     let model = &state.model;
     let windows: Vec<(SessionId, WindowId)> = if c.all {
         sessions_by_name(model)
@@ -3677,12 +4064,23 @@ pub(crate) fn listed_panes(
         let (s, w) = model.resolve_winlink(&c.target, ctx)?;
         vec![(s, w)]
     };
-    Ok(windows
-        .iter()
-        .filter_map(|(s, w)| Some((*s, model.windows.get(w)?)))
-        .flat_map(|(s, w)| w.pane_ids().into_iter().map(move |p| (s, p)))
-        .filter(|(s, p)| kept(state, c.filter.as_deref(), Level::Pane, Some(*s), *p))
-        .collect())
+    let mut out = Vec::new();
+    for (s, w) in windows {
+        let Some(window) = model.windows.get(&w) else {
+            continue;
+        };
+        let mut panes = window.pane_ids();
+        sort.apply(&mut panes, |order, a, b| {
+            compare_panes(state, order, *a, *b)
+        });
+        out.extend(
+            panes
+                .into_iter()
+                .filter(|p| kept(state, c.filter.as_deref(), Level::Pane, Some(s), *p))
+                .map(|p| (s, p)),
+        );
+    }
+    Ok(out)
 }
 
 /// Format variables (spec §4.5) for one pane, its window and its session.
@@ -4815,7 +5213,6 @@ const NO_EFFECT: &[&str] = &[
     "variation-selector-always-wide",
     "codepoint-widths",
     "pane-colours",
-    "user-keys",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.

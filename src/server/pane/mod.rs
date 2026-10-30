@@ -460,6 +460,19 @@ pub fn inner_term() -> &'static str {
 
 /// A running (or dead, until dropped) pane. Dropping it stops its tasks and
 /// closes the master, which hangs up the child.
+/// What `capture-pane`'s `-L`, `-F`, `-C` and `-H` add to a capture.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CaptureExtra {
+    /// `-L`: each row starts with its line number.
+    pub numbered: bool,
+    /// `-F`: each row starts with its flags (`H`, `O`, `P`, `W`, or `-`).
+    pub flags: bool,
+    /// `-C`: a backslash is `\\\\` and an ESC of `-e` is `\033`.
+    pub escaped: bool,
+    /// `-H`: the rows list their hyperlinks instead of their text.
+    pub links: bool,
+}
+
 pub struct PaneHandle {
     pid: Option<u32>,
     generation: u64,
@@ -537,7 +550,7 @@ impl PaneHandle {
             cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
-        let (master, child, tty) = spawn_child(&spec, size)?;
+        let (master, slave, child, tty) = spawn_child(&spec, size)?;
         let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
@@ -604,6 +617,7 @@ impl PaneHandle {
             id: spec.id,
             generation,
             master: Arc::clone(&master),
+            slave,
             child,
             emu: Arc::clone(&emu),
             events: Arc::clone(&events),
@@ -876,6 +890,25 @@ impl PaneHandle {
         keep_blanks: bool,
         written_only: bool,
     ) -> String {
+        self.capture_rows(
+            opts,
+            join,
+            keep_blanks,
+            written_only,
+            CaptureExtra::default(),
+        )
+    }
+
+    /// [`Self::capture_blanks`] with the flags that change what a row
+    /// starts with or holds (`-L`, `-F`, `-C`, `-H`).
+    pub fn capture_rows(
+        &self,
+        opts: &CaptureOpts,
+        join: bool,
+        keep_blanks: bool,
+        written_only: bool,
+        extra: CaptureExtra,
+    ) -> String {
         let mut pen = capture_sgr::Pen::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
@@ -889,12 +922,62 @@ impl PaneHandle {
         };
         let (start, end) = (bound(opts.start, 0), bound(opts.end, last));
         let mut out = String::new();
+        // `-H`: the links already listed, across rows.
+        let mut listed: Vec<(String, String)> = Vec::new();
         for line in start..=end {
             let row = &grid[Line(line)];
-            let wraps = join
-                && row[Column(grid.columns() - 1)]
-                    .flags
-                    .contains(CellFlags::WRAPLINE);
+            let wrapped = row[Column(grid.columns() - 1)]
+                .flags
+                .contains(CellFlags::WRAPLINE);
+            let wraps = join && wrapped;
+            let linked = (0..grid.columns()).any(|c| row[Column(c)].hyperlink().is_some());
+            let mut prefix = String::new();
+            let mut link_text = None;
+            if extra.links {
+                let mut uris: Vec<String> = Vec::new();
+                for c in 0..grid.columns() {
+                    let Some(link) = row[Column(c)].hyperlink() else {
+                        continue;
+                    };
+                    let key = (link.id().to_string(), link.uri().to_string());
+                    if !listed.contains(&key) {
+                        uris.push(key.1.clone());
+                        listed.push(key);
+                    }
+                }
+                // A row with no new link is not listed at all.
+                if uris.is_empty() {
+                    continue;
+                }
+                link_text = Some(uris.join(" "));
+            }
+            if extra.numbered {
+                prefix.push_str(&format!("{line} "));
+            }
+            if extra.flags {
+                // tmux's `grid_line` flags: the dead ones never show; a
+                // prompt and output start come from OSC 133, a wrap from the
+                // row, a hyperlink from any cell.
+                let bits = emu.marks.get((line + history) as usize);
+                let mut letters = String::new();
+                for (on, letter) in [
+                    (linked, 'H'),
+                    (bits & marks::OUTPUT != 0, 'O'),
+                    (bits & marks::PROMPT != 0, 'P'),
+                    (wrapped, 'W'),
+                    // Cells with a hyperlink are extended cells in tmux.
+                    (linked, 'X'),
+                ] {
+                    if on {
+                        letters.push(letter);
+                    }
+                }
+                if letters.is_empty() {
+                    letters.push('-');
+                }
+                prefix.push_str(&letters);
+                prefix.push(' ');
+            }
             // Without a wrap, `-J` stops at the used width; a non-blank
             // cell the program did not write (`DECALN`) still counts.
             let cols = grid.columns();
@@ -931,6 +1014,15 @@ impl PaneHandle {
             // it moved over, up to the next tab stop, are not printed. One
             // written over before its stop is a blank, like those cells.
             let mut tab_end = 0;
+            // `-C`: an `-e` code's ESC is written as text, `\033`, and the
+            // backslash of an OSC 8's `ESC \` is doubled as in `-C` text.
+            let esc = |code: String| {
+                if extra.escaped {
+                    code.replace("\x1b\\", "\\033\\\\").replace('\x1b', "\\033")
+                } else {
+                    code
+                }
+            };
             for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
@@ -941,7 +1033,8 @@ impl PaneHandle {
                 }
                 if opts.escapes {
                     let now = capture_sgr::Pen::of(cell);
-                    text.push_str(&capture_sgr::code(&pen, &now, &mut has_link));
+                    let code = capture_sgr::code(&pen, &now, &mut has_link);
+                    text.push_str(&esc(code));
                     pen = now;
                 }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
@@ -960,6 +1053,8 @@ impl PaneHandle {
                     } else {
                         text.push(' ');
                     }
+                } else if extra.escaped && cell.c == '\\' {
+                    text.push_str("\\\\");
                 } else {
                     text.push(cell.c);
                 }
@@ -968,8 +1063,12 @@ impl PaneHandle {
                 }
             }
             if has_link {
-                text.push_str(&capture_sgr::close_link());
+                text.push_str(&esc(capture_sgr::close_link()));
             }
+            if let Some(links) = link_text {
+                text = links;
+            }
+            out.push_str(&prefix);
             if wraps {
                 out.push_str(&text);
                 continue;
@@ -1357,14 +1456,25 @@ fn is_fork_error(e: &stdio::Error) -> bool {
     matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ENOMEM))
 }
 
+/// What [`spawn_child`] gives: the master, the held slave, the child and
+/// the slave's path.
+type Spawned = (
+    OwnedFd,
+    Option<OwnedFd>,
+    Option<tokio::process::Child>,
+    Option<PathBuf>,
+);
+
 /// Open a pty and spawn the child on it (spec §4.8). Returns the master,
 /// non-blocking and close-on-exec, and the child, or `None` when the
 /// program could not be started (it failed to exec): like tmux, that
 /// pane is born dead rather than failing the command.
-fn spawn_child(
-    spec: &PaneSpawn,
-    size: Size,
-) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>, Option<PathBuf>)> {
+///
+/// With a child, the slave is returned too, for the reader to hold until
+/// it has drained the master: on macOS the last close of a slave waits
+/// about 0.6 s for unread output to be read and then throws it away, so a
+/// child that exits while the reader is not running left nothing to read.
+fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<Spawned> {
     let name = Path::new(&spec.shell)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1424,12 +1534,12 @@ fn spawn_child(
         Err(_) => None,
     };
     let tty = nix::unistd::ttyname(&pty.slave).ok();
-    drop(pty.slave);
+    let held = child.is_some().then_some(pty.slave);
     drop(_guard);
 
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, child, tty))
+    Ok((pty.master, held, child, tty))
 }
 
 #[cfg(test)]
@@ -1532,6 +1642,48 @@ mod tests {
         }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
+    }
+
+    /// macOS drops a pty's unread output once its last slave fd closes, so
+    /// a child that has written and exited before the reader's first read
+    /// left an empty pane: the reader holds a slave until it has drained.
+    #[tokio::test]
+    async fn output_of_a_child_gone_before_the_first_read_is_kept() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            rows: 10,
+            ..spec_for(&["seq", "1", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        // The current-thread runtime runs no reader while this blocks. seq
+        // writes and exits; its exit waits for the output to drain, about
+        // 0.6 s on macOS with no other slave open, then throws it away. A
+        // held slave keeps it waiting until the reader has read.
+        let pid = handle.pid().expect("seq runs");
+        let since = Instant::now();
+        while !has_exited(pid) && since.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(ev) = rx.recv().await {
+                if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(exited.is_ok(), "seq exited");
+        assert_eq!(handle.history_size(), 21);
+    }
+
+    /// Whether the child `pid` has exited, without reaping it.
+    fn has_exited(pid: u32) -> bool {
+        // SAFETY: a zeroed siginfo_t is valid, and waitid only writes it.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let flags = libc::WEXITED | libc::WNOWAIT | libc::WNOHANG;
+        // SAFETY: `info` outlives the call.
+        let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, flags) };
+        r == 0 && info.si_signo == libc::SIGCHLD
     }
 
     /// A 5-row pane running `argv`, once it has `history` rows of scrollback.

@@ -38,7 +38,12 @@ booleans `truecolor`, `styled_underline`, `sync`, `kitty_keys`,
 or `null`), `target` (string or `null`, `attach -t` raw), `detach_others` and
 `nest` (booleans, default `false`), and optionally `tty` (string) and
 `created` (boolean, default `false`: the session is the one this client's
-`new-session` just made, which fires no `client-attached` hook).
+`new-session` just made, which fires no `client-attached` hook), and
+optionally `extras`, sent only when one of its fields is set: an object of
+`cwd` (string, `attach-session -c`), `read_only` (`-r`), `flags` (string,
+`-f`), `no_env` (`-E`) and `kill_parent` (`-x`), the booleans defaulting to
+`false`. A server older than `extras` ignores it, so those flags do nothing
+there.
 
 An unknown field in a hello is ignored. An unknown `mode`, or a hello that
 does not parse, gets `malformed hello: ...` and a close.

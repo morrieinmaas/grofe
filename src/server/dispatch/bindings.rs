@@ -150,7 +150,7 @@ const BRANCH_DEPTH_LIMIT: u32 = 100;
 /// limit (recorded: `if -F` nested 1990 deep runs, in 16 s, since each
 /// level re-parses the rest); grofe runs a branch on the actor's stack and
 /// re-splits its text, so it stops there with an error instead.
-fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, String> {
+pub(crate) fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, String> {
     if hooks::depth(state) >= BRANCH_DEPTH_LIMIT {
         return Err(format!(
             "if-shell: nested more than {BRANCH_DEPTH_LIMIT} deep"

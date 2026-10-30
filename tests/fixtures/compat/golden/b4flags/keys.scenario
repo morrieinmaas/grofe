@@ -1,0 +1,99 @@
+# B4: key names tmux has and grofe lacked: KP*, C0 controls, UserN and 0xNN, in bind-key, send-keys and list-keys.
+$ new-session -d -s main -x 60 -y 12 "sh -c 'stty -icanon -echo; cat -v'"
+$ run-shell 'sleep 0.3'
+$ send-keys -t main:1 KP0 KP1 KP2 KP3 KP4 KP5 KP6 KP7 KP8 KP9
+$ send-keys -t main:1 KP/ 'KP*' KP- KP+ KP. KPEnter
+$ send-keys -t main:1 M-KP5 C-KP5 S-KP5
+$ send-keys -t main:1 kp5 Kpenter
+$ send-keys -t main:1 '[SOH]' '[STX]' '[NUL]' '[LF]' '[DEL]' '[BEL]'
+$ send-keys -t main:1 0x41 0x42 0x20 0x7f 0x01 0x1b
+$ send-keys -t main:1 User0 User1 User1000 User1001
+$ send-keys -t main:1 'KPx' 'KP55' 'KP'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:1
+$ send-keys -t main:1 -l KP5 '[SOH]' 0x41
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t main:1
+$ send-keys -t main:1 -H 01 41 7f
+$ run-shell 'sleep 0.3'
+$ capture-pane -p -t main:1
+$ bind-key -n KP5 display-message kp5
+$ bind-key -n M-KP5 display-message mkp5
+$ bind-key -n C-KP5 display-message ckp5
+$ bind-key -n KP/ display-message kpslash
+$ bind-key -n 'KP*' display-message kpstar
+$ bind-key -n KPEnter display-message kpenter
+$ bind-key -n kp0 display-message kp0
+$ bind-key -T prefix KP1 display-message pkp1
+$ bind-key -n User0 display-message user0
+$ bind-key -n User999 display-message user999
+$ bind-key -n User1000 display-message user1000
+$ bind-key -n User1001 display-message user1001
+$ bind-key -n User display-message user
+$ bind-key -n 0x41 display-message hexA
+$ bind-key -n 0x7f display-message hex7f
+$ bind-key -n 0x20 display-message hex20
+$ bind-key -n 0xe9 display-message hexe9
+$ bind-key -n 0x1F600 display-message hexemoji
+$ bind-key -n 0x0 display-message hex0
+$ bind-key -n 0x01 display-message hex01
+$ bind-key -n 0x09 display-message hex09
+$ bind-key -n 0x0d display-message hex0d
+$ bind-key -n 0x1b display-message hex1b
+$ bind-key -n 0x1f display-message hex1f
+$ bind-key -n 0x display-message hexnone
+$ bind-key -n 0xzz display-message hexzz
+$ bind-key -n '[NUL]' display-message nul
+$ bind-key -n '[soh]' display-message soh
+$ bind-key -n '[ASC]' display-message asc
+$ bind-key -n '[ACK]' display-message ack
+$ bind-key -n 'M-[LF]' display-message mlf
+$ bind-key -n 'C-[LF]' display-message clf
+$ bind-key -n '[US]' display-message us
+$ bind-key -n '[DEL]' display-message del
+$ bind-key -n KPx display-message x
+$ bind-key -n KP display-message x
+$ bind-key -n 'C-S-KP5' display-message csk
+$ list-keys -T root
+$ list-keys -T prefix KP1
+$ list-keys KP5
+$ list-keys kp5
+$ list-keys -T root User0
+$ list-keys -T root 0x41
+$ list-keys -T root A
+$ list-keys -T root '[NUL]'
+$ list-keys -T root '[LF]'
+$ list-keys -T root 0x01
+$ list-keys -T root nosuchkey
+$ list-keys -T root User1001
+$ list-keys -T root -N
+$ list-keys -T root -1
+$ unbind-key -n KP5
+$ unbind-key -n 0x41
+$ unbind-key -n User0
+$ unbind-key -n '[NUL]'
+$ unbind-key -n KP5
+$ unbind-key -n Nosuch
+$ list-keys -T root
+$ set-option -g prefix KP5
+$ show-options -gv prefix
+$ set-option -g prefix2 User3
+$ show-options -gv prefix2
+$ set-option -g prefix 0x41
+$ show-options -gv prefix
+$ set-option -g prefix '[NUL]'
+$ show-options -gv prefix
+$ set-option -g prefix KPx
+$ set-option -g prefix None
+$ show-options -gv prefix
+$ set-option -g prefix 0x7f
+$ show-options -gv prefix
+$ set-option -g prefix 0x1F600
+$ show-options -gv prefix
+$ set-option -g prefix 'M-KP5'
+$ show-options -gv prefix
+$ set-option -g user-keys '\e[1;5A,\e[1;5B'
+$ show-options -gv user-keys
+$ show-options -g user-keys
+$ bind-key -T copy-mode-vi KP5 send-keys -X cursor-down
+$ list-keys -T copy-mode-vi KP5

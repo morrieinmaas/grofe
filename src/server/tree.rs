@@ -50,6 +50,22 @@ use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 /// tmux's `mode-style` default.
 const MODE_STYLE: &str = "bg=yellow,fg=black";
 
+/// What `find-window` looks for and where (`-C`, `-N`, `-T`, `-r`, `-i`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Find {
+    pub pattern: String,
+    /// `-C`: the text of the pane.
+    pub content: bool,
+    /// `-N`: the window's name.
+    pub name: bool,
+    /// `-T`: the pane's title.
+    pub title: bool,
+    /// `-r`: the pattern is a regular expression, not a glob.
+    pub regex: bool,
+    /// `-i`: case does not matter.
+    pub ignore: bool,
+}
+
 /// What `choose-tree` and `find-window` open with.
 pub struct Opts {
     /// `-Z`.
@@ -59,8 +75,8 @@ pub struct Opts {
     /// `-w`: windows collapsed under their sessions.
     pub windows: bool,
     /// `find-window`'s pattern: only windows whose name, a pane's title or
-    /// a pane's visible text hold it.
-    pub find: Option<String>,
+    /// a pane's visible text hold it, by `-N`, `-T` and `-C`.
+    pub find: Option<Find>,
     /// `-F -f -K -O -r -N -y -G`, the template, and the target pane.
     pub chooser: ChooseOpts,
     /// The dialect of the command that opened it, which its template runs
@@ -133,7 +149,7 @@ enum Tag {
 
 enum Kind {
     Tree {
-        find: Option<String>,
+        find: Option<Find>,
     },
     Clients,
     Buffers,
@@ -641,7 +657,7 @@ fn build(state: &State, tree: &Tree) -> (Vec<Item>, bool) {
     let filtered = |filter: Option<&str>| match &tree.kind {
         Kind::Clients => client_items(state, tree, filter),
         Kind::Buffers => buffer_items(state, tree, filter),
-        Kind::Tree { find } => tree_items(state, tree, find.as_deref(), filter),
+        Kind::Tree { find } => tree_items(state, tree, find.as_ref(), filter),
         Kind::Customize { hide_global } => custom_items(state, tree, filter, *hide_global),
     };
     let items = filtered(tree.filter.as_deref());
@@ -656,7 +672,7 @@ fn build(state: &State, tree: &Tree) -> (Vec<Item>, bool) {
     (items, false)
 }
 
-fn tree_items(state: &State, tree: &Tree, find: Option<&str>, filter: Option<&str>) -> Vec<Item> {
+fn tree_items(state: &State, tree: &Tree, find: Option<&Find>, filter: Option<&str>) -> Vec<Item> {
     use std::cmp::Ordering::Equal;
     let model = &state.model;
     let (order, reversed) = (tree.order, tree.reversed);
@@ -830,47 +846,65 @@ fn keeps(
     })
 }
 
-/// `find-window`'s filter for one pane, as tmux 3.7b builds it: the window
-/// name or the pane title as `#{m:*<pattern>*,...}`, or a line of the
-/// pane's visible text as `#{C:<pattern>}` (a `*<pattern>*` glob per line,
-/// trailing blanks dropped). The pattern reaches the format through a
+/// `find-window`'s filter for one pane, as tmux 3.7b builds it
+/// (`cmd-find-window.c`): with none of `-C`, `-N`, `-T` all three; the window
+/// name or the pane title as `#{m<suffix>:<glob>,...}`, or a line of the
+/// pane's visible text as `#{C<suffix>:<pattern>}` (a `*<pattern>*` glob per
+/// line, trailing blanks dropped; with `-r` a regular expression, as the
+/// names and titles are). The pattern reaches the format through a
 /// variable, so its `#`, `,` and `}` are text, never format syntax.
 // ponytail: evaluated on every draw of the chooser (tmux filters when it
 // rebuilds the tree); fine for the dozens of panes a server holds.
-fn matches(state: &State, pane: PaneId, find: Option<&str>) -> bool {
-    let Some(pattern) = find else {
+fn matches(state: &State, pane: PaneId, find: Option<&Find>) -> bool {
+    let Some(find) = find else {
         return true;
+    };
+    let (mut content, mut name, mut title) = (find.content, find.name, find.title);
+    if !content && !name && !title {
+        (content, name, title) = (true, true, true);
+    }
+    let suffix = match (find.regex, find.ignore) {
+        (true, true) => "/ri",
+        (true, false) => "/r",
+        (false, true) => "/i",
+        (false, false) => "",
     };
     let vars = FormatCtx::new(&state.model, pane);
     let server = ServerVars::new(state, pane, &vars);
-    let glob = format!("*{pattern}*");
-    let by_name = cmd::expand(
-        "#{||:#{m:#{find_window_glob},#{window_name}},#{m:#{find_window_glob},#{pane_title}}}",
-        &FindVars {
+    let glob = if find.regex {
+        find.pattern.clone()
+    } else {
+        format!("*{}*", find.pattern)
+    };
+    for (on, variable) in [(name, "window_name"), (title, "pane_title")] {
+        let format = format!("#{{m{suffix}:#{{find_window_glob}},#{{{variable}}}}}");
+        let vars = FindVars {
             inner: &server,
             glob: &glob,
             line: "",
-        },
-    );
-    if by_name == "1" {
-        return true;
-    }
-    state.model.panes.get(&pane).is_some_and(|p| {
-        let visible = crate::types::CaptureOpts {
-            start: None,
-            end: None,
-            escapes: false,
         };
-        p.handle.capture(&visible).lines().any(|line| {
-            let line = line.trim_end_matches(|c: char| c.is_ascii_whitespace());
-            let vars = FindVars {
-                inner: &server,
-                glob: &glob,
-                line,
+        if on && cmd::expand(&format, &vars) == "1" {
+            return true;
+        }
+    }
+    let format = format!("#{{m{suffix}:#{{find_window_glob}},#{{find_window_line}}}}");
+    content
+        && state.model.panes.get(&pane).is_some_and(|p| {
+            let visible = crate::types::CaptureOpts {
+                start: None,
+                end: None,
+                escapes: false,
             };
-            cmd::expand("#{m:#{find_window_glob},#{find_window_line}}", &vars) == "1"
+            p.handle.capture(&visible).lines().any(|line| {
+                let line = line.trim_end_matches(|c: char| c.is_ascii_whitespace());
+                let vars = FindVars {
+                    inner: &server,
+                    glob: &glob,
+                    line,
+                };
+                cmd::expand(&format, &vars) == "1"
+            })
         })
-    })
 }
 
 /// The variables `find-window`'s filter adds: its glob and the text line
