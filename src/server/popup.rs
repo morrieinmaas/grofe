@@ -974,7 +974,7 @@ impl Overlay for PopupOverlay {
 /// `popup_reapply_styles` builds them: `popup-style` and
 /// `popup-border-style` of the client's current window, over which `-s` and
 /// `-S` replace only the colours; no attributes.
-fn styles(state: &State, client: ClientId, frame: &Frame) -> (Style, Style) {
+pub(crate) fn styles(state: &State, client: ClientId, frame: &Frame) -> (Style, Style) {
     use crate::server::dispatch::options::Owner;
     let session = state.clients.get(&client).map(|c| c.session);
     let window = session
@@ -1025,7 +1025,7 @@ fn restyled(cell: &SnapCell, fill: &Style) -> SnapCell {
 }
 
 /// Puts `cell` at `(x, y)` if that is on screen.
-fn set(screen: &mut Screen, (x, y): (i32, i32), cell: SnapCell) {
+pub(crate) fn set(screen: &mut Screen, (x, y): (i32, i32), cell: SnapCell) {
     let (Ok(x), Ok(y)) = (u16::try_from(x), u16::try_from(y)) else {
         return;
     };
@@ -1035,7 +1035,7 @@ fn set(screen: &mut Screen, (x, y): (i32, i32), cell: SnapCell) {
     }
 }
 
-fn cell(c: char, style: &Style) -> SnapCell {
+pub(crate) fn cell(c: char, style: &Style) -> SnapCell {
     SnapCell {
         c,
         fg: style.fg,
@@ -1050,7 +1050,7 @@ fn cell(c: char, style: &Style) -> SnapCell {
 /// Draws the box's border in its style, then the title in its top edge
 /// from the third column, cut to the edge's inside less two cells, as
 /// tmux's `screen_write_box` does.
-fn draw_box(screen: &mut Screen, frame: &Frame, lines: Lines, style: &Style) {
+pub(crate) fn draw_box(screen: &mut Screen, frame: &Frame, lines: Lines, style: &Style) {
     let [tl, tr, bl, br, horizontal, vertical] = lines.chars();
     let (x, y) = frame.at;
     let (w, h) = (i32::from(frame.size.0), i32::from(frame.size.1));

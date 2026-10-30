@@ -294,6 +294,8 @@ struct Tree {
     squash_groups: bool,
     /// The session of the client it opened for (customize-mode's scope).
     session: Option<SessionId>,
+    /// The help popup is up (`F1`, `C-h`): any key closes it.
+    help: bool,
 }
 
 /// One item and its children, as `mode_tree_add` makes them.
@@ -434,6 +436,7 @@ impl Tree {
             prompt_yes: chooser.prompt_yes,
             squash_groups: !chooser.groups,
             session: None,
+            help: false,
             kind,
         })
     }
@@ -1294,6 +1297,20 @@ impl InputHook for TreeHook {
         if !shown {
             return None;
         }
+        // The help popup takes every key and closes on it; the rest of the
+        // input is eaten while it is up.
+        if state.trees.open.get(&client).is_some_and(|t| t.help) {
+            if matches!(input, Input::Focus(_)) {
+                return None;
+            }
+            if matches!(input, Input::Key(_))
+                && let Some(tree) = state.trees.open.get_mut(&client)
+            {
+                tree.help = false;
+            }
+            clients::mark_dirty(state, client);
+            return Some(Routed::Consumed);
+        }
         let key = match input {
             Input::Key(key) => *key,
             Input::Paste { .. } => return Some(Routed::Consumed),
@@ -1896,6 +1913,10 @@ fn key_press(state: &mut State, client: ClientId, key: &Key) -> Routed {
     let Some(tree) = state.trees.open.get(&client) else {
         return Routed::Consumed;
     };
+    if code == Some(KeyCode::F(1)) || ctrl('h') {
+        open_help(state, client);
+        return Routed::Consumed;
+    }
     if is('q') || code == Some(KeyCode::Escape) || ctrl('[') || ctrl('g') {
         close(state, client);
         return Routed::Consumed;
@@ -2695,6 +2716,197 @@ fn strip(total: usize, current: usize, sx: usize, offset: i32) -> Option<Strip> 
     })
 }
 
+// --- Help ---------------------------------------------------------------
+
+/// `mode_tree_help_start`: the keys every chooser has; `%1` is its item.
+const HELP_START: &[(&str, &str)] = &[
+    ("Up, k", "Move cursor up"),
+    ("Down, j", "Move cursor down"),
+    ("g", "Go to top"),
+    ("G", "Go to bottom"),
+    ("PPage, C-b", "Page up"),
+    ("NPage, C-f", "Page down"),
+    ("Left, h", "Collapse %1"),
+    ("Right, l", "Expand %1"),
+    ("M--", "Collapse all %1s"),
+    ("M-+", "Expand all %1s"),
+    ("t", "Toggle %1 tag"),
+    ("T", "Untag all %1s"),
+    ("C-t", "Tag all %1s"),
+    ("C-s", "Search forward"),
+    ("n", "Repeat search forward"),
+    ("N", "Repeat search backward"),
+    ("f", "Filter %1s"),
+    ("O", "Change sort order"),
+    ("r", "Reverse sort order"),
+    ("v", "Toggle preview"),
+];
+
+/// `mode_tree_help_end`.
+const HELP_END: &[(&str, &str)] = &[("q, Escape", "Exit mode")];
+
+/// What each mode adds (`window_*_help_lines`), its minimum popup width
+/// and the word `%1` stands for.
+fn help_of(kind: &Kind) -> (usize, &'static str, &'static [(&'static str, &'static str)]) {
+    match kind {
+        Kind::Tree { .. } => (
+            51,
+            "item",
+            &[
+                ("Enter", "Choose selected item"),
+                ("S-Up", "Swap current and previous window"),
+                ("S-Down", "Swap current and next window"),
+                ("x", "Kill selected item"),
+                ("X", "Kill tagged items"),
+                ("<", "Scroll previews left"),
+                (">", "Scroll previews right"),
+                ("m", "Set the marked pane"),
+                ("M", "Clear the marked pane"),
+                (":", "Run a command for each tagged item"),
+                ("f", "Enter a format"),
+                ("H", "Jump to the starting pane"),
+            ],
+        ),
+        Kind::Clients => (
+            0,
+            "client",
+            &[
+                ("Enter", "Choose selected %1"),
+                ("d", "Detach selected %1"),
+                ("D", "Detach tagged %1s"),
+                ("x", "Detach selected %1"),
+                ("X", "Detach tagged %1s"),
+                ("z", "Suspend selected %1"),
+                ("Z", "Suspend tagged %1s"),
+                ("f", "Enter a filter"),
+            ],
+        ),
+        Kind::Buffers => (
+            0,
+            "buffer",
+            &[
+                ("Enter", "Paste selected %1"),
+                ("p", "Paste selected %1"),
+                ("P", "Paste tagged %1s"),
+                ("d", "Delete selected %1"),
+                ("D", "Delete tagged %1s"),
+                ("e", "Open %1 in editor"),
+                ("f", "Enter a filter"),
+            ],
+        ),
+        Kind::Customize { .. } => (
+            52,
+            "option",
+            &[
+                ("Enter, s", "Set %1 value"),
+                ("S", "Set global %1 value"),
+                ("w", "Set window %1 value"),
+                ("d", "Set to default value"),
+                ("D", "Set tagged %1s to default value"),
+                ("u", "Unset an %1"),
+                ("U", "Unset tagged %1s"),
+                ("f", "Enter a filter"),
+                ("v", "Toggle information"),
+            ],
+        ),
+    }
+}
+
+/// `mode_tree_display_help`'s popup: its box on a client of `size`, and the
+/// lines it is written with. tmux writes every line into a popup of the
+/// lines' count less its border, so the first two scroll off the top.
+fn help_box(kind: &Kind, size: (u16, u16)) -> Option<((u16, u16), (u16, u16), Vec<(String, String)>)> {
+    let (width, item, extra) = help_of(kind);
+    let width = width.max(39);
+    let lines: Vec<(String, String)> = HELP_START
+        .iter()
+        .chain(extra)
+        .chain(HELP_END)
+        .map(|(k, d)| ((*k).to_string(), d.replace("%1", item)))
+        .collect();
+    let (w, h) = (u16::try_from(width).ok()?, u16::try_from(lines.len()).ok()?);
+    if size.0 < w || size.1 < h {
+        return None;
+    }
+    let skip = lines.len().saturating_sub(usize::from(h).saturating_sub(2));
+    let shown = lines.into_iter().skip(skip).collect();
+    Some((((size.0 - w) / 2, (size.1 - h) / 2), (w, h), shown))
+}
+
+/// Opens the help popup, if it fits the client.
+fn open_help(state: &mut State, client: ClientId) {
+    let Some(size) = state.clients.get(&client).map(|c| c.size) else {
+        return;
+    };
+    let Some(tree) = state.trees.open.get_mut(&client) else {
+        return;
+    };
+    if help_box(&tree.kind, size).is_some() {
+        tree.help = true;
+    }
+}
+
+/// Draws the help popup over the chooser.
+fn draw_help(state: &State, client: ClientId, tree: &Tree, screen: &mut Screen) {
+    use crate::server::popup::{self, Frame, Lines};
+    let Some(((px, py), (w, h), lines)) = help_box(&tree.kind, (screen.cols, screen.rows)) else {
+        return;
+    };
+    let chain = options::chain(&state.model, tree.pane);
+    let lines_style = state
+        .model
+        .options
+        .lookup("popup-border-lines", &chain)
+        .map(|v| Lines::parse(v).unwrap_or(Some(Lines::Single)))
+        .unwrap_or(Some(Lines::Single));
+    let frame = Frame {
+        at: (i32::from(px), i32::from(py)),
+        size: (w, h),
+        lines: lines_style,
+        title: None,
+        border_style: None,
+        style: None,
+        close_on_exit: false,
+        close_on_zero: false,
+        any_key: false,
+    };
+    let (fill, border) = popup::styles(state, client, &frame);
+    let ((ix, iy), (iw, ih)) = (
+        (i32::from(px) + 1, i32::from(py) + 1),
+        (usize::from(w).saturating_sub(2), usize::from(h).saturating_sub(2)),
+    );
+    for y in 0..ih {
+        for x in 0..iw {
+            popup::set(screen, (ix + x as i32, iy + y as i32), popup::cell(' ', &fill));
+        }
+    }
+    if let Some(l) = frame.lines {
+        popup::draw_box(screen, &frame, l, &border);
+    }
+    let mut bold = fill;
+    bold.attrs |= CellFlags::BOLD;
+    for (row, (key, desc)) in lines.iter().enumerate().take(ih) {
+        let mut x = 0;
+        let mut put = |text: &str, style: &Style, x: &mut usize| {
+            for c in text.chars() {
+                if *x >= iw {
+                    return;
+                }
+                popup::set(
+                    screen,
+                    (ix + *x as i32, iy + row as i32),
+                    popup::cell(c, style),
+                );
+                *x += 1;
+            }
+        };
+        put(&format!("{key:>11} "), &bold, &mut x);
+        // The vertical line of the alternate character set.
+        put("│", &fill, &mut x);
+        put(&format!(" {desc}"), &fill, &mut x);
+    }
+}
+
 // --- Mouse --------------------------------------------------------------
 
 /// What a mouse report is to the chooser, as `mode_tree_key` tells keys
@@ -3035,6 +3247,9 @@ impl Overlay for TreeOverlay {
         let mut canvas = Canvas { screen, geom };
         draw(state, tree, &v, &mut canvas);
         canvas.screen.cursor = None;
+        if tree.help {
+            draw_help(state, client, tree, canvas.screen);
+        }
     }
 }
 

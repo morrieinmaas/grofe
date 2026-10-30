@@ -138,3 +138,9 @@ fn a_burst_of_bells_rings_once() {
 fn choose_tree_takes_the_mouse() {
     check("b4rest", "tree-mouse", &[]);
 }
+
+/// F1 in a chooser shows its help popup.
+#[test]
+fn chooser_help_popups_match() {
+    check("b4rest", "tree-help", &[]);
+}

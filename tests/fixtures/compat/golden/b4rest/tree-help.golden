@@ -1,0 +1,322 @@
+$ new-session -d -s main -n w1 -x 80 -y 40 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set-buffer -b one hello
+? 0
+$ select-pane -t %0 -T t0
+? 0
+client 80x40 attach -t main
+$ choose-tree -w
+? 0
+screen (0)
+| (0) - main: 1 windows (attached)
+| (1) └─> + 1: w1*: "t0"
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ 1 (sort: index) ─────────────────────────────────────────────────────────────┐
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                   ┌──────┐                                   │
+| │                                   │ 1:t0 │                                   │
+| │                                   └──────┘                                   │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys Escape OP
+screen Exit mode
+| (0) - main: 1 windows (attached)
+| (1) └─> + 1: w1*: "t0"
+|
+|               ┌─────────────────────────────────────────────────┐
+|               │          g │ Go to top                          │
+|               │          G │ Go to bottom                       │
+|               │ PPage, C-b │ Page up                            │
+|               │ NPage, C-f │ Page down                          │
+|               │    Left, h │ Collapse item                      │
+|               │   Right, l │ Expand item                        │
+|               │        M-- │ Collapse all items                 │
+|               │        M-+ │ Expand all items                   │
+|               │          t │ Toggle item tag                    │
+|               │          T │ Untag all items                    │
+|               │        C-t │ Tag all items                      │
+|               │        C-s │ Search forward                     │
+|               │          n │ Repeat search forward              │
+|               │          N │ Repeat search backward             │
+|               │          f │ Filter items                       │
+| ┌ 1 (sort: ind│          O │ Change sort order                  │──────────────┐
+| │             │          r │ Reverse sort order                 │              │
+| │             │          v │ Toggle preview                     │              │
+| │             │      Enter │ Choose selected item               │              │
+| │             │       S-Up │ Swap current and previous window   │              │
+| │             │     S-Down │ Swap current and next window       │              │
+| │             │          x │ Kill selected item                 │              │
+| │             │          X │ Kill tagged items                  │              │
+| │             │          < │ Scroll previews left               │              │
+| │             │          > │ Scroll previews right              │              │
+| │             │          m │ Set the marked pane                │              │
+| │             │          M │ Clear the marked pane              │              │
+| │             │          : │ Run a command for each tagged item │              │
+| │             │          f │ Enter a format                     │              │
+| │             │          H │ Jump to the starting pane          │              │
+| │             │  q, Escape │ Exit mode                          │              │
+| │             └─────────────────────────────────────────────────┘              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys x
+screen (0)
+| (0) - main: 1 windows (attached)
+| (1) └─> + 1: w1*: "t0"
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ 1 (sort: index) ─────────────────────────────────────────────────────────────┐
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                   ┌──────┐                                   │
+| │                                   │ 1:t0 │                                   │
+| │                                   └──────┘                                   │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+$ display -p '[#{pane_mode}]'
+[tree-mode]
+? 0
+keys C-h
+screen Exit mode
+| (0) - main: 1 windows (attached)
+| (1) └─> + 1: w1*: "t0"
+|
+|               ┌─────────────────────────────────────────────────┐
+|               │          g │ Go to top                          │
+|               │          G │ Go to bottom                       │
+|               │ PPage, C-b │ Page up                            │
+|               │ NPage, C-f │ Page down                          │
+|               │    Left, h │ Collapse item                      │
+|               │   Right, l │ Expand item                        │
+|               │        M-- │ Collapse all items                 │
+|               │        M-+ │ Expand all items                   │
+|               │          t │ Toggle item tag                    │
+|               │          T │ Untag all items                    │
+|               │        C-t │ Tag all items                      │
+|               │        C-s │ Search forward                     │
+|               │          n │ Repeat search forward              │
+|               │          N │ Repeat search backward             │
+|               │          f │ Filter items                       │
+| ┌ 1 (sort: ind│          O │ Change sort order                  │──────────────┐
+| │             │          r │ Reverse sort order                 │              │
+| │             │          v │ Toggle preview                     │              │
+| │             │      Enter │ Choose selected item               │              │
+| │             │       S-Up │ Swap current and previous window   │              │
+| │             │     S-Down │ Swap current and next window       │              │
+| │             │          x │ Kill selected item                 │              │
+| │             │          X │ Kill tagged items                  │              │
+| │             │          < │ Scroll previews left               │              │
+| │             │          > │ Scroll previews right              │              │
+| │             │          m │ Set the marked pane                │              │
+| │             │          M │ Clear the marked pane              │              │
+| │             │          : │ Run a command for each tagged item │              │
+| │             │          f │ Enter a format                     │              │
+| │             │          H │ Jump to the starting pane          │              │
+| │             │  q, Escape │ Exit mode                          │              │
+| │             └─────────────────────────────────────────────────┘              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys Escape '[<0;5;5M'
+screen Exit mode
+| (0) - main: 1 windows (attached)
+| (1) └─> + 1: w1*: "t0"
+|
+|               ┌─────────────────────────────────────────────────┐
+|               │          g │ Go to top                          │
+|               │          G │ Go to bottom                       │
+|               │ PPage, C-b │ Page up                            │
+|               │ NPage, C-f │ Page down                          │
+|               │    Left, h │ Collapse item                      │
+|               │   Right, l │ Expand item                        │
+|               │        M-- │ Collapse all items                 │
+|               │        M-+ │ Expand all items                   │
+|               │          t │ Toggle item tag                    │
+|               │          T │ Untag all items                    │
+|               │        C-t │ Tag all items                      │
+|               │        C-s │ Search forward                     │
+|               │          n │ Repeat search forward              │
+|               │          N │ Repeat search backward             │
+|               │          f │ Filter items                       │
+| ┌ 1 (sort: ind│          O │ Change sort order                  │──────────────┐
+| │             │          r │ Reverse sort order                 │              │
+| │             │          v │ Toggle preview                     │              │
+| │             │      Enter │ Choose selected item               │              │
+| │             │       S-Up │ Swap current and previous window   │              │
+| │             │     S-Down │ Swap current and next window       │              │
+| │             │          x │ Kill selected item                 │              │
+| │             │          X │ Kill tagged items                  │              │
+| │             │          < │ Scroll previews left               │              │
+| │             │          > │ Scroll previews right              │              │
+| │             │          m │ Set the marked pane                │              │
+| │             │          M │ Clear the marked pane              │              │
+| │             │          : │ Run a command for each tagged item │              │
+| │             │          f │ Enter a format                     │              │
+| │             │          H │ Jump to the starting pane          │              │
+| │             │  q, Escape │ Exit mode                          │              │
+| │             └─────────────────────────────────────────────────┘              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys q
+$ display -p '[#{pane_mode}]'
+[tree-mode]
+? 0
+keys q
+$ display -p '[#{pane_mode}]'
+[]
+? 0
+$ customize-mode
+? 0
+screen (0)
+| (0) + Server Options
+| (1) + Session Options
+| (2) + Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) + Key Table - prefix
+| (6) + Key Table - root
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| ┌ Server Options ──────────────────────────────────────────────────────────────┐
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys Escape OP
+screen Exit mode
+| (0) + Server Options
+| (1) + Session Options
+| (2) + Window & Pane Options
+| (3) + Key Table - copy-mode
+| (4) + Key Table - copy-mode-vi
+| (5) + Key Tabl┌──────────────────────────────────────────────────┐
+| (6) + Key Tabl│          g │ Go to top                           │
+|               │          G │ Go to bottom                        │
+|               │ PPage, C-b │ Page up                             │
+|               │ NPage, C-f │ Page down                           │
+|               │    Left, h │ Collapse option                     │
+|               │   Right, l │ Expand option                       │
+|               │        M-- │ Collapse all options                │
+|               │        M-+ │ Expand all options                  │
+|               │          t │ Toggle option tag                   │
+|               │          T │ Untag all options                   │
+|               │        C-t │ Tag all options                     │
+|               │        C-s │ Search forward                      │
+|               │          n │ Repeat search forward               │
+|               │          N │ Repeat search backward              │
+|               │          f │ Filter options                      │
+|               │          O │ Change sort order                   │
+|               │          r │ Reverse sort order                  │
+|               │          v │ Toggle preview                      │
+|               │   Enter, s │ Set option value                    │
+|               │          S │ Set global option value             │
+|               │          w │ Set window option value             │
+| ┌ Server Optio│          d │ Set to default value                │─────────────┐
+| │             │          D │ Set tagged options to default value │             │
+| │             │          u │ Unset an option                     │             │
+| │             │          U │ Unset tagged options                │             │
+| │             │          f │ Enter a filter                      │             │
+| │             │          v │ Toggle information                  │             │
+| │             │  q, Escape │ Exit mode                           │             │
+| │             └──────────────────────────────────────────────────┘             │
+| │                                                                              │
+| │                                                                              │
+| │                                                                              │
+| └──────────────────────────────────────────────────────────────────────────────┘
+| [main] 1:w1*
+keys q
+$ display -p '[#{pane_mode}]'
+[options-mode]
+? 0

@@ -1,0 +1,31 @@
+# B4 rest: F1 and C-h in a chooser open a popup with its keys (mode_tree_
+# display_help): any key closes it, and is not passed on. The popup is as
+# wide as the mode asks (51 for choose-tree, 39 by default) and as tall as
+# its lines.
+$ new-session -d -s main -n w1 -x 80 -y 40 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set-buffer -b one hello
+$ select-pane -t %0 -T t0
+client 80x40 attach -t main
+$ choose-tree -w
+screen (0)
+keys Escape OP
+screen Exit mode
+keys x
+screen (0)
+$ display -p '[#{pane_mode}]'
+keys C-h
+screen Exit mode
+keys Escape '[<0;5;5M'
+screen Exit mode
+keys q
+$ display -p '[#{pane_mode}]'
+keys q
+$ display -p '[#{pane_mode}]'
+$ customize-mode
+screen (0)
+keys Escape OP
+screen Exit mode
+keys q
+$ display -p '[#{pane_mode}]'
