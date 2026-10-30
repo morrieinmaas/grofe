@@ -1,6 +1,7 @@
 //! B4 review: a locked client's keys reach only its `lock-command`, even
 //! with a command prompt left open under the lock.
 
+#[allow(clippy::duplicate_mod)]
 #[path = "../common/mod.rs"]
 mod common;
 
