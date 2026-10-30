@@ -550,7 +550,7 @@ impl PaneHandle {
             cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
-        let (master, child, tty) = spawn_child(&spec, size)?;
+        let (master, slave, child, tty) = spawn_child(&spec, size)?;
         let pid = child.as_ref().and_then(|c| c.id());
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
@@ -617,6 +617,7 @@ impl PaneHandle {
             id: spec.id,
             generation,
             master: Arc::clone(&master),
+            slave,
             child,
             emu: Arc::clone(&emu),
             events: Arc::clone(&events),
@@ -1495,14 +1496,25 @@ fn is_fork_error(e: &stdio::Error) -> bool {
     matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ENOMEM))
 }
 
+/// What [`spawn_child`] gives: the master, the held slave, the child and
+/// the slave's path.
+type Spawned = (
+    OwnedFd,
+    Option<OwnedFd>,
+    Option<tokio::process::Child>,
+    Option<PathBuf>,
+);
+
 /// Open a pty and spawn the child on it (spec §4.8). Returns the master,
 /// non-blocking and close-on-exec, and the child, or `None` when the
 /// program could not be started (it failed to exec): like tmux, that
 /// pane is born dead rather than failing the command.
-fn spawn_child(
-    spec: &PaneSpawn,
-    size: Size,
-) -> stdio::Result<(OwnedFd, Option<tokio::process::Child>, Option<PathBuf>)> {
+///
+/// With a child, the slave is returned too, for the reader to hold until
+/// it has drained the master: on macOS the last close of a slave waits
+/// about 0.6 s for unread output to be read and then throws it away, so a
+/// child that exits while the reader is not running left nothing to read.
+fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<Spawned> {
     let name = Path::new(&spec.shell)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1562,12 +1574,12 @@ fn spawn_child(
         Err(_) => None,
     };
     let tty = nix::unistd::ttyname(&pty.slave).ok();
-    drop(pty.slave);
+    let held = child.is_some().then_some(pty.slave);
     drop(_guard);
 
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, child, tty))
+    Ok((pty.master, held, child, tty))
 }
 
 /// The SGR for a capture with `-e`, as tmux's `grid_string_cells_code`: a
@@ -1773,6 +1785,48 @@ mod tests {
         }
         // 30 lines and the empty one after them, 10 rows on screen.
         assert_eq!(handle.history_size(), 21);
+    }
+
+    /// macOS drops a pty's unread output once its last slave fd closes, so
+    /// a child that has written and exited before the reader's first read
+    /// left an empty pane: the reader holds a slave until it has drained.
+    #[tokio::test]
+    async fn output_of_a_child_gone_before_the_first_read_is_kept() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let spec = PaneSpawn {
+            rows: 10,
+            ..spec_for(&["seq", "1", "30"])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        // The current-thread runtime runs no reader while this blocks. seq
+        // writes and exits; its exit waits for the output to drain, about
+        // 0.6 s on macOS with no other slave open, then throws it away. A
+        // held slave keeps it waiting until the reader has read.
+        let pid = handle.pid().expect("seq runs");
+        let since = Instant::now();
+        while !has_exited(pid) && since.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(ev) = rx.recv().await {
+                if matches!(ev.kind, PaneEventKind::Exited(_)) {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(exited.is_ok(), "seq exited");
+        assert_eq!(handle.history_size(), 21);
+    }
+
+    /// Whether the child `pid` has exited, without reaping it.
+    fn has_exited(pid: u32) -> bool {
+        // SAFETY: a zeroed siginfo_t is valid, and waitid only writes it.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let flags = libc::WEXITED | libc::WNOWAIT | libc::WNOHANG;
+        // SAFETY: `info` outlives the call.
+        let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, flags) };
+        r == 0 && info.si_signo == libc::SIGCHLD
     }
 
     /// A 5-row pane running `argv`, once it has `history` rows of scrollback.
