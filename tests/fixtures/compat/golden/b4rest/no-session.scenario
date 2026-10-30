@@ -8,6 +8,7 @@ $ list-panes
 $ list-clients
 $ list-buffers
 $ list-keys -1
+$ lsk -1
 $ display-message -p 'x'
 $ display-message -p '#{session_name}'
 $ new-window

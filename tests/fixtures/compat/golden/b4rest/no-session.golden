@@ -22,6 +22,8 @@ $ list-buffers
 ? 1
 $ list-keys -1
 ? 0
+$ lsk -1
+? 0
 $ display-message -p 'x'
 ! no server running on <SOCKET>
 ? 1
