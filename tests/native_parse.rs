@@ -1020,12 +1020,12 @@ fn bad_values_and_argument_counts_are_errors() {
     }
     // Flags no §4.5 row names stay unknown natively.
     assert_eq!(
-        err(&["wait-for", "-L", "a"]),
-        "command wait-for: unknown flag -L"
+        err(&["wait-for", "-Z", "a"]),
+        "command wait-for: unknown flag -Z"
     );
     assert_eq!(
-        err(&["refresh-client", "-A", "%1:on"]),
-        "command refresh-client: unknown flag -A"
+        err(&["refresh-client", "-Z", "%1:on"]),
+        "command refresh-client: unknown flag -Z"
     );
 }
 
@@ -1090,7 +1090,6 @@ fn tmux_only_names_are_unknown_natively() {
         "movew",
         "rotatew",
         "lastp",
-        "nextl",
         "newp",
         "wait",
         "confirm",
