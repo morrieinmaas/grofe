@@ -3088,6 +3088,8 @@ pub(crate) struct BindingRun {
     /// The mouse event a mouse key's commands run for (TC.10): its pane is
     /// the current pane while it is there.
     mouse: Option<crate::server::mouse::MouseTarget>,
+    /// The pane the commands run for, if not the active one (a menu's `-t`).
+    pane: Option<PaneId>,
     /// This run holds the client's input.
     holding: bool,
 }
@@ -3107,6 +3109,28 @@ pub(crate) fn run_commands_for(
         dialect,
         bound,
         mouse,
+        pane: None,
+        holding: false,
+    };
+    run_from(state, run);
+}
+
+/// [`run_binding`], with the commands' current pane `pane` (the pane a
+/// menu was opened for) rather than the active one.
+pub(crate) fn run_binding_in(
+    state: &mut State,
+    id: ClientId,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+    pane: Option<PaneId>,
+) {
+    let run = BindingRun {
+        id,
+        cmds: cmds.iter().cloned().collect(),
+        dialect,
+        bound: false,
+        mouse: None,
+        pane,
         holding: false,
     };
     run_from(state, run);
@@ -3149,6 +3173,7 @@ fn run_from(state: &mut State, mut run: BindingRun) {
             .as_ref()
             .map(|t| t.pane)
             .filter(|p| state.model.panes.contains_key(p))
+            .or(run.pane.filter(|p| state.model.panes.contains_key(p)))
             .or(active);
         let ctx = ClientCtx {
             pane,

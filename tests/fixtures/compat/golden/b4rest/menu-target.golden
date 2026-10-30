@@ -1,0 +1,110 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ split-window -h -t main cat
+? 0
+$ select-pane -t main:1.1
+? 0
+$ bind -n F5 display-menu -t main:1.2 -x 10 -y 5 Item i 'set -gF @r "#{pane_id}"'
+? 0
+$ bind -n F6 display-menu -x 10 -y 5 Item i 'set -gF @r "#{pane_id}"'
+? 0
+$ bind -n F7 display-menu -t main:1.2 -x 10 -y 5 Item i 'set -gF @r "#{pane_id}" ; set -gF @s "#{pane_id}"'
+? 0
+client 60x15 attach -t main
+keys Escape '[15~'
+screen Item
+|                               │
+|                               │
+|           ┌──────────┐        │
+|           │ Item (i) │        │
+|           └──────────┘        │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+| [main] 1:first*
+keys i
+$ show -gv @r
+%1
+? 0
+$ set -g @r none
+? 0
+keys Escape '[17~'
+screen Item
+|                               │
+|                               │
+|           ┌──────────┐        │
+|           │ Item (i) │        │
+|           └──────────┘        │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+| [main] 1:first*
+keys i
+$ show -gv @r
+%0
+? 0
+keys Escape '[18~'
+screen Item
+|                               │
+|                               │
+|           ┌──────────┐        │
+|           │ Item (i) │        │
+|           └──────────┘        │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+| [main] 1:first*
+keys i
+$ show -gv @r
+%1
+? 0
+$ show -gv @s
+%1
+? 0
+$ set -g @r none
+? 0
+keys Escape '[15~'
+screen Item
+|                               │
+|                               │
+|           ┌──────────┐        │
+|           │ Item (i) │        │
+|           └──────────┘        │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+|                               │
+| [main] 1:first*
+$ select-pane -t main:1.2
+? 0
+keys i
+$ show -gv @r
+%1
+? 0

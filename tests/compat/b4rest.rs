@@ -72,3 +72,9 @@ fn source_file_dash_reads_what_the_cli_pipes() {
     assert_eq!(show("@e"), "");
     cli.run(&argv(&["kill-server"]));
 }
+
+/// The items of a key's `display-menu -t` run for that pane.
+#[test]
+fn menu_items_run_for_the_pane_the_menu_was_opened_for() {
+    check("b4rest", "menu-target", &[]);
+}

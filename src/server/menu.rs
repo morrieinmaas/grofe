@@ -1098,6 +1098,7 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
         Action::Run(command) => match cmd::split_command_string(&command) {
             Ok(cmds) if !cmds.is_empty() => {
                 let dialect = shown.dialect;
+                let pane = shown.ctx.pane;
                 match shown.event.take() {
                     Some(event) => {
                         let run = move |state: &mut State| {
@@ -1116,7 +1117,7 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                     None if shown.ctx.client.is_none() => Routed::Command(cmds, dialect),
                     None => {
                         let run = move |state: &mut State| {
-                            clients::run_binding(state, id, &cmds, dialect)
+                            clients::run_binding_in(state, id, &cmds, dialect, pane)
                         };
                         clients::in_input_order(state, id, Box::new(run));
                         Routed::Consumed

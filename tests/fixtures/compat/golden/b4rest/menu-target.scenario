@@ -1,0 +1,34 @@
+# B4 rest: the items of a menu a key opened with -t run for that pane
+# (menu_key_cb gives them the pane the menu was opened for), however the
+# active pane changes before one is chosen. Pane %0 is active, %1 is the
+# target.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ split-window -h -t main cat
+$ select-pane -t main:1.1
+$ bind -n F5 display-menu -t main:1.2 -x 10 -y 5 Item i 'set -gF @r "#{pane_id}"'
+$ bind -n F6 display-menu -x 10 -y 5 Item i 'set -gF @r "#{pane_id}"'
+$ bind -n F7 display-menu -t main:1.2 -x 10 -y 5 Item i 'set -gF @r "#{pane_id}" ; set -gF @s "#{pane_id}"'
+client 60x15 attach -t main
+keys Escape '[15~'
+screen Item
+keys i
+$ show -gv @r
+$ set -g @r none
+keys Escape '[17~'
+screen Item
+keys i
+$ show -gv @r
+keys Escape '[18~'
+screen Item
+keys i
+$ show -gv @r
+$ show -gv @s
+# The active pane changes while the menu is up.
+$ set -g @r none
+keys Escape '[15~'
+screen Item
+$ select-pane -t main:1.2
+keys i
+$ show -gv @r
