@@ -288,7 +288,7 @@ pub fn place_pane(state: &mut State, ctx: &ClientCtx, c: PlacePane) -> Result<St
 
 /// The spawn for a popup's command: `GROFE_PANE` is `pane`'s id, `env` the
 /// whole environment. The popup sets the size.
-fn spawn_for(
+pub(crate) fn spawn_for(
     state: &State,
     session: crate::types::SessionId,
     pane: PaneId,

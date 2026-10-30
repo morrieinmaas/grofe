@@ -279,11 +279,13 @@ pub fn has_session(state: &mut State, ctx: &ClientCtx, c: HasSession) -> Result<
 /// tmux sorts sessions by name, not by id.
 pub fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let model = &state.model;
-    Ok(crate::server::dispatch::options::listed_sessions(state, &c)
-        .into_iter()
-        .filter_map(|id| model.sessions.get(&id))
-        .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
-        .collect())
+    Ok(
+        crate::server::dispatch::options::listed_sessions(state, &c)?
+            .into_iter()
+            .filter_map(|id| model.sessions.get(&id))
+            .map(|s| format!("{}: {} windows\n", s.name, s.windows.len()))
+            .collect(),
+    )
 }
 
 /// A new session name must be usable in a target and not taken.

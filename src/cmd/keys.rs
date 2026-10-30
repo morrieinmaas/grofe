@@ -21,6 +21,25 @@ pub fn is_key_name(name: &str) -> bool {
 /// `app_cursor` mode, CSI otherwise). `None` if `name` isn't a recognised
 /// key.
 pub fn key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
+    classic_key_bytes(name, modes).or_else(|| extended_key_bytes(name, modes))
+}
+
+/// The keys the table below has no row for, read as the key bindings read a
+/// name (`input::parse_key`) and encoded as a typed key is: the keypad
+/// (`KP5`), C0 codes (`[LF]`), `UserN` (no pane gets one: no bytes, but a
+/// key all the same) and `0xNN`.
+fn extended_key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
+    use crate::server::input::{KeyCode, encode, parse_key};
+    let key = parse_key(name).ok()?;
+    let extended = name.starts_with("0x")
+        || matches!(
+            key.code,
+            KeyCode::Keypad(_) | KeyCode::Control(_) | KeyCode::User(_)
+        );
+    extended.then(|| encode(&key, modes))
+}
+
+fn classic_key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
     let mut ctrl = false;
     let mut meta = false;
     let mut shift = false;

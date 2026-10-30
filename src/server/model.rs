@@ -331,6 +331,9 @@ pub struct Model {
     /// was marked in. Read it through [`Model::marked_pane`], which checks
     /// it is still there.
     pub marked: Option<(SessionId, WindowId, PaneId)>,
+    /// Each window's layout before its last `select-layout` (tmux's
+    /// `old_layout`), as a layout string, for `select-layout -o`.
+    pub old_layouts: BTreeMap<WindowId, String>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,

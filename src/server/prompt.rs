@@ -55,6 +55,14 @@ const WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
 /// of its own; a prompt is `command` unless `-T` says otherwise.
 const PROMPT_TYPES: [&str; 4] = ["command", "search", "target", "window-target"];
 
+/// [`PROMPT_TYPES`], for `show-prompt-history`.
+pub(crate) const KIND_NAMES: [&str; 4] = PROMPT_TYPES;
+
+/// Which of [`KIND_NAMES`] `name` is.
+pub(crate) fn kind_index(name: &str) -> Option<usize> {
+    PROMPT_TYPES.iter().position(|k| *k == name)
+}
+
 /// Every client's open prompt and the server-wide histories.
 #[derive(Debug, Default)]
 pub struct Prompts {
@@ -68,6 +76,16 @@ pub struct Prompts {
 }
 
 impl Prompts {
+    /// The lines entered at prompts of type `kind`, oldest first.
+    pub(crate) fn history(&self, kind: usize) -> &[String] {
+        &self.history[kind]
+    }
+
+    /// Forgets the history of prompt type `kind`.
+    pub(crate) fn clear_history(&mut self, kind: usize) {
+        self.history[kind].clear();
+    }
+
     /// Whether client `id` has a prompt open.
     pub fn is_open(&self, id: ClientId) -> bool {
         self.open.contains_key(&id)

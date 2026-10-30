@@ -123,14 +123,16 @@ pub fn choose_tree(state: &mut State, ctx: &ClientCtx, c: ChooseTree) -> Result<
 
 /// `wait-for`: blocks the caller until another call signals the channel;
 /// with `-S`, signals it.
-// ponytail: tmux's `-L`/`-U` (channel locks) are not parsed natively; the
-// corpus sends only the wait and the signal (fzf's `--tmux`).
 pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<String, String> {
     let Some(channel) = c.channel else {
         return Err(ParseError::TooFewArguments("wait-for".to_string(), 1).to_string());
     };
     if c.signal {
         clients::signal_channel(state, &channel);
+    } else if c.lock {
+        clients::lock_channel(state, &channel, dispatch::defer_reply);
+    } else if c.unlock {
+        clients::unlock_channel(state, &channel)?;
     } else {
         clients::wait_channel(state, &channel, dispatch::defer_reply);
     }

@@ -407,14 +407,14 @@ fn a_refused_line_of_a_sourced_file_is_noted() {
     let new = tmux(&srv, &["new-session", "-d", "-s", "main", "sleep 100000"]);
     assert!(new.status.success(), "{}", new.stderr);
     let file = srv.home.join("lack.conf");
-    fs::write(&file, "set -g @a 1\nlock-server\nset -g @b 2\n").unwrap();
+    fs::write(&file, "set -g @a 1\ndetach-client -E true\nset -g @b 2\n").unwrap();
     let out = tmux(&srv, &["source-file", file.to_str().unwrap()]);
     assert!(!out.status.success());
     let value = |name: &str| tmux(&srv, &["show-options", "-gqv", name]).stdout;
     assert_eq!((value("@a").trim(), value("@b").trim()), ("1", "2"));
     let lines = miss_lines(&srv);
     assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].contains("lock-server"), "{lines:?}");
+    assert!(lines[0].contains("detach-client -E"), "{lines:?}");
 }
 
 /// A copy-mode command grofe does not know does nothing, as in tmux (which

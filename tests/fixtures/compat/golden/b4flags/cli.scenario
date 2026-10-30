@@ -1,0 +1,27 @@
+# B4: tmux's global flags -h -D -l -N -q -T -v and the two letters in its getopt string that only print the usage (-d, -U).
+$ -h
+$ -d
+$ -U
+$ -dh
+$ -hZ
+$ -ZD
+$ -N new-session -d -s main
+$ -N start-server
+$ -N has-session -t main
+$ -N list-sessions
+$ new-session -d -s main -x 40 -y 12 'sleep 100000'
+$ -N has-session -t main
+$ -N new-session -d -s two 'sleep 100000'
+$ -q has-session -t main
+$ -v has-session -t main
+$ -vv list-sessions -F '#{session_name}'
+$ -T RGB,256 list-sessions -F '#{session_name}'
+$ -T nope list-sessions -F '#{session_name}'
+$ -T clipboard:title -q list-sessions -F '#{session_name}'
+$ -l has-session -t main
+$ -c 'echo $0'
+$ -l -c 'echo $0'
+$ -lc 'echo $0'
+$ -c 'echo hi' list-sessions
+$ -D list-sessions
+$ -2 -u list-sessions -F '#{session_name}'

@@ -789,7 +789,10 @@ pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<
     let pane = model.resolve_pane(&c.target, ctx)?;
     let prefix = model
         .options
-        .lookup("prefix", &options::chain(model, pane))
+        .lookup(
+            if c.second { "prefix2" } else { "prefix" },
+            &options::chain(model, pane),
+        )
         .and_then(|v| parse_prefix(v).ok())
         .flatten();
     let Some(key) = prefix else {

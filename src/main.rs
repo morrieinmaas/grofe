@@ -55,8 +55,16 @@ fn main() -> ExitCode {
                 println!("tmux {}", grofe::compat::compat_level());
                 return ExitCode::SUCCESS;
             }
+            // tmux's `usage(0)` prints to stdout.
+            Ok(cli) if cli.help => {
+                println!("{}", grofe::compat::tmux::USAGE);
+                return ExitCode::SUCCESS;
+            }
             Ok(cli) => {
                 let _ = DIALECT.set(cli.dialect);
+                let _ = NO_START.set(cli.no_start);
+                let _ = LOGIN.set(cli.login);
+                let _ = FEATURES.set(cli.features.clone());
                 // `-f`: the config of a server this call starts (spec §4.5),
                 // each file absolute, since the server does not keep this cwd.
                 let cwd = std::env::current_dir().unwrap_or_default();
@@ -76,6 +84,9 @@ fn main() -> ExitCode {
                 }
                 if let Some(command) = &cli.shell_command {
                     return shell_command(&globals, command);
+                }
+                if cli.foreground {
+                    return run_foreground(&globals);
                 }
                 (globals, cli.argv)
             }
@@ -150,6 +161,15 @@ fn main() -> ExitCode {
 /// The dialect every hello this process sends carries: grofe, unless the
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
+
+/// `tmux -N`: this call never starts a server.
+static NO_START: OnceLock<bool> = OnceLock::new();
+
+/// `tmux -l`: the shell `-c` runs is a login shell.
+static LOGIN: OnceLock<bool> = OnceLock::new();
+
+/// `tmux -T`: terminal features for the client this call attaches.
+static FEATURES: OnceLock<Vec<String>> = OnceLock::new();
 
 /// `tmux -f <file>...`: passed to a server this process starts.
 static CONFIG_FILES: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -333,6 +353,36 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
         }
     }
     Ok((globals, &args[i..]))
+}
+
+/// `tmux -D`: the server in this process, not detached from the terminal
+/// and never leaving for lack of sessions (`exit-empty` off), which tmux
+/// does for a call with no command. A server already on the socket is
+/// the call's to find: tmux then runs its default command against it.
+fn run_foreground(globals: &Globals) -> ExitCode {
+    let (socket, own_dir) = globals.resolve();
+    if let Some(dir) = socket.parent().filter(|d| !d.as_os_str().is_empty())
+        && (own_dir || !dir.exists())
+        && let Err(e) = paths::ensure_private_dir(dir)
+    {
+        return fail(&format!(
+            "socket directory {} is not usable: {e}",
+            dir.display()
+        ));
+    }
+    match UnixStream::connect(&socket) {
+        Ok(_) => return fail(&format!("server already running on {}", socket.display())),
+        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
+            // Stale: the file exists but nobody listens.
+            let _ = std::fs::remove_file(&socket);
+        }
+        Err(_) => {}
+    }
+    report_panics_for(&socket, "server");
+    match server::run_daemon(&socket, None, false) {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
 }
 
 /// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
@@ -705,6 +755,11 @@ fn shell_command(globals: &Globals, command: &str) -> ExitCode {
     let name = Path::new(&shell)
         .file_name()
         .map_or_else(|| shell.clone(), |n| n.to_string_lossy().into_owned());
+    // `-l`: a login shell, which is its `argv[0]` starting with a dash.
+    let name = match LOGIN.get() {
+        Some(true) => format!("-{name}"),
+        _ => name,
+    };
     let err = Command::new(&shell)
         .arg0(name)
         .arg("-c")
@@ -779,6 +834,7 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         detach_others: parsed.detach_others,
         nest: parsed.nest,
         created,
+        features: FEATURES.get().cloned().unwrap_or_default(),
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
     client::attach(stream, ctx, opts, term)
@@ -869,6 +925,10 @@ fn connect_or_start(
     }
     if let Ok(stream) = UnixStream::connect(socket) {
         return Ok(stream);
+    }
+    // `tmux -N`: no server for this call, whatever command it is.
+    if NO_START.get().copied().unwrap_or(false) {
+        return connect(socket);
     }
     let lock_path = paths::lock_path(socket);
     // Run as `tmux`, a socket grofe did not create (every one it creates

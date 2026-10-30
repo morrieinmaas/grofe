@@ -121,6 +121,16 @@ pub struct ListSessions {
     pub format: Option<String>,
     /// `-f` (M3.6): a format; only sessions it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
+}
+
+/// The `-O order` and `-r` of the commands that list things (tmux 3.7b's
+/// `sort.c`), as given: the order is checked when the command runs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SortFlags {
+    pub order: Option<String>,
+    pub reversed: bool,
 }
 
 /// `new-window` (`-d -t -n -c`, plus a trailing shell command; from M3.6
@@ -181,6 +191,8 @@ pub struct ListWindows {
     pub all: bool,
     /// `-f` (M3.6): a format; only windows it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command;
@@ -296,6 +308,8 @@ pub struct ListPanes {
     pub session: bool,
     /// `-f` (M3.6): a format; only panes it expands true for are listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// A single `send-keys` argument, already classified (spec §4.5): a key
@@ -471,6 +485,8 @@ pub struct ListClients {
     /// `-f` (M3.6, FE.2): a format; only clients it expands true for are
     /// listed.
     pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `next-window`, `previous-window`, `last-window` (`-t` session).
@@ -510,6 +526,8 @@ pub struct SwitchClient {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendPrefix {
     pub target: Target,
+    /// `-2`: the `prefix2` key instead of `prefix`.
+    pub second: bool,
 }
 
 /// `bind-key` (`-n -r -T -N`, then a key and its command).
@@ -550,6 +568,14 @@ pub struct ListKeys {
     pub notes: bool,
     /// The one key to list, raw.
     pub key: Option<String>,
+    /// `-a`: with `-N`, the bindings that have no note too.
+    pub all: bool,
+    /// `-F`: the format of a line.
+    pub format: Option<String>,
+    /// `-P`: the prefix string `-N` lines start with.
+    pub prefix: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `source-file` (`-q`, `-F`, `-n`, `-v`, a path).
@@ -634,6 +660,12 @@ pub struct SelectLayout {
     pub name: String,
     /// `-E`: spread the panes out evenly.
     pub spread: bool,
+    /// `-n`: the preset after the last one, as `next-layout`.
+    pub next: bool,
+    /// `-p`: the preset before the last one, as `previous-layout`.
+    pub previous: bool,
+    /// `-o`: the layout the window had before the last `select-layout`.
+    pub undo: bool,
 }
 
 // M3.6 verbs (spec §4.5's rows, native forms; TC.2 parses them). Each
@@ -738,6 +770,11 @@ pub struct ResizeWindow {
     pub largest: bool,
     /// `-a`: the size of the smallest attached client.
     pub smallest: bool,
+    /// `-L`, `-R`, `-U`, `-D`: the width or height, after `-x`/`-y`, less
+    /// or more by `adjust` cells (tmux checks them in that order).
+    pub direction: Option<Edge>,
+    /// The `adjustment`, in cells (1 when not given).
+    pub adjust: u32,
 }
 
 /// `last-pane` (TC.8).
@@ -779,6 +816,8 @@ pub struct RotateWindow {
     pub up: bool,
     /// `-D`: panes move down.
     pub down: bool,
+    /// `-Z`: a zoomed window stays zoomed, on the new active pane.
+    pub keep_zoom: bool,
 }
 
 /// `move-window` (TC.8).
@@ -829,6 +868,46 @@ pub struct UnlinkWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NextLayout {
     pub target: Target,
+}
+
+/// `lock-server`, `lock-session` and `lock-client` (B4): the lock command
+/// runs on every client of the server, of the session, or on one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lock {
+    pub scope: LockScope,
+}
+
+/// Whose clients a [`Lock`] locks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockScope {
+    Server,
+    Session(Target),
+    /// `-t`: the client, raw; `None` is the requesting client.
+    Client(Option<String>),
+}
+
+/// `server-access [-adlrw] [user]` (B4): who else may use the server.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServerAccess {
+    /// `-a`: allow the user.
+    pub add: bool,
+    /// `-d`: deny the user.
+    pub deny: bool,
+    /// `-l`: list the users.
+    pub list: bool,
+    /// `-r`: read-only access.
+    pub read_only: bool,
+    /// `-w`: read-write access.
+    pub write: bool,
+    pub user: Option<String>,
+}
+
+/// `show-prompt-history` and `clear-prompt-history` (B4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PromptHistory {
+    pub clear: bool,
+    /// `-T`: one prompt type's history; `None` is every type's.
+    pub kind: Option<String>,
 }
 
 /// `refresh-client` (TC.9).
@@ -939,6 +1018,11 @@ pub struct WaitFor {
     pub channel: Option<String>,
     /// `-S`.
     pub signal: bool,
+    /// `-L`: take the channel's lock, waiting for whoever holds it (`-S`
+    /// wins over it).
+    pub lock: bool,
+    /// `-U`: let go of the channel's lock (`-S` and `-L` win over it).
+    pub unlock: bool,
 }
 
 /// `display-popup` (TC.6). Positions stay raw: numbers, tmux's position
@@ -1264,6 +1348,11 @@ pub struct SetBuffer {
     /// `-n`: rename the buffer (the data, if any, is ignored).
     pub rename: Option<String>,
     pub data: Option<String>,
+    /// `-w`: also send the data to the `-t` client's clipboard (the
+    /// current client's, else).
+    pub clipboard: bool,
+    /// `-t`: the client `-w` sends to, raw.
+    pub client: Option<String>,
 }
 
 /// `show-buffer [-b name]` (TM.4).
@@ -1296,6 +1385,10 @@ pub struct SaveBuffer {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListBuffers {
     pub format: Option<String>,
+    /// `-f`: a format; only buffers it expands true for are listed.
+    pub filter: Option<String>,
+    /// `-O` and `-r`.
+    pub sort: SortFlags,
 }
 
 /// `delete-buffer [-b name]` (TM.4).
@@ -1426,6 +1519,10 @@ pub enum Command {
     UnlinkWindow(UnlinkWindow),
     MovePane(MovePane),
     NextLayout(NextLayout),
+    PreviousLayout(NextLayout),
+    Lock(Lock),
+    ServerAccess(ServerAccess),
+    PromptHistory(PromptHistory),
     /// `respawn-window` (TC.8): `respawn-pane`'s shape with a window target.
     RespawnWindow(RespawnPane),
     RefreshClient(RefreshClient),

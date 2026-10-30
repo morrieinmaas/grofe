@@ -413,6 +413,53 @@ pub struct AttachOptions {
     pub nest: bool,
     /// The session was just made by this client's `new-session`.
     pub created: bool,
+    /// `tmux -T`: terminal features this client's terminal is said to have.
+    pub features: Vec<String>,
+}
+
+/// What tmux's `-T features` (`tty_add_features`, separators `:` and `,`)
+/// says about the terminal, as far as grofe reads it: `RGB` true colour, `sixel` sixel images, `usstyle` styled
+/// underlines, `sync` synchronised output. A name tmux does not know ends
+/// the list, as in tmux; the other known ones (`256`, `clipboard`, `title`,
+/// `hyperlinks`, ...) change nothing grofe draws differently.
+pub fn apply_features(caps: &mut Caps, features: &[String]) {
+    const KNOWN: &[&str] = &[
+        "256",
+        "bpaste",
+        "ccolour",
+        "clipboard",
+        "cstyle",
+        "extkeys",
+        "focus",
+        "hyperlinks",
+        "ignorefkeys",
+        "margins",
+        "mouse",
+        "osc7",
+        "overline",
+        "progressbar",
+        "rectfill",
+        "RGB",
+        "sixel",
+        "strikethrough",
+        "sync",
+        "title",
+        "usstyle",
+    ];
+    for list in features {
+        for name in list.split([':', ',']) {
+            let Some(known) = KNOWN.iter().find(|k| k.eq_ignore_ascii_case(name)) else {
+                break;
+            };
+            match *known {
+                "RGB" => caps.truecolor = true,
+                "sixel" => caps.sixel = true,
+                "usstyle" => caps.styled_underline = true,
+                "sync" => caps.sync = true,
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The raw `-t` value of an already validated `attach-session` argv (the
@@ -655,6 +702,7 @@ fn run(
     if let Ok(list) = std::env::var(TEST_CAPS_ENV) {
         caps = with_test_caps(caps, &list);
     }
+    apply_features(&mut caps, &opts.features);
     let typeahead = probe.take_typeahead();
 
     let (cols, rows) = tty_size();

@@ -4,6 +4,7 @@
 //! with tmux 3.7b's flags, output and error text (`cmd-set-buffer.c`,
 //! `cmd-save-buffer.c`, `cmd-list-buffers.c`, `cmd-paste-buffer.c`).
 
+use std::cmp::Ordering;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -16,12 +17,13 @@ use crate::cmd::{
 };
 use crate::protocol::{ClientCtx, Failure};
 use crate::server::buffers::{self, BufferVars};
+use crate::server::dispatch::sorting::{Order, Sort, by_name};
 use crate::server::{Job, State, clients, dispatch, passthrough, tree};
 
 /// `set-buffer`: a new automatic buffer, or with `-b` that named buffer;
 /// `-a` appends to the `-b` buffer; `-n` renames (`-b`'s buffer, else the
 /// newest automatic one) and ignores any data.
-pub fn set_buffer(state: &mut State, _ctx: &ClientCtx, c: SetBuffer) -> Result<String, String> {
+pub fn set_buffer(state: &mut State, ctx: &ClientCtx, c: SetBuffer) -> Result<String, String> {
     let limit = buffers::limit(state);
     let bufs = &mut state.buffers;
     let found = c.name.as_deref().and_then(|n| bufs.get(n));
@@ -55,11 +57,27 @@ pub fn set_buffer(state: &mut State, _ctx: &ClientCtx, c: SetBuffer) -> Result<S
         ));
     }
     data.extend_from_slice(text.as_bytes());
-    match &c.name {
-        Some(name) => bufs.set(name, data),
-        None => bufs.add(data, limit),
+    let stored = match &c.name {
+        Some(name) => bufs.set(name, data.clone()),
+        None => bufs.add(data.clone(), limit),
+    };
+    stored?;
+    if c.clipboard {
+        send_to_clipboard(state, ctx, c.client.as_deref(), &data);
     }
-    .map(|()| String::new())
+    Ok(String::new())
+}
+
+/// `-w`: the data to the clipboard of client `to` (the current one when
+/// none is named; an unknown one is skipped, as tmux's `tc` is `NULL`).
+fn send_to_clipboard(state: &mut State, ctx: &ClientCtx, to: Option<&str>, data: &[u8]) {
+    let id = match to {
+        Some(name) => clients::client_by_name(state, name).ok(),
+        None => clients::current_client(state, ctx),
+    };
+    if let Some(id) = id {
+        passthrough::send_selection(state, id, data);
+    }
 }
 
 /// `show-buffer`: the buffer's data as it is.
@@ -270,13 +288,7 @@ fn install_loaded(
         ));
     }
     if c.clipboard {
-        let to = match c.client.as_deref() {
-            Some(name) => clients::client_by_name(state, name).ok(),
-            None => clients::current_client(state, ctx),
-        };
-        if let Some(id) = to {
-            passthrough::send_selection(state, id, &data);
-        }
+        send_to_clipboard(state, ctx, c.client.as_deref(), &data);
     }
     let limit = buffers::limit(state);
     match &c.name {
@@ -338,10 +350,27 @@ pub fn save_buffer(state: &mut State, ctx: &ClientCtx, c: SaveBuffer) -> Result<
 /// `list-buffers`: one line per buffer, newest first, in tmux's template
 /// or `-F`'s.
 pub fn list_buffers(state: &mut State, _ctx: &ClientCtx, c: ListBuffers) -> Result<String, String> {
+    let sort = Sort::new(&c.sort)?;
     let format = c.format.as_deref().unwrap_or(buffers::LIST_FORMAT);
-    Ok(state
-        .buffers
-        .iter()
+    let mut listed: Vec<&buffers::Buffer> = state.buffers.iter().collect();
+    sort.apply(&mut listed, |order, a, b| {
+        let first = match order {
+            Order::Name => by_name(&a.name, &b.name),
+            // Newest first, as the list is.
+            Order::Creation => b.id.cmp(&a.id),
+            Order::Size => a.data.len().cmp(&b.data.len()),
+            _ => Ordering::Equal,
+        };
+        first.then_with(|| by_name(&a.name, &b.name))
+    });
+    Ok(listed
+        .into_iter()
+        .filter(|b| {
+            c.filter.as_deref().is_none_or(|filter| {
+                let got = cmd::expand(filter, &BufferVars(b));
+                !got.is_empty() && got != "0"
+            })
+        })
         .map(|b| cmd::expand(format, &BufferVars(b)) + "\n")
         .collect())
 }

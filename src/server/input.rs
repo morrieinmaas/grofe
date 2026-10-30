@@ -72,6 +72,20 @@ pub enum KeyCode {
     /// tmux's `Any`: bound in a table, it takes every key that table
     /// does not bind (see [`KeyTables::lookup`]); never typed or sent.
     Any,
+    /// A numeric keypad key (`KP5`, `KPEnter`), which a terminal in
+    /// application keypad mode sends as its own sequence.
+    Keypad(Keypad),
+    /// A printable ASCII character given as `0xNN`: tmux makes such a key a
+    /// key of its own (shown as the character, never typed), so a binding
+    /// on it is not one on the character itself.
+    Literal(char),
+    /// A C0 control code as a key of its own (`[NUL]`, `[LF]`): tmux has
+    /// names for them to show in logs, and `0x01` makes one. Never `Tab`,
+    /// `Enter` or `Escape`, which are keys of theirs.
+    Control(u8),
+    /// tmux's `User0` to `User1000`, the keys the `user-keys` option names
+    /// terminal sequences for.
+    User(u16),
     /// A bindable mouse key (`MouseDown1Pane`, TC.10); never sent to a
     /// pane as a key.
     Mouse(MouseKey),
@@ -117,6 +131,93 @@ pub enum MousePlace {
     ScrollbarSlider,
     ScrollbarDown,
     Control(u8),
+}
+
+/// tmux's numeric keypad keys, in its key-code order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Keypad {
+    Slash,
+    Star,
+    Minus,
+    Seven,
+    Eight,
+    Nine,
+    Plus,
+    Four,
+    Five,
+    Six,
+    One,
+    Two,
+    Three,
+    Enter,
+    Zero,
+    Period,
+}
+
+/// Each keypad key with tmux's name, the byte it types in a pane that has
+/// not asked for application keypad mode, and the final byte of the `ESC O`
+/// sequence it types in one that has (`input_key_table`).
+const KEYPAD: [(Keypad, &str, u8, u8); 16] = [
+    (Keypad::Slash, "KP/", b'/', b'o'),
+    (Keypad::Star, "KP*", b'*', b'j'),
+    (Keypad::Minus, "KP-", b'-', b'm'),
+    (Keypad::Seven, "KP7", b'7', b'w'),
+    (Keypad::Eight, "KP8", b'8', b'x'),
+    (Keypad::Nine, "KP9", b'9', b'y'),
+    (Keypad::Plus, "KP+", b'+', b'k'),
+    (Keypad::Four, "KP4", b'4', b't'),
+    (Keypad::Five, "KP5", b'5', b'u'),
+    (Keypad::Six, "KP6", b'6', b'v'),
+    (Keypad::One, "KP1", b'1', b'q'),
+    (Keypad::Two, "KP2", b'2', b'r'),
+    (Keypad::Three, "KP3", b'3', b's'),
+    (Keypad::Enter, "KPEnter", b'\n', b'M'),
+    (Keypad::Zero, "KP0", b'0', b'p'),
+    (Keypad::Period, "KP.", b'.', b'n'),
+];
+
+impl Keypad {
+    pub(crate) fn row(self) -> &'static (Keypad, &'static str, u8, u8) {
+        // KEYPAD lists every variant.
+        KEYPAD.iter().find(|r| r.0 == self).unwrap_or(&KEYPAD[0])
+    }
+
+    /// tmux's name for the key.
+    pub fn name(self) -> &'static str {
+        self.row().1
+    }
+
+    /// Where the key sorts among tmux's key codes, from 0.
+    pub fn order(self) -> u32 {
+        KEYPAD.iter().position(|r| r.0 == self).unwrap_or(0) as u32
+    }
+
+    /// The key the `ESC O <final>` sequence of an application keypad is.
+    pub fn from_ss3(final_byte: u8) -> Option<Keypad> {
+        KEYPAD.iter().find(|r| r.3 == final_byte).map(|r| r.0)
+    }
+}
+
+/// tmux's names for the C0 control codes (`[NUL]` to `[US]`, `Tab`, `Enter`
+/// and `Escape` among them), by code; `ASC` is tmux's spelling of ACK.
+const C0_NAMES: [&str; 32] = [
+    "[NUL]", "[SOH]", "[STX]", "[ETX]", "[EOT]", "[ENQ]", "[ASC]", "[BEL]", "[BS]", "Tab", "[LF]",
+    "[VT]", "[FF]", "Enter", "[SO]", "[SI]", "[DLE]", "[DC1]", "[DC2]", "[DC3]", "[DC4]", "[NAK]",
+    "[SYN]", "[ETB]", "[CAN]", "[EM]", "[SUB]", "Escape", "[FS]", "[GS]", "[RS]", "[US]",
+];
+
+/// The most `UserN` tmux numbers (`KEYC_NUSER`).
+pub const MAX_USER_KEY: u16 = 1000;
+
+/// The key C0 code `code` is: `Tab`, `Enter` and `Escape` are keys of
+/// their own.
+fn control_key(code: u8) -> KeyCode {
+    match code {
+        9 => KeyCode::Tab,
+        13 => KeyCode::Enter,
+        27 => KeyCode::Escape,
+        code => KeyCode::Control(code),
+    }
 }
 
 const MOUSE_ACTIONS: &[(&str, MouseAction)] = &[
@@ -378,6 +479,20 @@ const NAMES: &[(&str, KeyCode)] = &[
 // has no keypad variants.
 pub fn parse_key(name: &str) -> Result<Key, String> {
     let bad = || format!("bad key: {name}");
+    // `0xNN`: a code point, or below 0x20 a C0 control code. No modifiers
+    // go with it, and what follows the digits is ignored (`sscanf`).
+    if let Some(hex) = name.strip_prefix("0x") {
+        let digits = hex.bytes().take_while(u8::is_ascii_hexdigit).count();
+        let code = u32::from_str_radix(&hex[..digits], 16).map_err(|_| bad())?;
+        let code = match u8::try_from(code) {
+            Ok(c) if c < 32 => control_key(c),
+            _ => match char::from_u32(code).ok_or_else(bad)? {
+                c if c.is_ascii() => KeyCode::Literal(c),
+                c => KeyCode::Char(c),
+            },
+        };
+        return Ok(Key::plain(code));
+    }
     let mut mods = Mods::default();
     let mut rest = name;
     loop {
@@ -401,8 +516,17 @@ pub fn parse_key(name: &str) -> Result<Key, String> {
         code
     } else if let Some(n) = function_key_number(rest) {
         KeyCode::F(n)
+    } else if let Some(row) = KEYPAD.iter().find(|r| r.1.eq_ignore_ascii_case(rest)) {
+        KeyCode::Keypad(row.0)
+    } else if let Some(c) = C0_NAMES
+        .iter()
+        .position(|n| n.starts_with('[') && n.eq_ignore_ascii_case(rest))
+    {
+        KeyCode::Control(c as u8)
     } else if let Some(m) = MouseKey::parse(rest) {
         KeyCode::Mouse(m)
+    } else if let Some(n) = user_key_number(rest) {
+        KeyCode::User(n)
     } else {
         let mut chars = rest.chars();
         match (chars.next(), chars.next()) {
@@ -411,6 +535,15 @@ pub fn parse_key(name: &str) -> Result<Key, String> {
         }
     };
     Ok(Key { code, mods })
+}
+
+/// `UserN`, N up to [`MAX_USER_KEY`]: tmux reads it with `sscanf("User%u")`,
+/// which takes the digits and leaves what follows them.
+fn user_key_number(s: &str) -> Option<u16> {
+    let digits = s.strip_prefix("User")?;
+    let end = digits.bytes().take_while(u8::is_ascii_digit).count();
+    let n: u32 = digits[..end].parse().ok()?;
+    u16::try_from(n).ok().filter(|n| *n <= MAX_USER_KEY)
 }
 
 /// `F1` to `F12` (tmux has no F13 and up).
@@ -450,6 +583,14 @@ impl fmt::Display for Key {
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "F{n}"),
             KeyCode::Mouse(m) => write!(f, "{m}"),
+            KeyCode::Literal(c) => write!(f, "{c}"),
+            KeyCode::Keypad(k) => f.write_str(k.name()),
+            KeyCode::Control(c) => f.write_str(C0_NAMES[usize::from(c) & 31]),
+            // tmux writes it into a 7 byte buffer: `User1000` is `User100`.
+            KeyCode::User(n) => {
+                let name = format!("User{n}");
+                f.write_str(&name[..name.len().min(7)])
+            }
             code => {
                 let name = NAMES
                     .iter()
@@ -476,6 +617,10 @@ pub struct Decoder {
     paste_scanned: usize,
     /// A piece of the current paste has already been passed on.
     paste_begun: bool,
+    /// The byte sequences the `user-keys` option names, longest first, each
+    /// with its `UserN`: tried before the built-in sequences, as tmux's
+    /// key tree takes them.
+    user_keys: Vec<(Vec<u8>, u16)>,
 }
 
 const PASTE_START: &[u8] = b"\x1b[200~";
@@ -488,6 +633,17 @@ const PASTE_TIMEOUT: Duration = Duration::from_secs(5);
 impl Decoder {
     pub fn new() -> Decoder {
         Decoder::default()
+    }
+
+    /// Sets the `user-keys` sequences (index and bytes).
+    pub fn set_user_keys(&mut self, keys: impl IntoIterator<Item = (u16, Vec<u8>)>) {
+        let mut keys: Vec<(Vec<u8>, u16)> = keys
+            .into_iter()
+            .filter(|(_, bytes)| !bytes.is_empty())
+            .map(|(n, bytes)| (bytes, n))
+            .collect();
+        keys.sort_by_key(|(bytes, _)| std::cmp::Reverse(bytes.len()));
+        self.user_keys = keys;
     }
 
     /// Decode `bytes` received at `now`. Bytes already waiting longer than
@@ -573,7 +729,11 @@ impl Decoder {
             if pos == self.buf.len() {
                 break;
             }
-            match step(&self.buf[pos..], force) {
+            let step = match user_key(&self.user_keys, &self.buf[pos..], force) {
+                Some(step) => step,
+                None => step(&self.buf[pos..], force),
+            };
+            match step {
                 Step::Need => break,
                 Step::Done(n, tok) => {
                     pos += n;
@@ -620,6 +780,26 @@ enum Step {
 
 fn key_tok(code: KeyCode, mods: Mods) -> Tok {
     Tok::Input(Input::Key(Key::new(code, mods)))
+}
+
+/// A `user-keys` sequence at the front of `buf`: the key if one is all
+/// there, `Need` if `buf` could still become one (and may wait), else
+/// `None` for the built-in sequences to read.
+fn user_key(keys: &[(Vec<u8>, u16)], buf: &[u8], force: bool) -> Option<Step> {
+    let whole = keys.iter().find(|(bytes, _)| buf.starts_with(bytes));
+    let longer = !force
+        && keys
+            .iter()
+            .any(|(bytes, _)| bytes.len() > buf.len() && bytes.starts_with(buf));
+    match whole {
+        Some((_, _)) if longer => Some(Step::Need),
+        Some((bytes, n)) => Some(Step::Done(
+            bytes.len(),
+            key_tok(KeyCode::User(*n), Mods::default()),
+        )),
+        None if longer => Some(Step::Need),
+        None => None,
+    }
 }
 
 /// Decode one token from the front of `buf` (non-empty).
@@ -732,16 +912,12 @@ fn ss3(b: u8) -> Option<KeyCode> {
         b'Q' => KeyCode::F(2),
         b'R' => KeyCode::F(3),
         b'S' => KeyCode::F(4),
-        b'M' => KeyCode::Enter,
         b'X' => KeyCode::Char('='),
-        b'j' => KeyCode::Char('*'),
-        b'k' => KeyCode::Char('+'),
         b'l' => KeyCode::Char(','),
-        b'm' => KeyCode::Char('-'),
-        b'n' => KeyCode::Char('.'),
-        b'o' => KeyCode::Char('/'),
-        b'p'..=b'y' => KeyCode::Char((b - b'p' + b'0') as char),
-        _ => return None,
+        // The keypad keys, of a terminal in application keypad mode: tmux
+        // names them (`KP5`) and a pane that has not asked for them gets
+        // the plain key back ([`encode`]).
+        b => return Keypad::from_ss3(b).map(KeyCode::Keypad),
     })
 }
 
@@ -3021,6 +3197,18 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
             None => out.extend(utf8(c)),
         },
         KeyCode::Enter => out.push(b'\r'),
+        // A keypad key: the byte of the key itself, or in a pane that asked
+        // for application keypad mode its `ESC O` sequence. tmux sends
+        // nothing for one with Ctrl or Shift.
+        KeyCode::Keypad(_) if m.ctrl || m.shift => return Vec::new(),
+        KeyCode::Keypad(k) if modes.app_keypad => out.extend([ESC, b'O', k.row().3]),
+        KeyCode::Keypad(k) => out.push(k.row().2),
+        // A C0 code goes as itself, as `input_key_vt10x` writes it.
+        KeyCode::Control(_) if m.ctrl || m.shift => return Vec::new(),
+        KeyCode::Control(c) => out.push(c),
+        // User keys are for bindings; no pane gets them.
+        KeyCode::User(_) => return Vec::new(),
+        KeyCode::Literal(c) => out.push(c as u8),
         KeyCode::Escape | KeyCode::Backspace if m.ctrl => return Vec::new(),
         KeyCode::Escape => out.push(ESC),
         KeyCode::Backspace => out.push(0x7f),
@@ -3096,6 +3284,9 @@ fn kitty_encode(key: &Key, modes: &InputModes, flags: u8) -> Vec<u8> {
             }
             s.push('u');
             s.into_bytes()
+        }
+        KeyCode::Keypad(_) | KeyCode::Control(_) | KeyCode::User(_) | KeyCode::Literal(_) => {
+            legacy_encode(key, modes)
         }
         KeyCode::Escape => csi_u(27, mods),
         KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace => {

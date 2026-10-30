@@ -12,6 +12,7 @@
 //! window and its session.
 
 use std::cell::OnceCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use crate::config::{self, Resolved, provenance::tilde};
 use crate::event::Event;
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::borders::PaneStatus;
+use crate::server::dispatch::sorting::{Order, Sort, by_name};
 use crate::server::events::Events;
 use crate::server::input::{Binding, BindingSource, Key, KeyTables, parse_key};
 use crate::server::model::Model;
@@ -2432,14 +2434,17 @@ pub fn list_keys(state: &mut State, ctx: &ClientCtx, c: ListKeys) -> Result<Stri
         Some(name) => Some(parse_key(name).map_err(|_| format!("invalid key: {name}"))?),
         None => None,
     };
+    let sort = Sort::new(&c.sort)?;
     let tables = &state.registry.key_tables;
     if let Some(t) = &c.table
         && !tables.exists(t)
     {
         return Err(format!("table {t} doesn't exist"));
     }
-    if ctx.dialect == crate::protocol::Dialect::Tmux {
-        return list_keys_tmux(state, ctx, &c, only);
+    // The flags only the tmux listing has choose it in either dialect.
+    let tmux_listing = c.format.is_some() || c.prefix.is_some() || c.all || c.sort.order.is_some();
+    if ctx.dialect == crate::protocol::Dialect::Tmux || tmux_listing {
+        return list_keys_tmux(state, ctx, &c, only, sort);
     }
     if c.notes {
         return list_notes(state, ctx, &c, only);
@@ -2528,28 +2533,48 @@ fn list_notes(
         .collect())
 }
 
-/// `list-keys` for a tmux-dialect request, as tmux 3.7b prints it
-/// (`cmd-list-keys.c`, recorded on `-L grofe-fe4 -f /dev/null`):
+/// tmux 3.7b's `LIST_KEYS_TEMPLATE`, a line of `list-keys`.
+const TMUX_LIST_KEYS: &str = "#{?notes_only,\
+#{key_prefix} #{p|#{key_string_width}:key_string} #{?key_note,#{key_note},#{key_command}},\
+bind-key #{?key_has_repeat,#{?key_repeat,-r,  },} \
+-T #{p|#{key_table_width}:key_table} #{p|#{key_string_width}:#{q|a:key_string}} #{key_command}}";
+
+/// The variables of one `list-keys` line (`cmd_list_keys_format_add_key_binding`).
+struct KeyVars(BTreeMap<&'static str, String>);
+
+impl FormatVars for KeyVars {
+    fn get(&self, name: &str) -> Option<String> {
+        self.0.get(name).cloned()
+    }
+}
+
+/// `list-keys` as tmux 3.7b prints it (`cmd-list-keys.c`, recorded):
 ///
 /// - which bindings: `-T`'s table, or with `-N` the prefix then the root
 ///   table, or every table by name; each table in tmux's key order
-///   ([`tmux_key_order`]); a key given keeps only its binding, `-N` only
-///   bindings with a note, `-1` only the first;
-/// - a line: `bind-key [-r] -T <table> <key> <commands>`, the table and
-///   the key (escaped as tmux escapes an argument) padded to the widest,
-///   `-r` or two blanks only when some binding repeats; with `-N`,
-///   `<prefix> <key> <note>`;
+///   ([`tmux_key_order`]) or the order `-O` asks for (`-r` reversing it); a
+///   key given keeps only its binding, `-N` only bindings with a note
+///   (`-a`: every one), `-1` only the first;
+/// - a line is `-F`'s format, else tmux's template, over the line's key
+///   variables: by default `bind-key [-r] -T <table> <key> <commands>`, the
+///   table and the key (escaped as tmux escapes an argument) padded to the
+///   widest, `-r` or two blanks only when some binding repeats; with `-N`,
+///   `<prefix> <key> <note>` (`-P`'s prefix, else the `prefix` key);
 /// - one binding (a key given, or `-1`) goes to the current client's
 ///   status line, not to the output.
 ///
 /// The commands are tmux's stock text for a stock binding, else each one
 /// printed as tmux prints a parsed command ([`tmux_command_line`]).
-// ponytail: no `-a`, `-F`, `-O`, `-P` or `-r` (none parse natively).
+// ponytail: tmux compares key codes as `int`s, so its `-O index` and
+// `-O modifier` order the keys it cannot tell apart by the low bits of the
+// difference of their codes; here they order by the key's place in tmux's
+// key table (index) or its modifiers (modifier), and `-O name` is by table.
 fn list_keys_tmux(
     state: &mut State,
     ctx: &ClientCtx,
     c: &ListKeys,
     only: Option<Key>,
+    sort: Sort,
 ) -> Result<String, String> {
     let tables = &state.registry.key_tables;
     let names: Vec<String> = match &c.table {
@@ -2557,41 +2582,65 @@ fn list_keys_tmux(
         None if c.notes => vec!["prefix".to_string(), "root".to_string()],
         None => tables.table_names().map(str::to_string).collect(),
     };
-    let mut rows: Vec<(String, Key, Binding)> = Vec::new();
+    // Each table, in key order; sorted as a whole unless a table or `-N`
+    // names the tables to sort one by one.
+    let mut groups: Vec<Vec<(String, Key, Binding)>> = Vec::new();
     for table in &names {
         let mut keys = tables.keys(table);
         keys.sort_by_key(tmux_key_order);
-        for key in keys {
-            if only.is_some_and(|k| !k.matches(&key)) {
-                continue;
-            }
-            let Some(b) = tables.exact(table, &key) else {
-                continue;
-            };
-            if c.notes && b.desc.as_deref().is_none_or(str::is_empty) {
-                continue;
-            }
-            rows.push((table.clone(), key, b.clone()));
-        }
+        groups.push(
+            keys.into_iter()
+                .filter_map(|key| Some((table.clone(), key, tables.exact(table, &key)?.clone())))
+                .collect(),
+        );
     }
+    let by = |order: Order, a: &(String, Key, Binding), b: &(String, Key, Binding)| {
+        let first = match order {
+            Order::Index => tmux_key_order(&a.1).cmp(&tmux_key_order(&b.1)),
+            Order::Modifier => tmux_key_order(&a.1).0.cmp(&tmux_key_order(&b.1).0),
+            Order::Name => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
+            _ => std::cmp::Ordering::Equal,
+        };
+        first.then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    };
+    let mut rows: Vec<(String, Key, Binding)> = Vec::new();
+    if c.table.is_some() || c.notes {
+        for group in &mut groups {
+            sort.apply(group, by);
+        }
+        rows.extend(groups.into_iter().flatten());
+    } else {
+        rows.extend(groups.into_iter().flatten());
+        sort.apply(&mut rows, by);
+    }
+    let filter_notes = c.notes && !c.all;
+    rows.retain(|(_, key, b)| {
+        only.is_none_or(|k| k.matches(key)) && (!filter_notes || b.desc.is_some())
+    });
     if c.first {
         rows.truncate(1);
     }
-    let prefix = match state.model.options.lookup("prefix", &[]) {
-        Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
-        _ => String::new(),
+    let prefix = match &c.prefix {
+        Some(p) => p.clone(),
+        None => match state.model.options.lookup("prefix", &[]) {
+            Some(p) if !p.eq_ignore_ascii_case("None") => p.to_string(),
+            _ => String::new(),
+        },
     };
+    let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
     let key_width = rows
         .iter()
-        .map(|(_, k, _)| k.to_string().chars().count())
+        .map(|(_, k, _)| width(&k.to_string()))
         .max()
         .unwrap_or(0);
-    let table_width = rows
-        .iter()
-        .map(|(t, _, _)| t.chars().count())
-        .max()
-        .unwrap_or(0);
+    let table_width = rows.iter().map(|(t, _, _)| width(t)).max().unwrap_or(0);
     let has_repeat = rows.iter().any(|(_, _, b)| b.repeat);
+    let template = match &c.format {
+        Some(f) if ctx.dialect == crate::protocol::Dialect::Tmux => tmux_template(f),
+        Some(f) => f.clone(),
+        None => tmux_template(TMUX_LIST_KEYS),
+    };
+    let flag = |on: bool| if on { "1" } else { "0" }.to_string();
     let lines: Vec<String> = rows
         .iter()
         .map(|(table, key, b)| {
@@ -2599,18 +2648,19 @@ fn list_keys_tmux(
                 .shown
                 .clone()
                 .unwrap_or_else(|| tmux_command_line(&b.cmds));
-            if c.notes {
-                let key = key.to_string();
-                let note = b.desc.clone().unwrap_or(command);
-                return format!("{prefix} {key:<key_width$} {note}");
-            }
-            let repeat = match (has_repeat, b.repeat) {
-                (false, _) => "",
-                (true, true) => "-r",
-                (true, false) => "  ",
-            };
-            let key = crate::cmd::parse::escape_arg(&key.to_string());
-            format!("bind-key {repeat} -T {table:<table_width$} {key:<key_width$} {command}")
+            let vars = KeyVars(BTreeMap::from([
+                ("notes_only", flag(c.notes)),
+                ("key_has_repeat", flag(has_repeat)),
+                ("key_string_width", key_width.to_string()),
+                ("key_table_width", table_width.to_string()),
+                ("key_repeat", flag(b.repeat)),
+                ("key_note", b.desc.clone().unwrap_or_default()),
+                ("key_prefix", prefix.clone()),
+                ("key_table", table.clone()),
+                ("key_string", key.to_string()),
+                ("key_command", command),
+            ]));
+            expand(&template, &vars)
         })
         .collect();
     if lines.len() == 1 || c.first {
@@ -2619,7 +2669,11 @@ fn list_keys_tmux(
         }
         return Ok(String::new());
     }
-    Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+    Ok(lines
+        .iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("{l}\n"))
+        .collect())
 }
 
 /// Where tmux 3.7b's key codes put `key` (its key tables are ordered by
@@ -2645,18 +2699,28 @@ pub(crate) fn tmux_key_order(key: &Key) -> (u8, u8, u32, String) {
         KeyCode::Left,
         KeyCode::Right,
     ];
+    // tmux orders by the key code: the characters and C0 codes, the user
+    // keys, the functional keys, then the mouse keys.
     match key.code {
-        KeyCode::Char(c) => (mods, 0, c as u32, String::new()),
+        // The characters tmux packs as UTF-8 (those past ASCII, and those a
+        // `0xNN` made) come after the C0 codes and ASCII, in that order.
+        KeyCode::Char(c) if c.is_ascii() => (mods, 0, c as u32, String::new()),
+        KeyCode::Literal(c) => (mods, 0, 0x80 + c as u32, String::new()),
+        KeyCode::Char(c) => (mods, 0, 0x1000 + c as u32, String::new()),
         KeyCode::Enter => (mods, 0, 13, String::new()),
         KeyCode::Tab => (mods, 0, 9, String::new()),
         KeyCode::Escape => (mods, 0, 27, String::new()),
+        KeyCode::Control(c) => (mods, 0, u32::from(c), String::new()),
+        KeyCode::User(n) => (mods, 1, u32::from(n), String::new()),
         // F1 to F12 sit between BSpace and IC.
-        KeyCode::F(n) => (mods, 1, u32::from(n), String::new()),
-        KeyCode::Mouse(m) => (mods, 2, mouse_order(m), String::new()),
+        KeyCode::F(n) => (mods, 2, u32::from(n), String::new()),
+        // The keypad follows the arrows.
+        KeyCode::Keypad(k) => (mods, 2, 25 + k.order(), String::new()),
+        KeyCode::Mouse(m) => (mods, 3, mouse_order(m), String::new()),
         code => {
             let at = SPECIAL.iter().position(|s| *s == code).unwrap_or(0) as u32;
             let at = if at == 0 { 0 } else { at + 12 };
-            (mods, 1, at, String::new())
+            (mods, 2, at, String::new())
         }
     }
 }
@@ -3537,7 +3601,7 @@ fn list_format(format: Option<String>, template: impl FnOnce() -> String) -> Str
 
 fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
     let fmt = list_format(c.format.clone(), || TMUX_LIST_SESSIONS.to_string());
-    let sessions = listed_sessions(state, &c);
+    let sessions = listed_sessions(state, &c)?;
     let panes = sessions
         .into_iter()
         .filter_map(|s| Some((Some(s), session_pane(&state.model, s)?)));
@@ -3607,34 +3671,81 @@ fn sessions_by_name(model: &Model) -> Vec<SessionId> {
     sessions.into_iter().map(|(_, id)| id).collect()
 }
 
-/// The sessions `list-sessions` lists: all of them, by name, that `-f`
-/// keeps.
-pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Vec<SessionId> {
-    sessions_by_name(&state.model)
+/// The sessions `list-sessions` lists: all of them, by name or in the order
+/// `-O` asks for, that `-f` keeps.
+pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Result<Vec<SessionId>, String> {
+    let sort = Sort::new(&c.sort)?;
+    let model = &state.model;
+    let mut all = sessions_by_name(model);
+    sort.apply(&mut all, |order, a, b| {
+        let (sa, sb) = (&model.sessions[a], &model.sessions[b]);
+        let first = match order {
+            Order::Index => sa.id.cmp(&sb.id),
+            Order::Creation => sa.created.cmp(&sb.created),
+            Order::Activity => sb.activity.cmp(&sa.activity),
+            Order::Name => by_name(&sa.name, &sb.name),
+            _ => Ordering::Equal,
+        };
+        first.then_with(|| by_name(&sa.name, &sb.name))
+    });
+    Ok(all
         .into_iter()
         .filter(|s| {
             session_pane(&state.model, *s)
                 .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Session, Some(*s), p))
         })
-        .collect()
+        .collect())
+}
+
+/// How tmux's `sort_winlink_cmp` compares two windows of `model` as the
+/// sessions `a` and `b` have them.
+fn compare_windows(
+    model: &Model,
+    order: Order,
+    a: (SessionId, WindowId),
+    b: (SessionId, WindowId),
+) -> Ordering {
+    let (wa, wb) = (&model.windows[&a.1], &model.windows[&b.1]);
+    let first = match order {
+        Order::Index => {
+            let index = |(s, w): (SessionId, WindowId)| {
+                model.index_in(s, w).unwrap_or(model.windows[&w].index)
+            };
+            index(a).cmp(&index(b))
+        }
+        Order::Creation => a.1.cmp(&b.1),
+        Order::Activity => wb.activity.cmp(&wa.activity),
+        Order::Name => by_name(&wa.name, &wb.name),
+        Order::Size => (u32::from(wa.cols) * u32::from(wa.rows))
+            .cmp(&(u32::from(wb.cols) * u32::from(wb.rows))),
+        _ => Ordering::Equal,
+    };
+    first.then_with(|| by_name(&wa.name, &wb.name))
 }
 
 /// The windows `list-windows` lists: the target session's, or with `-a`
-/// every session's (by name), in index order, that `-f` keeps. Each comes
-/// with the session it is listed in.
+/// every session's (by name), in index order or the order `-O` asks for,
+/// that `-f` keeps. Each comes with the session it is listed in.
 pub(crate) fn listed_windows(
     state: &State,
     ctx: &ClientCtx,
     c: &ListWindows,
 ) -> Result<Vec<(SessionId, WindowId)>, String> {
+    let sort = Sort::new(&c.sort)?;
     let model = &state.model;
     let sessions = match c.all {
         true => sessions_by_name(model),
         false => vec![model.resolve_session(&c.target, ctx)?],
     };
-    Ok(sessions
+    let mut all: Vec<(SessionId, WindowId)> = sessions
         .iter()
         .flat_map(|s| model.sessions[s].windows.iter().map(|w| (*s, *w)))
+        .collect();
+    sort.apply(&mut all, |order, a, b| {
+        compare_windows(model, order, *a, *b)
+    });
+    Ok(all
+        .into_iter()
         .filter(|(s, w)| {
             active_pane(model, *w)
                 .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Window, Some(*s), p))
@@ -3642,14 +3753,58 @@ pub(crate) fn listed_windows(
         .collect())
 }
 
+/// How tmux's `sort_pane_cmp` compares two panes of one window.
+fn compare_panes(state: &State, order: Order, a: PaneId, b: PaneId) -> Ordering {
+    let model = &state.model;
+    let title = |p: PaneId| state.passthrough.title(p);
+    let Some(window) = model
+        .panes
+        .get(&a)
+        .and_then(|p| model.windows.get(&p.window))
+    else {
+        return Ordering::Equal;
+    };
+    let size = |p: PaneId| {
+        model
+            .panes
+            .get(&p)
+            .map_or(0, |p| u32::from(p.cols) * u32::from(p.rows))
+    };
+    let ids = window.pane_ids();
+    let index = |p: PaneId| ids.iter().position(|i| *i == p).unwrap_or(0);
+    let first = match order {
+        Order::Activity => window
+            .active_points
+            .get(a)
+            .cmp(&window.active_points.get(b)),
+        Order::Creation => a.cmp(&b),
+        Order::Size => size(a).cmp(&size(b)),
+        Order::Index => index(a).cmp(&index(b)),
+        Order::Name => by_name(&title(a), &title(b)),
+        Order::Z => {
+            let z = |p: PaneId| match window.floating(p) {
+                None => (0, 0, index(p) as u32),
+                Some(f) => (1, f.z, 0),
+            };
+            z(a).cmp(&z(b))
+        }
+        _ => Ordering::Equal,
+    };
+    first.then_with(|| by_name(&title(a), &title(b)))
+}
+
 /// The panes `list-panes` lists: the target window's, with `-s` its
-/// session's, with `-a` every session's, that `-f` keeps. Each comes with
-/// the session it is listed in.
+/// session's, with `-a` every session's, that `-f` keeps; each window's
+/// panes in pane order or the order `-O` asks for. Each comes with the
+/// session it is listed in.
 pub(crate) fn listed_panes(
     state: &State,
     ctx: &ClientCtx,
     c: &ListPanes,
 ) -> Result<Vec<(SessionId, PaneId)>, String> {
+    // The order is checked once; each window is sorted on its own.
+    Sort::new(&c.sort)?;
+    let sort = Sort::lenient(&c.sort);
     let model = &state.model;
     let windows: Vec<(SessionId, WindowId)> = if c.all {
         sessions_by_name(model)
@@ -3664,12 +3819,23 @@ pub(crate) fn listed_panes(
         let (s, w) = model.resolve_winlink(&c.target, ctx)?;
         vec![(s, w)]
     };
-    Ok(windows
-        .iter()
-        .filter_map(|(s, w)| Some((*s, model.windows.get(w)?)))
-        .flat_map(|(s, w)| w.pane_ids().into_iter().map(move |p| (s, p)))
-        .filter(|(s, p)| kept(state, c.filter.as_deref(), Level::Pane, Some(*s), *p))
-        .collect())
+    let mut out = Vec::new();
+    for (s, w) in windows {
+        let Some(window) = model.windows.get(&w) else {
+            continue;
+        };
+        let mut panes = window.pane_ids();
+        sort.apply(&mut panes, |order, a, b| {
+            compare_panes(state, order, *a, *b)
+        });
+        out.extend(
+            panes
+                .into_iter()
+                .filter(|p| kept(state, c.filter.as_deref(), Level::Pane, Some(s), *p))
+                .map(|p| (s, p)),
+        );
+    }
+    Ok(out)
 }
 
 /// Format variables (spec §4.5) for one pane, its window and its session.
@@ -4818,7 +4984,6 @@ const NO_EFFECT: &[&str] = &[
     "variation-selector-always-wide",
     "codepoint-widths",
     "pane-colours",
-    "user-keys",
 ];
 
 /// Whether grofe stores `name` without ever acting on it.

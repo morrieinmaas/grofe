@@ -283,6 +283,17 @@ fn buffer_verbs_parse_with_their_flags() {
             name: Some("x".into()),
             rename: Some("y".into()),
             data: Some("data".into()),
+            clipboard: false,
+            client: None,
+        }))
+    );
+    assert_eq!(
+        cmd::parse(&argv(&["set-buffer", "-w", "-t", "c", "data"])),
+        Ok(Command::SetBuffer(SetBuffer {
+            data: Some("data".into()),
+            clipboard: true,
+            client: Some("c".into()),
+            ..SetBuffer::default()
         }))
     );
     assert_eq!(

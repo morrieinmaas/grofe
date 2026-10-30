@@ -8,7 +8,7 @@ use crate::cmd::{
 };
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
-use crate::server::dispatch::pane::print_pane;
+use crate::server::dispatch::pane::{print_pane, unzoom};
 use crate::server::dispatch::structure::{next_index, shuffle_up};
 use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::layout::{LayoutTree, MainSize, Preset};
@@ -413,54 +413,125 @@ pub fn select_layout(
     c: SelectLayout,
 ) -> Result<String, String> {
     let model = &mut state.model;
-    if c.spread {
+    // tmux finds `-t` as a pane (cmd-select-layout.c).
+    let window = model.resolve_window(&model.pane_type(&c.target, ctx)?, ctx)?;
+    // The window leaves zoom first, whatever happens after.
+    unzoom(model, window);
+    let was = options::window_layout(&model.windows[&window]);
+    let old = model.old_layouts.insert(window, was);
+    let step = match (c.next, c.previous) {
+        (true, _) => Some(1),
+        (false, true) => Some(PRESETS - 1),
+        _ => None,
+    };
+    let result = if let Some(step) = step {
+        step_preset(model, window, step);
+        Ok(())
+    } else if c.spread {
         let pane = model.resolve_pane(&c.target, ctx)?;
-        let window = model.panes[&pane].window;
         if let Some(w) = model.windows.get_mut(&window) {
-            w.zoomed = false;
             let area = w.area();
             w.layout.spread(area, pane);
         }
         model.relayout(window);
-        return Ok(String::new());
-    }
-    // tmux finds `-t` as a pane (cmd-select-layout.c).
-    let window = model.resolve_window(&model.pane_type(&c.target, ctx)?, ctx)?;
-    let (width, height) = main_sizes(model, window);
-    let Some(w) = model.windows.get_mut(&window) else {
-        return Err(format!("can't find window: {window}"));
-    };
-    w.zoomed = false;
-    let columns = tiled_max_columns(model, window);
-    let Some(preset) = Preset::from_name(&c.name, width, height, columns) else {
-        // Not a preset: a tmux layout string (spec §4.3), which puts every
-        // pane, floating ones too, into its cells, as tmux 3.7b does. tmux
-        // also resizes the window to the layout's size; a client showing
-        // the session sizes it back, and with none it keeps that size.
-        let session = model
-            .link_session(window, None)
-            .unwrap_or(model.windows[&window].session);
-        let shown = state.clients.values().any(|cl| cl.session == session);
-        let model = &mut state.model;
-        let applied = model.windows.get_mut(&window).map(|w| {
-            let panes = w.pane_ids();
-            let applied = w.layout.apply_tmux_layout(&c.name, &panes);
-            if applied.is_ok() {
-                w.floating.clear();
-                if !shown && let Some((cols, rows)) = w.layout.exact_size() {
-                    (w.cols, w.rows) = crate::types::cap_size(cols, rows);
-                }
-            }
-            applied
-        });
-        model.relayout(window);
-        return match applied {
-            Some(Err(cause)) => Err(format!("{cause}: {}", c.name)),
-            _ => Ok(String::new()),
+        Ok(())
+    } else {
+        // The name, else (`-o`) the layout before the last change.
+        let name = match (c.name.as_str(), c.undo) {
+            ("", true) => old.clone(),
+            ("", false) => None,
+            (name, _) => Some(name.to_string()),
         };
+        let preset = match (&name, c.undo) {
+            (_, true) => None,
+            (None, false) => model.windows[&window].layout.last_preset(),
+            (Some(name), false) => preset_named(name),
+        };
+        match (preset, name) {
+            (Some(index), _) => {
+                apply_nth_preset(model, window, index);
+                Ok(())
+            }
+            (None, Some(name)) => layout_from_string(state, window, &name),
+            (None, None) => Ok(()),
+        }
     };
-    apply_preset(model, window, preset);
-    Ok(String::new())
+    if result.is_err() {
+        // A failed change leaves the layout it would have undone.
+        match old {
+            Some(old) => state.model.old_layouts.insert(window, old),
+            None => state.model.old_layouts.remove(&window),
+        };
+    }
+    result.map(|()| String::new())
+}
+
+/// tmux's presets, in its order.
+const PRESETS: usize = Preset::NAMES.len();
+
+/// `layout_set_lookup`: the preset `name` is, whole or as the one preset it
+/// starts.
+fn preset_named(name: &str) -> Option<usize> {
+    if let Some(exact) = Preset::NAMES.iter().position(|n| *n == name) {
+        return Some(exact);
+    }
+    let mut starts = Preset::NAMES
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.starts_with(name));
+    match (starts.next(), starts.next()) {
+        (Some((index, _)), None) => Some(index),
+        _ => None,
+    }
+}
+
+/// Preset number `index` over the window's panes.
+fn apply_nth_preset(model: &mut Model, window: WindowId, index: usize) {
+    let (width, height) = main_sizes(model, window);
+    let columns = tiled_max_columns(model, window);
+    if let Some(preset) = Preset::from_name(Preset::NAMES[index], width, height, columns) {
+        apply_preset(model, window, preset);
+    }
+}
+
+/// The preset `step` after the last one applied (the first, with none): a
+/// step of `PRESETS - 1` is the one before it (the last, with none).
+pub(crate) fn step_preset(model: &mut Model, window: WindowId, step: usize) {
+    let index = match model.windows[&window].layout.last_preset() {
+        Some(last) => (last + step) % PRESETS,
+        None if step == 1 => 0,
+        None => PRESETS - 1,
+    };
+    apply_nth_preset(model, window, index);
+}
+
+/// A tmux layout string (spec §4.3), which puts every pane, floating ones
+/// too, into its cells, as tmux 3.7b does. tmux also resizes the window to
+/// the layout's size; a client showing the session sizes it back, and with
+/// none it keeps that size.
+fn layout_from_string(state: &mut State, window: WindowId, name: &str) -> Result<(), String> {
+    let model = &mut state.model;
+    let session = model
+        .link_session(window, None)
+        .unwrap_or(model.windows[&window].session);
+    let shown = state.clients.values().any(|cl| cl.session == session);
+    let model = &mut state.model;
+    let applied = model.windows.get_mut(&window).map(|w| {
+        let panes = w.pane_ids();
+        let applied = w.layout.apply_tmux_layout(name, &panes);
+        if applied.is_ok() {
+            w.floating.clear();
+            if !shown && let Some((cols, rows)) = w.layout.exact_size() {
+                (w.cols, w.rows) = crate::types::cap_size(cols, rows);
+            }
+        }
+        applied
+    });
+    model.relayout(window);
+    match applied {
+        Some(Err(cause)) => Err(format!("{cause}: {name}")),
+        _ => Ok(()),
+    }
 }
 
 /// `preset` over `window`'s panes in index order (D18: the old layout

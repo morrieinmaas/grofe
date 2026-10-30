@@ -44,6 +44,7 @@ use crate::cmd::{
 use crate::protocol::{Caps, ClientCtx, Dialect, Failure, Frame};
 use crate::server::borders::{Indicators, PaneLines, PaneStatus};
 use crate::server::dispatch::options::{self, FormatCtx, Owner};
+use crate::server::dispatch::sorting;
 use crate::server::dispatch::window::automatic_rename;
 use crate::server::input::{
     Decoder, Input, InputHook, KeySettings, KeyState, KeyTables, ROOT_TABLE, Routed,
@@ -274,6 +275,13 @@ pub struct ClientEntry {
     exit: Option<oneshot::Sender<String>>,
 }
 
+impl ClientEntry {
+    /// `suspend-client` stopped the client and it has not resumed.
+    pub(crate) fn is_suspended(&self) -> bool {
+        self.suspended
+    }
+}
+
 /// Which client a session's windows are sized for (spec D6), and the
 /// client about to take over once its debounce runs out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,6 +347,37 @@ pub struct Registry {
     messages: VecDeque<(SystemTime, String)>,
     /// `wait-for` channels (TC.9).
     waits: BTreeMap<String, WaitChannel>,
+    /// The clients now locked, their `lock-command` running in a popup
+    /// (`dispatch::lock`).
+    pub(crate) locked: BTreeSet<ClientId>,
+    /// `server-access`: the users allowed besides the owner, and whether
+    /// each may only read (uid, read-only). Root and the server's own user
+    /// are always in it, as tmux's `server_acl_init`.
+    acl: BTreeMap<u32, bool>,
+}
+
+impl Registry {
+    pub(crate) fn acl_contains(&self, uid: u32) -> bool {
+        self.acl.contains_key(&uid)
+    }
+
+    pub(crate) fn acl_entries(&self) -> impl Iterator<Item = (u32, bool)> + '_ {
+        self.acl.iter().map(|(uid, ro)| (*uid, *ro))
+    }
+
+    pub(crate) fn acl_allow(&mut self, uid: u32) {
+        self.acl.entry(uid).or_insert(false);
+    }
+
+    pub(crate) fn acl_deny(&mut self, uid: u32) {
+        self.acl.remove(&uid);
+    }
+
+    pub(crate) fn acl_set_read_only(&mut self, uid: u32, read_only: bool) {
+        if let Some(entry) = self.acl.get_mut(&uid) {
+            *entry = read_only;
+        }
+    }
 }
 
 impl Default for Registry {
@@ -355,6 +394,11 @@ impl Default for Registry {
             names_at: None,
             messages: VecDeque::new(),
             waits: BTreeMap::new(),
+            locked: BTreeSet::new(),
+            acl: [0, nix::unistd::getuid().as_raw()]
+                .into_iter()
+                .map(|uid| (uid, false))
+                .collect(),
         }
     }
 }
@@ -915,6 +959,10 @@ pub(crate) fn target_client(
 struct WaitChannel {
     woken: bool,
     waiters: Vec<oneshot::Sender<Result<String, Failure>>>,
+    /// `wait-for -L` holds the channel.
+    locked: bool,
+    /// The `-L` callers behind the holder, oldest first.
+    lockers: Vec<oneshot::Sender<Result<String, Failure>>>,
 }
 
 /// `wait-for -S`: every waiter on `channel` is released; with none, the
@@ -930,7 +978,57 @@ pub(crate) fn signal_channel(state: &mut State, channel: &str) {
     for tx in wc.waiters.drain(..) {
         let _ = tx.send(Ok(String::new()));
     }
-    waits.remove(channel);
+    if !wc.locked {
+        waits.remove(channel);
+    }
+}
+
+/// `wait-for -L`: takes `channel`'s lock, or waits behind whoever holds it
+/// until `wait-for -U` hands it over.
+pub(crate) fn lock_channel(
+    state: &mut State,
+    channel: &str,
+    reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
+) {
+    prune_waits(state);
+    if !state
+        .registry
+        .waits
+        .get(channel)
+        .is_some_and(|wc| wc.locked)
+    {
+        state
+            .registry
+            .waits
+            .entry(channel.to_string())
+            .or_default()
+            .locked = true;
+        return;
+    }
+    let tx = reply(state);
+    if let Some(wc) = state.registry.waits.get_mut(channel) {
+        wc.lockers.push(tx);
+    }
+}
+
+/// `wait-for -U`: the lock passes to the first `-L` waiting for it, else
+/// the channel is free. An unlocked channel is an error.
+pub(crate) fn unlock_channel(state: &mut State, channel: &str) -> Result<(), String> {
+    let waits = &mut state.registry.waits;
+    let Some(wc) = waits.get_mut(channel).filter(|wc| wc.locked) else {
+        return Err(format!("channel {channel} not locked"));
+    };
+    // A locker that hung up is skipped.
+    while !wc.lockers.is_empty() {
+        if wc.lockers.remove(0).send(Ok(String::new())).is_ok() {
+            return Ok(());
+        }
+    }
+    wc.locked = false;
+    if !wc.woken && wc.waiters.is_empty() {
+        waits.remove(channel);
+    }
+    Ok(())
 }
 
 /// `wait-for`: returns at once when `channel` was woken; otherwise
@@ -955,7 +1053,8 @@ pub(crate) fn wait_channel(
 fn prune_waits(state: &mut State) {
     state.registry.waits.retain(|_, wc| {
         wc.waiters.retain(|tx| !tx.is_closed());
-        wc.woken || !wc.waiters.is_empty()
+        wc.lockers.retain(|tx| !tx.is_closed());
+        wc.woken || wc.locked || !wc.waiters.is_empty()
     });
 }
 
@@ -1434,12 +1533,17 @@ pub fn deadline(state: &State) -> Option<Instant> {
             c.message.as_ref().and_then(|(_, until)| *until),
         ]
     });
-    [r.render_at, r.status_at, r.names_at]
-        .into_iter()
-        .chain(r.owners.values().map(SizeOwner::deadline))
-        .chain(clients)
-        .flatten()
-        .min()
+    [
+        r.render_at,
+        r.status_at,
+        r.names_at,
+        dispatch::lock::deadline(state),
+    ]
+    .into_iter()
+    .chain(r.owners.values().map(SizeOwner::deadline))
+    .chain(clients)
+    .flatten()
+    .min()
 }
 
 /// Runs whatever is due at `now` (see [`deadline`]).
@@ -1516,7 +1620,16 @@ pub fn tick(state: &mut State, now: Instant) {
             request_render(state, now);
         }
     }
+    dispatch::lock::tick(state, now);
     arm_status_clock(state, now);
+}
+
+/// Client `id` has just been active: a client whose lock command exited.
+pub(crate) fn touch(state: &mut State, id: ClientId, now: Instant) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.activity = now;
+        c.activity_time = SystemTime::now();
+    }
 }
 
 /// Schedules one `automatic-rename` check. As tmux's `check_window_name`
@@ -2748,6 +2861,18 @@ fn active_pane(model: &Model, session: SessionId) -> Option<PaneId> {
     Some(model.windows.get(&s.active)?.active)
 }
 
+/// The terminal sequences the `user-keys` option names, by `UserN`: its
+/// array's elements, as the strings they were set to.
+fn user_keys(model: &Model) -> Vec<(u16, Vec<u8>)> {
+    model
+        .options
+        .lookup_list("user-keys", &[])
+        .into_iter()
+        .flatten()
+        .filter_map(|(n, v)| Some((u16::try_from(*n).ok()?, v.clone().into_bytes())))
+        .collect()
+}
+
 /// Input bytes from client `id` at `now`: activity for D6, then each
 /// decoded input is routed in turn.
 fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
@@ -2758,6 +2883,7 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
     c.activity = now;
     c.activity_time = SystemTime::now();
     let session = c.session;
+    c.decoder.set_user_keys(user_keys(&state.model));
     let inputs = c.decoder.feed(bytes, now, escape);
     if let Some(owner) = state.registry.owners.get_mut(&session) {
         owner.activity(id, now);
@@ -3348,8 +3474,20 @@ pub fn list_clients(state: &State, ctx: &ClientCtx, c: ListClients) -> Result<St
                 .to_string()
         }
     });
+    let sort = sorting::Sort::new(&c.sort)?;
+    let mut listed: Vec<(&ClientId, &ClientEntry)> = state.clients.iter().collect();
+    sort.apply(&mut listed, |order, (ia, a), (ib, b)| {
+        let first = match order {
+            sorting::Order::Name => sorting::by_name(&a.name, &b.name),
+            sorting::Order::Size => a.size.0.cmp(&b.size.0).then(a.size.1.cmp(&b.size.1)),
+            sorting::Order::Creation => ia.cmp(ib),
+            sorting::Order::Activity => b.activity.cmp(&a.activity),
+            _ => std::cmp::Ordering::Equal,
+        };
+        first.then_with(|| sorting::by_name(&a.name, &b.name))
+    });
     let mut out = String::new();
-    for client in state.clients.values() {
+    for (_, client) in listed {
         if session.is_some_and(|s| s != client.session) {
             continue;
         }

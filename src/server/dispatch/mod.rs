@@ -27,12 +27,14 @@ pub mod buffers;
 pub mod client;
 pub mod copy;
 pub mod hooks;
+pub mod lock;
 pub mod menu;
 pub mod options;
 pub mod pane;
 pub mod plugins;
 pub mod popup;
 pub mod session;
+pub mod sorting;
 pub mod structure;
 pub mod window;
 
@@ -241,6 +243,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ListClients(_)
                 | Command::ListKeys(_)
                 | Command::ShowOptions(_)
+                | Command::PromptHistory(cmd::PromptHistory { clear: false, .. })
                 | Command::HasSession(_)
                 | Command::CapturePane(_)
                 | Command::ShowBuffer(_)
@@ -376,6 +379,10 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::UnlinkWindow(c) => structure::unlink_window(state, ctx, c),
         Command::MovePane(c) => structure::move_pane(state, ctx, c),
         Command::NextLayout(c) => structure::next_layout(state, ctx, c),
+        Command::PreviousLayout(c) => structure::previous_layout(state, ctx, c),
+        Command::Lock(c) => lock::lock(state, ctx, c),
+        Command::ServerAccess(c) => lock::server_access(state, ctx, c),
+        Command::PromptHistory(c) => lock::prompt_history(state, ctx, c),
         Command::RespawnWindow(c) => structure::respawn_window(state, ctx, c),
         Command::RefreshClient(c) => client::refresh_client(state, ctx, c),
         Command::ShowMessages(c) => client::show_messages(state, ctx, c),
