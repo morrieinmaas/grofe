@@ -986,13 +986,17 @@ fn styles(state: &State, client: ClientId, frame: &Frame) -> (Style, Style) {
         .chain(session.map(Owner::Session))
         .collect();
     let style = |name: &str, over: &Option<String>| {
-        let mut st = status::parse_style(
-            state
-                .model
-                .options
-                .lookup(name, &owners)
-                .unwrap_or_default(),
-        );
+        let raw = state
+            .model
+            .options
+            .lookup(name, &owners)
+            .unwrap_or_default();
+        // The options are formats, expanded for the client's window.
+        let raw = match state.clients.get(&client) {
+            Some(c) => crate::server::prompt::expand_command(state, &c.ctx, raw),
+            None => raw.to_string(),
+        };
+        let mut st = status::parse_style(&raw);
         if let Some(over) = over {
             let over = status::parse_style(over);
             (st.fg, st.bg) = (over.fg, over.bg);

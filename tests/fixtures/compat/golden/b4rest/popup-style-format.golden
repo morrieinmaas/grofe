@@ -1,0 +1,51 @@
+$ new-session -d -s main -n w1 -x 40 -y 12 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g popup-style '#{?#{==:#{window_name},w1},bg=red,bg=blue}'
+? 0
+$ set -g popup-border-style 'fg=#{?#{==:#{session_name},main},green,yellow},bg=#{?#{==:#{window_name},w1},cyan,magenta}'
+? 0
+client 40x12 attach -t main
+$& display-popup -w 20 -h 5 -x 10 -y 9 -T t cat
+styles 4-8 t
+~ 4 10-29 fg=green bg=cyan
+~ 5 10-10 fg=green bg=cyan
+~ 5 11-28 fg=default bg=red
+~ 5 29-29 fg=green bg=cyan
+~ 6 10-10 fg=green bg=cyan
+~ 6 11-28 fg=default bg=red
+~ 6 29-29 fg=green bg=cyan
+~ 7 10-10 fg=green bg=cyan
+~ 7 11-28 fg=default bg=red
+~ 7 29-29 fg=green bg=cyan
+~ 8 10-29 fg=green bg=cyan
+$ rename-window w2
+? 0
+styles 4-8 t
+~ 4 10-29 fg=green bg=magenta
+~ 5 10-10 fg=green bg=magenta
+~ 5 11-28 fg=default bg=blue
+~ 5 29-29 fg=green bg=magenta
+~ 6 10-10 fg=green bg=magenta
+~ 6 11-28 fg=default bg=blue
+~ 6 29-29 fg=green bg=magenta
+~ 7 10-10 fg=green bg=magenta
+~ 7 11-28 fg=default bg=blue
+~ 7 29-29 fg=green bg=magenta
+~ 8 10-29 fg=green bg=magenta
+$ rename-session other
+? 0
+$ set -g popup-style 'fg=#{session_name}'
+? 0
+styles 4-8 t
+~ 4 10-29 fg=yellow bg=magenta
+~ 5 10-10 fg=yellow bg=magenta
+~ 5 29-29 fg=yellow bg=magenta
+~ 6 10-10 fg=yellow bg=magenta
+~ 6 29-29 fg=yellow bg=magenta
+~ 7 10-10 fg=yellow bg=magenta
+~ 7 29-29 fg=yellow bg=magenta
+~ 8 10-29 fg=yellow bg=magenta

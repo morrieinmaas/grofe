@@ -1,0 +1,15 @@
+# B4 rest: popup-style and popup-border-style are formats, expanded for
+# the client's window each time the popup is drawn.
+$ new-session -d -s main -n w1 -x 40 -y 12 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g popup-style '#{?#{==:#{window_name},w1},bg=red,bg=blue}'
+$ set -g popup-border-style 'fg=#{?#{==:#{session_name},main},green,yellow},bg=#{?#{==:#{window_name},w1},cyan,magenta}'
+client 40x12 attach -t main
+$& display-popup -w 20 -h 5 -x 10 -y 9 -T t cat
+styles 4-8 t
+$ rename-window w2
+styles 4-8 t
+$ rename-session other
+$ set -g popup-style 'fg=#{session_name}'
+styles 4-8 t

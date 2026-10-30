@@ -90,3 +90,9 @@ fn popup_ee_closes_on_a_zero_exit_only() {
 fn a_popup_takes_the_mouse() {
     check("b4rest", "popup-mouse", &[]);
 }
+
+/// `popup-style` and `popup-border-style` expand formats.
+#[test]
+fn popup_styles_are_formats() {
+    check("b4rest", "popup-style-format", &[]);
+}
