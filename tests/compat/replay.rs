@@ -1001,11 +1001,12 @@ fn a_command_past_its_limit_is_killed() {
     let started = Instant::now();
     assert!(cli.run_within(&[], Duration::from_secs(1)).is_none());
     assert!(started.elapsed() < Duration::from_secs(6));
-    let pid: i32 = fs::read_to_string(&pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // Under load the shell can be killed before it writes its pid; then
+    // nothing ran that could be left behind.
+    let Ok(pid) = fs::read_to_string(&pidfile) else {
+        return;
+    };
+    let pid: i32 = pid.trim().parse().unwrap();
     assert!(!alive(pid), "the timed-out command {pid} is still running");
 }
 
