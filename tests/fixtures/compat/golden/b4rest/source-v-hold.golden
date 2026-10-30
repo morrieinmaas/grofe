@@ -1,0 +1,43 @@
+$ new-session -d -s main -x 40 -y 10 cat
+? 0
+$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -g @a 1\nrun-shell \"sleep 0.2; echo hi\"\nset -g @b 2\nsource-file c/inner.conf\ndisplay -p done\n" > h.conf && printf "set -g @c 3\ndisplay -p inner\n" > inner.conf'
+? 0
+$ source-file -v c/h.conf
+<TMPDIR>/home/c/h.conf:1: set-option -g @a 1
+<TMPDIR>/home/c/h.conf:2: run-shell "sleep 0.2; echo hi"
+<TMPDIR>/home/c/h.conf:3: set-option -g @b 2
+<TMPDIR>/home/c/h.conf:4: source-file c/inner.conf
+<TMPDIR>/home/c/h.conf:5: display-message -p done
+hi
+<TMPDIR>/home/c/inner.conf:1: set-option -g @c 3
+<TMPDIR>/home/c/inner.conf:2: display-message -p inner
+inner
+done
+? 0
+$ source-file -nv c/h.conf
+<TMPDIR>/home/c/h.conf:1: set-option -g @a 1
+<TMPDIR>/home/c/h.conf:2: run-shell "sleep 0.2; echo hi"
+<TMPDIR>/home/c/h.conf:3: set-option -g @b 2
+<TMPDIR>/home/c/h.conf:4: source-file c/inner.conf
+<TMPDIR>/home/c/h.conf:5: display-message -p done
+? 0
+$ source-file c/h.conf
+hi
+inner
+done
+? 0
+$ source-file -v c/h.conf c/inner.conf
+<TMPDIR>/home/c/h.conf:1: set-option -g @a 1
+<TMPDIR>/home/c/h.conf:2: run-shell "sleep 0.2; echo hi"
+<TMPDIR>/home/c/h.conf:3: set-option -g @b 2
+<TMPDIR>/home/c/h.conf:4: source-file c/inner.conf
+<TMPDIR>/home/c/h.conf:5: display-message -p done
+<TMPDIR>/home/c/inner.conf:1: set-option -g @c 3
+<TMPDIR>/home/c/inner.conf:2: display-message -p inner
+hi
+<TMPDIR>/home/c/inner.conf:1: set-option -g @c 3
+<TMPDIR>/home/c/inner.conf:2: display-message -p inner
+inner
+done
+inner
+? 0

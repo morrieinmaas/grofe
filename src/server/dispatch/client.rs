@@ -166,6 +166,8 @@ pub(crate) struct HeldFrame {
     pub cmds: Vec<Command>,
     pub keep_going: bool,
     pub depth: u32,
+    /// `source-file -v` was on where it was held.
+    pub verbose: bool,
 }
 
 type Answer = oneshot::Sender<Result<String, Failure>>;
@@ -246,7 +248,7 @@ fn resume(
     // one comes back here rather than holding on its own.
     hooks::enter(state);
     while let Some(frame) = frames.pop_front() {
-        let ran = dispatch::options::with_source_depth(frame.depth, || {
+        let ran = dispatch::options::with_source_depth(frame.depth, frame.verbose, || {
             dispatch::run_commands(state, &frame.ctx, frame.cmds)
         });
         match ran {

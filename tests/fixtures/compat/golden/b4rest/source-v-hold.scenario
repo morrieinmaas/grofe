@@ -1,0 +1,9 @@
+# B4 rest: source-file -v prints every line when the file is parsed, so
+# the lines after a run-shell that holds the queue are traced before it
+# runs, and a file sourced by a held line is traced too.
+$ new-session -d -s main -x 40 -y 10 cat
+$ run-shell 'mkdir -p ~/c && cd ~/c && printf "set -g @a 1\nrun-shell \"sleep 0.2; echo hi\"\nset -g @b 2\nsource-file c/inner.conf\ndisplay -p done\n" > h.conf && printf "set -g @c 3\ndisplay -p inner\n" > inner.conf'
+$ source-file -v c/h.conf
+$ source-file -nv c/h.conf
+$ source-file c/h.conf
+$ source-file -v c/h.conf c/inner.conf

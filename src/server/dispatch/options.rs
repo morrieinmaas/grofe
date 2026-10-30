@@ -2856,9 +2856,30 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
     let mut out = String::new();
     // What tmux refused while parsing is printed when every file is done.
     let mut refused = String::new();
-    let mut files = files.into_iter();
-    while let Some(path) = files.next() {
-        match source_one(state, ctx, &run, &path, &c) {
+    // Every file is read (and traced) before any of them runs.
+    let mut loaded = Vec::new();
+    for path in files {
+        match load_one(state, ctx, &run, &path, &c) {
+            Ok(file) => loaded.push((path, file)),
+            Err(e) if e.is_empty() => refused.push_str(&std::mem::take(&mut state.failed_out)),
+            Err(e) => {
+                out.push_str(&std::mem::take(&mut state.failed_out));
+                errors.push(e);
+            }
+        }
+    }
+    for (_, file) in &mut loaded {
+        if let Loaded::Tmux(parsed) = file {
+            out.push_str(&std::mem::take(&mut parsed.shown));
+        }
+    }
+    let mut loaded = loaded.into_iter();
+    while let Some((_, file)) = loaded.next() {
+        let result = match file {
+            Loaded::Tmux(parsed) => run_parsed(state, parsed),
+            Loaded::Toml(path) => apply_toml(state, &path),
+        };
+        match result {
             Ok(text) => out.push_str(&text),
             Err(e) if e.is_empty() => refused.push_str(&std::mem::take(&mut state.failed_out)),
             Err(e) => {
@@ -2869,19 +2890,41 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         // A command that held the request holds the files after it too.
         if let Some(held) = &mut state.held {
             held.errors.append(&mut errors);
-            held.frames.extend(files.by_ref().map(|path| {
-                let rest = SourceFile {
-                    format: false,
-                    paths: vec![if path == Path::new("-") { "-".into() } else { glob_escape(&path) }],
-                    ..c.clone()
-                };
-                super::client::HeldFrame {
-                    ctx: ctx.clone(),
-                    cmds: vec![Command::SourceFile(rest)],
-                    keep_going: true,
-                    depth: source_depth(),
+            for (path, file) in loaded.by_ref() {
+                match file {
+                    Loaded::Tmux(parsed) => {
+                        let Parsed {
+                            groups,
+                            run,
+                            depth,
+                            verbose,
+                            ..
+                        } = parsed;
+                        held.frames
+                            .extend(groups.into_iter().map(|cmds| super::client::HeldFrame {
+                                ctx: run.clone(),
+                                cmds,
+                                keep_going: true,
+                                depth,
+                                verbose,
+                            }));
+                    }
+                    Loaded::Toml(_) => {
+                        let rest = SourceFile {
+                            format: false,
+                            paths: vec![glob_escape(&path)],
+                            ..c.clone()
+                        };
+                        held.frames.push(super::client::HeldFrame {
+                            ctx: ctx.clone(),
+                            cmds: vec![Command::SourceFile(rest)],
+                            keep_going: true,
+                            depth: source_depth(),
+                            verbose: source_verbose(),
+                        });
+                    }
                 }
-            }));
+            }
             out.push_str(&refused);
             return Ok(out);
         }
@@ -2973,14 +3016,35 @@ fn glob_escape(path: &Path) -> String {
     String::from_utf8_lossy(&glob_quote(path.as_os_str().as_bytes())).into_owned()
 }
 
-/// One file `source-file` found.
-fn source_one(
+/// A file `source-file` found, read: a tmux file is parsed (and traced)
+/// before any file runs, as tmux reads every file when its read is done,
+/// a TOML one is applied when its turn comes.
+enum Loaded {
+    Tmux(Parsed),
+    Toml(PathBuf),
+}
+
+/// A tmux file read and parsed.
+struct Parsed {
+    /// What `-v` traced.
+    shown: String,
+    /// The commands of each line, to run in turn (none with `-n`).
+    groups: Vec<Vec<Command>>,
+    /// The context they run in.
+    run: ClientCtx,
+    /// The source-file depth and `-v` they run under.
+    depth: u32,
+    verbose: bool,
+}
+
+/// Reads one file `source-file` found.
+fn load_one(
     state: &mut State,
     ctx: &ClientCtx,
     run: &ClientCtx,
     path: &Path,
     c: &SourceFile,
-) -> Result<String, String> {
+) -> Result<Loaded, String> {
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
     if path == Path::new("-") || tmux && path.extension().is_none_or(|e| e != "toml") {
@@ -2988,14 +3052,21 @@ fn source_one(
         if depth >= MAX_SOURCE_DEPTH {
             return Err("too many nested files".to_string());
         }
-        return with_source_depth(depth + 1, || {
-            let verbose = c.verbose || SOURCE_VERBOSE.get();
-            let old = SOURCE_VERBOSE.replace(verbose);
-            let out = source_tmux_file(state, ctx, run, path, c.parse_only, verbose);
-            SOURCE_VERBOSE.set(old);
-            out
-        });
+        let verbose = c.verbose || source_verbose();
+        let parsed = with_source_depth(depth + 1, verbose, || {
+            parse_tmux_file(state, ctx, run, path, c.parse_only, verbose)
+        })?;
+        return Ok(Loaded::Tmux(Parsed {
+            depth: depth + 1,
+            verbose,
+            ..parsed
+        }));
     }
+    Ok(Loaded::Toml(path.to_path_buf()))
+}
+
+/// Applies a TOML file's settings and bindings.
+fn apply_toml(state: &mut State, path: &Path) -> Result<String, String> {
     let resolved = config::load_one(path, &config_env()).map_err(|e| join_errors(&e))?;
     check_live_names(&state.registry.key_tables, &resolved)?;
     log_warnings(&resolved);
@@ -3041,11 +3112,18 @@ pub(crate) fn source_depth() -> u32 {
 }
 
 /// Runs `f` at source-file depth `depth`, then puts the old depth back.
-pub(crate) fn with_source_depth<T>(depth: u32, f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_source_depth<T>(depth: u32, verbose: bool, f: impl FnOnce() -> T) -> T {
     let old = SOURCE_DEPTH.replace(depth);
+    let was = SOURCE_VERBOSE.replace(verbose);
     let out = f();
     SOURCE_DEPTH.set(old);
+    SOURCE_VERBOSE.set(was);
     out
+}
+
+/// Whether `source-file -v` is on for the file being sourced now.
+pub(crate) fn source_verbose() -> bool {
+    SOURCE_VERBOSE.get()
 }
 
 /// Reads a config file for [`source_tmux_file`]: `%if` conditions are
@@ -3121,14 +3199,14 @@ fn read_config(path: &Path) -> Result<String, String> {
 /// holds the lines after it too, as tmux's queue waits; those lines still
 /// run on after an error, and the errors from before the hold and after it
 /// fail the request at the end. With `parse_only` (`-n`) nothing runs.
-fn source_tmux_file(
+fn parse_tmux_file(
     state: &mut State,
     ctx: &ClientCtx,
     run: &ClientCtx,
     path: &Path,
     parse_only: bool,
     verbose: bool,
-) -> Result<String, String> {
+) -> Result<Parsed, String> {
     let text = if path == Path::new("-") {
         // The CLI client's stdin; an attached client has none (tmux's EBADF).
         match &state.cli_io {
@@ -3193,38 +3271,56 @@ fn source_tmux_file(
         }
         groups.push(group);
     }
-    if parse_only {
-        return Ok(shown);
-    }
-    let mut out = shown;
-    let mut errors = Vec::new();
-    let mut groups = groups.into_iter();
-    while let Some(group) = groups.next() {
-        match super::run_commands(state, &run, group) {
-            Ok(text) => out.push_str(&text),
-            Err(e) => {
-                out.push_str(&std::mem::take(&mut state.failed_out));
-                errors.push(e);
+    Ok(Parsed {
+        shown,
+        groups: if parse_only { Vec::new() } else { groups },
+        run,
+        depth: 0,
+        verbose,
+    })
+}
+
+/// Runs a parsed tmux file's lines (see [`parse_tmux_file`]).
+fn run_parsed(state: &mut State, parsed: Parsed) -> Result<String, String> {
+    let Parsed {
+        groups,
+        run,
+        depth,
+        verbose,
+        ..
+    } = parsed;
+    with_source_depth(depth, verbose, || {
+        let mut out = String::new();
+        let mut errors = Vec::new();
+        let mut groups = groups.into_iter();
+        while let Some(group) = groups.next() {
+            match super::run_commands(state, &run, group) {
+                Ok(text) => out.push_str(&text),
+                Err(e) => {
+                    out.push_str(&std::mem::take(&mut state.failed_out));
+                    errors.push(e);
+                }
+            }
+            if state.held.is_some() {
+                let held = state.held.get_or_insert_default();
+                held.errors.append(&mut errors);
+                held.frames
+                    .extend(groups.by_ref().map(|cmds| super::client::HeldFrame {
+                        ctx: run.clone(),
+                        cmds,
+                        keep_going: true,
+                        depth,
+                        verbose,
+                    }));
+                return Ok(out);
             }
         }
-        if state.held.is_some() {
-            let held = state.held.get_or_insert_default();
-            held.errors.append(&mut errors);
-            held.frames
-                .extend(groups.by_ref().map(|cmds| super::client::HeldFrame {
-                    ctx: run.clone(),
-                    cmds,
-                    keep_going: true,
-                    depth: source_depth(),
-                }));
+        if errors.is_empty() {
             return Ok(out);
         }
-    }
-    if errors.is_empty() {
-        return Ok(out);
-    }
-    state.failed_out = out;
-    Err(join_nonempty(&errors))
+        state.failed_out = out;
+        Err(join_nonempty(&errors))
+    })
 }
 
 /// `errors` one to a line, leaving out those whose text already went to

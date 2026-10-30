@@ -120,3 +120,9 @@ fn capture_pane_from_a_binding_shows_in_view_mode() {
 fn source_file_v_quotes_as_args_escape() {
     crate::tp::check_with("b4rest", "source-v-quoting", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
 }
+
+/// `source-file -v` across a `run-shell` that holds the queue.
+#[test]
+fn source_file_v_goes_on_after_a_hold() {
+    crate::tp::check_with("b4rest", "source-v-hold", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
+}

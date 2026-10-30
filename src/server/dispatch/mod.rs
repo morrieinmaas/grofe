@@ -202,6 +202,7 @@ pub(crate) fn run_commands(
                     cmds: rest,
                     keep_going: false,
                     depth: options::source_depth(),
+                    verbose: options::source_verbose(),
                 });
             }
             break;
