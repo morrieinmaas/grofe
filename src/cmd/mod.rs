@@ -505,6 +505,8 @@ pub struct SwitchClient {
     /// `-c` (M3.6, TC.9): the client to switch, raw like
     /// [`DetachClient::client`]; `None` is the requesting client.
     pub client: Option<String>,
+    /// `-Z`: a zoomed window stays zoomed on the pane switched to.
+    pub keep_zoom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

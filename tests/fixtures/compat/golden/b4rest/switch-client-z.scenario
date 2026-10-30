@@ -1,0 +1,29 @@
+# B4 rest: switch-client -t session:window.pane unzooms the window it
+# moves to another pane in, unless -Z keeps it zoomed (window_push_zoom
+# and window_pop_zoom).
+$ new-session -d -s main -x 40 -y 10 cat
+$ split-window -t main cat
+$ new-session -d -s other -x 40 -y 10 cat
+$ new-window -t other cat
+client 40x10 attach -t other
+$ resize-pane -Z -t main:1.2
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -t main:1.1
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -t other
+$ resize-pane -Z -t main:1.2
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -Z -t main:1.1
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -t other
+$ resize-pane -Z -t main:1.1
+$ switch-client -Z -t main:1.1
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -t other
+$ resize-pane -Z -t main:1.1
+$ switch-client -t main:1.1
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+$ switch-client -t other
+$ switch-client -Z -t main
+$ switch-client -Z -t other:2
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'

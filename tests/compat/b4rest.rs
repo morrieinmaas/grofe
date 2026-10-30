@@ -96,3 +96,9 @@ fn a_popup_takes_the_mouse() {
 fn popup_styles_are_formats() {
     check("b4rest", "popup-style-format", &[]);
 }
+
+/// `switch-client -Z`.
+#[test]
+fn switch_client_z_keeps_the_zoom() {
+    check("b4rest", "switch-client-z", &[]);
+}

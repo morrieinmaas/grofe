@@ -358,7 +358,7 @@ pub fn switch_client(
         neighbour_session(model, current, c.next)
     } else {
         let target = c.target.unwrap_or(Target::Current);
-        clients::select_target(model, &target, ctx)?
+        clients::select_target(model, &target, ctx, c.keep_zoom)?
     };
     clients::show_session(state, id, session);
     Ok(String::new())

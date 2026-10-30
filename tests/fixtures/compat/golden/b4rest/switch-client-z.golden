@@ -1,0 +1,58 @@
+$ new-session -d -s main -x 40 -y 10 cat
+? 0
+$ split-window -t main cat
+? 0
+$ new-session -d -s other -x 40 -y 10 cat
+? 0
+$ new-window -t other cat
+? 0
+client 40x10 attach -t other
+$ resize-pane -Z -t main:1.2
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+1 %1
+? 0
+$ switch-client -t main:1.1
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+0 %0
+? 0
+$ switch-client -t other
+? 0
+$ resize-pane -Z -t main:1.2
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+1 %1
+? 0
+$ switch-client -Z -t main:1.1
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+1 %0
+? 0
+$ switch-client -t other
+? 0
+$ resize-pane -Z -t main:1.1
+? 0
+$ switch-client -Z -t main:1.1
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+0 %0
+? 0
+$ switch-client -t other
+? 0
+$ resize-pane -Z -t main:1.1
+? 0
+$ switch-client -t main:1.1
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+1 %0
+? 0
+$ switch-client -t other
+? 0
+$ switch-client -Z -t main
+? 0
+$ switch-client -Z -t other:2
+? 0
+$ display -p -t main '#{window_zoomed_flag} #{pane_id}'
+1 %0
+? 0

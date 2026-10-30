@@ -393,7 +393,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         req.nest,
         req.tty.as_deref(),
     )?;
-    let session = select_target(&mut state.model, &target, &req.ctx)?;
+    let session = select_target(&mut state.model, &target, &req.ctx, false)?;
     if req.detach_others {
         detach_session(state, session, None);
     }
@@ -563,15 +563,14 @@ pub(crate) fn select_target(
     model: &mut Model,
     target: &Target,
     ctx: &ClientCtx,
+    keep_zoom: bool,
 ) -> Result<SessionId, String> {
     let session = model.resolve_session(target, ctx)?;
     if let Target::Window(..) | Target::Pane(_) = target {
         let window = model.resolve_window(target, ctx)?;
         if let Target::Pane(_) = target {
             let pane = model.resolve_pane(target, ctx)?;
-            if let Some(w) = model.windows.get_mut(&window) {
-                w.set_active(pane);
-            }
+            crate::server::dispatch::pane::switch_active(model, window, pane, keep_zoom);
         }
         model.select_window_in(session, window);
     }
@@ -3325,7 +3324,7 @@ pub fn attach_session(
         check_target(&state.model, &c.target, ctx, c.nest, None)?;
         return Err("open terminal failed: not a terminal".to_string());
     };
-    let session = select_target(&mut state.model, &c.target, ctx)?;
+    let session = select_target(&mut state.model, &c.target, ctx, false)?;
     if c.detach_others {
         detach_session(state, session, Some(id));
     }

@@ -285,7 +285,7 @@ fn set_input(model: &mut Model, pane: PaneId, on: bool) {
 /// Makes `pane` its window's active pane. As tmux 3.7b: selecting the
 /// active pane changes nothing (zoom included); otherwise the window
 /// leaves zoom, or with `keep_zoom` zooms the new active pane instead.
-fn switch_active(model: &mut Model, window: WindowId, pane: PaneId, keep_zoom: bool) {
+pub(crate) fn switch_active(model: &mut Model, window: WindowId, pane: PaneId, keep_zoom: bool) {
     let Some(w) = model.windows.get(&window) else {
         return;
     };

@@ -1191,8 +1191,6 @@ const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
     ('p', FlagKind::Bool),
     ('T', FlagKind::Value),
     ('c', FlagKind::Value),
-    // `-Z` keeps the target window zoomed; the choosers pass it, and it
-    // changes nothing here.
     ('Z', FlagKind::Bool),
 ];
 
@@ -1217,6 +1215,7 @@ fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
         previous: flags.present.contains(&'p'),
         key_table: flags.values.get(&'T').cloned(),
         client: flags.values.get(&'c').cloned(),
+        keep_zoom: flags.present.contains(&'Z'),
     }))
 }
 
