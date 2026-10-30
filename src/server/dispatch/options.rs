@@ -190,8 +190,9 @@ const BUILTINS: &[Builtin] = &[
         name: REMAIN_ON_EXIT,
         // A choice in tmux 3.7b, so `yes` is refused and a bad value is
         // `unknown value`; `failed` keeps a pane only when its command
-        // failed (Claude Code's agent teams set it).
-        kind: Kind::Choice(&["off", "on", "failed"]),
+        // failed (Claude Code's agent teams set it); `key` keeps it until
+        // a key is pressed (`split-window -k`).
+        kind: Kind::Choice(&["off", "on", "failed", "key"]),
         scope: OptionScope::Window,
         default: "off",
     },
@@ -3731,7 +3732,7 @@ fn display_message(
         return Ok(format!("{trace}{out}\n"));
     }
     if let Some(id) = current {
-        clients::display_message(state, id, &out, delay);
+        clients::display_message(state, id, &out, delay, c.ignore_keys);
     }
     Ok(trace)
 }
@@ -3900,7 +3901,17 @@ fn sessions_by_name(model: &Model) -> Vec<SessionId> {
 /// `-O` asks for, that `-f` keeps.
 pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Result<Vec<SessionId>, String> {
     let sort = Sort::new(&c.sort)?;
-    let model = &state.model;
+    Ok(sessions_sorted(&state.model, &sort)
+        .into_iter()
+        .filter(|s| {
+            session_pane(&state.model, *s)
+                .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Session, Some(*s), p))
+        })
+        .collect())
+}
+
+/// Every session, by name, or in the order `sort` asks for.
+pub(crate) fn sessions_sorted(model: &Model, sort: &Sort) -> Vec<SessionId> {
     let mut all = sessions_by_name(model);
     sort.apply(&mut all, |order, a, b| {
         let (sa, sb) = (&model.sessions[a], &model.sessions[b]);
@@ -3913,13 +3924,7 @@ pub(crate) fn listed_sessions(state: &State, c: &ListSessions) -> Result<Vec<Ses
         };
         first.then_with(|| by_name(&sa.name, &sb.name))
     });
-    Ok(all
-        .into_iter()
-        .filter(|s| {
-            session_pane(&state.model, *s)
-                .is_some_and(|p| kept(state, c.filter.as_deref(), Level::Session, Some(*s), p))
-        })
-        .collect())
+    all
 }
 
 /// How tmux's `sort_winlink_cmp` compares two windows of `model` as the

@@ -1311,6 +1311,7 @@ fn list_commands(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
         all: false,
         literal: false,
         verbose: false,
+        ignore_keys: false,
     })])
 }
 
@@ -1585,6 +1586,41 @@ fn core_rows() -> Vec<Row> {
         unsupported(
             "detach-client -E",
             "it needs a new attach frame; protocol v1 is frozen",
+            SEMANTIC,
+        ),
+        // A pane with no process, which a client fills (`-E`) or whose
+        // output the CLI's stdin is (`-I`); every grofe pane has a process
+        // on a pty, and the pane emulator takes bytes only from there.
+        unsupported(
+            "split-window -E",
+            "a pane with no process is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "split-window -I",
+            "a pane fed from the client's stdin is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "new-pane -E",
+            "a pane with no process is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "new-pane -I",
+            "a pane fed from the client's stdin is not something grofe has",
+            SEMANTIC,
+        ),
+        unsupported(
+            "display-message -I",
+            "text from the client's stdin cannot be fed to a pane's screen",
+            SEMANTIC,
+        ),
+        // tmux takes the lines under the cursor back out of the history;
+        // alacritty's grid can only push lines into it.
+        unsupported(
+            "resize-pane -T",
+            "the emulator cannot take lines back out of the history",
             SEMANTIC,
         ),
         // B4: the lock commands run `lock-command` in a popup over the

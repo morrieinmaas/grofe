@@ -201,6 +201,7 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
     if !c.detached {
         w.set_active(new);
     }
+    crate::server::dispatch::pane::apply_setup(state, ctx, new, &c.setup)?;
     if !c.print {
         return Ok(String::new());
     }

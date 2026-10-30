@@ -1,0 +1,63 @@
+# B4: split-window and new-pane -s -S -R -k -m -L, respawn-pane and respawn-window -e.
+$ new-session -d -s main -x 100 -y 50 'sleep 100000'
+$ split-window -d -t main:1 -s 'bg=red' -S 'fg=blue' -R 'fg=green' 'sleep 100000'
+$ show-options -p -t main:1.2
+$ show-options -pv -t main:1.2 window-style
+$ show-options -pv -t main:1.2 window-active-style
+$ show-options -pv -t main:1.2 pane-active-border-style
+$ show-options -pv -t main:1.2 pane-border-style
+$ split-window -d -t main:1 -s 'bg=nosuchcolour' 'sleep 100000'
+$ split-window -d -t main:1 -S 'bg=nosuchcolour' 'sleep 100000'
+$ split-window -d -t main:1 -R 'bg=nosuchcolour' 'sleep 100000'
+$ list-panes -t main:1 -F '#{pane_index}'
+$ select-layout -t main:1 even-vertical
+$ split-window -d -k -t main:1 'echo gone; exit 0'
+$ run-shell 'sleep 0.5'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{remain-on-exit}'
+$ show-options -pv -t main:1.6 remain-on-exit
+$ capture-pane -p -t main:1.6
+$ split-window -d -m 'bye now' -t main:1 'exit 3'
+$ run-shell 'sleep 0.5'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{pane_dead_status}'
+$ show-options -pv -t main:1.7 remain-on-exit-format
+$ show-options -pv -t main:1.7 remain-on-exit
+$ new-pane -d -k -t main:1 'echo float; exit 0'
+$ run-shell 'sleep 0.5'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{pane_floating_flag}'
+$ new-pane -d -s 'bg=blue' -S 'fg=red' -R 'fg=white' -t main:1 'sleep 100000'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag}'
+$ new-pane -L -d -t main:1 'sleep 100000'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag}'
+$ new-pane -L -d -h -l 10 -t main:1 'sleep 100000'
+$ new-pane -L -d -b -p 20 -t main:1 -s 'bg=green' 'sleep 100000'
+$ show-options -pv -t main:1.1 window-style
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag} #{pane_width}x#{pane_height}'
+$ new-pane -f -h -v -l 5 -p 5 -d -t main:1 'sleep 100000'
+$ list-panes -t main:1 -F '#{pane_index} #{pane_floating_flag} before'
+$ new-pane -L -Z -d -t main:1 'sleep 100000'
+$ new-window -d -t main:5 'sleep 100000'
+$ respawn-pane -k -t main:5.1 -e FOO=bar 'echo "FOO=$FOO"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:5.1
+$ respawn-pane -k -t main:5.1 -e A=1 -e B=2 -e A=3 'echo "$A $B"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:5.1
+$ respawn-window -k -t main:5 -e Z=zed 'echo "Z=$Z"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:5.1
+$ respawn-pane -k -t main:5.1 -e NOEQ 'echo "[$NOEQ]"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t main:5.1
+$ new-session -d -s two -x 40 -y 5 -e S1=one 'echo "$S1 [$LANG]"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t two:1.1
+$ set-environment -g CLIENTVAR fromserver
+$ new-session -d -s three -x 40 -y 5 -E 'echo "[$CLIENTVAR]"; sleep 100000'
+$ run-shell 'sleep 0.5'
+$ capture-pane -p -t three:1.1
+$ new-session -d -s four -x 40 -y 5 -f read-only 'sleep 100000'
+$ new-session -d -s five -x 40 -y 5 -D 'sleep 100000'
+$ new-session -d -s six -x 40 -y 5 -X 'sleep 100000'
+$ list-sessions -F '#{session_name}'
+$ new-session -A -D -d -s four 'sleep 100000'
+$ new-session -A -X -d -s four

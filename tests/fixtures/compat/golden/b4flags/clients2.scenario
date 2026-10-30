@@ -1,0 +1,9 @@
+# B4: attach -f no-detach-on-destroy keeps a client when its session goes.
+$ new-session -d -s a -x 60 -y 10 'cat'
+$ new-session -d -s b -x 60 -y 10 'cat'
+client 60x12 attach -t a -f no-detach-on-destroy
+$ list-clients -F '#{session_name} #{client_flags}'
+$ kill-session -t a
+$ run-shell 'sleep 0.3'
+$ list-clients -F '#{session_name} #{client_flags}'
+$ list-sessions -F '#{session_name}'

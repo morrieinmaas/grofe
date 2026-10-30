@@ -2023,6 +2023,14 @@ pub fn session_environment(
     env
 }
 
+/// A session's environment when `new-session -E` takes nothing from the
+/// client: empty, and no variable marked removed.
+pub fn blank_session_environment(state: &mut State, session: SessionId) -> Vec<(String, String)> {
+    state.hooks.session_removed.insert(session, BTreeSet::new());
+    state.hooks.session_hidden.remove(&session);
+    Vec::new()
+}
+
 /// Attach and switch-client: `session` takes the `update-environment`
 /// variables from the client's `client_env` again, as tmux 3.7b (recorded):
 /// each it has is set, each it lacks marked removed.

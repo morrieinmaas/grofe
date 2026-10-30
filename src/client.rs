@@ -415,6 +415,8 @@ pub struct AttachOptions {
     pub created: bool,
     /// `tmux -T`: terminal features this client's terminal is said to have.
     pub features: Vec<String>,
+    /// `attach-session -c -E -f -r -x`.
+    pub extras: crate::protocol::AttachExtras,
 }
 
 /// What tmux's `-T features` (`tty_add_features`, separators `:` and `,`)
@@ -716,6 +718,7 @@ fn run(
         detach_others: opts.detach_others,
         nest: opts.nest,
         created: opts.created,
+        extras: opts.extras,
         tty: nix::unistd::ttyname(io::stdin())
             .ok()
             .map(|p| p.display().to_string()),

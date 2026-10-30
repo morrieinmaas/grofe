@@ -903,7 +903,8 @@ pub fn respawn_window(
         let removed = state.model.remove_pane(*pane);
         state.events.panes_killed(removed);
     }
-    respawn(state, first, c.command, cwd).map_err(|e| format!("respawn window failed: {e}"))?;
+    respawn(state, first, c.command, cwd, c.env)
+        .map_err(|e| format!("respawn window failed: {e}"))?;
     if let Some(w) = state.model.windows.get_mut(&window) {
         w.set_active(first);
     }

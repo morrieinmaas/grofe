@@ -40,3 +40,28 @@ fn list_commands_sort_with_o_and_r_as_tmux_does() {
 fn the_small_flags_join_pane_p_resize_window_lrud_select_layout_nop_and_the_rest_match() {
     check_with("b4flags", "flags-a", &[], |s| s.to_string(), real_tmpdir);
 }
+
+#[test]
+fn capture_pane_c_l_f_h_a_p_and_m_match() {
+    check("b4flags", "capture", &[]);
+}
+
+#[test]
+fn split_window_and_new_pane_styles_and_k_m_l_and_respawn_e_match() {
+    check("b4flags", "panes", &[]);
+}
+
+#[test]
+fn client_flags_read_only_ignore_size_and_the_switch_client_flags_match() {
+    check("b4flags", "clients", &[]);
+}
+
+#[test]
+fn no_detach_on_destroy_keeps_a_client_when_its_session_goes() {
+    check("b4flags", "clients2", &[]);
+}
+
+#[test]
+fn a_key_closes_a_pane_kept_with_remain_on_exit_key() {
+    check("b4flags", "clients3", &[]);
+}

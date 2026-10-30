@@ -33,6 +33,22 @@ pub fn refresh_client(
         clients::pan(state, id, pan, by);
         return Ok(String::new());
     }
+    // The terminal's reply to a clipboard query would come back as keys
+    // (the input decoder has no OSC 52 reply), so none is asked for.
+    if c.clipboard {
+        return Err(
+            "refresh-client -l: reading the terminal's clipboard is not supported".to_string(),
+        );
+    }
+    for list in &c.flags {
+        clients::set_flags(state, id, list);
+    }
+    if c.report.is_some() {
+        crate::compat::note_miss("refresh-client -r: cosmetic, ignored");
+    }
+    if c.control {
+        return Err("not a control client".to_string());
+    }
     clients::refresh(state, id, c.status);
     Ok(String::new())
 }
@@ -97,7 +113,14 @@ pub fn find_window(state: &mut State, ctx: &ClientCtx, c: FindWindow) -> Result<
         &c.target,
         tree::Opts {
             zoom: c.zoom,
-            find: Some(pattern),
+            find: Some(tree::Find {
+                pattern,
+                content: c.content,
+                name: c.name,
+                title: c.title,
+                regex: c.regex,
+                ignore: c.ignore,
+            }),
             ..tree::Opts::new(ctx.dialect)
         },
     )

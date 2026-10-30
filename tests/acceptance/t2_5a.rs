@@ -397,6 +397,7 @@ fn raw_attach(
         nest: false,
         tty: None,
         created: false,
+        extras: Default::default(),
     };
     let mut bytes = (encode_hello(&hello).expect("hello") + "\n").into_bytes();
     bytes.extend_from_slice(typeahead);

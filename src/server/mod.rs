@@ -1006,6 +1006,7 @@ async fn connection_loop(
             nest,
             tty,
             created,
+            extras,
         }) => {
             let req = clients::AttachRequest {
                 pid: lines.get_ref().peer_cred().ok().and_then(|c| c.pid()),
@@ -1018,6 +1019,7 @@ async fn connection_loop(
                 nest,
                 tty,
                 created,
+                extras,
             };
             attach(lines, req, msgs.clone()).await;
             return;

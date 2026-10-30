@@ -85,8 +85,10 @@ fn main() -> ExitCode {
                 if let Some(command) = &cli.shell_command {
                     return shell_command(&globals, command);
                 }
-                if cli.foreground {
-                    return run_foreground(&globals);
+                if cli.foreground
+                    && let Some(code) = run_foreground(&globals)
+                {
+                    return code;
                 }
                 (globals, cli.argv)
             }
@@ -357,21 +359,22 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
 
 /// `tmux -D`: the server in this process, not detached from the terminal
 /// and never leaving for lack of sessions (`exit-empty` off), which tmux
-/// does for a call with no command. A server already on the socket is
-/// the call's to find: tmux then runs its default command against it.
-fn run_foreground(globals: &Globals) -> ExitCode {
+/// does for a call with no command. With a server already on the socket
+/// this is `None`: the call goes on as tmux's does, to its command (or the
+/// default one) against that server.
+fn run_foreground(globals: &Globals) -> Option<ExitCode> {
     let (socket, own_dir) = globals.resolve();
     if let Some(dir) = socket.parent().filter(|d| !d.as_os_str().is_empty())
         && (own_dir || !dir.exists())
         && let Err(e) = paths::ensure_private_dir(dir)
     {
-        return fail(&format!(
+        return Some(fail(&format!(
             "socket directory {} is not usable: {e}",
             dir.display()
-        ));
+        )));
     }
     match UnixStream::connect(&socket) {
-        Ok(_) => return fail(&format!("server already running on {}", socket.display())),
+        Ok(_) => return None,
         Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
             // Stale: the file exists but nobody listens.
             let _ = std::fs::remove_file(&socket);
@@ -379,10 +382,10 @@ fn run_foreground(globals: &Globals) -> ExitCode {
         Err(_) => {}
     }
     report_panics_for(&socket, "server");
-    match server::run_daemon(&socket, None, false) {
+    Some(match server::run_daemon(&socket, None, false) {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
-    }
+    })
 }
 
 /// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
@@ -447,14 +450,29 @@ fn existing_for_a(socket: &Path, argv: &[String]) -> Option<String> {
 /// `attach-session`, even with `-d` (recorded): the client attaches when it
 /// has a terminal, else fails as tmux does.
 fn attach_existing(socket: &Path, argv: &[String]) -> ExitCode {
+    let argv_of_new = argv;
     if !io::stdin().is_terminal() {
         return fail("open terminal failed: not a terminal");
     }
     match existing_for_a(socket, argv) {
-        Some(id) => attach(
-            socket,
-            &["attach-session".to_string(), "-t".to_string(), id],
-        ),
+        Some(id) => {
+            let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
+            // `new-session -A` attaches as `attach-session` does, with
+            // `-D`, `-X`, `-E`, `-c` and `-f` as it takes them.
+            if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv_of_new) {
+                if c.kill_parent {
+                    argv.push("-x".to_string());
+                } else if c.detach_others {
+                    argv.push("-d".to_string());
+                }
+                if c.no_env {
+                    argv.push("-E".to_string());
+                }
+                argv.extend(c.cwd.into_iter().flat_map(|d| ["-c".to_string(), d]));
+                argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
+            }
+            attach(socket, &argv)
+        }
         None => fail("no sessions"),
     }
 }
@@ -500,7 +518,11 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
     };
-    let argv = ["attach-session".to_string(), "-t".to_string(), id];
+    let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
+    // `new-session -f`: client flags for the client it attaches.
+    if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&create[..create.len() - 4]) {
+        argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
+    }
     match attach_to(&socket, &argv, true) {
         Ok(reason) => {
             println!("[{reason}]");
@@ -835,6 +857,13 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         nest: parsed.nest,
         created,
         features: FEATURES.get().cloned().unwrap_or_default(),
+        extras: grofe::protocol::AttachExtras {
+            cwd: parsed.cwd.clone(),
+            read_only: parsed.read_only,
+            flags: parsed.flags.clone(),
+            no_env: parsed.no_env,
+            kill_parent: parsed.kill_parent,
+        },
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
     client::attach(stream, ctx, opts, term)

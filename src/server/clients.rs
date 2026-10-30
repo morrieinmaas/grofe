@@ -96,6 +96,8 @@ pub struct AttachRequest {
     pub tty: Option<String>,
     /// Its own `new-session` made the session: no `client-attached`.
     pub created: bool,
+    /// `attach-session -c -E -f -r -x`.
+    pub extras: crate::protocol::AttachExtras,
 }
 
 /// An accepted attach: the connection writes `output` (one frame at a
@@ -243,6 +245,8 @@ pub struct ClientEntry {
     /// the language [`status::draw`] reads, and when it expires (`None`
     /// with `display-time 0`: only a key takes it down, as in tmux).
     message: Option<(String, Option<Instant>)>,
+    /// `display-message -N`: a key does not take the message down.
+    message_ignores_keys: bool,
     /// The status rows as last drawn, top first, for their click ranges,
     /// and the client row the first of them was drawn on.
     status_rows: Vec<StatusRow>,
@@ -259,6 +263,8 @@ pub struct ClientEntry {
     /// until it resumes and sends its size, which redraws it in full.
     suspended: bool,
     suspend_tx: mpsc::Sender<()>,
+    /// `read-only`, `ignore-size` and the like.
+    pub flags: ClientFlags,
     /// The outer terminal's mouse modes as last written (R2): 0 off, 1 on,
     /// 2 on with all motion; `None` before the first write.
     mouse_modes: Option<u8>,
@@ -273,6 +279,62 @@ pub struct ClientEntry {
     dirty: bool,
     outbox: Outbox,
     exit: Option<oneshot::Sender<String>>,
+}
+
+/// What `refresh-client -f`, `attach-session -f -r` and `switch-client -r`
+/// set on a client (tmux's `CLIENT_READONLY` and its kin).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientFlags {
+    /// The client's keys, pastes and mouse reach no pane, and only the
+    /// commands tmux marks read-only run from its bindings.
+    pub read_only: bool,
+    /// The client does not size the windows of its session.
+    pub ignore_size: bool,
+    /// The client stays attached when its session is destroyed.
+    pub no_detach_on_destroy: bool,
+    /// tmux gives such a client its own active pane per window; grofe keeps
+    /// the flag (and shows it) but not that.
+    pub active_pane: bool,
+}
+
+impl ClientFlags {
+    /// `server_client_set_flags`: `flags` is a comma list of names, each
+    /// switched off by a `!`; a name tmux does not know is skipped.
+    pub fn apply(&mut self, flags: &str) {
+        for word in flags.split(',') {
+            let (on, name) = match word.strip_prefix('!') {
+                Some(name) => (false, name),
+                None => (true, word),
+            };
+            match name {
+                // tmux masks `read-only` out of the flags it clears: a
+                // client cannot be made writable this way.
+                "read-only" => self.read_only |= on,
+                "ignore-size" => self.ignore_size = on,
+                "no-detach-on-destroy" => self.no_detach_on_destroy = on,
+                "active-pane" => {
+                    if on && !self.active_pane {
+                        crate::compat::note_miss("client flag active-pane: cosmetic, ignored");
+                    }
+                    self.active_pane = on;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The names `#{client_flags}` lists for these, in tmux's order.
+    fn names(self) -> Vec<&'static str> {
+        [
+            (self.ignore_size, "ignore-size"),
+            (self.no_detach_on_destroy, "no-detach-on-destroy"),
+            (self.read_only, "read-only"),
+            (self.active_pane, "active-pane"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect()
+    }
 }
 
 impl ClientEntry {
@@ -434,8 +496,22 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         req.tty.as_deref(),
     )?;
     let session = select_target(&mut state.model, &target, &req.ctx)?;
+    // `-c`: where the session's new windows start from now on.
+    if let (Some(dir), Some(s)) = (&req.extras.cwd, state.model.sessions.get_mut(&session)) {
+        s.cwd = req.ctx.cwd.join(dir);
+    }
     if req.detach_others {
-        detach_session(state, session, None);
+        detach_session_with(state, session, None, req.extras.kill_parent);
+    }
+    // `-r` makes the client read-only and have its size ignored; `-f` sets
+    // flags as `refresh-client -f` does.
+    let mut flags = ClientFlags::default();
+    if let Some(list) = &req.extras.flags {
+        flags.apply(list);
+    }
+    if req.extras.read_only {
+        flags.read_only = true;
+        flags.ignore_size = true;
     }
 
     let id = ClientId(state.registry.next_id);
@@ -472,6 +548,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             keys: KeyState::new(),
             focused: true,
             message: None,
+            message_ignores_keys: false,
             status_rows: Vec::new(),
             status_at: 0,
             held: VecDeque::new(),
@@ -482,17 +559,24 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             pan: None,
             suspended: false,
             suspend_tx,
+            flags,
             mouse_modes: None,
             dirty: true,
             outbox,
             exit: Some(exit_tx),
         },
     );
-    state.registry.owners.insert(session, SizeOwner::new(id));
+    // A client that ignores size does not size the windows, unless it is
+    // the session's only one.
+    if !flags.ignore_size || !state.registry.owners.contains_key(&session) {
+        state.registry.owners.insert(session, SizeOwner::new(id));
+    }
     touch_session(&mut state.model, session);
     sync_attached(state);
     changed(state);
-    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+    if !req.extras.no_env
+        && let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone())
+    {
         hooks::update_environment(state, session, &client_env);
     }
     // As tmux 3.7b (recorded): the panes it focuses, a session change, a
@@ -620,6 +704,17 @@ pub(crate) fn select_target(
 /// the session it leaves becomes its last session, and it takes the new
 /// session's size at once (switching is activity, spec D6).
 pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) {
+    show_session_with(state, id, session, true);
+}
+
+/// [`show_session`], leaving the session's environment as it is unless
+/// `update_env` (`switch-client -E`, `attach-session -E`).
+pub(crate) fn show_session_with(
+    state: &mut State,
+    id: ClientId,
+    session: SessionId,
+    update_env: bool,
+) {
     let Some(entry) = state.clients.get_mut(&id) else {
         return;
     };
@@ -631,10 +726,13 @@ pub(crate) fn show_session(state: &mut State, id: ClientId, session: SessionId) 
         state.model.client_last_session.insert(id, old);
         leave_session(state, id, old);
     }
-    state.registry.owners.insert(session, SizeOwner::new(id));
+    let ignores_size = state.clients.get(&id).is_some_and(|c| c.flags.ignore_size);
+    if !ignores_size || !state.registry.owners.contains_key(&session) {
+        state.registry.owners.insert(session, SizeOwner::new(id));
+    }
     touch_session(&mut state.model, session);
     sync_attached(state);
-    if let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
+    if update_env && let Some(client_env) = state.clients.get(&id).map(|c| c.ctx.env.clone()) {
         hooks::update_environment(state, session, &client_env);
     }
     hooks::track_focus(state);
@@ -674,7 +772,7 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
 /// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
     log_message(state, id, text);
-    set_message(state, id, status::escape_hashes(text), None);
+    set_message(state, id, status::escape_hashes(text), None, false);
 }
 
 /// The status-line message area (spec §4.10) for `display-message`
@@ -683,9 +781,15 @@ pub fn show_message(state: &mut State, id: ClientId, text: &str) {
 /// status row (tmux's `message-line 0`) for `display-time`, or until a key
 /// is pressed; the rows below stay.
 /// `delay` overrides `display-time` (`display-message -d`).
-pub fn display_message(state: &mut State, id: ClientId, text: &str, delay: Option<Duration>) {
+pub fn display_message(
+    state: &mut State,
+    id: ClientId,
+    text: &str,
+    delay: Option<Duration>,
+    ignore_keys: bool,
+) {
     log_message(state, id, text);
-    set_message(state, id, text.to_string(), delay);
+    set_message(state, id, text.to_string(), delay, ignore_keys);
 }
 
 /// How many messages `show-messages` keeps when `message-limit` is unset:
@@ -1063,7 +1167,13 @@ fn prune_waits(state: &mut State) {
     });
 }
 
-fn set_message(state: &mut State, id: ClientId, text: String, delay: Option<Duration>) {
+fn set_message(
+    state: &mut State,
+    id: ClientId,
+    text: String,
+    delay: Option<Duration>,
+    ignore_keys: bool,
+) {
     let now = Instant::now();
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
         return;
@@ -1072,6 +1182,11 @@ fn set_message(state: &mut State, id: ClientId, text: String, delay: Option<Dura
     let until = (!time.is_zero()).then(|| now + time);
     if let Some(c) = state.clients.get_mut(&id) {
         c.message = Some((text, until));
+        // As tmux: with a delay of 0 (until a key), `-N` does not change
+        // whether keys take the message down.
+        if until.is_some() {
+            c.message_ignores_keys = ignore_keys;
+        }
         c.dirty = true;
         request_render(state, now);
     }
@@ -1194,11 +1309,30 @@ pub fn gone(state: &mut State, id: ClientId) {
 
 /// Detaches client `id` with tmux's message.
 pub fn detach(state: &mut State, id: ClientId) {
+    detach_with(state, id, false);
+}
+
+/// [`detach`]; with `kill_parent` (tmux's `MSG_DETACHKILL`) the parent of
+/// the client's process, its shell, gets SIGHUP as the client goes, which
+/// tmux's client does by itself.
+pub fn detach_with(state: &mut State, id: ClientId, kill_parent: bool) {
     let reason = state
         .clients
         .get(&id)
         .map(|c| detached_from(&state.model, c.session));
+    let parent = kill_parent
+        .then(|| {
+            let pid = state.clients.get(&id)?.pid?;
+            crate::server::pane::procinfo::parent(pid)
+        })
+        .flatten();
     remove(state, id, reason);
+    if let Some(parent) = parent.filter(|p| *p > 1) {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(parent),
+            nix::sys::signal::Signal::SIGHUP,
+        );
+    }
 }
 
 fn detached_from(model: &Model, session: SessionId) -> String {
@@ -1208,8 +1342,14 @@ fn detached_from(model: &Model, session: SessionId) -> String {
     }
 }
 
-/// Detaches every client on `session` except `keep`.
-fn detach_session(state: &mut State, session: SessionId, keep: Option<ClientId>) {
+/// Detaches every client on `session` except `keep`, hanging up their
+/// parents with `kill_parent`.
+fn detach_session_with(
+    state: &mut State,
+    session: SessionId,
+    keep: Option<ClientId>,
+    kill_parent: bool,
+) {
     let ids: Vec<ClientId> = state
         .clients
         .iter()
@@ -1217,7 +1357,7 @@ fn detach_session(state: &mut State, session: SessionId, keep: Option<ClientId>)
         .map(|(id, _)| *id)
         .collect();
     for id in ids {
-        detach(state, id);
+        detach_with(state, id, kill_parent);
     }
 }
 
@@ -1371,6 +1511,18 @@ pub fn changed(state: &mut State) {
             .clients
             .get(&id)
             .and_then(|c| successors.get(&c.session).copied().flatten());
+        // `no-detach-on-destroy`: where `on` and `no-detached` would detach
+        // the client, it goes to the session most recently used instead.
+        let next = next.or_else(|| {
+            let c = state
+                .clients
+                .get(&id)
+                .filter(|c| c.flags.no_detach_on_destroy)?;
+            let (name, mode) = destroyed.get(&c.session)?;
+            matches!(mode.as_str(), "on" | "no-detached")
+                .then(|| successor(state, name, "off"))
+                .flatten()
+        });
         match next {
             Some(session) => {
                 show_session(state, id, session);
@@ -2723,10 +2875,17 @@ impl FormatVars for ClientVars<'_> {
             "client_discarded" => Some(c.outbox.discarded.to_string()),
             "client_key_table" => Some(c.keys.table().to_string()),
             // ponytail: grofe always speaks UTF-8 to the client.
-            "client_flags" => Some(if c.focused {
-                "attached,focused,UTF-8".to_string()
-            } else {
-                "attached,UTF-8".to_string()
+            "client_flags" => Some({
+                let mut flags = vec!["attached"];
+                if c.focused {
+                    flags.push("focused");
+                }
+                flags.extend(c.flags.names());
+                if c.suspended {
+                    flags.push("suspended");
+                }
+                flags.push("UTF-8");
+                flags.join(",")
             }),
             // tmux: 1 while the client is in any table but its session's
             // `key-table` (always `root` here).
@@ -2890,7 +3049,9 @@ fn input(state: &mut State, id: ClientId, bytes: &[u8], now: Instant) {
     let session = c.session;
     c.decoder.set_user_keys(user_keys(&state.model));
     let inputs = c.decoder.feed(bytes, now, escape);
-    if let Some(owner) = state.registry.owners.get_mut(&session) {
+    // A client that ignores size never takes the windows' size over.
+    let sizes_windows = state.clients.get(&id).is_some_and(|c| !c.flags.ignore_size);
+    if sizes_windows && let Some(owner) = state.registry.owners.get_mut(&session) {
         owner.activity(id, now);
     }
     touch_session(&mut state.model, session);
@@ -2929,7 +3090,16 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
         hold_item(state, id, Held::Input(input));
         return;
     }
-    // As tmux: a key press takes a message down, and still counts.
+    // As tmux: a key press takes a message down, and still counts; a
+    // message from `display-message -N` is not taken down by one (and the
+    // key goes no further, as tmux's `server_client_key_callback` returns).
+    if let Input::Key(_) = input
+        && c.message.is_some()
+        && c.message_ignores_keys
+        && c.message.as_ref().is_some_and(|(_, until)| until.is_some())
+    {
+        return;
+    }
     if let Input::Key(_) = input
         && c.message.take().is_some()
     {
@@ -3108,6 +3278,40 @@ pub(crate) fn sync_targets(state: &State, pane: PaneId) -> Vec<PaneId> {
         .collect()
 }
 
+/// `refresh-client -f`: `list` of client flags set or cleared on client `id`.
+pub(crate) fn set_flags(state: &mut State, id: ClientId, list: &str) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        c.flags.apply(list);
+    }
+}
+
+/// `switch-client -r`: the client becomes read-only, with its size ignored,
+/// or stops being.
+pub(crate) fn toggle_read_only(state: &mut State, id: ClientId) {
+    if let Some(c) = state.clients.get_mut(&id) {
+        let on = !c.flags.read_only;
+        c.flags.read_only = on;
+        c.flags.ignore_size = on;
+    }
+}
+
+/// Whether tmux lets a read-only client run the command `argv` (its
+/// `CMD_READONLY` commands; `send-keys` only to drive a mode, with `-X`).
+fn read_only_command(argv: &[String]) -> bool {
+    let Some(verb) = argv.first() else {
+        return true;
+    };
+    let name = crate::compat::tmux::resolve(verb).map_or(verb.as_str(), |spec| spec.name);
+    match name {
+        "attach-session" | "copy-mode" | "detach-client" | "list-clients" | "switch-client" => true,
+        "send-keys" => argv
+            .iter()
+            .skip(1)
+            .any(|a| a.starts_with('-') && a.contains('X')),
+        _ => false,
+    }
+}
+
 /// Routes one input: input hooks first (every input), then the client's
 /// key table, reading the active pane's modes now, since a command routed
 /// just before may have changed the active pane. Focus reports go no
@@ -3123,6 +3327,11 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             return;
         }
         hooks::client_focus(state, id, focused);
+    }
+    // A read-only client's pastes and mouse reach nothing.
+    let read_only = state.clients.get(&id).is_some_and(|c| c.flags.read_only);
+    if read_only && matches!(input, Input::Mouse(_) | Input::Paste { .. }) {
+        return;
     }
     let hooks = state.registry.input_hooks.clone();
     let hooked = hooks
@@ -3159,11 +3368,42 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             routed
         }
     };
+    // A read-only client's keys go to no pane, and its bindings run only
+    // commands tmux marks read-only (`key_bindings_dispatch`).
+    let routed = match routed {
+        Routed::ToPane(_) if read_only && !matches!(input, Input::Focus(_)) => return,
+        Routed::Command(ref cmds, _) | Routed::Bound(ref cmds, _)
+            if read_only && !cmds.iter().all(|argv| read_only_command(argv)) =>
+        {
+            show_message(state, id, "client is read-only");
+            return;
+        }
+        routed => routed,
+    };
     match routed {
         Routed::ToPane(bytes) => {
             let Some(pane) = pane else {
                 return;
             };
+            // A key pressed over a pane kept with `remain-on-exit key` closes
+            // it, and goes no further (`server_client_key_callback`).
+            if let Input::Key(_) = &input
+                && state
+                    .model
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|p| p.dead.is_some())
+                && state
+                    .model
+                    .options
+                    .lookup("remain-on-exit", &options::chain(&state.model, pane))
+                    == Some("key")
+            {
+                let removed = state.model.remove_pane(pane);
+                state.events.panes_killed(removed);
+                changed(state);
+                return;
+            }
             // A focus report goes in whatever the pane takes, as tmux's
             // `window_pane_update_focus`; keys and pastes stop at a pane
             // that takes no input or has exited (`window_pane_key`).
@@ -3421,10 +3661,24 @@ pub fn attach_session(
         return Err("open terminal failed: not a terminal".to_string());
     };
     let session = select_target(&mut state.model, &c.target, ctx)?;
-    if c.detach_others {
-        detach_session(state, session, Some(id));
+    if let (Some(dir), Some(s)) = (&c.cwd, state.model.sessions.get_mut(&session)) {
+        s.cwd = ctx.cwd.join(dir);
     }
-    show_session(state, id, session);
+    if let Some(list) = &c.flags
+        && let Some(client) = state.clients.get_mut(&id)
+    {
+        client.flags.apply(list);
+    }
+    if c.read_only
+        && let Some(client) = state.clients.get_mut(&id)
+    {
+        client.flags.read_only = true;
+        client.flags.ignore_size = true;
+    }
+    if c.detach_others {
+        detach_session_with(state, session, Some(id), c.kill_parent);
+    }
+    show_session_with(state, id, session, !c.no_env);
     Ok(String::new())
 }
 
@@ -3440,7 +3694,7 @@ pub fn detach_client(
         // tmux 3.7b finds `-s` with CMD_FIND_CANFAIL: no such session is
         // not an error (recorded).
         if let Ok(session) = state.model.resolve_session(target, ctx) {
-            detach_session(state, session, None);
+            detach_session_with(state, session, None, c.kill_parent);
         }
         return Ok(String::new());
     }
@@ -3451,10 +3705,10 @@ pub fn detach_client(
     if c.all_others {
         let others: Vec<ClientId> = state.clients.keys().copied().filter(|o| *o != id).collect();
         for other in others {
-            detach(state, other);
+            detach_with(state, other, c.kill_parent);
         }
     } else {
-        detach(state, id);
+        detach_with(state, id, c.kill_parent);
     }
     Ok(String::new())
 }
@@ -3564,6 +3818,7 @@ mod tests {
                     nest: true,
                     tty: Some(tty.to_string()),
                     created: false,
+                    extras: Default::default(),
                 },
             )
             .expect("attach");
@@ -3660,6 +3915,7 @@ mod tests {
                 keys: KeyState::new(),
                 focused: true,
                 message: None,
+                message_ignores_keys: false,
                 status_rows: Vec::new(),
                 status_at: 0,
                 held: VecDeque::new(),
@@ -3670,6 +3926,7 @@ mod tests {
                 pan: None,
                 suspended: false,
                 suspend_tx: mpsc::channel(1).0,
+                flags: ClientFlags::default(),
                 mouse_modes: None,
                 dirty: false,
                 outbox,
@@ -3828,7 +4085,7 @@ mod tests {
     #[test]
     fn messages_are_logged_and_capped() {
         let (mut state, id) = state_with_client();
-        display_message(&mut state, id, "hi", None);
+        display_message(&mut state, id, "hi", None, false);
         show_message(&mut state, id, "an #[error]");
         let log: Vec<&str> = messages(&state).map(|(_, m)| m.as_str()).collect();
         assert_eq!(
@@ -3836,7 +4093,7 @@ mod tests {
             ["client-1 message: hi", "client-1 message: an #[error]"]
         );
         for i in 0..MESSAGE_LIMIT {
-            display_message(&mut state, id, &i.to_string(), None);
+            display_message(&mut state, id, &i.to_string(), None, false);
         }
         assert_eq!(messages(&state).count(), MESSAGE_LIMIT);
         assert_eq!(
@@ -3849,7 +4106,7 @@ mod tests {
             .options
             .set(Owner::Global, "message-limit", "3", false)
             .unwrap();
-        display_message(&mut state, id, "last", None);
+        display_message(&mut state, id, "last", None, false);
         assert_eq!(messages(&state).count(), 3);
         assert_eq!(
             messages(&state).next_back().map(|(_, m)| m.as_str()),

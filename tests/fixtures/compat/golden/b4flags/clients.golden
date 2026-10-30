@@ -1,0 +1,125 @@
+$ new-session -d -s main -x 60 -y 10 'cat'
+? 0
+$ new-session -d -s other -x 50 -y 8 'cat'
+? 0
+client 60x12 attach -t main -r -c /
+$ display-message -p -t main '#{session_path}'
+/
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,ignore-size,read-only,UTF-8
+? 0
+keys a b
+$ run-shell 'sleep 0.3'
+? 0
+$ capture-pane -p -t main:1
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ refresh-client -t {client} -f '!read-only'
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,ignore-size,read-only,UTF-8
+? 0
+keys c
+$ run-shell 'sleep 0.3'
+? 0
+$ capture-pane -p -t main:1
+
+
+
+
+
+
+
+
+
+
+
+? 0
+$ refresh-client -t {client} -f ignore-size,active-pane,no-detach-on-destroy
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,ignore-size,no-detach-on-destroy,read-only,active-pane,UTF-8
+? 0
+$ refresh-client -t {client} -F '!ignore-size,bogus,!active-pane'
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,no-detach-on-destroy,read-only,UTF-8
+? 0
+$ refresh-client -t {client} -A '%1:on'
+! not a control client
+? 1
+$ refresh-client -t {client} -B 'x:%1:#{pane_id}'
+! not a control client
+? 1
+$ refresh-client -t {client} -C 80x24
+! not a control client
+? 1
+$ refresh-client -t {client} -r '%1:rgb:ff/00/00'
+? 0
+$ refresh-client -t {client} -f read-only -A '%1:on'
+! not a control client
+? 1
+$ list-clients -F '#{client_flags}'
+attached,focused,no-detach-on-destroy,read-only,UTF-8
+? 0
+$ switch-client -r -c {client}
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,no-detach-on-destroy,UTF-8
+? 0
+$ switch-client -r -c {client}
+? 0
+$ list-clients -F '#{client_flags}'
+attached,focused,ignore-size,no-detach-on-destroy,read-only,UTF-8
+? 0
+$ switch-client -n -c {client}
+? 0
+$ list-clients -F '#{session_name} #{client_flags}'
+other attached,focused,ignore-size,no-detach-on-destroy,read-only,UTF-8
+? 0
+$ switch-client -p -c {client}
+? 0
+$ list-clients -F '#{session_name}'
+main
+? 0
+$ switch-client -n -O name -c {client}
+? 0
+$ list-clients -F '#{session_name}'
+other
+? 0
+$ switch-client -n -O name -r -c {client}
+? 0
+$ list-clients -F '#{session_name} #{client_flags}'
+main attached,focused,no-detach-on-destroy,UTF-8
+? 0
+$ switch-client -n -O bogus -c {client}
+! invalid sort order
+? 1
+$ switch-client -l -c {client}
+? 0
+$ list-clients -F '#{session_name}'
+other
+? 0
+$ switch-client -E -t main -c {client}
+? 0
+$ switch-client -F -t other -c {client}
+? 0
+$ list-clients -F '#{session_name}'
+other
+? 0
+$ refresh-client -t {client} -f ''
+? 0
+$ refresh-client -t nosuch -f read-only
+! can't find client: nosuch
+? 1

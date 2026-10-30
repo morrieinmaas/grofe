@@ -37,10 +37,8 @@ use tokio::task::JoinHandle;
 pub use alacritty_terminal::term::cell::Flags as CellFlags;
 pub use alacritty_terminal::term::cell::Hyperlink;
 
-use crate::protocol::Caps;
 use crate::server::imgstore::{PaneImages, Store};
 use crate::server::passthrough::Scanner;
-use crate::server::render::write_sgr;
 use crate::server::status::Style;
 use crate::types::{
     CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
@@ -462,6 +460,19 @@ pub fn inner_term() -> &'static str {
 
 /// A running (or dead, until dropped) pane. Dropping it stops its tasks and
 /// closes the master, which hangs up the child.
+/// What `capture-pane`'s `-L`, `-F`, `-C` and `-H` add to a capture.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CaptureExtra {
+    /// `-L`: each row starts with its line number.
+    pub numbered: bool,
+    /// `-F`: each row starts with its flags (`H`, `O`, `P`, `W`, or `-`).
+    pub flags: bool,
+    /// `-C`: a backslash is `\\\\` and an ESC of `-e` is `\033`.
+    pub escaped: bool,
+    /// `-H`: the rows list their hyperlinks instead of their text.
+    pub links: bool,
+}
+
 pub struct PaneHandle {
     pid: Option<u32>,
     generation: u64,
@@ -878,6 +889,25 @@ impl PaneHandle {
         keep_blanks: bool,
         written_only: bool,
     ) -> String {
+        self.capture_rows(
+            opts,
+            join,
+            keep_blanks,
+            written_only,
+            CaptureExtra::default(),
+        )
+    }
+
+    /// [`Self::capture_blanks`] with the flags that change what a row
+    /// starts with or holds (`-L`, `-F`, `-C`, `-H`).
+    pub fn capture_rows(
+        &self,
+        opts: &CaptureOpts,
+        join: bool,
+        keep_blanks: bool,
+        written_only: bool,
+        extra: CaptureExtra,
+    ) -> String {
         // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
         // a style change.
         let sgr_flags = CellFlags::BOLD
@@ -887,11 +917,6 @@ impl PaneHandle {
             | CellFlags::INVERSE
             | CellFlags::HIDDEN
             | CellFlags::STRIKEOUT;
-        let caps = Caps {
-            truecolor: true,
-            styled_underline: true,
-            ..Caps::default()
-        };
         let mut pen = Style::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
@@ -905,12 +930,62 @@ impl PaneHandle {
         };
         let (start, end) = (bound(opts.start, 0), bound(opts.end, last));
         let mut out = String::new();
+        // `-H`: the links already listed, across rows.
+        let mut listed: Vec<(String, String)> = Vec::new();
         for line in start..=end {
             let row = &grid[Line(line)];
-            let wraps = join
-                && row[Column(grid.columns() - 1)]
-                    .flags
-                    .contains(CellFlags::WRAPLINE);
+            let wrapped = row[Column(grid.columns() - 1)]
+                .flags
+                .contains(CellFlags::WRAPLINE);
+            let wraps = join && wrapped;
+            let linked = (0..grid.columns()).any(|c| row[Column(c)].hyperlink().is_some());
+            let mut prefix = String::new();
+            let mut link_text = None;
+            if extra.links {
+                let mut uris: Vec<String> = Vec::new();
+                for c in 0..grid.columns() {
+                    let Some(link) = row[Column(c)].hyperlink() else {
+                        continue;
+                    };
+                    let key = (link.id().to_string(), link.uri().to_string());
+                    if !listed.contains(&key) {
+                        uris.push(key.1.clone());
+                        listed.push(key);
+                    }
+                }
+                // A row with no new link is not listed at all.
+                if uris.is_empty() {
+                    continue;
+                }
+                link_text = Some(uris.join(" "));
+            }
+            if extra.numbered {
+                prefix.push_str(&format!("{line} "));
+            }
+            if extra.flags {
+                // tmux's `grid_line` flags: the dead ones never show; a
+                // prompt and output start come from OSC 133, a wrap from the
+                // row, a hyperlink from any cell.
+                let bits = emu.marks.get((line + history) as usize);
+                let mut letters = String::new();
+                for (on, letter) in [
+                    (linked, 'H'),
+                    (bits & marks::OUTPUT != 0, 'O'),
+                    (bits & marks::PROMPT != 0, 'P'),
+                    (wrapped, 'W'),
+                    // Cells with a hyperlink are extended cells in tmux.
+                    (linked, 'X'),
+                ] {
+                    if on {
+                        letters.push(letter);
+                    }
+                }
+                if letters.is_empty() {
+                    letters.push('-');
+                }
+                prefix.push_str(&letters);
+                prefix.push(' ');
+            }
             // Without a wrap, `-J` stops at the used width; a non-blank
             // cell the program did not write (`DECALN`) still counts.
             let cols = grid.columns();
@@ -946,6 +1021,22 @@ impl PaneHandle {
             // it moved over, up to the next tab stop, are not printed. One
             // written over before its stop is a blank, like those cells.
             let mut tab_end = 0;
+            // `-e`: the OSC 8 hyperlink the text is inside of.
+            let mut row_link: Option<(String, String)> = None;
+            let osc8 = |id: &str, uri: &str| {
+                let id = if id.is_empty() {
+                    String::new()
+                } else {
+                    format!("id={id}")
+                };
+                let text = format!("\x1b]8;{id};{uri}\x1b\\");
+                if extra.escaped {
+                    // `\033\\` closes it, the backslash doubled as in `-C` text.
+                    text.replace("\x1b\\", "\\033\\\\").replace('\x1b', "\\033")
+                } else {
+                    text
+                }
+            };
             for col in 0..end {
                 let cell = &row[Column(col)];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
@@ -962,10 +1053,27 @@ impl PaneHandle {
                         underline_color: cell.underline_color(),
                     };
                     if style != pen {
-                        let mut sgr = Vec::new();
-                        write_sgr(&mut sgr, &style, &caps);
-                        text.push_str(&String::from_utf8_lossy(&sgr));
+                        let sgr = tmux_sgr(&pen, &style);
+                        // `-C`: the ESC is written as text, `\033`.
+                        if extra.escaped {
+                            text.push_str(&sgr.replace('\x1b', "\\033"));
+                        } else {
+                            text.push_str(&sgr);
+                        }
                         pen = style;
+                    }
+                    let link = cell.hyperlink().map(|l| {
+                        let id = l.id();
+                        // alacritty's own ids for links that had none.
+                        let id = if id.ends_with("_alacritty") { "" } else { id };
+                        (id.to_string(), l.uri().to_string())
+                    });
+                    if link != row_link {
+                        match &link {
+                            Some((id, uri)) => text.push_str(&osc8(id, uri)),
+                            None => text.push_str(&osc8("", "")),
+                        }
+                        row_link = link;
                     }
                 }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
@@ -984,6 +1092,8 @@ impl PaneHandle {
                     } else {
                         text.push(' ');
                     }
+                } else if extra.escaped && cell.c == '\\' {
+                    text.push_str("\\\\");
                 } else {
                     text.push(cell.c);
                 }
@@ -991,6 +1101,13 @@ impl PaneHandle {
                     text.extend(zw);
                 }
             }
+            if row_link.is_some() {
+                text.push_str(&osc8("", ""));
+            }
+            if let Some(links) = link_text {
+                text = links;
+            }
+            out.push_str(&prefix);
             if wraps {
                 out.push_str(&text);
                 continue;
@@ -2040,4 +2157,107 @@ mod tests {
             assert_eq!(exited, Ok(true), "iteration {i}: SIGUSR1 to {pid} was lost");
         }
     }
+}
+
+/// The SGR for a capture with `-e`, as tmux's `grid_string_cells_code`: a
+/// `0` first when an attribute goes away, then each newly set attribute,
+/// then the colours that changed (or all of them after a reset, unless
+/// default).
+fn tmux_sgr(last: &Style, now: &Style) -> String {
+    use alacritty_terminal::term::cell::Flags as F;
+    use alacritty_terminal::vte::ansi::NamedColor as N;
+    // Attributes in tmux's order, by the code they set.
+    const ATTRS: [(u32, F); 13] = [
+        (1, F::BOLD),
+        (2, F::DIM),
+        (3, F::ITALIC),
+        (4, F::UNDERLINE),
+        (5, F::empty()),
+        (7, F::INVERSE),
+        (8, F::HIDDEN),
+        (9, F::STRIKEOUT),
+        (42, F::DOUBLE_UNDERLINE),
+        (43, F::UNDERCURL),
+        (44, F::DOTTED_UNDERLINE),
+        (45, F::DASHED_UNDERLINE),
+        (53, F::empty()),
+    ];
+    let has = |f: F, flag: F| !flag.is_empty() && f.contains(flag);
+    let mut codes: Vec<u32> = Vec::new();
+    let mut last_attrs = last.attrs;
+    if ATTRS
+        .iter()
+        .any(|(_, f)| has(last.attrs, *f) && !has(now.attrs, *f))
+        || (last.underline_color.is_some() && now.underline_color.is_none())
+    {
+        codes.push(0);
+        last_attrs = F::empty();
+    }
+    for (code, f) in ATTRS {
+        if has(now.attrs, f) && !has(last_attrs, f) {
+            codes.push(code);
+        }
+    }
+    let mut out = String::new();
+    let put = |out: &mut String, codes: &[u32], sep: &dyn Fn(u32) -> String| {
+        out.push_str("\x1b[");
+        let n = codes.len();
+        for (i, c) in codes.iter().enumerate() {
+            out.push_str(&sep(*c));
+            if i + 1 < n {
+                out.push(';');
+            }
+        }
+        out.push('m');
+    };
+    if !codes.is_empty() {
+        put(&mut out, &codes, &|c| {
+            if c < 10 {
+                c.to_string()
+            } else {
+                format!("{}:{}", c / 10, c % 10)
+            }
+        });
+    }
+    let colour = |c: Color, base: u32, ext: u32, default: u32| -> Vec<u32> {
+        match c {
+            Color::Spec(Rgb { r, g, b }) => vec![ext, 2, r as u32, g as u32, b as u32],
+            Color::Indexed(n) => vec![ext, 5, n as u32],
+            Color::Named(name) => {
+                let n = name as usize;
+                match name {
+                    N::Foreground | N::Background => vec![default],
+                    _ if n < 8 => vec![base + n as u32],
+                    _ if (8..16).contains(&n) => vec![base + 60 + (n as u32 - 8)],
+                    _ => vec![default],
+                }
+            }
+        }
+    };
+    let underline = |c: Option<Color>| -> Vec<u32> {
+        match c {
+            Some(Color::Spec(Rgb { r, g, b })) => vec![58, 2, r as u32, g as u32, b as u32],
+            Some(Color::Indexed(n)) => vec![58, 5, n as u32],
+            _ => Vec::new(),
+        }
+    };
+    let reset = codes.first() == Some(&0);
+    let layers = [
+        (colour(now.fg, 30, 38, 39), colour(last.fg, 30, 38, 39)),
+        (colour(now.bg, 40, 48, 49), colour(last.bg, 40, 48, 49)),
+        (
+            underline(now.underline_color),
+            underline(last.underline_color),
+        ),
+    ];
+    for (new, old) in layers {
+        if new.is_empty() || (!reset && new == old) {
+            continue;
+        }
+        if reset && (new[0] == 49 || new[0] == 39) {
+            continue;
+        }
+        put(&mut out, &new, &|c| c.to_string());
+    }
+    out
 }

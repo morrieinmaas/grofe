@@ -3559,7 +3559,12 @@ mod tests {
             (b"\x1b[21~", "F10"),
             (b"\x1b[24~", "F12"),
             (b"\x1b[Z", "BTab"),
-            (b"\x1bOM", "Enter"),
+            // A terminal in application keypad mode: tmux's keypad keys.
+            (b"\x1bOM", "KPEnter"),
+            (b"\x1bOp", "KP0"),
+            (b"\x1bOy", "KP9"),
+            (b"\x1bOj", "KP*"),
+            (b"\x1bOn", "KP."),
             // xterm modifier parameter: 2 shift, 3 alt, 5 ctrl, 6 C-S, 7 C-M.
             (b"\x1b[1;2A", "S-Up"),
             (b"\x1b[1;3A", "M-Up"),

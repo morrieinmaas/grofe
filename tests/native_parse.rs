@@ -317,6 +317,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: t("@1"),
                 command: Some(argv(&["htop"])),
                 cwd: None,
+                env: Vec::new(),
             }),
         ),
         (
@@ -326,6 +327,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: true,
                 pan: None,
                 adjustment: None,
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -335,6 +337,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: false,
                 pan: None,
                 adjustment: None,
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -344,6 +347,7 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 status: false,
                 pan: Some(Pan::Left),
                 adjustment: s("10"),
+                ..RefreshClient::default()
             }),
         ),
         (
@@ -371,6 +375,11 @@ fn every_new_verb_parses_with_its_rows_flags() {
                 target: Target::Current,
                 zoom: true,
                 pattern: s("foo"),
+                content: false,
+                name: false,
+                title: false,
+                regex: false,
+                ignore: false,
             }),
         ),
         (

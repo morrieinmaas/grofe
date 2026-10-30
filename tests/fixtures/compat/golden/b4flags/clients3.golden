@@ -1,0 +1,19 @@
+$ new-session -d -s main -x 60 -y 10 'sleep 100000'
+? 0
+$ split-window -d -k -t main:1 'echo gone; exit 0'
+? 0
+client 60x12 attach -t main
+$ run-shell 'sleep 0.5'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead} #{remain-on-exit}'
+1 0 off
+2 1 key
+? 0
+$ select-pane -t main:1.2
+? 0
+keys x
+$ run-shell 'sleep 0.3'
+? 0
+$ list-panes -t main:1 -F '#{pane_index} #{pane_dead}'
+1 0
+? 0

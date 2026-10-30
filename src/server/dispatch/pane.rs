@@ -13,6 +13,7 @@ use crate::server::dispatch::{resolve_cwd, spawn_pane};
 use crate::server::input::{self, parse_prefix};
 use crate::server::layout::{self, Insert, LayoutError};
 use crate::server::model::Model;
+use crate::server::pane::CaptureExtra;
 use crate::server::pane::{PaneHandle, PaneSpawn, usable_cwd};
 use crate::server::{State, buffers, clients, copy, graphics, prompt};
 use crate::types::{Dir, Edge, PaneId, SplitSize, WindowId};
@@ -118,8 +119,9 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     if c.zoom {
         toggle_zoom(model, window, active);
     }
+    apply_setup(state, ctx, new, &c.setup)?;
     Ok(if c.print {
-        print_pane(model, new, c.format.as_deref())
+        print_pane(&state.model, new, c.format.as_deref())
     } else {
         String::new()
     })
@@ -450,7 +452,7 @@ fn respawn_pane(state: &mut State, ctx: &ClientCtx, c: RespawnPane) -> Result<St
         .cwd
         .as_deref()
         .map(|dir| resolve_cwd(model, ctx, Some(pane), Some(dir), &p.cwd));
-    respawn(state, pane, c.command, cwd).map_err(|e| format!("respawn pane failed: {e}"))?;
+    respawn(state, pane, c.command, cwd, c.env).map_err(|e| format!("respawn pane failed: {e}"))?;
     Ok(String::new())
 }
 
@@ -478,6 +480,7 @@ pub(crate) fn respawn(
     pane: PaneId,
     command: Option<Vec<String>>,
     cwd: Option<PathBuf>,
+    extra_env: Vec<(String, String)>,
 ) -> Result<(), String> {
     // As tmux's `window_pane_reset_mode_all`: a respawned pane leaves its
     // modes, and its copy is freed (M5).
@@ -494,7 +497,10 @@ pub(crate) fn respawn(
     let session = model.windows[&p.window].session;
     // As tmux's `spawn_pane` on respawn: the pane keeps the shell it started with.
     let shell = p.shell.clone();
-    let mut env = super::pane_env(state, session, pane, model.sessions[&session].env.clone());
+    // `-e` wins over the session's own variables.
+    let mut own = model.sessions[&session].env.clone();
+    own.extend(extra_env);
+    let mut env = super::pane_env(state, session, pane, own);
     env.push(("SHELL".to_string(), shell.clone()));
     let spec = PaneSpawn {
         id: pane,
@@ -814,18 +820,111 @@ pub fn send_prefix(state: &mut State, ctx: &ClientCtx, c: SendPrefix) -> Result<
     Ok(String::new())
 }
 
+/// What `-s`, `-S`, `-R`, `-k` and `-m` of `split-window` and `new-pane` set
+/// on the pane just made: pane options, through `set-option -p` so they are
+/// checked and announced as any are.
+pub(crate) fn apply_setup(
+    state: &mut State,
+    ctx: &ClientCtx,
+    pane: PaneId,
+    setup: &cmd::PaneSetup,
+) -> Result<(), String> {
+    // tmux stores a style as it is given, bad or not (the pane then draws
+    // its defaults). Here a bad one is left out, and noted.
+    let set = |state: &mut State, name: &str, value: &str| {
+        let target = cmd::target::parse_target(&pane.to_string()).map_err(|e| e.to_string())?;
+        options::run(
+            state,
+            ctx,
+            cmd::Command::SetOption(cmd::SetOption {
+                scope: Some(cmd::OptionScope::Pane),
+                unset: false,
+                unset_panes: false,
+                persist: false,
+                target,
+                name: name.to_string(),
+                value: Some(value.to_string()),
+                append: false,
+                expand: false,
+                quiet: false,
+                only_if_unset: false,
+                shown: None,
+            }),
+        )
+        .map(|_| ())
+    };
+    let styles = [
+        (&setup.style, &["window-style", "window-active-style"][..]),
+        (&setup.active_border, &["pane-active-border-style"][..]),
+        (&setup.inactive_border, &["pane-border-style"][..]),
+    ];
+    for (style, names) in styles {
+        let Some(style) = style else {
+            continue;
+        };
+        for name in names {
+            if set(state, name, style).is_err() {
+                crate::compat::note_miss(&format!("{name} {style}: bad style, not set"));
+            }
+        }
+    }
+    if setup.keep {
+        set(state, "remain-on-exit", "key")?;
+        if let Some(message) = &setup.message {
+            set(state, "remain-on-exit-format", message)?;
+        }
+    }
+    Ok(())
+}
+
 /// `capture-pane`: the pane's text between `-S` and `-E`, printed with
 /// `-p`, else stored in a paste buffer: `-b`'s, else a new automatic one.
+/// `-P` is the output not yet parsed, which grofe's parser keeps as state
+/// and not as bytes, so nothing; `-M` the screen of the pane's mode, which
+/// is the pane's own here; `-a` the screen under the alternate one, which
+/// the emulator does not give out, so it is only an error (`-q`: nothing)
+/// when there is no alternate screen.
 fn capture_pane(state: &mut State, ctx: &ClientCtx, c: CapturePane) -> Result<String, String> {
     let pane = state.model.resolve_pane(&c.target, ctx)?;
-    let text = state.model.panes[&pane].handle.capture_blanks(
-        &c.opts,
-        c.join,
-        c.keep_blanks,
-        c.written_only,
-    );
+    let handle = &state.model.panes[&pane].handle;
+    let text = if c.pending && !c.links {
+        String::new()
+    } else if c.alternate {
+        if !handle.modes().alt_screen {
+            if !c.quiet {
+                return Err("no alternate screen".to_string());
+            }
+            String::new()
+        } else {
+            return Err(
+                "the screen under the alternate screen is out of reach of the emulator".to_string(),
+            );
+        }
+    } else {
+        handle.capture_rows(
+            &c.opts,
+            c.join,
+            c.keep_blanks,
+            c.written_only,
+            CaptureExtra {
+                numbered: c.numbered,
+                flags: c.flags,
+                escaped: c.escaped,
+                links: c.links,
+            },
+        )
+    };
     if c.print {
-        return Ok(text);
+        // tmux ends what it prints with one newline.
+        return Ok(if text.is_empty() {
+            "\n".to_string()
+        } else {
+            text
+        });
+    }
+    // An empty capture sets no buffer.
+    if text.is_empty() {
+        return Ok(String::new());
     }
     let limit = buffers::limit(state);
     match &c.buffer {

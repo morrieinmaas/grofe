@@ -443,7 +443,7 @@ impl Model {
             .options
             .lookup(REMAIN_ON_EXIT, &options::chain(self, pane))
         {
-            Some("on") => true,
+            Some("on" | "key") => true,
             Some("failed") => status != Some(0),
             _ => false,
         }

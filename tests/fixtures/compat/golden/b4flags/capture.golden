@@ -1,0 +1,143 @@
+$ new-session -d -s main -x 40 -y 8 'printf "a\\\\b c\n\033[31mred\033[0m \033[1mbold\033[0m\n\033]8;;http://x.example/\033\\\\link\033]8;;\033\\\\ plain\n"; printf "\033]8;;http://y.example/\033\\\\two\033]8;;\033\\\\\n\n\n"; sleep 100000'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -t main:1
+a\b c
+red bold
+link plain
+two
+
+
+
+
+? 0
+$ capture-pane -p -C -t main:1
+a\\b c
+red bold
+link plain
+two
+
+
+
+
+? 0
+$ capture-pane -p -e -t main:1
+a\b c
+[31mred[39m [1mbold[0m
+]8;;http://x.example/\link]8;;\ plain
+]8;;http://y.example/\two]8;;\
+
+
+
+
+? 0
+$ capture-pane -p -e -C -t main:1
+a\\b c
+\033[31mred\033[39m \033[1mbold\033[0m
+\033]8;;http://x.example/\033\\link\033]8;;\033\\ plain
+\033]8;;http://y.example/\033\\two\033]8;;\033\\
+
+
+
+
+? 0
+$ capture-pane -p -L -t main:1
+0 a\b c
+1 red bold
+2 link plain
+3 two
+4 
+5 
+6 
+7 
+? 0
+$ capture-pane -p -F -t main:1
+- a\b c
+- red bold
+HX link plain
+HX two
+- 
+- 
+- 
+- 
+? 0
+$ capture-pane -p -L -F -t main:1
+0 - a\b c
+1 - red bold
+2 HX link plain
+3 HX two
+4 - 
+5 - 
+6 - 
+7 - 
+? 0
+$ capture-pane -p -LF -S -2 -E 3 -t main:1
+0 - a\b c
+1 - red bold
+2 HX link plain
+3 HX two
+? 0
+$ capture-pane -p -H -t main:1
+http://x.example/
+http://y.example/
+? 0
+$ capture-pane -p -H -L -t main:1
+2 http://x.example/
+3 http://y.example/
+? 0
+$ capture-pane -p -H -F -t main:1
+HX http://x.example/
+HX http://y.example/
+? 0
+$ capture-pane -p -a -t main:1
+! no alternate screen
+? 1
+$ capture-pane -p -a -q -t main:1
+
+? 0
+$ capture-pane -p -P -t main:1
+
+? 0
+$ capture-pane -p -P -C -t main:1
+
+? 0
+$ capture-pane -p -P -H -t main:1
+http://x.example/
+http://y.example/
+? 0
+$ capture-pane -p -M -t main:1
+a\b c
+red bold
+link plain
+two
+
+
+
+
+? 0
+$ capture-pane -b cap -C -t main:1
+? 0
+$ show-buffer -b cap
+a\\b c
+red bold
+link plain
+two
+
+
+
+
+? 0
+$ capture-pane -b capq -a -q -t main:1
+? 0
+$ show-buffer -b capq
+! no buffer capq
+? 1
+$ capture-pane -b capp -P -t main:1
+? 0
+$ show-buffer -b capp
+! no buffer capp
+? 1
+$ list-buffers -F '#{buffer_name}'
+cap
+? 0
