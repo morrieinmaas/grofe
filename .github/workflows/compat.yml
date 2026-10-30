@@ -26,8 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CANOPY_SHA: 4faa58fff9d83b23b8e90faedb1d67ab3f6a9536
-  ATHOME_SHA: 905f10a0b05764e51fae2a32f0975116c2691815
+  CANOPY_SHA: 433aee7939966bf6037012b8d5e8f4c4eeef2e2e
+  ATHOME_SHA: ed0d87b711f20b484ba469ec0848906d5f27bf71
 
 jobs:
   compat:
