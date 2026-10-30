@@ -577,7 +577,7 @@ pub(crate) fn click_timeout(state: &mut State, client: ClientId, generation: u64
     clients::in_input_order(state, client, Box::new(fire_double));
 }
 
-fn mouse_on(state: &State, client: ClientId) -> bool {
+pub(crate) fn mouse_on(state: &State, client: ClientId) -> bool {
     let Some(session) = state.clients.get(&client).map(|c| c.session) else {
         return false;
     };
@@ -803,11 +803,13 @@ fn forward(state: &mut State, client: ClientId, m: &Mouse) -> Routed {
 /// Report `m`, at 0-based cell `(x, y)` of `pane`, goes to the pane's
 /// process if its mouse mode asks for it.
 fn send_to(state: &mut State, pane: PaneId, m: &Mouse, (x, y): (u16, u16)) {
-    // A pane in a mode gives its app nothing (tmux's `window_pane_key`).
-    if state.copy.is_active(pane)
-        || state.clocks.is_active(pane)
-        || crate::server::tree::is_over(state, pane)
-    {
+    // A pane in a mode gives its app nothing (tmux's `window_pane_key`);
+    // any mouse report ends the clock, as any key does.
+    if state.copy.is_active(pane) || crate::server::tree::is_over(state, pane) {
+        return;
+    }
+    if state.clocks.is_active(pane) {
+        crate::server::clock::leave(state, pane);
         return;
     }
     // A pane taking no input gets no mouse either (tmux's `window_pane_key`).

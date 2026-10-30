@@ -16,6 +16,7 @@ mod b2b;
 mod b3wpb;
 mod b3wpc;
 mod b3wpd;
+mod b4rest;
 mod fe_1;
 mod fe_2;
 mod fe_3;

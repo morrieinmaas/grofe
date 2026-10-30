@@ -1,0 +1,44 @@
+# B4 rest: in clock mode a click, a drag or the wheel on the pane ends the
+# mode (the stock rows send-keys -M, which reaches window_clock_key); a
+# click on another pane leaves it alone. Left pane columns 0..33, right 35..59.
+$ new-session -d -s main -n first -x 60 -y 15 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g mouse on
+$ split-window -h -l 25 -t main cat
+$ select-pane -t main:1.1
+client 60x15 attach -t main
+$ clock-mode
+$ display-message -p -t main:1.1 'clock [#{pane_mode}]'
+keys Escape '[<0;50;5M'
+keys Escape '[<0;50;5m'
+$ display-message -p -t main:1.1 'other pane click [#{pane_mode}]'
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'click [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<64;10;5M'
+$ display-message -p -t main:1.1 'wheel up [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<65;10;5M'
+$ display-message -p -t main:1.1 'wheel down [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<32;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'drag [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<2;10;5M'
+keys Escape '[<2;10;5m'
+$ display-message -p -t main:1.1 'right click [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<1;10;5M'
+keys Escape '[<1;10;5m'
+$ display-message -p -t main:1.1 'middle click [#{pane_mode}]'
+$ clock-mode
+keys Escape '[<35;10;5M'
+$ display-message -p -t main:1.1 'motion [#{pane_mode}]'
+$ set -g mouse off
+$ clock-mode
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'mouse off click [#{pane_mode}]'

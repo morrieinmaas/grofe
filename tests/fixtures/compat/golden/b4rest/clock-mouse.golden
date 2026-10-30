@@ -1,0 +1,76 @@
+$ new-session -d -s main -n first -x 60 -y 15 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g mouse on
+? 0
+$ split-window -h -l 25 -t main cat
+? 0
+$ select-pane -t main:1.1
+? 0
+client 60x15 attach -t main
+$ clock-mode
+? 0
+$ display-message -p -t main:1.1 'clock [#{pane_mode}]'
+clock [clock-mode]
+? 0
+keys Escape '[<0;50;5M'
+keys Escape '[<0;50;5m'
+$ display-message -p -t main:1.1 'other pane click [#{pane_mode}]'
+other pane click [clock-mode]
+? 0
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'click [#{pane_mode}]'
+click []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<64;10;5M'
+$ display-message -p -t main:1.1 'wheel up [#{pane_mode}]'
+wheel up []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<65;10;5M'
+$ display-message -p -t main:1.1 'wheel down [#{pane_mode}]'
+wheel down []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<32;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'drag [#{pane_mode}]'
+drag []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<2;10;5M'
+keys Escape '[<2;10;5m'
+$ display-message -p -t main:1.1 'right click [#{pane_mode}]'
+right click []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<1;10;5M'
+keys Escape '[<1;10;5m'
+$ display-message -p -t main:1.1 'middle click [#{pane_mode}]'
+middle click []
+? 0
+$ clock-mode
+? 0
+keys Escape '[<35;10;5M'
+$ display-message -p -t main:1.1 'motion [#{pane_mode}]'
+motion []
+? 0
+$ set -g mouse off
+? 0
+$ clock-mode
+? 0
+keys Escape '[<0;10;5M'
+keys Escape '[<0;10;5m'
+$ display-message -p -t main:1.1 'mouse off click [#{pane_mode}]'
+mouse off click []
+? 0

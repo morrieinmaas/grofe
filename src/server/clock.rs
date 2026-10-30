@@ -264,6 +264,12 @@ impl InputHook for ClockHook {
                 Some(Routed::Consumed)
             }
             Input::Paste { .. } => Some(Routed::Consumed),
+            // With `mouse` off tmux reads a report as plain keys, which end the
+            // clock.
+            Input::Mouse(_) if !crate::server::mouse::mouse_on(state, client) => {
+                leave(state, pane);
+                Some(Routed::Consumed)
+            }
             Input::Mouse(_) | Input::Focus(_) => None,
         }
     }
