@@ -1,0 +1,6 @@
+# B4 rest: source-file -v prints each command as cmd_print does, every
+# argument through args_escape.
+$ new-session -d -s main -x 40 -y 10 cat
+$ run-shell 'cp {fixtures}/b4rest-trace.conf ~/trace.conf'
+$ source-file -nv trace.conf
+$ source-file -v trace.conf

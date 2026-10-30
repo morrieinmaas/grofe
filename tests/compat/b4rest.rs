@@ -114,3 +114,9 @@ fn show_messages_logs_a_keys_commands() {
 fn capture_pane_from_a_binding_shows_in_view_mode() {
     check("b4rest", "capture-binding", &[]);
 }
+
+/// `source-file -v` prints arguments as `args_escape` does.
+#[test]
+fn source_file_v_quotes_as_args_escape() {
+    crate::tp::check_with("b4rest", "source-v-quoting", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
+}

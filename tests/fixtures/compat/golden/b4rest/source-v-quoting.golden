@@ -1,0 +1,85 @@
+$ new-session -d -s main -x 40 -y 10 cat
+? 0
+$ run-shell 'cp {fixtures}/b4rest-trace.conf ~/trace.conf'
+? 0
+$ source-file -nv trace.conf
+<TMPDIR>/home/trace.conf:1: set-option -g @a "x y"
+<TMPDIR>/home/trace.conf:2: set-option -g @b "it's"
+<TMPDIR>/home/trace.conf:3: display-message -p "a;b"
+<TMPDIR>/home/trace.conf:4: display-message -p "#{x}"
+<TMPDIR>/home/trace.conf:5: display-message -p \~
+<TMPDIR>/home/trace.conf:6: display-message -p \~/x
+<TMPDIR>/home/trace.conf:7: display-message -p ''
+<TMPDIR>/home/trace.conf:8: display-message -p tab\there
+<TMPDIR>/home/trace.conf:9: display-message -p "\$HOME"
+<TMPDIR>/home/trace.conf:10: display-message -p \$
+<TMPDIR>/home/trace.conf:11: display-message -p \"
+<TMPDIR>/home/trace.conf:12: display-message -p 'a"b'
+<TMPDIR>/home/trace.conf:13: display-message -p \\\\
+<TMPDIR>/home/trace.conf:14: display-message -p "x\\\\y z"
+<TMPDIR>/home/trace.conf:15: display-message -p "100%"
+<TMPDIR>/home/trace.conf:16: display-message -p "{a}"
+<TMPDIR>/home/trace.conf:17: display-message -p " "
+<TMPDIR>/home/trace.conf:18: display-message -p "é ü"
+<TMPDIR>/home/trace.conf:19: display-message -p "\$a $1 \${b}"
+<TMPDIR>/home/trace.conf:20: display-message -p "q\"uo te"
+<TMPDIR>/home/trace.conf:21: display-message -p -F "#{pane_id}"
+<TMPDIR>/home/trace.conf:22: display-message -p -F "#{window_index}"
+<TMPDIR>/home/trace.conf:23: select-pane -T "a title"
+<TMPDIR>/home/trace.conf:24: bind-key -n F1 send-keys "x y" Enter \; display-message "hi there"
+<TMPDIR>/home/trace.conf:25: set-option -g status-left "#[fg=red]#S "
+<TMPDIR>/home/trace.conf:26: set-option -g @c a\nb
+<TMPDIR>/home/trace.conf:27: if-shell -F 1 "display -p yes" "display -p no"
+<TMPDIR>/home/trace.conf:28: run-shell -b true
+? 0
+$ source-file -v trace.conf
+<TMPDIR>/home/trace.conf:1: set-option -g @a "x y"
+<TMPDIR>/home/trace.conf:2: set-option -g @b "it's"
+<TMPDIR>/home/trace.conf:3: display-message -p "a;b"
+<TMPDIR>/home/trace.conf:4: display-message -p "#{x}"
+<TMPDIR>/home/trace.conf:5: display-message -p \~
+<TMPDIR>/home/trace.conf:6: display-message -p \~/x
+<TMPDIR>/home/trace.conf:7: display-message -p ''
+<TMPDIR>/home/trace.conf:8: display-message -p tab\there
+<TMPDIR>/home/trace.conf:9: display-message -p "\$HOME"
+<TMPDIR>/home/trace.conf:10: display-message -p \$
+<TMPDIR>/home/trace.conf:11: display-message -p \"
+<TMPDIR>/home/trace.conf:12: display-message -p 'a"b'
+<TMPDIR>/home/trace.conf:13: display-message -p \\\\
+<TMPDIR>/home/trace.conf:14: display-message -p "x\\\\y z"
+<TMPDIR>/home/trace.conf:15: display-message -p "100%"
+<TMPDIR>/home/trace.conf:16: display-message -p "{a}"
+<TMPDIR>/home/trace.conf:17: display-message -p " "
+<TMPDIR>/home/trace.conf:18: display-message -p "é ü"
+<TMPDIR>/home/trace.conf:19: display-message -p "\$a $1 \${b}"
+<TMPDIR>/home/trace.conf:20: display-message -p "q\"uo te"
+<TMPDIR>/home/trace.conf:21: display-message -p -F "#{pane_id}"
+<TMPDIR>/home/trace.conf:22: display-message -p -F "#{window_index}"
+<TMPDIR>/home/trace.conf:23: select-pane -T "a title"
+<TMPDIR>/home/trace.conf:24: bind-key -n F1 send-keys "x y" Enter \; display-message "hi there"
+<TMPDIR>/home/trace.conf:25: set-option -g status-left "#[fg=red]#S "
+<TMPDIR>/home/trace.conf:26: set-option -g @c a\nb
+<TMPDIR>/home/trace.conf:27: if-shell -F 1 "display -p yes" "display -p no"
+<TMPDIR>/home/trace.conf:28: run-shell -b true
+a;b
+
+~
+~/x
+
+tab	here
+$HOME
+$
+"
+a"b
+\\
+x\\y z
+100%
+{a}
+ 
+é ü
+$a $1 ${b}
+q"uo te
+%0
+1
+yes
+? 0

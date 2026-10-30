@@ -8,7 +8,7 @@ use crate::tp::{check, check_with};
 /// grofe reports a path under the client's real cwd, which on macOS is
 /// `/private/var/...` for a tempdir under `/var/...`; the golden, recorded
 /// in a container, has the plain path.
-fn real_tmpdir(golden: &str) -> String {
+pub fn real_tmpdir(golden: &str) -> String {
     if cfg!(target_os = "macos") {
         golden.replace("<TMPDIR>/home", "/private<TMPDIR>/home")
     } else {
