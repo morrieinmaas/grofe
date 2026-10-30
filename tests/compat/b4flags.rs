@@ -23,7 +23,22 @@ fn the_global_flags_h_d_u_n_q_t_v_l_behave_as_tmux_s() {
 
 #[test]
 fn lock_previous_layout_server_access_and_prompt_history_answer_as_tmux_does() {
-    check("b4flags", "commands", &[]);
+    // tmux leaves uid 0 out of `server-access -l`, so run as root (the
+    // Linux CI container) the server's own user is not listed.
+    let as_root = nix::unistd::getuid().is_root();
+    check_with(
+        "b4flags",
+        "commands",
+        &[],
+        |s| s.to_string(),
+        |g| {
+            if as_root {
+                g.replace("<USER> (W)\n", "")
+            } else {
+                g.to_string()
+            }
+        },
+    );
 }
 
 #[test]
