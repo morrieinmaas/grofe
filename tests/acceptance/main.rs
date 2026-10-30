@@ -11,6 +11,7 @@
 
 mod b1c;
 mod b1e;
+mod b4_lock;
 mod f1;
 mod float_mouse;
 mod g3_graphics;

@@ -3337,6 +3337,13 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
     if read_only && matches!(input, Input::Mouse(_) | Input::Paste { .. }) {
         return;
     }
+    // A locked client's input is its lock command's alone: a prompt or menu
+    // left open under the lock (their hooks come before the popup's) must
+    // not take it, as tmux's suspended client reads no keys at all.
+    if state.registry.locked.contains(&id) && state.popups.is_open(id) {
+        let _ = crate::server::popup::PopupHook.on_input(state, id, &input, now);
+        return;
+    }
     let hooks = state.registry.input_hooks.clone();
     let hooked = hooks
         .iter()
