@@ -1,0 +1,25 @@
+# B4 rest: capture-pane -p from a key prints into the pane's view mode,
+# like any command output from a binding.
+$ new-session -d -s main -x 40 -y 10 'printf "alpha\nbeta\n"; exec cat'
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ bind -n F5 capture-pane -p
+$ bind -n F6 capture-pane -p -t :.0 -e
+$ bind -n F7 capture-pane -p -J -S - -E -
+$ bind -n F8 capture-pane -b mine
+client 40x10 attach -t main
+$ run-shell 'sleep 0.5'
+keys Escape '[15~'
+screen alpha
+$ display -p '#{pane_mode}'
+keys q
+keys Escape '[17~'
+screen alpha
+keys q
+keys Escape '[18~'
+screen alpha
+keys q
+keys Escape '[19~'
+screen
+$ display -p '#{pane_mode}'
+$ show-buffer -b mine

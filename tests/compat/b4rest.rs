@@ -108,3 +108,9 @@ fn switch_client_z_keeps_the_zoom() {
 fn show_messages_logs_a_keys_commands() {
     check("b4rest", "messages-key", &[]);
 }
+
+/// `capture-pane -p` run by a key shows in the pane's view mode.
+#[test]
+fn capture_pane_from_a_binding_shows_in_view_mode() {
+    check("b4rest", "capture-binding", &[]);
+}

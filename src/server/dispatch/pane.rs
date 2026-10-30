@@ -822,6 +822,10 @@ fn capture_pane(state: &mut State, ctx: &ClientCtx, c: CapturePane) -> Result<St
         c.written_only,
     );
     if c.print {
+        // tmux's `file_can_print`: an attached client has no stdout to take it.
+        if ctx.client.is_some() {
+            return Err("can't write to client".to_string());
+        }
         return Ok(text);
     }
     let limit = buffers::limit(state);

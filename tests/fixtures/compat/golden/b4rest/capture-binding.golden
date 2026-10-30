@@ -1,0 +1,85 @@
+$ new-session -d -s main -x 40 -y 10 'printf "alpha\nbeta\n"; exec cat'
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ bind -n F5 capture-pane -p
+? 0
+$ bind -n F6 capture-pane -p -t :.0 -e
+? 0
+$ bind -n F7 capture-pane -p -J -S - -E -
+? 0
+$ bind -n F8 capture-pane -b mine
+? 0
+client 40x10 attach -t main
+$ run-shell 'sleep 0.5'
+? 0
+keys Escape '[15~'
+screen alpha
+| alpha
+| beta
+|
+|
+|
+|
+|
+|
+|
+| Can't write to client
+$ display -p '#{pane_mode}'
+
+? 0
+keys q
+keys Escape '[17~'
+screen alpha
+| alpha
+| beta
+| q
+|
+|
+|
+|
+|
+|
+| Can't find pane: 0
+keys q
+keys Escape '[18~'
+screen alpha
+| alpha
+| beta
+| qq
+|
+|
+|
+|
+|
+|
+| Can't write to client
+keys q
+keys Escape '[19~'
+screen
+| alpha
+| beta
+| qqq
+|
+|
+|
+|
+|
+|
+| [main] 1:cat*
+$ display -p '#{pane_mode}'
+
+? 0
+$ show-buffer -b mine
+alpha
+beta
+qqq
+
+
+
+
+
+
+? 0
