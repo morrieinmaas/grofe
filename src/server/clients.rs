@@ -3308,10 +3308,14 @@ fn read_only_command(argv: &[String]) -> bool {
     let name = crate::compat::tmux::resolve(verb).map_or(verb.as_str(), |spec| spec.name);
     match name {
         "attach-session" | "copy-mode" | "detach-client" | "list-clients" | "switch-client" => true,
-        "send-keys" => argv
-            .iter()
-            .skip(1)
-            .any(|a| a.starts_with('-') && a.contains('X')),
+        // send-keys' value flags are -c -N -t, so in `-tX` the X is a target.
+        "send-keys" => argv.iter().skip(1).any(|a| {
+            a.strip_prefix('-').is_some_and(|f| {
+                f.chars()
+                    .take_while(|c| !matches!(c, 'c' | 'N' | 't'))
+                    .any(|c| c == 'X')
+            })
+        }),
         _ => false,
     }
 }
@@ -3777,6 +3781,15 @@ pub fn list_clients(state: &State, ctx: &ClientCtx, c: ListClients) -> Result<St
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+
+    #[test]
+    fn a_read_only_client_drives_a_mode_only_with_a_real_x_flag() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(read_only_command(&v(&["send-keys", "-X", "cancel"])));
+        assert!(read_only_command(&v(&["send-keys", "-RX", "cancel"])));
+        assert!(!read_only_command(&v(&["send-keys", "-tX", "ls"])));
+        assert!(!read_only_command(&v(&["send-keys", "ls"])));
+    }
     use std::sync::Arc;
 
     use super::*;

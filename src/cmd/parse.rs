@@ -1610,7 +1610,7 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
     };
     let command = flags.present.contains(&'C');
     // A shell command is the first word, the others its `#{1}`, `#{2}`; a
-    // command (`-C`) is all of them, quoted into one command line.
+    // command (`-C`) is the first word alone.
     let mut words = flags.positionals.iter();
     let cmd = match (&delay, flags.positionals.is_empty()) {
         (Some(_), true) => String::new(),

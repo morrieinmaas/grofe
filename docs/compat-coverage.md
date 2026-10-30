@@ -1134,7 +1134,7 @@ Replayed by `tests/compat/b4flags.rs`. Done unless marked divergence.
 | --- | --- | --- |
 | lock-server, lock-session, lock-client, `lock-command`, `lock-after-time` | done | `lock-command` runs in a full-client popup (protocol v1 has no frame to hand the tty over) |
 | previous-layout, select-layout -n -p -o -E | done | |
-| server-access (-a -d -l -r -w) | done | the ACL is kept and listed; not enforced at connect, the socket is 0600 |
+| server-access (-a -d -l -r -w) | partial | the ACL is kept and listed; not enforced at connect, the socket is 0600 |
 | show-prompt-history, clear-prompt-history | done | |
 | Global -h -D -l -N -q -T -v -d -U | done | -v accepted without log files; -T effective for RGB, sixel, usstyle, sync only |
 | KP*, C0 names, UserN, 0xNN in bind-key, send-keys, list-keys | done | hex 0x20..0x7f are kept as distinct unreachable keys; the outer terminal is not put in DECKPAM, so the numpad stays plain digits |
