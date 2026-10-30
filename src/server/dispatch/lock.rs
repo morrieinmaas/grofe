@@ -127,13 +127,24 @@ fn lock_at(state: &State, session: crate::types::SessionId) -> Option<Instant> {
         .parse()
         .ok()
         .filter(|s| *s > 0)?;
-    let last = state
+    let last = last_activity(state, session)?;
+    // tmux's lock timer is one-shot: it fires once per idle spell, and only
+    // new activity arms it again.
+    if state.registry.lock_fired.get(&session) == Some(&last) {
+        return None;
+    }
+    Some(last + Duration::from_secs(secs))
+}
+
+/// The latest activity of `session`'s clients, which a lock that fires now
+/// marks as spent.
+fn last_activity(state: &State, session: crate::types::SessionId) -> Option<Instant> {
+    state
         .clients
         .values()
         .filter(|c| c.session == session)
         .map(|c| c.activity)
-        .max()?;
-    Some(last + Duration::from_secs(secs))
+        .max()
 }
 
 /// Locks the clients of the sessions whose time is up, and notes the
@@ -150,14 +161,20 @@ pub fn tick(state: &mut State, now: Instant) {
         state.registry.locked.remove(&id);
         clients::touch(state, id, now);
     }
-    let due: Vec<ClientId> = state
+    let due: Vec<(ClientId, crate::types::SessionId)> = state
         .clients
         .iter()
         .filter(|(id, _)| !state.registry.locked.contains(id))
         .filter(|(_, c)| lock_at(state, c.session).is_some_and(|at| at <= now))
-        .map(|(id, _)| *id)
+        .map(|(id, c)| (*id, c.session))
         .collect();
-    for id in due {
+    for (id, session) in due {
+        // Spent whether or not the client could be locked, so a client
+        // that cannot be (no `lock-command`, another popup, suspended)
+        // does not keep the deadline in the past.
+        if let Some(last) = last_activity(state, session) {
+            state.registry.lock_fired.insert(session, last);
+        }
         lock_client(state, id);
     }
 }

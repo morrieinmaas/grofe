@@ -412,6 +412,9 @@ pub struct Registry {
     /// The clients now locked, their `lock-command` running in a popup
     /// (`dispatch::lock`).
     pub(crate) locked: BTreeSet<ClientId>,
+    /// Per session, the client activity its `lock-after-time` last fired
+    /// for: tmux's lock timer is one-shot, so it waits for newer activity.
+    pub(crate) lock_fired: BTreeMap<SessionId, Instant>,
     /// `server-access`: the users allowed besides the owner, and whether
     /// each may only read (uid, read-only). Root and the server's own user
     /// are always in it, as tmux's `server_acl_init`.
@@ -457,6 +460,7 @@ impl Default for Registry {
             messages: VecDeque::new(),
             waits: BTreeMap::new(),
             locked: BTreeSet::new(),
+            lock_fired: BTreeMap::new(),
             acl: [0, nix::unistd::getuid().as_raw()]
                 .into_iter()
                 .map(|uid| (uid, false))
@@ -3957,6 +3961,19 @@ mod tests {
             .options
             .set(Owner::Session(session), name, value, false)
             .unwrap();
+    }
+
+    /// `lock-after-time` fires once per idle spell, as tmux's one-shot
+    /// session timer: a client that cannot be locked (no `lock-command`,
+    /// no session, another popup open, suspended) does not leave the
+    /// deadline in the past for the actor to spin on.
+    #[test]
+    fn a_lock_that_cannot_happen_does_not_wake_the_server_again() {
+        let (mut state, _) = state_with_client();
+        set_session_option(&mut state, "status-right", "x");
+        set_session_option(&mut state, "lock-after-time", "1");
+        set_session_option(&mut state, "lock-command", "");
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 1);
     }
 
     /// G2: with a clock in the status line, an idle server wakes only for
