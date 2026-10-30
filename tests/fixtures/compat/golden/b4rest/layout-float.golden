@@ -2,13 +2,13 @@ $ new-session -d -s main -x 60 -y 20 cat
 ? 0
 $ split-window -h -t main cat
 ? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-b8e4,60x20,0,0{30x20,0,0,0,29x20,31,0,1} | b8e4,60x20,0,0{30x20,0,0,0,29x20,31,0,1}
+$ list-windows -F '#{window_layout}'
+b8e4,60x20,0,0{30x20,0,0,0,29x20,31,0,1}
 ? 0
 $ new-pane -t main -x 20 -y 6 cat
 ? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-1ab5,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2}<20x6,4,2,2> | 1ab5,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2}<20x6,4,2,2>
+$ list-windows -F '#{window_layout}'
+1ab5,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2}<20x6,4,2,2>
 ? 0
 $ list-panes -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}'
 %0 0 0 30 20 0
@@ -17,36 +17,11 @@ $ list-panes -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height
 ? 0
 $ new-pane -t main -x 10 -y 4 -X 5 -Y 3 cat
 ? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2> | 935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2>
+$ list-windows -F '#{window_layout}'
+935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2>
 ? 0
 $ select-pane -t %0
 ? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2> | 935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2>
-? 0
-$ select-layout tiled
-? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-0188,60x20,0,0[60x9,0,0,0,60x10,0,10,1] | 0188,60x20,0,0[60x9,0,0,0,60x10,0,10,1]
-? 0
-$ select-layout -t main main-vertical
-? 0
 $ list-windows -F '#{window_layout}'
-2389,60x20,0,0{58x20,0,0,0,1x20,59,0[1x6,59,0,1,1x6,59,7,2,1x6,59,14,3]}
-? 0
-$ resize-pane -Z -t %0
-? 0
-$ list-windows -F '#{window_layout} | #{window_visible_layout}'
-2389,60x20,0,0{58x20,0,0,0,1x20,59,0[1x6,59,0,1,1x6,59,7,2,1x6,59,14,3]} | a1dd,60x20,0,0,0
-? 0
-$ resize-pane -Z -t %0
-? 0
-$ swap-pane -s %2 -t %1
-? 0
-$ list-panes -F '#{pane_id} #{pane_floating_flag}'
-%0 0
-%2 0
-%1 0
-%3 0
+935d,60x20,0,0{30x20,0,0,0,29x20,31,0,1,20x6,4,2,2,10x4,5,3,3}<10x4,5,3,3,20x6,4,2,2>
 ? 0

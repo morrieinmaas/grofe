@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use tokio::sync::oneshot;
@@ -962,6 +962,20 @@ impl InputHook for PromptHook {
         }
         if let Input::Focus(_) = input {
             return None;
+        }
+        // A paste is typed key by key (recorded): an Enter in it answers the
+        // prompt, and what follows goes on to the pane.
+        if let Input::Paste { data, .. } = input {
+            let mut decoder = crate::server::input::Decoder::new();
+            let now = Instant::now();
+            let mut typed = decoder.feed(data, now, Duration::ZERO);
+            typed.extend(decoder.flush(now, Duration::ZERO));
+            for key in typed {
+                if let Input::Key(key) = key {
+                    clients::type_key(state, client, key);
+                }
+            }
+            return Some(Routed::Consumed);
         }
         // `status-keys`, `word-separators` and the buffer `C-y` pastes,
         // read before the key.

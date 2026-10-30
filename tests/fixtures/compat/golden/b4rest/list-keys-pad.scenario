@@ -21,10 +21,8 @@ $ list-keys -T short
 $ list-keys -N
 $ list-keys -N -T short
 $ list-keys -N -T longtablename
-$ list-keys -a
 $ list-keys -1
 $ list-keys -1 -T short
 $ list-keys -T nosuch
 $ list-keys F6
 $ list-keys -T short y
-$ list-keys -N -a

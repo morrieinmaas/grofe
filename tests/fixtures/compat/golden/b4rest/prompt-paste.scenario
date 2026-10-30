@@ -1,6 +1,7 @@
 # B4 rest: a bracketed paste into a command prompt.
-$ new-session -d -s main -x 60 -y 6 cat
+$ new-session -d -s main -n w0 -x 60 -y 6 cat
 $ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ""
 client 60x6 attach -t main
 $& command-prompt -p 'say:' 'set -g @said "%%"'
 $ run-shell 'sleep 0.5'

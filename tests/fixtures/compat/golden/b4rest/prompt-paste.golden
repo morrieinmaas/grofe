@@ -1,6 +1,8 @@
-$ new-session -d -s main -x 60 -y 6 cat
+$ new-session -d -s main -n w0 -x 60 -y 6 cat
 ? 0
 $ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ""
 ? 0
 client 60x6 attach -t main
 $& command-prompt -p 'say:' 'set -g @said "%%"'
@@ -32,7 +34,7 @@ screen
 |
 |
 |
-| [main] 1:sh*                                  "<HOST>"
+| [main] 1:w0*
 keys Enter
 $ show -gv @said
 x

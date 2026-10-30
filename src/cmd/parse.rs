@@ -2761,8 +2761,15 @@ impl ConfigReader<'_> {
     // `$NAME` before the assignment on the same line sees it too.
     fn commands(&mut self, text: &str) -> Result<Vec<Vec<String>>, ParseError> {
         let mut applied = 0;
+        // A line's newline follows a `$` at its end, which is then a plain
+        // `$`; at the end of a string it is a syntax error.
+        let text = if text.ends_with('$') {
+            format!("{text}\n")
+        } else {
+            text.to_string()
+        };
         loop {
-            let mut cmds = split_command_string(text)?;
+            let mut cmds = split_command_string(&text)?;
             let assigning: Vec<usize> = (0..cmds.len())
                 .filter(|i| cmds[*i].first().is_some_and(|w| is_assignment(w)))
                 .collect();
