@@ -178,7 +178,7 @@ pub fn prompt_dialect(state: &State, opener: Dialect, has_template: bool) -> Dia
     }
 }
 
-/// Whether a request's `argv` runs `load-buffer -` (in either dialect), so
+/// Whether a request's `argv` runs `load-buffer -` or `source-file -` (in either dialect), so
 /// the CLI sends its stdin with it, as tmux's client reads its own stdin
 /// for the server (TM.7).
 pub fn loads_stdin(argv: &[String], dialect: Dialect) -> bool {
@@ -190,7 +190,11 @@ pub fn loads_stdin(argv: &[String], dialect: Dialect) -> bool {
             Dialect::Tmux => tmux::resolve(verb).map(|s| s.name).unwrap_or(""),
             Dialect::Grofe => verb.as_str(),
         };
-        verb == "load-buffer" && rest.last().is_some_and(|p| p == "-")
+        match verb {
+            "load-buffer" => rest.last().is_some_and(|p| p == "-"),
+            "source-file" | "source" => rest.iter().any(|p| p == "-"),
+            _ => false,
+        }
     })
 }
 

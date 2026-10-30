@@ -1,0 +1,15 @@
+# B4 rest: source-file - reads the client's stdin. The replayer's stdin is
+# empty, so a CLI client sources nothing; a key's source-file has no stdin
+# to read (the client is attached) and says so on the status line.
+$ new-session -d -s main -n first -x 60 -y 6 cat
+$ source-file -
+$ source-file -v -
+$ source-file -n -
+$ source-file -q -
+$ bind -n F5 source-file -
+$ bind -n F6 source-file -q -
+client 60x6 attach -t main
+keys Escape '[15~'
+screen
+keys Escape '[17~'
+screen

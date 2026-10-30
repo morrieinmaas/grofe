@@ -2843,6 +2843,10 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
         } else {
             given.clone()
         };
+        if given == "-" {
+            files.push(PathBuf::from("-"));
+            continue;
+        }
         match glob_files(&source_pattern(&ctx.cwd, &given)) {
             Ok(found) => files.extend(found),
             Err(GlobError::NoMatch) if c.quiet => {}
@@ -2868,7 +2872,7 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
             held.frames.extend(files.by_ref().map(|path| {
                 let rest = SourceFile {
                     format: false,
-                    paths: vec![glob_escape(&path)],
+                    paths: vec![if path == Path::new("-") { "-".into() } else { glob_escape(&path) }],
                     ..c.clone()
                 };
                 super::client::HeldFrame {
@@ -2979,7 +2983,7 @@ fn source_one(
 ) -> Result<String, String> {
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
-    if tmux && path.extension().is_none_or(|e| e != "toml") {
+    if path == Path::new("-") || tmux && path.extension().is_none_or(|e| e != "toml") {
         let depth = source_depth();
         if depth >= MAX_SOURCE_DEPTH {
             return Err("too many nested files".to_string());
@@ -3238,7 +3242,15 @@ fn source_tmux_file(
     parse_only: bool,
     verbose: bool,
 ) -> Result<String, String> {
-    let text = read_config(path)?;
+    let text = if path == Path::new("-") {
+        // The CLI client's stdin; an attached client has none (tmux's EBADF).
+        match &state.cli_io {
+            Some(crate::server::CliIo { stdin: Some(data), .. }) => String::from_utf8_lossy(data).into_owned(),
+            _ => return Err("Bad file descriptor: -".to_string()),
+        }
+    } else {
+        read_config(path)?
+    };
     let at = |line: usize, e: &dyn std::fmt::Display| format!("{}:{line}: {e}", path.display());
     // tmux collects what it refuses while parsing and prints it on stdout
     // when the file is done (`cfg_print_causes`), and the request fails.

@@ -14,3 +14,61 @@ fn the_mouse_ends_clock_mode() {
 fn source_file_target_is_the_context() {
     check("b4rest", "source-file-target", &[]);
 }
+
+/// `source-file -` from a key, and from a CLI whose stdin is empty.
+#[test]
+fn source_file_dash_is_the_clients_stdin() {
+    check("b4rest", "source-file-stdin", &[]);
+}
+
+/// The CLI's stdin is sourced: its commands, a `-v` trace, the path `-` in
+/// an error and `-n` parsing only; a failing line refuses the file.
+#[test]
+fn source_file_dash_reads_what_the_cli_pipes() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cli = crate::fe_1::grofe_cli(dir.path());
+    let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let pipe = |words: &[&str], text: &str| {
+        let mut child = cli
+            .command(&argv(words))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let show = |name: &str| cli.run(&argv(&["show-options", "-gv", name])).1;
+    cli.run(&argv(&["new-session", "-d", "-s", "main", "cat"]));
+
+    assert_eq!(
+        pipe(&["source-file", "-"], "set -g @a one\nset -g @b two\n"),
+        (Some(0), String::new(), String::new())
+    );
+    assert_eq!((show("@a").as_str(), show("@b").as_str()), ("one\n", "two\n"));
+    let (code, out, _) = pipe(&["source-file", "-v", "-"], "set -g @c three\n");
+    assert_eq!((code, out.as_str()), (Some(0), "-:1: set-option -g @c three\n"));
+    assert_eq!(show("@c"), "three\n");
+    let (code, out, _) = pipe(&["source-file", "-n", "-"], "set -g @d four\n");
+    assert_eq!((code, out.as_str()), (Some(0), ""));
+    assert_eq!(show("@d"), "");
+    let (code, out, _) = pipe(&["source-file", "-"], "set -g @e five\nbogus\n");
+    assert_eq!(code, Some(1));
+    assert_eq!(out, "-:2: unknown command: bogus\n");
+    assert_eq!(show("@e"), "");
+    cli.run(&argv(&["kill-server"]));
+}

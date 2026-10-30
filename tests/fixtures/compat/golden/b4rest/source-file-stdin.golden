@@ -1,0 +1,31 @@
+$ new-session -d -s main -n first -x 60 -y 6 cat
+? 0
+$ source-file -
+? 0
+$ source-file -v -
+? 0
+$ source-file -n -
+? 0
+$ source-file -q -
+? 0
+$ bind -n F5 source-file -
+? 0
+$ bind -n F6 source-file -q -
+? 0
+client 60x6 attach -t main
+keys Escape '[15~'
+screen
+|
+|
+|
+|
+|
+| Bad file descriptor: -
+keys Escape '[17~'
+screen
+|
+|
+|
+|
+|
+| Bad file descriptor: -
