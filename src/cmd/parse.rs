@@ -4661,6 +4661,7 @@ mod tests {
                 previous: true,
                 key_table: Some("prefix".to_string()),
                 client: None,
+                keep_zoom: false,
             }))
         );
         assert_eq!(
@@ -4672,6 +4673,7 @@ mod tests {
                 previous: false,
                 key_table: None,
                 client: None,
+                keep_zoom: false,
             }))
         );
     }

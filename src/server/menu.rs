@@ -1603,6 +1603,7 @@ mod tests {
             look: Look::default(),
             no_mouse: true,
             event: None,
+            key: None,
         };
         s.edge(false);
         s
