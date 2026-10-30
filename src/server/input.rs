@@ -274,6 +274,30 @@ pub struct Mouse {
     pub mods: Mods,
 }
 
+
+impl Mouse {
+    /// tmux's `m->b`: the button (0 to 2, 3 for a release), 32 for motion,
+    /// 64 for the wheel, and 4, 8, 16 for Shift, Meta and Ctrl.
+    pub fn code(&self) -> u32 {
+        let button = |b: MouseButton| match b {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+            MouseButton::Other(n) => 128 + u32::from(n.saturating_sub(8)),
+        };
+        let base = match self.kind {
+            MouseKind::Down(b) => button(b),
+            MouseKind::Up(_) => 3,
+            MouseKind::Drag(b) => 32 + button(b),
+            MouseKind::Move => 35,
+            MouseKind::WheelUp => 64,
+            MouseKind::WheelDown => 65,
+            MouseKind::WheelLeft => 66,
+            MouseKind::WheelRight => 67,
+        };
+        base + 4 * u32::from(self.mods.shift) + 8 * u32::from(self.mods.alt) + 16 * u32::from(self.mods.ctrl)
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseKind {
     Down(MouseButton),

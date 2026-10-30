@@ -49,7 +49,7 @@ use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Mouse, MouseButton, MouseKind, Routed};
 use crate::server::mouse::MouseTarget;
 use crate::server::pane::{CellFlags, SnapCell};
-use crate::server::popup::Lines;
+use crate::server::popup::{self, Lines};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::status::{self, Style};
 use crate::server::{State, clients, dispatch, prompt};
@@ -152,6 +152,9 @@ pub struct Look {
     pub mouse: bool,
     /// `-C`.
     pub start: Start,
+    /// A popup's own menu: choosing a row calls [`popup::menu_done`] with
+    /// the row's command text.
+    pub popup: bool,
 }
 
 /// The row a menu starts on when it takes no mouse (tmux's
@@ -1088,6 +1091,12 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
     let Some(Some(row)) = shown.rows.get_mut(i).map(Option::take) else {
         return Routed::Consumed;
     };
+    if shown.look.popup {
+        if let Action::Run(key) = row.action {
+            popup::menu_done(state, id, &key);
+        }
+        return Routed::Consumed;
+    }
     match row.action {
         // As tmux appends the item's command to the client's queue: behind
         // the rest of the binding that waits for the menu (recorded: `BM`).

@@ -1,0 +1,63 @@
+# B4 rest: a popup moves with a Meta drag or a drag of its border, resizes
+# with the right button on its border, and a right click outside it or on
+# its left or top edge opens its menu (popup_key_cb). SGR reports are
+# 1-based; the box is 30 by 8 with its top left at column 10, row 4.
+$ new-session -d -s main -n first -x 60 -y 20 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g mouse on
+client 60x20 attach -t main
+$& display-popup -T P -w 30 -h 8 -x 10 -y 12 cat
+screen P
+# Meta drag from inside: the first drag report arms it, the next ones move.
+keys Escape '[<8;20;8M'
+keys Escape '[<40;21;9M'
+keys Escape '[<40;24;10M'
+keys Escape '[<40;26;11M'
+keys Escape '[<11;26;11m'
+screen
+# A left drag of the border moves it, the same way; a corner of the client stops it.
+keys Escape '[<0;21;8M'
+keys Escape '[<32;22;8M'
+keys Escape '[<32;24;6M'
+keys Escape '[<0;24;6m'
+screen
+keys Escape '[<0;21;6M'
+keys Escape '[<32;20;6M'
+keys Escape '[<32;1;1M'
+keys Escape '[<0;1;1m'
+screen
+keys Escape '[<32;30;12M'
+keys Escape '[<0;30;12m'
+screen
+# The right button on the bottom border resizes it; never below 3 cells.
+keys Escape '[<2;15;8M'
+keys Escape '[<34;16;8M'
+keys Escape '[<34;41;13M'
+keys Escape '[<2;41;13m'
+screen
+keys Escape '[<2;21;12M'
+keys Escape '[<34;21;12M'
+keys Escape '[<34;2;2M'
+keys Escape '[<34;3;3M'
+keys Escape '[<34;4;4M'
+keys Escape '[<2;4;4m'
+screen
+# The popup's menu: a right press outside it, or on its left or top edge.
+# It opens above the pointer with no row chosen; a key picks a row.
+$ set-buffer -b mybuf hello
+# Paste has no row: buffer_name is not a format of the menu (as recorded).
+keys Escape '[<2;31;11M'
+screen Fill Space
+keys C
+screen
+keys Escape '[<2;30;10M'
+screen Fill Space
+keys F
+screen
+keys Escape '[<2;1;6M'
+screen Fill Space
+keys Escape '[<2;1;1M'
+screen Fill Space
+keys q
+screen

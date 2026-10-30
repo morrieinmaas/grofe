@@ -237,6 +237,10 @@ pub struct ClientEntry {
     /// Whether the outer terminal has focus, from its focus reports (the
     /// client asks for them); a client starts focused, as in tmux.
     pub focused: bool,
+    /// The mouse report before the one being routed, as tmux's `m->lx`,
+    /// `m->ly` and `m->lb` carry it: client cell and report code.
+    pub mouse_prev: Option<(u16, u16, u32)>,
+    mouse_last: Option<(u16, u16, u32)>,
     /// A message shown on the status line's first row until it expires or
     /// a key is pressed (a failed binding's error, as tmux shows it), in
     /// the language [`status::draw`] reads, and when it expires (`None`
@@ -427,6 +431,8 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             decoder: Decoder::new(),
             keys: KeyState::new(),
             focused: true,
+            mouse_prev: None,
+            mouse_last: None,
             message: None,
             status_rows: Vec::new(),
             status_at: 0,
@@ -2993,6 +2999,11 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
         }
         hooks::client_focus(state, id, focused);
     }
+    if let Input::Mouse(m) = &input
+        && let Some(c) = state.clients.get_mut(&id)
+    {
+        c.mouse_prev = c.mouse_last.replace((m.col, m.row, m.code()));
+    }
     let hooks = state.registry.input_hooks.clone();
     let hooked = hooks
         .iter()
@@ -3541,6 +3552,8 @@ mod tests {
                 decoder: Decoder::new(),
                 keys: KeyState::new(),
                 focused: true,
+                mouse_prev: None,
+                mouse_last: None,
                 message: None,
                 status_rows: Vec::new(),
                 status_at: 0,

@@ -84,3 +84,9 @@ fn menu_items_run_for_the_pane_the_menu_was_opened_for() {
 fn popup_ee_closes_on_a_zero_exit_only() {
     check("b4rest", "popup-ee", &[]);
 }
+
+/// A popup's drag, resize and menu.
+#[test]
+fn a_popup_takes_the_mouse() {
+    check("b4rest", "popup-mouse", &[]);
+}

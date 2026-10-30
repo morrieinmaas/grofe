@@ -279,6 +279,8 @@ struct Popup {
     exited: Option<Option<i32>>,
     /// The CLI reply of a `display-popup` waiting for this popup to close.
     waiting: Option<oneshot::Sender<Result<String, Failure>>>,
+    /// The mouse: a drag under way, and the last report seen.
+    drag: MouseState,
 }
 
 /// A popup closed while its command ran.
@@ -346,6 +348,7 @@ pub fn open(
             running: Running { handle, forwarder },
             exited: None,
             waiting: None,
+            drag: MouseState::default(),
         },
     );
     clients::mark_dirty(state, id);
@@ -619,6 +622,10 @@ impl InputHook for PopupHook {
         input: &Input,
         _now: Instant,
     ) -> Option<Routed> {
+        state.popups.open.get(&client)?;
+        if let Input::Mouse(m) = input && mouse_event(state, client, m) {
+            return Some(Routed::Consumed);
+        }
         let popup = state.popups.open.get(&client)?;
         let may_close = !popup.frame.close_on_exit || popup.exited.is_some();
         let running = popup.exited.is_none();
@@ -645,6 +652,249 @@ impl InputHook for PopupHook {
         }
         Some(Routed::Consumed)
     }
+}
+
+/// A popup being moved or resized with the mouse.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Dragging {
+    #[default]
+    Off,
+    Move,
+    Size,
+}
+
+/// What a popup keeps of the mouse (tmux's `dragging`, `dx` and `dy`).
+#[derive(Debug, Default)]
+struct MouseState {
+    dragging: Dragging,
+    dx: i32,
+    dy: i32,
+}
+
+const MASK_BUTTONS: u32 = 195;
+const MASK_MODIFIERS: u32 = 4 | 8 | 16;
+const MASK_META: u32 = 8;
+const MASK_DRAG: u32 = 32;
+const BUTTON_LEFT: u32 = 0;
+const BUTTON_RIGHT: u32 = 2;
+
+/// A popup's own menu: label, shortcut key (also what choosing runs).
+const MENU_ITEMS: &[(&str, &str)] = &[
+    ("Close", "q"),
+    ("#{?buffer_name,Paste #[underscore]#{buffer_name},}", "p"),
+    ("", ""),
+    ("Fill Space", "F"),
+    ("Centre", "C"),
+    ("", ""),
+    ("To Horizontal Pane", "h"),
+    ("To Vertical Pane", "v"),
+];
+
+/// A mouse report for the popup, as tmux 3.7b's `popup_key_cb` takes it
+/// before the keys: a drag under way goes on, a report outside the box
+/// is eaten (a right press opens the menu), a Meta drag or a drag of the
+/// border moves the box (left button) or resizes it (right button), and a
+/// right press on the left or top edge opens the menu. Returns whether
+/// the report is used up; if not it goes to the command.
+fn mouse_event(state: &mut State, id: ClientId, m: &input::Mouse) -> bool {
+    let Some(client) = state.clients.get(&id) else {
+        return true;
+    };
+    let size = client.size;
+    let (lx, ly, lb) = client.mouse_prev.unwrap_or_default();
+    let Some(popup) = state.popups.open.get(&id) else {
+        return true;
+    };
+    let frame = popup.frame.fitted(size);
+    let (px, py) = frame.at;
+    let (sx, sy) = (i32::from(frame.size.0), i32::from(frame.size.1));
+    let (mx, my) = (i32::from(m.col), i32::from(m.row));
+    let b = m.code();
+    let drag = |code: u32| code & MASK_DRAG != 0;
+    let buttons = |code: u32| code & MASK_BUTTONS;
+
+    if popup.drag.dragging != Dragging::Off {
+        drag_to(state, id, m, size);
+        return true;
+    }
+    if mx < px || mx > px + sx - 1 || my < py || my > py + sy - 1 {
+        if buttons(b) == BUTTON_RIGHT {
+            open_menu(state, id, m);
+        }
+        return true;
+    }
+    #[derive(PartialEq)]
+    enum Border {
+        None,
+        Left,
+        Right,
+        Top,
+        Bottom,
+    }
+    let mut border = Border::None;
+    if frame.lines.is_some() {
+        border = if mx == px {
+            Border::Left
+        } else if mx == px + sx - 1 {
+            Border::Right
+        } else if my == py {
+            Border::Top
+        } else if my == py + sy - 1 {
+            Border::Bottom
+        } else {
+            Border::None
+        };
+    }
+    if b & MASK_MODIFIERS == 0
+        && buttons(b) == BUTTON_RIGHT
+        && matches!(border, Border::Left | Border::Top)
+    {
+        open_menu(state, id, m);
+        return true;
+    }
+    if b & MASK_MODIFIERS == MASK_META || (border != Border::None && !drag(lb)) {
+        if !drag(b) {
+            return true;
+        }
+        let Some(popup) = state.popups.open.get_mut(&id) else {
+            return true;
+        };
+        if buttons(lb) == BUTTON_LEFT {
+            popup.drag.dragging = Dragging::Move;
+        } else if buttons(lb) == BUTTON_RIGHT {
+            popup.drag.dragging = Dragging::Size;
+        }
+        popup.drag.dx = i32::from(lx) - px;
+        popup.drag.dy = i32::from(ly) - py;
+        return true;
+    }
+    false
+}
+
+/// `popup_handle_drag`: a report while the box is being moved or resized.
+fn drag_to(state: &mut State, id: ClientId, m: &input::Mouse, (cols, rows): (u16, u16)) {
+    let Some(popup) = state.popups.open.get_mut(&id) else {
+        return;
+    };
+    if m.code() & MASK_DRAG == 0 {
+        popup.drag.dragging = Dragging::Off;
+        return;
+    }
+    let (cols, rows) = (i32::from(cols), i32::from(rows));
+    let (mx, my) = (i32::from(m.col), i32::from(m.row));
+    let now = popup.frame.fitted((cols as u16, rows as u16));
+    let (px, py) = now.at;
+    let (sx, sy) = (i32::from(now.size.0), i32::from(now.size.1));
+    match popup.drag.dragging {
+        Dragging::Off => {}
+        Dragging::Move => {
+            let place = |at: i32, d: i32, len: i32, room: i32| {
+                if at < d {
+                    0
+                } else if at - d + len > room {
+                    room - len
+                } else {
+                    at - d
+                }
+            };
+            let at = (
+                place(mx, popup.drag.dx, sx, cols),
+                place(my, popup.drag.dy, sy, rows),
+            );
+            popup.frame.at = at;
+            popup.drag.dx = mx - at.0;
+            popup.drag.dy = my - at.1;
+        }
+        Dragging::Size => {
+            let least = if popup.frame.lines.is_none() { 1 } else { 3 };
+            if mx < px + least || my < py + least {
+                return;
+            }
+            popup.frame.size = (
+                u16::try_from(mx - px).unwrap_or(u16::MAX),
+                u16::try_from(my - py).unwrap_or(u16::MAX),
+            );
+            resize_pty(state, id);
+        }
+    }
+    clients::mark_dirty(state, id);
+}
+
+/// The command's pty takes the size of the box's inside, if that changed.
+fn resize_pty(state: &mut State, id: ClientId) {
+    let Some(size) = state.clients.get(&id).map(|c| c.size) else {
+        return;
+    };
+    let Some(popup) = state.popups.open.get_mut(&id) else {
+        return;
+    };
+    let (_, inside) = popup.frame.fitted(size).inside();
+    if inside != popup.pty && inside.0 > 0 && inside.1 > 0 {
+        popup.pty = inside;
+        let _ = popup.running.handle.resize(inside.0, inside.1);
+    }
+}
+
+/// Opens the popup's menu at the pointer (`popup_menu_items`).
+fn open_menu(state: &mut State, id: ClientId, m: &input::Mouse) {
+    use crate::server::menu::{self, Look, Menu, MenuItem, Position};
+    let Some(ctx) = state.clients.get(&id).map(|c| c.ctx.clone()) else {
+        return;
+    };
+    let items = MENU_ITEMS
+        .iter()
+        .map(|(label, key)| {
+            if label.is_empty() {
+                return MenuItem::Separator;
+            }
+            MenuItem::Command {
+                label: (*label).to_string(),
+                key: input::parse_key(key).ok(),
+                command: (*key).to_string(),
+            }
+        })
+        .collect();
+    let menu = Menu {
+        title: None,
+        items,
+        x: Position::Pointer(m.col),
+        y: Position::Pointer(m.row),
+        look: Look {
+            mouse: true,
+            popup: true,
+            ..Look::default()
+        },
+    };
+    menu::open(state, &ctx, id, menu);
+}
+
+/// Row `key` of the popup's menu was chosen (`popup_menu_done`).
+pub fn menu_done(state: &mut State, id: ClientId, key: &str) {
+    let Some(size) = state.clients.get(&id).map(|c| c.size) else {
+        return;
+    };
+    let Some(popup) = state.popups.open.get_mut(&id) else {
+        return;
+    };
+    let now = popup.frame.fitted(size);
+    match key {
+        "q" => close(state, id),
+        "F" => {
+            popup.frame.at = (0, 0);
+            popup.frame.size = size;
+        }
+        "C" => {
+            popup.frame.at = (
+                i32::from(size.0 / 2) - i32::from(now.size.0 / 2),
+                i32::from(size.1 / 2) - i32::from(now.size.1 / 2),
+            );
+        }
+        // ponytail: tmux turns the popup's process into a pane; grofe's
+        // popups are not panes.
+        "h" | "v" => clients::show_message(state, id, "can't turn a popup into a pane"),
+        _ => {}
+    }
+    clients::mark_dirty(state, id);
 }
 
 /// A mouse report for a popup's command, as tmux 3.7b forwards one
@@ -816,7 +1066,9 @@ fn draw_box(screen: &mut Screen, frame: &Frame, lines: Lines, style: &Style) {
     let Some(title) = frame.title.as_deref() else {
         return;
     };
-    let room = usize::try_from(w - 4).unwrap_or(0);
+    // tmux passes `nx - 4` as an unsigned width, so a 3 wide box has no
+    // limit but its own edge, and overwrites its top right corner.
+    let room = usize::try_from(if w < 4 { w - 2 } else { w - 4 }).unwrap_or(0);
     let width = visible_width(title).min(room);
     if width == 0 {
         return;

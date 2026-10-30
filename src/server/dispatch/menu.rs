@@ -91,6 +91,7 @@ pub fn display_menu(state: &mut State, ctx: &ClientCtx, c: DisplayMenu) -> Resul
             stay_open: c.stay_open,
             mouse: c.mouse,
             start,
+            popup: false,
         },
     };
     if menu::open(state, ctx, id, menu) {
