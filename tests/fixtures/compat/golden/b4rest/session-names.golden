@@ -1,0 +1,80 @@
+$ new-session -d -s 'a:b' -x 40 -y 10 cat
+? 0
+$ list-sessions -F '[#{session_name}]'
+[a:b]
+? 0
+$ new-session -d -s 'c.d' -x 40 -y 10 cat
+? 0
+$ new-session -d -s ':.:' -x 40 -y 10 cat
+? 0
+$ new-session -d -s ' lead' -x 40 -y 10 cat
+? 0
+$ new-session -d -s 'trail ' -x 40 -y 10 cat
+? 0
+$ new-session -d -s '$7' -x 40 -y 10 cat
+? 0
+$ new-session -d -s '' -x 40 -y 10 cat
+? 0
+$ new-session -d -s '=x' -x 40 -y 10 cat
+? 0
+$ new-session -d -s 'tab	x' -x 40 -y 10 cat
+! invalid session name: tab	x
+? 1
+$ new-session -d -s 'é1' -x 40 -y 10 cat
+? 0
+$ list-sessions -F '[#{session_name}]'
+[]
+[ lead]
+[$7]
+[:.:]
+[=x]
+[a:b]
+[c.d]
+[trail ]
+[é1]
+? 0
+$ rename-session -t 'a_b' 'e:f'
+! can't find session: a_b
+? 1
+$ rename-session -t 'e_f' 'g.h'
+! can't find session: e_f
+? 1
+$ rename-session -t 'g_h' ''
+! can't find session: g_h
+? 1
+$ list-sessions -F '[#{session_name}]'
+[]
+[ lead]
+[$7]
+[:.:]
+[=x]
+[a:b]
+[c.d]
+[trail ]
+[é1]
+? 0
+$ has-session -t 'a:b'
+! can't find window: b
+? 1
+$ has-session -t 'e_f'
+! can't find session: e_f
+? 1
+$ new-session -d -s 'e_f' -x 40 -y 10 cat
+? 0
+$ new-session -d -s 'e:f' -x 40 -y 10 cat
+? 0
+$ new-window -t 'e_f:' -n 'w:1.x'
+? 0
+$ list-windows -t 'e_f' -F '[#{window_name}]'
+[sh]
+[w:1.x]
+? 0
+$ rename-window -t 'e_f:1' 'p:q.r'
+? 0
+$ list-windows -t 'e_f' -F '[#{window_name}]'
+[p:q.r]
+[w:1.x]
+? 0
+$ select-window -t 'e_f:p:q.r'
+! can't find pane: r
+? 1

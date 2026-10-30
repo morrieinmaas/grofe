@@ -1,0 +1,20 @@
+# B4 rest: the layout strings of a window with a floating pane.
+$ new-session -d -s main -x 60 -y 20 cat
+$ split-window -h -t main cat
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ new-pane -t main -x 20 -y 6 cat
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ list-panes -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_floating_flag}'
+$ new-pane -t main -x 10 -y 4 -X 5 -Y 3 cat
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ select-pane -t %0
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ select-layout tiled
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ select-layout -t main main-vertical
+$ list-windows -F '#{window_layout}'
+$ resize-pane -Z -t %0
+$ list-windows -F '#{window_layout} | #{window_visible_layout}'
+$ resize-pane -Z -t %0
+$ swap-pane -s %2 -t %1
+$ list-panes -F '#{pane_id} #{pane_floating_flag}'

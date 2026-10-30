@@ -1,0 +1,38 @@
+# B4 rest: pane-mode-changed fires when a pane enters or leaves a mode
+# (copy mode, the clock, a chooser, a view mode); client-active when a
+# client's input or resize makes it the latest client of its window.
+$ new-session -d -s main -x 60 -y 10 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g @log ''
+$ set-hook -g pane-mode-changed 'set -gF @log "#{@log}M[#{pane_mode}]#{pane_id};"'
+$ set-hook -g client-active 'set -gF @log "#{@log}A;"'
+$ copy-mode
+$ show -gv @log
+$ copy-mode -q
+$ show -gv @log
+$ clock-mode
+$ show -gv @log
+$ send-keys q
+$ show -gv @log
+$ copy-mode
+$ copy-mode
+$ clock-mode
+$ show -gv @log
+$ copy-mode -q
+$ show -gv @log
+$ set -g @log ''
+$ choose-tree
+$ show -gv @log
+client 60x10 attach -t main
+$ show -gv @log
+keys x
+$ show -gv @log
+keys y
+$ show -gv @log
+keys q
+$ show -gv @log
+$ set -g @log ''
+keys C-b '['
+$ show -gv @log
+keys q
+$ show -gv @log

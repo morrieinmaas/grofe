@@ -1,0 +1,55 @@
+# B4 rest: paste buffer edge cases.
+$ new-session -d -s main -x 40 -y 6 cat
+$ show-buffer
+$ list-buffers
+$ delete-buffer
+$ delete-buffer -b nosuch
+$ set-buffer -b x -a abc
+$ show-buffer -b x
+$ set-buffer hello
+$ set-buffer -a ' world'
+$ show-buffer
+$ set-buffer -b a1 one
+$ set-buffer -b a1 -a two
+$ show-buffer -b a1
+$ set-buffer -b a1 -n b1
+$ list-buffers -F '#{buffer_name}'
+$ set-buffer -b b1 -n buffer0001
+$ set-buffer -b nosuch -n y
+$ set-buffer -b c1 c
+$ set-buffer -b c1 -n b1
+$ set-buffer ''
+$ set-buffer -b e ''
+$ show-buffer -b e
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+$ set-buffer -b 'sp ace' v
+$ set-buffer -b 'a:b' v
+$ list-buffers -F '[#{buffer_name}]'
+$ set-buffer -n z
+$ set-buffer -w -n zz v
+$ delete-buffer -b b1
+$ delete-buffer -b b1
+$ set-buffer one
+$ set-buffer two
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ show-buffer -b buffer0000
+$ paste-buffer -b nosuch
+$ paste-buffer -b nosuch -p
+$ save-buffer -b nosuch /tmp/x
+$ save-buffer
+$ save-buffer -b two ''
+$ set-option -g buffer-limit 3
+$ set-buffer 1
+$ set-buffer 2
+$ set-buffer 3
+$ set-buffer 4
+$ set-buffer 5
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ set-buffer -b named n
+$ set-buffer 6
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ set-option -g buffer-limit 1
+$ set-buffer 7
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+$ set-buffer -b named n2
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'

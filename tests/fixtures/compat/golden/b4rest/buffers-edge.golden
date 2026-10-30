@@ -1,0 +1,182 @@
+$ new-session -d -s main -x 40 -y 6 cat
+? 0
+$ show-buffer
+! no buffers
+? 1
+$ list-buffers
+? 0
+$ delete-buffer
+! no buffer
+? 1
+$ delete-buffer -b nosuch
+! unknown buffer: nosuch
+? 1
+$ set-buffer -b x -a abc
+? 0
+$ show-buffer -b x
+abc
+? 0
+$ set-buffer hello
+? 0
+$ set-buffer -a ' world'
+? 0
+$ show-buffer
+ world
+? 0
+$ set-buffer -b a1 one
+? 0
+$ set-buffer -b a1 -a two
+? 0
+$ show-buffer -b a1
+onetwo
+? 0
+$ set-buffer -b a1 -n b1
+? 0
+$ list-buffers -F '#{buffer_name}'
+b1
+buffer1
+buffer0
+x
+? 0
+$ set-buffer -b b1 -n buffer0001
+? 0
+$ set-buffer -b nosuch -n y
+! unknown buffer: nosuch
+? 1
+$ set-buffer -b c1 c
+? 0
+$ set-buffer -b c1 -n b1
+? 0
+$ set-buffer ''
+? 0
+$ set-buffer -b e ''
+? 0
+$ show-buffer -b e
+! no buffer e
+? 1
+$ list-buffers -F '#{buffer_name} #{buffer_size}'
+b1 1
+buffer0001 6
+buffer1 6
+buffer0 5
+x 3
+? 0
+$ set-buffer -b 'sp ace' v
+? 0
+$ set-buffer -b 'a:b' v
+? 0
+$ list-buffers -F '[#{buffer_name}]'
+[a:b]
+[sp ace]
+[b1]
+[buffer0001]
+[buffer1]
+[buffer0]
+[x]
+? 0
+$ set-buffer -n z
+? 0
+$ set-buffer -w -n zz v
+? 0
+$ delete-buffer -b b1
+? 0
+$ delete-buffer -b b1
+! unknown buffer: b1
+? 1
+$ set-buffer one
+? 0
+$ set-buffer two
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer3 two
+buffer2 one
+a:b v
+sp ace v
+buffer0001 onetwo
+z  world
+zz hello
+x abc
+? 0
+$ show-buffer -b buffer0000
+! no buffer buffer0000
+? 1
+$ paste-buffer -b nosuch
+! no buffer nosuch
+? 1
+$ paste-buffer -b nosuch -p
+! no buffer nosuch
+? 1
+$ save-buffer -b nosuch /tmp/x
+! no buffer nosuch
+? 1
+$ save-buffer
+! command save-buffer: too few arguments (need at least 1)
+? 1
+$ save-buffer -b two ''
+! no buffer two
+? 1
+$ set-option -g buffer-limit 3
+? 0
+$ set-buffer 1
+? 0
+$ set-buffer 2
+? 0
+$ set-buffer 3
+? 0
+$ set-buffer 4
+? 0
+$ set-buffer 5
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer8 5
+buffer7 4
+buffer6 3
+a:b v
+sp ace v
+buffer0001 onetwo
+z  world
+zz hello
+x abc
+? 0
+$ set-buffer -b named n
+? 0
+$ set-buffer 6
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer9 6
+named n
+buffer8 5
+buffer7 4
+a:b v
+sp ace v
+buffer0001 onetwo
+z  world
+zz hello
+x abc
+? 0
+$ set-option -g buffer-limit 1
+? 0
+$ set-buffer 7
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+buffer10 7
+named n
+a:b v
+sp ace v
+buffer0001 onetwo
+z  world
+zz hello
+x abc
+? 0
+$ set-buffer -b named n2
+? 0
+$ list-buffers -F '#{buffer_name} #{buffer_sample}'
+named n2
+buffer10 7
+a:b v
+sp ace v
+buffer0001 onetwo
+z  world
+zz hello
+x abc
+? 0

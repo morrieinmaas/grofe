@@ -288,6 +288,11 @@ impl State {
     }
 
     fn remove_socket(&self) {
+        // tmux leaves its socket behind (recorded: `no server running`
+        // after the last session, not a missing file).
+        if self.model.identity == crate::compat::Identity::Tmux {
+            return;
+        }
         let Ok(meta) = fs::symlink_metadata(&self.socket) else {
             return;
         };
@@ -799,7 +804,11 @@ fn exit_if_empty(state: &mut State, listener: &UnixListener) {
         }
         eprintln!("grofe server: cannot restore {}", state.socket.display());
     }
-    let _ = fs::remove_file(&aside);
+    if state.model.identity == crate::compat::Identity::Tmux {
+        let _ = fs::rename(&aside, &state.socket);
+    } else {
+        let _ = fs::remove_file(&aside);
+    }
     state.exit = true;
 }
 

@@ -1,0 +1,30 @@
+# B4 rest: list-keys alignment of keys and tables.
+$ new-session -d -s main -x 80 -y 10 cat
+$ unbind -a -T prefix
+$ unbind -a -T root
+$ bind -T longtablename C-a send a
+$ bind -T longtablename M-C-Left send b
+$ bind -T longtablename -r BTab send c
+$ bind -T longtablename MouseDown1StatusLeft send d
+$ bind -T longtablename 'é' send e
+$ bind -T longtablename F12 send f
+$ bind -T short x send g
+$ bind -T short -N 'a note here' y send h
+$ bind -T short -N 'another longer note' -r Home send i
+$ bind -n F5 send j
+$ bind -n -N 'root note' F6 send k
+$ bind C-x send l
+$ bind -N 'prefix note' z send m
+$ list-keys
+$ list-keys -T longtablename
+$ list-keys -T short
+$ list-keys -N
+$ list-keys -N -T short
+$ list-keys -N -T longtablename
+$ list-keys -a
+$ list-keys -1
+$ list-keys -1 -T short
+$ list-keys -T nosuch
+$ list-keys F6
+$ list-keys -T short y
+$ list-keys -N -a

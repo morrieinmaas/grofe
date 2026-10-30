@@ -1,0 +1,24 @@
+# B4 rest: a bracketed paste into a command prompt.
+$ new-session -d -s main -x 60 -y 6 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+client 60x6 attach -t main
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+$ run-shell 'sleep 0.3'
+keys Escape '[200~' abc Space def Escape '[201~'
+screen
+keys Enter
+$ show -gv @said
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+$ run-shell 'sleep 0.3'
+keys Escape '[200~' 'x' Enter 'y' Escape '[201~'
+screen
+keys Enter
+$ show -gv @said
+$& command-prompt -1 -p 'one:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+$ run-shell 'sleep 0.3'
+keys Escape '[200~' 'qr' Escape '[201~'
+$ run-shell 'sleep 0.3'
+$ show -gv @said

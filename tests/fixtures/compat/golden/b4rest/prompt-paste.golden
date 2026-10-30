@@ -1,0 +1,50 @@
+$ new-session -d -s main -x 60 -y 6 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+client 60x6 attach -t main
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+keys Escape '[200~' abc Space def Escape '[201~'
+screen
+|
+|
+|
+|
+|
+| say: abc def
+keys Enter
+$ show -gv @said
+abc def
+? 0
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+keys Escape '[200~' 'x' Enter 'y' Escape '[201~'
+screen
+| y
+|
+|
+|
+|
+| [main] 1:sh*                                  "<HOST>"
+keys Enter
+$ show -gv @said
+x
+? 0
+$& command-prompt -1 -p 'one:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+keys Escape '[200~' 'qr' Escape '[201~'
+$ run-shell 'sleep 0.3'
+? 0
+$ show -gv @said
+q
+? 0

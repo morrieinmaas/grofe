@@ -1,0 +1,91 @@
+$ new-session -d -s main -x 50 -y 12 'sh -c "printf \"\\033[1mbold\\033[0m \\033[3;4mit-ul\\033[0m \\033[38;5;196mred\\033[48;2;1;2;3mrgb\\033[0m\\n\\033]8;;http://x.test/a\\033\\\\\\\\link\\033]8;;\\033\\\\\\\\ after \\033]8;id=7;http://y.test\\033\\\\\\\\two\\033]8;;\\033\\\\\\\\ end\\n\\033[7mrev\\033[27m \\033[9mstrike\\033[29m \\033[2mdim\\033[22m \\033[53mover\\033[55m \\033[4:3mcurly\\033[4:0m \\033[58;5;9;4mulc\\033[0m\\n\\033[31;1mred-bold\\033[39;22m x \\033[90mbright\\033[0m \\033[100mbgbright\\033[0m \\xe4\\xbd\\xa0\\xe5\\xa5\\xbd wide\\n\"; exec cat"'
+? 0
+$ run-shell 'sleep 0.5'
+? 0
+$ capture-pane -p -e
+[1mbold[0m [3;4mit-ul[0m [38;5;196mred[48;2;1;2;3mrgb[39m[49m
+]8;;http://x.test/a\link]8;;\ after ]8;id=7;http://y.test\two]8;;\ end
+[7mrev[0m [9mstrike[0m [2mdim[0m [5:3mover[0m [4:3mcurly[0m [4m[58;5;9mulc[0m
+[1m[31mred-bold[0m x [90mbright[39m [100mbgbright[49m \xe4\xbd\xa0\xe5\xa5\xb
+d wide
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p
+bold it-ul redrgb
+link after two end
+rev strike dim over curly ulc
+red-bold x bright bgbright \xe4\xbd\xa0\xe5\xa5\xb
+d wide
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -e -N
+[1mbold[0m [3;4mit-ul[0m [38;5;196mred[48;2;1;2;3mrgb[39m[49m        
+]8;;http://x.test/a\link]8;;\ after ]8;id=7;http://y.test\two]8;;\ end       
+[7mrev[0m [9mstrike[0m [2mdim[0m [5:3mover[0m [4:3mcurly[0m [4m[58;5;9mulc[0m                     
+[1m[31mred-bold[0m x [90mbright[39m [100mbgbright[49m \xe4\xbd\xa0\xe5\xa5\xb
+d wide      
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -e -J
+[1mbold[0m [3;4mit-ul[0m [38;5;196mred[48;2;1;2;3mrgb
+[39m[49m]8;;http://x.test/a\link]8;;\ after ]8;id=7;http://y.test\two]8;;\ end
+[7mrev[0m [9mstrike[0m [2mdim[0m [5:3mover[0m [4:3mcurly[0m [4m[58;5;9mulc
+[0;1m[31mred-bold[0m x [90mbright[39m [100mbgbright[49m \xe4\xbd\xa0\xe5\xa5\xbd wide
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -e -T
+[1mbold[0m [3;4mit-ul[0m [38;5;196mred[48;2;1;2;3mrgb
+[39m[49m]8;;http://x.test/a\link]8;;\ after ]8;id=7;http://y.test\two]8;;\ end
+[7mrev[0m [9mstrike[0m [2mdim[0m [5:3mover[0m [4:3mcurly[0m [4m[58;5;9mulc
+[0;1m[31mred-bold[0m x [90mbright[39m [100mbgbright[49m \xe4\xbd\xa0\xe5\xa5\xb
+d wide
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -e -C
+\033[1mbold\033[0m \033[3;4mit-ul\033[0m \033[38;5;196mred\033[48;2;1;2;3mrgb\033[39m\033[49m
+\033]8;;http://x.test/a\033\\link\033]8;;\033\\ after \033]8;id=7;http://y.test\033\\two\033]8;;\033\\ end
+\033[7mrev\033[0m \033[9mstrike\033[0m \033[2mdim\033[0m \033[5:3mover\033[0m \033[4:3mcurly\033[0m \033[4m\033[58;5;9mulc\033[0m
+\033[1m\033[31mred-bold\033[0m x \033[90mbright\033[39m \033[100mbgbright\033[49m \\xe4\\xbd\\xa0\\xe5\\xa5\\xb
+d wide
+
+
+
+
+
+
+
+? 0
+$ capture-pane -p -e -S 0 -E 1
+[1mbold[0m [3;4mit-ul[0m [38;5;196mred[48;2;1;2;3mrgb[39m[49m
+]8;;http://x.test/a\link]8;;\ after ]8;id=7;http://y.test\two]8;;\ end
+? 0

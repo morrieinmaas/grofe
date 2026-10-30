@@ -491,6 +491,11 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     };
     let stream = match stream {
         Ok(s) => s,
+        // tmux starts a server for `list-keys` and prints nothing: the server
+        // has no session and is gone before it answers (recorded).
+        Err(e) if dialect() == Dialect::Tmux && argv[0] == "list-keys" && no_server(&e) => {
+            return ExitCode::SUCCESS;
+        }
         Err(e) => return fail(&e),
     };
     match request(stream, socket, argv) {

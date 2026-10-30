@@ -1,0 +1,125 @@
+$ set -g exit-empty off
+! error connecting to <SOCKET> (No such file or directory)
+? 1
+$ new-session -d -s main -x 40 -y 10 cat
+? 0
+$ kill-session -t main
+? 0
+$ list-sessions
+! no server running on <SOCKET>
+? 1
+$ list-windows
+! no server running on <SOCKET>
+? 1
+$ list-panes
+! no server running on <SOCKET>
+? 1
+$ list-clients
+! no server running on <SOCKET>
+? 1
+$ list-buffers
+! no server running on <SOCKET>
+? 1
+$ list-keys -1
+? 0
+$ display-message -p 'x'
+! no server running on <SOCKET>
+? 1
+$ display-message -p '#{session_name}'
+! no server running on <SOCKET>
+? 1
+$ new-window
+! no server running on <SOCKET>
+? 1
+$ split-window
+! no server running on <SOCKET>
+? 1
+$ select-window -t 1
+! no server running on <SOCKET>
+? 1
+$ select-pane -t 1
+! no server running on <SOCKET>
+? 1
+$ kill-window
+! no server running on <SOCKET>
+? 1
+$ kill-pane
+! no server running on <SOCKET>
+? 1
+$ send-keys x
+! no server running on <SOCKET>
+? 1
+$ capture-pane -p
+! no server running on <SOCKET>
+? 1
+$ show-options -g -v status
+! no server running on <SOCKET>
+? 1
+$ show-options -v status
+! no server running on <SOCKET>
+? 1
+$ show-options -w -v automatic-rename
+! no server running on <SOCKET>
+? 1
+$ set -g status off
+! no server running on <SOCKET>
+? 1
+$ set status off
+! no server running on <SOCKET>
+? 1
+$ set -w automatic-rename off
+! no server running on <SOCKET>
+? 1
+$ rename-session x
+! no server running on <SOCKET>
+? 1
+$ rename-window x
+! no server running on <SOCKET>
+? 1
+$ has-session
+! no server running on <SOCKET>
+? 1
+$ has-session -t main
+! no server running on <SOCKET>
+? 1
+$ attach-session
+! no sessions
+? 1
+$ switch-client -t main
+! no server running on <SOCKET>
+? 1
+$ detach-client
+! no server running on <SOCKET>
+? 1
+$ next-window
+! no server running on <SOCKET>
+? 1
+$ last-window
+! no server running on <SOCKET>
+? 1
+$ resize-pane -x 10
+! no server running on <SOCKET>
+? 1
+$ copy-mode
+! no server running on <SOCKET>
+? 1
+$ clock-mode
+! no server running on <SOCKET>
+? 1
+$ choose-tree
+! no server running on <SOCKET>
+? 1
+$ display-panes
+! no server running on <SOCKET>
+? 1
+$ run-shell 'echo hi'
+! no server running on <SOCKET>
+? 1
+$ if-shell true 'display-message -p yes'
+! no server running on <SOCKET>
+? 1
+$ new-session -d -s again -x 40 -y 10 cat
+? 0
+$ list-sessions -F '#{session_name}'
+again
+? 0

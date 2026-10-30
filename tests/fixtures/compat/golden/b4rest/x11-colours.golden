@@ -1,0 +1,102 @@
+$ new-session -d -s main -x 40 -y 6 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ''
+? 0
+$ set -g status-style 'bg=orange,fg=navy'
+? 0
+$ show -gv status-style
+bg=orange,fg=navy
+? 0
+$ set -g status-style 'bg=SeaGreen3,fg=grey42'
+? 0
+$ show -gv status-style
+bg=SeaGreen3,fg=grey42
+? 0
+$ set -g status-style 'bg=gray42,fg=LightGoldenrod'
+? 0
+$ show -gv status-style
+bg=gray42,fg=LightGoldenrod
+? 0
+$ set -g status-style 'bg=light goldenrod,fg=dark slate gray'
+! invalid style: bg=light goldenrod,fg=dark slate gray
+? 1
+$ set -g status-style 'bg=lightgoldenrodyellow,fg=darkslategray4'
+? 0
+$ show -gv status-style
+bg=lightgoldenrodyellow,fg=darkslategray4
+? 0
+$ set -g status-style 'bg=colour123,fg=color45'
+? 0
+$ show -gv status-style
+bg=colour123,fg=color45
+? 0
+$ set -g status-style 'bg=#102030,fg=#FFFFFF'
+? 0
+$ show -gv status-style
+bg=#102030,fg=#FFFFFF
+? 0
+$ set -g status-style 'bg=notacolour'
+! invalid style: bg=notacolour
+? 1
+$ set -g status-style 'bg=grey101'
+! invalid style: bg=grey101
+? 1
+$ set -g status-style 'bg=grey100,fg=gray0'
+? 0
+$ show -gv status-style
+bg=grey100,fg=gray0
+? 0
+$ set -g status-style 'bg=lime,fg=aqua'
+? 0
+$ set -g status-style 'bg=Chartreuse1,fg=DeepPink4'
+? 0
+$ set -g status-style 'bg=white,fg=black'
+? 0
+$ set -g status-style 'bg=terminal,fg=default'
+? 0
+$ show -gv status-style
+bg=terminal,fg=default
+? 0
+$ set -g window-style 'fg=purple,bg=rebeccapurple'
+? 0
+$ set -g window-style 'fg=orange,bg=orangered'
+? 0
+$ show -gv window-style
+fg=orange,bg=orangered
+? 0
+$ set -g pane-border-style 'fg=salmon'
+? 0
+$ show -gv pane-border-style
+fg=salmon
+? 0
+client 40x6 attach -t main
+$ set -g status-style 'bg=orange,fg=navy'
+? 0
+styles 5-5
+~ 5 0-5 fg=rgb:00/00/80 bg=rgb:ff/a5/00
+~ 5 6-6 fg=default bg=rgb:ff/a5/00
+~ 5 7-11 fg=rgb:00/00/80 bg=rgb:ff/a5/00
+~ 5 12-39 fg=default bg=rgb:ff/a5/00
+$ set -g status-style 'bg=SeaGreen3,fg=grey42'
+? 0
+styles 5-5
+~ 5 0-5 fg=rgb:6b/6b/6b bg=rgb:43/cd/80
+~ 5 6-6 fg=default bg=rgb:43/cd/80
+~ 5 7-11 fg=rgb:6b/6b/6b bg=rgb:43/cd/80
+~ 5 12-39 fg=default bg=rgb:43/cd/80
+$ set -g status-style 'bg=lightgoldenrodyellow,fg=darkslategray4'
+? 0
+styles 5-5
+~ 5 0-5 fg=rgb:52/8b/8b bg=rgb:fa/fa/d2
+~ 5 6-6 fg=default bg=rgb:fa/fa/d2
+~ 5 7-11 fg=rgb:52/8b/8b bg=rgb:fa/fa/d2
+~ 5 12-39 fg=default bg=rgb:fa/fa/d2
+$ set -g status-style 'bg=grey100,fg=gray0'
+? 0
+styles 5-5
+~ 5 0-5 fg=rgb:00/00/00 bg=rgb:ff/ff/ff
+~ 5 6-6 fg=default bg=rgb:ff/ff/ff
+~ 5 7-11 fg=rgb:00/00/00 bg=rgb:ff/ff/ff
+~ 5 12-39 fg=default bg=rgb:ff/ff/ff

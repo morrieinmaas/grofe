@@ -1,0 +1,44 @@
+# B4 rest: commands on a server with no session (exit-empty off).
+$ set -g exit-empty off
+$ new-session -d -s main -x 40 -y 10 cat
+$ kill-session -t main
+$ list-sessions
+$ list-windows
+$ list-panes
+$ list-clients
+$ list-buffers
+$ list-keys -1
+$ display-message -p 'x'
+$ display-message -p '#{session_name}'
+$ new-window
+$ split-window
+$ select-window -t 1
+$ select-pane -t 1
+$ kill-window
+$ kill-pane
+$ send-keys x
+$ capture-pane -p
+$ show-options -g -v status
+$ show-options -v status
+$ show-options -w -v automatic-rename
+$ set -g status off
+$ set status off
+$ set -w automatic-rename off
+$ rename-session x
+$ rename-window x
+$ has-session
+$ has-session -t main
+$ attach-session
+$ switch-client -t main
+$ detach-client
+$ next-window
+$ last-window
+$ resize-pane -x 10
+$ copy-mode
+$ clock-mode
+$ choose-tree
+$ display-panes
+$ run-shell 'echo hi'
+$ if-shell true 'display-message -p yes'
+$ new-session -d -s again -x 40 -y 10 cat
+$ list-sessions -F '#{session_name}'

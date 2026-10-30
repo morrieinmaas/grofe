@@ -150,3 +150,54 @@ fn chooser_help_popups_match() {
 fn prompt_tab_completion_matches() {
     check("b4rest", "prompt-complete", &[]);
 }
+
+
+#[test]
+fn new_hooks_fire() {
+    check("b4rest", "hooks-new", &[]);
+}
+
+#[test]
+fn config_escapes_match() {
+    check("b4rest", "config-escapes", &[]);
+}
+
+#[test]
+fn commands_with_no_session_match() {
+    check("b4rest", "no-session", &[]);
+}
+
+#[test]
+fn session_names_with_colons_and_dots_match() {
+    check("b4rest", "session-names", &[]);
+}
+
+#[test]
+fn layout_strings_with_a_float_match() {
+    check("b4rest", "layout-float", &[]);
+}
+
+#[test]
+fn x11_colour_names_match() {
+    check("b4rest", "x11-colours", &[]);
+}
+
+#[test]
+fn buffer_edge_cases_match() {
+    check("b4rest", "buffers-edge", &[]);
+}
+
+#[test]
+fn list_keys_alignment_matches() {
+    check("b4rest", "list-keys-pad", &[]);
+}
+
+#[test]
+fn capture_pane_e_matches() {
+    check("b4rest", "capture-sgr", &[]);
+}
+
+#[test]
+fn a_paste_into_a_prompt_matches() {
+    check("b4rest", "prompt-paste", &[]);
+}

@@ -1,0 +1,41 @@
+# B4 rest: colour names (colour_byname): the X11 names, with or without
+# spaces and case, grey/gray levels, colourN, #rrggbb.
+$ new-session -d -s main -x 40 -y 6 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ''
+$ set -g status-style 'bg=orange,fg=navy'
+$ show -gv status-style
+$ set -g status-style 'bg=SeaGreen3,fg=grey42'
+$ show -gv status-style
+$ set -g status-style 'bg=gray42,fg=LightGoldenrod'
+$ show -gv status-style
+$ set -g status-style 'bg=light goldenrod,fg=dark slate gray'
+$ set -g status-style 'bg=lightgoldenrodyellow,fg=darkslategray4'
+$ show -gv status-style
+$ set -g status-style 'bg=colour123,fg=color45'
+$ show -gv status-style
+$ set -g status-style 'bg=#102030,fg=#FFFFFF'
+$ show -gv status-style
+$ set -g status-style 'bg=notacolour'
+$ set -g status-style 'bg=grey101'
+$ set -g status-style 'bg=grey100,fg=gray0'
+$ show -gv status-style
+$ set -g status-style 'bg=lime,fg=aqua'
+$ set -g status-style 'bg=Chartreuse1,fg=DeepPink4'
+$ set -g status-style 'bg=white,fg=black'
+$ set -g status-style 'bg=terminal,fg=default'
+$ show -gv status-style
+$ set -g window-style 'fg=purple,bg=rebeccapurple'
+$ set -g window-style 'fg=orange,bg=orangered'
+$ show -gv window-style
+$ set -g pane-border-style 'fg=salmon'
+$ show -gv pane-border-style
+client 40x6 attach -t main
+$ set -g status-style 'bg=orange,fg=navy'
+styles 5-5
+$ set -g status-style 'bg=SeaGreen3,fg=grey42'
+styles 5-5
+$ set -g status-style 'bg=lightgoldenrodyellow,fg=darkslategray4'
+styles 5-5
+$ set -g status-style 'bg=grey100,fg=gray0'
+styles 5-5
