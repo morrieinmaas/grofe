@@ -30,8 +30,10 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         return Ok(String::new());
     }
     let model = &mut state.model;
-    if let Some(name) = &c.name {
-        check_name(model, name)?;
+    let tmux = ctx.dialect == crate::protocol::Dialect::Tmux;
+    let mut c = c;
+    if let Some(name) = c.name.take() {
+        c.name = Some(check_name(model, &name, tmux)?);
     }
     // `-t`: the session to group with, else the name of a new group.
     let group = c.group.as_deref().map(|raw| {
@@ -286,17 +288,30 @@ pub fn list_sessions(state: &State, c: ListSessions) -> Result<String, String> {
         .collect())
 }
 
-/// A new session name must be usable in a target and not taken.
-// ponytail: tmux 3.7b accepts `:` and `.` (and the empty name) and makes
-// such a session hard to target; grofe refuses them, as new-session does.
-fn check_name(model: &Model, name: &str) -> Result<(), String> {
-    if name.is_empty() || name.contains([':', '.']) {
-        return Err(format!("bad session name: {name}"));
+/// A new session name, checked and cleaned. tmux 3.7b (recorded) accepts
+/// any name of valid UTF-8 and printable ASCII, `:` and `.` and the empty
+/// name too, storing a backslash doubled (`clean_name`); control characters
+/// are `invalid session name`. Natively a name must be usable in a target.
+fn clean_name(name: &str) -> Result<String, String> {
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(format!("invalid session name: {name}"));
     }
-    if model.session_by_name(name).is_some() {
+    Ok(name.replace('\\', "\\\\"))
+}
+
+fn check_name(model: &Model, name: &str, tmux: bool) -> Result<String, String> {
+    let name = if tmux {
+        clean_name(name)?
+    } else {
+        if name.is_empty() || name.contains([':', '.']) {
+            return Err(format!("bad session name: {name}"));
+        }
+        name.to_string()
+    };
+    if model.session_by_name(&name).is_some() {
         return Err(format!("duplicate session: {name}"));
     }
-    Ok(())
+    Ok(name)
 }
 
 /// In the tmux dialect the name is a format, expanded against the
@@ -316,11 +331,20 @@ pub fn rename_session(state: &mut State, ctx: &ClientCtx, c: Rename) -> Result<S
         }
         _ => c.name,
     };
+    let tmux = ctx.dialect == crate::protocol::Dialect::Tmux;
+    let name = if tmux { clean_name(&name)? } else { name };
     let model = &mut state.model;
     if model.sessions[&id].name == name {
         return Ok(String::new());
     }
-    check_name(model, &name)?;
+    let name = if tmux {
+        if model.session_by_name(&name).is_some() {
+            return Err(format!("duplicate session: {name}"));
+        }
+        name
+    } else {
+        check_name(model, &name, false)?
+    };
     if let Some(s) = model.sessions.get_mut(&id) {
         s.name = name;
     }

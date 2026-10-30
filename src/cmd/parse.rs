@@ -2404,7 +2404,6 @@ fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
 ///   `yacc stack overflow`. A `}` closing a `#{` is part of its word.
 ///
 /// Empty commands are dropped.
-// ponytail: no octal or `\u` escapes, `#` comments or `%if`.
 pub fn split_command_string(s: &str) -> Result<Vec<Vec<String>>, ParseError> {
     split_commands(&mut s.chars().peekable())
 }
@@ -2524,9 +2523,8 @@ fn split_commands(
             }
             '\\' => {
                 l.started = true;
-                let next = chars.next().unwrap_or('\\');
-                l.escaped_semicolon = fresh && next == ';';
-                l.word.push(escape(next));
+                l.escaped_semicolon = fresh && chars.peek() == Some(&';');
+                read_escape(chars, &mut l.word)?;
             }
             '\'' => {
                 l.started = true;
@@ -2546,7 +2544,7 @@ fn split_commands(
                 while let Some(x) = chars.next() {
                     match x {
                         '"' => break,
-                        '\\' => l.word.push(escape(chars.next().unwrap_or('\\'))),
+                        '\\' => read_escape(chars, &mut l.word)?,
                         '$' => expand_var(chars, &mut l.word)?,
                         x => l.word.push(x),
                     }
@@ -3101,6 +3099,57 @@ fn escape(c: char) -> char {
         't' => '\t',
         'v' => '\x0b',
         c => c,
+    }
+}
+
+/// After a backslash in a bare word or in double quotes, as tmux 3.7b's
+/// `yylex_token_escape` reads it (recorded): three octal digits, the first
+/// 0 to 3 (else `invalid octal escape`), `\u` and four hex digits, `\U` and
+/// eight (`invalid \u argument` when one is not hex or the code point is
+/// not a character), or the character `escape` stands for.
+fn read_escape(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    out: &mut String,
+) -> Result<(), ParseError> {
+    let invalid = |t: char| ParseError::Other(format!("invalid \\{t} argument"));
+    let octal = || ParseError::Other("invalid octal escape".to_string());
+    let Some(c) = chars.next() else {
+        out.push('\\');
+        return Ok(());
+    };
+    match c {
+        '4'..='7' => Err(octal()),
+        '0'..='3' => {
+            let mut value = c.to_digit(8).unwrap_or(0);
+            for _ in 0..2 {
+                match chars.next().and_then(|d| d.to_digit(8)) {
+                    Some(d) => value = value * 8 + d,
+                    None => return Err(octal()),
+                }
+            }
+            out.push(char::from(value as u8));
+            Ok(())
+        }
+        'u' | 'U' => {
+            let size = if c == 'u' { 4 } else { 8 };
+            let mut code = 0u32;
+            for _ in 0..size {
+                match chars.next() {
+                    // The end of the line or file ends the word quietly.
+                    None | Some('\n') => return Ok(()),
+                    Some(d) => match d.to_digit(16) {
+                        Some(d) => code = code.wrapping_mul(16).wrapping_add(d),
+                        None => return Err(invalid(c)),
+                    },
+                }
+            }
+            out.push(char::from_u32(code).ok_or_else(|| invalid(c))?);
+            Ok(())
+        }
+        c => {
+            out.push(escape(c));
+            Ok(())
+        }
     }
 }
 

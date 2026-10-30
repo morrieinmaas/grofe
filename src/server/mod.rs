@@ -11,6 +11,7 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod alerts;
+pub mod x11;
 pub mod borders;
 pub mod buffers;
 pub mod clients;

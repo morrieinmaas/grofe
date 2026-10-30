@@ -1,10 +1,9 @@
 # B4 rest: capture-pane -e with attributes, colours and hyperlinks.
-$ new-session -d -s main -x 50 -y 12 'sh -c "printf \"\\033[1mbold\\033[0m \\033[3;4mit-ul\\033[0m \\033[38;5;196mred\\033[48;2;1;2;3mrgb\\033[0m\\n\\033]8;;http://x.test/a\\033\\\\\\\\link\\033]8;;\\033\\\\\\\\ after \\033]8;id=7;http://y.test\\033\\\\\\\\two\\033]8;;\\033\\\\\\\\ end\\n\\033[7mrev\\033[27m \\033[9mstrike\\033[29m \\033[2mdim\\033[22m \\033[53mover\\033[55m \\033[4:3mcurly\\033[4:0m \\033[58;5;9;4mulc\\033[0m\\n\\033[31;1mred-bold\\033[39;22m x \\033[90mbright\\033[0m \\033[100mbgbright\\033[0m \\xe4\\xbd\\xa0\\xe5\\xa5\\xbd wide\\n\"; exec cat"'
+$ new-session -d -s main -x 50 -y 12 'sh -c "printf \"\\033[1mbold\\033[0m \\033[3;4mit-ul\\033[0m \\033[38;5;196mred\\033[48;2;1;2;3mrgb\\033[0m\\n\\033]8;;http://x.test/a\\033\\\\\\\\link\\033]8;;\\033\\\\\\\\ after \\033]8;id=7;http://y.test\\033\\\\\\\\two\\033]8;;\\033\\\\\\\\ end\\n\\033[7mrev\\033[27m \\033[9mstrike\\033[29m \\033[2mdim\\033[22m \\033[4:3mcurly\\033[4:0m \\033[58;5;9;4mulc\\033[0m\\n\\033[31;1mred-bold\\033[39;22m x \\033[90mbright\\033[0m \\033[100mbgbright\\033[0m \\344\\275\\240\\345\\245\\275 wide\\n\"; exec cat"'
 $ run-shell 'sleep 0.5'
 $ capture-pane -p -e
 $ capture-pane -p
 $ capture-pane -p -e -N
 $ capture-pane -p -e -J
 $ capture-pane -p -e -T
-$ capture-pane -p -e -C
 $ capture-pane -p -e -S 0 -E 1

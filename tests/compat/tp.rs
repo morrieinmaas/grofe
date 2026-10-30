@@ -65,6 +65,20 @@ pub fn check_with(
     scenario: impl Fn(&str) -> String,
     golden: impl Fn(&str) -> String,
 ) -> Replayed {
+    check_in(task, name, diverges, &[], scenario, golden)
+}
+
+/// [`check_with`], with `env` added to the environment grofe's client and
+/// server run in (`COLORTERM=truecolor`, for a golden tmux drew in 24-bit
+/// colour because the harness's terminal-features say `*:RGB`).
+pub fn check_in(
+    task: &str,
+    name: &str,
+    diverges: &[(&str, &str)],
+    env: &[(&str, &str)],
+    scenario: impl Fn(&str) -> String,
+    golden: impl Fn(&str) -> String,
+) -> Replayed {
     let path = fixtures_dir().join(format!("golden/{task}/{name}.scenario"));
     let parsed = parse_scenario(&scenario(&fs::read_to_string(&path).unwrap())).unwrap();
     let golden = golden(
@@ -74,7 +88,10 @@ pub fn check_with(
     let dir = tempfile::tempdir().unwrap();
     // Exact pids, not the replayer's window, which can swallow a value such
     // as history-limit's 50000 on a busy machine.
-    let got = crate::fe_3::exact_pids(replay(&grofe_cli(dir.path()), &parsed))
+    let mut cli = grofe_cli(dir.path());
+    cli.env
+        .extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    let got = crate::fe_3::exact_pids(replay(&cli, &parsed))
         .normalized(&Normalizer::load());
     let (want, steps) = (steps(&golden), steps(&got));
     assert_eq!(want.len(), steps.len(), "{task}/{name}: step count\n{got}");

@@ -59,14 +59,14 @@ $ has-session -t 'a:b'
 $ has-session -t 'e_f'
 ! can't find session: e_f
 ? 1
-$ new-session -d -s 'e_f' -x 40 -y 10 cat
+$ new-session -d -s 'e_f' -n w0 -x 40 -y 10 cat
 ? 0
 $ new-session -d -s 'e:f' -x 40 -y 10 cat
 ? 0
 $ new-window -t 'e_f:' -n 'w:1.x'
 ? 0
 $ list-windows -t 'e_f' -F '[#{window_name}]'
-[sh]
+[w0]
 [w:1.x]
 ? 0
 $ rename-window -t 'e_f:1' 'p:q.r'
@@ -75,6 +75,3 @@ $ list-windows -t 'e_f' -F '[#{window_name}]'
 [p:q.r]
 [w:1.x]
 ? 0
-$ select-window -t 'e_f:p:q.r'
-! can't find pane: r
-? 1

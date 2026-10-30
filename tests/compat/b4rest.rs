@@ -159,7 +159,7 @@ fn new_hooks_fire() {
 
 #[test]
 fn config_escapes_match() {
-    check("b4rest", "config-escapes", &[]);
+    crate::tp::check_with("b4rest", "config-escapes", &[], |s| s.to_string(), crate::b3wpd::real_tmpdir);
 }
 
 #[test]
@@ -179,7 +179,14 @@ fn layout_strings_with_a_float_match() {
 
 #[test]
 fn x11_colour_names_match() {
-    check("b4rest", "x11-colours", &[]);
+    crate::tp::check_in(
+        "b4rest",
+        "x11-colours",
+        &[],
+        &[("COLORTERM", "truecolor")],
+        |s| s.to_string(),
+        |g| g.to_string(),
+    );
 }
 
 #[test]

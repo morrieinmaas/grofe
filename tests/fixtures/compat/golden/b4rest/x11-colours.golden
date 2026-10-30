@@ -1,4 +1,4 @@
-$ new-session -d -s main -x 40 -y 6 cat
+$ new-session -d -s main -n w0 -x 40 -y 6 cat
 ? 0
 $ source-file {fixtures}/tmux-status-noclock.conf
 ? 0

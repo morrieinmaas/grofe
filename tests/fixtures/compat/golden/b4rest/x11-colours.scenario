@@ -1,6 +1,6 @@
 # B4 rest: colour names (colour_byname): the X11 names, with or without
 # spaces and case, grey/gray levels, colourN, #rrggbb.
-$ new-session -d -s main -x 40 -y 6 cat
+$ new-session -d -s main -n w0 -x 40 -y 6 cat
 $ source-file {fixtures}/tmux-status-noclock.conf
 $ set -g status-right ''
 $ set -g status-style 'bg=orange,fg=navy'

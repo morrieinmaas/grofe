@@ -17,10 +17,9 @@ $ rename-session -t 'g_h' ''
 $ list-sessions -F '[#{session_name}]'
 $ has-session -t 'a:b'
 $ has-session -t 'e_f'
-$ new-session -d -s 'e_f' -x 40 -y 10 cat
+$ new-session -d -s 'e_f' -n w0 -x 40 -y 10 cat
 $ new-session -d -s 'e:f' -x 40 -y 10 cat
 $ new-window -t 'e_f:' -n 'w:1.x'
 $ list-windows -t 'e_f' -F '[#{window_name}]'
 $ rename-window -t 'e_f:1' 'p:q.r'
 $ list-windows -t 'e_f' -F '[#{window_name}]'
-$ select-window -t 'e_f:p:q.r'

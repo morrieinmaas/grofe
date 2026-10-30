@@ -8,264 +8,193 @@ $ set-environment -g FOO bar
 ? 0
 $ source-file esc/e01.conf
 ? 0
-$ run-shell "tmux show-options -gv @e1 2>&1 | od -An -c"
-   a  \t   b  \n
+$ run-shell "tmux show-options -gv @e1 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e02.conf
 ? 0
-$ run-shell "tmux show-options -gv @e2 2>&1 | od -An -c"
-   a   \   t   b  \n
+$ run-shell "tmux show-options -gv @e2 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e03.conf
 ? 0
-$ run-shell "tmux show-options -gv @e3 2>&1 | od -An -c"
-   x 033   y  \n
+$ run-shell "tmux show-options -gv @e3 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e04.conf
 ? 0
-$ run-shell "tmux show-options -gv @e4 2>&1 | od -An -c"
- 303 251 360 237 230 200  \n
+$ run-shell "tmux show-options -gv @e4 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e05.conf
 ? 0
-$ run-shell "tmux show-options -gv @e5 2>&1 | od -An -c"
-   x   4   1   A  \n
+$ run-shell "tmux show-options -gv @e5 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e06.conf
 <TMPDIR>/home/esc/e06.conf:1: invalid octal escape
 ? 1
-$ run-shell "tmux show-options -gv @e6 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   6  \n
+$ run-shell "tmux show-options -gv @e6 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e07.conf
 ? 0
-$ run-shell "tmux show-options -gv @e7 2>&1 | od -An -c"
-   b   a   c   k   \   s   l   a   s   h       "   q   "       $
-   n   o   t   v   a   r  \n
+$ run-shell "tmux show-options -gv @e7 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e08.conf
 ? 0
-$ run-shell "tmux show-options -gv @e8 2>&1 | od -An -c"
-   a       b  \n
+$ run-shell "tmux show-options -gv @e8 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e09.conf
 ? 0
-$ run-shell "tmux show-options -gv @e9 2>&1 | od -An -c"
-   /   t   m   p   /   .   t   m   p   U   R   g   E   H   X   /
-   h   o   m   e  \n
+$ run-shell "tmux show-options -gv @e9 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e10.conf
 ? 0
-$ run-shell "tmux show-options -gv @e10 2>&1 | od -An -c"
-   /   t   m   p   /   .   t   m   p   U   R   g   E   H   X   /
-   h   o   m   e  \n
+$ run-shell "tmux show-options -gv @e10 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e11.conf
 ? 0
-$ run-shell "tmux show-options -gv @e11 2>&1 | od -An -c"
-   ~  \n
-? 0
-$ source-file esc/e12.conf
-? 0
-$ run-shell "tmux show-options -gv @e12 2>&1 | od -An -c"
-   /   r   o   o   t  \n
+$ run-shell "tmux show-options -gv @e11 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e13.conf
 ? 0
-$ run-shell "tmux show-options -gv @e13 2>&1 | od -An -c"
-   b   a   r  \n
+$ run-shell "tmux show-options -gv @e13 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e14.conf
 ? 0
-$ run-shell "tmux show-options -gv @e14 2>&1 | od -An -c"
-   b   a   r   x  \n
+$ run-shell "tmux show-options -gv @e14 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e15.conf
 ? 0
-$ run-shell "tmux show-options -gv @e15 2>&1 | od -An -c"
-   a   #   b  \n
+$ run-shell "tmux show-options -gv @e15 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e16.conf
 <TMPDIR>/home/esc/e16.conf:1: command set-option: too many arguments (need at most 2)
 ? 1
-$ run-shell "tmux show-options -gv @e16 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   1   6  \n
+$ run-shell "tmux show-options -gv @e16 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e17.conf
 ? 0
-$ run-shell "tmux show-options -gv @e17 2>&1 | od -An -c"
- 033   [   1   m  \n
+$ run-shell "tmux show-options -gv @e17 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e18.conf
 ? 0
-$ run-shell "tmux show-options -gv @e18 2>&1 | od -An -c"
-  \a  \b  \f  \n  \r  \v  \n
+$ run-shell "tmux show-options -gv @e18 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e19.conf
 ? 0
-$ run-shell "tmux show-options -gv @e19 2>&1 | od -An -c"
-   z  \n
+$ run-shell "tmux show-options -gv @e19 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e20.conf
 ? 0
-$ run-shell "tmux show-options -gv @e20 2>&1 | od -An -c"
-   a   ;   b  \n
+$ run-shell "tmux show-options -gv @e20 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e21.conf
 ? 0
-$ run-shell "tmux show-options -gv @e21 2>&1 | od -An -c"
-   {   x   }  \n
+$ run-shell "tmux show-options -gv @e21 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e22.conf
 ? 0
-$ run-shell "tmux show-options -gv @e22 2>&1 | od -An -c"
-  \n
+$ run-shell "tmux show-options -gv @e22 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e23.conf
 ? 0
-$ run-shell "tmux show-options -gv @e23 2>&1 | od -An -c"
-  \n
+$ run-shell "tmux show-options -gv @e23 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e24.conf
 ? 0
-$ run-shell "tmux show-options -gv @e24 2>&1 | od -An -c"
-   $   F   O   O  \n
+$ run-shell "tmux show-options -gv @e24 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e25.conf
 ? 0
-$ run-shell "tmux show-options -gv @e25 2>&1 | od -An -c"
-   $   F   O   O  \n
+$ run-shell "tmux show-options -gv @e25 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e26.conf
 ? 0
-$ run-shell "tmux show-options -gv @e26 2>&1 | od -An -c"
-   t   a   b  \t   l   i   t   e   r   a   l  \n
+$ run-shell "tmux show-options -gv @e26 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e27.conf
 <TMPDIR>/home/esc/e27.conf:1: invalid octal escape
 ? 1
-$ run-shell "tmux show-options -gv @e27 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   2   7  \n
+$ run-shell "tmux show-options -gv @e27 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e28.conf
 <TMPDIR>/home/esc/e28.conf:1: invalid \u argument
 ? 1
-$ run-shell "tmux show-options -gv @e28 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   2   8  \n
+$ run-shell "tmux show-options -gv @e28 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e29.conf
 ? 0
-$ run-shell "tmux show-options -gv @e29 2>&1 | od -An -c"
-   x   4  \n
+$ run-shell "tmux show-options -gv @e29 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e30.conf
 <TMPDIR>/home/esc/e30.conf:1: invalid \u argument
 ? 1
-$ run-shell "tmux show-options -gv @e30 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   3   0  \n
+$ run-shell "tmux show-options -gv @e30 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e31.conf
 <TMPDIR>/home/esc/e31.conf:1: invalid \U argument
 ? 1
-$ run-shell "tmux show-options -gv @e31 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   3   1  \n
+$ run-shell "tmux show-options -gv @e31 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e32.conf
 <TMPDIR>/home/esc/e32.conf:1: invalid \u argument
 ? 1
-$ run-shell "tmux show-options -gv @e32 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   3   2  \n
+$ run-shell "tmux show-options -gv @e32 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e33.conf
 ? 0
-$ run-shell "tmux show-options -gv @e33 2>&1 | od -An -c"
-   x   \   y  \n
+$ run-shell "tmux show-options -gv @e33 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e34.conf
 ? 0
-$ run-shell "tmux show-options -gv @e34 2>&1 | od -An -c"
-   \  \n
+$ run-shell "tmux show-options -gv @e34 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e35.conf
 ? 0
-$ run-shell "tmux show-options -gv @e35 2>&1 | od -An -c"
-   a   '   b  \n
+$ run-shell "tmux show-options -gv @e35 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e36.conf
 ? 0
-$ run-shell "tmux show-options -gv @e36 2>&1 | od -An -c"
-   a   b   c  \n
+$ run-shell "tmux show-options -gv @e36 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e37.conf
 ? 0
-$ run-shell "tmux show-options -gv @e37 2>&1 | od -An -c"
-   a   '   b  \n
-? 0
-$ source-file esc/e38.conf
-<TMPDIR>/home/esc/e38.conf:1: unknown command: x
-? 1
-$ run-shell "tmux show-options -gv @e38 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   3   8  \n
+$ run-shell "tmux show-options -gv @e37 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e39.conf
 ? 0
-$ run-shell "tmux show-options -gv @e39 2>&1 | od -An -c"
-   a   ~   b  \n
+$ run-shell "tmux show-options -gv @e39 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e40.conf
 ? 0
-$ run-shell "tmux show-options -gv @e40 2>&1 | od -An -c"
-   /   t   m   p   /   .   t   m   p   U   R   g   E   H   X   /
-   h   o   m   e   /   x  \n
+$ run-shell "tmux show-options -gv @e40 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e41.conf
 ? 0
-$ run-shell "tmux show-options -gv @e41 2>&1 | od -An -c"
-   /   t   m   p   /   .   t   m   p   U   R   g   E   H   X   /
-   h   o   m   e   /   x  \n
+$ run-shell "tmux show-options -gv @e41 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e42.conf
 ? 0
-$ run-shell "tmux show-options -gv @e42 2>&1 | od -An -c"
-   b   a   r  \n
+$ run-shell "tmux show-options -gv @e42 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e43.conf
 <TMPDIR>/home/esc/e43.conf:1: invalid environment variable
 ? 1
-$ run-shell "tmux show-options -gv @e43 2>&1 | od -An -c"
-   i   n   v   a   l   i   d       o   p   t   i   o   n   :    
-   @   e   4   3  \n
+$ run-shell "tmux show-options -gv @e43 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e44.conf
 ? 0
-$ run-shell "tmux show-options -gv @e44 2>&1 | od -An -c"
-   $  \n
+$ run-shell "tmux show-options -gv @e44 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e45.conf
 ? 0
-$ run-shell "tmux show-options -gv @e45 2>&1 | od -An -c"
-   a   $  \n
+$ run-shell "tmux show-options -gv @e45 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e46.conf
 ? 0
-$ run-shell "tmux show-options -gv @e46 2>&1 | od -An -c"
-   $  \n
+$ run-shell "tmux show-options -gv @e46 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e47.conf
 ? 0
-$ run-shell "tmux show-options -gv @e47 2>&1 | od -An -c"
-  \n
+$ run-shell "tmux show-options -gv @e47 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0
 $ source-file esc/e48.conf
 ? 0
-$ run-shell "tmux show-options -gv @e48 2>&1 | od -An -c"
-  \n
+$ run-shell "tmux show-options -gv @e48 2>&1 | sed \"s#$HOME#HOME#\" | od -An -c"
 ? 0

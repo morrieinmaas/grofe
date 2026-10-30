@@ -484,8 +484,10 @@ fn tmux_colour(s: &str) -> Option<TmuxColour> {
         "brightmagenta" | "95" => BrightMagenta,
         "brightcyan" | "96" => BrightCyan,
         "brightwhite" | "97" => BrightWhite,
-        // ponytail: tmux also takes X11 colour names (`colour_byname`).
-        _ => return None,
+        // Anything else is an X11 name (`colour_byname`).
+        _ => {
+            return crate::server::x11::by_name(s).map(|c| TmuxColour::Colour(Color::Spec(c)));
+        }
     };
     Some(TmuxColour::Colour(Color::Named(named)))
 }

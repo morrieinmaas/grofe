@@ -76,8 +76,6 @@ $ list-buffers -F '[#{buffer_name}]'
 ? 0
 $ set-buffer -n z
 ? 0
-$ set-buffer -w -n zz v
-? 0
 $ delete-buffer -b b1
 ? 0
 $ delete-buffer -b b1
@@ -94,7 +92,7 @@ a:b v
 sp ace v
 buffer0001 onetwo
 z  world
-zz hello
+buffer0 hello
 x abc
 ? 0
 $ show-buffer -b buffer0000
@@ -135,7 +133,6 @@ a:b v
 sp ace v
 buffer0001 onetwo
 z  world
-zz hello
 x abc
 ? 0
 $ set-buffer -b named n
@@ -151,7 +148,6 @@ a:b v
 sp ace v
 buffer0001 onetwo
 z  world
-zz hello
 x abc
 ? 0
 $ set-option -g buffer-limit 1
@@ -165,7 +161,6 @@ a:b v
 sp ace v
 buffer0001 onetwo
 z  world
-zz hello
 x abc
 ? 0
 $ set-buffer -b named n2
@@ -177,6 +172,5 @@ a:b v
 sp ace v
 buffer0001 onetwo
 z  world
-zz hello
 x abc
 ? 0

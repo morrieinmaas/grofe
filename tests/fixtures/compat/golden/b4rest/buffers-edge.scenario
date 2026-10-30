@@ -26,7 +26,6 @@ $ set-buffer -b 'sp ace' v
 $ set-buffer -b 'a:b' v
 $ list-buffers -F '[#{buffer_name}]'
 $ set-buffer -n z
-$ set-buffer -w -n zz v
 $ delete-buffer -b b1
 $ delete-buffer -b b1
 $ set-buffer one

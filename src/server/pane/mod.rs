@@ -6,6 +6,7 @@
 //! writer (owns writes to the master through a bounded queue). The foreground
 //! command, argv and cwd are sampled on demand ([`procinfo::Cache`]).
 
+mod capture_sgr;
 pub mod io;
 pub mod marks;
 mod pipe;
@@ -37,11 +38,8 @@ use tokio::task::JoinHandle;
 pub use alacritty_terminal::term::cell::Flags as CellFlags;
 pub use alacritty_terminal::term::cell::Hyperlink;
 
-use crate::protocol::Caps;
 use crate::server::imgstore::{PaneImages, Store};
 use crate::server::passthrough::Scanner;
-use crate::server::render::write_sgr;
-use crate::server::status::Style;
 use crate::types::{
     CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
 };
@@ -878,21 +876,7 @@ impl PaneHandle {
         keep_blanks: bool,
         written_only: bool,
     ) -> String {
-        // The SGR-bearing flags; layout flags (wide spacers, wrap) are not
-        // a style change.
-        let sgr_flags = CellFlags::BOLD
-            | CellFlags::DIM
-            | CellFlags::ITALIC
-            | CellFlags::ALL_UNDERLINES
-            | CellFlags::INVERSE
-            | CellFlags::HIDDEN
-            | CellFlags::STRIKEOUT;
-        let caps = Caps {
-            truecolor: true,
-            styled_underline: true,
-            ..Caps::default()
-        };
-        let mut pen = Style::default();
+        let mut pen = capture_sgr::Pen::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
         let history = grid.history_size() as i32;
@@ -942,6 +926,7 @@ impl PaneHandle {
                 allocated(used(), cols)
             };
             let mut text = String::new();
+            let mut has_link = false;
             // A tab is its `\t` alone, as tmux captures it: the blank cells
             // it moved over, up to the next tab stop, are not printed. One
             // written over before its stop is a blank, like those cells.
@@ -955,18 +940,9 @@ impl PaneHandle {
                     continue;
                 }
                 if opts.escapes {
-                    let style = Style {
-                        fg: cell.fg,
-                        bg: cell.bg,
-                        attrs: cell.flags & sgr_flags,
-                        underline_color: cell.underline_color(),
-                    };
-                    if style != pen {
-                        let mut sgr = Vec::new();
-                        write_sgr(&mut sgr, &style, &caps);
-                        text.push_str(&String::from_utf8_lossy(&sgr));
-                        pen = style;
-                    }
+                    let now = capture_sgr::Pen::of(cell);
+                    text.push_str(&capture_sgr::code(&pen, &now, &mut has_link));
+                    pen = now;
                 }
                 if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
                     text.push(' ');
@@ -990,6 +966,9 @@ impl PaneHandle {
                 if let Some(zw) = cell.zerowidth() {
                     text.extend(zw);
                 }
+            }
+            if has_link {
+                text.push_str(&capture_sgr::close_link());
             }
             if wraps {
                 out.push_str(&text);

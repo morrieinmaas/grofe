@@ -434,7 +434,7 @@ pub const EVENTS: &[EventSpec] = &[
     },
     EventSpec {
         name: "pane-mode-changed",
-        fires: "never: copy mode and the choosers do not report to hooks",
+        fires: "a pane entered or left a mode (copy mode, the clock, a chooser)",
         tmux: "pane-mode-changed",
         kind: HookKind::WindowPane,
     },

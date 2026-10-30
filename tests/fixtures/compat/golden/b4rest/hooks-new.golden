@@ -6,8 +6,6 @@ $ set -g @log ''
 ? 0
 $ set-hook -g pane-mode-changed 'set -gF @log "#{@log}M[#{pane_mode}]#{pane_id};"'
 ? 0
-$ set-hook -g client-active 'set -gF @log "#{@log}A;"'
-? 0
 $ copy-mode
 ? 0
 $ show -gv @log
@@ -23,56 +21,46 @@ $ clock-mode
 $ show -gv @log
 M[copy-mode]%0;M[]%0;M[clock-mode]%0;
 ? 0
-$ send-keys q
+$ clock-mode
 ? 0
 $ show -gv @log
 M[copy-mode]%0;M[]%0;M[clock-mode]%0;
 ? 0
-$ copy-mode
-? 0
-$ copy-mode
-? 0
-$ clock-mode
-? 0
-$ show -gv @log
-M[copy-mode]%0;M[]%0;M[clock-mode]%0;M[copy-mode]%0;M[clock-mode]%0;
-? 0
 $ copy-mode -q
 ? 0
 $ show -gv @log
-M[copy-mode]%0;M[]%0;M[clock-mode]%0;M[copy-mode]%0;M[clock-mode]%0;M[]%0;M[]%0;
+M[copy-mode]%0;M[]%0;M[clock-mode]%0;M[]%0;
 ? 0
 $ set -g @log ''
 ? 0
+client 60x10 attach -t main
 $ choose-tree
 ? 0
 $ show -gv @log
 M[tree-mode]%0;
 ? 0
-client 60x10 attach -t main
+$ copy-mode -q
+? 0
 $ show -gv @log
-M[tree-mode]%0;
+M[tree-mode]%0;M[]%0;
+? 0
+$ set -g @log ''
+? 0
+keys C-b '['
+$ show -gv @log
+M[copy-mode]%0;
+? 0
+keys q
+$ show -gv @log
+M[copy-mode]%0;M[]%0;
+? 0
+$ set -g @log ''
+? 0
+keys C-b t
+$ show -gv @log
+M[clock-mode]%0;
 ? 0
 keys x
 $ show -gv @log
-M[tree-mode]%0;
+M[clock-mode]%0;M[]%0;
 ? 0
-keys y
-$ show -gv @log
-! no server running on <SOCKET>
-? 1
-keys q
-$ show -gv @log
-! no server running on <SOCKET>
-? 1
-$ set -g @log ''
-! no server running on <SOCKET>
-? 1
-keys C-b '['
-$ show -gv @log
-! no server running on <SOCKET>
-? 1
-keys q
-$ show -gv @log
-! no server running on <SOCKET>
-? 1

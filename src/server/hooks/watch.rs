@@ -26,6 +26,7 @@ const WATCHED: &[&str] = &[
     "window-linked",
     "window-unlinked",
     "pane-title-changed",
+    "pane-mode-changed",
     "pane-focus-in",
     "pane-focus-out",
 ];
@@ -41,6 +42,9 @@ struct Snap {
     sessions: BTreeMap<SessionId, SessionSnap>,
     windows: BTreeMap<WindowId, WindowSnap>,
     titles: BTreeMap<PaneId, String>,
+    /// The modes each pane is in, oldest first (only while
+    /// `pane-mode-changed` is bound).
+    modes: BTreeMap<PaneId, Vec<String>>,
     /// Each window an attached, focused client shows, and the pane tmux
     /// counts as focused in it.
     focused: BTreeMap<WindowId, PaneId>,
@@ -94,6 +98,11 @@ fn snapshot(state: &State, before: Option<&Snap>) -> Snap {
             snap.titles.insert(*pane, state.passthrough.title(*pane));
         }
     }
+    if wanted(state, "pane-mode-changed") {
+        for pane in m.panes.keys() {
+            snap.modes.insert(*pane, pane_modes(state, *pane));
+        }
+    }
     for c in state.clients.values() {
         // A terminal that does not report focus is always focused.
         if focus_events && !c.focused {
@@ -113,6 +122,25 @@ fn snapshot(state: &State, before: Option<&Snap>) -> Snap {
         snap.focused.insert(window, kept.copied().unwrap_or(active));
     }
     snap
+}
+
+/// The modes `pane` is in, the oldest first: the clock, copy mode over it,
+/// a chooser over both.
+fn pane_modes(state: &State, pane: PaneId) -> Vec<String> {
+    let mut out = Vec::new();
+    if state.clocks.is_active(pane) {
+        out.push("clock-mode".to_string());
+    }
+    if state.copy.is_active(pane) {
+        out.push(
+            crate::server::copy::format_var(state, pane, "pane_mode")
+                .unwrap_or_else(|| "copy-mode".to_string()),
+        );
+    }
+    if let Some(name) = crate::server::tree::format_var(state, pane, "pane_mode") {
+        out.push(name);
+    }
+    out
 }
 
 /// Takes the first snapshot if a watched hook has just been bound and
@@ -314,6 +342,18 @@ fn diff(state: &State, before: &Snap, now: &Snap) -> Vec<Fired> {
     for (pane, title) in &now.titles {
         if before.titles.get(pane).is_some_and(|t| t != title) {
             out.extend(pane_fired(state, "pane-title-changed", *pane));
+        }
+    }
+    // One hook for each mode a pane left and each it entered, as tmux fires
+    // one per `window_pane_set_mode` and `window_pane_reset_mode`.
+    for (pane, now_modes) in &now.modes {
+        let Some(was) = before.modes.get(pane) else {
+            continue;
+        };
+        let kept = was.iter().zip(now_modes).take_while(|(a, b)| a == b).count();
+        let changes = (was.len() - kept) + (now_modes.len() - kept);
+        for _ in 0..changes {
+            out.extend(pane_fired(state, "pane-mode-changed", *pane));
         }
     }
     out
