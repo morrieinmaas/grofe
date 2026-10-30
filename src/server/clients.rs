@@ -724,6 +724,34 @@ pub(crate) fn plan_command_log(
     plan
 }
 
+/// `cmd` as `show-messages` prints a command it ran (tmux's `cmd_print`).
+fn print_for_log(dialect: crate::protocol::Dialect, cmd: &[String]) -> String {
+    let printed = match dialect {
+        crate::protocol::Dialect::Tmux => tmux_print(cmd),
+        crate::protocol::Dialect::Grofe => None,
+    };
+    printed.unwrap_or_else(|| {
+        let words: Vec<String> = cmd
+            .iter()
+            .map(|w| crate::server::dispatch::options::escape_arg(w))
+            .collect();
+        words.join(" ")
+    })
+}
+
+/// Logs `cmd`, a command a key's binding runs in a branch of its own
+/// (`if-shell`), as run by that key.
+pub(crate) fn log_key_command(state: &mut State, ctx: &ClientCtx, cmd: &[String]) {
+    let Some(key) = state.event_key.clone() else {
+        return;
+    };
+    let Some(who) = ctx.client.and_then(|id| state.clients.get(&id)).map(|c| c.name.clone()) else {
+        return;
+    };
+    let printed = print_for_log(ctx.dialect, cmd);
+    push_message(state, format!("{who} key {key}: {printed}"));
+}
+
 /// Logs the planned line of the request command whose first native
 /// command is about to run ([`plan_command_log`]), and any before it that
 /// ran as no command at all.
@@ -3066,7 +3094,13 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
             }
         }
         Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
-        Routed::Bound(cmds, dialect) => run_commands_for(state, id, &cmds, dialect, true, None),
+        Routed::Bound(cmds, dialect) => {
+            let key = match &input {
+                Input::Key(key) => Some(key.to_string()),
+                _ => None,
+            };
+            run_commands_for(state, id, &cmds, dialect, true, None, key);
+        }
         Routed::Consumed => {}
     }
 }
@@ -3085,7 +3119,8 @@ fn route(state: &mut State, id: ClientId, input: Input, now: Instant) {
 /// waiting on its shell holds the rest of the commands, and the client's
 /// later input, until it is done ([`BindingRun`]).
 pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
-    run_commands_for(state, id, cmds, dialect, false, None);
+    let key = state.command_key.take();
+    run_commands_for(state, id, cmds, dialect, false, None, key);
 }
 
 /// One binding's commands still to run for a client, in order.
@@ -3100,6 +3135,9 @@ pub(crate) struct BindingRun {
     mouse: Option<crate::server::mouse::MouseTarget>,
     /// The pane the commands run for, if not the active one (a menu's `-t`).
     pane: Option<PaneId>,
+    /// The key whose binding runs these commands, if one does: each is
+    /// logged for `show-messages` as run by it.
+    key: Option<String>,
     /// This run holds the client's input.
     holding: bool,
 }
@@ -3112,6 +3150,7 @@ pub(crate) fn run_commands_for(
     dialect: Dialect,
     bound: bool,
     mouse: Option<crate::server::mouse::MouseTarget>,
+    key: Option<String>,
 ) {
     let run = BindingRun {
         id,
@@ -3120,6 +3159,7 @@ pub(crate) fn run_commands_for(
         bound,
         mouse,
         pane: None,
+        key,
         holding: false,
     };
     run_from(state, run);
@@ -3133,6 +3173,7 @@ pub(crate) fn run_binding_in(
     cmds: &[Vec<String>],
     dialect: Dialect,
     pane: Option<PaneId>,
+    key: Option<String>,
 ) {
     let run = BindingRun {
         id,
@@ -3141,6 +3182,7 @@ pub(crate) fn run_binding_in(
         bound: false,
         mouse: None,
         pane,
+        key,
         holding: false,
     };
     run_from(state, run);
@@ -3200,10 +3242,17 @@ fn run_from(state: &mut State, mut run: BindingRun) {
                 dispatch::run_split(state, &ctx, &argv)
             }
         };
+        if let Some(key) = &run.key {
+            let who = state.clients.get(&id).map(|c| c.name.clone());
+            let printed = print_for_log(run.dialect, &argv);
+            push_message(state, format!("{} key {key}: {printed}", who.unwrap_or_default()));
+        }
+        let saved = std::mem::replace(&mut state.event_key, run.key.clone());
         let result = match &run.mouse {
             Some(target) => MouseState::with_current(state, Some(target.clone()), one),
             None => one(state),
         };
+        state.event_key = saved;
         let wait = binding_wait(state, id);
         // What a command prints shows in the view mode of the client's
         // pane (`server_client_print`), the error on its status line.

@@ -250,6 +250,11 @@ pub struct State {
     /// The log lines of the request now running, logged as its commands
     /// fire (`clients::log_fired`).
     pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
+    /// The key whose binding is running its commands (`show-messages`).
+    pub(crate) event_key: Option<String>,
+    /// The key the next [`clients::run_binding`] logs its commands under:
+    /// set by a prompt, confirm or menu a binding opened.
+    pub(crate) command_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -579,6 +584,8 @@ async fn serve(
         failed_out: String::new(),
         cli_io: None,
         command_log: Default::default(),
+        event_key: None,
+        command_key: None,
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -1278,6 +1285,8 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         failed_out: String::new(),
         cli_io: None,
         command_log: Default::default(),
+        event_key: None,
+        command_key: None,
         exit: false,
         exit_when_empty: false,
         connections: 0,

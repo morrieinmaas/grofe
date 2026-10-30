@@ -142,6 +142,9 @@ struct Prompt {
     default_yes: bool,
     /// Which of [`PROMPT_TYPES`] the prompt is, so which history it walks.
     kind: usize,
+    /// The key whose binding opened the prompt: its command is logged as
+    /// run by that key (`show-messages`).
+    key: Option<String>,
     /// `status-keys` is `vi`, and the prompt is in its command mode
     /// (tmux's `PROMPT_COMMAND`); both are read before each key.
     vi: bool,
@@ -238,6 +241,7 @@ impl Prompt {
             confirm_key: 'y',
             default_yes: false,
             kind: 0,
+            key: None,
             vi: false,
             command_mode: false,
             separators: WORD_SEPARATORS.to_string(),
@@ -989,6 +993,7 @@ impl InputHook for PromptHook {
                 let command = prompt.command(&prompt.line());
                 match cmd::split_command_string(&command) {
                     Ok(cmds) if !cmds.is_empty() => {
+                        state.command_key = prompt.key.clone();
                         clients::run_binding(state, client, &cmds, prompt.dialect)
                     }
                     Ok(_) => {}
@@ -1092,7 +1097,10 @@ impl InputHook for PromptHook {
                     Read::Confirm => prompt.confirmed().then_some(prompt.template.clone()),
                 };
                 match command.map(|c| cmd::split_command_string(&c)) {
-                    Some(Ok(cmds)) if !cmds.is_empty() => Routed::Command(cmds, prompt.dialect),
+                    Some(Ok(cmds)) if !cmds.is_empty() => {
+                        state.command_key = prompt.key.clone();
+                        Routed::Command(cmds, prompt.dialect)
+                    }
                     Some(Err(e)) => {
                         clients::show_message(state, client, &e.to_string());
                         Routed::Consumed
@@ -1480,6 +1488,8 @@ pub fn ask(
         then: Then(Some(then)),
         ..Prompt::new(label.to_string(), initial, String::new())
     };
+    let mut prompt = prompt;
+    prompt.key = state.event_key.clone();
     state.prompts.open.insert(id, prompt);
     clients::mark_dirty(state, id);
 }
@@ -1492,6 +1502,7 @@ fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str
     };
     let command = replace_template(&prompt.template, &format!("{prefix}{line}"));
     let dialect = prompt.dialect;
+    state.command_key = prompt.key.clone();
     match cmd::split_command_string(&command) {
         Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect),
         Ok(_) => {}
@@ -1579,6 +1590,8 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
 /// client's input, as tmux 3.7b's command queue waits (recorded,
 /// `tm_6/waits`).
 fn open(state: &mut State, id: ClientId, prompt: Prompt, wait: bool) {
+    let mut prompt = prompt;
+    prompt.key = state.event_key.clone();
     state.prompts.open.insert(id, prompt);
     if wait {
         let reply = dispatch::defer_reply(state);

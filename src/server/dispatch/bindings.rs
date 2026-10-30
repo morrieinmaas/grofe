@@ -89,6 +89,7 @@ fn shell_form(
     let jobs = state.jobs.clone();
     let shell_jobs = state.shell_jobs.clone();
     let event = state.mouse.current().cloned();
+    let key = state.event_key.clone();
     // A binding's client types on behind the condition, as tmux's
     // per-client queue waits: its input is held until the branch has run.
     let held = ctx
@@ -104,9 +105,11 @@ fn shell_form(
             .is_ok();
         let job: Job = Box::new(move |state: &mut State| {
             let branch = if yes { Some(then) } else { otherwise };
+            let saved = std::mem::replace(&mut state.event_key, key);
             let result = MouseState::with_current(state, event, |state| {
                 branch.map_or(Ok(String::new()), |b| run_branch(state, &ctx, &b))
             });
+            state.event_key = saved;
             let inner = state.deferred_reply.take();
             state.events.flush(&state.model);
             clients::changed(state);
@@ -155,6 +158,7 @@ fn run_branch(state: &mut State, ctx: &ClientCtx, text: &str) -> Result<String, 
     }
     let mut cmds = Vec::new();
     for argv in cmd::split_command_string(text).map_err(|e| e.to_string())? {
+        clients::log_key_command(state, ctx, &argv);
         let argv = mouse::resolve_targets(state, &argv);
         cmds.extend(parse_split(state, ctx, &argv)?);
     }

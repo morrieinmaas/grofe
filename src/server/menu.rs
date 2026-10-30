@@ -232,6 +232,8 @@ struct Shown {
     /// The mouse event the menu was opened for: its rows' commands run for
     /// it, as tmux's `menu_key_cb` passes the item's event on.
     event: Option<MouseTarget>,
+    /// The key whose binding opened the menu (`show-messages`).
+    key: Option<String>,
 }
 
 struct Row {
@@ -688,6 +690,7 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
         ctx: ctx.clone(),
         look: menu.look,
         no_mouse,
+        key: state.event_key.clone(),
         event,
     };
     if no_mouse {
@@ -1108,6 +1111,7 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
             Ok(cmds) if !cmds.is_empty() => {
                 let dialect = shown.dialect;
                 let pane = shown.ctx.pane;
+                let key = shown.key.clone();
                 match shown.event.take() {
                     Some(event) => {
                         let run = move |state: &mut State| {
@@ -1118,15 +1122,19 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                                 dialect,
                                 false,
                                 Some(event),
+                                key,
                             );
                         };
                         clients::in_input_order(state, id, Box::new(run));
                         Routed::Consumed
                     }
-                    None if shown.ctx.client.is_none() => Routed::Command(cmds, dialect),
+                    None if shown.ctx.client.is_none() => {
+                        state.command_key = key;
+                        Routed::Command(cmds, dialect)
+                    }
                     None => {
                         let run = move |state: &mut State| {
-                            clients::run_binding_in(state, id, &cmds, dialect, pane)
+                            clients::run_binding_in(state, id, &cmds, dialect, pane, key)
                         };
                         clients::in_input_order(state, id, Box::new(run));
                         Routed::Consumed

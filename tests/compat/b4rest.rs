@@ -102,3 +102,9 @@ fn popup_styles_are_formats() {
 fn switch_client_z_keeps_the_zoom() {
     check("b4rest", "switch-client-z", &[]);
 }
+
+/// The commands a key runs are logged for `show-messages`.
+#[test]
+fn show_messages_logs_a_keys_commands() {
+    check("b4rest", "messages-key", &[]);
+}

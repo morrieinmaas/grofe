@@ -673,7 +673,7 @@ fn fire(
         Some((cmds, _)) if is_border_drag_row(&key, &cmds) => {
             drag_border_start(state, client, m, &target);
         }
-        Some((cmds, dialect)) => run_mouse_binding(state, &target, &cmds, dialect),
+        Some((cmds, dialect)) => run_mouse_binding(state, &target, &cmds, dialect, &key),
         // Bound nowhere: the report goes to the pane it is over, as
         // tmux's `forward_key`.
         None => {
@@ -924,6 +924,7 @@ pub fn run_mouse_binding(
     target: &MouseTarget,
     cmds: &[Vec<String>],
     dialect: Dialect,
+    key: &Key,
 ) {
     clients::run_commands_for(
         state,
@@ -932,6 +933,7 @@ pub fn run_mouse_binding(
         dialect,
         true,
         Some(target.clone()),
+        Some(key.to_string()),
     );
 }
 

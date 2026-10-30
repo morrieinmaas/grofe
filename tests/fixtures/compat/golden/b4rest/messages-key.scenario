@@ -1,0 +1,24 @@
+# B4 rest: show-messages logs each command a key runs as `<client> key
+# <key>: <command>` (cmdq_add_message), a command of a sourced file or a
+# hook with no client of its own as `command: <command>`.
+$ new-session -d -s main -x 40 -y 10 cat
+$ set -g message-limit 100
+$ bind -n F5 set -g @x 1 \; display-message -p hi
+$ bind -n F6 run-shell 'true'
+$ bind -n F7 if-shell -F 1 'set -g @y 2' 'set -g @y 3'
+$ bind -n F8 command-prompt -p 'x:' 'set -g @p %%'
+$ bind -n F9 confirm-before -p 'ok?' 'set -g @c yes'
+$ bind -n F10 display-menu Item i 'set -g @m yes'
+client 40x10 attach -t main
+keys Escape '[15~'
+keys Escape '[17~'
+keys Escape '[18~'
+$ run-shell 'sleep 0.3'
+keys Escape '[19~'
+keys z Enter
+keys Escape '[20~'
+keys y
+keys Escape '[21~'
+keys i
+$ run-shell 'sleep 0.3'
+$ run-shell "tmux show-messages | grep -E '^[^ ]+ [^ ]+ key F' | sed 's/^[^ ]* //'"
