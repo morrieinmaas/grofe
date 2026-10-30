@@ -1,0 +1,35 @@
+$ new-session -d -s main -n w0 -x 60 -y 6 cat
+? 0
+$ source-file {fixtures}/tmux-status-noclock.conf
+? 0
+$ set -g status-right ""
+? 0
+$ set -g default-command cat
+? 0
+$ set -g window-status-format '#I'
+? 0
+$ set -g window-status-current-format '#I'
+? 0
+client 60x6 attach -t main
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+keys Escape '[200~' 'x' Enter C-b c 'y' Escape '[201~'
+$ run-shell 'sleep 0.3'
+? 0
+$ show -gv @said
+x
+? 0
+$ list-windows -F '#{window_index}'
+1
+2
+? 0
+screen
+| y
+|
+|
+|
+|
+| [main] 1 2

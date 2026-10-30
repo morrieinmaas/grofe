@@ -233,6 +233,11 @@ fn a_paste_into_a_prompt_matches() {
 }
 
 #[test]
+fn a_paste_after_the_enter_that_answers_a_prompt_is_typed_as_keys() {
+    check("b4rest", "prompt-paste-rest", &[]);
+}
+
+#[test]
 fn option_remain_format_matches() {
     check("b4rest", "opt-remain-format", &[]);
 }

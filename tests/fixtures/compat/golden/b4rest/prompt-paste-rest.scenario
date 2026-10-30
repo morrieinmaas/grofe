@@ -1,0 +1,17 @@
+# B4 rest: what a paste holds after the Enter that answers a prompt is typed
+# on as keys: the prompt ate the paste start, so a C-b c in it opens a window.
+$ new-session -d -s main -n w0 -x 60 -y 6 cat
+$ source-file {fixtures}/tmux-status-noclock.conf
+$ set -g status-right ""
+$ set -g default-command cat
+$ set -g window-status-format '#I'
+$ set -g window-status-current-format '#I'
+client 60x6 attach -t main
+$& command-prompt -p 'say:' 'set -g @said "%%"'
+$ run-shell 'sleep 0.5'
+$ run-shell 'sleep 0.3'
+keys Escape '[200~' 'x' Enter C-b c 'y' Escape '[201~'
+$ run-shell 'sleep 0.3'
+$ show -gv @said
+$ list-windows -F '#{window_index}'
+screen
