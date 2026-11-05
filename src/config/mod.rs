@@ -77,6 +77,12 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("main-pane-width", "main-pane-width"),
     ("main-pane-height", "main-pane-height"),
     ("window-size", "window-size"),
+    // MF (spec 2026-11-05-frames.md): grofe's own options, taken here
+    // under either identity (only their defaults differ), though tmux's
+    // CLI does not know them.
+    ("pane-frames", "pane-frames"),
+    ("pane-gap", "pane-gap"),
+    ("pane-frame-title", "pane-frame-title"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -265,7 +271,9 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "scroll-on-clear"
         | "xterm-keys"
         | "exit-unattached"
-        | "variation-selector-always-wide" => Ty::Bool,
+        | "variation-selector-always-wide"
+        | "pane-frames"
+        | "pane-frame-title" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
@@ -283,6 +291,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "initial-repeat-time"
         | "lock-after-time"
         | "tiled-layout-max-columns"
+        | "pane-gap"
         | "input-buffer-size"
         | "message-limit"
         | "prefix-timeout"
@@ -557,11 +566,11 @@ pub(crate) fn closest<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::dispatch::options::builtin_names;
+    use crate::server::dispatch::options::{builtin_names, grofe_only_names};
 
     #[test]
     fn every_builtin_option_has_a_toml_name() {
-        for name in builtin_names() {
+        for name in builtin_names().chain(grofe_only_names()) {
             assert!(
                 OPTION_NAMES.iter().any(|(_, n)| *n == name),
                 "built-in option {name} has no OPTION_NAMES row"
@@ -569,7 +578,9 @@ mod tests {
         }
         for (toml, tmux) in OPTION_NAMES {
             assert!(
-                builtin_names().any(|n| n == *tmux),
+                builtin_names()
+                    .chain(grofe_only_names())
+                    .any(|n| n == *tmux),
                 "OPTION_NAMES row {toml} names unknown option {tmux}"
             );
         }

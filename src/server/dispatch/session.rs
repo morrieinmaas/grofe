@@ -143,6 +143,9 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         active_points: Default::default(),
         floating: Vec::new(),
         pane_status: Default::default(),
+        frames: false,
+        pane_gap: 0,
+        drop_preview: None,
         links: Vec::new(),
     });
     // `-n` names the window for good, as `rename-window` does.

@@ -2129,10 +2129,15 @@ mod tests {
         assert_eq!(store_name("nope"), "nope");
     }
 
-    /// The option table covers every option grofe has, and only those.
+    /// The option table covers every option grofe has that tmux's CLI
+    /// knows, and only those: grofe's own (`pane-frames` and the rest)
+    /// have no row.
     #[test]
     fn the_option_table_is_the_option_store_s() {
-        use crate::server::dispatch::options::{builtin_names, list_names};
+        use crate::server::dispatch::options::{builtin_names, grofe_only_names, list_names};
+        for name in grofe_only_names() {
+            assert!(option_name(name).is_none(), "{name} is grofe's own");
+        }
         let store: Vec<&str> = builtin_names().chain(list_names()).collect();
         for name in &store {
             assert!(
