@@ -69,7 +69,8 @@ pub struct EventSpec {
     pub name: &'static str,
     /// What fires the event, for readers and FE.3.
     pub fires: &'static str,
-    /// The tmux 3.7b hook FE.3's table maps onto this event.
+    /// The tmux 3.7b hook FE.3's table maps onto this event; empty for
+    /// grofe's own events, which no tmux hook name reaches.
     pub tmux: &'static str,
     /// Which tmux option table holds the hook.
     pub kind: HookKind,
@@ -499,6 +500,20 @@ pub const EVENTS: &[EventSpec] = &[
         fires: "a window's size changed",
         tmux: "window-resized",
         kind: HookKind::Window,
+    },
+    // M4 (the stub edit adds them, raised by nobody yet): grofe's own, with
+    // no tmux hook. T4.2 raises `resume-changed`, T4.3 `restore-done`.
+    EventSpec {
+        name: "resume-changed",
+        fires: "a pane's resume or expectation was set or cleared",
+        tmux: "",
+        kind: HookKind::WindowPane,
+    },
+    EventSpec {
+        name: "restore-done",
+        fires: "a restore from the snapshot finished",
+        tmux: "",
+        kind: HookKind::Session,
     },
 ];
 
@@ -2216,11 +2231,20 @@ mod tests {
 
     #[test]
     fn every_event_names_a_distinct_tmux_hook() {
-        let mut tmux: Vec<&str> = EVENTS.iter().map(|e| e.tmux).collect();
+        let mut tmux: Vec<&str> = EVENTS
+            .iter()
+            .map(|e| e.tmux)
+            .filter(|t| !t.is_empty())
+            .collect();
         tmux.sort();
         tmux.dedup();
-        assert_eq!(tmux.len(), EVENTS.len());
-        assert_eq!(EVENTS.len(), 68);
+        assert_eq!(tmux.len(), 68);
+        let own: Vec<&str> = EVENTS
+            .iter()
+            .filter(|e| e.tmux.is_empty())
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(own, ["resume-changed", "restore-done"]);
         let mut names: Vec<&str> = EVENTS.iter().map(|e| e.name).collect();
         names.sort();
         names.dedup();

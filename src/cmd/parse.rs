@@ -15,14 +15,14 @@ use super::{
     DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
     ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
-    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, PaneSetup,
-    ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart, PromptHistory, RefreshClient,
-    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
-    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
-    SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
-    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile,
-    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
+    PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart,
+    PromptHistory, RebootCheck, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
+    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
+    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess, SetBuffer,
+    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
+    ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
+    SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -935,7 +935,8 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
     ('o', FlagKind::Bool),
     ('U', FlagKind::Bool),
 ];
-const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
+const SET_OPTION_LONG: &[(&str, FlagKind)] =
+    &[("persist", FlagKind::Bool), ("no-persist", FlagKind::Bool)];
 
 /// Resolves `-g -s -w -p` to a scope, by tmux's own precedence: never an
 /// error, just a fixed order of preference over whichever flags were
@@ -989,6 +990,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         unset: flags.present.contains(&'u') || flags.present.contains(&'U'),
         unset_panes: flags.present.contains(&'U'),
         persist: flags.long_present.contains("persist"),
+        no_persist: flags.long_present.contains("no-persist"),
         target: target_or_current(&flags.values, 't')?,
         name,
         value,
@@ -1111,6 +1113,16 @@ fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 const SUBSCRIBE_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
+
+// M4 stubs: every argument is accepted, so the verb answers "not
+// implemented yet" whatever it is given; T4.2 and T4.5 parse their flags.
+fn parse_pane_set_resume(_argv: &[String]) -> Result<Command, ParseError> {
+    Ok(Command::PaneSetResume(PaneSetResume))
+}
+
+fn parse_reboot_check(_argv: &[String]) -> Result<Command, ParseError> {
+    Ok(Command::RebootCheck(RebootCheck))
+}
 
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -3716,6 +3728,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "reload" => parse_reload(rest),
         "list-plugins" => parse_list_plugins(rest),
         "plugin-restart" => parse_plugin_restart(rest),
+        "pane-set-resume" => parse_pane_set_resume(rest),
+        "reboot-check" => parse_reboot_check(rest),
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
         "select-layout" => parse_select_layout(rest),
@@ -4663,6 +4677,7 @@ mod tests {
                 unset: false,
                 unset_panes: false,
                 persist: true,
+                no_persist: false,
                 target: Target::Current,
                 name: "history-limit".to_string(),
                 value: Some("50000".to_string()),
@@ -4685,6 +4700,7 @@ mod tests {
                 unset: true,
                 unset_panes: false,
                 persist: false,
+                no_persist: false,
                 target: Target::Current,
                 name: "@my-opt".to_string(),
                 value: None,
@@ -4694,6 +4710,35 @@ mod tests {
                 only_if_unset: false,
                 shown: None,
             })
+        );
+    }
+
+    #[test]
+    fn set_option_no_persist_is_parsed() {
+        let Ok(Command::SetOption(c)) = parse(&argv(&["set", "-p", "--no-persist", "@a", "y"]))
+        else {
+            panic!("not a set-option");
+        };
+        assert!(c.no_persist && !c.persist);
+    }
+
+    #[test]
+    fn m4_stub_verbs_parse_whatever_they_are_given() {
+        assert_eq!(
+            parse(&argv(&[
+                "pane-set-resume",
+                "-t",
+                "%1",
+                "--",
+                "agent",
+                "--resume",
+                "a"
+            ])),
+            Ok(Command::PaneSetResume(PaneSetResume))
+        );
+        assert_eq!(
+            parse(&argv(&["reboot-check", "--json"])),
+            Ok(Command::RebootCheck(RebootCheck))
         );
     }
 

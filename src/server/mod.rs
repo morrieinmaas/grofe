@@ -35,9 +35,12 @@ pub mod plugins;
 pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod restore;
+pub mod resume;
 pub mod screenimg;
 pub mod shell_jobs;
 pub mod sixel;
+pub mod snapshot;
 pub mod sources;
 pub mod status;
 pub mod tree;
@@ -386,10 +389,13 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             let place = state.model.place_of(p);
             let exited = Event::PaneExited { pane, uid, status };
             state.events.emit_at(exited, place);
-            state.model.pane_exited(pane, status);
-            hooks::pane_exited(state, pane, window);
-            if state.model.closed() {
-                state.exit = true;
+            // A restored pane whose resumed process exited is kept (T4.4).
+            if !restore::on_pane_exited(state, pane) {
+                state.model.pane_exited(pane, status);
+                hooks::pane_exited(state, pane, window);
+                if state.model.closed() {
+                    state.exit = true;
+                }
             }
             clients::changed(state);
         }

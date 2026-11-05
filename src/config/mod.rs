@@ -38,6 +38,9 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("history-limit", "history-limit"),
     ("mouse", "mouse"),
     ("remain-on-exit", "remain-on-exit"),
+    // M4 (spec §6): read by T4.3 and T4.4.
+    ("restore-on-start", "restore-on-start"),
+    ("restore-stagger-ms", "restore-stagger-ms"),
     ("automatic-rename", "automatic-rename"),
     ("automatic-rename-format", "automatic-rename-format"),
     ("allow-rename", "allow-rename"),
@@ -243,6 +246,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     match toml_key {
         "mouse"
         | "remain-on-exit"
+        | "restore-on-start"
         | "automatic-rename"
         | "allow-rename"
         | "focus-events"
@@ -282,7 +286,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "input-buffer-size"
         | "message-limit"
         | "prefix-timeout"
-        | "prompt-history-limit" => Ty::Int,
+        | "prompt-history-limit"
+        | "restore-stagger-ms" => Ty::Int,
         _ => Ty::Str,
     }
 }
@@ -568,6 +573,13 @@ mod tests {
                 "OPTION_NAMES row {toml} names unknown option {tmux}"
             );
         }
+    }
+
+    #[test]
+    fn the_restore_keys_have_their_defaults() {
+        let resolved = load(&Env::from_vars(None, None)).expect("defaults load");
+        assert_eq!(resolved.get("restore-on-start"), Some("on"));
+        assert_eq!(resolved.get("restore-stagger-ms"), Some("1000"));
     }
 
     #[test]

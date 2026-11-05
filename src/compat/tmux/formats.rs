@@ -235,6 +235,7 @@ impl Rewriter {
             unset: false,
             unset_panes: false,
             persist: false,
+            no_persist: false,
             target: crate::cmd::Target::Current,
             name: RBRACE_OPTION.to_string(),
             value: Some("}".to_string()),
@@ -697,7 +698,7 @@ pub(crate) fn tmux_hook_names(window: bool) -> &'static [&'static str] {
 pub fn hook_event(tmux: &str) -> Result<&'static str, TmuxError> {
     crate::server::hooks::EVENTS
         .iter()
-        .find(|e| e.tmux == tmux)
+        .find(|e| !e.tmux.is_empty() && e.tmux == tmux)
         .map(|e| e.name)
         .ok_or_else(|| TmuxError(format!("invalid option: {tmux}")))
 }

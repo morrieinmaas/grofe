@@ -933,9 +933,10 @@ execute this".
 
 Spec §6. Goal: the server's state survives a kill, a crash and a reboot, with
 every pane's `uid` intact and every pane that has a `resume` running it.
-Whether this replaces resurrect and continuum, or coexists with them running
-as plugins, is open (§2 of `plan-amend-2026-09-29.md`; owner to decide no
-later than this stub edit). M4 starts once the alias-day container test (new
+Owner ruling 2026-11-05 (§2 of `plan-amend-2026-09-29.md`): on grofe,
+grofe's native persistence replaces tmux-resurrect and tmux-continuum.
+canopy keeps them only for real tmux; a canopy change, outside grofe,
+makes canopy skip them when it runs on grofe. M4 starts once the alias-day container test (new
 section, above) is green. It builds on TC.8's layout geometry export
 and import and on TC.5's internal events.
 

@@ -439,6 +439,9 @@ pub struct SetOption {
     /// `-U`: unset, and for a window option in the window's panes too.
     pub unset_panes: bool,
     pub persist: bool,
+    /// `--no-persist`: clears the sticky `--persist` mark (T4.1 gives it
+    /// meaning; parsed only until then).
+    pub no_persist: bool,
     pub target: Target,
     pub name: String,
     pub value: Option<String>,
@@ -681,6 +684,16 @@ pub struct ListPlugins;
 pub struct PluginRestart {
     pub name: String,
 }
+
+/// `pane-set-resume` (grofe's own, T4.2, spec §6): sets or clears the argv
+/// that brings a pane's process back. T4.2 adds its flags.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PaneSetResume;
+
+/// `reboot-check` (grofe's own, T4.5, spec §6): each pane's verdict from
+/// the snapshot on disk. T4.5 adds its flags.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RebootCheck;
 
 /// `command-prompt` (`-p -I`, then a template; R24; from M3.6 `-b -k -1
 /// -T`, TC.7).
@@ -1606,6 +1619,9 @@ pub enum Command {
     // M6 (the stub edit adds them; T6.3 implements them).
     ListPlugins(ListPlugins),
     PluginRestart(PluginRestart),
+    // M4 (the stub edit adds them; T4.2 and T4.5 implement them).
+    PaneSetResume(PaneSetResume),
+    RebootCheck(RebootCheck),
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
     SelectLayout(SelectLayout),
