@@ -1752,6 +1752,20 @@ pub fn default_bindings() -> KeyTables {
         "Kill current window",
     );
     bind("!", &["break-pane"], false, "Break pane to a new window");
+    // FR.4: grofe's own, so a tmux-identity server drops it with the rest
+    // of grofe's prefix defaults ([`KeyTables::use_tmux_stock`]).
+    bind(
+        "F",
+        &[
+            "if-shell",
+            "-F",
+            "#{pane_floating_flag}",
+            "unfloat-pane",
+            "float-pane",
+        ],
+        false,
+        "Float or unfloat the active pane",
+    );
     bind(
         "{",
         &["swap-pane", "-U"],
@@ -4676,6 +4690,27 @@ mod tests {
             reloaded.exact(PREFIX_TABLE, &k("\"")).map(|b| b.dialect),
             Some(Dialect::Tmux)
         );
+    }
+
+    /// FR.4: grofe identity binds `prefix F` to the float toggle; tmux 3.7b
+    /// has no `F`, so a tmux-identity table leaves it unbound.
+    #[test]
+    fn prefix_f_toggles_floating_under_grofe_identity_only() {
+        let mut t = default_bindings();
+        let f = t.exact(PREFIX_TABLE, &k("F")).expect("grofe's F");
+        assert_eq!(
+            words(f),
+            [
+                "if-shell",
+                "-F",
+                "#{pane_floating_flag}",
+                "unfloat-pane",
+                "float-pane"
+            ]
+        );
+        assert_eq!(f.dialect, Dialect::Grofe);
+        t.use_tmux_stock();
+        assert!(t.exact(PREFIX_TABLE, &k("F")).is_none());
     }
 
     // ---- default key table (T2.5b) ----

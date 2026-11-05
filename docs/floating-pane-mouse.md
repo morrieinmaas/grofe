@@ -2,7 +2,7 @@
 
 tmux 3.7b's floating panes (`new-pane`) take the mouse on their border through
 tmux's stock rows, and grofe does what tmux does there (recorded on tmux 3.7b:
-`tests/fixtures/compat/golden/tc_6/float-border-mouse`). grofe adds two verbs of its own on top; neither changes what tmux 3.7b does.
+`tests/fixtures/compat/golden/tc_6/float-border-mouse`). grofe adds three verbs of its own on top; none changes what tmux 3.7b does.
 
 ## The border (needs `mouse on`)
 
@@ -50,16 +50,31 @@ the built-in behaviour above, on tiled and floating borders alike.
 
 ## Commands
 
-tmux 3.7b has neither verb, so both are free of tmux names, and both are unknown
-commands under the `tmux` name. Flags are `new-pane`'s: `-x`/`-y` the size, `-X`/`-Y`
-the window cell of the top-left content cell (cells or `N%`), `-t` the pane.
+tmux 3.7b has none of these verbs, so they are free of tmux names, and all three are
+unknown commands under the `tmux` name. Flags are `new-pane`'s: `-x`/`-y` the size,
+`-X`/`-Y` the window cell of the top-left content cell (cells or `N%`), `-t` the pane.
 
 - `float-pane [-t pane] [-x w] [-y h] [-X x] [-Y y]`: a tiled pane becomes floating,
   on top, keeping its process and history; the other tiled panes take its place, and
   a zoomed window is unzoomed. Defaults are `new-pane`'s. A window's last tiled pane
-  cannot float. To put it back, use `join-pane` or `select-layout` as before.
+  cannot float. `unfloat-pane` puts it back.
+- `unfloat-pane [-t pane] [-s target-pane] [-h|-v]`: a floating pane goes back into
+  the tiling, as the same pane: its process, history, uid and resume command stay, and
+  the snapshot saves it again. It splits `-s target-pane` if given (a tiled pane of
+  the same window), else the tiled pane under its centre, else the window's last
+  active tiled pane; a window with no tiled pane left takes it as
+  its only one. The split is side by side with `-h`, one above the other with `-v`
+  (`-h` wins, as in `join-pane`), else along the longer side of the pane split. The
+  pane goes after the one it splits and becomes the active pane; a zoomed window is
+  unzoomed.
 - `place-pane [-t pane] [-X x] [-Y y]`: moves a floating pane, held so that the whole
   pane, border included, stays inside the window (a pane larger than the window goes
   to its top left). An axis not given stays.
 
 `#{pane_floating_flag}` (tmux's own format) tells a floating pane.
+
+## Keys
+
+Under grofe identity `prefix F` floats the active pane, or unfloats it if it is
+floating: `if-shell -F '#{pane_floating_flag}' unfloat-pane float-pane`. Under tmux
+identity `F` is unbound in the prefix table, as in tmux 3.7b.

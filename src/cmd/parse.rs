@@ -22,7 +22,8 @@ use super::{
     SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess, SetBuffer,
     SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
     ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
-    SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane, UnlinkWindow, WaitFor, WindowMove,
+    WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -2535,6 +2536,33 @@ fn parse_float_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_unfloat_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[
+        ('t', FlagKind::Value),
+        ('s', FlagKind::Value),
+        ('h', FlagKind::Bool),
+        ('v', FlagKind::Bool),
+    ];
+    let flags = flags_for(argv, SHORT, "unfloat-pane")?;
+    no_extra_positionals(&flags, "unfloat-pane", 0)?;
+    let dir = if flags.present.contains(&'h') {
+        Some(Dir::Horizontal)
+    } else if flags.present.contains(&'v') {
+        Some(Dir::Vertical)
+    } else {
+        None
+    };
+    Ok(Command::UnfloatPane(UnfloatPane {
+        target: target_or_current(&flags.values, 't')?,
+        split: flags
+            .values
+            .get(&'s')
+            .map(|s| parse_target(s))
+            .transpose()?,
+        dir,
+    }))
+}
+
 fn parse_place_pane(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('t', FlagKind::Value),
@@ -3881,6 +3909,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "display-popup" => parse_display_popup(rest),
         "new-pane" => parse_new_pane(rest),
         "float-pane" => parse_float_pane(rest),
+        "unfloat-pane" => parse_unfloat_pane(rest),
         "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
         "display-panes" => parse_display_panes(rest),
@@ -6077,5 +6106,58 @@ mod choose_tests {
         };
         assert!(c.zoom);
         assert_eq!(c.opts.no_preview, 1);
+    }
+}
+
+#[cfg(test)]
+mod unfloat_pane_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    fn unfloat(words: &[&str]) -> UnfloatPane {
+        match parse(&argv(words)) {
+            Ok(Command::UnfloatPane(c)) => c,
+            other => panic!("{words:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unfloat_pane_defaults_to_the_current_pane_and_no_direction() {
+        assert_eq!(
+            unfloat(&["unfloat-pane"]),
+            UnfloatPane {
+                target: Target::Current,
+                split: None,
+                dir: None,
+            }
+        );
+    }
+
+    #[test]
+    fn unfloat_pane_reads_its_targets_and_direction() {
+        let c = unfloat(&["unfloat-pane", "-t", "%3", "-s", "%1", "-h"]);
+        assert_eq!(c.target, parse_target("%3").unwrap());
+        assert_eq!(c.split, Some(parse_target("%1").unwrap()));
+        assert_eq!(c.dir, Some(Dir::Horizontal));
+        assert_eq!(unfloat(&["unfloat-pane", "-v"]).dir, Some(Dir::Vertical));
+        // As in `join-pane`, `-h` wins over `-v`.
+        assert_eq!(
+            unfloat(&["unfloat-pane", "-v", "-h"]).dir,
+            Some(Dir::Horizontal)
+        );
+    }
+
+    #[test]
+    fn unfloat_pane_rejects_unknown_flags_and_positionals() {
+        assert_eq!(
+            parse(&argv(&["unfloat-pane", "-x", "3"]))
+                .unwrap_err()
+                .to_string(),
+            "command unfloat-pane: unknown flag -x"
+        );
+        assert!(parse(&argv(&["unfloat-pane", "extra"])).is_err());
     }
 }
