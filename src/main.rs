@@ -394,27 +394,44 @@ struct Globals {
 }
 
 impl Globals {
-    /// `-S` wins, then `-L`, then `$GROFE` (set inside panes), then the
+    /// `-S` wins, then `-L`, then under the tmux name `$TMUX`'s socket (as
+    /// tmux 3.7b's `main`), then `$GROFE` (set inside panes), then the
     /// default socket.
     fn socket(&self) -> PathBuf {
         self.resolve().0
     }
 
     /// The socket path, and whether its directory is grofe's own (the
-    /// default or `-L` location) rather than one the user named with `-S`
-    /// or `$GROFE`. Only grofe's own directory is verified private, as tmux
-    /// does not police `-S` parents.
+    /// default or `-L` location) rather than one the user named with `-S`,
+    /// `$TMUX` or `$GROFE`. Only grofe's own directory is verified private,
+    /// as tmux does not police `-S` parents.
     fn resolve(&self) -> (PathBuf, bool) {
-        if self.socket.is_none()
-            && self.name.is_none()
-            && let Some(s) = std::env::var_os("GROFE").filter(|s| !s.is_empty())
-        {
-            return (PathBuf::from(s), false);
+        if self.socket.is_none() && self.name.is_none() {
+            if let Some(s) = tmux_env_socket() {
+                return (s, false);
+            }
+            if let Some(s) = std::env::var_os("GROFE").filter(|s| !s.is_empty()) {
+                return (PathBuf::from(s), false);
+            }
         }
         let env = Env::from_process();
         let path = paths::socket_path(&env, self.socket.as_deref(), self.name.as_deref());
         (path, self.socket.is_none())
     }
+}
+
+/// Under the tmux name, the socket `$TMUX` names (spec D12: tools pass it
+/// around as tmux's), unless it is in tmux's own directory. Never under
+/// the grofe name, which has `$GROFE`.
+fn tmux_env_socket() -> Option<PathBuf> {
+    if dialect() != Dialect::Tmux {
+        return None;
+    }
+    let dirs = grofe::compat::tmux_socket_dirs(
+        std::env::var("TMUX_TMPDIR").ok().as_deref(),
+        nix::unistd::geteuid().as_raw(),
+    );
+    grofe::compat::tmux_env_socket(std::env::var_os("TMUX").as_deref(), &dirs)
 }
 
 fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
@@ -953,11 +970,7 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
     let stream = connect_attach()?;
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        pane: client_pane(
-            std::env::var_os("GROFE").as_deref(),
-            std::env::var("GROFE_PANE").ok().as_deref(),
-            socket,
-        ),
+        pane: cli_pane(socket),
         env: std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
@@ -1216,6 +1229,24 @@ fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -
     grofe_pane?.parse().ok()
 }
 
+/// This CLI's pane for a request to `target`: `$GROFE_PANE`, and under the
+/// tmux name `$TMUX_PANE` when `$TMUX` names `target` (a tool that kept
+/// only tmux's variables, spec D12), each trusted as [`client_pane`] says.
+fn cli_pane(target: &Path) -> Option<PaneId> {
+    client_pane(
+        std::env::var_os("GROFE").as_deref(),
+        std::env::var("GROFE_PANE").ok().as_deref(),
+        target,
+    )
+    .or_else(|| {
+        client_pane(
+            tmux_env_socket().as_deref().map(Path::as_os_str),
+            std::env::var("TMUX_PANE").ok().as_deref(),
+            target,
+        )
+    })
+}
+
 /// Sends the control hello and one request, and reads until its reply.
 ///
 /// `target` is the socket this request is being sent to, used to decide
@@ -1280,11 +1311,7 @@ fn control_hello(target: &Path) -> Result<String, String> {
 
 /// [`control_hello`], sending this CLI's pane only when `with_pane`.
 fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
-    let pane = client_pane(
-        std::env::var_os("GROFE").as_deref(),
-        std::env::var("GROFE_PANE").ok().as_deref(),
-        target,
-    );
+    let pane = cli_pane(target);
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: pane.filter(|_| with_pane),
