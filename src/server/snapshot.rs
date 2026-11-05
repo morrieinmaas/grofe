@@ -29,7 +29,7 @@
 //! `--persist` is a sticky mark on an option (`Options::set`); options
 //! with it are saved at every scope.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -664,6 +664,45 @@ pub fn track(state: &mut State, output: bool) {
     if !output {
         w.build(&state.model);
     }
+}
+
+/// The `uid` of each pane whose entry the writer would change at its next
+/// write: its entry in a snapshot of `model` now differs from the last
+/// write's, or the last write lacks it. A change the writer holds but has
+/// not written yet; `reboot-check` (T4.5) tells "not saved yet" from a
+/// disk that disagrees with it. Empty once the writer is frozen or the
+/// server is terminating (nothing more is written); every pane before the
+/// first write.
+pub fn pending_panes(model: &Model) -> HashSet<String> {
+    let all = || model.panes.values().map(|p| p.uid.clone()).collect();
+    let guard = lock(&WRITER);
+    let Some(w) = guard.as_ref() else {
+        return all();
+    };
+    if w.io.frozen.load(Ordering::SeqCst) || terminating() {
+        return HashSet::new();
+    }
+    let written: Option<Snapshot> = lock(&w.io.disk)
+        .written
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice(bytes).ok());
+    let Some(written) = written else {
+        return all();
+    };
+    let panes = |s: &Snapshot| -> HashMap<String, PaneSnap> {
+        s.sessions
+            .iter()
+            .flat_map(|s| &s.windows)
+            .flat_map(|w| &w.panes)
+            .map(|p| (p.uid.clone(), p.clone()))
+            .collect()
+    };
+    let before = panes(&written);
+    panes(&build(model, &w.cwds))
+        .into_iter()
+        .filter(|(uid, p)| before.get(uid) != Some(p))
+        .map(|(uid, _)| uid)
+        .collect()
 }
 
 #[cfg(test)]

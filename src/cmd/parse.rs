@@ -1187,8 +1187,27 @@ fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-fn parse_reboot_check(_argv: &[String]) -> Result<Command, ParseError> {
-    Ok(Command::RebootCheck(RebootCheck))
+const REBOOT_CHECK_LONG: &[(&str, FlagKind)] = &[("json", FlagKind::Bool)];
+
+/// `reboot-check [--json]` (T4.5, spec §6).
+fn parse_reboot_check(argv: &[String]) -> Result<Command, ParseError> {
+    const NAME: &str = "reboot-check";
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[],
+            long: REBOOT_CHECK_LONG,
+        },
+        NAME,
+    )?;
+    if let Some(word) = flags.positionals.first() {
+        return Err(ParseError::Other(format!(
+            "{NAME}: unexpected argument {word}"
+        )));
+    }
+    Ok(Command::RebootCheck(RebootCheck {
+        json: flags.long_present.contains("json"),
+    }))
 }
 
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
@@ -4864,11 +4883,22 @@ mod tests {
     }
 
     #[test]
-    fn m4_stub_verbs_parse_whatever_they_are_given() {
+    fn reboot_check_takes_json_and_nothing_else() {
+        assert_eq!(
+            parse(&argv(&["reboot-check"])),
+            Ok(Command::RebootCheck(RebootCheck { json: false }))
+        );
         assert_eq!(
             parse(&argv(&["reboot-check", "--json"])),
-            Ok(Command::RebootCheck(RebootCheck))
+            Ok(Command::RebootCheck(RebootCheck { json: true }))
         );
+        for bad in [
+            &["reboot-check", "--bogus"][..],
+            &["reboot-check", "-x"][..],
+            &["reboot-check", "word"][..],
+        ] {
+            assert!(parse(&argv(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
