@@ -125,6 +125,28 @@ fn a_resume_set_less_than_a_second_ago_is_not_saved_yet() {
 }
 
 #[test]
+fn a_respawn_with_a_command_is_not_saved_yet_until_written() {
+    // Not through pane-set-resume: the writer's own pending state says so.
+    let srv = server();
+    let a = uid(&srv, "main:0.0");
+    srv.cmd(&["pane-set-resume", "-t", "main:0.0", "--", "/bin/cat"])
+        .expect("set resume");
+    wait_saved(&srv, &a, serde_json::json!(["/bin/cat"]));
+    srv.cmd(&["respawn-pane", "-k", "-t", "main:0.0", "/bin/cat", "-u"])
+        .expect("respawn with a command");
+    let out = check(&srv);
+    assert_eq!(code(&out), Some(1), "{out:?}");
+    assert!(
+        line_for(&out, &a).starts_with(&format!("main:0.0 {a} not saved yet")),
+        "{out:?}"
+    );
+    wait_saved(&srv, &a, serde_json::json!(["/bin/cat", "-u"]));
+    let out = check(&srv);
+    assert_eq!(code(&out), Some(0), "{out:?}");
+    assert_eq!(line_for(&out, &a), format!("main:0.0 {a} will resume"));
+}
+
+#[test]
 fn it_reads_the_disk_not_the_writers_memory() {
     let srv = server();
     let a = uid(&srv, "main:0.0");

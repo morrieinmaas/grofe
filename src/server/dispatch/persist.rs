@@ -1,10 +1,8 @@
 //! `pane-set-resume` (T4.2) and `reboot-check` (T4.5), spec §6.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
@@ -14,7 +12,7 @@ use crate::protocol::{ClientCtx, Failure};
 use crate::server::State;
 use crate::server::dispatch::defer_reply;
 use crate::server::resume::{self, Set};
-use crate::server::snapshot::{SNAPSHOT_VERSION, Snapshot};
+use crate::server::snapshot::{self, SNAPSHOT_VERSION, Snapshot};
 
 /// `pane-set-resume [-t pane] [-u] [--expect <reason>] [-- argv...]`: the
 /// logic is `server::resume`'s.
@@ -30,33 +28,10 @@ pub fn pane_set_resume(
         (false, None) => Set::Resume(c.argv),
     };
     resume::set(state, ctx, pane, what)?;
-    if let Some(p) = state.model.panes.get(&pane) {
-        note_change(&p.uid);
-    }
     Ok(String::new())
 }
 
 // ---- reboot-check ----
-
-/// When each pane's resume or expectation was last set by
-/// `pane-set-resume`, by `uid`: a snapshot written before that cannot
-/// hold it yet. Only `reboot-check` reads it, and only to tell "not saved
-/// yet" from a disk that disagrees.
-// ponytail: a resume from `respawn-pane <cmd>` on a pane already saved is
-// not noted, so for up to one debounce it reads as "will restart without
-// its conversation" instead of "not saved yet".
-static CHANGED: Mutex<BTreeMap<String, SystemTime>> = Mutex::new(BTreeMap::new());
-
-/// How much earlier than a change a write may be stamped and still have
-/// been built before it: the writer builds, then writes on its thread.
-const BUILD_TO_WRITE: Duration = Duration::from_millis(200);
-
-fn note_change(uid: &str) {
-    CHANGED
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(uid.to_string(), SystemTime::now());
-}
 
 /// One pane's line of the report.
 #[derive(Debug, Clone, Serialize)]
@@ -79,10 +54,7 @@ const SHELL: &str = "restores as a shell";
 enum Disk {
     Missing,
     Unreadable(String),
-    Read {
-        snap: Box<Snapshot>,
-        written: Option<SystemTime>,
-    },
+    Read(Box<Snapshot>),
 }
 
 /// Reads `path` without [`crate::server::snapshot::read`]'s renames: a
@@ -103,11 +75,7 @@ fn read_disk(path: &Path) -> Disk {
             snap.version
         ));
     }
-    let written = fs::metadata(path).and_then(|m| m.modified()).ok();
-    Disk::Read {
-        snap: Box::new(snap),
-        written,
-    }
+    Disk::Read(Box::new(snap))
 }
 
 /// `reboot-check [--json]` (spec §6): every pane's verdict from the
@@ -179,7 +147,7 @@ pub fn reboot_check(state: &mut State, _ctx: &ClientCtx, c: RebootCheck) -> Resu
 fn verdicts(state: &State, disk: &Disk, restore: bool) -> Vec<Entry> {
     let model = &state.model;
     let saved: HashMap<&str, &Option<Vec<String>>> = match disk {
-        Disk::Read { snap, .. } => snap
+        Disk::Read(snap) => snap
             .sessions
             .iter()
             .flat_map(|s| &s.windows)
@@ -188,12 +156,10 @@ fn verdicts(state: &State, disk: &Disk, restore: bool) -> Vec<Entry> {
             .collect(),
         _ => HashMap::new(),
     };
-    let written = match disk {
-        Disk::Read { written, .. } => *written,
-        _ => None,
-    };
-    let mut changed = CHANGED.lock().unwrap_or_else(PoisonError::into_inner);
-    changed.retain(|uid, _| model.panes.values().any(|p| &p.uid == uid));
+    // A pane whose saved resume differs from its live one is "not saved
+    // yet" only while the writer still has the change to write; otherwise
+    // the disk itself disagrees (edited, or the writer frozen).
+    let pending = snapshot::pending_panes(model);
     let mut sessions: Vec<_> = model.sessions.values().collect();
     sessions.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = Vec::new();
@@ -215,18 +181,13 @@ fn verdicts(state: &State, disk: &Disk, restore: bool) -> Vec<Entry> {
                     // start a shell.
                     (WITHOUT, Some(expect.clone()))
                 } else if let Some(resume) = &p.resume {
-                    let after_write = match (changed.get(&p.uid), written) {
-                        (Some(at), Some(w)) => *at + BUILD_TO_WRITE > w,
-                        (Some(_), None) => true,
-                        (None, _) => false,
-                    };
                     match (disk, saved.get(p.uid.as_str())) {
                         (Disk::Missing, _) => (NOT_SAVED, Some("no snapshot".to_string())),
                         (Disk::Unreadable(why), _) => (NOT_SAVED, Some(why.clone())),
                         (_, None) => (NOT_SAVED, Some("not in the snapshot".to_string())),
                         (_, Some(Some(r))) if r == resume => (WILL_RESUME, None),
-                        _ if after_write => {
-                            (NOT_SAVED, Some("set since the last write".to_string()))
+                        _ if pending.contains(&p.uid) => {
+                            (NOT_SAVED, Some("changed since the last write".to_string()))
                         }
                         (_, Some(Some(_))) => (
                             WITHOUT,
