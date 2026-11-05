@@ -21,6 +21,15 @@
 //!   restores as its config says.
 //! - `GROFE_REMAIN_ON_EXIT=1`: tests run with `remain-on-exit` on (spec §4.2).
 //!
+//! Frames (MF, a contract edit). grofe identity frames its panes by default
+//! (spec 2026-11-05-frames.md), while the suites written before MF test
+//! tmux-style shared borders. So every harness writes [`FRAMES_PIN`], a
+//! `conf.d` file holding `pane-frames = false`, into its config dir: the
+//! server reads it through the real config chain, after `config.toml`, so a
+//! test's own `config.toml` cannot undo it. A harness built with
+//! [`TestServerBuilder::frames`]`(true)` writes none and sees grofe's
+//! built-in defaults (the frames_* suites).
+//!
 //! Persistence (M4, a contract edit): [`TestServer::snapshot_path`] and
 //! [`TestServer::edit_snapshot`] reach this server's `state.json`;
 //! [`TestServer::kill_hard`] crashes the server, [`TestServer::signal_all`]
@@ -53,6 +62,10 @@ pub use nix::sys::signal::Signal;
 
 /// The prompt a pane's shell shows (see [`TestServer::command`]).
 pub const PROMPT: &str = "$ ";
+
+/// The `conf.d` file, relative to the config dir `grofe/`, that pins a
+/// harness to frames off (module docs).
+pub const FRAMES_PIN: &str = "conf.d/00-harness-frames-off.toml";
 
 /// How long a single CLI invocation may take before the test fails.
 pub const CMD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -88,8 +101,21 @@ pub struct TestServer {
 
 impl TestServer {
     /// Isolated dirs and a socket path, with no server started yet. For
-    /// lifecycle tests that exercise auto-start themselves.
+    /// lifecycle tests that exercise auto-start themselves. Pinned to
+    /// frames off (module docs); [`TestServerBuilder::unstarted`] with
+    /// [`TestServerBuilder::frames`] is the unpinned one.
     pub fn unstarted() -> TestServer {
+        let srv = TestServer::bare();
+        let pin = srv.config_home.join("grofe").join(FRAMES_PIN);
+        if let Some(dir) = pin.parent() {
+            fs::create_dir_all(dir).expect("create harness conf.d");
+        }
+        fs::write(&pin, "pane-frames = false\n").expect("write the frames pin");
+        srv
+    }
+
+    /// [`Self::unstarted`] without the frames pin.
+    fn bare() -> TestServer {
         let dir = tempfile::Builder::new()
             .prefix("grofe")
             .tempdir()
@@ -418,6 +444,7 @@ impl TestServer {
 pub struct TestServerBuilder {
     restore_on_start: bool,
     path_env: Option<String>,
+    frames: bool,
 }
 
 impl TestServerBuilder {
@@ -437,11 +464,30 @@ impl TestServerBuilder {
         self
     }
 
-    /// Starts the server, as [`TestServer::start`].
-    pub fn start(self) -> TestServer {
-        let mut srv = TestServer::unstarted();
+    /// `true` leaves out the frames pin (module docs), so the server keeps
+    /// grofe's built-in `pane-frames` default (on under grofe identity) and
+    /// whatever the test's own config says.
+    pub fn frames(mut self, built_in: bool) -> TestServerBuilder {
+        self.frames = built_in;
+        self
+    }
+
+    /// Isolated dirs as this builder says, with no server started yet, as
+    /// [`TestServer::unstarted`].
+    pub fn unstarted(self) -> TestServer {
+        let mut srv = if self.frames {
+            TestServer::bare()
+        } else {
+            TestServer::unstarted()
+        };
         srv.restore_on_start = self.restore_on_start;
         srv.path_env = self.path_env;
+        srv
+    }
+
+    /// Starts the server, as [`TestServer::start`].
+    pub fn start(self) -> TestServer {
+        let mut srv = self.unstarted();
         srv.spawn_server();
         srv
     }

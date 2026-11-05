@@ -8,6 +8,7 @@ use super::schema::{
     FloatPlan, PanePlan, Plan, Run, SessionPlan, Wait, WaitFor, WindowPlan, session_name_problem,
 };
 use super::{Server, words};
+use crate::server::layout::{parse_tmux_layout, tmux_checksum};
 
 pub struct UpOptions {
     /// `-d`: never attach.
@@ -166,10 +167,30 @@ fn populate(
             let id = split(server, s, sid, w, p, &prev)?;
             start_pane(server, &id, p)?;
             panes.push(id);
+            // Splitting the previous pane halves it each time, which runs
+            // out of room after a few panes, sooner in a framed window
+            // (each pane gives up its frame and gap). The window's own
+            // layout replaces this arrangement below, so keep the panes
+            // made so far evenly tiled meanwhile.
+            if w.layout.is_some() {
+                server.run(&words(&["select-layout", "-t", &win, "tiled"]))?;
+            }
         }
         if let Some(layout) = &w.layout {
+            // A layout saved from a framed window is framed: into a
+            // window without frames it goes unframed (the other way
+            // round `select-layout` frames a plain string itself).
+            let framed = server
+                .run(&words(&["show-options", "-Awv", "-t", &win, "pane-frames"]))?
+                .trim()
+                == "on";
+            let layout = if framed {
+                layout.clone()
+            } else {
+                unframed_layout(layout)
+            };
             server
-                .run(&words(&["select-layout", "-t", &win, layout]))
+                .run(&words(&["select-layout", "-t", &win, &layout]))
                 .map_err(|e| format!("window {}: {e}", w.name.as_deref().unwrap_or("")))?;
         }
         let mut focus_pane = None;
@@ -436,4 +457,63 @@ pub fn watch(
 ) -> Result<(), String> {
     server.wait_closed(id);
     server.host_shell(command, root, name)
+}
+
+/// `layout` as a window without frames takes it. A framed window's
+/// `#{window_layout}` (spec 2026-11-05-frames.md), which `layout save`
+/// stores as it is, describes the content rects, its root `pad`
+/// (`1 + pane-gap`) cells in from the corner, and `select-layout` takes
+/// such a string only into a framed window. Here every cell gains `pad`
+/// cells each way and moves `pad` up and left: the one-cell-border tree
+/// the framed window laid its panes out on. Anything else (a root at the
+/// corner, a preset, a string that does not parse) is returned as it is.
+pub fn unframed_layout(layout: &str) -> String {
+    let pad = match parse_tmux_layout(layout) {
+        Some(g) if g.x == g.y && g.x > 0 => g.x,
+        _ => return layout.to_string(),
+    };
+    let (Some((_, body)), Ok(cell)) = (
+        layout.split_once(','),
+        regex::Regex::new(r"(\d+)x(\d+),(\d+),(\d+)"),
+    ) else {
+        return layout.to_string();
+    };
+    let n = |c: &regex::Captures, i: usize| c[i].parse::<u16>().unwrap_or(0);
+    let body = cell.replace_all(body, |c: &regex::Captures| {
+        format!(
+            "{}x{},{},{}",
+            n(c, 1).saturating_add(pad),
+            n(c, 2).saturating_add(pad),
+            n(c, 3).saturating_sub(pad),
+            n(c, 4).saturating_sub(pad),
+        )
+    });
+    format!("{:04x},{body}", tmux_checksum(&body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_framed_layout_unframes_to_its_one_cell_border_tree() {
+        // An 80x24 framed window, gap 1 (pad 2), two panes side by side.
+        let body = "76x20,2,2{37x20,2,2,0,36x20,42,2[36x9,42,2,1,36x8,42,14,2]}";
+        let framed = format!("{:04x},{body}", tmux_checksum(body));
+        let want = "78x22,0,0{39x22,0,0,0,38x22,40,0[38x11,40,0,1,38x10,40,12,2]}";
+        assert_eq!(
+            unframed_layout(&framed),
+            format!("{:04x},{want}", tmux_checksum(want))
+        );
+        assert!(parse_tmux_layout(&unframed_layout(&framed)).is_some());
+    }
+
+    #[test]
+    fn an_unframed_layout_or_a_preset_is_kept() {
+        let body = "80x24,0,0{40x24,0,0,0,39x24,41,0,1}";
+        let plain = format!("{:04x},{body}", tmux_checksum(body));
+        assert_eq!(unframed_layout(&plain), plain);
+        assert_eq!(unframed_layout("main-vertical"), "main-vertical");
+        assert_eq!(unframed_layout("ffff,2x2,1,1,0"), "ffff,2x2,1,1,0");
+    }
 }

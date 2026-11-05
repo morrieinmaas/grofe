@@ -7,8 +7,9 @@
 //! unfloats it where it lands. Under tmux identity `drag-pane` is unknown
 //! and `C-MouseDrag1Pane` unbound.
 //!
-//! grofe's built-in `pane-frames` is `off` until FR.2 draws the frames, so
-//! these servers turn it on in the config (gap 1, the default).
+//! The harness pins its servers to frames off (`tests/common`); these opt
+//! out with `.frames(true)` and also say `pane-frames = true` in the
+//! config (gap 1, the default).
 //!
 //! Each test runs its own server on a private `-S` socket.
 
@@ -79,7 +80,7 @@ fn layout(srv: &TestServer) -> Vec<String> {
 /// A framed grofe-identity server with session `main`, one 80x23 window
 /// running `cat`: `%0` on the left and `%1` on the right.
 fn framed() -> TestServer {
-    let srv = TestServer::unstarted();
+    let srv = TestServer::builder().frames(true).unstarted();
     let dir = srv.config_home.join("grofe");
     fs::create_dir_all(&dir).expect("mkdir config");
     fs::write(dir.join("config.toml"), "pane-frames = true\n").expect("write config");
@@ -456,7 +457,7 @@ fn tmux(srv: &TestServer, args: &[&str]) -> CmdOutput {
 
 #[test]
 fn under_tmux_identity_drag_pane_is_unknown_and_the_ctrl_drag_unbound() {
-    let srv = TestServer::unstarted();
+    let srv = TestServer::builder().frames(true).unstarted();
     let out = tmux(&srv, &["start-server"]);
     assert!(out.status.success(), "start-server: {}", out.stderr);
     let out = tmux(&srv, &["drag-pane", "-M"]);
@@ -477,4 +478,177 @@ fn drag_pane_outside_a_mouse_key_fails() {
         Err("no mouse target\n".to_string())
     );
     assert!(srv.cmd(&["drag-pane"]).is_err());
+}
+
+// ---- the drop preview, end to end ------------------------------------------
+
+/// The active border style the preview tests set, so its cells stand out.
+const PREVIEW_STYLE: &str = "fg=red";
+
+/// Every cell showing `glyph` in [`PREVIEW_STYLE`]'s colour on the
+/// client's screen, as `(x, y)`: the raw output so far replayed through
+/// an emulator, colours and all.
+fn red(a: &mut Harness, glyph: char) -> Vec<(u16, u16)> {
+    use alacritty_terminal::Term;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::Config;
+    use alacritty_terminal::term::test::TermSize;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+    let mut term = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+    let mut parser: Processor = Processor::new();
+    parser.advance(&mut term, a.output());
+    let grid = term.grid();
+    let mut out = Vec::new();
+    for y in 0..grid.screen_lines() {
+        for x in 0..grid.columns() {
+            let cell = &grid[Line(y as i32)][Column(x)];
+            let is_red = matches!(cell.fg, Color::Named(NamedColor::Red) | Color::Indexed(1));
+            if cell.c == glyph && is_red {
+                out.push((x as u16, y as u16));
+            }
+        }
+    }
+    out
+}
+
+/// Waits until the red top-left corners on screen are `want`.
+fn red_corners(a: &mut Harness, want: &[(u16, u16)]) {
+    wait_red(a, '╭', want);
+}
+
+/// Waits until the cells showing `glyph` in red are `want`, in any order.
+fn wait_red(a: &mut Harness, glyph: char, want: &[(u16, u16)]) {
+    let mut want = want.to_vec();
+    want.sort();
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        let mut got = red(a, glyph);
+        got.sort();
+        if got == want {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "red corners {got:?}, want {want:?}; screen:\n{}",
+            a.text()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A framed server for the preview tests: `%0` active on the left in
+/// [`PREVIEW_STYLE`], `%1` on the right in the inactive style.
+fn preview_server() -> (TestServer, Harness) {
+    let srv = framed();
+    ok(
+        &srv,
+        &["set", "-g", "pane-active-border-style", PREVIEW_STYLE],
+    );
+    ok(&srv, &["set", "-g", "pane-border-style", "fg=blue"]);
+    ok(&srv, &["select-pane", "-t", "%0"]);
+    let a = attach(&srv);
+    (srv, a)
+}
+
+/// The frame corner of content rect `r`: one cell up and left.
+fn corner((l, t, _, _): (u16, u16, u16, u16)) -> (u16, u16) {
+    (l - 1, t - 1)
+}
+
+/// While a title drag is going the preview frame is drawn in
+/// `pane-active-border-style` round where the pane would land, follows
+/// the pointer from one zone to another, and is gone after the release,
+/// which lands the pane exactly where the preview last showed.
+#[test]
+fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
+    let (srv, mut a) = preview_server();
+    let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
+    red_corners(&mut a, &[corner(r0)]);
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, title(&srv, "%0"), false));
+    // Over %1's middle: a swap, so the preview is %1's own place.
+    let mid = middle(&srv, "%1");
+    a.send(sgr(32, (mid.0 - 1, mid.1), false));
+    a.send(sgr(32, mid, false));
+    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    let bottom = |(l, t, w, h): (u16, u16, u16, u16)| (l + w, t + h);
+    wait_red(&mut a, '╯', &[bottom(r0), bottom(r1)]);
+    // Over %1's bottom quarter: docking below %1, so the preview moves
+    // to the landing rect of that drop.
+    let low = (mid.0, r1.1 + r1.3 - 2);
+    a.send(sgr(32, low, false));
+    let deadline = std::time::Instant::now() + WAIT;
+    let half = loop {
+        let got: Vec<(u16, u16)> = red(&mut a, '╭')
+            .into_iter()
+            .filter(|c| *c != corner(r0))
+            .collect();
+        if let [c] = got[..]
+            && c != corner(r1)
+        {
+            break c;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{got:?}:\n{}",
+            a.text()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(half.1 > corner(r1).1, "{half:?}:\n{}", a.text());
+    // The release drops %0 there, and the preview goes: the only red
+    // frame left is the active pane's, %0's own in its new place.
+    a.send(sgr(0, low, true));
+    wait_until(|| corner(rect(&srv, "%0")) == half, WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
+    red_corners(&mut a, &[half]);
+    wait_red(&mut a, '╯', &[bottom(rect(&srv, "%0"))]);
+}
+
+/// A move the release of which can no longer come (the mouse turned off
+/// mid-drag) takes its preview with it and moves nothing.
+#[test]
+fn the_drop_preview_goes_when_the_move_is_cancelled() {
+    let (srv, mut a) = preview_server();
+    let before = layout(&srv);
+    let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, title(&srv, "%0"), false));
+    let mid = middle(&srv, "%1");
+    a.send(sgr(32, (mid.0 - 1, mid.1), false));
+    a.send(sgr(32, mid, false));
+    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    ok(&srv, &["set", "-g", "mouse", "off"]);
+    // The next report finds the mouse off and cancels the move.
+    a.send(sgr(32, (mid.0 + 1, mid.1), false));
+    red_corners(&mut a, &[corner(r0)]);
+    a.send(sgr(0, (mid.0 + 1, mid.1), true));
+    stays(&srv, &before);
+    red_corners(&mut a, &[corner(r0)]);
+}
+
+/// A release over the pane itself, straight from a zone that showed a
+/// preview, drops nothing and still takes the preview off the window: no
+/// later redraw brings it back.
+#[test]
+fn a_drop_on_the_pane_itself_clears_the_preview() {
+    let (srv, mut a) = preview_server();
+    let before = layout(&srv);
+    let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, title(&srv, "%0"), false));
+    let mid = middle(&srv, "%1");
+    a.send(sgr(32, (mid.0 - 1, mid.1), false));
+    a.send(sgr(32, mid, false));
+    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    // The release comes over %0 with no motion report there first.
+    a.send(sgr(0, middle(&srv, "%0"), true));
+    red_corners(&mut a, &[corner(r0)]);
+    stays(&srv, &before);
+    // A redraw of the whole screen draws no preview either.
+    ok(&srv, &["refresh-client"]);
+    std::thread::sleep(Duration::from_millis(200));
+    red_corners(&mut a, &[corner(r0)]);
 }

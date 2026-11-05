@@ -523,15 +523,11 @@ const BUILTINS: &[Builtin] = &[
     // frames and around the outer ones; the title is drawn in the top
     // edge unless `pane-frame-title` is off. Off and 0 under tmux
     // identity (TMUX_DEFAULTS).
-    // ponytail: grofe's default stays `off` (the spec's is `on`) while
-    // nothing draws the frames. A later task pins the existing suites,
-    // which assume shared borders, to frames off in the test harness and,
-    // after FR.2, flips this default to `on`.
     Builtin {
         name: "pane-frames",
         kind: Kind::Bool,
         scope: OptionScope::Window,
-        default: "off",
+        default: "on",
     },
     Builtin {
         name: "pane-gap",
