@@ -686,9 +686,18 @@ pub struct PluginRestart {
 }
 
 /// `pane-set-resume` (grofe's own, T4.2, spec §6): sets or clears the argv
-/// that brings a pane's process back. T4.2 adds its flags.
+/// that brings a pane's process back: `[-t pane] [-u] [--expect <reason>]
+/// [-- argv...]`. Exactly one of `argv`, `unset` and `expect` is given.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PaneSetResume;
+pub struct PaneSetResume {
+    pub target: Target,
+    /// `-u`: clear the resume and any expectation.
+    pub unset: bool,
+    /// `--expect <reason>`: a resume is expected and none is known yet.
+    pub expect: Option<String>,
+    /// The resume; `argv[0]` is resolved to an absolute path by the server.
+    pub argv: Vec<String>,
+}
 
 /// `reboot-check` (grofe's own, T4.5, spec §6): each pane's verdict from
 /// the snapshot on disk. T4.5 adds its flags.

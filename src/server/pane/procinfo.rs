@@ -123,6 +123,25 @@ pub fn parent(pid: i32) -> Option<i32> {
     os::parent(pid)
 }
 
+/// When process `pid` started, in the OS's own units (clock ticks since
+/// boot on Linux, microseconds since the epoch on macOS): with the pid,
+/// what tells a process from a later one that reuses its pid. `None` once
+/// it has exited, a zombie included; a stopped process still has one.
+pub fn start_time(pid: i32) -> Option<u64> {
+    os::start_time(pid)
+}
+
+/// The value of `name` in the environment process `pid` was started (or
+/// last exec'd) with, read now: `/proc/<pid>/environ` on Linux, the tail
+/// of `KERN_PROCARGS2` on macOS. `None` if it is unset or unreadable (a
+/// process of another user). A shell's later `export` is not seen.
+pub fn env_var(pid: i32, name: &str) -> Option<String> {
+    os::environ(pid)?.into_iter().find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name).then(|| v.to_string())
+    })
+}
+
 /// How many times [`sample`] reads again after the name changed under it.
 const SAMPLE_TRIES: usize = 4;
 
@@ -177,6 +196,23 @@ mod os {
         dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
             .filter(|pid| stat_pgrp(*pid) == Some(pgrp))
             .collect()
+    }
+
+    /// Field 22 of `/proc/<pid>/stat`, unless field 3 says the process
+    /// is a zombie (`Z`) or dead (`X`).
+    pub fn start_time(pid: i32) -> Option<u64> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rest = stat.get(stat.rfind(')')? + 2..)?;
+        let mut fields = rest.split(' ');
+        if matches!(fields.next()?, "Z" | "X") {
+            return None;
+        }
+        fields.nth(18)?.parse().ok()
+    }
+
+    pub fn environ(pid: i32) -> Option<Vec<String>> {
+        let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+        split_nul(&raw)
     }
 
     /// Field 4 of `/proc/<pid>/stat`.
@@ -258,8 +294,8 @@ mod os {
         Some(PathBuf::from(std::ffi::OsStr::from_bytes(path)))
     }
 
-    /// The parent pid, from `proc_pidinfo`'s `PROC_PIDTBSDINFO`.
-    pub fn parent(pid: i32) -> Option<i32> {
+    /// `proc_pidinfo`'s `PROC_PIDTBSDINFO` for `pid`.
+    fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
         // SAFETY: an all-zero proc_bsdinfo is a valid value.
         let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
         let size = mem::size_of::<libc::proc_bsdinfo>() as i32;
@@ -273,7 +309,22 @@ mod os {
                 size,
             )
         };
-        (n == size).then_some(info.pbi_ppid as i32)
+        (n == size).then_some(info)
+    }
+
+    /// The parent pid, from `proc_pidinfo`'s `PROC_PIDTBSDINFO`.
+    pub fn parent(pid: i32) -> Option<i32> {
+        bsdinfo(pid).map(|info| info.pbi_ppid as i32)
+    }
+
+    /// The start time in microseconds since the epoch, from
+    /// `PROC_PIDTBSDINFO`; `None` for a zombie.
+    pub fn start_time(pid: i32) -> Option<u64> {
+        let info = bsdinfo(pid)?;
+        if info.pbi_status == libc::SZOMB {
+            return None;
+        }
+        Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
     }
 
     /// `proc_listpids`'s type for "the members of one process group"
@@ -304,9 +355,18 @@ mod os {
         pids
     }
 
-    /// The full argv from `KERN_PROCARGS2`: `argc` as an i32, the exec path,
-    /// NUL padding, then `argc` NUL-terminated strings (then the environment).
     pub fn argv(pid: i32) -> Option<Vec<String>> {
+        parse_procargs2(&procargs2(pid)?).map(|(argv, _)| argv)
+    }
+
+    pub fn environ(pid: i32) -> Option<Vec<String>> {
+        parse_procargs2(&procargs2(pid)?).map(|(_, env)| env)
+    }
+
+    /// The raw `KERN_PROCARGS2` of `pid`: `argc` as an i32, the exec path,
+    /// NUL padding, then `argc` NUL-terminated strings, then the
+    /// environment's.
+    fn procargs2(pid: i32) -> Option<Vec<u8>> {
         let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
         let mut argmax: libc::c_int = 0;
         let mut len = mem::size_of::<libc::c_int>();
@@ -341,10 +401,12 @@ mod os {
         if rc != 0 {
             return None;
         }
-        parse_procargs2(&buf[..len])
+        buf.truncate(len);
+        Some(buf)
     }
 
-    pub(super) fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
+    /// The argv and the environment in a `KERN_PROCARGS2` buffer.
+    pub(super) fn parse_procargs2(buf: &[u8]) -> Option<(Vec<String>, Vec<String>)> {
         let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
         let rest = &buf[4..];
         // Skip the exec path, then the NUL padding after it.
@@ -358,7 +420,17 @@ mod os {
             argv.push(String::from_utf8_lossy(&rest[..end]).into_owned());
             rest = rest.get(end + 1..).unwrap_or(&[]);
         }
-        (!argv.is_empty()).then_some(argv)
+        if argv.is_empty() {
+            return None;
+        }
+        // The environment runs to the first empty string; the padding
+        // and the `apple[]` strings after it are not the process's.
+        let env = rest
+            .split(|&b| b == 0)
+            .take_while(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect();
+        Some((argv, env))
     }
 }
 
@@ -392,6 +464,78 @@ mod tests {
         assert!(members.contains(&(child.id() as i32)), "{members:?}");
     }
 
+    /// A start time is stable for a live process, and gone with it once it
+    /// has exited and been reaped.
+    #[test]
+    fn start_time_tells_a_live_process_from_a_gone_one() {
+        let me = std::process::id() as i32;
+        let first = start_time(me);
+        assert!(first.is_some());
+        assert_eq!(start_time(me), first);
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        assert_eq!(start_time(pid), None);
+    }
+
+    /// A zombie (exited, not yet reaped) has no start time.
+    #[test]
+    fn a_zombie_has_no_start_time() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        let gone = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            start_time(pid).is_none()
+        });
+        child.wait().unwrap();
+        assert!(gone, "an exited child still has a start time");
+    }
+
+    /// A stopped process keeps its start time.
+    #[test]
+    fn a_stopped_process_has_a_start_time() {
+        use nix::sys::signal::{Signal, kill};
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let before = start_time(pid.as_raw());
+        kill(pid, Signal::SIGSTOP).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let stopped = start_time(pid.as_raw());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(before.is_some());
+        assert_eq!(stopped, before);
+    }
+
+    #[test]
+    fn reads_a_child_s_environment() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .env_clear()
+            .env("PATH", "/x/bin:/usr/bin:/bin")
+            .env("GROFE_T42", "a=b")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let read = |name| {
+            (0..200).find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                env_var(pid, name)
+            })
+        };
+        let path = read("PATH");
+        let value = read("GROFE_T42");
+        let unset = env_var(pid, "HOME");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(path.as_deref(), Some("/x/bin:/usr/bin:/bin"));
+        assert_eq!(value.as_deref(), Some("a=b"));
+        assert_eq!(unset, None);
+    }
+
     #[test]
     fn a_newline_in_an_argument_is_not_a_member_of_its_own() {
         let members = vec![
@@ -408,7 +552,10 @@ mod tests {
         buf.extend_from_slice(b"/bin/sleep\0\0\0\0sleepy\x0030\0HOME=/x\0");
         assert_eq!(
             os::parse_procargs2(&buf),
-            Some(vec!["sleepy".to_string(), "30".to_string()])
+            Some((
+                vec!["sleepy".to_string(), "30".to_string()],
+                vec!["HOME=/x".to_string()]
+            ))
         );
     }
 }

@@ -1114,10 +1114,77 @@ fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
 
 const SUBSCRIBE_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
 
-// M4 stubs: every argument is accepted, so the verb answers "not
-// implemented yet" whatever it is given; T4.2 and T4.5 parse their flags.
-fn parse_pane_set_resume(_argv: &[String]) -> Result<Command, ParseError> {
-    Ok(Command::PaneSetResume(PaneSetResume))
+const PANE_SET_RESUME_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('u', FlagKind::Bool)];
+
+/// `pane-set-resume [-t pane] [-u] [--expect <reason>] [-- argv...]` (T4.2,
+/// spec §6). `--expect` is the one long flag here that takes a value,
+/// which `tokenize` does not do, so it is taken out first: from the flags
+/// before `--` or the first positional, as `--expect <reason>` or
+/// `--expect=<reason>`.
+fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
+    const NAME: &str = "pane-set-resume";
+    let mut rest = Vec::with_capacity(argv.len());
+    let mut expect = None;
+    let mut i = 0;
+    while i < argv.len() {
+        let tok = argv[i].as_str();
+        if tok == "--" || !tok.starts_with('-') || tok == "-" {
+            rest.extend_from_slice(&argv[i..]);
+            break;
+        }
+        if tok == "--expect" {
+            let reason = argv
+                .get(i + 1)
+                .ok_or_else(|| ParseError::Other(format!("{NAME}: --expect needs a reason")))?;
+            expect = Some(reason.clone());
+            i += 2;
+            continue;
+        }
+        if let Some(reason) = tok.strip_prefix("--expect=") {
+            expect = Some(reason.to_string());
+            i += 1;
+            continue;
+        }
+        rest.push(argv[i].clone());
+        // `-t` takes the next word as its value, even one like `--expect`.
+        if tok == "-t"
+            && let Some(value) = argv.get(i + 1)
+        {
+            rest.push(value.clone());
+            i += 1;
+        }
+        i += 1;
+    }
+    let flags = tokenize(
+        &rest,
+        &FlagTable {
+            short: PANE_SET_RESUME_SHORT,
+            long: &[],
+        },
+        NAME,
+    )?;
+    let unset = flags.present.contains(&'u');
+    let argv = flags.positionals;
+    let given = [unset, expect.is_some(), !argv.is_empty()]
+        .iter()
+        .filter(|&&g| g)
+        .count();
+    if given != 1 {
+        return Err(ParseError::Other(format!(
+            "{NAME}: give one of an argv after --, -u or --expect <reason>"
+        )));
+    }
+    if expect.as_deref() == Some("") {
+        return Err(ParseError::Other(format!(
+            "{NAME}: --expect needs a reason"
+        )));
+    }
+    Ok(Command::PaneSetResume(PaneSetResume {
+        target: target_or_current(&flags.values, 't')?,
+        unset,
+        expect,
+        argv,
+    }))
 }
 
 fn parse_reboot_check(_argv: &[String]) -> Result<Command, ParseError> {
@@ -4723,7 +4790,8 @@ mod tests {
     }
 
     #[test]
-    fn m4_stub_verbs_parse_whatever_they_are_given() {
+    fn pane_set_resume_parses_its_three_forms() {
+        let pane = parse_target("%1").expect("target");
         assert_eq!(
             parse(&argv(&[
                 "pane-set-resume",
@@ -4734,8 +4802,69 @@ mod tests {
                 "--resume",
                 "a"
             ])),
-            Ok(Command::PaneSetResume(PaneSetResume))
+            Ok(Command::PaneSetResume(PaneSetResume {
+                target: pane.clone(),
+                argv: argv(&["agent", "--resume", "a"]),
+                ..PaneSetResume::default()
+            }))
         );
+        // Without `--`, the first word that is not a flag starts the argv.
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "nvim", "-S", "s.vim"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                argv: argv(&["nvim", "-S", "s.vim"]),
+                ..PaneSetResume::default()
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "-t", "%1", "-u"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                target: pane.clone(),
+                unset: true,
+                ..PaneSetResume::default()
+            }))
+        );
+        for form in [
+            &["pane-set-resume", "--expect", "no id", "-t", "%1"][..],
+            &["pane-set-resume", "-t", "%1", "--expect=no id"][..],
+        ] {
+            assert_eq!(
+                parse(&argv(form)),
+                Ok(Command::PaneSetResume(PaneSetResume {
+                    target: pane.clone(),
+                    expect: Some("no id".to_string()),
+                    ..PaneSetResume::default()
+                })),
+                "{form:?}"
+            );
+        }
+        // A word after `--` that looks like `--expect` is the argv's.
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "--", "a", "--expect", "x"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                argv: argv(&["a", "--expect", "x"]),
+                ..PaneSetResume::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn pane_set_resume_takes_exactly_one_form() {
+        for bad in [
+            &["pane-set-resume"][..],
+            &["pane-set-resume", "-u", "--", "a"][..],
+            &["pane-set-resume", "--expect", "x", "--", "a"][..],
+            &["pane-set-resume", "-u", "--expect", "x"][..],
+            &["pane-set-resume", "--expect"][..],
+            &["pane-set-resume", "--expect", ""][..],
+            &["pane-set-resume", "--bogus", "--", "a"][..],
+        ] {
+            assert!(parse(&argv(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn m4_stub_verbs_parse_whatever_they_are_given() {
         assert_eq!(
             parse(&argv(&["reboot-check", "--json"])),
             Ok(Command::RebootCheck(RebootCheck))
