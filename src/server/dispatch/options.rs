@@ -1358,8 +1358,10 @@ impl Options {
 
     /// Sets `name` at `owner`. Returns whether the value changed: setting
     /// an option to its current value is a no-op (spec §4.2), so the
-    /// caller emits `option-changed` only on `true`. The `--persist` flag
-    /// is stored either way.
+    /// caller emits `option-changed` only on `true`. `persist` (`--persist`)
+    /// marks the option for the snapshot either way, and the mark is
+    /// sticky (spec §6): a set without it keeps it, and only
+    /// [`Options::clear_persist`] (`--no-persist`) or an unset clears it.
     pub fn set(
         &mut self,
         owner: Owner,
@@ -1370,7 +1372,7 @@ impl Options {
         let value = validate(name, value)?;
         let at = self.values.entry(owner).or_default();
         if let Some(e) = at.get_mut(name) {
-            e.persist = persist;
+            e.persist |= persist;
             if e.value == value {
                 return Ok(false);
             }
@@ -1389,7 +1391,9 @@ impl Options {
             && let Some(b) = builtin(name)
         {
             let default = self.default_of(b).to_string();
-            return self.set(owner, name, &default, false);
+            let changed = self.set(owner, name, &default, false);
+            self.clear_persist(owner, name);
+            return changed;
         }
         let Some(at) = self.values.get_mut(&owner) else {
             return Ok(false);
@@ -1399,6 +1403,13 @@ impl Options {
             self.values.remove(&owner);
         }
         Ok(removed)
+    }
+
+    /// `--no-persist`: drops `name`'s sticky `--persist` mark at `owner`.
+    pub fn clear_persist(&mut self, owner: Owner, name: &str) {
+        if let Some(e) = self.values.get_mut(&owner).and_then(|at| at.get_mut(name)) {
+            e.persist = false;
+        }
     }
 
     /// The entry set at exactly `owner`.
@@ -1873,6 +1884,9 @@ fn set_option(
         _ => (value, c.shown.clone().filter(|_| tmux)),
     };
     let did = model.options.set(owner, &c.name, &value, c.persist)?;
+    if c.no_persist {
+        model.options.clear_persist(owner, &c.name);
+    }
     let stored = model
         .options
         .get(owner, &c.name)
