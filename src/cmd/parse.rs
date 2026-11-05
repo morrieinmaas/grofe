@@ -12,7 +12,7 @@ use super::{
     AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseOpts,
     ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore,
     CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes,
-    DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
+    DisplayPopup, DragPane, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
     ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
     MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
@@ -2563,6 +2563,16 @@ fn parse_unfloat_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_drag_pane(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('M', FlagKind::Bool)];
+    let flags = flags_for(argv, SHORT, "drag-pane")?;
+    no_extra_positionals(&flags, "drag-pane", 0)?;
+    if !flags.present.contains(&'M') {
+        return Err(ParseError::Other("drag-pane needs -M".to_string()));
+    }
+    Ok(Command::DragPane(DragPane))
+}
+
 fn parse_place_pane(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[
         ('t', FlagKind::Value),
@@ -3910,6 +3920,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "new-pane" => parse_new_pane(rest),
         "float-pane" => parse_float_pane(rest),
         "unfloat-pane" => parse_unfloat_pane(rest),
+        "drag-pane" => parse_drag_pane(rest),
         "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
         "display-panes" => parse_display_panes(rest),

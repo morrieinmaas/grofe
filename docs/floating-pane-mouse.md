@@ -32,6 +32,50 @@ a pane, as in tmux. A plain click fires `MouseUp1Border` too.
 A pane that asked for the mouse gets the clicks inside it, in its own cells, and
 nothing for a click on its border.
 
+## Framed tiles (needs `mouse on`)
+
+With `pane-frames on` (spec `docs/specs/2026-11-05-frames.md`) every cell of a
+tile's frame, and every gap cell, is a border too: a press or drag there is
+`MouseDown1Border` or `MouseDrag1Border`, aimed at the pane the cell belongs to.
+A gap cell belongs to the nearest frame, a tie going to the pane on the left or
+above, as tmux gives a border to the pane on its left or above.
+
+The built-in `resize-pane -M` drag there:
+
+| Where the drag starts | What it does |
+|---|---|
+| a tile's top edge (its title), corners aside | moves the pane (below) |
+| any other frame edge, or a gap cell between tiles | resizes, as a tmux border drag: the pane on the left of (or above) the separator grows by the cells moved, the other shrinks |
+| a floating pane's border | as above |
+
+Under grofe identity `C-MouseDrag1Pane` (Ctrl and drag anywhere in a pane) runs
+`drag-pane -M`, which starts the same move for the pane under the pointer,
+tiled or floating. Under tmux identity the key is unbound and `drag-pane` is an
+unknown command, as in tmux 3.7b. Outside a mouse key `drag-pane -M` fails with
+`no mouse target`, as `send-keys -M` does.
+
+While the button is down the window's drop preview shows where the pane will
+land. On release over a tiled pane `T`:
+
+| Released over | Result |
+|---|---|
+| the middle of `T` | the two swap places, as `swap-pane` |
+| the outer quarter of one of `T`'s sides (its frame included) | `T` is split, and the pane takes the half on that side; the space it left is filled as `kill-pane` would fill it |
+| the pane itself, a gap, or no pane | nothing changes |
+
+- An edge drop that would leave the layout's shape as it is changes nothing,
+  so a moved divider stays put.
+- A side of `T` too small to split along its axis is no edge: the drop there
+  is the middle's swap.
+- A floating pane dropped by `drag-pane -M` goes into the tiling by the same
+  table, which is unfloating it with the mouse; on `T`'s middle, `T` floats in
+  its place.
+- The moved pane becomes the active pane. It is the same pane: its process,
+  history, uid and resume command stay.
+- A zoomed window does not start a move.
+- The program inside learns its new size once, on release; the preview goes
+  on release, or when the client goes.
+
 ## Which binding wins
 
 As in tmux, the border does what the root table says and nothing else. The default

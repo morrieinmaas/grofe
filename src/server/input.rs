@@ -1906,6 +1906,17 @@ pub fn default_bindings() -> KeyTables {
             Binding::new(cmds, false, BindingSource::Default),
         );
     }
+    // FR.3: Ctrl and drag anywhere in a pane moves it, as dragging a
+    // framed tile's title does; grofe's own, so a tmux-identity server
+    // drops it and the key is unbound, as in tmux.
+    if let Ok(key) = parse_key("C-MouseDrag1Pane") {
+        let argv = ["drag-pane", "-M"].map(String::from).to_vec();
+        t.insert(
+            ROOT_TABLE,
+            key,
+            Binding::new(vec![argv], false, BindingSource::Default),
+        );
+    }
     t
 }
 
