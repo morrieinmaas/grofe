@@ -762,7 +762,7 @@ fn contains_email(text: &str) -> bool {
 }
 
 fn hostname_lossy() -> Option<String> {
-    let out = Command::new("hostname").output().ok()?;
+    let out = Command::new("uname").arg("-n").output().ok()?;
     if !out.status.success() {
         return None;
     }

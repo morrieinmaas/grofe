@@ -348,7 +348,7 @@ fn socket_path_is_the_servers_socket() {
 
 /// `hostname`'s answer, which is what tmux titles a new pane with.
 fn host() -> String {
-    let out = Command::new("hostname").output().expect("hostname");
+    let out = Command::new("uname").arg("-n").output().expect("uname -n");
     String::from_utf8_lossy(&out.stdout).trim_end().to_string()
 }
 

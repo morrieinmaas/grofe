@@ -699,7 +699,7 @@ pub fn next_pid() -> u64 {
 }
 
 fn hostname() -> String {
-    let out = Command::new("hostname").env_clear().output();
+    let out = Command::new("uname").arg("-n").env_clear().output();
     out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
 }
