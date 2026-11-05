@@ -919,6 +919,10 @@ fn finish(
     reply: oneshot::Sender<Reply>,
 ) {
     if state.exit {
+        // The final snapshot is written before the reply too: a CLI that
+        // saw it (or found the socket gone) may read `state.json` at once,
+        // and the actor loop's own write would come after.
+        snapshot::track(state, false);
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }
