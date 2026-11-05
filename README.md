@@ -73,6 +73,53 @@ line, and `grofe control` speaks a simple JSON protocol with an event stream,
 so scripts and plugins react to what happens instead of polling. Plugins are
 ordinary programs in whatever language you like.
 
+## Framed panes
+
+Under the grofe name a window is a canvas. Each tiled pane is a rounded tile
+with its own frame, its title drawn in the frame's top edge, and a cell of
+gap between tiles and around the outside:
+
+```
+ ╭─ 1: nvim ──────────────────╮ ╭─ 2: zsh ──────────────────╮
+ │                            │ │                           │
+ │                            │ ╰───────────────────────────╯
+ │                            │
+ │                            │ ╭─ 3: cargo ────────────────╮
+ │                            │ │                           │
+ ╰────────────────────────────╯ ╰───────────────────────────╯
+```
+
+The active pane's frame takes `pane-active-border-style`, the others
+`pane-border-style`, and the title is `pane-border-format`. `#{pane_width}`,
+the pty size and `#{window_layout}` are the content, inside the frames. A
+window too small to frame every pane falls back to tmux's shared borders.
+The keys in `config.toml`:
+
+```toml
+pane-frames = true          # false: tmux's shared one-cell borders
+pane-gap = 1                # cells between frames and around them, 0 to 8
+pane-frame-title = true     # false: a plain top edge
+
+[pane-border]
+lines = "rounded"           # the default with frames; single, double, heavy, ...
+```
+
+Under the `tmux` name nothing changes: shared borders, tmux's geometry, and
+the frame options are unknown to tmux's `set-option`. Set `pane-frames = true`
+(and `pane-gap` if you like) in `config.toml` to get the framed canvas there
+too.
+
+With `mouse` on, panes move with the mouse. Drag a tile by its title (or
+Ctrl-drag anywhere in it, `drag-pane -M`): a preview frame shows where it
+will land. Drop it on another pane's middle and the two swap; drop it on the
+outer quarter of a side and it docks there, splitting that pane; drop it on
+itself or a gap and nothing changes. Dragging a gap or any other frame edge
+resizes, as a border drag does in tmux. Panes can float above the tiles:
+`prefix F` floats the active pane or puts a floating one back
+(`float-pane`, `unfloat-pane`), the right-click pane menu has Float and
+Unfloat, and a Ctrl-drag of a floating pane drops it into the tiling. See
+`docs/floating-pane-mouse.md`.
+
 ## Switching from tmux
 
 > **Know the gaps first.** The tmux compatibility layer answers what the
