@@ -354,6 +354,9 @@ fn the_program_learns_its_size_once_on_release() {
     let lines = || fs::read_to_string(&log).unwrap_or_default().lines().count();
     wait_until(|| lines() == 1, WAIT).expect("the trap is set");
     let mut a = attach(&srv);
+    // Whatever the attach itself caused has landed.
+    std::thread::sleep(Duration::from_millis(300));
+    let before = lines();
     let (l0, t0, w0, h0) = rect(&srv, "%0");
     let mut path: Vec<(u16, u16)> = (0..20)
         .map(|i| (l0 + w0 / 2 + i % 7, t0 + 2 + i % 9))
@@ -363,7 +366,12 @@ fn the_program_learns_its_size_once_on_release() {
     wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(lines(), 2, "one resize: {:?}", fs::read_to_string(&log));
+    assert_eq!(
+        lines(),
+        before + 1,
+        "one resize: {:?}",
+        fs::read_to_string(&log)
+    );
 }
 
 #[test]
