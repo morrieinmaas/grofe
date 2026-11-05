@@ -4810,4 +4810,169 @@ mod tests {
         assert_eq!(find(&tree, A, Edge::Right), Some(B));
         assert_eq!(find(&tree, B, Edge::Down), Some(C));
     }
+
+    /// Every framed content rect has a cell, sits `pad` in from the
+    /// window's edges, and the rects grown by `pad + 1` on their right
+    /// and bottom tile the window grown by 1 less `pad`: neighbours are
+    /// exactly `1 + pad` apart, as the module docs say.
+    fn assert_framed_tiling(tree: &LayoutTree, area: Rect) -> Result<(), TestCaseError> {
+        let pad = tree.pad_on(area);
+        prop_assert!(pad > 0);
+        let rects = tree.compute(area);
+        let mut covered = 0u64;
+        for (id, r) in &rects {
+            prop_assert!(r.cols >= 1 && r.rows >= 1, "{id:?} {r:?}");
+            prop_assert!(r.x >= pad && r.y >= pad, "{id:?} {r:?}");
+            prop_assert!(r.x + r.cols + pad <= area.cols, "{id:?} {r:?}");
+            prop_assert!(r.y + r.rows + pad <= area.rows, "{id:?} {r:?}");
+            covered += u64::from(r.cols + pad + 1) * u64::from(r.rows + pad + 1);
+        }
+        let want = u64::from(area.cols - pad + 1) * u64::from(area.rows - pad + 1);
+        prop_assert_eq!(covered, want);
+        for (i, (_, a)) in rects.iter().enumerate() {
+            for (_, b) in &rects[i + 1..] {
+                let apart_x = a.x + a.cols + pad < b.x || b.x + b.cols + pad < a.x;
+                let apart_y = a.y + a.rows + pad < b.y || b.y + b.rows + pad < a.y;
+                prop_assert!(apart_x || apart_y, "{a:?} {b:?} pad {pad}");
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// FR.1: with frames on (gap 0, 1 or 8, so pad 1, 2 or 9) every
+        /// op on a window that frames its panes leaves it framed, each
+        /// pane a content cell, and the content rects tiled as the spec
+        /// says; an export imports back as the same content rects.
+        #[test]
+        fn framed_ops_keep_every_pane_a_content_cell(
+            ops in prop::collection::vec(structure_op_strategy(), 0..32),
+            size in (10u16..90, 8u16..40),
+            gap in prop::sample::select(vec![0u16, 1, 8]),
+        ) {
+            let area = rect(size.0, size.1);
+            let pad = 1 + gap;
+            let mut tree = LayoutTree::new(PaneId(0));
+            tree.set_pad(pad);
+            let mut alive = vec![PaneId(0)];
+            let mut next_id = 1u32;
+            for (kind, flags, a, b, n, _) in ops {
+                if tree.pad_on(area) == 0 {
+                    break;
+                }
+                let pa = alive[a % alive.len()];
+                let pb = alive[b % alive.len()];
+                let dir = if flags[0] { Dir::Horizontal } else { Dir::Vertical };
+                match kind {
+                    0 | 1 => {
+                        let size = if flags[1] { SplitSize::Half } else { SplitSize::Cells(n) };
+                        let how = Insert { dir, size, before: flags[1] ^ flags[2], full: flags[2] };
+                        let before = tree.compute(area);
+                        match tree.insert(area, pa, PaneId(next_id), how) {
+                            Ok(()) => {
+                                alive.push(PaneId(next_id));
+                                next_id += 1;
+                            }
+                            Err(_) => prop_assert_eq!(tree.compute(area), before),
+                        }
+                    }
+                    2 => {
+                        if alive.len() > 1 {
+                            tree.remove(pa);
+                            alive.retain(|p| *p != pa);
+                        }
+                    }
+                    3 => {
+                        prop_assert!(tree.swap(pa, pb));
+                    }
+                    4 => {
+                        let edge = [Edge::Left, Edge::Right, Edge::Up, Edge::Down][b % 4];
+                        let delta = i32::from(n) * if flags[1] { 1 } else { -1 };
+                        tree.resize(area, pa, edge, delta);
+                    }
+                    5 => tree.rotate(flags[0]),
+                    6 => tree.resize_to(area, pa, dir, n),
+                    7 => {
+                        tree.spread(area, pa);
+                    }
+                    8 => {
+                        let name = Preset::NAMES[a % Preset::NAMES.len()];
+                        let main = if flags[1] { MainSize::Cells(n) } else { MainSize::Percent(n as u8) };
+                        let preset = Preset::from_name(name, main, main, 0).unwrap();
+                        let order: Vec<PaneId> = tree.order.clone();
+                        let old = tree.compute(area);
+                        if !tree.preset(area, preset, &order) {
+                            prop_assert_eq!(tree.compute(area), old);
+                        }
+                    }
+                    _ => {
+                        let before = tree.compute(area);
+                        let exported = tree.export(area);
+                        let mut copy = tree.clone();
+                        copy.rotate(true);
+                        copy.import(&exported).unwrap();
+                        prop_assert_eq!(copy.exact_size(), Some((area.cols, area.rows)));
+                        let by_id = |mut r: Vec<(PaneId, Rect)>| {
+                            r.sort_by_key(|(p, _)| *p);
+                            r
+                        };
+                        prop_assert_eq!(by_id(copy.compute(area)), by_id(before));
+                    }
+                }
+                assert_framed_tiling(&tree, area)?;
+            }
+        }
+    }
+
+    /// Four panes in nested splits, gap 0 (separator 2) and gap 8 (pad
+    /// 9), on odd sizes: the content rects tmux's tree gives the inner
+    /// area, each `pad` short on its right and bottom.
+    #[test]
+    fn nested_framed_splits_at_gap_0_and_8() {
+        let r = |x, y, cols, rows| Rect { x, y, cols, rows };
+        let build = |area: Rect, pad: u16| {
+            let mut tree = LayoutTree::new(A);
+            tree.set_pad(pad);
+            tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+                .unwrap();
+            tree.split(area, B, Dir::Vertical, C, SplitSize::Half)
+                .unwrap();
+            tree.split(area, C, Dir::Horizontal, D, SplitSize::Half)
+                .unwrap();
+            tree
+        };
+        // Gap 0: inner 80x24 at (1,1); 40 | 39, then 39 rows 12 / 11,
+        // then 39 columns 19 | 19.
+        let area = rect(81, 25);
+        let tree = build(area, 1);
+        assert_eq!(
+            tree.compute(area),
+            vec![
+                (A, r(1, 1, 39, 23)),
+                (B, r(42, 1, 38, 11)),
+                (C, r(42, 14, 18, 10)),
+                (D, r(62, 14, 18, 10)),
+            ]
+        );
+        // Gap 8: inner 72x31 at (9,9).
+        let area = rect(81, 40);
+        let tree = build(area, 9);
+        let rects = tree.compute(area);
+        assert_eq!(rects[0].1, r(9, 9, 27, 22));
+        assert_eq!(rects[1].1.x, 9 + 36 + 1);
+        for (_, c) in &rects {
+            assert!(c.x + c.cols + 9 <= 81 && c.y + c.rows + 9 <= 40, "{c:?}");
+        }
+        // Resized to the minimum and back out.
+        let mut tree = build(area, 9);
+        tree.resize_to(area, D, Dir::Horizontal, 0);
+        assert_eq!(tree.compute(area)[3].1.cols, 1);
+        tree.resize(area, D, Edge::Left, 1000);
+        assert_eq!(tree.compute(area)[2].1.cols, 1);
+        // Nothing is left to split C with.
+        let err = tree.split(area, C, Dir::Horizontal, PaneId(5), SplitSize::Half);
+        assert_eq!(err, Err(LayoutError::TooSmall(C)));
+    }
 }

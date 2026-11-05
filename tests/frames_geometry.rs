@@ -393,3 +393,27 @@ fn a_framed_layout_survives_a_restore() {
     ok(&srv, &["start-server", "--restore"]);
     assert_eq!(geometry(&srv, "f"), before);
 }
+
+/// Frames set at run time with `--persist`, not by the config, come back
+/// with the snapshot's options: the restored window is framed from them.
+#[test]
+fn a_restored_window_takes_its_frames_from_the_options() {
+    let srv = TestServer::start();
+    session(&srv);
+    ok(&srv, &["split-window", "-h", "-t", "f"]);
+    ok(
+        &srv,
+        &["set", "--persist", "-w", "-t", "f", "pane-frames", "on"],
+    );
+    ok(
+        &srv,
+        &["set", "--persist", "-w", "-t", "f", "pane-gap", "2"],
+    );
+    let before = geometry(&srv, "f");
+    assert_eq!(before[0], "3,3,35x18", "{before:?}");
+    ok(&srv, &["kill-server"]);
+    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    ok(&srv, &["start-server", "--restore"]);
+    assert_eq!(ok(&srv, &["show", "-wv", "-t", "f", "pane-frames"]), "on\n");
+    assert_eq!(geometry(&srv, "f"), before);
+}
