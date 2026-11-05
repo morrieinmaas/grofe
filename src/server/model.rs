@@ -1140,6 +1140,7 @@ mod tests {
             graphics_ok: false,
             images: false,
             identity: Default::default(),
+            delay: std::time::Duration::ZERO,
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(

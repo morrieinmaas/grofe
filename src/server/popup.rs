@@ -1308,6 +1308,7 @@ mod tests {
             graphics_ok: false,
             images: false,
             identity: Default::default(),
+            delay: std::time::Duration::ZERO,
         };
         assert_eq!(open(&mut state, id, frame, spawn), Ok(false));
         assert!(!state.popups.is_open(id));

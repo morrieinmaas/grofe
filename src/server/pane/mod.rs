@@ -137,6 +137,10 @@ pub struct PaneSpawn {
     pub images: bool,
     /// The server's identity, which names it in the XTVERSION reply.
     pub identity: crate::compat::Identity,
+    /// How long after the pty is allocated the child is spawned (T4.4's
+    /// restore stagger); zero spawns it at once. Input sent meanwhile waits
+    /// in the pty, and [`PaneHandle::started`] says when the child is up.
+    pub delay: Duration,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -476,7 +480,10 @@ pub struct CaptureExtra {
 }
 
 pub struct PaneHandle {
-    pid: Option<u32>,
+    /// Set once the child runs: at spawn, or after [`PaneSpawn::delay`].
+    pid: Arc<OnceLock<u32>>,
+    /// `true` once the child was spawned (or failed to start).
+    started: tokio::sync::watch::Receiver<bool>,
     generation: u64,
     master: Arc<AsyncFd<OwnedFd>>,
     emu: Arc<Mutex<Emu>>,
@@ -552,8 +559,12 @@ impl PaneHandle {
             cols: spec.cols.max(MIN_COLS),
             rows: spec.rows.max(1),
         };
-        let (master, slave, child, tty) = spawn_child(&spec, size)?;
-        let pid = child.as_ref().and_then(|c| c.id());
+        let delay = spec.delay;
+        let ((master, slave, child, tty), pending) = spawn_child(&spec, size)?;
+        let pid = Arc::new(OnceLock::new());
+        if let Some(id) = child.as_ref().and_then(|c| c.id()) {
+            let _ = pid.set(id);
+        }
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let master = Arc::new(AsyncFd::new(master)?);
 
@@ -615,7 +626,7 @@ impl PaneHandle {
             None => Pipe::new(Arc::clone(&input), generation),
         };
 
-        let reader = tokio::spawn(io::reader(io::Reader {
+        let mut reader = io::Reader {
             id: spec.id,
             generation,
             master: Arc::clone(&master),
@@ -633,7 +644,25 @@ impl PaneHandle {
             graphics_ok: Arc::clone(&graphics_ok),
             images_on: Arc::clone(&images_on),
             default_colours: Arc::clone(&default_colours),
-        }));
+        };
+        let (started_tx, started) = tokio::sync::watch::channel(delay.is_zero());
+        let reader = match pending {
+            Some((cmd, held)) => {
+                let pid = Arc::clone(&pid);
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    let child = start_delayed(cmd, &held);
+                    if let Some(id) = child.as_ref().and_then(|c| c.id()) {
+                        let _ = pid.set(id);
+                    }
+                    reader.slave = child.is_some().then_some(held);
+                    reader.child = child;
+                    let _ = started_tx.send(true);
+                    io::reader(reader).await;
+                })
+            }
+            None => tokio::spawn(io::reader(reader)),
+        };
         let writer = tokio::spawn(io::writer(
             Arc::clone(&master),
             input_rx,
@@ -642,6 +671,7 @@ impl PaneHandle {
 
         Ok(Self {
             pid,
+            started,
             generation,
             master,
             emu,
@@ -1087,7 +1117,15 @@ impl PaneHandle {
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.pid
+        self.pid.get().copied()
+    }
+
+    /// Resolves once the child was spawned, at once for a pane without a
+    /// [`PaneSpawn::delay`]: `true`, or `false` when the handle went first
+    /// (dropped, or replaced by a respawn) and the child never will be.
+    pub fn started(&self) -> impl std::future::Future<Output = bool> + Send + 'static {
+        let mut started = self.started.clone();
+        async move { started.wait_for(|s| *s).await.is_ok() }
     }
 
     /// This spawn's generation, as carried by every [`PaneEvent`] it sends.
@@ -1468,6 +1506,10 @@ type Spawned = (
     Option<PathBuf>,
 );
 
+/// A child [`spawn_child`] left for later ([`PaneSpawn::delay`]): its
+/// command and the pty slave it is to run on.
+type Pending = (tokio::process::Command, OwnedFd);
+
 /// Open a pty and spawn the child on it (spec §4.8). Returns the master,
 /// non-blocking and close-on-exec, and the child, or `None` when the
 /// program could not be started (it failed to exec): like tmux, that
@@ -1477,7 +1519,33 @@ type Spawned = (
 /// it has drained the master: on macOS the last close of a slave waits
 /// about 0.6 s for unread output to be read and then throws it away, so a
 /// child that exits while the reader is not running left nothing to read.
-fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<Spawned> {
+///
+/// With a [`PaneSpawn::delay`], only the pty is opened: no child, and the
+/// command with the slave come back as [`Pending`], for [`start_delayed`].
+fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(Spawned, Option<Pending>)> {
+    let cmd = child_command(spec)?;
+    let guard = spawn_lock();
+    let pty = openpty(&size.winsize(spec.cell_px), None)?;
+    fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
+    fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    let tty = nix::unistd::ttyname(&pty.slave).ok();
+    let (held, child, pending) = if spec.delay.is_zero() {
+        let child = exec_on(cmd, &pty.slave)?;
+        let held = child.is_some().then_some(pty.slave);
+        (held, child, None)
+    } else {
+        (None, None, Some((cmd, pty.slave)))
+    };
+    drop(guard);
+
+    let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
+    fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+    Ok(((pty.master, held, child, tty), pending))
+}
+
+/// The child's command for `spec`, not yet spawned.
+fn child_command(spec: &PaneSpawn) -> stdio::Result<tokio::process::Command> {
     let name = Path::new(&spec.shell)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1505,13 +1573,17 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<Spawned> {
         }
     };
     cmd.current_dir(&spec.cwd).env_clear().envs(child_env(spec));
+    Ok(cmd)
+}
 
-    let _guard = spawn_lock();
-    let pty = openpty(&size.winsize(spec.cell_px), None)?;
-    fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
-    fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    let slave = pty.slave.as_raw_fd();
+/// Spawns `cmd` with `slave` as its controlling terminal and stdio. The
+/// caller holds [`spawn_lock`]. `None` when the program could not be
+/// started; an error only when `fork` itself failed.
+fn exec_on(
+    mut cmd: tokio::process::Command,
+    slave: &OwnedFd,
+) -> stdio::Result<Option<tokio::process::Child>> {
+    let slave = slave.as_raw_fd();
     let fd_limit = nofile_limit();
     // SAFETY: the closure only makes async-signal-safe libc calls.
     unsafe {
@@ -1531,18 +1603,22 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<Spawned> {
             Ok(())
         });
     }
-    let child = match cmd.spawn() {
-        Ok(child) => Some(child),
-        Err(e) if is_fork_error(&e) => return Err(e),
-        Err(_) => None,
-    };
-    let tty = nix::unistd::ttyname(&pty.slave).ok();
-    let held = child.is_some().then_some(pty.slave);
-    drop(_guard);
+    match cmd.spawn() {
+        Ok(child) => Ok(Some(child)),
+        Err(e) if is_fork_error(&e) => Err(e),
+        Err(_) => Ok(None),
+    }
+}
 
-    let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
-    fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, held, child, tty))
+/// The delayed half of [`spawn_child`]: spawns the [`Pending`] child.
+/// Nothing waits on it to report a failure, so a failed `fork` is logged
+/// and, like a failed exec, gives a pane whose program never ran.
+fn start_delayed(cmd: tokio::process::Command, slave: &OwnedFd) -> Option<tokio::process::Child> {
+    let _guard = spawn_lock();
+    exec_on(cmd, slave).unwrap_or_else(|e| {
+        eprintln!("grofe server: cannot start a pane's delayed process: {e}");
+        None
+    })
 }
 
 #[cfg(test)]
@@ -1567,6 +1643,7 @@ mod tests {
             graphics_ok: false,
             images: false,
             identity: Default::default(),
+            delay: Duration::ZERO,
         }
     }
 
@@ -1858,6 +1935,7 @@ mod tests {
             rows: 5,
             images: true,
             identity: Default::default(),
+            delay: Duration::ZERO,
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1891,6 +1969,7 @@ mod tests {
             rows: 5,
             images: true,
             identity: Default::default(),
+            delay: Duration::ZERO,
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1919,6 +1998,7 @@ mod tests {
             rows: 5,
             images: true,
             identity: Default::default(),
+            delay: Duration::ZERO,
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1955,6 +2035,7 @@ mod tests {
             rows: 5,
             images: true,
             identity: Default::default(),
+            delay: Duration::ZERO,
             ..spec_for(&["sleep", "100"])
         };
         let new = PaneHandle::spawn_over(spec, tx, Arc::new(Notify::new()), &old).expect("respawn");

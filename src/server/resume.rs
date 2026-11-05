@@ -58,14 +58,25 @@ impl Binding {
 /// Called after every spawn and respawn, the pane's new handle in place: a
 /// resume from the spawn command binds to the pane's root process. Any
 /// expectation was the old process's and goes.
+///
+/// A spawn command's bare `argv[0]` (`fake-agent`, as typed) is made
+/// absolute here, against the `PATH` the root process started with (the
+/// pane's spawn environment), so a restore under a minimal `PATH` can still
+/// run it (spec §6). A one-word command runs through the shell and is kept
+/// as it is, as is a name the `PATH` does not hold.
 pub fn bind_root(pane: &mut Pane) {
     pane.expect = None;
+    let root = pane.handle.pid().and_then(|pid| i32::try_from(pid).ok());
+    if let (Some(root), Some(resume)) = (root, pane.resume.as_mut())
+        && resume.len() > 1
+        && !resume[0].contains('/')
+        && let Some(found) =
+            procinfo::env_var(root, "PATH").and_then(|path| lookup(&resume[0], &path))
+    {
+        resume[0] = found.display().to_string();
+    }
     pane.resume_binding = match pane.resume {
-        Some(_) => pane
-            .handle
-            .pid()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(Binding::of),
+        Some(_) => root.and_then(Binding::of),
         None => None,
     };
 }

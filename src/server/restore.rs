@@ -8,9 +8,17 @@
 //! config's `restore-on-start` is on and `GROFE_RESTORE_ON_START=0` does
 //! not force it off.
 //!
-//! Every pane gets a shell in its `cwd` (the home directory, with one log
-//! line, when it is gone), its `uid` and `#{pane_restored}`; runtime ids
-//! are fresh. A restored session takes the server's environment: the
+//! Every pane gets its `uid` and `#{pane_restored}`; runtime ids are
+//! fresh. A pane with a `resume` runs it directly, no shell (T4.4), its
+//! pty allocated at once and its child spawned after the pane's stagger
+//! delay ([`stagger_delay`]), which the server applies and never writes
+//! into the argv; input sent meanwhile waits in the pty. Every other pane
+//! gets a shell in its `cwd` at once (the home directory, with one log
+//! line, when it is gone). Each start is logged with its offset from the
+//! restore's start on the monotonic clock. When a process a restore
+//! started from a resume exits, or cannot start, the pane respawns as a
+//! shell in its `cwd` with the same `uid` and its resume cleared
+//! ([`on_pane_exited`]); a pane's later processes follow `remain-on-exit`. A restored session takes the server's environment: the
 //! snapshot holds none, its `update-environment` variables start unset,
 //! and the first attach fills them, as every attach does
 //! (`hooks::update_environment`).
@@ -18,16 +26,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::paths::{self, Env};
-use crate::server::State;
 use crate::server::dispatch::options::Owner;
-use crate::server::dispatch::{pane::toggle_zoom, spawn_pane};
+use crate::server::dispatch::pane::{respawn, toggle_zoom};
+use crate::server::dispatch::{spawn_pane, spawn_pane_delayed};
 use crate::server::layout::{GeometryCell, LayoutGeometry, LayoutTree, Preset};
 use crate::server::model::{Session, Window};
 use crate::server::pane::usable_cwd;
-use crate::server::snapshot::{self, OptionSnap, SessionSnap, Snapshot, SnapshotError, WindowSnap};
+use crate::server::snapshot::{
+    self, OptionSnap, PaneSnap, SessionSnap, Snapshot, SnapshotError, WindowSnap,
+};
+use crate::server::{Job, State, hooks, resume};
 use crate::types::{PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// Set to `1` in the environment of a server `start-server --restore`
@@ -112,6 +124,42 @@ pub fn at_start(state: &mut State) {
     }
 }
 
+/// A restored pane's delay before its resume is spawned: the FNV-1a hash
+/// of its `uid` modulo `stagger_ms` (`restore-stagger-ms`); 0 is no delay
+/// at all. Panes without a resume are never delayed.
+pub fn stagger_delay(uid: &str, stagger_ms: u64) -> Duration {
+    match stagger_ms {
+        0 => Duration::ZERO,
+        ms => Duration::from_millis(paths::fnv1a64(uid.as_bytes()) % ms),
+    }
+}
+
+/// One restore's start, on the monotonic clock, and its stagger.
+#[derive(Clone, Copy)]
+struct Clock {
+    t0: Instant,
+    stagger_ms: u64,
+}
+
+impl Clock {
+    /// Milliseconds since the restore began.
+    fn offset(&self) -> u128 {
+        self.t0.elapsed().as_millis()
+    }
+}
+
+/// The panes running a process a restore started from their resume, with
+/// that spawn's generation: their exit respawns a shell
+/// ([`on_pane_exited`]); a later process in the pane (another generation)
+/// does not count.
+// ponytail: one server per process, so one set per process; `State` has
+// no field for it (rule 4).
+static FROM_RESUME: Mutex<Vec<(PaneId, u64)>> = Mutex::new(Vec::new());
+
+fn from_resume() -> std::sync::MutexGuard<'static, Vec<(PaneId, u64)>> {
+    FROM_RESUME.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Recreates everything in `snap` (T4.3, T4.4), only into a server with
 /// no session. A session, window or pane the snapshot repeats is skipped
 /// with a log line; a window whose layout does not hold its panes gets
@@ -120,14 +168,24 @@ pub fn restore(state: &mut State, snap: Snapshot) -> Result<RestoreReport, Resto
     if !state.model.sessions.is_empty() {
         return Err(RestoreError(NOT_EMPTY.to_string()));
     }
+    let t0 = Instant::now();
     let sessions = dedupe(snap.sessions);
     for o in &snap.options {
         set_option(state, Owner::Global, o);
     }
+    let clock = Clock {
+        t0,
+        stagger_ms: state
+            .model
+            .options
+            .lookup("restore-stagger-ms", &[])
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000),
+    };
     let mut report = RestoreReport::default();
     let mut made = Vec::new();
     for s in sessions {
-        match restore_session(state, s, &mut report) {
+        match restore_session(state, s, clock, &mut report) {
             Ok(Some(id)) => made.push(id),
             Ok(None) => {}
             Err(e) => {
@@ -198,6 +256,7 @@ fn set_option(state: &mut State, owner: Owner, o: &OptionSnap) {
 fn restore_session(
     state: &mut State,
     s: SessionSnap,
+    clock: Clock,
     report: &mut RestoreReport,
 ) -> Result<Option<SessionId>, String> {
     let id = state.model.alloc_session_id();
@@ -208,7 +267,7 @@ fn restore_session(
     let mut windows = Vec::new();
     let mut spawned = Vec::new();
     for w in &s.windows {
-        match restore_window(state, id, w, &env, &mut spawned) {
+        match restore_window(state, id, w, &env, clock, &mut spawned) {
             Ok(window) => windows.push((window, w)),
             Err(e) => {
                 for p in spawned {
@@ -277,6 +336,7 @@ fn restore_window(
     session: SessionId,
     w: &WindowSnap,
     env: &[(String, String)],
+    clock: Clock,
     spawned: &mut Vec<PaneId>,
 ) -> Result<Window, String> {
     let id = state.model.alloc_window_id();
@@ -287,24 +347,8 @@ fn restore_window(
     let mut panes = Vec::new();
     for p in &w.panes {
         let cwd = pane_cwd(&p.uid, &p.cwd);
-        let pane = spawn_pane(
-            state,
-            (session, id),
-            env.to_vec(),
-            None,
-            cwd,
-            (cols, rows),
-            None,
-        )?;
+        let pane = restore_pane(state, (session, id), p, env, cwd, (cols, rows), clock)?;
         spawned.push(pane);
-        if let Some(live) = state.model.panes.get_mut(&pane) {
-            live.uid = p.uid.clone();
-            live.restored = true;
-            // As every spawn: a `default-command` the pane runs is its
-            // resume, bound to its root process.
-            crate::server::resume::bind_root(live);
-        }
-        crate::server::resume::spawned(state, pane, Default::default());
         for o in &p.options {
             set_option(state, Owner::Pane(pane), o);
         }
@@ -345,6 +389,124 @@ fn restore_window(
         pane_status: Default::default(),
         links: Vec::new(),
     })
+}
+
+/// One pane of `p`'s window `place`: its resume after its delay, else a
+/// shell at once. A resume whose spawn fails outright (`fork` itself)
+/// gets a shell too, so it never aborts the restore.
+fn restore_pane(
+    state: &mut State,
+    place: (SessionId, WindowId),
+    p: &PaneSnap,
+    env: &[(String, String)],
+    cwd: PathBuf,
+    size: (u16, u16),
+    clock: Clock,
+) -> Result<PaneId, String> {
+    let resume = p.resume.clone().filter(|r| !r.is_empty());
+    let mut delay = Duration::ZERO;
+    let mut pane = None;
+    if let Some(argv) = &resume {
+        delay = stagger_delay(&p.uid, clock.stagger_ms);
+        let made = spawn_pane_delayed(
+            state,
+            place,
+            env.to_vec(),
+            Some(argv.clone()),
+            cwd.clone(),
+            size,
+            None,
+            delay,
+        );
+        match made {
+            Ok(id) => pane = Some(id),
+            Err(e) => eprintln!(
+                "grofe server: restore: pane {}: resume {}: {e}, starting a shell",
+                p.uid,
+                argv.join(" ")
+            ),
+        }
+    }
+    let resumed = pane.is_some();
+    let pane = match pane {
+        Some(pane) => pane,
+        None => spawn_pane(state, place, env.to_vec(), None, cwd, size, None)?,
+    };
+    let Some(live) = state.model.panes.get_mut(&pane) else {
+        return Ok(pane);
+    };
+    live.uid = p.uid.clone();
+    live.restored = true;
+    if resumed {
+        // Saved again as it was: the spawn argv and the resume (which
+        // `spawn_pane` took from what it ran).
+        live.argv = p.argv.clone();
+        from_resume().push((pane, live.handle.generation()));
+    }
+    if !delay.is_zero() {
+        when_started(state, pane, clock);
+        return Ok(pane);
+    }
+    // As every spawn: the command the pane runs (its resume, or a
+    // `default-command`) is its resume, bound to its root process.
+    resume::bind_root(live);
+    log_started(state, pane, clock.offset());
+    resume::spawned(state, pane, Default::default());
+    Ok(pane)
+}
+
+/// Once `pane`'s delayed child is up, the actor binds its resume and logs
+/// the start, as [`restore_pane`] does at once for a pane with no delay.
+/// A pane respawned or gone first is left alone.
+fn when_started(state: &State, pane: PaneId, clock: Clock) {
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    let started = p.handle.started();
+    let generation = p.handle.generation();
+    let jobs = state.jobs.clone();
+    tokio::spawn(async move {
+        if !started.await {
+            return;
+        }
+        let at = clock.offset();
+        let job: Job = Box::new(move |state: &mut State| {
+            let Some(live) = state.model.panes.get_mut(&pane) else {
+                return;
+            };
+            if live.handle.generation() != generation {
+                return;
+            }
+            resume::bind_root(live);
+            log_started(state, pane, at);
+            resume::spawned(state, pane, Default::default());
+        });
+        let _ = jobs.send(job).await;
+    });
+}
+
+/// The log line of a restored pane's start, `at` ms into the restore: its
+/// resume, or its shell. Nothing for a resume that could not start
+/// ([`on_pane_exited`] logs that).
+fn log_started(state: &State, pane: PaneId, at: u128) {
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    if p.handle.pid().is_none() {
+        return;
+    }
+    let resumed = from_resume().contains(&(pane, p.handle.generation()));
+    match (&p.resume, resumed) {
+        (Some(argv), true) => eprintln!(
+            "grofe server: restore: pane {}: resume started at +{at} ms: {}",
+            p.uid,
+            argv.join(" ")
+        ),
+        _ => eprintln!(
+            "grofe server: restore: pane {}: shell started at +{at} ms",
+            p.uid
+        ),
+    }
 }
 
 /// Where a restored pane's shell starts: its `cwd`, or the home directory
@@ -417,9 +579,55 @@ fn keyed(g: &LayoutGeometry<String>, ids: &BTreeMap<&str, PaneId>) -> Option<Lay
 }
 
 /// Called by the actor when `pane`'s process exits, before the pane is
-/// reported dead or removed. `true` means this module kept the pane (T4.4
-/// respawns a shell in a restored pane whose resume exited) and the usual
-/// exit handling is skipped.
-pub fn on_pane_exited(_state: &mut State, _pane: PaneId) -> bool {
-    false
+/// reported dead or removed. `true` means this module kept the pane and
+/// the usual exit handling is skipped: when the process was one a restore
+/// started from the pane's resume (it exited, or could not start), the
+/// pane respawns as a shell in its `cwd`, same `uid`, with its resume
+/// cleared (`resume-changed`) and one log line. Not while the server is
+/// exiting.
+pub fn on_pane_exited(state: &mut State, pane: PaneId) -> bool {
+    let Some(p) = state.model.panes.get(&pane) else {
+        return false;
+    };
+    let key = (pane, p.handle.generation());
+    {
+        let mut set = from_resume();
+        let Some(at) = set.iter().position(|k| *k == key) else {
+            return false;
+        };
+        set.swap_remove(at);
+    }
+    if state.exit {
+        return false;
+    }
+    let ran = p.handle.pid().is_some();
+    let uid = p.uid.clone();
+    let cwd = usable_cwd(p.cwd.clone());
+    let Some(p) = state.model.panes.get_mut(&pane) else {
+        return false;
+    };
+    let argv = p.resume.clone().unwrap_or_default().join(" ");
+    // The resume goes with its process (T4.2); the shell is not a spawn
+    // command to rerun either.
+    let had = p.resume.take().is_some() | p.expect.take().is_some();
+    p.resume_binding = None;
+    p.argv = None;
+    let what = if ran { "exited" } else { "could not start" };
+    let kept = match respawn(state, pane, None, Some(cwd.clone()), Vec::new()) {
+        Ok(()) => {
+            eprintln!(
+                "grofe server: restore: pane {uid}: resume {what}: {argv}; a shell in {}",
+                cwd.display()
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!("grofe server: restore: pane {uid}: resume {what}: {argv}; no shell: {e}");
+            false
+        }
+    };
+    if had {
+        hooks::resume_changed(state, pane);
+    }
+    kept
 }
