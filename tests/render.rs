@@ -434,6 +434,29 @@ fn absolute_cursor_move_follows_every_wide_or_zero_width_cell() {
     }
 }
 
+/// A VS16 emoji the pane's emulator made wide (`❤️` then `x`) is drawn
+/// once as a wide pair: its spacer is not drawn, and the cursor goes to
+/// the cell after the pair, so `x` neither overlaps it nor drifts a cell.
+#[test]
+fn a_vs16_wide_pair_advances_two_cells_once() {
+    let mut inputs = single((4, 1), "");
+    let row = &mut inputs.panes[0].2.rows[0];
+    row[0].c = '\u{2764}';
+    row[0].zerowidth = vec!['\u{FE0F}'];
+    row[0].flags = CellFlags::WIDE_CHAR;
+    row[1].flags = CellFlags::WIDE_CHAR_SPACER;
+    row[2].c = 'x';
+    let screen = compose(&inputs);
+    let bytes = diff(None, &screen, &RICH);
+    let ends = ends_of(&bytes, "\u{2764}\u{FE0F}".as_bytes());
+    assert_eq!(ends.len(), 1, "drawn once");
+    assert!(
+        bytes[ends[0]..].starts_with(b"\x1b[1;3Hx"),
+        "{:?}",
+        String::from_utf8_lossy(&bytes[ends[0]..])
+    );
+}
+
 #[test]
 fn cursor_shape_position_and_visibility() {
     let bar = single((20, 3), "ab\x1b[5 q");
