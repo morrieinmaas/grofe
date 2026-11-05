@@ -1067,6 +1067,27 @@ pub fn session_created(state: &mut State, session: SessionId) {
     notify(state, f);
 }
 
+/// `resume-changed`: pane `pane`'s resume or expectation was set or
+/// cleared (T4.2). grofe's own hook, no tmux name; the `subscribe` stream
+/// carries it from T6.1.
+pub fn resume_changed(state: &mut State, pane: PaneId) {
+    if !wanted(state, "resume-changed") {
+        return;
+    }
+    let mut f = Fired::new("resume-changed", Some(pane));
+    f.vars.hook_pane = Some(pane);
+    notify(state, f);
+}
+
+/// `restore-done`: a restore from the snapshot finished (T4.3). It is
+/// about the whole server, so only the global hook runs.
+pub fn restore_done(state: &mut State) {
+    if !wanted(state, "restore-done") {
+        return;
+    }
+    notify(state, Fired::new("restore-done", None));
+}
+
 /// `client-session-changed` for client `id`, which now shows its session
 /// (attach, switch-client, attach-session; tmux fires it even when the
 /// session is the same one).
