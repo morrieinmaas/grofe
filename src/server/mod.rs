@@ -724,10 +724,16 @@ async fn actor(
             }
             _ = sigterm.recv() => {
                 eprintln!("grofe server: SIGTERM");
+                // Write the pre-signal state now, not from the writer's
+                // signal task, which may not run before the runtime stops.
+                snapshot::track(&mut state, false);
                 break;
             }
             _ = sigint.recv() => {
                 eprintln!("grofe server: SIGINT");
+                // Write the pre-signal state now, not from the writer's
+                // signal task, which may not run before the runtime stops.
+                snapshot::track(&mut state, false);
                 break;
             }
             // As tmux's server: SIGHUP (its terminal going away) is ignored.
