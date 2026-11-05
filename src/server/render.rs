@@ -19,8 +19,10 @@ use unicode_width::UnicodeWidthChar;
 use crate::protocol::Caps;
 use crate::server::State;
 use crate::server::borders::{self, Geometry, Indicators, PaneBox, PaneLines, PaneStatus};
+use crate::server::dispatch::options;
 use crate::server::graphics;
 use crate::server::layout::BorderSegment;
+use crate::server::model::{Model, Window};
 use crate::server::pane::{CellFlags, CursorShape, CursorState, Hyperlink, RowsSnapshot, SnapCell};
 use crate::server::screenimg::{self, ImageCaps, Place, ScreenImage};
 use crate::server::status::{StatusRow, Style, StyledLine};
@@ -139,6 +141,51 @@ pub struct PaneLooks {
     /// reach; the middle dot without one.
     pub fill: Option<char>,
     pub panes: HashMap<PaneId, PaneLook>,
+    /// Framed tiles (spec 2026-11-05-frames.md): each visible tiled pane's
+    /// frame rect, its content grown by one cell on every side, in window
+    /// coordinates ([`Window::frame_rects`]). Empty draws tmux's shared
+    /// borders. While it is not, floating panes take the same frames.
+    pub frames: Vec<(PaneId, Rect)>,
+    /// `pane-frame-title`: a frame's top edge carries the pane's
+    /// `pane-border-format`.
+    pub frame_title: bool,
+    /// Where a dragged pane would land, a content rect
+    /// ([`Window::drop_preview`]): framed in `pane-active-border-style`
+    /// above the tiles and below the floating panes.
+    pub drop_preview: Option<Rect>,
+}
+
+/// Fills in `looks`' frame part for window `w` (spec
+/// 2026-11-05-frames.md): its frame rects and `pane-frame-title`, its drop
+/// preview, and `rounded` lines where `pane-frames` is on and
+/// `pane-border-lines` is left at its default. A framed window has no
+/// `pane-border-status` (the title is in the frame).
+pub fn apply_frames(model: &Model, w: &Window, looks: &mut PaneLooks) {
+    looks.drop_preview = w.drop_preview;
+    if !w.frames {
+        return;
+    }
+    let chain = options::chain(model, w.active);
+    // grofe's built-in default is `rounded` already; tmux identity's is
+    // `single`, which gives way to `rounded` with frames on unless the
+    // window, its session or the pane sets the lines.
+    // ponytail: a global `single` under tmux identity (`set -g`, or the
+    // config) is not told apart from the built-in default and draws
+    // `rounded` frames; set it on the session or window to keep `single`.
+    let set_here = chain
+        .iter()
+        .any(|o| model.options.get(*o, "pane-border-lines").is_some());
+    if looks.lines == PaneLines::Single
+        && model.identity == crate::compat::Identity::Tmux
+        && !set_here
+    {
+        looks.lines = PaneLines::Rounded;
+    }
+    looks.frame_title = model.options.lookup("pane-frame-title", &chain) != Some("off");
+    looks.frames = w.frame_rects();
+    if !looks.frames.is_empty() {
+        looks.status = PaneStatus::Off;
+    }
 }
 
 /// Where things are on one client's screen, for an [`Overlay`] (and for
@@ -418,8 +465,126 @@ fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
             }
         }
     }
-    let border = draw_borders(&mut win, inputs);
+    let border = if inputs.look.frames.is_empty() {
+        draw_borders(&mut win, inputs)
+    } else {
+        // Frames stand apart from the window's edge and from each other:
+        // no cell of theirs joins the edge a smaller window gets.
+        draw_frames(&mut win, inputs);
+        vec![false; win.cells.len()]
+    };
+    if let Some(r) = inputs.look.drop_preview {
+        let preview = PaneBox {
+            id: inputs.active,
+            x: i32::from(r.x),
+            y: i32::from(r.y),
+            w: i32::from(r.cols),
+            h: i32::from(r.rows),
+            index: 0,
+        };
+        let frame = Frame {
+            lines: inputs.look.lines,
+            style: inputs.active_border_style,
+            title: None,
+            marked: false,
+        };
+        draw_frame(&mut win, &preview, &frame);
+    }
     (win, border)
+}
+
+/// How one frame is drawn.
+struct Frame<'a> {
+    lines: PaneLines,
+    style: Style,
+    /// The title drawn in the top edge, if any.
+    title: Option<&'a str>,
+    /// The marked pane's frame is drawn with reverse toggled.
+    marked: bool,
+}
+
+/// Each framed tile's frame (spec 2026-11-05-frames.md), in its pane's
+/// `pane-active-border-style` for the active pane, else its
+/// `pane-border-style`, with the title in the top edge while
+/// `pane-frame-title` is on. Gap cells keep the window's blank.
+fn draw_frames(win: &mut Screen, inputs: &FrameInputs) {
+    let looks = &inputs.look;
+    for (i, (id, r)) in looks.frames.iter().enumerate() {
+        let look = looks.panes.get(id);
+        let style = match (*id == inputs.active, look) {
+            (true, Some(l)) => l.active_border,
+            (false, Some(l)) => l.border,
+            (true, None) => inputs.active_border_style,
+            (false, None) => inputs.border_style,
+        };
+        let content = PaneBox {
+            id: *id,
+            x: i32::from(r.x) + 1,
+            y: i32::from(r.y) + 1,
+            w: i32::from(r.cols) - 2,
+            h: i32::from(r.rows) - 2,
+            index: look.map_or(i, |l| l.index),
+        };
+        let frame = Frame {
+            lines: looks.lines,
+            style,
+            title: look.map(|l| l.title.as_str()).filter(|_| looks.frame_title),
+            marked: inputs.marked == Some(*id),
+        };
+        draw_frame(win, &content, &frame);
+    }
+}
+
+/// The frame round `pane`'s content (`pane` in `screen`'s coordinates):
+/// corners and edges of `frame.lines`, clipped to the screen, and the
+/// title from two cells in, between a space each side, cut to leave the
+/// last edge cell before the corner: `╭─ 1: nvim ─────╮`.
+fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
+    let (cols, rows) = (i32::from(screen.cols), i32::from(screen.rows));
+    let (x0, y0) = (pane.x - 1, pane.y - 1);
+    let (x1, y1) = (pane.x + pane.w, pane.y + pane.h);
+    if pane.w < 0 || pane.h < 0 {
+        return;
+    }
+    let g = |cell| borders::frame_glyph(frame.lines, cell, Some(pane));
+    let mut edge = Vec::new();
+    for x in x0..=x1 {
+        let (top, bottom) = match x {
+            x if x == x0 => (borders::CELL_TOPLEFT, borders::CELL_BOTTOMLEFT),
+            x if x == x1 => (borders::CELL_TOPRIGHT, borders::CELL_BOTTOMRIGHT),
+            _ => (borders::CELL_LEFTRIGHT, borders::CELL_LEFTRIGHT),
+        };
+        edge.push((x, y0, g(top)));
+        edge.push((x, y1, g(bottom)));
+    }
+    for y in pane.y..y1 {
+        edge.push((x0, y, g(borders::CELL_TOPBOTTOM)));
+        edge.push((x1, y, g(borders::CELL_TOPBOTTOM)));
+    }
+    let on_screen = |x: i32, y: i32| (0..cols).contains(&x) && (0..rows).contains(&y);
+    for (x, y, ch) in &edge {
+        if on_screen(*x, *y) {
+            screen.cells[(y * cols + x) as usize] = styled(*ch, &frame.style);
+        }
+    }
+    if let Some(title) = frame.title.filter(|t| !t.is_empty()) {
+        // Corner and one edge cell on each side stay the frame's.
+        let tx = x0 + 2;
+        let width = (x1 - 1 - tx).min(cols - tx);
+        if width >= 3 && tx >= 0 && on_screen(tx, y0) {
+            let under = vec![(g(borders::CELL_LEFTRIGHT), frame.style); width as usize];
+            let drawn =
+                crate::server::status::draw_over(&format!(" {title} "), frame.style, &under);
+            draw_line_at(screen, y0 as u16, tx as usize, &drawn.line);
+        }
+    }
+    if frame.marked {
+        for (x, y, _) in &edge {
+            if on_screen(*x, *y) {
+                screen.cells[(y * cols + x) as usize].flags ^= CellFlags::INVERSE;
+            }
+        }
+    }
 }
 
 /// A border glyph by which neighbours are border too.
@@ -690,7 +855,20 @@ pub fn draw_floating(
             index: index.unwrap_or(0),
         };
         let g = |cell| borders::glyph(looks.lines, cell, Some(&shown));
-        for i in -1..=w {
+        let framed = !looks.frames.is_empty();
+        if framed {
+            // The tiles' frame style, title included (spec
+            // 2026-11-05-frames.md).
+            let on_screen = PaneBox { x, y, ..shown };
+            let frame = Frame {
+                lines: looks.lines,
+                style: border,
+                title: look.map(|l| l.title.as_str()).filter(|_| looks.frame_title),
+                marked: false,
+            };
+            draw_frame(screen, &on_screen, &frame);
+        }
+        for i in (-1..=w).filter(|_| !framed) {
             let (top, bottom) = match i {
                 -1 => (borders::CELL_TOPLEFT, borders::CELL_BOTTOMLEFT),
                 i if i == w => (borders::CELL_TOPRIGHT, borders::CELL_BOTTOMRIGHT),
@@ -699,7 +877,7 @@ pub fn draw_floating(
             put(screen, x + i, y - 1, styled(g(top), &border));
             put(screen, x + i, y + h, styled(g(bottom), &border));
         }
-        for j in 0..h {
+        for j in (0..h).filter(|_| !framed) {
             put(
                 screen,
                 x - 1,
