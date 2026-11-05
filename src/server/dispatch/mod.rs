@@ -31,6 +31,7 @@ pub mod lock;
 pub mod menu;
 pub mod options;
 pub mod pane;
+pub mod persist;
 pub mod plugins;
 pub mod popup;
 pub mod session;
@@ -356,6 +357,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::Refused(text) => Err(text),
         Command::ListPlugins(c) => plugins::list_plugins(state, ctx, c),
         Command::PluginRestart(c) => plugins::plugin_restart(state, ctx, c),
+        Command::PaneSetResume(c) => persist::pane_set_resume(state, ctx, c),
+        Command::RebootCheck(c) => persist::reboot_check(state, ctx, c),
         Command::Reload(c) => {
             let out = options::reload(state, ctx, c);
             server::sources::prune_unreferenced(state);
@@ -524,6 +527,9 @@ pub(crate) fn spawn_pane(
             uid: Ulid::generate().to_string(),
             window,
             resume: argv.clone(),
+            resume_binding: None,
+            expect: None,
+            restored: false,
             argv,
             shell,
             cwd,

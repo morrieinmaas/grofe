@@ -122,6 +122,9 @@ pub fn new_window(state: &mut State, ctx: &ClientCtx, c: NewWindow) -> Result<St
         size,
         cell_px,
     )?;
+    if let Some(p) = state.model.panes.get_mut(&pane) {
+        crate::server::resume::bind_root(p);
+    }
     let model = &mut state.model;
     let named = c.name.is_some();
     model.insert_window(Window {

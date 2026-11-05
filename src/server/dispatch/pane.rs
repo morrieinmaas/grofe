@@ -91,6 +91,9 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
 
     unzoom(&mut state.model, window);
     let new = spawn_pane(state, (session, window), env, c.command, cwd, size, cell_px)?;
+    if let Some(p) = state.model.panes.get_mut(&new) {
+        crate::server::resume::bind_root(p);
+    }
     let model = &mut state.model;
     let Some(w) = model.windows.get_mut(&window) else {
         model.panes.remove(&new);
@@ -543,6 +546,7 @@ pub(crate) fn respawn(
         p.cwd = cwd;
         p.argv = argv.clone();
         p.resume = argv;
+        crate::server::resume::bind_root(p);
     }
     Ok(())
 }
@@ -841,6 +845,7 @@ pub(crate) fn apply_setup(
                 unset: false,
                 unset_panes: false,
                 persist: false,
+                no_persist: false,
                 target,
                 name: name.to_string(),
                 value: Some(value.to_string()),

@@ -94,6 +94,15 @@ pub fn log_path(env: &Env, socket: &Path) -> PathBuf {
     state_dir(env).join(format!("{}.log", instance_name(socket)))
 }
 
+/// The session snapshot for the instance at `socket` (spec §6):
+/// `state.json` in the instance's own directory beside its log, named the
+/// same way, so every socket has its own.
+pub fn snapshot_path(env: &Env, socket: &Path) -> PathBuf {
+    state_dir(env)
+        .join(instance_name(socket))
+        .join("state.json")
+}
+
 /// Resolves `socket` to a path that is stable whether or not the socket
 /// file itself exists yet. Absolutises it lexically against the current
 /// working directory (no filesystem access beyond reading the cwd, for a
@@ -131,7 +140,7 @@ pub fn same_socket(a: &Path, b: &Path) -> bool {
 /// (unlike `std::hash::DefaultHasher`), used only to disambiguate
 /// state/log file names for two sockets that happen to share a file stem.
 /// Not used for anything security-sensitive.
-fn fnv1a64(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const PRIME: u64 = 0x100000001b3;
     let mut hash = OFFSET_BASIS;
@@ -399,6 +408,25 @@ mod tests {
         };
         let socket = Path::new("/tmp/test-a/run/default.sock");
         assert_ne!(log_path(&a, socket), log_path(&b, socket));
+    }
+
+    #[test]
+    fn snapshot_path_is_in_the_instance_directory_beside_the_log() {
+        let e = Env {
+            xdg_state_home: Some("/home/u/.state".to_string()),
+            ..env()
+        };
+        let socket = Path::new("/proj-a/grofe.sock");
+        let snap = snapshot_path(&e, socket);
+        let log = log_path(&e, socket);
+        assert_eq!(
+            snap.file_name().and_then(|n| n.to_str()),
+            Some("state.json")
+        );
+        let dir = snap.parent().unwrap();
+        assert_eq!(dir.parent(), log.parent());
+        assert_eq!(dir.file_name(), log.file_stem());
+        assert_ne!(snap, snapshot_path(&e, Path::new("/proj-b/grofe.sock")));
     }
 
     #[test]
