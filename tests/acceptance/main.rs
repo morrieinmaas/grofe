@@ -12,6 +12,7 @@
 mod b1c;
 mod b1e;
 mod b4_lock;
+mod copy_emacs;
 mod f1;
 mod float_mouse;
 mod g3_graphics;
