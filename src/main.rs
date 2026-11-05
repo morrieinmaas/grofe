@@ -163,6 +163,47 @@ fn main() -> ExitCode {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
+            // `start-server --restore` (spec §6): the server this starts
+            // restores the snapshot whatever the config says. A restore
+            // goes only into an empty server, and only at its start.
+            let restore = rest.get(1).is_some_and(|a| a == "--restore");
+            let rest: Vec<String> = rest
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !restore || *i != 1)
+                .map(|(_, a)| a.clone())
+                .collect();
+            let rest = rest.as_slice();
+            if restore {
+                if let Ok(stream) = UnixStream::connect(&socket) {
+                    let argv = ["list-sessions", "-F", "#{session_name}"].map(String::from);
+                    return match request(stream, &socket, &argv) {
+                        Ok(Reply::Ok { out, .. }) if !out.trim().is_empty() => {
+                            fail(server::restore::NOT_EMPTY)
+                        }
+                        // ponytail: an empty running server cannot be asked
+                        // to restore (no verb for it); the restore runs
+                        // only in a server this command starts.
+                        Ok(_) => fail(&format!(
+                            "a server is already running on {}: restore runs only at server start",
+                            socket.display()
+                        )),
+                        Err(e) => fail(&e),
+                    };
+                }
+                let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
+                if snapshot.exists() {
+                    // SAFETY: the CLI has started no thread yet, so nothing
+                    // reads the environment concurrently. The server it
+                    // starts inherits the variable.
+                    unsafe { std::env::set_var(server::restore::RESTORE_ENV, "1") };
+                } else {
+                    eprintln!(
+                        "grofe: no snapshot to restore at {}; starting an empty server",
+                        snapshot.display()
+                    );
+                }
+            }
             match connect_or_start(&socket, own_dir, false).and_then(|s| probe(s, &socket)) {
                 // tmux runs the rest of a `start-server \; ...` chain (TPM's
                 // `start-server \; show-option -gqv @tpm_plugins`); the
