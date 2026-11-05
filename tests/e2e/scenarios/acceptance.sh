@@ -37,8 +37,8 @@ export PATH="$REAL_TMUX_DIR:$PATH"
 # paths may run.
 export GROFE_TEST_PRIVATE_TMP=1
 # The tools spec 8 names (kitten is packaged on both images, so required),
-# and the ones the suite's cases also drive.
-TOOLS=(nvim fzf less htop git kitten tmux bats cargo bash python3 lsof ps pgrep)
+# and the ones the suite's cases also drive (`which`: tmux-fzf's .fzf-tmux).
+TOOLS=(nvim fzf less htop git kitten tmux bats cargo bash python3 lsof ps pgrep which)
 fails=0
 
 pass() { printf 'PASS %s\n' "$*"; }
