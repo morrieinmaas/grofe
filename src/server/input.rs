@@ -1910,11 +1910,12 @@ pub fn default_bindings() -> KeyTables {
 }
 
 /// grofe identity's `MouseDown3Pane` (FR.4): a pane that asked for the
-/// mouse gets the click, as tmux's stock row sends it on; any other opens
+/// mouse is focused and gets the click, as tmux's stock row sends it on;
+/// any other opens
 /// the pane's menu at the pointer, its items acting on the pane clicked.
 /// Float shows on a tiled pane and Unfloat on a floating one.
 pub const GROFE_PANE_MENU: &str = concat!(
-    r##"if-shell -F "#{mouse_any_flag}" { send-keys -M } { "##,
+    r##"if-shell -F "#{mouse_any_flag}" { select-pane -t = ; send-keys -M } { "##,
     r##"display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" "##,
     r##""#{?pane_floating_flag,,Float}" f { float-pane -t = } "##,
     r##""#{?pane_floating_flag,Unfloat,}" f { unfloat-pane -t = } "##,

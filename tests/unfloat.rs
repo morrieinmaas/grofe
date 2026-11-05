@@ -329,6 +329,54 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
     assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
 }
 
+/// A pane that asked for the mouse gets the right click, as tmux's stock
+/// row sends it on, and no menu opens.
+#[test]
+fn the_pane_menu_leaves_a_click_to_a_pane_that_asked_for_the_mouse() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("log");
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "cat",
+    ])
+    .expect("new-session");
+    let app = format!(
+        "stty raw -echo; printf '\\033[?1000h\\033[?1006h'; exec cat > '{}'",
+        log.display()
+    );
+    srv.cmd(&["split-window", "-h", "-t", "%0", &app])
+        .expect("split");
+    wait_until(|| var(&srv, "%1", "#{mouse_any_flag}") == "1", WAIT).expect("%1 asks");
+    srv.cmd(&["select-pane", "-t", "%0"]).expect("select");
+    let mut client = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
+    client.wait_for_output(MOUSE_ON, 0);
+    client.wait_for("[main]");
+    // %1 starts at column 41, so client cell (51, 6) is its cell (10, 6).
+    std::thread::sleep(Duration::from_millis(400));
+    client.send(right_press(51, 6));
+    client.send("\x1b[<2;51;6m");
+    let got = wait_until(
+        || {
+            fs::read(&log)
+                .unwrap_or_default()
+                .starts_with(b"\x1b[<2;10;6M")
+        },
+        WAIT,
+    );
+    assert!(got.is_ok(), "{:?}", fs::read(&log));
+    assert!(!client.text().contains("Kill"), "{}", client.text());
+    // As tmux's stock row does, the click focuses the pane it goes to.
+    assert_eq!(var(&srv, "%1", "#{pane_active}"), "1");
+}
+
 /// Under tmux identity the root table's `MouseDown3Pane` is tmux 3.7b's
 /// stock row, as tmux prints it, with nothing of grofe's.
 #[test]
