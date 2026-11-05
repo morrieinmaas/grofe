@@ -563,7 +563,9 @@ fn input_sent_inside_the_delay_reaches_the_process() {
         WAIT,
     )
     .unwrap_or_else(|e| panic!("the input reached the process: {e}; log:\n{}", srv.log()));
-    assert_eq!(started(&last_start_log(&srv), "resume").len(), 1);
+    // The start's log line comes from the actor once the child is up, and
+    // can follow the process's own first write.
+    assert_eq!(wait_started(&srv, "resume", 1).len(), 1);
 }
 
 // ---- falling back to a shell ----
@@ -649,7 +651,8 @@ fn a_killed_restored_agent_leaves_a_shell_in_its_cwd() {
 fn a_resume_whose_binary_is_gone_gives_a_shell() {
     let srv = TestServer::start();
     let agent = Agent::new();
-    agent.config(&srv, "restore-stagger-ms = 0");
+    // The default stagger: the failed start is a delayed one (195 ms).
+    agent.config(&srv, "");
     let gone = agent.bin.join("deleted-agent").display().to_string();
     let snap = snapshot_of(
         &srv.home,
@@ -736,4 +739,70 @@ fn a_spawn_command_resume_is_resolved_and_restored() {
     srv.wait_for(|| agent.transcript("s") == "resume s\nresume s\n", WAIT)
         .unwrap_or_else(|e| panic!("restored: {e}; log:\n{}", srv.log()));
     assert!(list_panes(&srv, "#{pane_uid}").contains(&uid));
+}
+
+/// A one-word spawn command is a script for the shell: a plain name is
+/// made absolute as a multi-word `argv[0]` is (else a restore would look it
+/// up on the server's `PATH`), and any other script is kept as it is.
+#[test]
+fn a_one_word_spawn_command_is_resolved_only_when_plain() {
+    let agent = Agent::new();
+    let srv = TestServer::builder().path_env("/usr/bin:/bin").start();
+    let idle = agent.bin.join("idle");
+    fs::write(&idle, "#!/bin/sh\nexec sleep 100\n").expect("write idle");
+    fs::set_permissions(&idle, fs::Permissions::from_mode(0o755)).expect("chmod");
+    ok(
+        &srv,
+        &["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"],
+    );
+    let path = format!("PATH={}:/usr/bin:/bin", agent.bin.display());
+    let spawn = |command: &str| {
+        let pane = ok(
+            &srv,
+            &[
+                "new-window",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                "main",
+                "-e",
+                &path,
+                command,
+            ],
+        );
+        pane.trim().to_string()
+    };
+    let plain = spawn("idle");
+    assert_eq!(
+        fmt(&srv, &plain, "#{pane_resume}"),
+        idle.display().to_string()
+    );
+    let script = spawn("idle; true");
+    // Shown quoted, as one word.
+    assert_eq!(fmt(&srv, &script, "#{pane_resume}"), "\"idle; true\"");
+}
+
+/// A server killed while a resume waits out its delay never starts it:
+/// nothing is left running after the server.
+#[test]
+fn kill_server_inside_the_delay_starts_nothing() {
+    let srv = TestServer::start();
+    let agent = Agent::new();
+    // 01UIDD waits 4828 ms at 5000.
+    agent.config(&srv, "restore-stagger-ms = 5000");
+    let out = srv.home.join("ran");
+    let script = format!("echo ran > {}; exec sleep 100", out.display());
+    let snap = snapshot_of(
+        &srv.home,
+        vec![pane(
+            "01UIDD",
+            &srv.home,
+            Some(words(&["/bin/sh", "-c", &script])),
+        )],
+    );
+    restore(&srv, &snap);
+    kill(&srv);
+    std::thread::sleep(Duration::from_millis(6000));
+    assert!(!out.exists(), "the resume ran after kill-server");
 }
