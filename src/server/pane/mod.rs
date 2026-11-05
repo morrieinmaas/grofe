@@ -484,6 +484,8 @@ pub struct PaneHandle {
     pid: Arc<OnceLock<u32>>,
     /// `true` once the child was spawned (or failed to start).
     started: tokio::sync::watch::Receiver<bool>,
+    /// The `PATH` the child is spawned with, from [`PaneSpawn::env`].
+    spawn_path: Option<String>,
     generation: u64,
     master: Arc<AsyncFd<OwnedFd>>,
     emu: Arc<Mutex<Emu>>,
@@ -560,6 +562,12 @@ impl PaneHandle {
             rows: spec.rows.max(1),
         };
         let delay = spec.delay;
+        let spawn_path = spec
+            .env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone());
         let ((master, slave, child, tty), pending) = spawn_child(&spec, size)?;
         let pid = Arc::new(OnceLock::new());
         if let Some(id) = child.as_ref().and_then(|c| c.id()) {
@@ -672,6 +680,7 @@ impl PaneHandle {
         Ok(Self {
             pid,
             started,
+            spawn_path,
             generation,
             master,
             emu,
@@ -1114,6 +1123,12 @@ impl PaneHandle {
             out.push('\n');
         }
         out
+    }
+
+    /// The `PATH` this spawn's child gets (the last `PATH` of its
+    /// environment), known without reading the process.
+    pub fn spawn_path(&self) -> Option<&str> {
+        self.spawn_path.as_deref()
     }
 
     pub fn pid(&self) -> Option<u32> {
