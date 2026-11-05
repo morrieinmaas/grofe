@@ -197,7 +197,9 @@ run_image() {
 }
 
 main() {
-  local scenario="" keep_image=0 arg gating=()
+  local scenario="" arg gating=()
+  # Globals: the exit trap reads them after main returns.
+  keep_image=0
   local repo
   repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   wanted=()
