@@ -1,0 +1,64 @@
+#!/bin/sh
+# Vendored from canopy 4ecaa86711567fdbc60ff6b6a836d399b7e50fd9, test/fixtures/fake-agent, unchanged
+# below this header. Re-vendor from canopy rather than editing here.
+#
+# A stand-in for a real coding agent, for tests that need one.
+#
+# It does the three things canopy's persistence path actually depends on
+# and nothing else: it accepts a caller-chosen session id at launch, it
+# accepts that same id back on a resume, and it stays running so a pane
+# holding it looks like a pane holding an agent. What it writes is a
+# transcript named for the id, so a test can prove a resumed pane
+# continued the same conversation rather than starting a fresh one, which
+# is the single claim this milestone exists to make good on.
+#
+# $FAKE_AGENT_HOME is required rather than defaulted. A default would put
+# transcripts somewhere in a real home the first time a test forgot to set
+# it, and a fixture that writes outside its scratch directory is a fixture
+# nobody can trust.
+set -eu
+
+usage() {
+  printf 'usage: fake-agent (--session-id|--resume) <id>\n' >&2
+  printf '       fake-agent --anonymous\n' >&2
+  exit 2
+}
+
+# --anonymous is the case that cannot be brought back, and it is not a
+# hypothetical: an agent started as a bare command, with no id anywhere on
+# its command line, is what Claude Code looks like until it reports. canopy
+# can recover an id from a pane's command when the launch form carries one,
+# so a pane launched WITH an id is resumable even if it never reports. This
+# mode is how a test gets a pane where there is genuinely nothing to find.
+if [ "$#" -eq 1 ] && [ "$1" = "--anonymous" ]; then
+  mode=launch
+  id=anonymous
+else
+  [ "$#" -eq 2 ] || usage
+  case "$1" in
+    --session-id) mode=launch ;;
+    --resume) mode=resume ;;
+    *) usage ;;
+  esac
+  id="$2"
+fi
+case "$id" in
+  '' | */* | .*) usage ;;
+  *) ;;
+esac
+
+if [ -z "${FAKE_AGENT_HOME-}" ]; then
+  printf 'fake-agent: FAKE_AGENT_HOME must be set\n' >&2
+  exit 2
+fi
+mkdir -p "$FAKE_AGENT_HOME"
+
+printf '%s %s\n' "$mode" "$id" >>"$FAKE_AGENT_HOME/$id.transcript"
+
+# Alive until killed. A loop rather than a single long sleep, so the
+# process that a test kills is this script and not a sleep that replaced
+# it: tmux reports a pane's foreground command, and a fixture that execs
+# something else stops looking like the agent it is standing in for.
+while :; do
+  sleep 1
+done
