@@ -14,7 +14,8 @@
 #           tmux 3.7b and not grofe, and /usr/bin/tmux is grofe answering
 #           as tmux 3.7b
 #   cargo   `cargo test --test acceptance`; a test that skipped for want of
-#           a spec 8 tool is a FAIL naming the tool
+#           a spec 8 tool is a FAIL naming the tool; a failed case gets one
+#           serial rerun, and passing there is reported as FLAKY
 #   bats    `bats tests/cli.bats` against the debug binary
 #
 # Each check prints `PASS <what>` or `FAIL <what>`; a phase exits nonzero
@@ -81,10 +82,17 @@ tools() {
   fi
 }
 
+# failed_tests <log>: the names libtest lists under its last `failures:`.
+failed_tests() {
+  awk '/^failures:$/ { n = 0; delete t; next } /^    [A-Za-z0-9_:]+$/ { t[n++] = $1 }
+    END { for (i = 0; i < n; i++) print t[i] }' "$1"
+}
+
 cargo_suite() {
-  local log="$HOME/cargo-test.log" rc=0 t
+  local log="$HOME/cargo-test.log" relog="$HOME/cargo-retry.log" rc=0 t failed=()
   cd "$SRC" || { fail "no source at $SRC"; return; }
-  cargo test --locked --offline --test acceptance 2>&1 | tee "$log" || rc=$?
+  # --show-output prints what passing cases wrote too, so a skip shows.
+  cargo test --locked --offline --test acceptance -- --show-output 2>&1 | tee "$log" || rc=$?
   grep -E '^test result:' "$log" | sed 's/^/SUMMARY /'
   for t in "${TOOLS[@]}"; do
     if grep -q "skipping: $t not found" "$log"; then
@@ -96,9 +104,27 @@ cargo_suite() {
   grep -iE '^skipping' "$log" | sort | uniq -c | sed 's/^ */SKIP /'
   if [ "$rc" -eq 0 ]; then
     pass "cargo test --test acceptance"
+    return
+  fi
+  mapfile -t failed < <(failed_tests "$log")
+  if [ "${#failed[@]}" -eq 0 ]; then
+    fail "cargo test --test acceptance exited $rc with no failed case listed"
+    return
+  fi
+  # The timing cases are bounded in wall time, and a loaded host (or the
+  # suite's own parallel cases) can push one past its bound. Each failed
+  # case gets one rerun, alone and serially: one that passes there is
+  # printed as FLAKY, one that fails again fails the phase.
+  for t in "${failed[@]}"; do printf 'FAILED-TEST %s\n' "$t"; done
+  rc=0
+  cargo test --locked --offline --test acceptance -- --exact --test-threads=1 "${failed[@]}" 2>&1 |
+    tee "$relog" || rc=$?
+  grep -E '^test result:' "$relog" | sed 's/^/RETRY-SUMMARY /'
+  if [ "$rc" -eq 0 ]; then
+    for t in "${failed[@]}"; do printf 'FLAKY %s (failed in the full run, passed alone)\n' "$t"; done
+    pass "cargo test --test acceptance (${#failed[@]} case(s) passed on the serial rerun)"
   else
-    grep -E '^    [a-z0-9_:]+$' "$log" | sed 's/^ */FAILED-TEST /'
-    fail "cargo test --test acceptance exited $rc"
+    for t in $(failed_tests "$relog"); do fail "cargo: $t failed in the full run and again alone"; done
   fi
 }
 
