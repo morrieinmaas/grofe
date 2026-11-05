@@ -318,6 +318,7 @@ pub(crate) fn spawn_for(
         graphics_ok: false,
         images: false,
         identity: state.model.identity,
+        delay: std::time::Duration::ZERO,
     }
 }
 

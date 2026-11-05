@@ -525,6 +525,7 @@ pub(crate) fn respawn(
         graphics_ok: graphics::panes_graphics_ok(state),
         images: graphics::images_enabled(&state.model),
         identity: state.model.identity,
+        delay: std::time::Duration::ZERO,
     };
     let cwd = spec.cwd.clone();
     // The scrollback stays, as tmux's `screen_reinit` leaves it.
