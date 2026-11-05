@@ -14,12 +14,13 @@ use common::{CmdOutput, TestServer};
 
 const WAIT: Duration = Duration::from_secs(10);
 
+/// The config every test starts from: indexes from 0, so targets read
+/// `main:0.0`.
+const ZERO: &str = "base-index = 0\npane-base-index = 0\n";
+
 /// A server with a detached session `main` of one pane.
 fn server() -> TestServer {
-    let srv = TestServer::start();
-    srv.cmd(&["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"])
-        .expect("new-session");
-    srv
+    server_with_config("")
 }
 
 /// A server started over a temp `config.toml` holding `config`.
@@ -27,7 +28,7 @@ fn server_with_config(config: &str) -> TestServer {
     let srv = TestServer::unstarted();
     let dir = srv.config_home.join("grofe");
     fs::create_dir_all(&dir).expect("config dir");
-    fs::write(dir.join("config.toml"), config).expect("write config");
+    fs::write(dir.join("config.toml"), format!("{ZERO}{config}")).expect("write config");
     let srv = srv.restart();
     srv.cmd(&["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"])
         .expect("new-session");
@@ -84,7 +85,8 @@ fn line_for<'a>(out: &'a CmdOutput, uid: &str) -> &'a str {
 #[test]
 fn every_resumed_pane_saved_exits_0() {
     let srv = server();
-    srv.cmd(&["split-window", "-d", "-t", "main"]).expect("split");
+    srv.cmd(&["split-window", "-d", "-t", "main"])
+        .expect("split");
     let a = uid(&srv, "main:0.0");
     let b = uid(&srv, "main:0.1");
     srv.cmd(&["pane-set-resume", "-t", "main:0.0", "--", "/bin/cat", "-u"])
@@ -94,7 +96,10 @@ fn every_resumed_pane_saved_exits_0() {
     let out = check(&srv);
     assert_eq!(code(&out), Some(0), "{out:?}");
     assert_eq!(line_for(&out, &a), format!("main:0.0 {a} will resume"));
-    assert_eq!(line_for(&out, &b), format!("main:0.1 {b} restores as a shell"));
+    assert_eq!(
+        line_for(&out, &b),
+        format!("main:0.1 {b} restores as a shell")
+    );
     assert_eq!(out.stdout.lines().count(), 2, "{out:?}");
 }
 
@@ -141,7 +146,9 @@ fn it_reads_the_disk_not_the_writers_memory() {
     assert_eq!(code(&out), Some(1), "{out:?}");
     assert_eq!(
         line_for(&out, &a),
-        format!("main:0.0 {a} will restart without its conversation (the snapshot holds an older resume)")
+        format!(
+            "main:0.0 {a} will restart without its conversation (the snapshot holds an older resume)"
+        )
     );
 }
 
@@ -169,8 +176,10 @@ fn an_expectation_gives_its_reason() {
 #[test]
 fn only_plain_shells_exit_0() {
     let srv = server();
-    srv.cmd(&["split-window", "-d", "-t", "main"]).expect("split");
-    srv.cmd(&["new-window", "-d", "-t", "main"]).expect("window");
+    srv.cmd(&["split-window", "-d", "-t", "main"])
+        .expect("split");
+    srv.cmd(&["new-window", "-d", "-t", "main"])
+        .expect("window");
     let out = check(&srv);
     assert_eq!(code(&out), Some(0), "{out:?}");
     assert_eq!(out.stdout.lines().count(), 3, "{out:?}");
@@ -182,7 +191,8 @@ fn only_plain_shells_exit_0() {
 #[test]
 fn restore_off_and_no_unit_is_misconfigured() {
     let srv = server_with_config("restore-on-start = false\n");
-    srv.cmd(&["split-window", "-d", "-t", "main"]).expect("split");
+    srv.cmd(&["split-window", "-d", "-t", "main"])
+        .expect("split");
     let a = uid(&srv, "main:0.0");
     srv.cmd(&["pane-set-resume", "-t", "main:0.0", "--", "/bin/cat"])
         .expect("set resume");
@@ -211,7 +221,10 @@ fn a_systemd_unit_that_restores_makes_restore_off_fine() {
     let a = uid(&srv, "main:0.0");
     let out = check(&srv);
     assert_eq!(code(&out), Some(0), "{out:?}");
-    assert_eq!(line_for(&out, &a), format!("main:0.0 {a} restores as a shell"));
+    assert_eq!(
+        line_for(&out, &a),
+        format!("main:0.0 {a} restores as a shell")
+    );
     srv.cmd(&["pane-set-resume", "-t", "main:0.0", "--", "/bin/cat"])
         .expect("set resume");
     wait_saved(&srv, &a, serde_json::json!(["/bin/cat"]));
@@ -265,8 +278,10 @@ fn a_read_only_state_directory_is_misconfigured() {
 #[test]
 fn json_has_one_entry_per_pane() {
     let srv = server();
-    srv.cmd(&["split-window", "-d", "-t", "main"]).expect("split");
-    srv.cmd(&["new-session", "-d", "-s", "other"]).expect("other");
+    srv.cmd(&["split-window", "-d", "-t", "main"])
+        .expect("split");
+    srv.cmd(&["new-session", "-d", "-s", "other"])
+        .expect("other");
     let a = uid(&srv, "main:0.0");
     srv.cmd(&["pane-set-resume", "-t", "main:0.0", "--", "/bin/cat"])
         .expect("set resume");

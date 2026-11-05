@@ -700,9 +700,12 @@ pub struct PaneSetResume {
 }
 
 /// `reboot-check` (grofe's own, T4.5, spec §6): each pane's verdict from
-/// the snapshot on disk. T4.5 adds its flags.
+/// the snapshot on disk: `[--json]`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RebootCheck;
+pub struct RebootCheck {
+    /// `--json`: an array with one entry per pane instead of lines.
+    pub json: bool,
+}
 
 /// `command-prompt` (`-p -I`, then a template; R24; from M3.6 `-b -k -1
 /// -T`, TC.7).
