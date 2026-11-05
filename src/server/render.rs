@@ -168,17 +168,12 @@ pub fn apply_frames(model: &Model, w: &Window, looks: &mut PaneLooks) {
     let chain = options::chain(model, w.active);
     // grofe's built-in default is `rounded` already; tmux identity's is
     // `single`, which gives way to `rounded` with frames on unless the
-    // window, its session or the pane sets the lines.
-    // ponytail: a global `single` under tmux identity (`set -g`, or the
-    // config) is not told apart from the built-in default and draws
-    // `rounded` frames; set it on the session or window to keep `single`.
-    let set_here = chain
-        .iter()
-        .any(|o| model.options.get(*o, "pane-border-lines").is_some());
-    if looks.lines == PaneLines::Single
-        && model.identity == crate::compat::Identity::Tmux
-        && !set_here
-    {
+    // user set the lines: on the pane, window or session, or globally
+    // (`set -g`, or the config).
+    let name = "pane-border-lines";
+    let set = model.options.set_globally(name)
+        || chain.iter().any(|o| model.options.get(*o, name).is_some());
+    if looks.lines == PaneLines::Single && model.identity == crate::compat::Identity::Tmux && !set {
         looks.lines = PaneLines::Rounded;
     }
     looks.frame_title = model.options.lookup("pane-frame-title", &chain) != Some("off");

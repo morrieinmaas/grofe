@@ -296,6 +296,32 @@ fn a_title_too_long_is_cut_and_never_overwrites_the_corners() {
 }
 
 #[test]
+fn a_wide_character_title_is_never_split_and_never_overruns() {
+    let mut inputs = three(Some(1), PaneLines::Rounded, true);
+    for l in inputs.look.panes.values_mut() {
+        // 2 cells each: pane 1's title room (15 cells, a space first)
+        // fits seven, pane 2's (14) would cut the seventh in two.
+        l.title = "漢字漢字漢字漢字漢字".to_string();
+    }
+    let screen = compose(&inputs);
+    let rows: Vec<String> = text(&screen).lines().map(str::to_string).collect();
+    assert_eq!(rows[1], " ╭─ 漢字漢字漢字漢─╮ ╭─ 漢字漢字漢字──╮");
+    // The corners and the edge cell before each stay the frame's.
+    for (x, ch) in [
+        (1, '╭'),
+        (2, '─'),
+        (18, '─'),
+        (19, '╮'),
+        (21, '╭'),
+        (36, '─'),
+        (37, '─'),
+        (38, '╮'),
+    ] {
+        assert_eq!(at(&screen, x, 1).c, ch, "{x}: {}", rows[1]);
+    }
+}
+
+#[test]
 fn explicit_lines_win_and_the_marked_frame_is_reversed() {
     let mut inputs = three(Some(1), PaneLines::Heavy, true);
     inputs.marked = Some(PaneId(3));
@@ -466,6 +492,58 @@ fn tmux_identity_with_frames_on_draws_rounded_unless_the_lines_are_set() {
     srv.cmd(&["set", "-w", "-t", "f", "pane-border-lines", "double"])
         .expect("set lines");
     client.wait_for("╔══");
+}
+
+#[test]
+fn tmux_identity_with_frames_on_keeps_a_global_single_set_at_runtime() {
+    let (srv, mut client) =
+        attached("compat-identity = \"tmux\"\npane-frames = true\npane-frame-title = false\n");
+    client.wait_for("╭──");
+    srv.cmd(&["set", "-g", "pane-border-lines", "single"])
+        .expect("set lines");
+    client.wait_for("┌──");
+    let shown = client.text();
+    assert!(!shown.contains('╭'), "{shown}");
+    assert!(!shown.contains('┬'), "{shown}");
+}
+
+#[test]
+fn tmux_identity_with_frames_on_keeps_a_single_the_config_sets() {
+    let (_srv, mut client) = attached(
+        "compat-identity = \"tmux\"\npane-frames = true\npane-frame-title = false\n\
+         [pane-border]\nlines = \"single\"\n",
+    );
+    client.wait_for("┌──");
+    let shown = client.text();
+    assert_eq!(shown.matches('┌').count(), 3, "{shown}");
+    assert!(!shown.contains('╭'), "{shown}");
+}
+
+#[test]
+fn grofe_identity_with_an_explicit_single_draws_single_frames() {
+    let (srv, mut client) = attached("pane-frames = true\npane-frame-title = false\n");
+    client.wait_for("╭──");
+    srv.cmd(&["set", "-g", "pane-border-lines", "single"])
+        .expect("set lines");
+    client.wait_for("┌──");
+    assert!(!client.text().contains('╭'), "{}", client.text());
+}
+
+#[test]
+fn a_zoomed_framed_window_draws_one_framed_tile() {
+    let (srv, mut client) = attached("pane-frames = true\n");
+    client.wait_until("three titled frames", harness::DEFAULT_TIMEOUT, |t| {
+        t.matches(": cat ─").count() == 3
+    });
+    srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
+    client.wait_until("one framed tile", harness::DEFAULT_TIMEOUT, |t| {
+        t.matches('╭').count() == 1
+    });
+    let shown = client.text();
+    let rows: Vec<&str> = shown.lines().collect();
+    assert!(rows[1].starts_with(" ╭─ 1: cat ─"), "{shown}");
+    assert!(rows[1].trim_end().ends_with('╮'), "{shown}");
+    assert_eq!(shown.matches('╯').count(), 1, "{shown}");
 }
 
 #[test]
