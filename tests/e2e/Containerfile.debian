@@ -1,0 +1,38 @@
+# The Debian e2e image (plan T4.6), the one every container scenario must
+# pass on. Built only by scripts/e2e.sh, from a context holding nothing but
+# grofe at HEAD as a `git archive` export:
+#
+#   grofe/    grofe at HEAD, built in the first stage
+#
+# No systemd: PID 1 is podman's --init and a sleep, so `podman restart`
+# kills every process and the scenario's next phase "boots" by hand, as a
+# login unit would. grofe is /usr/local/lib/grofe/grofe with `grofe` and
+# `tmux` symlinks in /usr/bin, so a boot with PATH=/usr/bin:/bin finds them.
+# fake-agent sits in /opt/e2e/bin only, on the setter's PATH and never on
+# the boot's. Both bases are pinned by digest.
+FROM docker.io/library/rust:1.98-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS build
+
+ENV CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never
+WORKDIR /src
+COPY grofe/ /src/
+RUN cargo build --release --locked --bin grofe \
+  && mkdir -p /out \
+  && cp target/release/grofe /out/grofe
+
+FROM docker.io/library/debian:stable-slim@sha256:5bc3287b25407c965a30f38e32603dc253a3869e1b12a21ac09bfc27fd8b13ce
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash jq procps \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash test
+
+COPY --from=build /out/grofe /usr/local/lib/grofe/grofe
+RUN ln -s /usr/local/lib/grofe/grofe /usr/bin/grofe \
+  && ln -s /usr/local/lib/grofe/grofe /usr/bin/tmux
+COPY grofe/tests/fixtures/fake-agent /opt/e2e/bin/fake-agent
+COPY grofe/tests/e2e/scenarios/ /opt/e2e/scenarios/
+RUN chmod -R a+rX /opt/e2e && chmod 755 /opt/e2e/bin/fake-agent
+
+ENV LANG=C.UTF-8
+CMD ["sleep", "infinity"]

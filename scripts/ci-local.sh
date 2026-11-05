@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Run CI locally: the real workflow's Linux jobs in a container via act,
 # then the macOS leg natively. Stand-in while GitHub Actions is unavailable.
-# Usage: scripts/ci-local.sh [linux|macos]   (default: both)
+# Usage: scripts/ci-local.sh [linux|macos|e2e]   (default: linux and macos)
+#
+# The e2e leg (T4.6) runs the container scenarios through scripts/e2e.sh:
+# today `reboot`, on the Debian image (and Arch with E2E_ARCH=1, never
+# gating). It honours e2e.sh's CONTAINER, E2E_PODMAN_NETWORK and
+# E2E_PODMAN_OPTS. It is a leg of its own, not part of the default run.
 #
 # The compat suite (TC.13) runs in both legs when the caller sets
 # GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME to canopy and athome checkouts
@@ -96,11 +101,16 @@ macos() {
   bats tests/cli.bats
 }
 
+e2e() {
+  scripts/e2e.sh reboot
+}
+
 case "${1:-both}" in
   linux) linux ;;
   macos) macos ;;
+  e2e) e2e ;;
   # Not `macos && linux`: bash ignores set -e inside a function on the
   # left of &&, so a failing cargo test there would not stop the run.
   both) macos; linux ;;
-  *) echo "usage: $0 [linux|macos]" >&2; exit 2 ;;
+  *) echo "usage: $0 [linux|macos|e2e]" >&2; exit 2 ;;
 esac
