@@ -16,8 +16,11 @@
 //!   memory (no I/O), so a termination signal finds the state as it was;
 //! - `kill-server` (any exit with sessions left) writes the model as it
 //!   stands, synchronously, and SIGTERM, SIGHUP and SIGINT write the last
-//!   built state; each then **freezes** the writer, so the panes dying and
-//!   sessions closing after the signal never reach the file;
+//!   state built before the signal; each then **freezes** the writer, so
+//!   the panes dying and sessions closing after the signal never reach the
+//!   file. The signal is seen in its handler ([`terminating`]), before the
+//!   runtime delivers it or any pane exit it caused, so the actor never
+//!   folds such an exit into the state;
 //! - an empty state is written only once the model had sessions and lost
 //!   them with no termination signal seen (the last pane exiting, or the
 //!   last session killed): an empty server that never had a session never
@@ -32,7 +35,7 @@ use std::io::{self, Write as _};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -469,6 +472,7 @@ impl Writer {
         }
         spawn_ticks(state.jobs.clone());
         spawn_signals(Arc::clone(&io));
+        watch_termination();
         Writer {
             io,
             cwds: HashMap::new(),
@@ -485,6 +489,82 @@ impl Writer {
         let snap = writable.then_some(snap);
         *lock(&self.io.latest) = snap.clone();
         snap
+    }
+}
+
+/// Set by the handler of SIGTERM, SIGHUP or SIGINT as the signal arrives.
+static TERMINATING: AtomicBool = AtomicBool::new(false);
+
+/// The handlers [`on_termination`] replaced (the runtime's), by signal.
+static PREVIOUS: OnceLock<Vec<(nix::libc::c_int, nix::libc::sigaction)>> = OnceLock::new();
+
+/// Whether a termination signal has reached this process. It is set in
+/// the signal handler itself: the runtime hands a signal to its listeners
+/// only on a later poll, and a pane the same signal killed can reach the
+/// actor first. A signal handled before the pane exit it caused is seen
+/// here by the time the actor gets that exit.
+fn terminating() -> bool {
+    TERMINATING.load(Ordering::SeqCst)
+}
+
+/// Sets [`TERMINATING`], then runs the handler it replaced.
+extern "C" fn on_termination(
+    sig: nix::libc::c_int,
+    info: *mut nix::libc::siginfo_t,
+    ctx: *mut std::ffi::c_void,
+) {
+    use nix::libc;
+    TERMINATING.store(true, Ordering::SeqCst);
+    let Some(prev) = PREVIOUS.get() else {
+        return;
+    };
+    for (s, act) in prev {
+        if *s != sig {
+            continue;
+        }
+        let h = act.sa_sigaction;
+        // SAFETY: `h` is the handler `sigaction` reported for `sig`, of
+        // the kind its flags name; only real handlers are replaced.
+        if act.sa_flags & libc::SA_SIGINFO != 0 {
+            let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut std::ffi::c_void) =
+                unsafe { std::mem::transmute(h) };
+            f(sig, info, ctx);
+        } else {
+            let f: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(h) };
+            f(sig);
+        }
+    }
+}
+
+/// Puts [`on_termination`] in front of the runtime's handlers of SIGTERM,
+/// SIGHUP and SIGINT (installed by `serve` and [`spawn_signals`]).
+fn watch_termination() {
+    use nix::libc;
+    let mut prev = Vec::new();
+    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        // SAFETY: a query; `old` is a valid out pointer.
+        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } != 0 {
+            continue;
+        }
+        if old.sa_sigaction == libc::SIG_DFL || old.sa_sigaction == libc::SIG_IGN {
+            continue;
+        }
+        prev.push((sig, old));
+    }
+    // Recorded before any is installed, so the handler always finds them.
+    if PREVIOUS.set(prev).is_err() {
+        return;
+    }
+    for (sig, old) in PREVIOUS.get().into_iter().flatten() {
+        let mut new = *old;
+        new.sa_sigaction = on_termination as *const () as usize;
+        new.sa_flags = old.sa_flags | libc::SA_SIGINFO;
+        // SAFETY: `new` is a valid action whose handler is async-signal
+        // safe: an atomic store and the handler it replaced.
+        if unsafe { libc::sigaction(*sig, &new, std::ptr::null_mut()) } != 0 {
+            eprintln!("grofe server: snapshot writer: cannot watch signal {sig}");
+        }
     }
 }
 
@@ -538,7 +618,7 @@ fn tick(state: &mut State) {
     let Some(w) = guard.as_mut() else {
         return;
     };
-    if w.io.frozen.load(Ordering::SeqCst) {
+    if w.io.frozen.load(Ordering::SeqCst) || terminating() {
         return;
     }
     let model = &state.model;
@@ -564,14 +644,19 @@ pub fn track(state: &mut State, output: bool) {
     if w.io.frozen.load(Ordering::SeqCst) {
         return;
     }
+    if terminating() {
+        // What this message changed came after the signal: the state
+        // built before it is the one to keep.
+        let latest = lock(&w.io.latest).clone();
+        w.io.write_final(latest.as_ref());
+        return;
+    }
     if state.exit {
         // `kill-server` (or any exit that leaves sessions) writes them;
         // the last session going writes the empty state.
-        // ponytail: a termination signal the runtime has not delivered to
-        // the signal task yet, while the actor already handles the panes
-        // it killed, does not stop the empty write. Waiting for it here
-        // would hold the exiting server's listener open (a tmux-identity
-        // socket stays on disk, and a CLI connecting meanwhile is reset).
+        // ponytail: a pane killed by a reboot's signal before the server
+        // gets its own (the panes signalled first) is an ordinary exit
+        // here, and the last one writes the empty state.
         let snap = w.build(&state.model);
         w.io.write_final(snap.as_ref());
         return;

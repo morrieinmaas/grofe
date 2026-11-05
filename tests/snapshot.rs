@@ -24,9 +24,15 @@ fn snapshot(srv: &TestServer) -> Option<Snapshot> {
     serde_json::from_str(&text).ok()
 }
 
-fn wait_snapshot(
+fn wait_snapshot(srv: &TestServer, what: &str, cond: impl FnMut(&Snapshot) -> bool) -> Snapshot {
+    wait_snapshot_within(srv, what, SAVED, cond)
+}
+
+/// As [`wait_snapshot`], with an Accept line's own bound.
+fn wait_snapshot_within(
     srv: &TestServer,
     what: &str,
+    within: Duration,
     mut cond: impl FnMut(&Snapshot) -> bool,
 ) -> Snapshot {
     let mut last = None;
@@ -35,7 +41,7 @@ fn wait_snapshot(
             last = snapshot(srv);
             last.as_ref().is_some_and(&mut cond)
         },
-        SAVED,
+        within,
     );
     if found.is_err() {
         panic!("{what}: the snapshot never matched; last seen:\n{last:#?}");
@@ -109,7 +115,10 @@ fn a_split_reaches_the_file_with_no_client_attached() {
     srv.cmd(&["split-window", "-t", "main", "-c", &dir_path, "sleep 600"])
         .expect("split-window");
     let uid = display(&srv, "main", "#{pane_uid}");
-    let snap = wait_snapshot(&srv, "the split pane", |s| pane(s, &uid).is_some());
+    // Accept: within 2 s.
+    let snap = wait_snapshot_within(&srv, "the split pane", Duration::from_secs(2), |s| {
+        pane(s, &uid).is_some()
+    });
     let p = pane(&snap, &uid).expect("pane");
     assert_eq!(canonical(&p.cwd), canonical(dir.path()), "{p:#?}");
     let argv = p.argv.as_ref().expect("the split's argv");
@@ -129,7 +138,8 @@ fn a_cd_in_a_pane_follows_into_the_file() {
     let line = format!("cd '{}'", target.display());
     srv.cmd(&["send-keys", "-t", "main", &line, "Enter"])
         .expect("send-keys");
-    wait_snapshot(&srv, "the cd", |s| {
+    // Accept: within 2 s of the next sample, which is at most 1 s away.
+    wait_snapshot_within(&srv, "the cd", Duration::from_secs(3), |s| {
         pane(s, &uid).is_some_and(|p| canonical(&p.cwd) == target)
     });
 }
@@ -511,4 +521,69 @@ fn the_snapshot_holds_the_window_shape() {
     for p in &w.panes {
         assert!(text.contains(&format!("\"{}\"", p.uid)), "{text}");
     }
+}
+
+/// Whether `pid` has exited (gone, or a zombie its stopped parent has not
+/// reaped).
+fn exited(pid: i32) -> bool {
+    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+        Err(_) => true,
+    }
+}
+
+/// The race a reboot runs: the server gets `signal` first, but its panes
+/// die of the same signal before the server runs again, so the signal and
+/// every pane exit reach the runtime together. The server is stopped
+/// across the kills to force that ordering. Neither the dead panes nor
+/// the closed sessions may reach the file.
+fn signalled_while_its_panes_die_of_it(signal: Signal) {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    for round in 0..5 {
+        let srv = TestServer::start();
+        srv.cmd(&["set-option", "-g", "remain-on-exit", "off"])
+            .expect("remain-on-exit off");
+        for name in ["main", "other"] {
+            // `sleep` dies of SIGTERM, where an interactive shell ignores it.
+            srv.cmd(&["new-session", "-d", "-s", name, "sleep 600"])
+                .expect("new-session");
+            for _ in 0..3 {
+                srv.cmd(&["split-window", "-d", "-t", name, "sleep 600"])
+                    .expect("split-window");
+            }
+        }
+        let live = uids(&srv);
+        assert_eq!(live.len(), 8);
+        let pids: Vec<i32> = srv
+            .cmd(&["list-panes", "-a", "-F", "#{pane_pid}"])
+            .expect("list-panes")
+            .lines()
+            .map(|l| l.parse().expect("pane pid"))
+            .collect();
+        let server: i32 = display(&srv, "main", "#{pid}").parse().expect("pid");
+        wait_snapshot(&srv, "every pane", |s| snap_uids(s) == live);
+        kill(Pid::from_raw(server), Signal::SIGSTOP).expect("SIGSTOP");
+        srv.signal_all(signal);
+        let died = srv.wait_for(|| pids.iter().all(|&p| exited(p)), Duration::from_secs(5));
+        kill(Pid::from_raw(server), Signal::SIGCONT).expect("SIGCONT");
+        died.expect("the panes die of the signal");
+        srv.wait_for(|| !srv.is_running(), Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("the server goes after {signal:?}"));
+        std::thread::sleep(Duration::from_millis(500));
+        let snap = snapshot(&srv).expect("a snapshot");
+        assert_eq!(snap_uids(&snap), live, "{signal:?}, round {round}");
+    }
+}
+
+#[test]
+fn sigterm_killing_the_panes_too_leaves_every_pane() {
+    signalled_while_its_panes_die_of_it(Signal::SIGTERM);
+}
+
+#[test]
+fn sighup_killing_the_panes_too_leaves_every_pane() {
+    signalled_while_its_panes_die_of_it(Signal::SIGHUP);
 }
