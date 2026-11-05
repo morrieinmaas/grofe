@@ -1459,6 +1459,11 @@ impl KeyTables {
         for (key, b) in add {
             self.insert(PREFIX_TABLE, key, b);
         }
+        // grofe's own default `root` rows ([`GROFE_PANE_MENU`]) give way to
+        // tmux's stock ones.
+        if let Some(t) = self.tables.get_mut(ROOT_TABLE) {
+            t.retain(|_, b| !(b.source == BindingSource::Default && b.dialect == Dialect::Grofe));
+        }
         // The rest of the stock `root` rows: those the config and the
         // runtime neither bound nor unbound.
         let unbound_root = |key: &Key| {
@@ -1889,8 +1894,38 @@ pub fn default_bindings() -> KeyTables {
             t.insert_stock_root(name, text);
         }
     }
+    // FR.4: grofe identity's pane menu, with Float and Unfloat; a server
+    // with tmux identity binds tmux's stock menu instead.
+    if let (Ok(key), Ok(cmds)) = (
+        parse_key("MouseDown3Pane"),
+        crate::cmd::split_command_string(GROFE_PANE_MENU),
+    ) {
+        t.insert(
+            ROOT_TABLE,
+            key,
+            Binding::new(cmds, false, BindingSource::Default),
+        );
+    }
     t
 }
+
+/// grofe identity's `MouseDown3Pane` (FR.4): a pane that asked for the
+/// mouse gets the click, as tmux's stock row sends it on; any other opens
+/// the pane's menu at the pointer, its items acting on the pane clicked.
+/// Float shows on a tiled pane and Unfloat on a floating one.
+pub const GROFE_PANE_MENU: &str = concat!(
+    r##"if-shell -F "#{mouse_any_flag}" { send-keys -M } { "##,
+    r##"display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" "##,
+    r##""#{?pane_floating_flag,,Float}" f { float-pane -t = } "##,
+    r##""#{?pane_floating_flag,Unfloat,}" f { unfloat-pane -t = } "##,
+    r##"'' "##,
+    r##""#{?pane_floating_flag,,Horizontal Split}" h { split-window -h -t = -c "#{pane_current_path}" } "##,
+    r##""#{?pane_floating_flag,,Vertical Split}" v { split-window -v -t = -c "#{pane_current_path}" } "##,
+    r##"'' "##,
+    r##"Kill X { kill-pane -t = } "##,
+    r##""#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z -t = } "##,
+    r##"}"##,
+);
 
 /// The copy-mode key table with `mode-keys vi`.
 pub const COPY_MODE_VI_TABLE: &str = "copy-mode-vi";
@@ -5013,9 +5048,20 @@ mod tests {
         for name in NATIVE_STOCK_ROOT {
             assert!(t.exact(ROOT_TABLE, &k(name)).is_some(), "{name}");
         }
-        assert!(t.exact(ROOT_TABLE, &k("MouseDown3Pane")).is_none());
+        // FR.4: grofe's own pane menu, which tmux's stock one replaces.
+        let menu = t.exact(ROOT_TABLE, &k("MouseDown3Pane")).expect("menu");
+        assert_eq!(menu.dialect, Dialect::Grofe);
+        assert!(menu.shown.is_none());
+        assert_eq!(menu.cmds[0][0], "if-shell");
+        assert!(
+            menu.cmds[0][4].contains("'unfloat-pane' '-t' '='"),
+            "{menu:?}"
+        );
+        assert!(t.exact(ROOT_TABLE, &k("M-MouseDown3Pane")).is_none());
         t.use_tmux_stock();
         assert_eq!(t.keys(ROOT_TABLE).len(), TMUX_STOCK_ROOT.len());
+        let menu = t.exact(ROOT_TABLE, &k("MouseDown3Pane")).expect("menu");
+        assert_eq!(menu.dialect, Dialect::Tmux);
         // `unbind -n` sticks through a reload, which binds the stock again.
         t.unbind_runtime(ROOT_TABLE, &k("MouseDown3Status"));
         t.use_tmux_stock();

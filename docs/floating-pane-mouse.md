@@ -73,8 +73,16 @@ unknown commands under the `tmux` name. Flags are `new-pane`'s: `-x`/`-y` the si
 
 `#{pane_floating_flag}` (tmux's own format) tells a floating pane.
 
-## Keys
+## Keys and the pane menu
 
-Under grofe identity `prefix F` floats the active pane, or unfloats it if it is
-floating: `if-shell -F '#{pane_floating_flag}' unfloat-pane float-pane`. Under tmux
-identity `F` is unbound in the prefix table, as in tmux 3.7b.
+Under grofe identity:
+
+- `prefix F` floats the active pane, or unfloats it if it is floating:
+  `if-shell -F '#{pane_floating_flag}' unfloat-pane float-pane`.
+- A right click on a pane (`MouseDown3Pane`) opens the pane's menu at the pointer,
+  acting on the pane clicked: Float on a tiled pane, Unfloat on a floating one (key
+  `f`), Horizontal and Vertical Split on a tiled pane, Kill, and Zoom. A pane that
+  asked for the mouse gets the click instead, as with tmux's stock menu.
+
+Under tmux identity neither is bound: `F` is unbound in the prefix table and
+`MouseDown3Pane` is tmux 3.7b's stock menu, unchanged.

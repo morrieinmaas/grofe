@@ -270,6 +270,88 @@ fn under_tmux_identity_unfloat_pane_is_unknown_and_f_is_unbound() {
     let _ = tmux(&srv, &["kill-server"]);
 }
 
+/// What an attached client sees once the server has turned the mouse on.
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// An SGR press of the right button at 1-based client cell `(x, y)`; the
+/// button stays down, as a release outside the menu would close it.
+fn right_press(x: u16, y: u16) -> String {
+    format!("\x1b[<2;{x};{y}M")
+}
+
+/// grofe identity's pane menu (`MouseDown3Pane`) floats the pane clicked
+/// and, on a floating pane, unfloats it.
+#[test]
+fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
+    let srv = TestServer::start();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "cat",
+    ])
+    .expect("new-session");
+    srv.cmd(&["split-window", "-h", "-t", "%0", "cat"])
+        .expect("split");
+    let shown = srv
+        .cmd(&["list-keys", "-T", "root", "MouseDown3Pane"])
+        .expect("list-keys");
+    assert!(shown.contains("unfloat-pane"), "{shown}");
+    assert!(shown.contains("float-pane"), "{shown}");
+    let mut client = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
+    client.wait_for_output(MOUSE_ON, 0);
+    client.wait_for("[main]");
+    let floating = |want: &'static str| {
+        let srv = &srv;
+        move || var(srv, "%0", "#{pane_floating_flag}") == want
+    };
+    // %1 is active; the click is on %0, cell (10, 5).
+    std::thread::sleep(Duration::from_millis(400));
+    client.send(right_press(11, 6));
+    client.wait_until("the tiled pane's menu", WAIT, |t| t.contains("Float"));
+    assert!(!client.text().contains("Unfloat"), "{}", client.text());
+    client.send("f");
+    wait_until(floating("1"), WAIT).expect("the menu floats %0");
+    client.send("\x1b[<2;11;6m");
+    // The floating pane is 40x6 at (4, 2): its cell (10, 4) is over it.
+    let (l, t, _, _) = rect(&srv, "%0");
+    assert_eq!((l, t), (4, 2));
+    std::thread::sleep(Duration::from_millis(400));
+    client.send(right_press(11, 5));
+    client.wait_until("the floating pane's menu", WAIT, |t| t.contains("Unfloat"));
+    client.send("f");
+    wait_until(floating("0"), WAIT).expect("the menu unfloats %0");
+    assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
+}
+
+/// Under tmux identity the root table's `MouseDown3Pane` is tmux 3.7b's
+/// stock row, as tmux prints it, with nothing of grofe's.
+#[test]
+fn under_tmux_identity_the_pane_menu_is_stock() {
+    let srv = TestServer::unstarted();
+    let out = tmux(&srv, &["start-server"]);
+    assert!(out.status.success(), "start-server: {}", out.stderr);
+    let out = tmux(&srv, &["list-keys", "-T", "root"]);
+    assert!(out.status.success(), "{out:?}");
+    let (_, stock) = grofe::server::input::TMUX_STOCK_ROOT
+        .iter()
+        .find(|(k, _)| *k == "MouseDown3Pane")
+        .expect("the stock row");
+    let row = out
+        .stdout
+        .lines()
+        .find(|l| l.split_whitespace().nth(3) == Some("MouseDown3Pane"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    assert!(row.ends_with(stock), "{row}");
+    assert!(!out.stdout.contains("float-pane"), "{}", out.stdout);
+    let _ = tmux(&srv, &["kill-server"]);
+}
+
 fn snapshot(srv: &TestServer) -> Option<grofe::server::snapshot::Snapshot> {
     let text = fs::read_to_string(srv.snapshot_path()).ok()?;
     serde_json::from_str(&text).ok()
