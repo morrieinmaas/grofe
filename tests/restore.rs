@@ -717,3 +717,40 @@ fn a_changed_uid_turns_the_comparison_red() {
     assert_ne!(after, panes, "the mutated uid must show");
     assert!(after.iter().any(|l| l.contains("01MUTATED")), "{after:?}");
 }
+
+/// `start-server --restore` reaches the server through its environment,
+/// which the server drops at once: no pane, `run-shell` or `pipe-pane`
+/// command inherits it (a server one of them starts would restore too).
+#[test]
+fn the_restore_request_reaches_nothing_the_server_runs() {
+    let srv = TestServer::start();
+    kill(&srv);
+    write_snapshot(&srv, &sample(&srv.home));
+    ok(&srv, &["start-server", "--restore"]);
+    let home = srv.home.display().to_string();
+    ok(
+        &srv,
+        &["pipe-pane", "-t", "main", &format!("env > {home}/pipe-env")],
+    );
+    ok(&srv, &["run-shell", &format!("env > {home}/run-env")]);
+    ok(
+        &srv,
+        &[
+            "send-keys",
+            "-t",
+            "main",
+            &format!("env > {home}/pane-env"),
+            "Enter",
+        ],
+    );
+    for file in ["pipe-env", "run-env", "pane-env"] {
+        let path = srv.home.join(file);
+        wait_until(
+            || fs::read_to_string(&path).is_ok_and(|t| t.contains("HOME=")),
+            WAIT,
+        )
+        .unwrap_or_else(|_| panic!("{file} written"));
+        let text = fs::read_to_string(&path).expect("read env");
+        assert!(!text.contains("GROFE_RESTORE="), "{file}: {text}");
+    }
+}

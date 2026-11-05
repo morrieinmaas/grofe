@@ -454,6 +454,7 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
         socket.display()
     );
 
+    restore::take_request();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

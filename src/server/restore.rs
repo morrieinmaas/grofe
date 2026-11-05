@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::paths::{self, Env};
@@ -30,8 +31,8 @@ use crate::server::snapshot::{self, OptionSnap, SessionSnap, Snapshot, SnapshotE
 use crate::types::{PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// Set to `1` in the environment of a server `start-server --restore`
-/// starts: restore whatever the config says. The server drops it from the
-/// environment its panes get.
+/// starts: restore whatever the config says. The server drops it from its
+/// environment at once ([`take_request`]).
 pub const RESTORE_ENV: &str = "GROFE_RESTORE";
 
 /// What a restore brought back, for the log and `restore-done`.
@@ -54,18 +55,30 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+/// Whether the server's environment held [`RESTORE_ENV`] set to `1`.
+static FORCED: AtomicBool = AtomicBool::new(false);
+
+/// Takes [`RESTORE_ENV`] out of the process environment, remembering it
+/// for [`at_start`], so nothing the server runs inherits it: not a pane,
+/// a hook, a `pipe-pane` command (which takes the process environment)
+/// nor a server one of them starts. Called by `run_daemon` before any
+/// thread or runtime exists.
+pub fn take_request() {
+    if let Some(v) = std::env::var_os(RESTORE_ENV) {
+        FORCED.store(v == "1", Ordering::SeqCst);
+        // SAFETY: called before the server starts any thread, so nothing
+        // reads the environment concurrently.
+        unsafe { std::env::remove_var(RESTORE_ENV) };
+    }
+}
+
 /// The error a restore into a server that has sessions gives.
 pub const NOT_EMPTY: &str = "server not empty: restore needs an empty server";
 
 /// Called once at server start, after the config is applied and before
 /// the server reports ready: restores the snapshot when asked to.
 pub fn at_start(state: &mut State) {
-    let forced = std::env::var_os(RESTORE_ENV).is_some_and(|v| v == "1");
-    if std::env::var_os(RESTORE_ENV).is_some() {
-        // Never handed on: a server a pane starts restores as its own
-        // config says.
-        crate::server::hooks::set_global(state, RESTORE_ENV, None, false);
-    }
+    let forced = FORCED.load(Ordering::SeqCst);
     let configured = state.options.restore_on_start
         && state.model.options.lookup("restore-on-start", &[]) == Some("on");
     if !forced && !configured {
@@ -287,7 +300,11 @@ fn restore_window(
         if let Some(live) = state.model.panes.get_mut(&pane) {
             live.uid = p.uid.clone();
             live.restored = true;
+            // As every spawn: a `default-command` the pane runs is its
+            // resume, bound to its root process.
+            crate::server::resume::bind_root(live);
         }
+        crate::server::resume::spawned(state, pane, Default::default());
         for o in &p.options {
             set_option(state, Owner::Pane(pane), o);
         }
@@ -299,11 +316,11 @@ fn restore_window(
         cols,
         rows,
     };
-    let layout = layout(&w.layout, &panes, area);
     let first = panes
         .first()
         .map(|(_, p)| *p)
         .ok_or("a window with no pane")?;
+    let layout = layout(&w.layout, &panes, first, area);
     let active = panes
         .iter()
         .find(|(uid, _)| *uid == w.active_pane)
@@ -347,9 +364,14 @@ fn pane_cwd(uid: &str, cwd: &Path) -> PathBuf {
 /// The window's layout: `geometry` with its cells' `uid`s made the panes'
 /// ids, the panes in the snapshot's order. A geometry that does not hold
 /// exactly these panes, or does not tile, gives them side by side.
-fn layout(geometry: &LayoutGeometry<String>, panes: &[(&str, PaneId)], area: Rect) -> LayoutTree {
+fn layout(
+    geometry: &LayoutGeometry<String>,
+    panes: &[(&str, PaneId)],
+    first: PaneId,
+    area: Rect,
+) -> LayoutTree {
     let ids: Vec<PaneId> = panes.iter().map(|(_, p)| *p).collect();
-    let mut tree = LayoutTree::new(ids[0]);
+    let mut tree = LayoutTree::new(first);
     if ids.len() < 2 {
         return tree;
     }
