@@ -142,11 +142,6 @@ pub fn env_var(pid: i32, name: &str) -> Option<String> {
     })
 }
 
-/// The executable process `pid` runs, read now.
-pub fn exe(pid: i32) -> Option<PathBuf> {
-    os::exe(pid)
-}
-
 /// How many times [`sample`] reads again after the name changed under it.
 const SAMPLE_TRIES: usize = 4;
 
@@ -220,10 +215,6 @@ mod os {
         split_nul(&raw)
     }
 
-    pub fn exe(pid: i32) -> Option<PathBuf> {
-        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
-    }
-
     /// Field 4 of `/proc/<pid>/stat`.
     pub fn parent(pid: i32) -> Option<i32> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -256,7 +247,7 @@ mod os {
 mod os {
     use std::ffi::{CStr, c_void};
     use std::mem;
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
 
     use nix::libc;
@@ -334,17 +325,6 @@ mod os {
             return None;
         }
         Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-    }
-
-    pub fn exe(pid: i32) -> Option<PathBuf> {
-        let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-        // SAFETY: the buffer is valid for its full length.
-        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-        if n <= 0 {
-            return None;
-        }
-        buf.truncate(n as usize);
-        Some(PathBuf::from(std::ffi::OsString::from_vec(buf)))
     }
 
     /// `proc_listpids`'s type for "the members of one process group"
@@ -531,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_child_s_environment_and_executable() {
+    fn reads_a_child_s_environment() {
         let mut child = std::process::Command::new("sleep")
             .arg("5")
             .env_clear()
@@ -549,14 +529,11 @@ mod tests {
         let path = read("PATH");
         let value = read("GROFE_T42");
         let unset = env_var(pid, "HOME");
-        let exe = exe(pid);
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(path.as_deref(), Some("/x/bin:/usr/bin:/bin"));
         assert_eq!(value.as_deref(), Some("a=b"));
         assert_eq!(unset, None);
-        let exe = exe.expect("exe");
-        assert_eq!(exe.file_name().and_then(|n| n.to_str()), Some("sleep"));
     }
 
     #[test]

@@ -85,10 +85,12 @@ pub(crate) struct CliIo {
     /// Its stdin, decoded; `None` when it sent none.
     pub stdin: Option<Vec<u8>>,
     pub umask: Option<u32>,
+    /// The requesting process (the socket peer), when the OS says.
+    pub pid: Option<i32>,
 }
 
 impl CliIo {
-    fn of(req: &Request) -> CliIo {
+    fn of(req: &Request, pid: Option<i32>) -> CliIo {
         use base64::Engine as _;
         CliIo {
             stdin: req
@@ -96,6 +98,7 @@ impl CliIo {
                 .as_deref()
                 .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
             umask: req.umask,
+            pid,
         }
     }
 }
@@ -836,7 +839,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
-            state.cli_io = Some(CliIo::of(&req));
+            state.cli_io = Some(CliIo::of(&req, pid));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors

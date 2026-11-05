@@ -100,15 +100,16 @@ pub fn set(state: &mut State, ctx: &ClientCtx, pane: PaneId, what: Set) -> Resul
         .panes
         .get(&pane)
         .ok_or_else(|| format!("can't find pane: {pane}"))?;
+    let caller = state.cli_io.as_ref().and_then(|io| io.pid);
     let (resume, expect, binding) = match what {
         Set::Clear => (None, None, None),
         Set::Resume(argv) => {
-            let (leader, binding) = foreground(p)?;
+            let (leader, binding) = foreground(p, caller)?;
             let argv = resolve(state, ctx, p, leader, argv)?;
             (Some(argv), None, Some(binding))
         }
         Set::Expect(reason) => {
-            let (_, binding) = foreground(p)?;
+            let (_, binding) = foreground(p, caller)?;
             (None, Some(reason), Some(binding))
         }
     };
@@ -118,10 +119,11 @@ pub fn set(state: &mut State, ctx: &ClientCtx, pane: PaneId, what: Set) -> Resul
 }
 
 /// The pane's foreground process group leader, and the binding for it.
-/// When that leader is the very CLI asking (run from an interactive shell,
-/// which gives each command its own group), the binding is its parent
-/// instead, the shell that ran it: the CLI is gone the moment it answers.
-fn foreground(p: &Pane) -> Result<(i32, Binding), String> {
+/// When that leader is the very CLI asking, `caller` (run from an
+/// interactive shell, which gives each command its own group), the binding
+/// is its parent instead, the shell that ran it: the CLI is gone the
+/// moment it answers.
+fn foreground(p: &Pane, caller: Option<i32>) -> Result<(i32, Binding), String> {
     if p.dead.is_some() {
         return Err(format!("pane {} is dead", p.id));
     }
@@ -129,10 +131,7 @@ fn foreground(p: &Pane) -> Result<(i32, Binding), String> {
         .handle
         .foreground_group()
         .ok_or_else(|| format!("pane {} has no foreground process", p.id))?;
-    // ponytail: the caller's pid is not handed to command handlers, so
-    // "the leader is this CLI" is told by its executable and argv; a
-    // second grofe binary at another path is not recognised.
-    let bound = if is_this_cli(leader) {
+    let bound = if caller == Some(leader) {
         procinfo::parent(leader).unwrap_or(leader)
     } else {
         leader
@@ -140,17 +139,6 @@ fn foreground(p: &Pane) -> Result<(i32, Binding), String> {
     let binding = Binding::of(bound)
         .ok_or_else(|| format!("pane {}: its foreground process has exited", p.id))?;
     Ok((leader, binding))
-}
-
-/// Whether process `pid` is a grofe CLI running `pane-set-resume`.
-fn is_this_cli(pid: i32) -> bool {
-    let me = i32::try_from(std::process::id())
-        .ok()
-        .and_then(procinfo::exe);
-    me.is_some() && procinfo::exe(pid) == me && {
-        let argv = procinfo::sample(pid).argv.unwrap_or_default();
-        argv.iter().any(|a| a == "pane-set-resume")
-    }
 }
 
 /// `argv` with `argv[0]` made absolute (see the module docs).

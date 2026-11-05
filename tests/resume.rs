@@ -562,3 +562,27 @@ fn a_spawn_command_resume_clears_when_its_process_exits_and_the_pane_stays() {
         .wait_for(|| count() == 4, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {} raised", count()));
 }
+
+/// The CLI asking is told by its pid, not its executable: a grofe at
+/// another path (an upgrade installed while the server runs) binds to the
+/// shell that ran it just the same, not to itself.
+#[test]
+fn a_cli_from_another_grofe_binary_binds_to_its_shell() {
+    let f = Fixture::new();
+    let other = f.bin.join("grofe-upgraded");
+    fs::copy(env!("CARGO_BIN_EXE_grofe"), &other).expect("copy grofe");
+    f.type_line(
+        "main",
+        &format!(
+            "{} -S {} pane-set-resume -- /bin/sleep 5",
+            other.display(),
+            f.srv.socket.display(),
+        ),
+    );
+    f.srv
+        .wait_for(|| f.resume("main") == "/bin/sleep 5", WAIT)
+        .unwrap_or_else(|e| panic!("{e}: #{{pane_resume}} is {:?}", f.resume("main")));
+    f.wait_prompt("main");
+    thread::sleep(SEVERAL_SAMPLES);
+    assert_eq!(f.resume("main"), "/bin/sleep 5");
+}
