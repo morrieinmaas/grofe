@@ -505,16 +505,16 @@ fn nested_grofe_runs_detaches_and_refuses_self_nesting() {
 // ---- wide characters (case 5) ----
 
 /// CJK, an emoji, an emoji with VS16 and a combining mark: the `|` after
-/// each lands where the pane put it. The VS16 heart is one cell wide here,
-/// as in the pane's emulator; real terminals draw it two wide (logged in
-/// docs/dogfood.md, not fixed), and grofe's absolute cursor move after it
-/// keeps the next cell in place there too (render tests).
+/// each lands where the pane put it. The VS16 heart is two cells wide in
+/// the pane's emulator, as Ghostty and WezTerm draw it; this outer
+/// emulator draws it one wide, and grofe's absolute cursor move after it
+/// still puts the `|` in the pane's column (render tests).
 #[test]
 fn wide_characters_do_not_drift_the_next_cell() {
     let lines = [
         ("a\u{6F22}\u{5B57}|", 5),
         ("b\u{1F44D}|", 3),
-        ("c\u{2764}\u{FE0F}|", 2),
+        ("c\u{2764}\u{FE0F}|", 3),
         ("de\u{301}|", 2),
     ];
     let script: String = lines

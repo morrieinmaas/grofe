@@ -104,6 +104,10 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         // A new session has no client yet.
         None,
     )?;
+    if let Some(p) = state.model.panes.get_mut(&pane) {
+        crate::server::resume::bind_root(p);
+    }
+    crate::server::resume::spawned(state, pane, Default::default());
 
     let model = &mut state.model;
     model.insert_session(Session {

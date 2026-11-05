@@ -9,6 +9,7 @@ pub mod tmux;
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -35,6 +36,17 @@ pub enum Identity {
 /// `tmux -V`'s number, `TERM_PROGRAM_VERSION` under tmux identity.
 pub fn compat_level() -> &'static str {
     "3.7b"
+}
+
+/// The XTVERSION (`CSI > q`) reply a pane gets: `DCS > | <name> <version>
+/// ST`, under tmux identity tmux's name and the compat level, as tmux 3.7b
+/// answers (recorded: `ESC P > | tmux 3.7b ESC \`).
+pub fn xtversion_reply(identity: Identity) -> Vec<u8> {
+    let (name, version) = match identity {
+        Identity::Tmux => ("tmux", compat_level()),
+        Identity::Grofe => ("grofe", env!("CARGO_PKG_VERSION")),
+    };
+    format!("\x1bP>|{name} {version}\x1b\\").into_bytes()
 }
 
 /// How the CLI that started this server process was invoked, set once by
@@ -113,6 +125,22 @@ fn decide_identity(started: Identity, option: &str) -> Identity {
 /// number>`, recorded against real tmux (`/tmp/tmux-501/x,86444,0`).
 pub fn tmux_value(socket: &Path, pid: u32, session: SessionId) -> String {
     format!("{},{pid},{}", socket.display(), session.0)
+}
+
+/// The socket a `$TMUX` value names, as tmux 3.7b's `main` reads it with
+/// no `-L`/`-S`: everything before the first comma, unless the value is
+/// empty or starts with a comma. A socket in one of tmux's own `dirs`
+/// (`$TMUX` inherited from a real tmux) is not grofe's (spec D12), so it
+/// names none and the caller falls back as if `$TMUX` were unset.
+pub fn tmux_env_socket(tmux: Option<&OsStr>, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let value = tmux?.as_bytes();
+    let first = value.split(|b| *b == b',').next()?;
+    if first.is_empty() {
+        return None;
+    }
+    let socket = PathBuf::from(OsStr::from_bytes(first));
+    refuse_tmux_socket(&socket, dirs).ok()?;
+    Some(socket)
 }
 
 /// Variables a job the server runs for `session` gets (`run-shell`,
@@ -429,6 +457,23 @@ fn logged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `$TMUX`'s socket is its first field; empty, comma-led and
+    /// tmux-directory values name none.
+    #[test]
+    fn tmux_env_socket_takes_the_first_field() {
+        let dirs = tmux_socket_dirs(None, 501);
+        let s = |v: &str| tmux_env_socket(Some(OsStr::new(v)), &dirs);
+        assert_eq!(
+            s("/run/grofe/default.sock,86444,1"),
+            Some(PathBuf::from("/run/grofe/default.sock"))
+        );
+        assert_eq!(s("/run/x.sock"), Some(PathBuf::from("/run/x.sock")));
+        assert_eq!(s(""), None);
+        assert_eq!(s(",1,0"), None);
+        assert_eq!(s("/tmp/tmux-501/default,1,0"), None);
+        assert_eq!(tmux_env_socket(None, &dirs), None);
+    }
 
     /// The CLI sends its stdin only for a `load-buffer -`, by any tmux
     /// name, anywhere in a `;` chain; natively by its own name only.

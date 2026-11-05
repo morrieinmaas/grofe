@@ -35,9 +35,12 @@ pub mod plugins;
 pub mod popup;
 pub mod prompt;
 pub mod render;
+pub mod restore;
+pub mod resume;
 pub mod screenimg;
 pub mod shell_jobs;
 pub mod sixel;
+pub mod snapshot;
 pub mod sources;
 pub mod status;
 pub mod tree;
@@ -82,10 +85,12 @@ pub(crate) struct CliIo {
     /// Its stdin, decoded; `None` when it sent none.
     pub stdin: Option<Vec<u8>>,
     pub umask: Option<u32>,
+    /// The requesting process (the socket peer), when the OS says.
+    pub pid: Option<i32>,
 }
 
 impl CliIo {
-    fn of(req: &Request) -> CliIo {
+    fn of(req: &Request, pid: Option<i32>) -> CliIo {
         use base64::Engine as _;
         CliIo {
             stdin: req
@@ -93,6 +98,7 @@ impl CliIo {
                 .as_deref()
                 .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
             umask: req.umask,
+            pid,
         }
     }
 }
@@ -386,11 +392,18 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             let place = state.model.place_of(p);
             let exited = Event::PaneExited { pane, uid, status };
             state.events.emit_at(exited, place);
-            state.model.pane_exited(pane, status);
-            hooks::pane_exited(state, pane, window);
-            if state.model.closed() {
-                state.exit = true;
+            // A restored pane whose resumed process exited is kept (T4.4).
+            if !restore::on_pane_exited(state, pane) {
+                state.model.pane_exited(pane, status);
+                hooks::pane_exited(state, pane, window);
+                if state.model.closed() {
+                    state.exit = true;
+                }
             }
+            // After restore's hook, which may have respawned the pane: a
+            // binding to the process that exited is cleared now, whether
+            // the pane is kept (`remain-on-exit`) or gone.
+            resume::on_pane_exited(state, pane);
             clients::changed(state);
         }
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),
@@ -441,6 +454,7 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
         socket.display()
     );
 
+    restore::take_request();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -612,6 +626,8 @@ async fn serve(
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
+    // Before ready: the starting CLI's command sees the restored sessions.
+    restore::at_start(&mut state);
     plugins::start(&mut state);
     signal_ready(&mut ready, "ok");
 
@@ -718,10 +734,16 @@ async fn actor(
             }
             _ = sigterm.recv() => {
                 eprintln!("grofe server: SIGTERM");
+                // Write the pre-signal state now, not from the writer's
+                // signal task, which may not run before the runtime stops.
+                snapshot::track(&mut state, false);
                 break;
             }
             _ = sigint.recv() => {
                 eprintln!("grofe server: SIGINT");
+                // Write the pre-signal state now, not from the writer's
+                // signal task, which may not run before the runtime stops.
+                snapshot::track(&mut state, false);
                 break;
             }
             // As tmux's server: SIGHUP (its terminal going away) is ignored.
@@ -734,6 +756,7 @@ async fn actor(
         clients::check_unattached(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
+        snapshot::track(&mut state, output);
         if state.exit {
             break;
         }
@@ -826,7 +849,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
-            state.cli_io = Some(CliIo::of(&req));
+            state.cli_io = Some(CliIo::of(&req, pid));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
@@ -896,6 +919,10 @@ fn finish(
     reply: oneshot::Sender<Reply>,
 ) {
     if state.exit {
+        // The final snapshot is written before the reply too: a CLI that
+        // saw it (or found the socket gone) may read `state.json` at once,
+        // and the actor loop's own write would come after.
+        snapshot::track(state, false);
         // Before replying, so a CLI that saw the reply finds no socket.
         state.remove_socket();
     }

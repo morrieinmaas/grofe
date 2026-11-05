@@ -31,6 +31,7 @@ pub mod lock;
 pub mod menu;
 pub mod options;
 pub mod pane;
+pub mod persist;
 pub mod plugins;
 pub mod popup;
 pub mod session;
@@ -356,6 +357,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::Refused(text) => Err(text),
         Command::ListPlugins(c) => plugins::list_plugins(state, ctx, c),
         Command::PluginRestart(c) => plugins::plugin_restart(state, ctx, c),
+        Command::PaneSetResume(c) => persist::pane_set_resume(state, ctx, c),
+        Command::RebootCheck(c) => persist::reboot_check(state, ctx, c),
         Command::Reload(c) => {
             let out = options::reload(state, ctx, c);
             server::sources::prune_unreferenced(state);
@@ -480,12 +483,29 @@ impl cmd::FormatVars for NoVars {
 pub(crate) fn spawn_pane(
     state: &mut State,
     // The window's session, passed in: a new window is not in the model yet.
+    place: (SessionId, WindowId),
+    env: Vec<(String, String)>,
+    argv: Option<Vec<String>>,
+    cwd: PathBuf,
+    size: (u16, u16),
+    cell_px: Option<(u16, u16)>,
+) -> Result<PaneId, String> {
+    let zero = std::time::Duration::ZERO;
+    spawn_pane_delayed(state, place, env, argv, cwd, size, cell_px, zero)
+}
+
+/// [`spawn_pane`] with the child spawned `delay` after its pty is
+/// allocated ([`PaneSpawn::delay`]): the restore stagger (T4.4).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_pane_delayed(
+    state: &mut State,
     (session, window): (SessionId, WindowId),
     env: Vec<(String, String)>,
     argv: Option<Vec<String>>,
     cwd: PathBuf,
     (cols, rows): (u16, u16),
     cell_px: Option<(u16, u16)>,
+    delay: std::time::Duration,
 ) -> Result<PaneId, String> {
     let id = state.model.alloc_pane_id();
     let cwd = usable_cwd(cwd);
@@ -513,6 +533,8 @@ pub(crate) fn spawn_pane(
         cell_px,
         graphics_ok: graphics::panes_graphics_ok(state),
         images: graphics::images_enabled(&state.model),
+        identity: state.model.identity,
+        delay,
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
@@ -524,6 +546,9 @@ pub(crate) fn spawn_pane(
             uid: Ulid::generate().to_string(),
             window,
             resume: argv.clone(),
+            resume_binding: None,
+            expect: None,
+            restored: false,
             argv,
             shell,
             cwd,

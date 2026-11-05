@@ -38,16 +38,13 @@ from a list rather than from memory. Add entries at the bottom, newest last.
 Found by the T3.6 acceptance suite; no need to log them again unless they
 hurt more than described.
 
-- **VS16 emoji width.** An emoji made wide by VS16 (`❤️`) is one cell in
-  grofe's emulator and two in Ghostty and WezTerm. grofe moves the cursor
-  absolutely after it, so the next cell does not drift, but the emoji can
-  overlap its right neighbour.
 - **`kitten icat --unicode-placeholder`** runs through grofe in the
   suite only where `kitten` is installed (T3.8's rule); the recorded
   placeholder fixture always runs. Try one image preview by hand in each
   terminal on day one and log what you see.
-- **XTVERSION** (`CSI > q`) from an app gets no reply (spec §8). An app that
-  waits for one without a DA1 fence would hang until its own timeout.
+
+Fixed since: VS16 emoji width (`❤️` is now two cells, as in Ghostty and
+WezTerm) and XTVERSION (`CSI > q` is answered with grofe's name and version).
 
 ## Entry template
 

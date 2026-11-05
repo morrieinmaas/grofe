@@ -145,6 +145,8 @@ pub(crate) struct Reader {
     pub(crate) to_actor: mpsc::Sender<PaneEvent>,
     /// Runs over every read before the emulator (T3.3).
     pub(crate) scanner: Scanner,
+    /// The XTVERSION reply, from the server's identity.
+    pub(crate) xtversion: Vec<u8>,
     /// See `PaneHandle::set_graphics_ok`.
     pub(crate) graphics_ok: Arc<AtomicBool>,
     /// See `PaneHandle::set_images`.
@@ -336,6 +338,11 @@ impl Reader {
         self.scanner.set_sixel(images);
         let (bytes, found) = self.scanner.scan_at(bytes);
         let found_marks = self.scanner.take_marks();
+        // XTVERSION, which the emulator does not answer, ahead of its
+        // replies as a graphics query's answer is.
+        for _ in 0..self.scanner.take_xtversion() {
+            self.reply(self.xtversion.clone());
+        }
         for (_, kind) in &found {
             if let PaneEventKind::Graphics(apc) = kind
                 && let Some(answer) = graphics::answer_query(apc, &self.graphics_ok)

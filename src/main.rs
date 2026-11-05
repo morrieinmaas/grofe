@@ -28,6 +28,37 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [args...]";
 
+/// `grofe --help`: the global options and the commands most sessions use.
+/// Every other tmux command name works too.
+const HELP: &str = "\
+usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
+
+Options:
+  -L socket-name   use the named server socket in grofe's socket directory
+  -S socket-path   use the server socket at this path
+  -V, --version    print grofe's version and exit
+  -h, --help       print this help and exit
+
+Common commands:
+  new-session (new)         start a session (and a server when none runs)
+  attach-session (attach)   attach to a session
+  list-sessions             list sessions
+  kill-session              kill a session
+  new-window (neww)         open a window
+  split-window (splitw)     split a pane
+  send-keys (send)          send keys to a pane
+  capture-pane (capturep)   print a pane's contents
+  display-message (display) print a message or format
+  source-file (source)      run a config file's commands
+  kill-server               stop the server and every session
+  show-config               show the merged config and where each value came from
+  import-tmux               convert a tmux.conf to grofe's config
+  layout                    bring up, save, list and pick layouts
+  control                   a stdio bridge to the server's protocol
+
+Commands take tmux's names and flags; `;` chains commands, as in tmux.
+";
+
 /// How long the CLI waits for a freshly started server to report ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -73,6 +104,8 @@ fn main() -> ExitCode {
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
+                    version: false,
+                    help: false,
                 };
                 // Never a socket in tmux's own directory (spec D12).
                 let dirs = grofe::compat::tmux_socket_dirs(
@@ -95,12 +128,17 @@ fn main() -> ExitCode {
             Err(e) => return fail(&e),
         }
     } else {
-        // `grofe -V`: grofe's own version, decided by `argv[0]` (spec D12).
-        if args.first().is_some_and(|a| a == "-V") {
-            println!("grofe {}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
-        }
         match parse_globals(&args) {
+            // `grofe -V`: grofe's own version, decided by `argv[0]` (spec
+            // D12); under the tmux name `-V` and `-h` are tmux's, above.
+            Ok((globals, _)) if globals.version => {
+                println!("grofe {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            Ok((globals, _)) if globals.help => {
+                print!("{HELP}");
+                return ExitCode::SUCCESS;
+            }
             Ok((globals, rest)) => (globals, rest.to_vec()),
             Err(e) => {
                 eprintln!("grofe: {e}\n{USAGE}");
@@ -125,6 +163,47 @@ fn main() -> ExitCode {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
+            // `start-server --restore` (spec §6): the server this starts
+            // restores the snapshot whatever the config says. A restore
+            // goes only into an empty server, and only at its start.
+            let restore = rest.get(1).is_some_and(|a| a == "--restore");
+            let rest: Vec<String> = rest
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !restore || *i != 1)
+                .map(|(_, a)| a.clone())
+                .collect();
+            let rest = rest.as_slice();
+            if restore {
+                if let Ok(stream) = UnixStream::connect(&socket) {
+                    let argv = ["list-sessions", "-F", "#{session_name}"].map(String::from);
+                    return match request(stream, &socket, &argv) {
+                        Ok(Reply::Ok { out, .. }) if !out.trim().is_empty() => {
+                            fail(server::restore::NOT_EMPTY)
+                        }
+                        // ponytail: an empty running server cannot be asked
+                        // to restore (no verb for it); the restore runs
+                        // only in a server this command starts.
+                        Ok(_) => fail(&format!(
+                            "a server is already running on {}: restore runs only at server start",
+                            socket.display()
+                        )),
+                        Err(e) => fail(&e),
+                    };
+                }
+                let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
+                if snapshot.exists() {
+                    // SAFETY: the CLI has started no thread yet, so nothing
+                    // reads the environment concurrently. The server it
+                    // starts inherits the variable.
+                    unsafe { std::env::set_var(server::restore::RESTORE_ENV, "1") };
+                } else {
+                    eprintln!(
+                        "grofe: no snapshot to restore at {}; starting an empty server",
+                        snapshot.display()
+                    );
+                }
+            }
             match connect_or_start(&socket, own_dir, false).and_then(|s| probe(s, &socket)) {
                 // tmux runs the rest of a `start-server \; ...` chain (TPM's
                 // `start-server \; show-option -gqv @tpm_plugins`); the
@@ -149,6 +228,21 @@ fn main() -> ExitCode {
             control_bridge(&globals.socket())
         }
         "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
+        // grofe's own verb (T4.5): the server reads the snapshot and answers;
+        // with no server there is nothing to lose, and none is started.
+        "reboot-check" if dialect() == Dialect::Grofe => {
+            let (socket, own_dir) = globals.resolve();
+            match UnixStream::connect(&socket) {
+                Ok(_) => one_shot(&socket, own_dir, rest),
+                Err(_) => {
+                    println!(
+                        "no server running on {}: nothing to check",
+                        socket.display()
+                    );
+                    ExitCode::SUCCESS
+                }
+            }
+        }
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
@@ -293,25 +387,32 @@ fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
 struct Globals {
     socket: Option<PathBuf>,
     name: Option<String>,
+    /// `-V` / `--version` among the global options.
+    version: bool,
+    /// `-h` / `--help` among the global options.
+    help: bool,
 }
 
 impl Globals {
-    /// `-S` wins, then `-L`, then `$GROFE` (set inside panes), then the
+    /// `-S` wins, then `-L`, then under the tmux name `$TMUX`'s socket (as
+    /// tmux 3.7b's `main`), then `$GROFE` (set inside panes), then the
     /// default socket.
     fn socket(&self) -> PathBuf {
         self.resolve().0
     }
 
     /// The socket path, and whether its directory is grofe's own (the
-    /// default or `-L` location) rather than one the user named with `-S`
-    /// or `$GROFE`. Only grofe's own directory is verified private, as tmux
-    /// does not police `-S` parents.
+    /// default or `-L` location) rather than one the user named with `-S`,
+    /// `$TMUX` or `$GROFE`. Only grofe's own directory is verified private,
+    /// as tmux does not police `-S` parents.
     fn resolve(&self) -> (PathBuf, bool) {
-        if self.socket.is_none()
-            && self.name.is_none()
-            && let Some(s) = std::env::var_os("GROFE").filter(|s| !s.is_empty())
-        {
-            return (PathBuf::from(s), false);
+        if self.socket.is_none() && self.name.is_none() {
+            if let Some(s) = tmux_env_socket() {
+                return (s, false);
+            }
+            if let Some(s) = std::env::var_os("GROFE").filter(|s| !s.is_empty()) {
+                return (PathBuf::from(s), false);
+            }
         }
         let env = Env::from_process();
         let path = paths::socket_path(&env, self.socket.as_deref(), self.name.as_deref());
@@ -319,10 +420,26 @@ impl Globals {
     }
 }
 
+/// Under the tmux name, the socket `$TMUX` names (spec D12: tools pass it
+/// around as tmux's), unless it is in tmux's own directory. Never under
+/// the grofe name, which has `$GROFE`.
+fn tmux_env_socket() -> Option<PathBuf> {
+    if dialect() != Dialect::Tmux {
+        return None;
+    }
+    let dirs = grofe::compat::tmux_socket_dirs(
+        std::env::var("TMUX_TMPDIR").ok().as_deref(),
+        nix::unistd::geteuid().as_raw(),
+    );
+    grofe::compat::tmux_env_socket(std::env::var_os("TMUX").as_deref(), &dirs)
+}
+
 fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     let mut globals = Globals {
         socket: None,
         name: None,
+        version: false,
+        help: false,
     };
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -341,6 +458,14 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
             "--" => {
                 i += 1;
                 break;
+            }
+            "-V" | "--version" => {
+                globals.version = true;
+                i += 1;
+            }
+            "-h" | "--help" => {
+                globals.help = true;
+                i += 1;
             }
             s if s.starts_with("-S") => {
                 globals.socket = Some(PathBuf::from(&s[2..]));
@@ -845,11 +970,7 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
     let stream = connect_attach()?;
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        pane: client_pane(
-            std::env::var_os("GROFE").as_deref(),
-            std::env::var("GROFE_PANE").ok().as_deref(),
-            socket,
-        ),
+        pane: cli_pane(socket),
         env: std::env::vars_os()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect(),
@@ -1108,6 +1229,24 @@ fn client_pane(grofe: Option<&OsStr>, grofe_pane: Option<&str>, target: &Path) -
     grofe_pane?.parse().ok()
 }
 
+/// This CLI's pane for a request to `target`: `$GROFE_PANE`, and under the
+/// tmux name `$TMUX_PANE` when `$TMUX` names `target` (a tool that kept
+/// only tmux's variables, spec D12), each trusted as [`client_pane`] says.
+fn cli_pane(target: &Path) -> Option<PaneId> {
+    client_pane(
+        std::env::var_os("GROFE").as_deref(),
+        std::env::var("GROFE_PANE").ok().as_deref(),
+        target,
+    )
+    .or_else(|| {
+        client_pane(
+            tmux_env_socket().as_deref().map(Path::as_os_str),
+            std::env::var("TMUX_PANE").ok().as_deref(),
+            target,
+        )
+    })
+}
+
 /// Sends the control hello and one request, and reads until its reply.
 ///
 /// `target` is the socket this request is being sent to, used to decide
@@ -1172,11 +1311,7 @@ fn control_hello(target: &Path) -> Result<String, String> {
 
 /// [`control_hello`], sending this CLI's pane only when `with_pane`.
 fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
-    let pane = client_pane(
-        std::env::var_os("GROFE").as_deref(),
-        std::env::var("GROFE_PANE").ok().as_deref(),
-        target,
-    );
+    let pane = cli_pane(target);
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: pane.filter(|_| with_pane),

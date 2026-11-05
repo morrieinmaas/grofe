@@ -15,14 +15,14 @@ use super::{
     DisplayPopup, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
     ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
-    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan, PaneSetup,
-    ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart, PromptHistory, RefreshClient,
-    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
-    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
-    SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
-    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile,
-    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
+    PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart,
+    PromptHistory, RebootCheck, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
+    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
+    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess, SetBuffer,
+    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
+    ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
+    SwapWindow, SwitchClient, Target, UnbindKey, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -935,7 +935,8 @@ const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
     ('o', FlagKind::Bool),
     ('U', FlagKind::Bool),
 ];
-const SET_OPTION_LONG: &[(&str, FlagKind)] = &[("persist", FlagKind::Bool)];
+const SET_OPTION_LONG: &[(&str, FlagKind)] =
+    &[("persist", FlagKind::Bool), ("no-persist", FlagKind::Bool)];
 
 /// Resolves `-g -s -w -p` to a scope, by tmux's own precedence: never an
 /// error, just a fixed order of preference over whichever flags were
@@ -989,6 +990,7 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
         unset: flags.present.contains(&'u') || flags.present.contains(&'U'),
         unset_panes: flags.present.contains(&'U'),
         persist: flags.long_present.contains("persist"),
+        no_persist: flags.long_present.contains("no-persist"),
         target: target_or_current(&flags.values, 't')?,
         name,
         value,
@@ -1111,6 +1113,102 @@ fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 const SUBSCRIBE_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
+
+const PANE_SET_RESUME_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('u', FlagKind::Bool)];
+
+/// `pane-set-resume [-t pane] [-u] [--expect <reason>] [-- argv...]` (T4.2,
+/// spec §6). `--expect` is the one long flag here that takes a value,
+/// which `tokenize` does not do, so it is taken out first: from the flags
+/// before `--` or the first positional, as `--expect <reason>` or
+/// `--expect=<reason>`.
+fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
+    const NAME: &str = "pane-set-resume";
+    let mut rest = Vec::with_capacity(argv.len());
+    let mut expect = None;
+    let mut i = 0;
+    while i < argv.len() {
+        let tok = argv[i].as_str();
+        if tok == "--" || !tok.starts_with('-') || tok == "-" {
+            rest.extend_from_slice(&argv[i..]);
+            break;
+        }
+        if tok == "--expect" {
+            let reason = argv
+                .get(i + 1)
+                .ok_or_else(|| ParseError::Other(format!("{NAME}: --expect needs a reason")))?;
+            expect = Some(reason.clone());
+            i += 2;
+            continue;
+        }
+        if let Some(reason) = tok.strip_prefix("--expect=") {
+            expect = Some(reason.to_string());
+            i += 1;
+            continue;
+        }
+        rest.push(argv[i].clone());
+        // `-t` takes the next word as its value, even one like `--expect`.
+        if tok == "-t"
+            && let Some(value) = argv.get(i + 1)
+        {
+            rest.push(value.clone());
+            i += 1;
+        }
+        i += 1;
+    }
+    let flags = tokenize(
+        &rest,
+        &FlagTable {
+            short: PANE_SET_RESUME_SHORT,
+            long: &[],
+        },
+        NAME,
+    )?;
+    let unset = flags.present.contains(&'u');
+    let argv = flags.positionals;
+    let given = [unset, expect.is_some(), !argv.is_empty()]
+        .iter()
+        .filter(|&&g| g)
+        .count();
+    if given != 1 {
+        return Err(ParseError::Other(format!(
+            "{NAME}: give one of an argv after --, -u or --expect <reason>"
+        )));
+    }
+    if expect.as_deref() == Some("") {
+        return Err(ParseError::Other(format!(
+            "{NAME}: --expect needs a reason"
+        )));
+    }
+    Ok(Command::PaneSetResume(PaneSetResume {
+        target: target_or_current(&flags.values, 't')?,
+        unset,
+        expect,
+        argv,
+    }))
+}
+
+const REBOOT_CHECK_LONG: &[(&str, FlagKind)] = &[("json", FlagKind::Bool)];
+
+/// `reboot-check [--json]` (T4.5, spec §6).
+fn parse_reboot_check(argv: &[String]) -> Result<Command, ParseError> {
+    const NAME: &str = "reboot-check";
+    let flags = tokenize(
+        argv,
+        &FlagTable {
+            short: &[],
+            long: REBOOT_CHECK_LONG,
+        },
+        NAME,
+    )?;
+    if let Some(word) = flags.positionals.first() {
+        return Err(ParseError::Other(format!(
+            "{NAME}: unexpected argument {word}"
+        )));
+    }
+    Ok(Command::RebootCheck(RebootCheck {
+        json: flags.long_present.contains("json"),
+    }))
+}
 
 fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
     let flags = tokenize(
@@ -3716,6 +3814,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "reload" => parse_reload(rest),
         "list-plugins" => parse_list_plugins(rest),
         "plugin-restart" => parse_plugin_restart(rest),
+        "pane-set-resume" => parse_pane_set_resume(rest),
+        "reboot-check" => parse_reboot_check(rest),
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
         "select-layout" => parse_select_layout(rest),
@@ -4663,6 +4763,7 @@ mod tests {
                 unset: false,
                 unset_panes: false,
                 persist: true,
+                no_persist: false,
                 target: Target::Current,
                 name: "history-limit".to_string(),
                 value: Some("50000".to_string()),
@@ -4685,6 +4786,7 @@ mod tests {
                 unset: true,
                 unset_panes: false,
                 persist: false,
+                no_persist: false,
                 target: Target::Current,
                 name: "@my-opt".to_string(),
                 value: None,
@@ -4695,6 +4797,108 @@ mod tests {
                 shown: None,
             })
         );
+    }
+
+    #[test]
+    fn set_option_no_persist_is_parsed() {
+        let Ok(Command::SetOption(c)) = parse(&argv(&["set", "-p", "--no-persist", "@a", "y"]))
+        else {
+            panic!("not a set-option");
+        };
+        assert!(c.no_persist && !c.persist);
+    }
+
+    #[test]
+    fn pane_set_resume_parses_its_three_forms() {
+        let pane = parse_target("%1").expect("target");
+        assert_eq!(
+            parse(&argv(&[
+                "pane-set-resume",
+                "-t",
+                "%1",
+                "--",
+                "agent",
+                "--resume",
+                "a"
+            ])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                target: pane.clone(),
+                argv: argv(&["agent", "--resume", "a"]),
+                ..PaneSetResume::default()
+            }))
+        );
+        // Without `--`, the first word that is not a flag starts the argv.
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "nvim", "-S", "s.vim"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                argv: argv(&["nvim", "-S", "s.vim"]),
+                ..PaneSetResume::default()
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "-t", "%1", "-u"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                target: pane.clone(),
+                unset: true,
+                ..PaneSetResume::default()
+            }))
+        );
+        for form in [
+            &["pane-set-resume", "--expect", "no id", "-t", "%1"][..],
+            &["pane-set-resume", "-t", "%1", "--expect=no id"][..],
+        ] {
+            assert_eq!(
+                parse(&argv(form)),
+                Ok(Command::PaneSetResume(PaneSetResume {
+                    target: pane.clone(),
+                    expect: Some("no id".to_string()),
+                    ..PaneSetResume::default()
+                })),
+                "{form:?}"
+            );
+        }
+        // A word after `--` that looks like `--expect` is the argv's.
+        assert_eq!(
+            parse(&argv(&["pane-set-resume", "--", "a", "--expect", "x"])),
+            Ok(Command::PaneSetResume(PaneSetResume {
+                argv: argv(&["a", "--expect", "x"]),
+                ..PaneSetResume::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn pane_set_resume_takes_exactly_one_form() {
+        for bad in [
+            &["pane-set-resume"][..],
+            &["pane-set-resume", "-u", "--", "a"][..],
+            &["pane-set-resume", "--expect", "x", "--", "a"][..],
+            &["pane-set-resume", "-u", "--expect", "x"][..],
+            &["pane-set-resume", "--expect"][..],
+            &["pane-set-resume", "--expect", ""][..],
+            &["pane-set-resume", "--bogus", "--", "a"][..],
+        ] {
+            assert!(parse(&argv(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn reboot_check_takes_json_and_nothing_else() {
+        assert_eq!(
+            parse(&argv(&["reboot-check"])),
+            Ok(Command::RebootCheck(RebootCheck { json: false }))
+        );
+        assert_eq!(
+            parse(&argv(&["reboot-check", "--json"])),
+            Ok(Command::RebootCheck(RebootCheck { json: true }))
+        );
+        for bad in [
+            &["reboot-check", "--bogus"][..],
+            &["reboot-check", "-x"][..],
+            &["reboot-check", "word"][..],
+        ] {
+            assert!(parse(&argv(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

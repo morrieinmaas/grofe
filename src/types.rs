@@ -104,7 +104,8 @@ pub struct Rect {
 }
 
 /// The direction a layout cell is split in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Dir {
     Horizontal,
     #[default]

@@ -85,8 +85,9 @@ ordinary programs in whatever language you like.
 >   `*.conf` files are read as tmux config only when the request comes
 >   through the `tmux` name or the server has tmux identity.
 > - **Copy mode and paste buffers** (`copy-mode`, `send-keys -X`, the
->   `*-buffer` commands) work, with tmux 3.7b's `copy-mode-vi` table. Only
->   the vi keys are there; `mode-keys emacs` has no table.
+>   `*-buffer` commands) work, with tmux 3.7b's stock `copy-mode-vi` and
+>   `copy-mode` (emacs) tables. Under the `tmux` name `mode-keys` defaults
+>   to `emacs`, as in tmux (`vi` when `$VISUAL` or `$EDITOR` names a vi).
 > - **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
 >   config with `grofe import-tmux` first.
 > - **Out of scope:** tmux's control mode (`-C` and `-CC`). A window linked

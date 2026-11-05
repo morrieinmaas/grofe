@@ -186,8 +186,78 @@ macro_rules! forward {
     };
 }
 
+/// Variation selector 16: the character before it takes emoji
+/// presentation.
+const VS16: char = '\u{FE0F}';
+
+/// A width-2 character [`Written::widen_for_vs16`] writes in place of the
+/// base, so the emulator lays out a wide pair, then puts the base back.
+const WIDE_STAND_IN: char = '\u{3000}';
+
+impl<L: EventListener> Written<'_, L> {
+    /// VS16 after a narrow base with an emoji presentation (`❤️`) makes it
+    /// two cells, as Ghostty and WezTerm draw it; alacritty would only add
+    /// VS16 to the cell. The base is written again as a wide pair from its
+    /// own cell, wrapping as a wide character does. Returns whether it did.
+    fn widen_for_vs16(&mut self) -> bool {
+        let cols = self.0.columns();
+        let mode = *self.0.mode();
+        let grid = self.0.grid();
+        let at = grid.cursor.point;
+        let col = if grid.cursor.input_needs_wrap {
+            at.column.0
+        } else if at.column.0 == 0 {
+            // The base would be on the line above: left as alacritty has it.
+            return false;
+        } else {
+            at.column.0 - 1
+        };
+        let base = &grid[at.line][Column(col)];
+        let spacers = CellFlags::WIDE_CHAR
+            | CellFlags::WIDE_CHAR_SPACER
+            | CellFlags::LEADING_WIDE_CHAR_SPACER;
+        let narrow = unicode_width::UnicodeWidthChar::width(base.c) == Some(1);
+        let pair = format!("{}{VS16}", base.c);
+        if base.flags.intersects(spacers)
+            || base.zerowidth().is_some()
+            || !narrow
+            || unicode_width::UnicodeWidthStr::width(pair.as_str()) != 2
+            // With no wrap a wide pair cannot start in the last column.
+            || (!mode.contains(TermMode::LINE_WRAP) && col + 1 >= cols)
+            || cols < 2
+        {
+            return false;
+        }
+        let base = base.clone();
+        let grid = self.0.grid_mut();
+        grid.cursor.point.column = Column(col);
+        grid.cursor.input_needs_wrap = false;
+        if mode.contains(TermMode::INSERT) {
+            // The base goes, and the wide pair's insert shifts the rest of
+            // the line two cells: one more than the base did.
+            Handler::delete_chars(&mut *self.0, 1);
+        }
+        let template = std::mem::replace(&mut self.0.grid_mut().cursor.template, base.clone());
+        self.input(WIDE_STAND_IN);
+        let grid = self.0.grid_mut();
+        grid.cursor.template = template;
+        let at = grid.cursor.point;
+        let wide = at
+            .column
+            .0
+            .saturating_sub(if grid.cursor.input_needs_wrap { 1 } else { 2 });
+        let cell = &mut grid[at.line][Column(wide)];
+        cell.c = base.c;
+        cell.push_zerowidth(VS16);
+        true
+    }
+}
+
 impl<L: EventListener> Handler for Written<'_, L> {
     fn input(&mut self, c: char) {
+        if c == VS16 && self.widen_for_vs16() {
+            return;
+        }
         // Where the character lands, for a sixel it would overwrite.
         let target = self.2.as_ref().filter(|s| s.has_sixel()).and_then(|_| {
             let (p, at) = (self.probe()?, self.point());
@@ -496,6 +566,7 @@ impl<L: EventListener> Handler for Written<'_, L> {
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::index::Line;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
@@ -562,6 +633,106 @@ mod tests {
         assert_eq!(rig.row(), Some(4));
         rig.feed(scroll);
         rig.row()
+    }
+
+    /// Row `line`'s cells as (char, zero-width chars, wide, spacer).
+    fn cells(rig: &Rig, line: i32) -> Vec<(char, Vec<char>, bool, bool)> {
+        (0..COLS)
+            .map(|c| {
+                let cell = &rig.term.grid()[Line(line)][Column(c)];
+                (
+                    cell.c,
+                    cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+                    cell.flags.contains(CellFlags::WIDE_CHAR),
+                    cell.flags.contains(CellFlags::WIDE_CHAR_SPACER),
+                )
+            })
+            .collect()
+    }
+
+    fn cursor(rig: &Rig) -> (i32, usize) {
+        let p = rig.term.grid().cursor.point;
+        (p.line.0, p.column.0)
+    }
+
+    const VS16: char = '\u{FE0F}';
+
+    /// `❤️` (U+2764 U+FE0F) takes two cells, as Ghostty and WezTerm draw
+    /// it, so the next character lands after it.
+    #[test]
+    fn vs16_widens_an_emoji_capable_base() {
+        let mut rig = Rig::new(0);
+        rig.feed("\u{2764}\u{FE0F}x");
+        let row = cells(&rig, 0);
+        assert_eq!(row[0], ('\u{2764}', vec![VS16], true, false));
+        assert_eq!(row[1], (' ', vec![], false, true));
+        assert_eq!(row[2], ('x', vec![], false, false));
+        assert_eq!(cursor(&rig), (0, 3));
+        // The spacer counts as written, as any wide char's does.
+        assert_eq!(used(&rig.term.grid()[Line(0)]), 3);
+        // Kept with the SGR the base was drawn in.
+        let mut rig = Rig::new(0);
+        rig.feed("\x1b[31m\u{2764}\x1b[0m\u{FE0F}");
+        let cell = &rig.term.grid()[Line(0)][Column(0)];
+        assert_eq!(cell.fg, Color::Named(NamedColor::Red));
+        assert_eq!(cursor(&rig), (0, 2));
+    }
+
+    /// Without VS16 the same base is one cell, and VS16 changes nothing
+    /// after a base with no emoji presentation, or one already wide.
+    #[test]
+    fn vs16_leaves_other_bases_alone() {
+        let mut rig = Rig::new(0);
+        rig.feed("\u{2764}x");
+        assert_eq!(cells(&rig, 0)[0], ('\u{2764}', vec![], false, false));
+        assert_eq!(cells(&rig, 0)[1].0, 'x');
+        assert_eq!(cursor(&rig), (0, 2));
+
+        let mut rig = Rig::new(0);
+        rig.feed("a\u{FE0F}x");
+        assert_eq!(cells(&rig, 0)[0], ('a', vec![VS16], false, false));
+        assert_eq!(cursor(&rig), (0, 2));
+
+        let mut rig = Rig::new(0);
+        rig.feed("\u{1F600}\u{FE0F}x");
+        let row = cells(&rig, 0);
+        assert_eq!(row[0], ('\u{1F600}', vec![VS16], true, false));
+        assert_eq!((row[1].3, row[2].0), (true, 'x'));
+        assert_eq!(cursor(&rig), (0, 3));
+    }
+
+    /// A base in the last column no longer fits once wide: it wraps, as a
+    /// wide character does, leaving a leading spacer.
+    #[test]
+    fn vs16_in_the_last_column_wraps() {
+        let mut rig = Rig::new(0);
+        rig.feed("abcd\u{2764}\u{FE0F}x");
+        let top = &rig.term.grid()[Line(0)][Column(COLS - 1)];
+        assert!(top.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER));
+        let row = cells(&rig, 1);
+        assert_eq!(row[0], ('\u{2764}', vec![VS16], true, false));
+        assert_eq!((row[1].3, row[2].0), (true, 'x'));
+        assert_eq!(cursor(&rig), (1, 3));
+
+        // In the second last column it just fits, and the cursor waits.
+        let mut rig = Rig::new(0);
+        rig.feed("abc\u{2764}\u{FE0F}");
+        let row = cells(&rig, 0);
+        assert_eq!(row[3], ('\u{2764}', vec![VS16], true, false));
+        assert!(row[4].3);
+        assert!(rig.term.grid().cursor.input_needs_wrap);
+    }
+
+    /// Insert mode shifts the rest of the line one more cell, not two.
+    #[test]
+    fn vs16_in_insert_mode_shifts_by_the_extra_cell() {
+        let mut rig = Rig::new(0);
+        rig.feed("xy\r\x1b[4h\u{2764}\u{FE0F}");
+        let row = cells(&rig, 0);
+        assert_eq!(row[0], ('\u{2764}', vec![VS16], true, false));
+        assert!(row[1].3);
+        assert_eq!((row[2].0, row[3].0, row[4].0), ('x', 'y', ' '));
+        assert_eq!(cursor(&rig), (0, 2));
     }
 
     #[test]

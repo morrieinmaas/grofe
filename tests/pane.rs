@@ -36,6 +36,8 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         cell_px: None,
         graphics_ok: false,
         images: false,
+        identity: Default::default(),
+        delay: std::time::Duration::ZERO,
     }
 }
 
@@ -336,6 +338,30 @@ async fn snapshot_rows_copies_cells() {
     assert_eq!(row.len(), 80);
     assert_eq!(row[0].c, 'A');
     assert!(row[0].flags.contains(grofe::server::pane::CellFlags::BOLD));
+}
+
+/// A pane's `❤️` (U+2764 U+FE0F) is a wide pair and the cursor ends two
+/// cells on; a bare `❤` stays one cell.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vs16_emoji_takes_two_cells() {
+    use grofe::server::pane::CellFlags;
+    let p = sh(
+        1,
+        "printf '\\342\\235\\244\\357\\270\\217x\\n\\342\\235\\244y'; sleep 5",
+    );
+    wait_screen(&p.handle, "y").await;
+    let snap = p.handle.snapshot_rows(0..2);
+    let (top, bottom) = (&snap.rows[0], &snap.rows[1]);
+    assert_eq!(
+        (top[0].c, top[0].zerowidth.as_slice()),
+        ('\u{2764}', &['\u{FE0F}'][..])
+    );
+    assert!(top[0].flags.contains(CellFlags::WIDE_CHAR));
+    assert!(top[1].flags.contains(CellFlags::WIDE_CHAR_SPACER));
+    assert_eq!(top[2].c, 'x');
+    assert_eq!((bottom[0].c, bottom[1].c), ('\u{2764}', 'y'));
+    assert!(!bottom[0].flags.contains(CellFlags::WIDE_CHAR));
+    assert_eq!((snap.cursor.row, snap.cursor.col), (1, 2));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
