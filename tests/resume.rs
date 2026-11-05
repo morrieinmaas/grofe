@@ -419,3 +419,66 @@ fn with_no_server_it_fails_and_starts_nothing() {
     assert!(!srv.is_running());
     assert_eq!(srv.server_starts(), 0);
 }
+
+#[test]
+fn every_set_and_clear_raises_resume_changed() {
+    let f = Fixture::new();
+    f.srv
+        .cmd(&["set-hook", "-g", "resume-changed", "set -g -a @rc x"])
+        .expect("set-hook");
+    let count = || {
+        f.srv
+            .cmd(&["show-options", "-gqv", "@rc"])
+            .unwrap_or_default()
+            .trim()
+            .len()
+    };
+    f.launch_agent("main", "h");
+    f.srv
+        .cmd(&[
+            "pane-set-resume",
+            "-t",
+            "main",
+            "--",
+            "fake-agent",
+            "--resume",
+            "h",
+        ])
+        .expect("set");
+    f.srv
+        .wait_for(|| count() == 1, WAIT)
+        .expect("raised on set");
+    f.srv
+        .cmd(&[
+            "pane-set-resume",
+            "-t",
+            "main",
+            "--",
+            "fake-agent",
+            "--resume",
+            "h",
+        ])
+        .expect("the same again");
+    f.srv
+        .cmd(&["pane-set-resume", "-t", "main", "--expect", "no id"])
+        .expect("expect");
+    f.srv
+        .wait_for(|| count() == 2, WAIT)
+        .expect("raised on expect");
+    f.srv.cmd(&["send-keys", "-t", "main", "C-c"]).expect("C-c");
+    f.srv
+        .wait_for(|| count() == 3, CLEARED_WITHIN + WAIT)
+        .expect("raised when its process went");
+    f.srv
+        .cmd(&["pane-set-resume", "-t", "main", "--", "/bin/sleep", "9"])
+        .expect("set");
+    f.srv
+        .cmd(&["pane-set-resume", "-t", "main", "-u"])
+        .expect("-u");
+    f.srv
+        .wait_for(|| count() == 5, WAIT)
+        .expect("raised on set and -u");
+    // Nothing that changes nothing raises it.
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(count(), 5);
+}

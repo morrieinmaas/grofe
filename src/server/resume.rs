@@ -238,12 +238,11 @@ fn update(
     }
 }
 
-/// The one place `resume-changed` is raised from.
-// ponytail: `resume-changed` is in `hooks::EVENTS`, but hooks has no
-// public way to fire a pane's notify hook and the event stream has no
-// variant for it, so nothing is delivered yet; every set and clear
-// passes through here, so wiring it is one call.
-fn raise_changed(_state: &mut State, _pane: PaneId) {}
+/// The one place `resume-changed` is raised from: every set and clear
+/// here, a clear for a gone process included, passes through it.
+fn raise_changed(state: &mut State, pane: PaneId) {
+    hooks::resume_changed(state, pane);
+}
 
 /// Clears every binding whose process is gone; whether any remain.
 pub fn sweep(state: &mut State) -> bool {
