@@ -70,6 +70,20 @@ pub fn bind_root(pane: &mut Pane) {
     };
 }
 
+/// After [`bind_root`] at a spawn or respawn, with the actor's state:
+/// raises `resume-changed` when the pane's resume or expectation differs
+/// from `before` (a new pane had neither), and starts the sampling timer
+/// for the new binding.
+pub fn spawned(state: &mut State, pane: PaneId, before: (Option<Vec<String>>, Option<String>)) {
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    if (p.resume.as_ref(), p.expect.as_ref()) != (before.0.as_ref(), before.1.as_ref()) {
+        raise_changed(state, pane);
+    }
+    watch(state);
+}
+
 /// `pane-set-resume`: what to record for the target pane.
 pub enum Set {
     Resume(Vec<String>),

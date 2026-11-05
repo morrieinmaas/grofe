@@ -482,3 +482,83 @@ fn every_set_and_clear_raises_resume_changed() {
     thread::sleep(Duration::from_millis(300));
     assert_eq!(count(), 5);
 }
+
+/// A resume from a spawn command is bound to the pane's root process:
+/// when that process exits and the pane stays (`remain-on-exit`), the
+/// resume is cleared in the same step that marks the pane dead (the
+/// actor's exit handling), and `resume-changed` is raised for the spawn
+/// and for the clear.
+#[test]
+fn a_spawn_command_resume_clears_when_its_process_exits_and_the_pane_stays() {
+    let f = Fixture::new();
+    f.srv
+        .cmd(&["set-option", "-g", "remain-on-exit", "on"])
+        .expect("remain-on-exit");
+    f.srv
+        .cmd(&["set-hook", "-g", "resume-changed", "set -g -a @rc x"])
+        .expect("set-hook");
+    let count = || {
+        f.srv
+            .cmd(&["show-options", "-gqv", "@rc"])
+            .unwrap_or_default()
+            .trim()
+            .len()
+    };
+    let agent = f.agent();
+    let pane = f
+        .srv
+        .cmd(&[
+            "new-window",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "main",
+            "--",
+            &agent,
+            "--session-id",
+            "x",
+        ])
+        .expect("new-window");
+    let pane = pane.trim().to_string();
+    f.srv
+        .wait_for(|| f.transcript("x").contains("launch x"), WAIT)
+        .expect("the agent launched");
+    assert_eq!(f.resume(&pane), format!("{agent} --session-id x"));
+    f.srv
+        .wait_for(|| count() == 1, WAIT)
+        .expect("raised for the spawn");
+    f.srv.cmd(&["send-keys", "-t", &pane, "C-c"]).expect("C-c");
+    // Dead and resume read in one request, so one actor step: a dead pane
+    // never shows the resume of the process that exited.
+    let state = || f.fmt(&pane, "#{pane_dead}|#{pane_resume}");
+    let started = std::time::Instant::now();
+    loop {
+        let now = state();
+        if now == "1|" {
+            break;
+        }
+        assert_eq!(
+            now,
+            format!("0|{agent} --session-id x"),
+            "dead before cleared"
+        );
+        assert!(started.elapsed() < WAIT, "the agent never exited: {now}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    f.srv
+        .wait_for(|| count() == 2, WAIT)
+        .expect("raised for the clear");
+    // `respawn-pane <cmd>` binds the new command to the new root, and its
+    // exit clears it the same way.
+    f.srv
+        .cmd(&["respawn-pane", "-t", &pane, "--", "/bin/sleep", "1"])
+        .expect("respawn-pane");
+    assert_eq!(f.resume(&pane), "/bin/sleep 1");
+    f.srv
+        .wait_for(|| state() == "1|", WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {}", state()));
+    f.srv
+        .wait_for(|| count() == 4, WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {} raised", count()));
+}

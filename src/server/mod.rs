@@ -397,6 +397,10 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
                     state.exit = true;
                 }
             }
+            // After restore's hook, which may have respawned the pane: a
+            // binding to the process that exited is cleared now, whether
+            // the pane is kept (`remain-on-exit`) or gone.
+            resume::on_pane_exited(state, pane);
             clients::changed(state);
         }
         PaneEventKind::Output(bytes) => state.events.emit(Event::pane_output(pane, &bytes)),

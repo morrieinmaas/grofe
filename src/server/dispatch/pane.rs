@@ -94,6 +94,7 @@ fn split_window(state: &mut State, ctx: &ClientCtx, c: SplitWindow) -> Result<St
     if let Some(p) = state.model.panes.get_mut(&new) {
         crate::server::resume::bind_root(p);
     }
+    crate::server::resume::spawned(state, new, Default::default());
     let model = &mut state.model;
     let Some(w) = model.windows.get_mut(&window) else {
         model.panes.remove(&new);
@@ -537,6 +538,7 @@ pub(crate) fn respawn(
         (session, state.model.panes[&pane].window),
         &handle,
     );
+    let mut before = Default::default();
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
         // process (`-k`), and stops its tasks. An `Exited` its reader had
@@ -546,9 +548,11 @@ pub(crate) fn respawn(
         p.dead = None;
         p.cwd = cwd;
         p.argv = argv.clone();
+        before = (p.resume.take(), p.expect.clone());
         p.resume = argv;
         crate::server::resume::bind_root(p);
     }
+    crate::server::resume::spawned(state, pane, before);
     Ok(())
 }
 
