@@ -22,7 +22,7 @@ use crate::cmd::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 use crate::event::Place;
 use crate::protocol::ClientCtx;
 use crate::server::borders::PaneStatus;
-use crate::server::dispatch::options::{self, Options, REMAIN_ON_EXIT};
+use crate::server::dispatch::options::{self, Options, Owner, REMAIN_ON_EXIT};
 use crate::server::layout::LayoutTree;
 use crate::server::pane::PaneHandle;
 use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
@@ -107,6 +107,15 @@ pub struct Window {
     /// `pane-border-status` as last applied (`clients::sync_pane_status`):
     /// the panes along the top or bottom edge give up a row to their title.
     pub pane_status: PaneStatus,
+    /// `pane-frames` and `pane-gap` as last applied ([`Window::set_frames`],
+    /// which keeps the layout's pad in step): each tiled pane framed, with
+    /// `pane_gap` cells between frames and around the outer ones (spec
+    /// 2026-11-05-frames.md).
+    pub frames: bool,
+    pub pane_gap: u16,
+    /// Where a pane being dragged would land, a content rect: set by the
+    /// mouse move (FR.3), drawn as a frame around it (FR.2).
+    pub drop_preview: Option<Rect>,
 }
 
 /// Panes' `active_point`s, drawn from one counter for the whole server as
@@ -193,6 +202,61 @@ impl Window {
         }
     }
 
+    /// Frames the tiles, or not, with `gap` cells between them: the
+    /// contract fields and the layout's pad together. The caller lays the
+    /// window out again ([`Model::relayout`]).
+    pub fn set_frames(&mut self, frames: bool, gap: u16) {
+        self.frames = frames;
+        self.pane_gap = gap;
+        self.layout.set_pad(if frames { 1 + gap } else { 0 });
+    }
+
+    /// The cells a zoomed pane is inset by on every side: its frame and
+    /// the gap, or 0 unframed or when the window is too small to frame
+    /// it (a content rect below 1x1).
+    fn zoom_pad(&self) -> u16 {
+        let pad = self.layout.pad();
+        let fits = |len: u16| u32::from(len) > 2 * u32::from(pad);
+        if pad > 0 && fits(self.cols) && fits(self.rows) {
+            pad
+        } else {
+            0
+        }
+    }
+
+    /// Whether the window's panes are framed on this redraw: `pane-frames`
+    /// on and the window big enough to frame them all. Otherwise they have
+    /// tmux's shared borders ([`LayoutTree::borders`]).
+    pub fn framed(&self) -> bool {
+        if self.zoomed {
+            self.zoom_pad() > 0
+        } else {
+            self.layout.pad_on(self.area()) > 0
+        }
+    }
+
+    /// Each visible tiled pane's frame rect, in pane order: its content
+    /// rect grown by the frame's one cell on every side (the zoomed pane's
+    /// alone when zoomed). Empty when the window is not [`Self::framed`].
+    pub fn frame_rects(&self) -> Vec<(PaneId, Rect)> {
+        if !self.framed() {
+            return Vec::new();
+        }
+        self.pane_rects()
+            .into_iter()
+            .filter(|(id, _)| *id != HOLE)
+            .map(|(id, r)| {
+                let frame = Rect {
+                    x: r.x - 1,
+                    y: r.y - 1,
+                    cols: r.cols + 2,
+                    rows: r.rows + 2,
+                };
+                (id, frame)
+            })
+            .collect()
+    }
+
     /// `r`, a layout cell's rect, less the row a border status takes from
     /// the panes along the top (or bottom) edge, as tmux's
     /// `layout_fix_panes` does.
@@ -212,17 +276,31 @@ impl Window {
     }
 
     /// The tiled panes and their content rects in the layout.
+    /// With frames on, `pane-border-status` has no effect: the title is
+    /// drawn in the frame.
     pub fn tiled_rects(&self) -> Vec<(PaneId, Rect)> {
+        let area = self.area();
+        let framed = self.layout.pad_on(area) > 0;
         self.layout
-            .compute(self.area())
+            .compute(area)
             .into_iter()
-            .map(|(id, r)| (id, self.edge_adjusted(r)))
+            .map(|(id, r)| (id, if framed { r } else { self.edge_adjusted(r) }))
             .collect()
     }
 
-    /// The rect the zoomed pane fills.
+    /// The rect the zoomed pane fills: the window, or framed, the window
+    /// inset by the frame and the gap on every side.
     pub fn zoom_rect(&self) -> Rect {
-        self.edge_adjusted(self.area())
+        let pad = self.zoom_pad();
+        if pad == 0 {
+            return self.edge_adjusted(self.area());
+        }
+        Rect {
+            x: pad,
+            y: pad,
+            cols: self.cols - 2 * pad,
+            rows: self.rows - 2 * pad,
+        }
     }
 
     /// The panes on show and their content rects: the layout's, or only
@@ -398,9 +476,66 @@ impl Model {
     pub fn insert_window(&mut self, mut window: Window) {
         let (id, session, index) = (window.id, window.session, window.index);
         window.links.clear();
+        let (frames, gap) = self.frame_options(&[Owner::Window(id), Owner::Session(session)]);
+        window.set_frames(frames, gap);
         self.windows.insert(id, window);
         self.add_link(session, id, index);
         self.sync_group(session);
+    }
+
+    /// `pane-frames` and `pane-gap` as `chain` (then global) sets them.
+    fn frame_options(&self, chain: &[Owner]) -> (bool, u16) {
+        let frames = self.options.lookup("pane-frames", chain) == Some("on");
+        let gap = self
+            .options
+            .lookup("pane-gap", chain)
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(0);
+        (frames, gap)
+    }
+
+    /// Gives every window the `pane-frames` and `pane-gap` its options now
+    /// say, laying out again each one that changed. Run when either option
+    /// changes anywhere (`options::option_changed`).
+    // ponytail: only then and when a window is made; a window moved to a
+    // session that sets them differently keeps its own until the next
+    // change of either.
+    pub fn sync_frames(&mut self) {
+        let wanted: Vec<(WindowId, (bool, u16))> = self
+            .windows
+            .values()
+            .map(|w| (w.id, self.frame_options(&options::chain(self, w.active))))
+            .filter(|(id, want)| {
+                let w = &self.windows[id];
+                (w.frames, w.pane_gap) != *want
+            })
+            .collect();
+        for (id, (frames, gap)) in wanted {
+            if let Some(w) = self.windows.get_mut(&id) {
+                w.set_frames(frames, gap);
+            }
+            self.relayout(id);
+            self.fit_zoomed(id);
+        }
+    }
+
+    /// A zoomed window's pane sized to the zoom rect, which
+    /// [`Model::relayout`] leaves to the caller.
+    fn fit_zoomed(&mut self, window: WindowId) {
+        let Some(w) = self.windows.get(&window).filter(|w| w.zoomed) else {
+            return;
+        };
+        let (active, zoom) = (w.active, w.zoom_rect());
+        let (cols, rows) = (zoom.cols.max(1), zoom.rows.max(1));
+        if let Some(p) = self.panes.get_mut(&active)
+            && (p.cols, p.rows) != (cols, rows)
+        {
+            p.cols = cols;
+            p.rows = rows;
+            if let Err(e) = p.handle.resize(cols, rows) {
+                eprintln!("grofe server: resizing {active}: {e}");
+            }
+        }
     }
 
     /// Makes `window` its session's active window; the one it replaces
@@ -1223,6 +1358,9 @@ mod tests {
             active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
             links: Vec::new(),
         });
         model.insert_window(Window {
@@ -1243,6 +1381,9 @@ mod tests {
             active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
             links: Vec::new(),
         });
 
@@ -1297,6 +1438,9 @@ mod tests {
             active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
             links: Vec::new(),
         };
         assert_eq!(w.last_pane(), None);
@@ -1347,6 +1491,9 @@ mod tests {
                 active_points: Default::default(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
+                frames: false,
+                pane_gap: 0,
+                drop_preview: None,
                 links: Vec::new(),
             });
         }
@@ -1442,6 +1589,9 @@ mod tests {
                 active_points: Default::default(),
                 floating: Vec::new(),
                 pane_status: Default::default(),
+                frames: false,
+                pane_gap: 0,
+                drop_preview: None,
                 links: Vec::new(),
             });
         }
@@ -1466,6 +1616,9 @@ mod tests {
             active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
             links: Vec::new(),
         });
         // `add_session` leaves the window list to the caller.
@@ -1493,5 +1646,68 @@ mod tests {
         // A window loop of a pane in a gone window fails the whole `#{}`.
         let gone = FormatCtx::new(&model, PaneId(999));
         assert_eq!(expand("a#{W:x}b", &gone), "a");
+    }
+
+    /// FR.1: `frame_rects` is each visible tile's content grown by its
+    /// frame, the zoomed pane fills the window less frame and gap, and a
+    /// window too small to frame falls back to shared borders.
+    #[test]
+    fn frame_rects_surround_the_content() {
+        let (a, b) = (PaneId(1), PaneId(2));
+        let mut w = Window {
+            id: WindowId(1),
+            session: SessionId(1),
+            index: 0,
+            name: "w".to_string(),
+            layout: LayoutTree::new(a),
+            active: a,
+            zoomed: false,
+            cols: 80,
+            rows: 24,
+            bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
+            activity: std::time::SystemTime::now(),
+            last_panes: Vec::new(),
+            active_points: Default::default(),
+            floating: Vec::new(),
+            pane_status: PaneStatus::Top,
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
+            links: Vec::new(),
+        };
+        let area = w.area();
+        w.layout
+            .split(
+                area,
+                a,
+                crate::types::Dir::Horizontal,
+                b,
+                Default::default(),
+            )
+            .unwrap();
+        assert!(!w.framed());
+        assert!(w.frame_rects().is_empty());
+        w.set_frames(true, 1);
+        assert!(w.framed());
+        let r = |x, y, cols, rows| Rect { x, y, cols, rows };
+        // The border status has no effect on a framed window.
+        assert_eq!(
+            w.tiled_rects(),
+            vec![(a, r(2, 2, 37, 20)), (b, r(42, 2, 36, 20))]
+        );
+        assert_eq!(
+            w.frame_rects(),
+            vec![(a, r(1, 1, 39, 22)), (b, r(41, 1, 38, 22))]
+        );
+        w.zoomed = true;
+        assert_eq!(w.zoom_rect(), r(2, 2, 76, 20));
+        assert_eq!(w.frame_rects(), vec![(a, r(1, 1, 78, 22))]);
+        w.zoomed = false;
+        (w.cols, w.rows) = (6, 24);
+        assert!(!w.framed());
+        assert!(w.frame_rects().is_empty());
+        assert_eq!(w.tiled_rects()[0].1.x, 0);
     }
 }

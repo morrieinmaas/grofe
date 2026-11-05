@@ -105,7 +105,23 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
         "automatic-rename-format",
         "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
     ),
+    // MF (spec 2026-11-05-frames.md): tmux's shared borders, which the
+    // TOML config can still turn into frames.
+    ("pane-frames", "off"),
+    ("pane-gap", "0"),
+    ("pane-border-lines", "single"),
 ];
+
+/// grofe's own options that tmux's CLI does not know (spec
+/// 2026-11-05-frames.md): through the tmux dialect `set-option` and
+/// `show-options` call them `invalid option`, as tmux would, while the
+/// native CLI and the TOML config take them under either identity.
+const GROFE_ONLY: &[&str] = &["pane-frames", "pane-gap", "pane-frame-title"];
+
+/// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).
+pub fn is_grofe_only(name: &str) -> bool {
+    GROFE_ONLY.contains(&name)
+}
 
 /// `bell-action`, `activity-action` and `silence-action`'s choices.
 const ALERT_ACTIONS: &[&str] = &["none", "any", "current", "other"];
@@ -485,17 +501,45 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
+    // MF adds `rounded` (spec 2026-11-05-frames.md), grofe's default: a
+    // frame's corners, drawn as `single` with frames off. tmux identity
+    // keeps `single` (TMUX_DEFAULTS).
     Builtin {
         name: "pane-border-lines",
-        kind: Kind::Choice(&["single", "double", "heavy", "simple", "number", "spaces"]),
+        kind: Kind::Choice(&[
+            "single", "double", "heavy", "simple", "number", "spaces", "rounded",
+        ]),
         scope: OptionScope::Window,
-        default: "single",
+        default: "rounded",
     },
     Builtin {
         name: "pane-border-indicators",
         kind: Kind::Choice(&["off", "colour", "arrows", "both"]),
         scope: OptionScope::Window,
         default: "colour",
+    },
+    // MF (spec 2026-11-05-frames.md): grofe's own names ([`GROFE_ONLY`]).
+    // Each tiled pane gets its own frame with `pane-gap` cells between
+    // frames and around the outer ones; the title is drawn in the top
+    // edge unless `pane-frame-title` is off. Off and 0 under tmux
+    // identity (TMUX_DEFAULTS).
+    Builtin {
+        name: "pane-frames",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+    },
+    Builtin {
+        name: "pane-gap",
+        kind: Kind::Number { max: 8 },
+        scope: OptionScope::Window,
+        default: "1",
+    },
+    Builtin {
+        name: "pane-frame-title",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
     },
     Builtin {
         name: "status-position",
@@ -1148,10 +1192,19 @@ pub fn builtin_scope(name: &str) -> Option<OptionScope> {
         .or_else(|| list_builtin(name).map(|l| l.scope))
 }
 
-/// Every built-in option's name, in table order (T3.1 walks it to check
-/// its TOML name table is complete).
+/// Every built-in option's name tmux's CLI knows, in table order (T3.1
+/// walks it to check its TOML name table is complete, FE.1 its tmux
+/// one): all but [`grofe_only_names`].
 pub fn builtin_names() -> impl Iterator<Item = &'static str> {
-    BUILTINS.iter().map(|b| b.name)
+    BUILTINS
+        .iter()
+        .map(|b| b.name)
+        .filter(|n| !is_grofe_only(n))
+}
+
+/// The built-ins only grofe's own CLI and config know ([`GROFE_ONLY`]).
+pub fn grofe_only_names() -> impl Iterator<Item = &'static str> {
+    GROFE_ONLY.iter().copied()
 }
 
 fn builtin(name: &str) -> Option<&'static Builtin> {
@@ -1346,6 +1399,12 @@ impl Options {
         self.identity_defaults
             .get(b.name)
             .map_or(b.default, String::as_str)
+    }
+
+    /// Whether the user set global option `name`: the config sets it, or a
+    /// runtime `set -g` (or `source-file`) did, even to its default value.
+    pub fn set_globally(&self, name: &str) -> bool {
+        self.config_base.contains_key(name) || self.runtime.contains(name)
     }
 
     /// Marks a global option as set at runtime, which the config then
@@ -1790,6 +1849,9 @@ fn set_option(
     if index.is_none() && list_builtin(base).is_none() && check_name(base).is_err() {
         return quiet(check_name(base).map(|_| String::new()));
     }
+    if ctx.dialect == Dialect::Tmux && is_grofe_only(base) {
+        return quiet(Err(format!("invalid option: {}", c.name)));
+    }
     if index.is_some() || list_builtin(base).is_some() {
         let base = base.to_string();
         return set_list(model, events, ctx, &c, &base, index);
@@ -1913,9 +1975,12 @@ impl FormatVars for NoVars {
 }
 
 /// `option-changed`, emitted only for a real change (spec §4.2).
-fn option_changed(model: &Model, events: &mut Events, owner: Owner, name: &str) {
+fn option_changed(model: &mut Model, events: &mut Events, owner: Owner, name: &str) {
     if name == "graphics" {
         crate::server::graphics::sync_option(model);
+    }
+    if matches!(name, "pane-frames" | "pane-gap") {
+        model.sync_frames();
     }
     events.emit(Event::OptionChanged {
         scope: match owner {
@@ -1960,7 +2025,8 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         // (recorded on tmux 3.7b) makes that, and an unknown option, an
         // empty answer.
         let known = check_name(name).and_then(|()| {
-            if name.starts_with('@') && model.options.get(owner, name).is_none() {
+            let unset_user = name.starts_with('@') && model.options.get(owner, name).is_none();
+            if unset_user || (ctx.dialect == Dialect::Tmux && is_grofe_only(name)) {
                 Err(format!("invalid option: {name}"))
             } else {
                 Ok(())
@@ -2017,7 +2083,10 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
         (Owner::Server, None) => (Owner::Global, true),
         _ => (owner, false),
     };
-    let wanted = |name: &str| !only_server || builtin_scope(name) == Some(OptionScope::Global);
+    let wanted = |name: &str| {
+        (!only_server || builtin_scope(name) == Some(OptionScope::Global))
+            && !(tmux && is_grofe_only(name))
+    };
     let mut lines: Vec<(&str, String)> = model
         .options
         .at(listed)
@@ -2047,6 +2116,7 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             let names: Vec<&str> = match &c.name {
                 Some(n) => vec![n.as_str()],
                 None => builtin_names()
+                    .chain(grofe_only_names().filter(|_| !tmux))
                     .filter(|n| builtin_scope(n) == Some(mine))
                     .collect(),
             };
@@ -5757,6 +5827,29 @@ mod tests {
         );
     }
 
+    /// FR.2: a global set at runtime or by the config counts as set, even
+    /// to the default value; an untouched default does not.
+    #[test]
+    fn set_globally_tells_a_user_set_from_the_default() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let mut run = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv)
+        };
+        run(&["set", "-g", "pane-border-lines", "single"]).unwrap();
+        let options = &state.model.options;
+        assert!(options.set_globally("pane-border-lines"));
+        assert!(!options.set_globally("pane-border-style"));
+        let mut fresh = Options::new(false);
+        fresh.use_tmux_defaults(None);
+        assert!(!fresh.set_globally("pane-border-lines"));
+        fresh
+            .config_base
+            .insert("pane-border-lines".into(), "single".into());
+        assert!(fresh.set_globally("pane-border-lines"));
+    }
+
     /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in
     /// `tc_0b/display-formats` and `tm_0/list-keys-copy-mode-vi`).
     #[test]
@@ -6119,7 +6212,10 @@ mod tests {
             validate("status-position", "left"),
             Err("unknown value: left".to_string())
         );
-        assert_eq!(builtin_names().count(), BUILTINS.len());
+        assert_eq!(
+            builtin_names().count() + grofe_only_names().count(),
+            BUILTINS.len()
+        );
     }
 
     /// `set-titles`/`set-titles-string` (R15): tmux's own names, scope and

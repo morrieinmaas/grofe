@@ -100,6 +100,17 @@ a preset name is one of `even-horizontal`, `even-vertical`,
 `main-vertical-mirrored`, `tiled`. A layout string must be valid and have no
 more cells than the window has panes (checked before anything is created).
 
+Layout strings and framed panes. In a framed window (`pane-frames`, on by
+default under the grofe name) `#{window_layout}` describes the panes'
+content, inside their frames: the root sits `1 + pane-gap` cells in from the
+corner (`76x20,2,2{...}` for an 80x24 window with the default gap of 1), and
+neighbouring cells are `2 + pane-gap` apart. `up` applies a layout whichever
+way it was saved: into a framed window a framed string goes as it is and a
+plain one is framed; into a window without frames a framed string is first
+turned back into the shared-border tree it came from. Sizes come across as
+closely as the frames allow; a string goes back exactly into a window of the
+same size and the same frames.
+
 Without `layout`, panes are made by successive splits of the previous pane in
 the direction `split` says. `size` is the `split-window -l` of the split that
 creates the pane: `"30%"` (1 to 99) or cells (a positive integer, or a
@@ -169,7 +180,9 @@ only: a session called `~/x` is not a path, and needs a target given). An
 existing file is only replaced with `--force`; the file is written beside the
 target and renamed over it, so a symlink there is replaced, not written
 through. Saving then running `up` in a
-fresh server gives the same window names, pane count, layout string and cwds.
+fresh server gives the same window names, pane count, layout string and cwds
+(with the same `pane-frames` and `pane-gap`; a framed save comes up unframed,
+and the other way round, with its panes in the same arrangement).
 Env, hooks, `wait` and `size` are not recoverable from a running session and
 are not written.
 
