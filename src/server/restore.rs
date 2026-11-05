@@ -26,7 +26,7 @@ use crate::server::dispatch::{pane::toggle_zoom, spawn_pane};
 use crate::server::layout::{GeometryCell, LayoutGeometry, LayoutTree, Preset};
 use crate::server::model::{Session, Window};
 use crate::server::pane::usable_cwd;
-use crate::server::snapshot::{OptionSnap, SNAPSHOT_VERSION, SessionSnap, Snapshot, WindowSnap};
+use crate::server::snapshot::{self, OptionSnap, SessionSnap, Snapshot, SnapshotError, WindowSnap};
 use crate::types::{PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// Set to `1` in the environment of a server `start-server --restore`
@@ -72,9 +72,10 @@ pub fn at_start(state: &mut State) {
         return;
     }
     let path = paths::snapshot_path(&Env::from_process(), &state.socket);
-    let snap = match read(&path) {
+    // `read` moves an unknown version or an unreadable file aside itself.
+    let snap = match snapshot::read(&path) {
         Ok(snap) => snap,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Err(SnapshotError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("grofe server: restore: no snapshot at {}", path.display());
             return;
         }
@@ -84,29 +85,18 @@ pub fn at_start(state: &mut State) {
         }
     };
     match restore(state, snap) {
-        Ok(r) => eprintln!(
-            "grofe server: restore-done: {} sessions, {} windows, {} panes from {}",
-            r.sessions,
-            r.windows,
-            r.panes,
-            path.display()
-        ),
+        Ok(r) => {
+            eprintln!(
+                "grofe server: restore-done: {} sessions, {} windows, {} panes from {}",
+                r.sessions,
+                r.windows,
+                r.panes,
+                path.display()
+            );
+            crate::server::hooks::restore_done(state);
+        }
         Err(e) => eprintln!("grofe server: restore: {e}"),
     }
-}
-
-// ponytail: a private parse until T4.1's `snapshot::read` lands (it also
-// renames unknown versions and corrupt files aside); then this calls it.
-fn read(path: &Path) -> std::io::Result<Snapshot> {
-    use std::io::{Error, ErrorKind};
-    let text = std::fs::read_to_string(path)?;
-    let snap: Snapshot =
-        serde_json::from_str(&text).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-    if snap.version != SNAPSHOT_VERSION {
-        let msg = format!("unknown snapshot version {}", snap.version);
-        return Err(Error::new(ErrorKind::InvalidData, msg));
-    }
-    Ok(snap)
 }
 
 /// Recreates everything in `snap` (T4.3, T4.4), only into a server with

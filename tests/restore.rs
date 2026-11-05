@@ -179,7 +179,10 @@ fn sample_panes(home: &Path) -> Vec<String> {
 
 fn write_snapshot(srv: &TestServer, snap: &Snapshot) {
     let path = srv.snapshot_path();
-    fs::create_dir_all(path.parent().expect("parent")).expect("mkdir state");
+    // The instance directory is private, as the server makes it.
+    std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
+        .create(path.parent().expect("parent"))
+        .expect("mkdir state");
     let text = serde_json::to_string_pretty(snap).expect("serialize");
     fs::write(&path, text).expect("write snapshot");
 }
@@ -528,6 +531,65 @@ fn a_bad_layout_keeps_every_pane() {
         )),
         ["01UIDA", "01UIDB"].map(String::from)
     );
+}
+
+/// A finished restore raises `restore-done`.
+#[test]
+fn a_restore_raises_restore_done() {
+    let srv = TestServer::builder().restore_on_start(true).start();
+    write_config(&srv, "[hooks]\nrestore-done = \"set -g @restored yes\"\n");
+    kill(&srv);
+    write_snapshot(&srv, &sample(&srv.home));
+    let srv = srv.restart();
+    wait_until(
+        || {
+            srv.cmd(&["show-options", "-gqv", "@restored"])
+                .is_ok_and(|v| v == "yes\n")
+        },
+        WAIT,
+    )
+    .expect("the restore-done hook ran");
+    assert!(
+        srv.log()
+            .contains("restore-done: 2 sessions, 3 windows, 5 panes"),
+        "{}",
+        srv.log()
+    );
+}
+
+/// The writer saves the restored state, `--persist` marks and `uid`s
+/// included, so a second restore brings back the same.
+#[test]
+fn a_restored_state_is_saved_again_with_its_persist_marks() {
+    let srv = TestServer::start();
+    kill(&srv);
+    write_snapshot(&srv, &sample(&srv.home));
+    ok(&srv, &["start-server", "--restore"]);
+    // Something changes, so the writer writes the restored state.
+    ok(&srv, &["rename-window", "-t", "main:0", "renamed"]);
+    let saved = || {
+        let text = fs::read_to_string(srv.snapshot_path()).unwrap_or_default();
+        text.contains("renamed") && text.contains("sess-b") && text.contains("@theme")
+    };
+    wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
+    kill(&srv);
+    ok(&srv, &["start-server", "--restore"]);
+    assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&srv.home));
+    assert_eq!(
+        ok(
+            &srv,
+            &[
+                "show-options",
+                "-p",
+                "-t",
+                "work:1.2",
+                "-v",
+                "@agent_session"
+            ]
+        ),
+        "sess-b\n"
+    );
+    assert_eq!(ok(&srv, &["show-options", "-gv", "@theme"]), "dark\n");
 }
 
 // ---- needs T4.1's writer: `kill-server` saves the state ----
