@@ -1168,3 +1168,17 @@ with no open `compat` or `copy` entry.
 
 **M8 Compatibility extras.** Decide after the release gate whether a tmux `-CC` subset earns
 its keep. (`import-tmux` moved to M3.5.)
+
+## MF: framed panes, gaps and mouse moves
+
+Spec: [`../specs/2026-11-05-frames.md`](../specs/2026-11-05-frames.md). Integration
+branch `frames`. Wave 1 runs FR.1 and FR.4 in parallel; wave 2 runs FR.2 and FR.3
+in parallel after both merge. Every task keeps tmux identity byte-identical: the
+existing suites and compat goldens stay green unchanged.
+
+| Task | Content | Owns | Needs | Done means |
+|---|---|---|---|---|
+| **FR.1** Geometry and options | `pane-frames`, `pane-gap`, `pane-frame-title` options with identity-dependent defaults; `rounded` in `pane-border-lines`; framed geometry in the layout tree (separator `2 + g`, content inset `1 + g`), zoom, small-window fallback; contract fields on `Window`: `frames: bool`, `pane_gap: u16`, `drop_preview: Option<Rect>` (set by FR.3, drawn by FR.2), and `Window::frame_rects()` giving each visible tiled pane's frame rect | `src/server/layout.rs`, `src/server/model.rs`, `src/server/dispatch/options.rs`, `src/config/mod.rs`, `tests/frames_geometry.rs` | none | Unit and integration: with frames on and gap 1, splits, `resize-pane -L 5`, presets and zoom give the expected content rects and pty sizes; frames off gives today's rects exactly; a too-small window falls back; defaults differ by identity |
+| **FR.4** Float and unfloat verbs | `unfloat-pane`, the `prefix F` toggle and the pane menu items under grofe identity; docs for both | `src/cmd/parse.rs` (its parse fn and match arm), `src/cmd/mod.rs` (its variant), `src/server/dispatch/popup.rs`, `src/server/dispatch/mod.rs` (its arm), `src/server/input.rs` (grofe-identity defaults only), `docs/floating-pane-mouse.md`, `tests/unfloat.rs` | none | `unfloat-pane` splits the pane under the floating pane's centre and keeps the process; `-s`, `-h`, `-v` work; `prefix F` twice returns the pane to a tiled pane; under tmux identity `unfloat-pane` is unknown and the stock table and menu are unchanged |
+| **FR.2** Drawing frames | Rounded per-pane frames with the title in the top edge, active and inactive styles, gap cells as background, floating frames in the same style, the drop preview frame | `src/server/borders.rs`, `src/server/render.rs`, `tests/frames_render.rs` | FR.1 | Rendered cells for a 3-pane framed window match a checked-in fixture; the active frame takes the active style; `pane-frame-title off` draws plain edges; a `drop_preview` rect draws above tiles and below floating panes; frames off renders byte-identical to today |
+| **FR.3** Mouse moves | Frame and gap hit testing (`MouseDown1Border`/`MouseDrag1Border` aimed per the spec), title drag moves, other edges resize, `drag-pane -M` and its `C-MouseDrag1Pane` default, drop zones (swap, edge split, nothing), unfloat by Ctrl-drop, the preview rect | `src/server/mouse.rs`, `src/server/floating.rs`, new `src/server/drop.rs`, the `drag-pane` parse fn, variant and dispatch arm, its default binding in `src/server/input.rs`, `docs/floating-pane-mouse.md` (mouse section), `tests/frames_mouse.rs` | FR.1, FR.4 | SGR mouse reports through an attached client: dropping on a pane's middle swaps; on its left quarter docks left; on itself changes nothing; dragging a gap between two tiles resizes both; a Ctrl-drop of a floating pane unfloats it there; the preview rect follows the pointer and clears on release; under tmux identity border drags behave as the tc_6 golden |
