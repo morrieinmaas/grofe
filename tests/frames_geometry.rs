@@ -284,6 +284,9 @@ fn the_defaults_differ_by_identity() {
     assert_eq!(show(&srv, "pane-gap"), "1\n");
     assert_eq!(show(&srv, "pane-frame-title"), "on\n");
     assert_eq!(show(&srv, "pane-border-lines"), "rounded\n");
+    ok(&srv, &["set", "-g", "pane-frames", "off"]);
+    ok(&srv, &["set", "-gu", "pane-frames"]);
+    assert_eq!(show(&srv, "pane-frames"), "on\n");
 
     let tmux = start_with_config("compat-identity = \"tmux\"\n");
     assert_eq!(show(&tmux, "pane-frames"), "off\n");
