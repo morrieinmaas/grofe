@@ -855,3 +855,116 @@ fn tmux_dash_d_with_a_running_server_runs_new_session() {
     );
     let _ = tmux(&srv, &["kill-server"]);
 }
+
+/// `<link> <args>` in the harness's environment plus `vars` (no `GROFE`,
+/// `GROFE_PANE`, `TMUX` or `TMUX_PANE` unless `vars` sets them).
+fn run_with(srv: &TestServer, link: &Path, vars: &[(&str, &str)], args: &[&str]) -> CmdOutput {
+    let mut cmd = Command::new(link);
+    isolate(srv, &mut cmd);
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    cmd.args(args);
+    run_bounded(cmd, CMD_TIMEOUT)
+}
+
+/// Run as `tmux` with no `-L`/`-S`, the socket is `$TMUX`'s first field,
+/// as tmux 3.7b's `main` takes it: a tool that kept only `$TMUX` (and
+/// `$TMUX_PANE`) from a pane reaches that pane's server, and that pane.
+#[test]
+fn the_tmux_name_follows_the_socket_in_dollar_tmux() {
+    let srv = start_as_tmux();
+    let env = pane_env(&srv, &["new-session", "-d", "-s", "rt"], "env-rt");
+    let tmux_var = var(&env, "TMUX").to_string();
+    let pane = var(&env, "TMUX_PANE").to_string();
+    assert!(tmux_var.starts_with(&srv.socket.display().to_string()));
+    // A second window becomes the active one, so only the pane context
+    // names the first pane.
+    grofe(&srv, &["new-window", "-t", "rt"]).expect("new-window");
+    let link = tmux_link(&srv);
+
+    let out = run_with(&srv, &link, &[("TMUX", &tmux_var)], &["list-sessions"]);
+    assert!(out.status.success(), "{}", out.stderr);
+    assert!(out.stdout.starts_with("rt: "), "{}", out.stdout);
+
+    let out = run_with(
+        &srv,
+        &link,
+        &[("TMUX", &tmux_var), ("TMUX_PANE", &pane)],
+        &["display-message", "-p", "#{pane_id}"],
+    );
+    assert_eq!(out.stdout.trim(), pane, "{}", out.stderr);
+
+    // `$TMUX` wins over a `$GROFE` naming another server.
+    let other = root(&srv).join("other.sock").display().to_string();
+    let out = run_with(
+        &srv,
+        &link,
+        &[("TMUX", &tmux_var), ("GROFE", &other)],
+        &["list-sessions"],
+    );
+    assert!(out.status.success(), "{}", out.stderr);
+
+    // `-S` and `-L` win over `$TMUX`.
+    let out = run_with(
+        &srv,
+        &link,
+        &[("TMUX", &tmux_var)],
+        &["-S", &other, "list-sessions"],
+    );
+    assert!(!out.status.success());
+    assert!(out.stderr.contains(&other), "{}", out.stderr);
+    let out = run_with(
+        &srv,
+        &link,
+        &[("TMUX", &tmux_var)],
+        &["-L", "grofe-envsock", "list-sessions"],
+    );
+    assert!(!out.status.success());
+    let named = srv.runtime_dir.join("grofe/grofe-envsock.sock");
+    assert!(
+        out.stderr.contains(&named.display().to_string()),
+        "{}",
+        out.stderr
+    );
+
+    // An empty `$TMUX`, or one with an empty first field, is not a socket.
+    let default = srv.runtime_dir.join("grofe/default.sock");
+    for value in ["", ",1,0"] {
+        let out = run_with(&srv, &link, &[("TMUX", value)], &["list-sessions"]);
+        assert!(!out.status.success(), "TMUX={value:?}");
+        assert!(
+            out.stderr.contains(&default.display().to_string()),
+            "TMUX={value:?}: {}",
+            out.stderr
+        );
+    }
+    let _ = tmux(&srv, &["kill-server"]);
+}
+
+/// The `grofe` name keeps its own rule: `$GROFE`, never `$TMUX`.
+#[test]
+fn the_grofe_name_ignores_dollar_tmux() {
+    let srv = start_as_tmux();
+    grofe(&srv, &["new-session", "-d", "-s", "n"]).expect("new-session");
+    let grofe_bin = Path::new(env!("CARGO_BIN_EXE_grofe"));
+    let tmux_var = format!("{},1,0", srv.socket.display());
+    let out = run_with(&srv, grofe_bin, &[("TMUX", &tmux_var)], &["list-sessions"]);
+    assert!(!out.status.success(), "{}", out.stdout);
+    let default = srv.runtime_dir.join("grofe/default.sock");
+    assert!(
+        out.stderr.contains(&default.display().to_string()),
+        "{}",
+        out.stderr
+    );
+    let other = format!("{},1,0", root(&srv).join("other.sock").display());
+    let socket = srv.socket.display().to_string();
+    let out = run_with(
+        &srv,
+        grofe_bin,
+        &[("TMUX", &other), ("GROFE", &socket)],
+        &["list-sessions"],
+    );
+    assert!(out.status.success(), "{}", out.stderr);
+    let _ = tmux(&srv, &["kill-server"]);
+}
