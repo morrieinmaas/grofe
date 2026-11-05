@@ -6,6 +6,8 @@
 #
 #   grofe/                  grofe at HEAD, built in the first stage
 #   inputs/canopy.bundle    canopy's pinned commit as branch `pinned`
+#   inputs/canopy/          its tree (acceptance and compat stages)
+#   inputs/athome/          athome's tree at its pinned commit (compat)
 #
 # No systemd: PID 1 is podman's --init and a sleep, so `podman restart`
 # kills every process and the scenario's next phase "boots" by hand, as a
@@ -78,6 +80,41 @@ COPY grofe/tests/e2e/scenarios/ /opt/e2e/scenarios/
 RUN chmod -R a+rX /opt/e2e
 
 ENV LANG=C.UTF-8
+WORKDIR /
+CMD ["sleep", "infinity"]
+
+# The compat stage (plan TE.2), for `# e2e-target: compat`: the acceptance
+# stage plus what TC.13's suite, TM.7's parity suite and TC.0b's recorder
+# need, laid out as containers/compat/golden.Containerfile lays out the
+# recording image. Real tmux 3.7b and a second build with sixel are
+# /usr/local/bin/tmux and tmux-sixel there, first on the recorder's fixed
+# PATH as in that image (/usr/bin/tmux stays grofe; the suites put their
+# own grofe symlink first). athome's tree goes to ~/compat/athome, and
+# both trees to tests/compat/scenarios/trees, where the scenarios name
+# them for recording. `golden` (uid 1001) is the recorder's user name,
+# which normalization replaces: compat.sh maps the test user onto it.
+FROM acceptance AS compat
+
+ARG TMUX_VERSION=3.7b
+ARG TMUX_SHA256=87f2e99e3b685973f2ca002ffd6ed7e51a5744f7009daae5a15670b6d532db96
+RUN curl -fsSLo /tmp/tmux.tar.gz \
+    "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
+  && echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c - \
+  && mkdir /tmp/tmux && tar -xzf /tmp/tmux.tar.gz -C /tmp/tmux --strip-components=1 \
+  && cd /tmp/tmux && ./configure --prefix="/usr/local/lib/tmux-${TMUX_VERSION}-sixel" --enable-sixel \
+  && make -j"$(nproc)" && make install \
+  && cd / && rm -rf /tmp/tmux /tmp/tmux.tar.gz \
+  && test "$("/usr/local/lib/tmux-${TMUX_VERSION}-sixel/bin/tmux" -V)" = "tmux ${TMUX_VERSION}" \
+  && ln -s "/usr/local/lib/tmux-${TMUX_VERSION}/bin/tmux" /usr/local/bin/tmux \
+  && ln -s "/usr/local/lib/tmux-${TMUX_VERSION}-sixel/bin/tmux" /usr/local/bin/tmux-sixel \
+  && useradd -M -u 1001 -s /bin/sh golden
+COPY --chown=test:test inputs/athome/ /home/test/compat/athome/
+COPY --chown=test:test inputs/canopy/ /home/test/grofe/tests/compat/scenarios/trees/canopy/
+COPY --chown=test:test inputs/athome/ /home/test/grofe/tests/compat/scenarios/trees/athome/
+USER test
+WORKDIR /home/test/grofe
+RUN cargo test --locked --test compat --no-run
+USER root
 WORKDIR /
 CMD ["sleep", "infinity"]
 
