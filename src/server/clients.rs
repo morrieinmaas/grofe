@@ -2505,9 +2505,8 @@ fn pane_looks(
     let model = &state.model;
     let wchain = options::chain(model, w.active);
     let wopt = |name: &str| model.options.lookup(name, &wchain).unwrap_or("");
-    let status = PaneStatus::parse(wopt("pane-border-status"));
     let mut looks = render::PaneLooks {
-        status,
+        status: PaneStatus::parse(wopt("pane-border-status")),
         lines: PaneLines::parse(wopt("pane-border-lines")),
         indicators: Indicators::parse(wopt("pane-border-indicators")),
         // `fill-character`: its first character, if one cell wide.
@@ -2515,8 +2514,11 @@ fn pane_looks(
             .chars()
             .next()
             .filter(|c| unicode_width::UnicodeWidthChar::width(*c) == Some(1)),
-        panes: Default::default(),
+        ..Default::default()
     };
+    // FR.2: the frames, their title and lines, and the drop preview.
+    render::apply_frames(model, w, &mut looks);
+    let titled = looks.status != PaneStatus::Off || looks.frame_title;
     let order = w.pane_ids();
     let base_index = model.pane_base_index(w.id) as usize;
     let now = local_now();
@@ -2526,7 +2528,7 @@ fn pane_looks(
         let client_vars = ClientVars::new(model, c, Some(FormatCtx::new(model, *id)));
         let vars = options::ServerVars::new(state, *id, &client_vars);
         let (fg, bg) = window_style_colours(&opt, &vars, *id == w.active);
-        let title = if status == PaneStatus::Off {
+        let title = if !titled {
             String::new()
         } else {
             status::expand_time(opt("pane-border-format"), &vars, &now)

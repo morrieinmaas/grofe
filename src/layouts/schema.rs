@@ -191,7 +191,9 @@ struct RawFloat {
 }
 
 /// Values `pane-border-lines` takes.
-const BORDERS: [&str; 6] = ["single", "double", "heavy", "simple", "number", "spaces"];
+const BORDERS: [&str; 7] = [
+    "single", "double", "heavy", "simple", "number", "spaces", "rounded",
+];
 
 /// The default wait timeout, in seconds.
 pub const DEFAULT_WAIT_SECS: u64 = 30;

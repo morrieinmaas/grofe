@@ -1405,6 +1405,12 @@ impl Options {
             .map_or(b.default, String::as_str)
     }
 
+    /// Whether the user set global option `name`: the config sets it, or a
+    /// runtime `set -g` (or `source-file`) did, even to its default value.
+    pub fn set_globally(&self, name: &str) -> bool {
+        self.config_base.contains_key(name) || self.runtime.contains(name)
+    }
+
     /// Marks a global option as set at runtime, which the config then
     /// leaves alone.
     fn mark_runtime(&mut self, name: &str) {
@@ -5823,6 +5829,29 @@ mod tests {
             Ok(()),
             "the given path is still a glob"
         );
+    }
+
+    /// FR.2: a global set at runtime or by the config counts as set, even
+    /// to the default value; an untouched default does not.
+    #[test]
+    fn set_globally_tells_a_user_set_from_the_default() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let mut run = |words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv)
+        };
+        run(&["set", "-g", "pane-border-lines", "single"]).unwrap();
+        let options = &state.model.options;
+        assert!(options.set_globally("pane-border-lines"));
+        assert!(!options.set_globally("pane-border-style"));
+        let mut fresh = Options::new(false);
+        fresh.use_tmux_defaults(None);
+        assert!(!fresh.set_globally("pane-border-lines"));
+        fresh
+            .config_base
+            .insert("pane-border-lines".into(), "single".into());
+        assert!(fresh.set_globally("pane-border-lines"));
     }
 
     /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in

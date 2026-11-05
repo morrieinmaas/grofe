@@ -1258,7 +1258,9 @@ pub(super) const TABLE: &[OptInfo] = &[
         kind: Kind::Choice,
         scope: 4,
         flags: 0,
-        choices: &["single", "double", "heavy", "simple", "number", "spaces"],
+        choices: &[
+            "single", "double", "heavy", "simple", "number", "spaces", "rounded",
+        ],
         unit: "",
         text: "Type of characters used to draw pane border lines. Some of these are only supported on terminals with UTF-8 support.",
         default: Some("single"),
