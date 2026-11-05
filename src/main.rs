@@ -187,6 +187,21 @@ fn main() -> ExitCode {
             control_bridge(&globals.socket())
         }
         "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
+        // grofe's own verb (T4.5): the server reads the snapshot and answers;
+        // with no server there is nothing to lose, and none is started.
+        "reboot-check" if dialect() == Dialect::Grofe => {
+            let (socket, own_dir) = globals.resolve();
+            match UnixStream::connect(&socket) {
+                Ok(_) => one_shot(&socket, own_dir, rest),
+                Err(_) => {
+                    println!(
+                        "no server running on {}: nothing to check",
+                        socket.display()
+                    );
+                    ExitCode::SUCCESS
+                }
+            }
+        }
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
