@@ -13,9 +13,12 @@
 #           naming it, never a skip); `tmux` on the suite's PATH is real
 #           tmux 3.7b and not grofe, and /usr/bin/tmux is grofe answering
 #           as tmux 3.7b
-#   cargo   `cargo test --test acceptance`; a test that skipped for want of
-#           a spec 8 tool is a FAIL naming the tool; a failed case gets one
-#           serial rerun, and passing there is reported as FLAKY
+#   cargo   `cargo test --test acceptance`; a skip is a FAIL naming its
+#           reason, except the two plugin cases' provisioned release
+#           binaries (opensessions, xre), which are listed as SKIP; a failed
+#           case gets one serial rerun, and passing there is reported as
+#           FLAKY and counted (`FLAKY-COUNT <n>`); with E2E_STRICT=1 (the
+#           release gate's setting) a FLAKY case fails the phase
 #   bats    `bats tests/cli.bats` against the debug binary
 #
 # Each check prints `PASS <what>` or `FAIL <what>`; a phase exits nonzero
@@ -82,9 +85,11 @@ tools() {
   fi
 }
 
-# failed_tests <log>: the names libtest lists under its last `failures:`.
+# failed_tests <log>: the names libtest lists under its last `failures:`,
+# none when it printed no such list (a crashed run).
 failed_tests() {
-  awk '/^failures:$/ { n = 0; delete t; next } /^    [A-Za-z0-9_:]+$/ { t[n++] = $1 }
+  awk '/^failures:$/ { f = 1; n = 0; delete t; next } /^$/ && n { f = 0 }
+    f && /^    [A-Za-z0-9_:]+$/ { t[n++] = $1 }
     END { for (i = 0; i < n; i++) print t[i] }' "$1"
 }
 
@@ -94,15 +99,16 @@ cargo_suite() {
   # --show-output prints what passing cases wrote too, so a skip shows.
   cargo test --locked --offline --test acceptance -- --show-output 2>&1 | tee "$log" || rc=$?
   grep -E '^test result:' "$log" | sed 's/^/SUMMARY /'
-  for t in "${TOOLS[@]}"; do
-    if grep -q "skipping: $t not found" "$log"; then
-      fail "cargo: a case skipped because $t is not found"
-    fi
-  done
-  # Skips for anything else (the plugin cases' provisioned release
-  # binaries, which TE.1 does not install) are listed, not failed.
-  grep -iE '^skipping' "$log" | sort | uniq -c | sed 's/^ */SKIP /'
+  # The plugin cases' provisioned release binaries need a canopy checkout,
+  # which the build context does not hold: those skips are listed. Any
+  # other skip (a spec 8 tool missing or too old) fails, naming its reason.
+  local plugin_skip='^skipping: no (opensessions binaries at [$]GROFE_TEST_OPENSESSIONS|xre 0[.]1[.]1 at [$]GROFE_TEST_XRE or on PATH)$'
+  grep -E '^skipping' "$log" | grep -E "$plugin_skip" | sort | uniq -c | sed 's/^ */SKIP /'
+  grep -E '^skipping' "$log" | grep -vE "$plugin_skip" | sort -u | while IFS= read -r t; do
+    printf 'FAIL cargo: a case skipped (%s)\n' "$t"
+  done | grep . && fails=$((fails + 1))
   if [ "$rc" -eq 0 ]; then
+    echo "FLAKY-COUNT 0"
     pass "cargo test --test acceptance"
     return
   fi
@@ -120,11 +126,18 @@ cargo_suite() {
   cargo test --locked --offline --test acceptance -- --exact --test-threads=1 "${failed[@]}" 2>&1 |
     tee "$relog" || rc=$?
   grep -E '^test result:' "$relog" | sed 's/^/RETRY-SUMMARY /'
-  if [ "$rc" -eq 0 ]; then
-    for t in "${failed[@]}"; do printf 'FLAKY %s (failed in the full run, passed alone)\n' "$t"; done
-    pass "cargo test --test acceptance (${#failed[@]} case(s) passed on the serial rerun)"
+  if [ "$rc" -ne 0 ]; then
+    mapfile -t failed < <(failed_tests "$relog")
+    for t in "${failed[@]}"; do fail "cargo: $t failed in the full run and again alone"; done
+    [ "${#failed[@]}" -gt 0 ] || fail "cargo: the serial rerun exited $rc with no failed case listed"
+    return
+  fi
+  for t in "${failed[@]}"; do printf 'FLAKY %s (failed in the full run, passed alone)\n' "$t"; done
+  echo "FLAKY-COUNT ${#failed[@]}"
+  if [ "${E2E_STRICT:-0}" = 1 ]; then
+    fail "cargo test --test acceptance: ${#failed[@]} FLAKY case(s), and E2E_STRICT=1"
   else
-    for t in $(failed_tests "$relog"); do fail "cargo: $t failed in the full run and again alone"; done
+    pass "cargo test --test acceptance (${#failed[@]} FLAKY case(s) passed on the serial rerun)"
   fi
 }
 

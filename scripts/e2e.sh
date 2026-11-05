@@ -41,6 +41,8 @@
 #                        overlay.mount_program=/usr/bin/fuse-overlayfs` on a
 #                        kernel without overlayfs
 #   E2E_ARCH=1           also run on Arch
+#   E2E_STRICT=1         passed to every phase: a scenario that forgives a
+#                        failure passing on its rerun (FLAKY) fails instead
 #
 # Output: target/e2e/<run-id>/<scenario>/<image>/{build,<run>}.log, and one
 # summary line per image and run. Exits 0 only when every gating run passed
@@ -133,7 +135,7 @@ run_steps() {
     printf '### phase %s\n' "$step" >>"$out"
     rc=0
     engine exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test \
-      "$name" bash "/opt/e2e/scenarios/$scenario.sh" "$step" >>"$out" 2>&1 || rc=$?
+      -e E2E_STRICT="${E2E_STRICT:-0}" "$name" bash "/opt/e2e/scenarios/$scenario.sh" "$step" >>"$out" 2>&1 || rc=$?
     printf '### phase %s exited %s\n' "$step" "$rc" >>"$out"
     [ "$rc" -eq 0 ] || return "$rc"
   done
@@ -198,6 +200,9 @@ run_image() {
         ;;
       *) if [ "$rc" -eq 0 ]; then verdict=PASS; else verdict="FAIL (exit $rc)"; fi ;;
     esac
+    local flaky
+    flaky="$(grep -c '^FLAKY ' "$dir/${run_name%!}.log" || true)"
+    [ "${flaky:-0}" -eq 0 ] || verdict="$verdict ($flaky FLAKY)"
     case "$verdict" in FAIL*) status=1 ;; esac
     printf '%s\t%s\t%s\n' "$image" "${run_name%!}" "$verdict" >>"$summary"
     log "$image: run ${run_name%!}: $verdict ($dir/${run_name%!}.log)"
