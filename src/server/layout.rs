@@ -42,6 +42,21 @@
 //! window's current size (`LayoutTree::new` takes no area either). Threading
 //! `area` through explicitly, and rebasing onto it, means the tree never
 //! mutates from sizes that belong to some older window size.
+//!
+//! Framed windows (`pane-frames`, spec 2026-11-05-frames.md): every tile's
+//! content has its own one-cell frame and `g` gap cells around it, so two
+//! neighbouring content rects are `2 + g` cells apart and the content area
+//! is the window inset by `1 + g` on every side. With `pad = 1 + g` that is
+//! exactly the one-cell-border tree laid out on the window less `pad` at its
+//! left and top (the *inner* area), each pane then giving up `pad` cells on
+//! its right and bottom: the separator becomes `1 + pad`, and the last pane
+//! along an axis ends `pad` cells short of the window. So the tree keeps its
+//! one-cell borders and every op runs unchanged on the inner area; only the
+//! entry points translate (`LayoutTree::set_pad`). A size the user gives in
+//! cells (`split-window -l`, `resize-pane -x`, `main-pane-width`) is a
+//! content size and gains `pad`; an op that would leave a framed pane with
+//! no content cell is refused (or, for a resize, cut short). A window too
+//! small for its frames is laid out unframed.
 
 use crate::server::borders::PaneStatus;
 use crate::types::{Dir, Edge, PaneId, Rect, SplitSize};
@@ -230,6 +245,11 @@ pub struct LayoutTree {
     /// The last preset applied, as a [`Preset::index`]: where
     /// `next-layout` goes on from (tmux's `lastlayout`).
     last_preset: Option<usize>,
+    /// `1 + pane-gap` in a framed window, else 0 (module docs).
+    pad: u16,
+    /// The pad `exact_for` was made under: `exact_for` is an inner area
+    /// that much smaller than the window ([`Self::exact_size`]).
+    exact_pad: u16,
 }
 
 /// Which axis a point-in-rect lookup runs along.
@@ -247,13 +267,65 @@ impl LayoutTree {
             exact_for: None,
             order: vec![pane],
             last_preset: None,
+            pad: 0,
+            exact_pad: 0,
         }
     }
 
-    /// The area size the tree's weights are exact for, if any: after
+    /// The window size the tree's weights are exact for, if any: after
     /// [`Self::apply_tmux_layout`], the layout string's own size.
     pub fn exact_size(&self) -> Option<(u16, u16)> {
+        let pad = self.exact_pad;
         self.exact_for
+            .map(|(cols, rows)| (cols.saturating_add(pad), rows.saturating_add(pad)))
+    }
+
+    /// Frames the tree's panes with `pad` cells each (`1 + pane-gap`; 0
+    /// for none), as the module docs describe. Nothing is rescaled: the
+    /// next render lays the panes out on the new inner area.
+    pub fn set_pad(&mut self, pad: u16) {
+        self.pad = pad;
+    }
+
+    /// The pad the panes are framed with on `area`: [`Self::set_pad`]'s,
+    /// unless some pane would have no content cell, when it is 0.
+    // ponytail: a window too small to frame every pane is laid out
+    // unframed as a whole, not framed where it fits.
+    pub fn pad_on(&self, area: Rect) -> u16 {
+        match inner(area, self.pad) {
+            Some(inner) if self.pad > 0 && self.fits(inner, self.pad) => self.pad,
+            _ => 0,
+        }
+    }
+
+    /// Whether every pane laid out on `inner` keeps a content cell after
+    /// giving up `pad` cells each way.
+    fn fits(&self, inner: Rect, pad: u16) -> bool {
+        let mut out = Vec::new();
+        collect_rects(&self.root, inner, &mut out);
+        out.iter().all(|(_, r)| r.cols > pad && r.rows > pad)
+    }
+
+    /// Runs `op` on the inner area of `area` with the pad in effect there.
+    /// When frames are in effect and `op` leaves some pane without a
+    /// content cell, the tree is put back as it was and the answer is
+    /// `None`.
+    fn framed<T>(&mut self, area: Rect, op: impl FnOnce(&mut Self, Rect, u16) -> T) -> Option<T> {
+        let pad = self.pad_on(area);
+        let inner = inner(area, pad)?;
+        let before = (pad > 0).then(|| self.clone());
+        let exact = self.exact_for;
+        let out = op(self, inner, pad);
+        if let Some(before) = before
+            && !self.fits(inner, pad)
+        {
+            *self = before;
+            return None;
+        }
+        if self.exact_for != exact {
+            self.exact_pad = pad;
+        }
+        Some(out)
     }
 
     /// Makes the tree exact on `area`: overwrites every split's weights with
@@ -306,7 +378,29 @@ impl LayoutTree {
     /// `-b` and `-f`). With half the room, the first of the two cells gets
     /// the odd cell, as in tmux. `new` comes right after `target` in index
     /// order either way, as `join-pane` places it in tmux 3.7b.
+    ///
+    /// In a framed window `how.size` in cells is the new pane's content
+    /// size, and a split that would leave a pane no content cell fails
+    /// with `TooSmall`.
     pub fn insert(
+        &mut self,
+        area: Rect,
+        target: PaneId,
+        new: PaneId,
+        how: Insert,
+    ) -> Result<(), LayoutError> {
+        self.framed(area, |tree, inner, pad| {
+            let size = match how.size {
+                SplitSize::Cells(n) => SplitSize::Cells(n.saturating_add(pad)),
+                size => size,
+            };
+            tree.insert_inner(inner, target, new, Insert { size, ..how })
+        })
+        .unwrap_or(Err(LayoutError::TooSmall(target)))
+    }
+
+    /// [`Self::insert`] on the inner area.
+    fn insert_inner(
         &mut self,
         area: Rect,
         target: PaneId,
@@ -488,8 +582,22 @@ impl LayoutTree {
     /// would drop any leaf below one cell (`max_shrink`'s doc comment); a
     /// no-op (not a panic) if `pane` has no neighbour across `edge`, the
     /// clamp reduces the requested delta to zero, or `area` is below the
-    /// floor (module docs).
+    /// floor (module docs). In a framed window the clamp also keeps every
+    /// pane a content cell.
     pub fn resize(&mut self, area: Rect, pane: PaneId, edge: Edge, delta: i32) {
+        let len = i32::from(area.cols.max(area.rows));
+        let mut delta = delta.clamp(-len, len);
+        while self
+            .framed(area, |tree, inner, _| tree.resize_inner(inner, pane, edge, delta))
+            .is_none()
+            && delta != 0
+        {
+            delta -= delta.signum();
+        }
+    }
+
+    /// [`Self::resize`] on the inner area.
+    fn resize_inner(&mut self, area: Rect, pane: PaneId, edge: Edge, delta: i32) {
         let mut path = Vec::new();
         if !find_path(&self.root, pane, &mut path) {
             return;
@@ -544,7 +652,40 @@ impl LayoutTree {
     /// vertical preset spreads the rows left after the title row
     /// (tmux's `layout_spread_cell`), which the pane along that edge then
     /// gets back, so the extra rows go to the first panes whichever edge.
+    ///
+    /// In a framed window a main pane's size in cells is its content size,
+    /// and a preset that would leave a pane no content cell is not applied.
     pub fn preset_bordered(
+        &mut self,
+        area: Rect,
+        preset: Preset,
+        panes: &[PaneId],
+        status: PaneStatus,
+    ) -> bool {
+        let applied = self.framed(area, |tree, inner, pad| {
+            let grown = |main: MainSize| match main {
+                MainSize::Cells(n) => MainSize::Cells(n.saturating_add(pad)),
+                main => main,
+            };
+            let preset = match preset {
+                Preset::MainHorizontal { main } => Preset::MainHorizontal { main: grown(main) },
+                Preset::MainHorizontalMirrored { main } => {
+                    Preset::MainHorizontalMirrored { main: grown(main) }
+                }
+                Preset::MainVertical { main } => Preset::MainVertical { main: grown(main) },
+                Preset::MainVerticalMirrored { main } => {
+                    Preset::MainVerticalMirrored { main: grown(main) }
+                }
+                other => other,
+            };
+            tree.preset_inner(inner, preset, panes, status)
+        });
+        self.last_preset = Some(preset.index());
+        applied == Some(true)
+    }
+
+    /// [`Self::preset_bordered`] on the inner area.
+    fn preset_inner(
         &mut self,
         area: Rect,
         preset: Preset,
@@ -599,6 +740,7 @@ impl LayoutTree {
     /// centre line (deterministic: the far subtree's leaf whose span on the
     /// cross axis contains that centre coordinate).
     pub fn neighbour(&self, area: Rect, pane: PaneId, edge: Edge) -> Option<PaneId> {
+        let area = inner(area, self.pad_on(area))?;
         let mut path = Vec::new();
         if !find_path(&self.root, pane, &mut path) {
             return None;
@@ -630,18 +772,29 @@ impl LayoutTree {
     /// A pane's rect can be 0 cells wide or tall only when `area` is too
     /// small to hold every pane plus its borders; callers must not size a
     /// PTY to 0 from such a rect (M2's job, when it resizes panes).
-    /// In index order (tmux's pane list, `order`).
+    /// In index order (tmux's pane list, `order`). In a framed window the
+    /// rects are the panes' content, frames and gaps excluded.
     pub fn compute(&self, area: Rect) -> Vec<(PaneId, Rect)> {
+        let pad = self.pad_on(area);
         let mut out = Vec::new();
-        collect_rects(&self.root, area, &mut out);
+        if let Some(inner) = inner(area, pad) {
+            collect_rects(&self.root, inner, &mut out);
+        }
+        for (_, r) in &mut out {
+            r.cols -= pad;
+            r.rows -= pad;
+        }
         out.sort_by_key(|(id, _)| self.order.iter().position(|p| p == id));
         out
     }
 
-    /// Every border segment for `area`.
+    /// Every border segment for `area`. None in a framed window, whose
+    /// panes have frames rather than shared borders.
     pub fn borders(&self, area: Rect) -> Vec<BorderSegment> {
         let mut out = Vec::new();
-        collect_borders(&self.root, area, &mut out);
+        if self.pad_on(area) == 0 {
+            collect_borders(&self.root, area, &mut out);
+        }
         out
     }
 
@@ -712,7 +865,28 @@ impl LayoutTree {
     /// to the cells after it (or before it, for the last), clamped so every
     /// pane keeps a cell. A no-op without such an ancestor, or when `area`
     /// is below the floor (module docs).
+    ///
+    /// In a framed window `cells` is the content size, and the clamp also
+    /// keeps every pane a content cell.
     pub fn resize_to(&mut self, area: Rect, pane: PaneId, dir: Dir, cells: u16) {
+        let Some((_, now)) = self.compute(area).into_iter().find(|(id, _)| *id == pane) else {
+            return;
+        };
+        let now = axis_len(dir, now);
+        let mut cells = cells.min(axis_len(dir, area));
+        while self
+            .framed(area, |tree, inner, pad| {
+                tree.resize_to_inner(inner, pane, dir, cells.saturating_add(pad));
+            })
+            .is_none()
+            && cells != now
+        {
+            cells = if cells > now { cells - 1 } else { cells + 1 };
+        }
+    }
+
+    /// [`Self::resize_to`] on the inner area.
+    fn resize_to_inner(&mut self, area: Rect, pane: PaneId, dir: Dir, cells: u16) {
         let mut path = Vec::new();
         if !find_path(&self.root, pane, &mut path) || !self.rebase(area) {
             return;
@@ -742,6 +916,11 @@ impl LayoutTree {
     /// evenly, or if they already are, its grandparent's, and so on up, as
     /// tmux's `layout_spread_out` does. Returns whether anything changed.
     pub fn spread(&mut self, area: Rect, pane: PaneId) -> bool {
+        self.framed(area, |tree, inner, _| tree.spread_inner(inner, pane)) == Some(true)
+    }
+
+    /// [`Self::spread`] on the inner area.
+    fn spread_inner(&mut self, area: Rect, pane: PaneId) -> bool {
         let mut path = Vec::new();
         if !find_path(&self.root, pane, &mut path) || !self.rebase(area) {
             return false;
@@ -776,9 +955,17 @@ impl LayoutTree {
     }
 
     /// The layout's cells with their sizes and offsets on `area`, for the
-    /// layout-string codec.
+    /// layout-string codec. In a framed window they are the content rects,
+    /// the root's too: `pad` in from the window's edges, and neighbours
+    /// `1 + pad` cells apart.
     pub fn export(&self, area: Rect) -> LayoutGeometry {
-        export_node(&self.root, area)
+        let pad = self.pad_on(area);
+        let Some(inner) = inner(area, pad) else {
+            return export_node(&self.root, area);
+        };
+        let mut g = export_node(&self.root, inner);
+        shrink_cells(&mut g, pad);
+        g
     }
 
     /// Replaces the layout with `geometry`, which must tile its area
@@ -787,7 +974,13 @@ impl LayoutTree {
     /// `next-layout` position stay, as a layout string
     /// leaves tmux's pane list alone (the codec puts the panes in the
     /// cells, in the order tmux would).
+    ///
+    /// A framed window's export (its root `pad` cells in from the corner,
+    /// the same on both axes) imports as the layout it was exported from.
     pub fn import(&mut self, geometry: &LayoutGeometry) -> Result<(), LayoutError> {
+        let mut geometry = geometry.clone();
+        let pad = unframe(&mut geometry);
+        let geometry = &geometry;
         if (geometry.x, geometry.y) != (0, 0) {
             return Err(LayoutError::Invalid);
         }
@@ -808,6 +1001,7 @@ impl LayoutTree {
         }
         self.root = root;
         self.exact_for = Some((geometry.cols, geometry.rows));
+        self.exact_pad = pad;
         Ok(())
     }
 
@@ -833,6 +1027,7 @@ impl LayoutTree {
         if panes.len() > count {
             return Err(format!("have {} panes but need {count}", panes.len()));
         }
+        let pad = unframe(&mut geometry);
         fix_root_size(&mut geometry);
         let mismatch = || "size mismatch after applying layout".to_string();
         if (geometry.x, geometry.y) != (0, 0) {
@@ -844,6 +1039,8 @@ impl LayoutTree {
             exact_for: Some((geometry.cols, geometry.rows)),
             order: Vec::new(),
             last_preset: None,
+            pad: 0,
+            exact_pad: pad,
         };
         // The bottom-right cell is the last child's last child and so on
         // down (tmux's `layout_find_bottomright`): found in O(depth).
@@ -864,9 +1061,57 @@ impl LayoutTree {
         });
         self.root = cells.root;
         self.exact_for = cells.exact_for;
+        self.exact_pad = cells.exact_pad;
         self.order = panes.to_vec();
         Ok(())
     }
+}
+
+/// `area` less `pad` cells at its left and top: the area a framed tree's
+/// one-cell-border layout runs on (module docs). `None` when nothing is
+/// left.
+fn inner(area: Rect, pad: u16) -> Option<Rect> {
+    if pad == 0 {
+        return Some(area);
+    }
+    Some(Rect {
+        x: area.x.saturating_add(pad),
+        y: area.y.saturating_add(pad),
+        cols: area.cols.checked_sub(pad).filter(|&c| c > 0)?,
+        rows: area.rows.checked_sub(pad).filter(|&r| r > 0)?,
+    })
+}
+
+/// Every cell of `g`, laid out on an inner area, as its content: `pad`
+/// cells narrower and shorter.
+fn shrink_cells(g: &mut LayoutGeometry, pad: u16) {
+    g.cols = g.cols.saturating_sub(pad);
+    g.rows = g.rows.saturating_sub(pad);
+    if let GeometryCell::Split { children, .. } = &mut g.cell {
+        children.iter_mut().for_each(|c| shrink_cells(c, pad));
+    }
+}
+
+/// A framed export ([`shrink_cells`]), its root `pad` cells in from the
+/// corner on both axes, back on an inner area at the origin: every cell
+/// `pad` cells wider and taller, and moved `pad` up and left. Returns the
+/// pad, 0 (changing nothing) for a root at the corner or off the diagonal.
+fn unframe(g: &mut LayoutGeometry) -> u16 {
+    fn grow(g: &mut LayoutGeometry, pad: u16) {
+        g.x = g.x.saturating_sub(pad);
+        g.y = g.y.saturating_sub(pad);
+        g.cols = g.cols.saturating_add(pad);
+        g.rows = g.rows.saturating_add(pad);
+        if let GeometryCell::Split { children, .. } = &mut g.cell {
+            children.iter_mut().for_each(|c| grow(c, pad));
+        }
+    }
+    let pad = g.x;
+    if pad == 0 || g.y != pad {
+        return 0;
+    }
+    grow(g, pad);
+    pad
 }
 
 /// `target_size, new_size` for [`LayoutTree::insert`] on `avail` cells:
