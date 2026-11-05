@@ -1233,6 +1233,21 @@ pub struct FloatPane {
     pub y: Option<Offset>,
 }
 
+/// `unfloat-pane` (grofe's own; tmux 3.7b has no such verb): a floating
+/// pane goes back into the layout, keeping its process and history, by
+/// splitting the tiled pane under its centre, or `-s`, or the window's last
+/// active tiled pane, or its first. `dir` is `-h` (side by side) or `-v`
+/// (one above the other), `-h` winning as in `join-pane`; without either
+/// the split runs along that tiled pane's longer side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfloatPane {
+    /// `-t`.
+    pub target: Target,
+    /// `-s`: the tiled pane to split.
+    pub split: Option<Target>,
+    pub dir: Option<Dir>,
+}
+
 /// `place-pane` (grofe's own): moves a floating pane to the window cell
 /// `-X`, `-Y` of its top-left content cell, as `new-pane` reads them; an
 /// axis not given stays. The place is held inside the window as a mouse
@@ -1642,6 +1657,7 @@ pub enum Command {
     DisplayPopup(DisplayPopup),
     NewPane(NewPane),
     FloatPane(FloatPane),
+    UnfloatPane(UnfloatPane),
     PlacePane(PlacePane),
     DisplayMenu(DisplayMenu),
     DisplayPanes(DisplayPanes),
