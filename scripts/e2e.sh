@@ -155,8 +155,12 @@ run_image() {
   tag="localhost/grofe-e2e-$image:$(printf '%s' "$run_id" | tr '[:upper:]' '[:lower:]')"
   [ -f "$ctx/grofe/tests/e2e/Containerfile.$image" ] || { log "$image: no tests/e2e/Containerfile.$image at HEAD"; return 1; }
   mkdir -p "$dir"
+  # Arch's base is amd64 only: on an arm64 host the build (and so every run
+  # of the image) is emulated.
+  local plat_args=()
+  [ "$image" = arch ] && plat_args=(--platform linux/amd64)
   log "$image: building $tag"
-  if ! engine build ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
+  if ! engine build ${plat_args[@]+"${plat_args[@]}"} ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
     -t "$tag" "$ctx" >"$dir/build.log" 2>&1; then
     log "$image: the image did not build: $dir/build.log"
     printf '%s\tbuild\tFAIL\n' "$image" >>"$summary"
