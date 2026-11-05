@@ -22,7 +22,11 @@
 # `!` is a mutation run: it passes only when its last phase fails and the
 # uids on its `FAIL` lines are exactly those on its `MUTATED` lines. A
 # header line `# e2e-target: <stage>` builds that stage of the
-# Containerfile (`--target`) instead of its last one.
+# Containerfile (`--target`) instead of its last one. A header line
+# `# e2e-hostname: <name>` gives its containers that hostname instead of
+# `e2e`, and `# e2e-inputs: <name>...` brings canopy and athome into the
+# build context at their pinned commits (pinned_inputs below), from the
+# local clones GROFE_E2E_CANOPY_REPO and GROFE_E2E_ATHOME_REPO name.
 #
 # Nothing of the host's is mounted into a container: no home, no sockets,
 # no runtime dir. Around the whole thing the host-state check (host_state
@@ -43,6 +47,10 @@
 #   E2E_ARCH=1           also run on Arch
 #   E2E_STRICT=1         passed to every phase: a scenario that forgives a
 #                        failure passing on its rerun (FLAKY) fails instead
+#   GROFE_E2E_CANOPY_REPO, GROFE_E2E_ATHOME_REPO
+#                        local canopy and athome clones holding the pinned
+#                        commits, for a scenario with `# e2e-inputs:`; read
+#                        only (TA.1's names, scripts/e2e-alias-day.sh)
 #
 # Output: target/e2e/<run-id>/<scenario>/<image>/{build,<run>}.log, and one
 # summary line per image and run. Exits 0 only when every gating run passed
@@ -114,6 +122,48 @@ host_state() {
   fi
 }
 
+# pinned_inputs <work> <name>...: canopy and athome, each at the commit
+# grofe records for it (tests/fixtures/compat/golden/tc_13/PINS, the commits
+# TC.13's goldens were recorded against), into <work>/ctx/inputs. As TA.1's
+# stage 1 (scripts/e2e-alias-day.sh) takes them: read only, `git archive`
+# of the pinned commit and never a working tree; canopy also as a bundle of
+# that commit (branch `pinned`) from a throwaway clone under <work>, for
+# what needs its history; athome as a tree only, after the same secrets
+# gate (no .secrets/, .env or .envrc).
+#
+#   canopy   ctx/inputs/canopy.bundle and ctx/inputs/canopy/
+#   athome   ctx/inputs/athome/
+pinned_inputs() {
+  local work="$1" name var src sha bad
+  local pins="$work/ctx/grofe/tests/fixtures/compat/golden/tc_13/PINS" in="$work/ctx/inputs"
+  shift
+  for name in "$@"; do
+    case "$name" in
+      canopy) var=GROFE_E2E_CANOPY_REPO ;;
+      athome) var=GROFE_E2E_ATHOME_REPO ;;
+      *) log "inputs: no input named $name"; return 1 ;;
+    esac
+    src="${!var:-}"
+    [ -n "$src" ] || { log "inputs: set $var to a local $name clone"; return 1; }
+    sha="$(awk -v n="$name" '$1 == n { print $2 }' "$pins")"
+    [ -n "$sha" ] || { log "inputs: PINS has no $name line"; return 1; }
+    git -C "$src" cat-file -e "$sha^{commit}" 2>/dev/null ||
+      { log "inputs: $name's pinned commit $sha is not in $src"; return 1; }
+    # Called in an `||` list, so errexit is off here: each step checks.
+    mkdir -p "$in/$name" && git -C "$src" archive "$sha" | tar -x -C "$in/$name" || return 1
+    if [ "$name" = canopy ]; then
+      git clone --quiet --no-checkout "$src" "$work/clone-canopy" &&
+        git -C "$work/clone-canopy" branch --quiet pinned "$sha" &&
+        git -C "$work/clone-canopy" bundle create --quiet "$in/canopy.bundle" pinned || return 1
+    else
+      bad="$(cd "$in/$name" && find . \( -path '*/.secrets' -o -path '*/.secrets/*' -o -name '.env' -o -name '*.env' \
+        -o -name '.envrc' -o -name 'dot_envrc*' \) -print | LC_ALL=C sort)"
+      [ -z "$bad" ] || { log "inputs: the $name archive holds $(printf '%s' "$bad" | tr '\n' ' ')"; return 1; }
+    fi
+    log "inputs: $name at $sha (PINS)"
+  done
+}
+
 # --- the harness -------------------------------------------------------------
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
@@ -163,8 +213,9 @@ run_image() {
   # of the image) is emulated.
   local plat_args=()
   [ "$image" = arch ] && plat_args=(--platform linux/amd64)
-  local target target_args=()
+  local target target_args=() hostname
   target="$(sed -n 's/^# e2e-target: *//p' "$ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
+  hostname="$(sed -n 's/^# e2e-hostname: *//p' "$ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
   [ -n "$target" ] && target_args=(--target "$target")
   log "$image: building $tag"
   if ! engine build ${plat_args[@]+"${plat_args[@]}"} ${target_args[@]+"${target_args[@]}"} ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
@@ -180,7 +231,7 @@ run_image() {
     name="grofe-e2e-$image-${run_name%!}-$$"
     containers+=("$name")
     # shellcheck disable=SC2086 # steps is a list of words
-    if ! engine run -d --init --name "$name" --hostname e2e ${net_args[@]+"${net_args[@]}"} \
+    if ! engine run -d --init --name "$name" --hostname "${hostname:-e2e}" ${net_args[@]+"${net_args[@]}"} \
       --tmpfs /run/user:rw,mode=0755 "$tag" >"$dir/${run_name%!}.log" 2>&1; then
       rc=1
     else
@@ -266,6 +317,10 @@ main() {
   mkdir -p "$work/ctx/grofe"
   git -C "$repo" archive HEAD | tar -x -C "$work/ctx/grofe"
   log "$scenario at $sha, images: ${wanted[*]}, out: $out"
+  local inputs
+  inputs="$(sed -n 's/^# e2e-inputs: *//p' "$work/ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
+  # shellcheck disable=SC2086 # inputs is a list of words
+  [ -z "$inputs" ] || pinned_inputs "$work" $inputs || return 2
 
   local image status=0
   for image in "${wanted[@]}"; do
