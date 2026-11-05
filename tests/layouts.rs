@@ -1107,3 +1107,36 @@ fn srv_layout(srv: &TestServer, target: &str) -> String {
         .trim()
         .to_string()
 }
+
+/// A tmux-identity server whose config frames its windows. `grofe
+/// layout` speaks grofe's CLI to it, so it still sees `pane-frames`.
+fn tmux_identity_framed() -> TestServer {
+    let srv = TestServer::builder().frames(true).unstarted();
+    let dir = srv.config_home.join("grofe");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("config.toml"),
+        "compat-identity = \"tmux\"\npane-frames = true\n",
+    )
+    .unwrap();
+    srv
+}
+
+#[test]
+fn a_framed_tmux_identity_window_takes_a_layout_framed() {
+    let plain = TestServer::unstarted();
+    let framed = tmux_identity_framed();
+    save_and_up(&plain, &framed);
+    // Framed, with tmux identity's gap of 0: one cell in.
+    let first = &panes(&framed, "fr:w")[0][5];
+    assert!(first.starts_with("1,1,"), "{first}");
+}
+
+#[test]
+fn a_framed_tmux_identity_window_saves_a_layout_that_comes_up_unframed() {
+    let framed = tmux_identity_framed();
+    let plain = TestServer::unstarted();
+    save_and_up(&framed, &plain);
+    let first = &panes(&plain, "fr:w")[0][5];
+    assert!(first.starts_with("0,0,"), "{first}");
+}
