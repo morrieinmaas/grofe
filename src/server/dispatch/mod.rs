@@ -398,6 +398,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::DisplayPopup(c) => popup::display_popup(state, ctx, c),
         Command::NewPane(c) => popup::new_pane(state, ctx, c),
         Command::FloatPane(c) => popup::float_pane(state, ctx, c),
+        Command::UnfloatPane(c) => popup::unfloat_pane(state, ctx, c),
         Command::PlacePane(c) => popup::place_pane(state, ctx, c),
         Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
         Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
