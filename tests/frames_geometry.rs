@@ -278,8 +278,7 @@ fn a_too_small_window_falls_back_to_shared_borders() {
 fn the_defaults_differ_by_identity() {
     let srv = TestServer::start();
     let show = |srv: &TestServer, name: &str| ok(srv, &["show", "-gv", name]);
-    // ponytail: `on` once FR.2 lands (the option's comment).
-    assert_eq!(show(&srv, "pane-frames"), "off\n");
+    assert_eq!(show(&srv, "pane-frames"), "on\n");
     assert_eq!(show(&srv, "pane-gap"), "1\n");
     assert_eq!(show(&srv, "pane-frame-title"), "on\n");
     assert_eq!(show(&srv, "pane-border-lines"), "rounded\n");
