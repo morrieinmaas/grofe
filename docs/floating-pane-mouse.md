@@ -68,8 +68,10 @@ land. On release over a tiled pane `T`:
 - A side of `T` too small to split along its axis is no edge: the drop there
   is the middle's swap.
 - A floating pane dropped by `drag-pane -M` goes into the tiling by the same
-  table, which is unfloating it with the mouse; on `T`'s middle, `T` floats in
-  its place.
+  table, which is unfloating it with the mouse. On `T`'s middle it does not
+  swap: `T` is split along its longer axis and the pane takes the right or
+  bottom half, as `unfloat-pane -s T` does, so no other pane starts floating.
+  With no tiled pane left it takes the whole window wherever it is dropped.
 - The moved pane becomes the active pane. It is the same pane: its process,
   history, uid and resume command stay.
 - A zoomed window does not start a move.

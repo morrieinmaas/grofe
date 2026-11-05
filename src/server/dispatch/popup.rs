@@ -335,14 +335,7 @@ pub fn unfloat_pane(state: &mut State, ctx: &ClientCtx, c: UnfloatPane) -> Resul
             layout.replace(HOLE, pane);
         }
     }
-    let Some(w) = model.windows.get_mut(&window) else {
-        return Ok(String::new());
-    };
-    w.zoomed = false;
-    w.layout = layout;
-    w.floating.retain(|f| f.pane != pane);
-    w.set_active(pane);
-    model.relayout(window);
+    crate::server::drop::apply(model, window, pane, layout);
     Ok(String::new())
 }
 

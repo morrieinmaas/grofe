@@ -12,12 +12,13 @@
 //! An edge drop that would leave the layout's shape as it is changes
 //! nothing, so a moved divider stays put; a side of `T` too small to split
 //! is no edge, and counts as the middle. A floating pane drops into the
-//! tiling by the same table, which is unfloating it with the mouse: on the
-//! middle `T` floats in its place.
+//! tiling by the same table, which is unfloating it with the mouse, except
+//! that on the middle it splits `T` as `unfloat-pane -s T` would rather
+//! than swapping, so no other pane starts floating.
 //!
 //! [`plan`] works the drop out without changing anything, so the same
 //! answer gives the preview while the button is down and the move on
-//! release ([`apply`]).
+//! release ([`apply`], which `unfloat-pane` shares).
 
 use crate::server::layout::{GeometryCell, Insert, LayoutGeometry, LayoutTree};
 use crate::server::model::Window;
@@ -97,9 +98,9 @@ fn contains(r: Rect, (x, y): (u32, u32)) -> bool {
 
 /// Where `dragged`, a pane of `w` (tiled or floating), lands if released at
 /// window cell `at`, or `None` when that changes nothing. A zoomed window
-/// moves nothing.
+/// moves nothing, nor a pane no longer in `w`.
 pub fn plan(w: &Window, dragged: PaneId, at: (u32, u32)) -> Option<Drop> {
-    if w.zoomed {
+    if w.zoomed || !w.pane_ids().contains(&dragged) {
         return None;
     }
     let area = w.area();
@@ -108,32 +109,23 @@ pub fn plan(w: &Window, dragged: PaneId, at: (u32, u32)) -> Option<Drop> {
     let (onto, content) = w
         .tiled_rects()
         .into_iter()
-        .filter(|(id, _)| *id != HOLE)
         .find(|(_, r)| contains(drop_rect(*r, framed), at))?;
-    if onto == dragged {
+    let (layout, swap) = if onto == HOLE {
+        // Only floating panes are left: one dropped anywhere takes the
+        // layout's hole, as `unfloat-pane` does.
+        let mut layout = w.layout.clone();
+        (floating && layout.replace(HOLE, dragged)).then_some((layout, false))?
+    } else if onto == dragged {
         return None;
-    }
-    let edge = match zone(drop_rect(content, framed), at) {
-        // The same shape again: nothing, rather than the middle's swap.
-        Zone::Edge(side) => match docked(w, dragged, onto, side) {
-            Some(None) => return None,
-            edge => edge.flatten(),
-        },
-        Zone::Middle => None,
-    };
-    let (layout, swap) = match edge {
-        Some(layout) => (layout, false),
-        None => {
-            let mut layout = w.layout.clone();
-            let swapped = if floating {
-                layout.replace(onto, dragged)
-            } else {
-                layout.swap(dragged, onto)
-            };
-            if !swapped {
-                return None;
-            }
-            (layout, true)
+    } else {
+        match zone(drop_rect(content, framed), at) {
+            // The same shape again: nothing, rather than the middle.
+            Zone::Edge(side) => match docked(w, dragged, onto, side) {
+                Some(None) => return None,
+                Some(Some(layout)) => (layout, false),
+                None => middle(w, dragged, onto, content, floating)?,
+            },
+            Zone::Middle => middle(w, dragged, onto, content, floating)?,
         }
     };
     let (_, preview) = layout
@@ -146,6 +138,32 @@ pub fn plan(w: &Window, dragged: PaneId, at: (u32, u32)) -> Option<Drop> {
         preview,
         swap,
     })
+}
+
+/// A drop on the middle of `onto` (content rect `content`): a tiled pane
+/// swaps with it; a floating pane splits it along its longer axis and takes
+/// the right or bottom half, as `unfloat-pane -s` does, so no other pane
+/// starts floating. `None` when neither axis has room.
+fn middle(
+    w: &Window,
+    dragged: PaneId,
+    onto: PaneId,
+    content: Rect,
+    floating: bool,
+) -> Option<(LayoutTree, bool)> {
+    if !floating {
+        let mut layout = w.layout.clone();
+        return layout.swap(dragged, onto).then_some((layout, true));
+    }
+    let sides = if content.cols > content.rows {
+        [Side::Right, Side::Bottom]
+    } else {
+        [Side::Bottom, Side::Right]
+    };
+    sides
+        .into_iter()
+        .find_map(|side| docked(w, dragged, onto, side).flatten())
+        .map(|layout| (layout, false))
 }
 
 /// The layout with `dragged` out of its place and in the half of `onto` on
@@ -190,26 +208,19 @@ fn same_shape(a: &LayoutGeometry, b: &LayoutGeometry) -> bool {
     }
 }
 
-/// Makes `drop`, worked out by [`plan`] for `dragged` in `window`: the
-/// layout changes, a floating pane leaves the floating set (or on a swap
-/// hands its place to the pane it swapped with), and `dragged` becomes the
-/// active pane. Each moved pane learns its new size now, once. The panes
-/// are the same panes: process, history and uid stay.
-pub fn apply(model: &mut Model, window: WindowId, dragged: PaneId, drop: Drop) {
+/// Puts `pane` of `window` in its place in `layout`, worked out by
+/// [`plan`] or by `unfloat-pane`: a floating pane leaves the floating set,
+/// a zoom ends, and `pane` becomes the active pane. Each moved pane learns
+/// its new size now, once. The panes are the same panes: process, history
+/// and uid stay.
+pub fn apply(model: &mut Model, window: WindowId, pane: PaneId, layout: LayoutTree) {
     let Some(w) = model.windows.get_mut(&window) else {
         return;
     };
-    if let Some(i) = w.floating.iter().position(|f| f.pane == dragged) {
-        if drop.swap {
-            w.floating[i].pane = drop.onto;
-        } else {
-            w.floating.remove(i);
-        }
-    }
+    w.floating.retain(|f| f.pane != pane);
     w.zoomed = false;
-    w.layout = drop.layout;
-    w.drop_preview = None;
-    w.set_active(dragged);
+    w.layout = layout;
+    w.set_active(pane);
     model.relayout(window);
 }
 
@@ -371,10 +382,66 @@ mod tests {
             after.iter().find(|p| p.0 == PaneId(1)).unwrap().1
         );
         assert!(d.preview.x < after[0].1.x);
-        // The middle: %1 takes %0's place.
-        let d = plan(&w, PaneId(1), (40, 10)).expect("a swap");
-        assert!(d.swap);
+        // The middle: %0 is split along its longer axis, as
+        // `unfloat-pane -s %0` splits it, and %1 takes the right half; %0
+        // stays tiled, no pane starts floating.
+        let d = plan(&w, PaneId(1), (40, 10)).expect("a dock");
+        assert!(!d.swap);
+        let after = rects(&d.layout, &w);
+        assert_eq!(after.len(), 2, "{after:?}");
+        let (zero, one) = (after[0].1, after[1].1);
+        assert_eq!((after[0].0, after[1].0), (PaneId(0), PaneId(1)));
+        assert!(one.x > zero.x && one.y == zero.y, "{after:?}");
+        assert_eq!(d.preview, one);
+    }
+
+    #[test]
+    fn a_floating_pane_on_a_tall_panes_middle_takes_its_bottom_half() {
+        let mut w = window(true);
+        // 16 content columns, 19 rows.
+        w.cols = 20;
+        w.layout.remove(PaneId(1));
+        w.floating.push(Floating {
+            pane: PaneId(1),
+            x: 5,
+            y: 5,
+            cols: 10,
+            rows: 5,
+            z: 1,
+        });
+        let d = plan(&w, PaneId(1), (10, 11)).expect("a dock");
+        let after = rects(&d.layout, &w);
+        let (zero, one) = (after[0].1, after[1].1);
+        assert!(one.y > zero.y && one.x == zero.x, "{after:?}");
+    }
+
+    #[test]
+    fn a_floating_pane_takes_the_hole_when_no_pane_is_tiled() {
+        let mut w = window(true);
+        w.layout.remove(PaneId(1));
+        w.layout.replace(PaneId(0), HOLE);
+        for (pane, x) in [(PaneId(0), 5), (PaneId(1), 40)] {
+            w.floating.push(Floating {
+                pane,
+                x,
+                y: 5,
+                cols: 20,
+                rows: 5,
+                z: 1,
+            });
+        }
+        let d = plan(&w, PaneId(1), (10, 15)).expect("into the hole");
         assert_eq!(rects(&d.layout, &w)[0].0, PaneId(1));
+        assert_eq!(d.preview, rects(&d.layout, &w)[0].1);
+    }
+
+    #[test]
+    fn a_pane_no_longer_in_the_window_lands_nowhere() {
+        let mut w = window(true);
+        w.layout.remove(PaneId(1));
+        // %1 has gone mid-drag: nothing to drop, on %0's edge or middle.
+        assert!(plan(&w, PaneId(1), (3, 10)).is_none());
+        assert!(plan(&w, PaneId(1), (40, 10)).is_none());
     }
 
     #[test]

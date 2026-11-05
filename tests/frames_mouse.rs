@@ -297,6 +297,75 @@ fn a_ctrl_drop_of_a_floating_pane_unfloats_it_there() {
     assert_eq!(var(&srv, "%2", "#{window_panes}"), "3");
 }
 
+/// On a tiled pane's middle a floating pane does not swap: the pane it
+/// lands on stays tiled and is split along its longer axis, as
+/// `unfloat-pane -s` splits it.
+#[test]
+fn a_ctrl_drop_of_a_floating_pane_on_a_middle_splits_it() {
+    let srv = framed();
+    ok(&srv, &["split-window", "-v", "-t", "%1", "cat"]);
+    ok(
+        &srv,
+        &[
+            "float-pane",
+            "-t",
+            "%2",
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "45",
+            "-Y",
+            "4",
+        ],
+    );
+    let mut a = attach(&srv);
+    let (l0, t0, w0, h0) = rect(&srv, "%0");
+    drag(
+        &mut a,
+        CTRL,
+        middle(&srv, "%2"),
+        &[(30, 10), middle(&srv, "%0")],
+    );
+    let tiled = wait_until(|| var(&srv, "%2", "#{pane_floating_flag}") == "0", WAIT);
+    assert!(tiled.is_ok(), "{:?}", layout(&srv));
+    // %0 is wider than tall, so it is split side by side and %2 takes the
+    // right half; nothing floats now.
+    assert!(w0 > h0);
+    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "0");
+    let (l2, t2, _, h2) = rect(&srv, "%2");
+    assert_eq!(rect(&srv, "%0").0, l0, "{:?}", layout(&srv));
+    assert!(l2 > l0 && (t2, h2) == (t0, h0), "{:?}", layout(&srv));
+    assert_eq!(var(&srv, "%2", "#{pane_active}"), "1");
+}
+
+/// The moved pane's program learns its new size once, on release: the
+/// reports during the drag only move the preview.
+#[test]
+fn the_program_learns_its_size_once_on_release() {
+    let srv = framed();
+    let log = srv.config_home.join("winch");
+    let script = format!(
+        "trap 'echo w >> {0}' WINCH; echo ready > {0}; while :; do sleep 0.05; done",
+        log.display()
+    );
+    ok(&srv, &["split-window", "-v", "-t", "%1", &script]);
+    let lines = || fs::read_to_string(&log).unwrap_or_default().lines().count();
+    wait_until(|| lines() == 1, WAIT).expect("the trap is set");
+    let mut a = attach(&srv);
+    let (l0, t0, w0, h0) = rect(&srv, "%0");
+    let mut path: Vec<(u16, u16)> = (0..20)
+        .map(|i| (l0 + w0 / 2 + i % 7, t0 + 2 + i % 9))
+        .collect();
+    path.push((l0 + 1, t0 + h0 / 2));
+    drag(&mut a, 0, title(&srv, "%2"), &path);
+    wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT)
+        .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(lines(), 2, "one resize: {:?}", fs::read_to_string(&log));
+}
+
 #[test]
 fn a_zoomed_window_starts_no_move() {
     let srv = framed();

@@ -687,12 +687,14 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     if m.kind == MouseKind::Move {
         focus_follows(state, client, m);
     }
-    if !mouse_on(state, client) {
-        // The key tables drop it, as with no mouse at all.
+    if !mouse_on(state, client) || client_window(state, client).is_none() {
+        // A move whose release can no longer come is cancelled, its
+        // preview with it.
+        cancel_move(state, client);
+        // The key tables drop it, as with no mouse at all; a client showing
+        // no window has nothing to point at.
         return None;
     }
-    // A client showing no window has nothing to point at.
-    client_window(state, client)?;
     let from = state.mouse.pointers.get(&client).and_then(|p| p.last);
     // The report that ends a drag drops a pane being moved, before the
     // drag's end fires.
@@ -941,7 +943,7 @@ fn drop_move(state: &mut State, client: ClientId, mv: PaneMove, cell: (u16, u16)
     let planned = plan_move(state, client, mv, cell);
     set_preview(state, mv.window, None);
     if let Some(d) = planned {
-        crate::server::drop::apply(&mut state.model, mv.window, mv.pane, d);
+        crate::server::drop::apply(&mut state.model, mv.window, mv.pane, d.layout);
         clients::changed(state);
     }
 }
@@ -1441,13 +1443,25 @@ fn drag_tick(state: &mut State, client: ClientId, generation: u64) {
     }
 }
 
+/// Client `client`'s pane move, if any, ends without a drop, and its
+/// preview goes.
+fn cancel_move(state: &mut State, client: ClientId) {
+    let mv = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.pane_move.take());
+    if let Some(mv) = mv {
+        set_preview(state, mv.window, None);
+    }
+}
+
 /// Client `id` is gone: its pointer, and with it any drag and its timer,
 /// goes too (the client's removal calls this).
 pub fn client_gone(state: &mut State, id: ClientId) {
     // A move it had going is cancelled, its preview with it.
-    if let Some(mv) = state.mouse.pointers.remove(&id).and_then(|p| p.pane_move) {
-        set_preview(state, mv.window, None);
-    }
+    cancel_move(state, id);
+    state.mouse.pointers.remove(&id);
     if state.mouse.current.as_ref().is_some_and(|m| m.client == id) {
         state.mouse.current = None;
     }
