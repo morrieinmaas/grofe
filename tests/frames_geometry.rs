@@ -6,8 +6,10 @@
 //! panes falls back to shared borders; the defaults follow the identity,
 //! and the TOML config takes the options under either.
 //!
-//! grofe's built-in `pane-frames` is `off` until FR.2 draws the frames
-//! (the option's ponytail), so the framed tests turn it on in the config.
+//! The harness pins its servers to frames off (`tests/common`); these
+//! tests opt out with `.frames(true)` and see grofe's built-in defaults.
+//! The framed tests still say `pane-frames = true` in the config, so they
+//! test the config path as well.
 
 mod common;
 
@@ -55,7 +57,7 @@ fn write_config(srv: &TestServer, text: &str) {
 
 /// A server whose config sets `text`, started by the first command.
 fn start_with_config(text: &str) -> TestServer {
-    let srv = TestServer::unstarted();
+    let srv = TestServer::builder().frames(true).unstarted();
     write_config(&srv, text);
     ok(&srv, &["start-server"]);
     srv
@@ -214,7 +216,7 @@ fn a_zoomed_pane_is_one_framed_tile() {
 /// again moves nothing.
 #[test]
 fn frames_off_is_tmux_geometry() {
-    let srv = TestServer::start();
+    let srv = TestServer::builder().frames(true).start();
     ok(&srv, &["set", "-g", "pane-frames", "off"]);
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
@@ -276,10 +278,9 @@ fn a_too_small_window_falls_back_to_shared_borders() {
 /// rounded, tmux's keeps shared single borders.
 #[test]
 fn the_defaults_differ_by_identity() {
-    let srv = TestServer::start();
+    let srv = TestServer::builder().frames(true).start();
     let show = |srv: &TestServer, name: &str| ok(srv, &["show", "-gv", name]);
-    // ponytail: `on` once FR.2 lands (the option's comment).
-    assert_eq!(show(&srv, "pane-frames"), "off\n");
+    assert_eq!(show(&srv, "pane-frames"), "on\n");
     assert_eq!(show(&srv, "pane-gap"), "1\n");
     assert_eq!(show(&srv, "pane-frame-title"), "on\n");
     assert_eq!(show(&srv, "pane-border-lines"), "rounded\n");
@@ -296,6 +297,30 @@ fn the_defaults_differ_by_identity() {
     ok(&tmux, &["set", "-g", "pane-frames", "on"]);
     ok(&tmux, &["set", "-gu", "pane-frames"]);
     assert_eq!(show(&tmux, "pane-frames"), "off\n");
+}
+
+/// With no config at all a grofe-identity server frames its panes: the
+/// built-in default, gap 1.
+#[test]
+fn grofe_frames_its_panes_by_default() {
+    let srv = TestServer::builder().frames(true).start();
+    session(&srv);
+    ok(&srv, &["split-window", "-h", "-t", "f"]);
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x20", "42,2,36x20"]));
+    wait_pty(&srv, "f:.1", "20 36");
+}
+
+/// The harness pins every other suite to frames off through its `conf.d`
+/// file, which a test's own `config.toml` does not undo.
+#[test]
+fn the_harness_pins_frames_off() {
+    let srv = TestServer::unstarted();
+    write_config(&srv, "pane-frames = true\n");
+    ok(&srv, &["start-server"]);
+    assert_eq!(ok(&srv, &["show", "-gv", "pane-frames"]), "off\n");
+    session(&srv);
+    ok(&srv, &["split-window", "-h", "-t", "f"]);
+    assert_eq!(geometry(&srv, "f"), strings(&["0,0,40x24", "41,0,39x24"]));
 }
 
 /// The TOML config takes the frame options under tmux identity too.
@@ -398,7 +423,7 @@ fn a_framed_layout_survives_a_restore() {
 /// with the snapshot's options: the restored window is framed from them.
 #[test]
 fn a_restored_window_takes_its_frames_from_the_options() {
-    let srv = TestServer::start();
+    let srv = TestServer::builder().frames(true).start();
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
     ok(

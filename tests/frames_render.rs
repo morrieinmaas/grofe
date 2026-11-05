@@ -437,7 +437,7 @@ fn frames_off_ignores_the_frame_title() {
 /// A server whose config sets `config`, a 40x12 session `f` running
 /// `cat` split into 1 | (2 / 3), and a client attached at 40x13.
 fn attached(config: &str) -> (TestServer, Harness) {
-    let srv = TestServer::unstarted();
+    let srv = TestServer::builder().frames(true).unstarted();
     let dir = srv.config_home.join("grofe");
     fs::create_dir_all(&dir).expect("config dir");
     fs::write(dir.join("config.toml"), config).expect("write config");
