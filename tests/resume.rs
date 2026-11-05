@@ -233,25 +233,36 @@ fn from_outside_a_pane_the_foreground_process_path_resolves() {
 fn from_outside_a_pane_the_spawn_environment_path_resolves() {
     let f = Fixture::new();
     let path = format!("PATH={}:/usr/bin:/bin", f.bin.display());
-    f.srv
-        .cmd(&["new-window", "-t", "main", "-e", &path])
+    let pane = f
+        .srv
+        .cmd(&[
+            "new-window",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "main",
+            "-e",
+            &path,
+        ])
         .expect("new-window -e PATH");
-    f.wait_prompt("main:1");
+    let pane = pane.trim();
+    f.wait_prompt(pane);
     // The foreground process has no PATH of its own.
-    f.type_line("main:1", "env -i /bin/sleep 1000");
-    f.wait_foreground("main:1", "sleep");
+    f.type_line(pane, "env -i /bin/sleep 1000");
+    f.wait_foreground(pane, "sleep");
     f.srv
         .cmd(&[
             "pane-set-resume",
             "-t",
-            "main:1",
+            pane,
             "--",
             "fake-agent",
             "--resume",
             "b",
         ])
         .expect("pane-set-resume");
-    assert_eq!(f.resume("main:1"), format!("{} --resume b", f.agent()));
+    assert_eq!(f.resume(pane), format!("{} --resume b", f.agent()));
 }
 
 #[test]
@@ -380,12 +391,23 @@ fn dash_u_clears() {
 #[test]
 fn a_spawn_command_is_the_resume_bound_to_the_root() {
     let f = Fixture::new();
-    f.srv
-        .cmd(&["new-window", "-t", "main", "/bin/sleep", "1000"])
+    let pane = f
+        .srv
+        .cmd(&[
+            "new-window",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "main",
+            "/bin/sleep",
+            "1000",
+        ])
         .expect("new-window");
-    assert_eq!(f.resume("main:1"), "/bin/sleep 1000");
+    let pane = pane.trim();
+    assert_eq!(f.resume(pane), "/bin/sleep 1000");
     thread::sleep(SEVERAL_SAMPLES);
-    assert_eq!(f.resume("main:1"), "/bin/sleep 1000");
+    assert_eq!(f.resume(pane), "/bin/sleep 1000");
 }
 
 #[test]
