@@ -42,6 +42,43 @@ wait_for_line() {
     [ "$status" -eq 0 ]
 }
 
+@test "--version and -V print grofe's version" {
+    version="$(grep -m1 '^version' "$(dirname "$BATS_TEST_FILENAME")/../Cargo.toml" | cut -d'"' -f2)"
+    for flag in --version -V; do
+        run "$BIN" "$flag"
+        [ "$status" -eq 0 ]
+        [ "$output" = "grofe $version" ]
+    done
+    run "$BIN" -L x --version
+    [ "$status" -eq 0 ]
+    [ "$output" = "grofe $version" ]
+}
+
+@test "--help and -h print usage with the common commands" {
+    for flag in --help -h; do
+        run "$BIN" "$flag"
+        [ "$status" -eq 0 ]
+        [[ "${lines[0]}" == usage:\ grofe* ]]
+        for word in -L -S --version --help new-session attach-session \
+            list-sessions split-window send-keys kill-server; do
+            grep -q -- "$word" <<<"$output"
+        done
+    done
+    # Nothing starts a server.
+    [ ! -e "$SOCK" ]
+}
+
+@test "through a tmux symlink -V and -h stay tmux's" {
+    mkdir -p "$TMP/bin"
+    ln -s "$BIN" "$TMP/bin/tmux"
+    run "$TMP/bin/tmux" -V
+    [ "$status" -eq 0 ]
+    [ "$output" = "tmux 3.7b" ]
+    run "$TMP/bin/tmux" -h
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" == usage:\ tmux* ]]
+}
+
 @test "no GROFE variables reach the binary" {
     run env
     [ "$status" -eq 0 ]
