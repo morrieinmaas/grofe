@@ -1273,6 +1273,13 @@ pub struct UnfloatPane {
     pub dir: Option<Dir>,
 }
 
+/// `drag-pane -M` (grofe's own; tmux 3.7b has no such verb): the pane of
+/// the running mouse key moves with the pointer until the release, and
+/// drops into the tiling where it lands (spec 2026-11-05-frames.md "Drag
+/// and drop"). Only meaningful from a mouse key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DragPane;
+
 /// `place-pane` (grofe's own): moves a floating pane to the window cell
 /// `-X`, `-Y` of its top-left content cell, as `new-pane` reads them; an
 /// axis not given stays. The place is held inside the window as a mouse
@@ -1686,6 +1693,7 @@ pub enum Command {
     NewPane(NewPane),
     FloatPane(FloatPane),
     UnfloatPane(UnfloatPane),
+    DragPane(DragPane),
     PlacePane(PlacePane),
     DisplayMenu(DisplayMenu),
     DisplayPanes(DisplayPanes),
