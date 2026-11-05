@@ -43,6 +43,8 @@
 //! `area` through explicitly, and rebasing onto it, means the tree never
 //! mutates from sizes that belong to some older window size.
 
+use serde::{Deserialize, Serialize};
+
 use crate::server::borders::PaneStatus;
 use crate::types::{Dir, Edge, PaneId, Rect, SplitSize};
 
@@ -170,23 +172,27 @@ pub struct Insert {
 /// A layout as cells with their sizes and offsets (tmux's layout cells),
 /// for the tmux layout-string codec: [`LayoutTree::export`] writes it and
 /// [`LayoutTree::import`] reads it. Geometry only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutGeometry {
+///
+/// Cells name panes by runtime id; the M4 snapshot keeps the same shape
+/// with cells keyed by pane `uid` (`LayoutGeometry<String>`, spec §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutGeometry<P = PaneId> {
     pub x: u16,
     pub y: u16,
     pub cols: u16,
     pub rows: u16,
-    pub cell: GeometryCell,
+    pub cell: GeometryCell<P>,
 }
 
 /// What a [`LayoutGeometry`] cell holds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GeometryCell {
-    Pane(PaneId),
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeometryCell<P = PaneId> {
+    Pane(P),
     /// Children in order along `dir`, one border cell apart.
     Split {
         dir: Dir,
-        children: Vec<LayoutGeometry>,
+        children: Vec<LayoutGeometry<P>>,
     },
 }
 

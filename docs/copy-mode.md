@@ -550,11 +550,20 @@ scenarios do not depend on.
 ## The emacs table (B2b)
 
 With `mode-keys emacs`, copy mode reads tmux 3.7b's stock `copy-mode`
-table: its 75 bindings, listed by `list-keys -T copy-mode` as tmux prints
+table. That is tmux's own default, and grofe's under tmux identity: tmux
+3.7b sets `mode-keys` (and `status-keys`) to `vi` only when `$VISUAL`, else
+`$EDITOR`, has a basename holding `vi`, and grofe does the same when it
+starts with tmux identity, so a tmux user who never set `mode-keys` gets
+this table on `prefix [`. grofe's own default stays `vi` (spec §5.3). The
+table's 75 bindings, listed by `list-keys -T copy-mode` as tmux prints
 them (`golden/b2b/emacs-keys`), and the keys they bind are checked through
 an attached client (`golden/b2b/emacs-move`, `-scroll`, `-keypad`,
 `-select`, `-marks`, `-prompts`). A lone Escape is not typed in these
-goldens: the recording container's tmux holds it back.
+goldens: the recording container's tmux holds it back. With nothing
+configured and no vi in `$EDITOR`, `tests/acceptance/copy_emacs.rs` starts
+a server through the `tmux` name and checks that `prefix [` reaches this
+table: `C-Space` selects, `M-w` copies into a buffer, `C-g` clears, `q`,
+`C-c` and a lone Escape leave, and `C-s` and `C-r` open their prompts.
 
 **Incremental search.** `C-s` and `C-r` open `command-prompt -i`. An
 incremental prompt does not wait for Enter: its template runs with every

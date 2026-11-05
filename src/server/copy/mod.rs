@@ -50,7 +50,8 @@ pub const MODE_NAME: &str = "copy-mode";
 pub const VIEW_MODE_NAME: &str = "view-mode";
 /// The key table copy mode uses with `mode-keys vi`.
 pub const VI_TABLE: &str = "copy-mode-vi";
-/// The key table with `mode-keys emacs` (not shipped, spec §4.11).
+/// The key table with `mode-keys emacs`: tmux 3.7b's stock emacs rows
+/// ([`crate::server::input::COPY_MODE_EMACS`]).
 pub const EMACS_TABLE: &str = "copy-mode";
 
 /// tmux's `WHITESPACE`.

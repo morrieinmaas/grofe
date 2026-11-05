@@ -284,6 +284,14 @@ pub struct Pane {
     pub cwd: PathBuf,
     /// The argv that brings this pane's process back; `None` starts a shell.
     pub resume: Option<Vec<String>>,
+    /// The process `resume` (or `expect`) was set for; cleared with it when
+    /// that process is gone (T4.2).
+    pub resume_binding: Option<crate::server::resume::Binding>,
+    /// `pane-set-resume --expect <reason>`: a resume is expected and none
+    /// is known, with why (T4.2). Never saved.
+    pub expect: Option<String>,
+    /// The pane came from a snapshot (T4.3, `#{pane_restored}`).
+    pub restored: bool,
     /// `Some(status)` once the child exited and the master drained;
     /// `status` is `None` when a signal killed it.
     pub dead: Option<Option<i32>>,
@@ -1144,6 +1152,9 @@ mod tests {
                 shell: "/bin/sh".to_string(),
                 cwd: std::env::temp_dir(),
                 resume: None,
+                resume_binding: None,
+                expect: None,
+                restored: false,
                 dead: None,
                 cols: 80,
                 rows: 24,

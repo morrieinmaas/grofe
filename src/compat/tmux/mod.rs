@@ -1069,6 +1069,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("remain-on-exit-format", "remain-on-exit-format"),
     ("renumber-windows", "renumber-windows"),
     ("repeat-time", "repeat-time"),
+    ("restore-on-start", "restore-on-start"),
+    ("restore-stagger-ms", "restore-stagger-ms"),
     ("scroll-on-clear", "scroll-on-clear"),
     (
         "session-status-current-style",

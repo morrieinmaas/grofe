@@ -15,9 +15,17 @@
 //! Server defaults. Until config exists (M3), the server reads two variables
 //! at start, which the harness always sets (see `grofe::server::StartOptions`):
 //!
-//! - `GROFE_RESTORE_ON_START=0`: restore-on-start forced off. A no-op until
-//!   M4, there so M4 can never restore the user's real sessions into a test.
+//! - `GROFE_RESTORE_ON_START=0`: restore-on-start forced off, so M4 can
+//!   never restore the user's real sessions into a test. A server built with
+//!   [`TestServer::builder`]`.restore_on_start(true)` goes without it and
+//!   restores as its config says.
 //! - `GROFE_REMAIN_ON_EXIT=1`: tests run with `remain-on-exit` on (spec §4.2).
+//!
+//! Persistence (M4, a contract edit): [`TestServer::snapshot_path`] and
+//! [`TestServer::edit_snapshot`] reach this server's `state.json`;
+//! [`TestServer::kill_hard`] crashes the server, [`TestServer::signal_all`]
+//! signals it and every process below it as a reboot or logout does, and
+//! [`TestServer::restart`] starts a new server on the same socket and dirs.
 //!
 //! Every wait is bounded, and dropping a `TestServer` (including while a test
 //! panics) stops its server: `kill-server` first, then SIGKILL as a fallback,
@@ -28,9 +36,10 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,6 +48,8 @@ use grofe::paths::{self, Env};
 use grofe::protocol::{ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::server::{START_MARKER, StartOptions};
 use tempfile::TempDir;
+
+pub use nix::sys::signal::Signal;
 
 /// The prompt a pane's shell shows (see [`TestServer::command`]).
 pub const PROMPT: &str = "$ ";
@@ -57,7 +68,17 @@ pub struct CmdOutput {
 pub struct TestServer {
     dir: TempDir,
     /// The server [`Self::start`] spawned, when this harness is its parent.
-    server: Option<Child>,
+    /// Behind a lock so [`Self::kill_hard`] works through `&self`.
+    server: Mutex<Option<Child>>,
+    /// Processes that were below a server [`Self::kill_hard`] or
+    /// [`Self::signal_all`] hit (pid and start time), which outlive it as
+    /// orphans; teardown kills what still runs.
+    orphans: Mutex<Vec<(i32, String)>>,
+    /// Whether servers this harness starts may restore on start; off
+    /// unless [`TestServerBuilder::restore_on_start`] turned it on.
+    restore_on_start: bool,
+    /// [`TestServerBuilder::path_env`]: the only `PATH` its commands see.
+    path_env: Option<String>,
     pub socket: PathBuf,
     pub home: PathBuf,
     pub config_home: PathBuf,
@@ -84,7 +105,10 @@ impl TestServer {
         TestServer {
             socket: runtime_dir.join("test.sock"),
             dir,
-            server: None,
+            server: Mutex::new(None),
+            orphans: Mutex::new(Vec::new()),
+            restore_on_start: false,
+            path_env: None,
             home,
             config_home,
             state_home,
@@ -96,17 +120,118 @@ impl TestServer {
     /// own child so teardown can kill and reap it by pid. Panics, with the
     /// server log, if it does not come up.
     pub fn start() -> TestServer {
-        let mut srv = TestServer::unstarted();
-        let mut cmd = srv.command();
+        TestServer::builder().start()
+    }
+
+    /// A server with persistence settings: restore on start, the `PATH`
+    /// it starts under.
+    pub fn builder() -> TestServerBuilder {
+        TestServerBuilder::default()
+    }
+
+    /// Spawns `grofe __server` as this process's child, in its own process
+    /// group (so [`Self::kill_hard`] can kill the group), and waits for it.
+    fn spawn_server(&mut self) {
+        let mut cmd = self.command();
         cmd.arg("__server")
+            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        srv.server = Some(cmd.spawn().expect("spawn test server"));
-        if wait_until(|| srv.is_running(), CMD_TIMEOUT).is_err() {
-            panic!("test server failed to start; server log:\n{}", srv.log());
+        let child = cmd.spawn().expect("spawn test server");
+        *self
+            .server
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = Some(child);
+        if wait_until(|| self.is_running(), CMD_TIMEOUT).is_err() {
+            panic!("test server failed to start; server log:\n{}", self.log());
         }
-        srv
+    }
+
+    /// This server's snapshot, `state.json` under its temp `XDG_STATE_HOME`,
+    /// derived by `grofe::paths::snapshot_path` as the server derives it.
+    pub fn snapshot_path(&self) -> PathBuf {
+        paths::snapshot_path(&self.paths_env(), &self.socket)
+    }
+
+    /// Rewrites the snapshot on disk through `edit`, for mutation proofs.
+    /// Panics when there is no snapshot or it is not JSON.
+    pub fn edit_snapshot(&self, edit: impl FnOnce(&mut serde_json::Value)) {
+        let path = self.snapshot_path();
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read snapshot {}: {e}", path.display()));
+        let mut value: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("snapshot {} is not JSON: {e}", path.display()));
+        edit(&mut value);
+        let text = serde_json::to_string_pretty(&value).expect("serialize snapshot");
+        fs::write(&path, text).unwrap_or_else(|e| panic!("write snapshot {}: {e}", path.display()));
+    }
+
+    /// SIGKILLs the server and its process group, as a crash would, and
+    /// reaps it. Pane processes are left to their hangup; teardown kills
+    /// any that remain.
+    pub fn kill_hard(&self) {
+        use nix::sys::signal::killpg;
+        use nix::unistd::Pid;
+        let mut server = self.server.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut child) = server.take() else {
+            panic!("kill_hard: this harness started no server");
+        };
+        self.orphans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(descendants(child.id()));
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+        let _ = child.kill();
+        if wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT).is_err() {
+            panic!("kill_hard: the server did not die");
+        }
+    }
+
+    /// Sends `signal` to the server and every process below it (its panes,
+    /// jobs and plugins), as a reboot or logout does. Returns at once:
+    /// the caller waits for what it expects to follow.
+    pub fn signal_all(&self, signal: Signal) {
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+        let server = self.server.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(child) = server.as_ref() else {
+            panic!("signal_all: this harness started no server");
+        };
+        let below = descendants(child.id());
+        let _ = kill(Pid::from_raw(child.id() as i32), signal);
+        for (pid, _) in &below {
+            let _ = kill(Pid::from_raw(*pid), signal);
+        }
+        self.orphans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(below);
+    }
+
+    /// A new server on the same socket, state and config dirs, restoring
+    /// as this harness was built to. A server still answering is stopped
+    /// first with `kill-server`; one already going (after
+    /// [`Self::signal_all`]) is waited for.
+    pub fn restart(mut self) -> TestServer {
+        let ctx = self.ctx();
+        if let Some(mut child) = self
+            .server
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            let reaped = |child: &mut Child| !matches!(child.try_wait(), Ok(None));
+            if self.is_running() || wait_until(|| reaped(&mut child), TEARDOWN_WAIT).is_err() {
+                stop_server(&mut child, &self.socket, &ctx);
+            }
+        }
+        // A crashed server leaves its socket file behind.
+        if !self.is_running() {
+            let _ = fs::remove_file(&self.socket);
+        }
+        self.spawn_server();
+        self
     }
 
     /// A `grofe -S <socket>` command with the isolated environment applied.
@@ -120,6 +245,10 @@ impl TestServer {
     /// no startup file sets another prompt.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        if self.path_env.is_some() {
+            // `env -i PATH=<path>`, plus the harness's own variables below.
+            cmd.env_clear();
+        }
         cmd.arg("-S")
             .arg(&self.socket)
             .current_dir(&self.home)
@@ -132,8 +261,15 @@ impl TestServer {
             .env("SHELL", "/bin/sh")
             .env("PS1", PROMPT)
             .env("ENV", "")
-            .env(StartOptions::RESTORE_ON_START_ENV, "0")
             .env(StartOptions::REMAIN_ON_EXIT_ENV, "1");
+        if self.restore_on_start {
+            cmd.env_remove(StartOptions::RESTORE_ON_START_ENV);
+        } else {
+            cmd.env(StartOptions::RESTORE_ON_START_ENV, "0");
+        }
+        if let Some(path) = &self.path_env {
+            cmd.env("PATH", path);
+        }
         cmd
     }
 
@@ -277,6 +413,40 @@ impl TestServer {
     }
 }
 
+/// [`TestServer::builder`]: a server with persistence settings.
+#[derive(Default)]
+pub struct TestServerBuilder {
+    restore_on_start: bool,
+    path_env: Option<String>,
+}
+
+impl TestServerBuilder {
+    /// `true` lets the server restore on start as its config says (the
+    /// harness otherwise forces it off with `GROFE_RESTORE_ON_START=0`),
+    /// for this server and every one [`TestServer::restart`] starts.
+    pub fn restore_on_start(mut self, on: bool) -> TestServerBuilder {
+        self.restore_on_start = on;
+        self
+    }
+
+    /// Runs the server, and every CLI the harness runs, as under
+    /// `env -i PATH=<path>`: only the harness's own variables and this
+    /// `PATH`.
+    pub fn path_env(mut self, path: &str) -> TestServerBuilder {
+        self.path_env = Some(path.to_string());
+        self
+    }
+
+    /// Starts the server, as [`TestServer::start`].
+    pub fn start(self) -> TestServer {
+        let mut srv = TestServer::unstarted();
+        srv.restore_on_start = self.restore_on_start;
+        srv.path_env = self.path_env;
+        srv.spawn_server();
+        srv
+    }
+}
+
 /// How long teardown waits for a server to go.
 const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 
@@ -287,9 +457,18 @@ const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 /// none).
 impl Drop for TestServer {
     fn drop(&mut self) {
-        if let Some(mut child) = self.server.take() {
+        let server = self
+            .server
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(mut child) = server.take() {
             stop_server(&mut child, &self.socket, &self.ctx());
         }
+        kill_leftovers(
+            self.orphans
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
         // ponytail: servers a test started some other way (auto-start, `-L`)
         // are not our children, so they only get a polite `kill-server` over
         // their socket. One whose socket is already gone leaks. The upgrade

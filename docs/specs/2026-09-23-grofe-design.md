@@ -632,7 +632,9 @@ that pins it against a golden recorded from tmux 3.7b.
   view keeps its place while output continues. Keys go through the
   `copy-mode-vi` table, whose commands are `send-keys -X <command>` (`-N`
   count, `-F` a format argument), as in tmux, so the owner's bindings keep
-  their argv. `mode-keys` stays `vi` (§5.3); the emacs table is not shipped.
+  their argv. `mode-keys` stays `vi` (§5.3) for grofe; with `mode-keys emacs`
+  (tmux identity's default, as in tmux) keys go through tmux 3.7b's stock
+  `copy-mode` table instead (B2b).
 - **Selection** runs over logical lines: soft-wrapped rows join into one line,
   hard newlines stay, trailing blanks are trimmed, wide cells are copied
   whole. Rectangle, line and word selection (`word-separators`) work as in

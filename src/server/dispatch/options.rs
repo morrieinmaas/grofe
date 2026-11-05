@@ -523,6 +523,23 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "auto",
     },
+    // M4 (the stub edit; spec §6): whether a starting server restores the
+    // snapshot, and the spread of resumed panes' start delays. grofe's own
+    // names; T4.3 and T4.4 read them, nothing does until then.
+    Builtin {
+        name: "restore-on-start",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+    },
+    Builtin {
+        name: "restore-stagger-ms",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "1000",
+    },
     // G3: kitty direct placements, animation and sixel (grofe's own name,
     // like `compat-identity`; `docs/graphics-placement.md`). Off, the
     // clients get what T3.8 sent.
@@ -4743,6 +4760,21 @@ impl FormatVars for FormatCtx<'_> {
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
+            // M4 (spec §6): the pane's resume argv, quoted as
+            // `pane_start_command`; the reason a resume is expected and
+            // none is known; whether the pane came from a snapshot.
+            "pane_resume" => p
+                .resume
+                .as_deref()
+                .map(|argv| {
+                    argv.iter()
+                        .map(|a| escape_arg(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default(),
+            "pane_resume_expected" => p.expect.clone().unwrap_or_default(),
+            "pane_restored" => flag(p.restored),
             "pane_pipe" => flag(p.handle.pipe_open()),
             "pane_pipe_pid" => p.handle.pipe_pid()?.to_string(),
             // Empty for a live pane and for one a signal killed, as tmux.
