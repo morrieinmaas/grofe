@@ -20,7 +20,9 @@
 # /run/user tmpfs comes back empty, the container's disk stays. Before each
 # phase /run/user/<uid> is created as logind would. A run whose name ends in
 # `!` is a mutation run: it passes only when its last phase fails and the
-# uids on its `FAIL` lines are exactly those on its `MUTATED` lines.
+# uids on its `FAIL` lines are exactly those on its `MUTATED` lines. A
+# header line `# e2e-target: <stage>` builds that stage of the
+# Containerfile (`--target`) instead of its last one.
 #
 # Nothing of the host's is mounted into a container: no home, no sockets,
 # no runtime dir. Around the whole thing the host-state check (host_state
@@ -39,6 +41,8 @@
 #                        overlay.mount_program=/usr/bin/fuse-overlayfs` on a
 #                        kernel without overlayfs
 #   E2E_ARCH=1           also run on Arch
+#   E2E_STRICT=1         passed to every phase: a scenario that forgives a
+#                        failure passing on its rerun (FLAKY) fails instead
 #
 # Output: target/e2e/<run-id>/<scenario>/<image>/{build,<run>}.log, and one
 # summary line per image and run. Exits 0 only when every gating run passed
@@ -131,7 +135,7 @@ run_steps() {
     printf '### phase %s\n' "$step" >>"$out"
     rc=0
     engine exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test \
-      "$name" bash "/opt/e2e/scenarios/$scenario.sh" "$step" >>"$out" 2>&1 || rc=$?
+      -e E2E_STRICT="${E2E_STRICT:-0}" "$name" bash "/opt/e2e/scenarios/$scenario.sh" "$step" >>"$out" 2>&1 || rc=$?
     printf '### phase %s exited %s\n' "$step" "$rc" >>"$out"
     [ "$rc" -eq 0 ] || return "$rc"
   done
@@ -159,8 +163,11 @@ run_image() {
   # of the image) is emulated.
   local plat_args=()
   [ "$image" = arch ] && plat_args=(--platform linux/amd64)
+  local target target_args=()
+  target="$(sed -n 's/^# e2e-target: *//p' "$ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
+  [ -n "$target" ] && target_args=(--target "$target")
   log "$image: building $tag"
-  if ! engine build ${plat_args[@]+"${plat_args[@]}"} ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
+  if ! engine build ${plat_args[@]+"${plat_args[@]}"} ${target_args[@]+"${target_args[@]}"} ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
     -t "$tag" "$ctx" >"$dir/build.log" 2>&1; then
     log "$image: the image did not build: $dir/build.log"
     printf '%s\tbuild\tFAIL\n' "$image" >>"$summary"
@@ -193,6 +200,9 @@ run_image() {
         ;;
       *) if [ "$rc" -eq 0 ]; then verdict=PASS; else verdict="FAIL (exit $rc)"; fi ;;
     esac
+    local flaky
+    flaky="$(grep -c '^FLAKY ' "$dir/${run_name%!}.log" || true)"
+    [ "${flaky:-0}" -eq 0 ] || verdict="$verdict ($flaky FLAKY)"
     case "$verdict" in FAIL*) status=1 ;; esac
     printf '%s\t%s\t%s\n' "$image" "${run_name%!}" "$verdict" >>"$summary"
     log "$image: run ${run_name%!}: $verdict ($dir/${run_name%!}.log)"
