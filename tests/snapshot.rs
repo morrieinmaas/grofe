@@ -78,6 +78,17 @@ fn canonical(p: &Path) -> PathBuf {
     fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
+/// The instance directory as the server makes it (`0700`): it refuses a
+/// directory others can read.
+fn private_dir(dir: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .expect("instance dir");
+}
+
 fn session(srv: &TestServer, name: &str) {
     srv.cmd(&["new-session", "-d", "-s", name])
         .expect("new-session");
@@ -277,7 +288,10 @@ fn an_empty_server_never_overwrites_the_snapshot() {
     // Restore is off under the harness: this server is empty, and stays
     // so; its kill-server must not wipe the old state either.
     std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(snapshot(&srv).map(|s| s.sessions), Some(before.sessions.clone()));
+    assert_eq!(
+        snapshot(&srv).map(|s| s.sessions),
+        Some(before.sessions.clone())
+    );
     srv.cmd(&["kill-server"]).expect("kill-server");
     srv.wait_for(|| !srv.is_running(), Duration::from_secs(5))
         .expect("the server goes");
@@ -398,7 +412,7 @@ fn a_crash_at_any_point_leaves_a_state_that_was_written() {
 fn an_unknown_version_is_moved_aside_before_the_first_write() {
     let srv = TestServer::start();
     let path = srv.snapshot_path();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    private_dir(path.parent().unwrap());
     let newer = r#"{"version": 2, "from": "a newer grofe"}"#;
     fs::write(&path, newer).unwrap();
     session(&srv, "main");
@@ -417,7 +431,7 @@ fn an_unknown_version_is_moved_aside_before_the_first_write() {
 fn a_garbage_file_is_moved_aside_as_corrupt() {
     let srv = TestServer::start();
     let path = srv.snapshot_path();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    private_dir(path.parent().unwrap());
     fs::write(&path, "this is { not json").unwrap();
     session(&srv, "main");
     wait_snapshot(&srv, "a fresh file", |s| s.sessions.len() == 1);
@@ -466,7 +480,7 @@ fn the_file_is_at_the_snapshot_path_with_mode_0600() {
 fn the_snapshot_holds_the_window_shape() {
     let srv = TestServer::start();
     session(&srv, "main");
-    srv.cmd(&["rename-window", "-t", "main:0", "edit"])
+    srv.cmd(&["rename-window", "-t", "main", "edit"])
         .expect("rename");
     srv.cmd(&["split-window", "-h", "-t", "main"])
         .expect("split");

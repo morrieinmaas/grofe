@@ -740,6 +740,7 @@ async fn actor(
         clients::check_unattached(&mut state);
         state.events.flush(&state.model);
         exit_if_empty(&mut state, &listener);
+        snapshot::track(&mut state, output);
         if state.exit {
             break;
         }
