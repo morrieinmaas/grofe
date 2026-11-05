@@ -476,9 +476,9 @@ fn clear_history(
 }
 
 /// Starts a new process in `pane` (kept in place, same `%N` and
-/// `pane_uid`): `command`, else the pane's resume argv, in `cwd` (`-c`,
-/// which becomes the pane's spawn cwd) or else its spawn cwd. A live
-/// process is hung up. The error is the reason the spawn failed.
+/// `pane_uid`): `command`, else the pane's resume argv, else its spawn
+/// command, in `cwd` (`-c`, which becomes the pane's spawn cwd) or else
+/// its spawn cwd. A live process is hung up. The error is the reason the spawn failed.
 pub(crate) fn respawn(
     state: &mut State,
     pane: PaneId,
@@ -494,9 +494,11 @@ pub(crate) fn respawn(
         .panes
         .get(&pane)
         .ok_or_else(|| format!("can't find pane: {pane}"))?;
+    // A resume cleared with its process (T4.2) leaves the spawn command,
+    // which tmux's respawn runs again.
     let argv = match command {
         Some(command) => Some(command),
-        None => p.resume.clone(),
+        None => p.resume.clone().or_else(|| p.argv.clone()),
     };
     let session = model.windows[&p.window].session;
     // As tmux's `spawn_pane` on respawn: the pane keeps the shell it started with.
