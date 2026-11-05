@@ -513,13 +513,19 @@ fn red(a: &mut Harness, glyph: char) -> Vec<(u16, u16)> {
     out
 }
 
-/// Waits until the red top-left corners on screen are `want` (sorted).
+/// Waits until the red top-left corners on screen are `want`.
 fn red_corners(a: &mut Harness, want: &[(u16, u16)]) {
+    wait_red(a, '╭', want);
+}
+
+/// Waits until the cells showing `glyph` in red are `want`, in any order.
+fn wait_red(a: &mut Harness, glyph: char, want: &[(u16, u16)]) {
     let mut want = want.to_vec();
     want.sort();
     let deadline = std::time::Instant::now() + WAIT;
     loop {
-        let got = red(a, '╭');
+        let mut got = red(a, glyph);
+        got.sort();
         if got == want {
             return;
         }
@@ -567,8 +573,8 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
     a.send(sgr(32, mid, false));
     red_corners(&mut a, &[corner(r0), corner(r1)]);
-    let (bx, by) = (r1.0 + r1.2, r1.1 + r1.3);
-    assert!(red(&mut a, '╯').contains(&(bx, by)), "{}", a.text());
+    let bottom = |(l, t, w, h): (u16, u16, u16, u16)| (l + w, t + h);
+    wait_red(&mut a, '╯', &[bottom(r0), bottom(r1)]);
     // Over %1's bottom quarter: docking below %1, so the preview moves
     // to the landing rect of that drop.
     let low = (mid.0, r1.1 + r1.3 - 2);
@@ -598,8 +604,7 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     wait_until(|| corner(rect(&srv, "%0")) == half, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
     red_corners(&mut a, &[half]);
-    let (l, t, w, h) = rect(&srv, "%0");
-    assert_eq!(red(&mut a, '╯'), vec![(l + w, t + h)], "{}", a.text());
+    wait_red(&mut a, '╯', &[bottom(rect(&srv, "%0"))]);
 }
 
 /// A move the release of which can no longer come (the mouse turned off
@@ -621,5 +626,29 @@ fn the_drop_preview_goes_when_the_move_is_cancelled() {
     red_corners(&mut a, &[corner(r0)]);
     a.send(sgr(0, (mid.0 + 1, mid.1), true));
     stays(&srv, &before);
+    red_corners(&mut a, &[corner(r0)]);
+}
+
+/// A release over the pane itself, straight from a zone that showed a
+/// preview, drops nothing and still takes the preview off the window: no
+/// later redraw brings it back.
+#[test]
+fn a_drop_on_the_pane_itself_clears_the_preview() {
+    let (srv, mut a) = preview_server();
+    let before = layout(&srv);
+    let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, title(&srv, "%0"), false));
+    let mid = middle(&srv, "%1");
+    a.send(sgr(32, (mid.0 - 1, mid.1), false));
+    a.send(sgr(32, mid, false));
+    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    // The release comes over %0 with no motion report there first.
+    a.send(sgr(0, middle(&srv, "%0"), true));
+    red_corners(&mut a, &[corner(r0)]);
+    stays(&srv, &before);
+    // A redraw of the whole screen draws no preview either.
+    ok(&srv, &["refresh-client"]);
+    std::thread::sleep(Duration::from_millis(200));
     red_corners(&mut a, &[corner(r0)]);
 }
