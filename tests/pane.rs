@@ -36,6 +36,7 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         cell_px: None,
         graphics_ok: false,
         images: false,
+        identity: Default::default(),
     }
 }
 

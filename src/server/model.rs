@@ -1131,6 +1131,7 @@ mod tests {
             cell_px: None,
             graphics_ok: false,
             images: false,
+            identity: Default::default(),
         };
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(

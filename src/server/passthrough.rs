@@ -160,6 +160,12 @@ pub struct Scanner {
     /// private mode, in a `CSI ?` sequence ([`ScanState::CsiPriv`]).
     param: u32,
     forged: bool,
+    /// In a `CSI >` sequence: a parameter after the first, or an
+    /// intermediate, was read ([`ScanState::CsiGt`]).
+    gt_rest: bool,
+    gt_other: bool,
+    /// XTVERSION queries met since [`Self::take_xtversion`].
+    xtversion: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +204,9 @@ enum ScanState {
     /// final the emulator ignores, since the reader makes those marks
     /// in-band and a pane must not.
     CsiPriv,
+    /// Inside `CSI >`: its bytes reach the emulator, which does not answer
+    /// XTVERSION (`CSI > q`); the reader does, counted here.
+    CsiGt,
 }
 
 impl Scanner {
@@ -245,6 +254,13 @@ impl Scanner {
         std::mem::take(&mut self.marks)
     }
 
+    /// How many XTVERSION queries were met since the last call. As tmux
+    /// 3.7b's `INPUT_CSI_XDA`, that is `CSI > q` whose first parameter is
+    /// absent or 0 (recorded: `CSI > 1 q` gets no reply).
+    pub fn take_xtversion(&mut self) -> usize {
+        std::mem::take(&mut self.xtversion)
+    }
+
     fn step(&mut self, b: u8, out: &mut Vec<u8>, found: &mut Vec<PaneEventKind>) {
         use ScanState::*;
         match self.state {
@@ -279,6 +295,12 @@ impl Scanner {
                     self.param = 0;
                     self.forged = false;
                     self.state = CsiPriv;
+                } else if b == b'>' {
+                    out.push(b);
+                    self.param = 0;
+                    self.gt_rest = false;
+                    self.gt_other = false;
+                    self.state = CsiGt;
                 } else {
                     self.state = Ground;
                     self.ground(b, out);
@@ -307,6 +329,37 @@ impl Scanner {
                     self.state = Ground;
                 }
                 _ => out.push(b),
+            },
+            CsiGt => match b {
+                b'0'..=b'9' => {
+                    out.push(b);
+                    if !self.gt_rest {
+                        self.param = (self.param * 10 + u32::from(b - b'0')).min(100_000);
+                    }
+                }
+                b';' | b':' => {
+                    out.push(b);
+                    self.gt_rest = true;
+                }
+                0x40..=0x7e => {
+                    out.push(b);
+                    if b == b'q' && self.param == 0 && !self.gt_other {
+                        self.xtversion += 1;
+                    }
+                    self.state = Ground;
+                }
+                ESC => {
+                    self.state = Ground;
+                    self.ground(b, out);
+                }
+                CAN | SUB => {
+                    out.push(b);
+                    self.state = Ground;
+                }
+                _ => {
+                    out.push(b);
+                    self.gt_other = true;
+                }
             },
             ApcIntro => {
                 if b == b'G' {
@@ -1109,6 +1162,27 @@ mod tests {
         // CAN ends it, for the emulator too.
         let (bytes, found) = on.scan(b"\x1bPq~~\x18ok");
         assert_eq!((bytes.as_ref(), found.len()), (&b"\x18ok"[..], 0));
+    }
+
+    /// XTVERSION is counted as tmux 3.7b answers it: `CSI > q` and `CSI >
+    /// 0 q` (recorded), not another parameter, an intermediate or another
+    /// final. Its bytes still reach the emulator, which ignores them.
+    #[test]
+    fn xtversion_queries_are_counted() {
+        let mut s = Scanner::default();
+        let input: &[u8] = b"a\x1b[>q\x1b[>0q\x1b[>1q\x1b[>0;1q\x1b[> q\x1b[>c\x1b[qb";
+        let (bytes, _) = s.scan(input);
+        assert_eq!(bytes.as_ref(), input);
+        assert_eq!(s.take_xtversion(), 3);
+        assert_eq!(s.take_xtversion(), 0);
+        // Split anywhere.
+        let mut s = Scanner::default();
+        let mut n = 0;
+        for b in b"\x1b[>0q\x1b[>q" {
+            s.scan(&[*b]);
+            n += s.take_xtversion();
+        }
+        assert_eq!(n, 2);
     }
 
     #[test]
