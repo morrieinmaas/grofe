@@ -40,7 +40,10 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
 RUN useradd -m -u 1000 -s /bin/bash test
 COPY --chown=test:test grofe/ /home/test/grofe/
 USER test
-ENV CARGO_HOME=/home/test/.cargo CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never
+# Line tables only and no incremental cache: a backtrace keeps its
+# file:line, and target/ in the image is much smaller.
+ENV CARGO_HOME=/home/test/.cargo CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never \
+  CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_INCREMENTAL=0
 WORKDIR /home/test/grofe
 RUN cargo test --locked --test acceptance --no-run && cargo build --locked --bin grofe
 USER root
