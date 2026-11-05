@@ -21,13 +21,17 @@
 # Every container and image the run creates is removed at the end, the build
 # stage's included; --keep-image keeps the images, for a rerun that reuses
 # the build cache. Exits 0 only when the report's verdict is PASS.
-# Folded into scripts/e2e.sh by T4.6.
+# Folded into scripts/e2e.sh by T4.6: `scripts/e2e.sh alias-day` runs this,
+# which takes its host-state check, E2E_PODMAN_NETWORK and E2E_PODMAN_OPTS
+# from there.
 set -euo pipefail
 
 keep_image=0
 [ "${1:-}" = --keep-image ] && keep_image=1
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=e2e.sh
+. "$repo/scripts/e2e.sh"
 # shellcheck source=../tests/e2e/alias-day/pins.env disable=SC1091
 . "$repo/tests/e2e/alias-day/pins.env"
 : "${GROFE_E2E_ATHOME_REPO:?set GROFE_E2E_ATHOME_REPO to a local athome clone}"
@@ -44,14 +48,14 @@ name="grofe-alias-day-$(printf '%s' "$run_id" | tr '[:upper:]' '[:lower:]')"
 image="localhost/grofe-alias-day:$(printf '%s' "$run_id" | tr '[:upper:]' '[:lower:]')"
 
 cleanup() {
-  podman rm -f "$name" >/dev/null 2>&1 || true
+  engine rm -f "$name" >/dev/null 2>&1 || true
   if [ "$keep_image" -eq 0 ]; then
-    podman rmi -f "$image" >/dev/null 2>&1 || true
+    engine rmi -f "$image" >/dev/null 2>&1 || true
     # The build stage and every layer this build made or reused, as the
     # build log names them, so an image some other process built meanwhile
     # is never touched. The bases, pulled by digest, are shared and stay.
     grep -oE '^(--> |Using cache )[0-9a-f]{12,}' "$out/build.log" 2>/dev/null | awk '{ print $NF }' | sort -u |
-      xargs -r podman rmi -f >/dev/null 2>&1 || true
+      xargs -r "${engine_argv[@]}" rmi -f >/dev/null 2>&1 || true
   fi
   rm -rf "$work"
 }
@@ -60,35 +64,13 @@ trap cleanup EXIT
 log() { printf '[alias-day] %s\n' "$*" | tee -a "$out/run.log" >&2; }
 
 # --- the host-state check ---------------------------------------------------
-# Names, kinds and sizes everywhere, plus content hashes of regular files;
-# sockets have no content, so their names stand for them.
-host_state() {
-  local uid dir
-  uid="$(id -u)"
-  for dir in "${TMUX_TMPDIR:-/tmp}/tmux-$uid" "/tmp/tmux-$uid" "${TMPDIR:-/tmp}/grofe-$uid" \
-    "${XDG_RUNTIME_DIR:-/nonexistent}/grofe" "${XDG_STATE_HOME:-$HOME/.local/state}/grofe" \
-    "$HOME/.config/canopy" "$HOME/.local/share/canopy"; do
-    printf '== %s\n' "$dir"
-    [ -e "$dir" ] || { echo "(absent)"; continue; }
-    (cd "$dir" && find . -path ./.git -prune -o -print | LC_ALL=C sort | while read -r p; do
-      if [ -f "$p" ] && [ ! -L "$p" ]; then
-        printf '%s f %s\n' "$p" "$(shasum -a 256 "$p" | cut -d' ' -f1)"
-      elif [ -S "$p" ]; then
-        printf '%s socket\n' "$p"
-      elif [ -L "$p" ]; then
-        printf '%s link %s\n' "$p" "$(readlink "$p")"
-      else
-        printf '%s other\n' "$p"
-      fi
-    done)
-  done
-  if [ -d "$HOME/.local/share/canopy/.git" ]; then
-    printf '== canopy store HEAD\n%s\n' "$(git -C "$HOME/.local/share/canopy" rev-parse HEAD)"
-  fi
+# scripts/e2e.sh's, plus the athome repo's status.
+alias_host_state() {
+  host_state
   printf '== athome repo status\n%s\n' "$(git -C "$GROFE_E2E_ATHOME_REPO" rev-parse HEAD)"
   git -C "$GROFE_E2E_ATHOME_REPO" status --porcelain
 }
-host_state >"$work/host.before"
+alias_host_state >"$work/host.before"
 
 # --- stage 1: inputs ------------------------------------------------------------
 ctx="$work/ctx"
@@ -168,17 +150,17 @@ stage3=fail
 image_id="(not built)"
 if [ "$gate" = pass ]; then
   log "building the image"
-  if timeout 3000 podman build -f "$ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$image" "$ctx" \
+  if timeout 3000 "${engine_argv[@]}" build ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$image" "$ctx" \
     >"$out/build.log" 2>&1; then
-    image_id="$(podman image inspect --format '{{.Id}}' "$image")"
+    image_id="$(engine image inspect --format '{{.Id}}' "$image")"
     log "image $image_id; starting the container"
-    podman run -d --name "$name" --hostname e2e --systemd=always "$image" >/dev/null
-    podman exec "$name" timeout 120 systemctl is-system-running --wait >"$out/boot.log" 2>&1 || true
+    engine run -d --name "$name" ${net_args[@]+"${net_args[@]}"} --hostname e2e --systemd=always "$image" >/dev/null
+    engine exec "$name" timeout 120 systemctl is-system-running --wait >"$out/boot.log" 2>&1 || true
     for _ in $(seq 1 60); do
-      podman exec "$name" test -S /run/user/1000/bus && break
+      engine exec "$name" test -S /run/user/1000/bus && break
       sleep 1
     done
-    as_test=(podman exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test "$name")
+    as_test=(engine exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test "$name")
     log "stage 2: apply"
     if "${as_test[@]}" bash /opt/e2e/alias-day.sh apply >"$out/stage2.log" 2>&1; then
       stage2=pass
@@ -188,9 +170,9 @@ if [ "$gate" = pass ]; then
       stage3=pass
     fi
     log "stage 3: $stage3"
-    podman exec "$name" env >"$work/container.env" 2>&1 || true
-    podman cp "$name:/home/test/e2e-out" "$out/out" >/dev/null 2>&1 || true
-    podman exec "$name" journalctl --no-pager -b >"$out/journal.log" 2>&1 || true
+    engine exec "$name" env >"$work/container.env" 2>&1 || true
+    engine cp "$name:/home/test/e2e-out" "$out/out" >/dev/null 2>&1 || true
+    engine exec "$name" journalctl --no-pager -b >"$out/journal.log" 2>&1 || true
   else
     log "the image did not build: see build.log"
   fi
@@ -199,8 +181,8 @@ creds="$(grep -E '^(GITHUB_TOKEN|GH_TOKEN|BW_[A-Z_]*|RBW_[A-Z_]*)=' "$work/conta
 
 # The run is over: the container goes now, so the host check sees no podman
 # process of ours.
-podman rm -f "$name" >/dev/null 2>&1 || true
-host_state >"$work/host.after"
+engine rm -f "$name" >/dev/null 2>&1 || true
+alias_host_state >"$work/host.after"
 if cmp -s "$work/host.before" "$work/host.after"; then
   host="byte-identical: yes, for every directory below"
   host_ok=1

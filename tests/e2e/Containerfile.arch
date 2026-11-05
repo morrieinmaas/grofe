@@ -1,0 +1,33 @@
+# The Arch e2e image (plan T4.6): the owner's Linux, optional
+# (scripts/e2e.sh runs it only with E2E_ARCH=1, and it never gates). The
+# base is amd64 only; on an arm64 host podman runs it emulated. The same
+# shape as Containerfile.debian: grofe at HEAD from a `git archive` export,
+# built in the first stage with Arch's own rust; `grofe` and `tmux`
+# symlinks in /usr/bin; fake-agent only in /opt/e2e/bin; no systemd. The
+# base is pinned by digest; the packages are whatever Arch ships the day
+# the image is built (a rolling release has no other pin).
+FROM docker.io/library/archlinux:base@sha256:42217d5f09e11d3fe7ad3b309b7fde891d458464dab5d674e629073765610427 AS build
+
+RUN pacman -Syu --noconfirm --needed rust gcc && pacman -Scc --noconfirm
+ENV CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never
+WORKDIR /src
+COPY grofe/ /src/
+RUN cargo build --release --locked --bin grofe \
+  && mkdir -p /out \
+  && cp target/release/grofe /out/grofe
+
+FROM docker.io/library/archlinux:base@sha256:42217d5f09e11d3fe7ad3b309b7fde891d458464dab5d674e629073765610427
+
+RUN pacman -Syu --noconfirm --needed bash jq procps-ng && pacman -Scc --noconfirm
+
+RUN useradd -m -u 1000 -s /bin/bash test
+
+COPY --from=build /out/grofe /usr/local/lib/grofe/grofe
+RUN ln -s /usr/local/lib/grofe/grofe /usr/bin/grofe \
+  && ln -s /usr/local/lib/grofe/grofe /usr/bin/tmux
+COPY grofe/tests/fixtures/fake-agent /opt/e2e/bin/fake-agent
+COPY grofe/tests/e2e/scenarios/ /opt/e2e/scenarios/
+RUN chmod -R a+rX /opt/e2e && chmod 755 /opt/e2e/bin/fake-agent
+
+ENV LANG=C.UTF-8
+CMD ["sleep", "infinity"]
