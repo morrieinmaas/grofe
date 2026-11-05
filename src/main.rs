@@ -28,6 +28,37 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [args...]";
 
+/// `grofe --help`: the global options and the commands most sessions use.
+/// Every other tmux command name works too.
+const HELP: &str = "\
+usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
+
+Options:
+  -L socket-name   use the named server socket in grofe's socket directory
+  -S socket-path   use the server socket at this path
+  -V, --version    print grofe's version and exit
+  -h, --help       print this help and exit
+
+Common commands:
+  new-session (new)         start a session (and a server when none runs)
+  attach-session (attach)   attach to a session
+  list-sessions             list sessions
+  kill-session              kill a session
+  new-window (neww)         open a window
+  split-window (splitw)     split a pane
+  send-keys (send)          send keys to a pane
+  capture-pane (capturep)   print a pane's contents
+  display-message (display) print a message or format
+  source-file (source)      run a config file's commands
+  kill-server               stop the server and every session
+  show-config               show the merged config and where each value came from
+  import-tmux               convert a tmux.conf to grofe's config
+  layout                    bring up, save, list and pick layouts
+  control                   a stdio bridge to the server's protocol
+
+Commands take tmux's names and flags; `;` chains commands, as in tmux.
+";
+
 /// How long the CLI waits for a freshly started server to report ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -73,6 +104,8 @@ fn main() -> ExitCode {
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
+                    version: false,
+                    help: false,
                 };
                 // Never a socket in tmux's own directory (spec D12).
                 let dirs = grofe::compat::tmux_socket_dirs(
@@ -95,12 +128,17 @@ fn main() -> ExitCode {
             Err(e) => return fail(&e),
         }
     } else {
-        // `grofe -V`: grofe's own version, decided by `argv[0]` (spec D12).
-        if args.first().is_some_and(|a| a == "-V") {
-            println!("grofe {}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
-        }
         match parse_globals(&args) {
+            // `grofe -V`: grofe's own version, decided by `argv[0]` (spec
+            // D12); under the tmux name `-V` and `-h` are tmux's, above.
+            Ok((globals, _)) if globals.version => {
+                println!("grofe {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            Ok((globals, _)) if globals.help => {
+                print!("{HELP}");
+                return ExitCode::SUCCESS;
+            }
             Ok((globals, rest)) => (globals, rest.to_vec()),
             Err(e) => {
                 eprintln!("grofe: {e}\n{USAGE}");
@@ -293,6 +331,10 @@ fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
 struct Globals {
     socket: Option<PathBuf>,
     name: Option<String>,
+    /// `-V` / `--version` among the global options.
+    version: bool,
+    /// `-h` / `--help` among the global options.
+    help: bool,
 }
 
 impl Globals {
@@ -323,6 +365,8 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     let mut globals = Globals {
         socket: None,
         name: None,
+        version: false,
+        help: false,
     };
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -341,6 +385,14 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
             "--" => {
                 i += 1;
                 break;
+            }
+            "-V" | "--version" => {
+                globals.version = true;
+                i += 1;
+            }
+            "-h" | "--help" => {
+                globals.help = true;
+                i += 1;
             }
             s if s.starts_with("-S") => {
                 globals.socket = Some(PathBuf::from(&s[2..]));

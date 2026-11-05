@@ -211,6 +211,43 @@ fn compat_identity_in_config_overrides_a_grofe_start() {
     assert_eq!(var(&env, "TERM_PROGRAM_VERSION"), "3.7b");
 }
 
+/// What a pane of a new session `name` reads back, as `od -c` prints it
+/// with the blanks removed, after it sends XTVERSION (`CSI > q`, `CSI > 0
+/// q`), `CSI > 1 q` (not XTVERSION) and DA1 as a fence.
+fn xtversion_replies(srv: &TestServer, name: &str) -> String {
+    let path = srv.home.join(format!("xtv-{name}"));
+    let script = format!(
+        "stty -icanon -echo min 0 time 10; printf '\\033[>q\\033[>0q\\033[>1q\\033[c'; \
+         dd bs=1024 count=8 2>/dev/null | od -An -c | tr -d ' \\n' > {0}.tmp; \
+         mv {0}.tmp {0}; sleep 60",
+        path.display()
+    );
+    grofe(srv, &["new-session", "-d", "-s", name, &script]).expect("new-session");
+    wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its replies");
+    fs::read_to_string(&path).unwrap()
+}
+
+/// XTVERSION is answered once per query, before the DA1 fence, with the
+/// server's name and version: grofe's own, or under tmux identity tmux's
+/// as tmux 3.7b answers it (`DCS > | tmux 3.7b ST`, recorded).
+#[test]
+fn xtversion_names_the_server_identity() {
+    let srv = TestServer::unstarted();
+    grofe(&srv, &["start-server"]).expect("start-server");
+    let reply = format!("033P>|grofe{}033\\", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        xtversion_replies(&srv, "g"),
+        format!("{reply}{reply}033[?1;2;4c")
+    );
+
+    let srv = start_as_tmux();
+    let reply = "033P>|tmux3.7b033\\";
+    assert_eq!(
+        xtversion_replies(&srv, "t"),
+        format!("{reply}{reply}033[?1;2;4c")
+    );
+}
+
 /// The first line a CLI run with `cmd` sends to a socket nobody answers.
 fn first_line_sent(mut cmd: Command, listener: &UnixListener) -> String {
     listener.set_nonblocking(true).unwrap();

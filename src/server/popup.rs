@@ -1307,6 +1307,7 @@ mod tests {
             cell_px: None,
             graphics_ok: false,
             images: false,
+            identity: Default::default(),
         };
         assert_eq!(open(&mut state, id, frame, spawn), Ok(false));
         assert!(!state.popups.is_open(id));

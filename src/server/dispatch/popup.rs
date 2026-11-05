@@ -317,6 +317,7 @@ pub(crate) fn spawn_for(
         cell_px: clients::cell_px(state, session),
         graphics_ok: false,
         images: false,
+        identity: state.model.identity,
     }
 }
 

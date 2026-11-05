@@ -135,6 +135,8 @@ pub struct PaneSpawn {
     pub graphics_ok: bool,
     /// The `graphics` option (G3): kitty direct placements and sixel.
     pub images: bool,
+    /// The server's identity, which names it in the XTVERSION reply.
+    pub identity: crate::compat::Identity,
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -627,6 +629,7 @@ impl PaneHandle {
             wake,
             to_actor,
             scanner: Scanner::default(),
+            xtversion: crate::compat::xtversion_reply(spec.identity),
             graphics_ok: Arc::clone(&graphics_ok),
             images_on: Arc::clone(&images_on),
             default_colours: Arc::clone(&default_colours),
@@ -1563,6 +1566,7 @@ mod tests {
             cell_px: None,
             graphics_ok: false,
             images: false,
+            identity: Default::default(),
         }
     }
 
@@ -1853,6 +1857,7 @@ mod tests {
         let spec = PaneSpawn {
             rows: 5,
             images: true,
+            identity: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1885,6 +1890,7 @@ mod tests {
         let spec = PaneSpawn {
             rows: 5,
             images: true,
+            identity: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1912,6 +1918,7 @@ mod tests {
         let spec = PaneSpawn {
             rows: 5,
             images: true,
+            identity: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -1947,6 +1954,7 @@ mod tests {
         let spec = PaneSpawn {
             rows: 5,
             images: true,
+            identity: Default::default(),
             ..spec_for(&["sleep", "100"])
         };
         let new = PaneHandle::spawn_over(spec, tx, Arc::new(Notify::new()), &old).expect("respawn");

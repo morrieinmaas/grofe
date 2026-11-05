@@ -1270,9 +1270,10 @@ through the real render path on macOS and Linux and all of them passed. See
 docs/spike-notes.md's "TERM decision" and "T3.6 re-run" sections for the
 evidence; the passing re-run is what alias day requires (D7).
 
-An inner `CSI > q` (XTVERSION) gets no reply from the library; grofe answers
-it only if an app needs it. This is distinct from the client's probe of the
-outer terminal in §4.4.
+An inner `CSI > q` (XTVERSION) gets no reply from the library, so grofe
+answers it itself, as tmux does: `DCS > | grofe <version> ST`, or under tmux
+identity `DCS > | tmux 3.7b ST`. This is distinct from the client's probe of
+the outer terminal in §4.4.
 
 **Zellij files worth reading:** `zellij-server/src/panes/grid.rs`,
 `terminal_pane.rs`, `os_input_output_unix.rs`, `pty.rs`, `screen.rs`, `route.rs`,

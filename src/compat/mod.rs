@@ -37,6 +37,17 @@ pub fn compat_level() -> &'static str {
     "3.7b"
 }
 
+/// The XTVERSION (`CSI > q`) reply a pane gets: `DCS > | <name> <version>
+/// ST`, under tmux identity tmux's name and the compat level, as tmux 3.7b
+/// answers (recorded: `ESC P > | tmux 3.7b ESC \`).
+pub fn xtversion_reply(identity: Identity) -> Vec<u8> {
+    let (name, version) = match identity {
+        Identity::Tmux => ("tmux", compat_level()),
+        Identity::Grofe => ("grofe", env!("CARGO_PKG_VERSION")),
+    };
+    format!("\x1bP>|{name} {version}\x1b\\").into_bytes()
+}
+
 /// How the CLI that started this server process was invoked, set once by
 /// `main.rs` before the server runs. Unset (a unit test) is grofe.
 static STARTED_AS: OnceLock<Identity> = OnceLock::new();
