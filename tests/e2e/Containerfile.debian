@@ -1,8 +1,11 @@
 # The Debian e2e image (plan T4.6), the one every container scenario must
 # pass on. Built only by scripts/e2e.sh, from a context holding nothing but
-# grofe at HEAD as a `git archive` export:
+# grofe at HEAD as a `git archive` export and, for the stages whose
+# scenario declares them (`# e2e-inputs:`), canopy and athome at their
+# pinned commits:
 #
-#   grofe/    grofe at HEAD, built in the first stage
+#   grofe/                  grofe at HEAD, built in the first stage
+#   inputs/canopy.bundle    canopy's pinned commit as branch `pinned`
 #
 # No systemd: PID 1 is podman's --init and a sleep, so `podman restart`
 # kills every process and the scenario's next phase "boots" by hand, as a
@@ -23,8 +26,10 @@ RUN cargo build --release --locked --bin grofe \
 # it (`# e2e-target: acceptance`), so the last stage below stays the image
 # every other scenario gets. It holds the toolchain, grofe's source at HEAD
 # under the test user's home with the acceptance suite and the debug binary
-# already built, and the spec 8 tools: neovim, fzf, less, htop, git, kitten
-# (Debian's kitty package), bats. Real tmux 3.7b is built from the release
+# already built, the spec 8 tools: neovim, fzf, less, htop, git, kitten
+# (Debian's kitty package), bats, and the plugin cases' release binaries,
+# provisioned from canopy at its pinned commit. Real tmux 3.7b is built
+# from the release
 # tarball, pinned by the sha256 containers/compat/golden.Containerfile
 # uses, into /usr/local/lib/tmux-3.7b, never /usr/bin: there `tmux` is
 # grofe, as in the image below.
@@ -45,6 +50,18 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
   && test "$("/usr/local/lib/tmux-${TMUX_VERSION}/bin/tmux" -V)" = "tmux ${TMUX_VERSION}"
 
 RUN useradd -m -u 1000 -s /bin/bash test
+# canopy at its pinned commit, a clone of the bundle scripts/e2e.sh made
+# (`# e2e-inputs: canopy`), and the release binaries TP.8's and TP.9's
+# cases run against, provisioned from it by canopy's own checksum-verified
+# function before grofe's source comes in, so a grofe change reuses them.
+COPY --chown=test:test inputs/canopy.bundle /tmp/canopy.bundle
+COPY grofe/scripts/provision-plugin-binaries.sh /usr/local/lib/e2e/provision-plugin-binaries.sh
+USER test
+RUN git clone --quiet --branch pinned /tmp/canopy.bundle /home/test/compat/canopy \
+  && /usr/local/lib/e2e/provision-plugin-binaries.sh /home/test/compat/canopy /home/test/compat/plugins
+ENV GROFE_TEST_OPENSESSIONS=/home/test/compat/plugins/store/plugins/opensessions/bin \
+  GROFE_TEST_XRE=/home/test/compat/plugins/store/plugins/tmux-fzf-url/bin/xre
+USER root
 COPY --chown=test:test grofe/ /home/test/grofe/
 USER test
 # Line tables only and no incremental cache: a backtrace keeps its

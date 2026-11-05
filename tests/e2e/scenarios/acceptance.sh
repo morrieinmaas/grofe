@@ -3,9 +3,11 @@
 # acceptance suite in a clean image. Run by scripts/e2e.sh as the test
 # user, one phase per call, never on a host, in the Containerfile's
 # `acceptance` stage (the toolchain, grofe's source at HEAD in ~/grofe with
-# the suite prebuilt, the spec 8 tools and real tmux 3.7b):
+# the suite prebuilt, the spec 8 tools, real tmux 3.7b, and the plugin
+# cases' release binaries, provisioned from canopy at its pinned commit):
 #
 # e2e-target: acceptance
+# e2e-inputs: canopy
 # e2e-run: cargo tools cargo
 # e2e-run: bats tools bats
 #
@@ -14,10 +16,9 @@
 #           tmux 3.7b and not grofe, and /usr/bin/tmux is grofe answering
 #           as tmux 3.7b
 #   cargo   `cargo test --test acceptance`; a skip is a FAIL naming its
-#           reason, except the two plugin cases' provisioned release
-#           binaries (opensessions, xre), which are listed as SKIP; a failed
-#           case gets one serial rerun, and passing there is reported as
-#           FLAKY and counted (`FLAKY-COUNT <n>`); with E2E_STRICT=1 (the
+#           reason (the plugin cases' opensessions and xre binaries are
+#           provisioned in the image); a failed case gets one serial
+#           rerun, and passing there is reported as FLAKY and counted (`FLAKY-COUNT <n>`); with E2E_STRICT=1 (the
 #           release gate's setting) a FLAKY case fails the phase
 #   bats    `bats tests/cli.bats` against the debug binary
 #
@@ -99,12 +100,9 @@ cargo_suite() {
   # --show-output prints what passing cases wrote too, so a skip shows.
   cargo test --locked --offline --test acceptance -- --show-output 2>&1 | tee "$log" || rc=$?
   grep -E '^test result:' "$log" | sed 's/^/SUMMARY /'
-  # The plugin cases' provisioned release binaries need a canopy checkout,
-  # which the build context does not hold: those skips are listed. Any
-  # other skip (a spec 8 tool missing or too old) fails, naming its reason.
-  local plugin_skip='^skipping: no (opensessions binaries at [$]GROFE_TEST_OPENSESSIONS|xre 0[.]1[.]1 at [$]GROFE_TEST_XRE or on PATH)$'
-  grep -E '^skipping' "$log" | grep -E "$plugin_skip" | sort | uniq -c | sed 's/^ */SKIP /'
-  grep -E '^skipping' "$log" | grep -vE "$plugin_skip" | sort -u | while IFS= read -r t; do
+  # Every skip (a spec 8 tool or a plugin binary missing or too old) fails,
+  # naming its reason.
+  grep -E '^skipping' "$log" | sort -u | while IFS= read -r t; do
     printf 'FAIL cargo: a case skipped (%s)\n' "$t"
   done | grep . && fails=$((fails + 1))
   if [ "$rc" -eq 0 ]; then

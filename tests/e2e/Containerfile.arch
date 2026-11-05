@@ -20,8 +20,9 @@ RUN cargo build --release --locked --bin grofe \
 # for a scenario that names it (`# e2e-target: acceptance`); the toolchain,
 # grofe's source at HEAD in the test user's home with the acceptance suite
 # and the debug binary built, the spec 8 tools from Arch (kitten comes with
-# kitty), and real tmux 3.7b from the release tarball, pinned by the sha256
-# containers/compat/golden.Containerfile uses, in /usr/local/lib/tmux-3.7b.
+# kitty), real tmux 3.7b from the release tarball, pinned by the sha256
+# containers/compat/golden.Containerfile uses, in /usr/local/lib/tmux-3.7b,
+# and the plugin cases' release binaries.
 FROM docker.io/library/archlinux:base@sha256:42217d5f09e11d3fe7ad3b309b7fde891d458464dab5d674e629073765610427 AS acceptance
 
 ARG TMUX_VERSION=3.7b
@@ -38,6 +39,16 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
   && test "$("/usr/local/lib/tmux-${TMUX_VERSION}/bin/tmux" -V)" = "tmux ${TMUX_VERSION}"
 
 RUN useradd -m -u 1000 -s /bin/bash test
+# canopy at its pinned commit and the plugin cases' release binaries
+# provisioned from it, as in Containerfile.debian.
+COPY --chown=test:test inputs/canopy.bundle /tmp/canopy.bundle
+COPY grofe/scripts/provision-plugin-binaries.sh /usr/local/lib/e2e/provision-plugin-binaries.sh
+USER test
+RUN git clone --quiet --branch pinned /tmp/canopy.bundle /home/test/compat/canopy \
+  && /usr/local/lib/e2e/provision-plugin-binaries.sh /home/test/compat/canopy /home/test/compat/plugins
+ENV GROFE_TEST_OPENSESSIONS=/home/test/compat/plugins/store/plugins/opensessions/bin \
+  GROFE_TEST_XRE=/home/test/compat/plugins/store/plugins/tmux-fzf-url/bin/xre
+USER root
 COPY --chown=test:test grofe/ /home/test/grofe/
 USER test
 # Line tables only and no incremental cache: a backtrace keeps its
