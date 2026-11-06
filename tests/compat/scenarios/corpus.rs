@@ -329,6 +329,26 @@ pub fn run(co: &Checkouts) -> Vec<String> {
                                 reply.trim()
                             ));
                         }
+                        {
+                            let (_, modes, _) = cli.run(&words(&[
+                                "list-panes",
+                                "-a",
+                                "-F",
+                                "#{pane_id}:#{pane_in_mode}:#{pane_mode}",
+                            ]));
+                            let (_, cur, _) = cli.run(&words(&[
+                                "display-message",
+                                "-p",
+                                "#{pane_id}:#{pane_in_mode}:#{pane_mode}",
+                            ]));
+                            if modes.contains(":1:") || at.starts_with("static-cli:3") {
+                                eprintln!(
+                                    "DEBUG mode after {at} req={req:?} cur={} all={}",
+                                    cur.trim(),
+                                    modes.trim().replace('\n', " ")
+                                );
+                            }
+                        }
                         let (new, len) = miss_lines(&log, log_len);
                         log_len = len;
                         for what in new {
