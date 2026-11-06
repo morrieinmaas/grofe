@@ -19,6 +19,10 @@
 # read-only, and hands the goldens back as a tar on stdout. As a guard the
 # script lists the host's real tmux and grofe socket directories before and
 # after and fails if they changed.
+#
+# The image is always linux/amd64, emulated on another host: tmux's output
+# depends on the platform, as copy-mode search keeps the case of a pattern
+# outside ASCII only where `char` is signed (tm_3/unicode).
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -58,10 +62,10 @@ socket_dirs() {
 }
 before=$(socket_dirs)
 
-podman build -q -t "$image" -f "$repo/containers/compat/golden.Containerfile" \
+podman build -q --platform linux/amd64 -t "$image" -f "$repo/containers/compat/golden.Containerfile" \
   "$repo/containers/compat" >/dev/null
 
-run=(podman run --rm
+run=(podman run --rm --platform linux/amd64
   -v "$repo:/src:ro"
   -v grofe-compat-golden-target-v2:/target
   -v grofe-compat-golden-cargo-v2:/home/golden/cargo)

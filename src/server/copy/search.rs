@@ -7,7 +7,7 @@
 //! The search is a port of tmux 3.7b's `window_copy_search` and the
 //! functions it calls, quirks included: a pattern with none of
 //! `^$*+()?[].\` is searched as plain text, one with no upper-case letter
-//! ignores case, a line is searched with its soft-wrapped rows joined (up
+//! and no byte outside ASCII ignores case, a line is searched with its soft-wrapped rows joined (up
 //! to 2000 cells), padded to the pane's width with blanks, and an empty
 //! match counts as none. tmux's POSIX extended syntax is read as glibc
 //! reads it ([`translate`]) and run with the `regex` crate, leftmost-longest
@@ -229,9 +229,11 @@ impl Longest {
     }
 }
 
-/// tmux's `window_copy_is_lowercase`.
+/// tmux's `window_copy_is_lowercase`. It compares each byte as a signed
+/// `char` (x86_64) with `tolower` of it unsigned, so a byte outside ASCII
+/// never compares equal and the pattern keeps its case.
 fn is_lowercase(s: &str) -> bool {
-    !s.bytes().any(|b| b.is_ascii_uppercase())
+    !s.bytes().any(|b| b.is_ascii_uppercase() || !b.is_ascii())
 }
 
 /// Whether tmux searches `s` as a regex at all: one with none of these
@@ -2342,6 +2344,18 @@ mod tests {
             (m.cx, format_var(&m, "search_count")),
             (8, Some("1".into()))
         );
+    }
+
+    /// tmux's `window_copy_is_lowercase` compares a signed `char` with
+    /// `tolower` of it unsigned, so any byte outside ASCII counts as upper
+    /// case and the whole pattern keeps its case (`tm_3/unicode`).
+    #[test]
+    fn a_pattern_with_a_byte_outside_ascii_keeps_its_case() {
+        let rows = ["Straße Ünïc ünïc", ""];
+        assert_eq!(first(&rows, "[[:lower:]]+ß"), Some("traß".into()));
+        assert_eq!(first(&rows, "strasse|ünï."), Some("ünïc".into()));
+        assert_eq!(first(&["xx STRAßE", ""], "s.raß"), None);
+        assert_eq!(first(&["xx STRAßE", ""], "s.ra"), Some("STRA".into()));
     }
 
     /// tmux searches a pattern with none of `^$*+()?[].\` as text.

@@ -51,14 +51,14 @@ $ send-keys -t main -X history-top
 $ send-keys -t main -X search-forward '[[:lower:]]+ß'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-19,1,0 1 1 Straß
+20,1,0 1 1 traß
 ? 0
 $ send-keys -t main -X history-bottom
 ? 0
 $ send-keys -t main -X search-backward '[[:lower:]]+ß'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-19,1,0 1 1 Straß
+20,1,0 1 1 traß
 ? 0
 $ send-keys -t main -X history-top
 ? 0
@@ -163,14 +163,14 @@ $ send-keys -t main -X history-top
 $ send-keys -t main -X search-forward 'ünï.'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-11,1,0 1 1 Ünïc
+0,0,0 0  
 ? 0
 $ send-keys -t main -X history-bottom
 ? 0
 $ send-keys -t main -X search-backward 'ünï.'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-11,1,0 1 1 Ünïc
+0,23,0 0  
 ? 0
 $ send-keys -t main -X history-top
 ? 0
@@ -191,14 +191,14 @@ $ send-keys -t main -X history-top
 $ send-keys -t main -X search-forward 'αβ.'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-6,2,0 1 2 αβγ
+6,2,0 1 1 αβγ
 ? 0
 $ send-keys -t main -X history-bottom
 ? 0
 $ send-keys -t main -X search-backward 'αβ.'
 ? 0
 $ display -p -t main '#{copy_cursor_x},#{copy_cursor_y},#{scroll_position} #{search_present} #{search_count} #{search_match}'
-10,2,0 1 2 ΑΒΓ
+6,2,0 1 1 αβγ
 ? 0
 $ send-keys -t main -X history-top
 ? 0
