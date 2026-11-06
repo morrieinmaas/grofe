@@ -178,7 +178,7 @@ systemd_image() {
   local w="$GATE_WORK/systemd" in
   rm -rf "$w"
   mkdir -p "$w/ctx/grofe"
-  git -C "$repo" archive "$GATE_SHA" | tar -x -C "$w/ctx/grofe"
+  git -C "$repo" archive "$GATE_SHA" | tar -x -C "$w/ctx/grofe" || return 1
   pinned_inputs "$w" canopy athome || return 1
   # The image wants athome as a tar and canopy's bundle on branch alias-day.
   in="$w/ctx/inputs"
