@@ -85,6 +85,16 @@ die() {
   exit 2
 }
 
+# GNU timeout, which macOS lacks; Homebrew's coreutils installs it as
+# gtimeout.
+if command -v timeout >/dev/null; then
+  TIMEOUT=timeout
+elif command -v gtimeout >/dev/null; then
+  TIMEOUT=gtimeout
+else
+  die "no timeout or gtimeout on PATH; on macOS: brew install coreutils"
+fi
+
 is_leg() {
   local l
   for l in "${LEGS[@]}"; do [ "$l" = "$1" ] && return 0; done
@@ -175,7 +185,7 @@ systemd_image() {
     git -C "$w/clone-canopy" bundle create --quiet "$in/canopy.bundle" alias-day || return 1
   rm -rf "$in/canopy" "$w/gate-"*
   echo "### building $GATE_IMAGE (log: $GATE_OUT/systemd-build.log)"
-  timeout 3600 "${engine_argv[@]}" build ${net_args[@]+"${net_args[@]}"} \
+  "$TIMEOUT" 3600 "${engine_argv[@]}" build ${net_args[@]+"${net_args[@]}"} \
     -f "$w/ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$GATE_IMAGE" "$w/ctx" \
     >"$GATE_OUT/systemd-build.log" 2>&1
 }
@@ -323,7 +333,7 @@ main() {
       rc=0
       start="$(date +%s)"
       : >"$GATE_WORK/why"
-      timeout --kill-after=60 "$(leg_timeout "$leg")" bash "$GATE_SRC/scripts/release-gate.sh" --leg "$leg" \
+      "$TIMEOUT" --kill-after=60 "$(leg_timeout "$leg")" bash "$GATE_SRC/scripts/release-gate.sh" --leg "$leg" \
         </dev/null >"$log" 2>&1 3>"$GATE_WORK/why" || rc=$?
       why="$(head -n 1 "$GATE_WORK/why")"
       case "$rc" in
