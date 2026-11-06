@@ -267,6 +267,10 @@ tmux:
 search for `#{copy_cursor_word}`. As in tmux, a pattern with no upper-case
 letter matches without regard to case, `wrap-search` decides whether `n`
 wraps at the end, and a match may span a soft wrap but never a hard newline.
+A pattern with any character outside ASCII (`ünï.`) keeps its case, as in
+tmux on x86_64: tmux compares each byte as a signed `char`, so such a byte
+never counts as lower case. Where `char` is unsigned (Linux on arm64), tmux
+ignores case for it too; the goldens are recorded on x86_64.
 A new copy mode starts with the pane's last search, upwards, so `n` repeats
 it. Matches are drawn in `copy-mode-match-style`, the one under the cursor
 in `copy-mode-current-match-style`.
