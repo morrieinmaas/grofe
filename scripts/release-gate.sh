@@ -318,7 +318,7 @@ main() {
     echo "release-gate: could not check out canopy $c and athome $a (PINS): $GATE_OUT/pins.log" >&2
   fi
 
-  local failed=() verdict why log rc start
+  local failed=() verdict why log rc start macos_skipped=0
   for leg in "${LEGS[@]}"; do
     log="$GATE_OUT/$leg.log"
     why=""
@@ -346,6 +346,7 @@ main() {
       esac
       echo "release-gate: $leg $verdict after $(($(date +%s) - start))s" >&2
     fi
+    [ "$leg" = macos ] && [ "$verdict" = SKIP ] && [ "$why" != "not selected" ] && macos_skipped=1
     case "$verdict" in
       FAIL) failed+=("$leg") ;;
       SKIP) [ "$why" = "not selected" ] || [ "$leg" = macos ] || failed+=("$leg") ;;
@@ -363,6 +364,8 @@ main() {
   fi
   if [ "${#selected[@]}" -gt 0 ]; then
     echo "release-gate: the selected legs passed (a partial run, not a release gate)" >&2
+  elif [ "$macos_skipped" -eq 1 ]; then
+    echo "release-gate: every leg this host can run passed; macos not run, not a release gate" >&2
   else
     echo "release-gate: PASS" >&2
   fi
