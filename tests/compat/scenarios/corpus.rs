@@ -251,6 +251,51 @@ fn ensure_target(cli: &Cli) {
     }
 }
 
+/// Whether `req` is a `run-shell -b`, whose job runs on after the reply.
+fn starts_a_job(req: &[String]) -> bool {
+    matches!(req.first().map(String::as_str), Some("run-shell" | "run"))
+        && req[1..]
+            .iter()
+            .take_while(|w| w.starts_with('-') && *w != "--")
+            .any(|w| w.contains('b'))
+}
+
+/// Waits, up to [`JOB_WAIT`], until the server has no child but its
+/// panes. A `run-shell -b` job's output, a failing one's message
+/// included, opens a view mode over a pane when the job ends: let it land
+/// mid-replay and whether a later `send-keys -X` finds a pane in a mode,
+/// and so what the miss log holds, depends on how fast the machine is.
+fn wait_for_jobs(cli: &Cli) {
+    let (_, pid, _) = cli.run(&words(&["display-message", "-p", "#{pid}"]));
+    let (_, panes, _) = cli.run(&words(&["list-panes", "-a", "-F", "#{pane_pid}"]));
+    let (pid, panes): (&str, Vec<&str>) = (pid.trim(), panes.lines().collect());
+    if pid.is_empty() {
+        return;
+    }
+    let deadline = Instant::now() + JOB_WAIT;
+    while Instant::now() < deadline {
+        let ps = std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=", "-o", "ppid="])
+            .output()
+            .expect("ps");
+        let ps = String::from_utf8_lossy(&ps.stdout);
+        let busy = ps.lines().any(|l| {
+            let mut w = l.split_whitespace();
+            let (child, parent) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
+            parent == pid && !panes.contains(&child)
+        });
+        if !busy {
+            // The job's output reaches the server's loop just after it exits.
+            thread::sleep(Duration::from_millis(100));
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// How long [`wait_for_jobs`] waits for a `run-shell -b` job.
+const JOB_WAIT: Duration = Duration::from_secs(5);
+
 /// The miss log's lines past byte `from`, time stamps dropped, and the
 /// log's length.
 fn miss_lines(log: &Path, from: usize) -> (Vec<String>, usize) {
@@ -314,6 +359,9 @@ pub fn run(co: &Checkouts) -> Vec<String> {
                             None => waited += 1,
                             Some(0) => {}
                             Some(_) => refused += 1,
+                        }
+                        if starts_a_job(&req) {
+                            wait_for_jobs(&cli);
                         }
                         if req.first().is_some_and(|w| w == "-c")
                             && (code != Some(0) || !reply.contains(SHELL_RAN))
