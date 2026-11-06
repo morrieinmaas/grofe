@@ -5,8 +5,8 @@
 # sudo, the way the hosted runner's user is set up. One script, so the two
 # cannot drift apart.
 #
-#   scripts/ci-linux.sh toolchain    Rust at RUST_TOOLCHAIN through rustup,
-#                                    when cargo is not already that version
+#   scripts/ci-linux.sh toolchain    Rust at rust-toolchain.toml's channel,
+#                                    with rustfmt and clippy, through rustup
 #   scripts/ci-linux.sh unit         fmt, clippy, the lib, bin and doc tests
 #   scripts/ci-linux.sh acceptance   the tools, fzf at FZF_VERSION, the plugin
 #                                    release binaries, every integration test
@@ -22,7 +22,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RUST_TOOLCHAIN=1.98.1
+# The Rust version is rust-toolchain.toml's, the repo's one pin.
+RUST_TOOLCHAIN="$(sed -n 's/^channel *= *"\(.*\)"$/\1/p' rust-toolchain.toml)"
+[ -n "$RUST_TOOLCHAIN" ] || { echo "ci-linux.sh: no channel in rust-toolchain.toml" >&2; exit 1; }
 FZF_VERSION=0.74.4
 FZF_SHA256=05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504
 # The tools the suites run; under CI each one missing fails its test
