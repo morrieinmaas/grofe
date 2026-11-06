@@ -6,15 +6,12 @@ name: compat
 # tests/fixtures/compat/golden/tc_13/ were recorded against (that directory's
 # PINS file; the suite fails if a checkout is at another commit).
 #
-# Written for the record and for `act`: GitHub Actions is disabled, and the
-# gate is scripts/ci-local.sh. This job cannot pass on GitHub yet, because
-# both pinned commits are on local branches that are not pushed (canopy
-# `m37-tp12`, athome `grofe-config`). There is no workflow_dispatch
-# trigger, so `scripts/ci-local.sh` (`act workflow_dispatch`) leaves it out
-# until they are. The suite still runs in the gate: ci-local passes
-# GROFE_COMPAT_CANOPY, GROFE_COMPAT_ATHOME and GROFE_COMPAT_REQUIRED through
-# to both legs, mounting the checkouts read-only for act, and the CI
-# workflow's `cargo test --test '*'` runs it.
+# It runs on GitHub for pushes to main and pull requests. There is no
+# workflow_dispatch trigger, so `scripts/ci-local.sh` (`act
+# workflow_dispatch`) leaves it out. The suite still runs in that gate:
+# ci-local passes GROFE_COMPAT_CANOPY, GROFE_COMPAT_ATHOME and
+# GROFE_COMPAT_REQUIRED through to both legs, mounting the checkouts
+# read-only for act, and the CI workflow's `cargo test --test '*'` runs it.
 
 on:
   push:
@@ -28,6 +25,7 @@ concurrency:
 env:
   CANOPY_SHA: 433aee7939966bf6037012b8d5e8f4c4eeef2e2e
   ATHOME_SHA: ed0d87b711f20b484ba469ec0848906d5f27bf71
+  FZF_VERSION: 0.74.4
 
 jobs:
   compat:
@@ -67,7 +65,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y neovim fzf bash
+          sudo apt-get install -y neovim bash
+
+      # The owner's fzf pin (containers/compat/Containerfile). TC.13's
+      # `fzf --tmux` check waits for a floating pane, and Ubuntu's older fzf
+      # opens a popup instead.
+      - name: fzf ${{ env.FZF_VERSION }} (Linux)
+        if: runner.os == 'Linux'
+        env:
+          FZF_SHA256: 05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504
+        run: |
+          mkdir -p "$RUNNER_TEMP/fzf"
+          curl -fsSLo "$RUNNER_TEMP/fzf.tar.gz" \
+            "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz"
+          echo "${FZF_SHA256}  $RUNNER_TEMP/fzf.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/fzf.tar.gz" -C "$RUNNER_TEMP/fzf" fzf
+          echo "$RUNNER_TEMP/fzf" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/fzf/fzf" --version | grep -q "^${FZF_VERSION} "
 
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
