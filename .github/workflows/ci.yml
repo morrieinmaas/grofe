@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  FZF_VERSION: 0.74.4
+
 jobs:
   unit:
     timeout-minutes: 20
@@ -60,7 +63,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y neovim fzf htop tmux bats less shellcheck
+          sudo apt-get install -y neovim htop tmux bats less shellcheck
+
+      # The owner's fzf pin, as compat.yml. fe_4's `fzf-tmux` case waits for
+      # a floating pane, and Ubuntu's older fzf opens a popup instead.
+      # Homebrew's fzf on macOS is current.
+      - name: fzf ${{ env.FZF_VERSION }} (Linux)
+        if: runner.os == 'Linux'
+        env:
+          FZF_SHA256: 05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504
+        run: |
+          mkdir -p "$RUNNER_TEMP/fzf"
+          curl -fsSLo "$RUNNER_TEMP/fzf.tar.gz" \
+            "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz"
+          echo "${FZF_SHA256}  $RUNNER_TEMP/fzf.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/fzf.tar.gz" -C "$RUNNER_TEMP/fzf" fzf
+          echo "$RUNNER_TEMP/fzf" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/fzf/fzf" --version | grep -q "^${FZF_VERSION} "
 
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
@@ -101,8 +120,7 @@ jobs:
       - name: cargo test (integration)
         run: |
           cargo build --example spike
-          cargo test --test '*' --no-run
-          cargo test --test '*'
+          cargo test --test '*' --no-fail-fast
 
       - name: bats
         run: |
