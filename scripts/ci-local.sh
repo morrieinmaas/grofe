@@ -21,6 +21,10 @@
 # provisions for its own platform (scripts/provision-plugin-binaries.sh)
 # from the GROFE_COMPAT_CANOPY checkout mounted below. Host binaries are not
 # passed in: on macOS they are the wrong platform for the container.
+#
+# act runs the workflow's jobs side by side, one per CPU. CI_LOCAL_ACT_JOBS=<n>
+# caps that (act's --concurrent-jobs); scripts/release-gate.sh sets 1, so
+# the timing tests in one job never share the host with another job.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -86,6 +90,10 @@ linux() {
     # The mounts belong to another user inside the container.
     args+=(--env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory
       --env 'GIT_CONFIG_VALUE_0=*')
+  fi
+
+  if [ -n "${CI_LOCAL_ACT_JOBS:-}" ]; then
+    args+=(--concurrent-jobs "$CI_LOCAL_ACT_JOBS")
   fi
 
   act workflow_dispatch --matrix os:ubuntu-latest \
