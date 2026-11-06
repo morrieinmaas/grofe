@@ -671,7 +671,10 @@ fn a_plugin_inherits_only_stdio_from_the_server() {
     let p = script(
         &srv,
         "p.sh",
-        &format!("ls /dev/fd > {}\nexec sleep 600", out.display()),
+        &format!(
+            "sh -c 'for f in /dev/fd/*; do echo \"${{f##*/}}\"; done' > {}\nexec sleep 600",
+            out.display()
+        ),
     );
     let srv = start_with(srv, &plugin_table("p", &p, "restart = \"never\""), None);
     running(&srv, "p");
@@ -680,8 +683,11 @@ fn a_plugin_inherits_only_stdio_from_the_server() {
         WAIT,
     )
     .expect("fd list");
-    // `ls` itself may hold its directory open as one more descriptor; the
-    // server's sockets, pty masters and logs are many, and well above it.
+    // A child shell's glob lists what the plugin passes on, and holds
+    // /dev/fd open as one more descriptor, 3 (`ls` would hold two on
+    // macOS, whose fts keeps `.` open too, and the script's own shell may
+    // hold its script at 255); the server's sockets, pty masters and logs
+    // are many, and well above it.
     let fds: Vec<u32> = fs::read_to_string(&out)
         .expect("fds")
         .split_whitespace()
