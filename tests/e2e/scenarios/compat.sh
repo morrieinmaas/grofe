@@ -13,7 +13,8 @@
 # e2e-run: rerecord rerecord
 #
 #   tools      what the phases below rely on: real tmux 3.7b (and
-#              tmux-sixel) first on the recorder's PATH and not grofe,
+#              tmux-sixel) first on the recorder's PATH and not grofe, fzf
+#              at the owner's 0.74.4,
 #              /usr/bin/tmux grofe answering as 3.7b, canopy's checkout at
 #              its PINS commit with a clean tree, athome's tree and the
 #              recording trees present
@@ -82,6 +83,11 @@ tools() {
     pass "the recorder's PATH finds real tmux first"
   else
     fail "the recorder's PATH does not find /usr/local/bin/tmux first"
+  fi
+  if [ "$(command -v fzf)" = /usr/local/bin/fzf ] && fzf --version | grep -q '^0\.74\.4 '; then
+    pass "fzf: /usr/local/bin/fzf is 0.74.4, the owner's version"
+  else
+    fail "fzf: PATH finds '$(command -v fzf)', $(fzf --version 2>&1), not /usr/local/bin/fzf 0.74.4"
   fi
   if [ /usr/bin/tmux -ef "$GROFE" ] && [ "$(env -u TMUX /usr/bin/tmux -V)" = "tmux 3.7b" ]; then
     pass "grofe as tmux: /usr/bin/tmux is grofe and prints tmux 3.7b"

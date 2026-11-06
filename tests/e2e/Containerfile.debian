@@ -108,6 +108,20 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
   && ln -s "/usr/local/lib/tmux-${TMUX_VERSION}/bin/tmux" /usr/local/bin/tmux \
   && ln -s "/usr/local/lib/tmux-${TMUX_VERSION}-sixel/bin/tmux" /usr/local/bin/tmux-sixel \
   && useradd -M -u 1001 -s /bin/sh golden
+# fzf at the owner's version, pinned as containers/compat/Containerfile
+# pins it: TC.13's live `fzf --tmux` check needs one that opens its picker
+# as a floating pane, and Debian's 0.60 opens a popup.
+ARG FZF_VERSION=0.74.4
+RUN case "$(uname -m)" in \
+    aarch64|arm64) arch=arm64 sha=5d673b849f494f0d64ec471d8640b153ca8849e3846a31da17abdcfce8df6b46 ;; \
+    x86_64|amd64) arch=amd64 sha=05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504 ;; \
+    *) echo "no fzf for $(uname -m)" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSLo /tmp/fzf.tar.gz \
+    "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_${arch}.tar.gz" \
+  && echo "${sha}  /tmp/fzf.tar.gz" | sha256sum -c - \
+  && tar -xzf /tmp/fzf.tar.gz -C /usr/local/bin fzf && rm /tmp/fzf.tar.gz \
+  && /usr/local/bin/fzf --version | grep -q "^${FZF_VERSION} "
 COPY --chown=test:test inputs/athome/ /home/test/compat/athome/
 COPY --chown=test:test inputs/canopy/ /home/test/grofe/tests/compat/scenarios/trees/canopy/
 COPY --chown=test:test inputs/athome/ /home/test/grofe/tests/compat/scenarios/trees/athome/
