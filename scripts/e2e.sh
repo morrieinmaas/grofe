@@ -22,7 +22,11 @@
 # `!` is a mutation run: it passes only when its last phase fails and the
 # uids on its `FAIL` lines are exactly those on its `MUTATED` lines. A
 # header line `# e2e-target: <stage>` builds that stage of the
-# Containerfile (`--target`) instead of its last one.
+# Containerfile (`--target`) instead of its last one. A header line
+# `# e2e-hostname: <name>` gives its containers that hostname instead of
+# `e2e`, and `# e2e-inputs: <name>...` brings canopy and athome into the
+# build context at their pinned commits (pinned_inputs below), from the
+# local clones GROFE_E2E_CANOPY_REPO and GROFE_E2E_ATHOME_REPO name.
 #
 # Nothing of the host's is mounted into a container: no home, no sockets,
 # no runtime dir. Around the whole thing the host-state check (host_state
@@ -43,6 +47,11 @@
 #   E2E_ARCH=1           also run on Arch
 #   E2E_STRICT=1         passed to every phase: a scenario that forgives a
 #                        failure passing on its rerun (FLAKY) fails instead
+#   GROFE_E2E_CANOPY_REPO, GROFE_E2E_ATHOME_REPO
+#                        local canopy and athome clones holding the pinned
+#                        commits, for a scenario with `# e2e-inputs:`; read
+#                        only (TA.1's names, scripts/e2e-alias-day.sh);
+#                        such a scenario also needs gitleaks on PATH
 #
 # Output: target/e2e/<run-id>/<scenario>/<image>/{build,<run>}.log, and one
 # summary line per image and run. Exits 0 only when every gating run passed
@@ -114,6 +123,70 @@ host_state() {
   fi
 }
 
+# gitleaks_gate <label> <out-dir> <gitleaks args>...: one gitleaks pass
+# with TA.1's flags (redacted, exit code 1 on a finding, a JSON report in
+# <out-dir>/gitleaks-<label>.json); 0 when it found nothing.
+gitleaks_gate() {
+  local label="$1" out="$2"
+  shift 2
+  gitleaks "$@" --no-banner --redact --exit-code 1 --report-format json \
+    --report-path "$out/gitleaks-$label.json" >"$out/gitleaks-$label.log" 2>&1
+}
+
+# pinned_inputs <work> <name>...: canopy and athome, each at the commit
+# grofe records for it (tests/fixtures/compat/golden/tc_13/PINS, the commits
+# TC.13's goldens were recorded against), into <work>/ctx/inputs. As TA.1's
+# stage 1 (scripts/e2e-alias-day.sh) takes them: read only, `git archive`
+# of the pinned commit and never a working tree; canopy also as a bundle of
+# that commit (branch `pinned`) from a throwaway clone under <work>, for
+# what needs its history. Each passes TA.1's secrets gate for it before it
+# enters the context: the tree is exported to <work>/gate-<name>, outside
+# the build context, and moved in only when athome's tree holds no
+# .secrets/, .env or .envrc and gitleaks finds nothing in either tree, nor
+# in the history canopy's bundle carries. Needs gitleaks on PATH.
+#
+#   canopy   ctx/inputs/canopy.bundle and ctx/inputs/canopy/
+#   athome   ctx/inputs/athome/
+pinned_inputs() {
+  local work="$1" name var src sha bad gate
+  local pins="$work/ctx/grofe/tests/fixtures/compat/golden/tc_13/PINS" in="$work/ctx/inputs"
+  shift
+  command -v gitleaks >/dev/null || { log "inputs: gitleaks not found, and the secrets gate needs it"; return 1; }
+  mkdir -p "$in" "$work/gitleaks" || return 1
+  for name in "$@"; do
+    case "$name" in
+      canopy) var=GROFE_E2E_CANOPY_REPO ;;
+      athome) var=GROFE_E2E_ATHOME_REPO ;;
+      *) log "inputs: no input named $name"; return 1 ;;
+    esac
+    src="${!var:-}"
+    [ -n "$src" ] || { log "inputs: set $var to a local $name clone"; return 1; }
+    sha="$(awk -v n="$name" '$1 == n { print $2 }' "$pins")"
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { log "inputs: PINS's $name line is '$sha', not a full commit sha"; return 1; }
+    git -C "$src" cat-file -e "$sha^{commit}" 2>/dev/null ||
+      { log "inputs: $name's pinned commit $sha is not in $src"; return 1; }
+    # Called in an `||` list, so errexit is off here: each step checks.
+    gate="$work/gate-$name"
+    mkdir -p "$gate" && git -C "$src" archive "$sha" | tar -x -C "$gate" || return 1
+    if [ "$name" = athome ]; then
+      bad="$(cd "$gate" && find . \( -path '*/.secrets' -o -path '*/.secrets/*' -o -name '.env' -o -name '*.env' \
+        -o -name '.envrc' -o -name 'dot_envrc*' \) -print | LC_ALL=C sort)"
+      [ -z "$bad" ] || { log "inputs: the $name archive holds $(printf '%s' "$bad" | tr '\n' ' ')"; return 1; }
+    fi
+    gitleaks_gate "$name" "$work/gitleaks" dir "$gate" ||
+      { log "inputs: gitleaks flagged $name's tree ($work/gitleaks/gitleaks-$name.log)"; return 1; }
+    if [ "$name" = canopy ]; then
+      git clone --quiet --no-checkout "$src" "$work/clone-canopy" &&
+        git -C "$work/clone-canopy" branch --quiet pinned "$sha" || return 1
+      gitleaks_gate canopy-history "$work/gitleaks" git --log-opts=pinned "$work/clone-canopy" ||
+        { log "inputs: gitleaks flagged canopy's history up to $sha"; return 1; }
+      git -C "$work/clone-canopy" bundle create --quiet "$in/canopy.bundle" pinned || return 1
+    fi
+    mv "$gate" "$in/$name" || return 1
+    log "inputs: $name at $sha (PINS), secrets gate passed"
+  done
+}
+
 # --- the harness -------------------------------------------------------------
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
@@ -163,9 +236,22 @@ run_image() {
   # of the image) is emulated.
   local plat_args=()
   [ "$image" = arch ] && plat_args=(--platform linux/amd64)
-  local target target_args=()
+  local target target_args=() hostname
   target="$(sed -n 's/^# e2e-target: *//p' "$ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
+  hostname="$(sed -n 's/^# e2e-hostname: *//p' "$ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1 | tr -d ' \t\r')"
+  if [ -n "$hostname" ] && ! [[ "$hostname" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    log "$scenario: e2e-hostname '$hostname' is not a hostname ([a-z0-9][a-z0-9-]*)"
+    printf '%s\thostname\tFAIL\n' "$image" >>"$summary"
+    return 1
+  fi
   [ -n "$target" ] && target_args=(--target "$target")
+  # A scenario whose stage this image's Containerfile lacks (compat is
+  # Debian's only) is skipped on it, not failed.
+  if [ -n "$target" ] && ! grep -qiE "^FROM .* AS $target\s*$" "$ctx/grofe/tests/e2e/Containerfile.$image"; then
+    log "$image: no '$target' stage in tests/e2e/Containerfile.$image, skipped"
+    printf '%s\t%s\tSKIP (no %s stage)\n' "$image" "$scenario" "$target" >>"$summary"
+    return 0
+  fi
   log "$image: building $tag"
   if ! engine build ${plat_args[@]+"${plat_args[@]}"} ${target_args[@]+"${target_args[@]}"} ${net_args[@]+"${net_args[@]}"} -f "$ctx/grofe/tests/e2e/Containerfile.$image" \
     -t "$tag" "$ctx" >"$dir/build.log" 2>&1; then
@@ -180,7 +266,7 @@ run_image() {
     name="grofe-e2e-$image-${run_name%!}-$$"
     containers+=("$name")
     # shellcheck disable=SC2086 # steps is a list of words
-    if ! engine run -d --init --name "$name" --hostname e2e ${net_args[@]+"${net_args[@]}"} \
+    if ! engine run -d --init --name "$name" --hostname "${hostname:-e2e}" ${net_args[@]+"${net_args[@]}"} \
       --tmpfs /run/user:rw,mode=0755 "$tag" >"$dir/${run_name%!}.log" 2>&1; then
       rc=1
     else
@@ -266,6 +352,10 @@ main() {
   mkdir -p "$work/ctx/grofe"
   git -C "$repo" archive HEAD | tar -x -C "$work/ctx/grofe"
   log "$scenario at $sha, images: ${wanted[*]}, out: $out"
+  local inputs
+  inputs="$(sed -n 's/^# e2e-inputs: *//p' "$work/ctx/grofe/tests/e2e/scenarios/$scenario.sh" | head -n 1)"
+  # shellcheck disable=SC2086 # inputs is a list of words
+  [ -z "$inputs" ] || pinned_inputs "$work" $inputs || return 2
 
   local image status=0
   for image in "${wanted[@]}"; do
