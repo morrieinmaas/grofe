@@ -365,7 +365,8 @@ fn find_window_globs_the_text_and_escapes_the_pattern() {
     srv.cmd(&["new-window", "-d", "-t", "main", "-n", "a,b", "cat"])
         .expect("new-window");
     let mut a = attach(&srv, "main");
-    let listed = |a: &mut Harness, pattern: &str| -> Vec<String> {
+    // Each entry, with the screen column it starts at.
+    let listed = |a: &mut Harness, pattern: &str| -> Vec<(usize, String)> {
         srv.cmd(&["find-window", "-Z", pattern])
             .expect("find-window");
         a.wait_for("(filter: ");
@@ -375,12 +376,10 @@ fn find_window_globs_the_text_and_escapes_the_pattern() {
         text.lines()
             .take_while(|l| !l.starts_with('┌'))
             .filter(|l| l.contains("─> - "))
-            .map(|l| {
-                l.split("─> - ")
-                    .nth(1)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
+            .filter_map(|l| {
+                let (before, entry) = l.split_once("─> - ")?;
+                let at = before.chars().count() + "─> - ".chars().count();
+                Some((at, entry.trim().to_string()))
             })
             .collect()
     };
@@ -392,15 +391,23 @@ fn find_window_globs_the_text_and_escapes_the_pattern() {
         .expect("host");
     let host = host.trim_end();
     let short = host.split('.').next().unwrap_or(host);
-    let titled = |name: &str| {
-        if host.is_empty() || host == short {
+    // The row ends at the screen's edge, so a long host name (a macOS
+    // runner's) is cut there, as tmux cuts it.
+    let titled = |name: &str, at: usize| {
+        let full = if host.is_empty() || host == short {
             name.to_string()
         } else {
             format!("{name}: \"{host}\"")
-        }
+        };
+        let shown: String = full.chars().take(80usize.saturating_sub(at)).collect();
+        (at, shown.trim_end().to_string())
     };
-    assert_eq!(listed(&mut a, "f?o"), [titled("2: one")]);
-    assert_eq!(listed(&mut a, "a,b"), [titled("3: a,b")]);
+    let one = listed(&mut a, "f?o");
+    assert_eq!(one.len(), 1, "{one:?}");
+    assert_eq!(one, [titled("2: one", one[0].0)]);
+    let ab = listed(&mut a, "a,b");
+    assert_eq!(ab.len(), 1, "{ab:?}");
+    assert_eq!(ab, [titled("3: a,b", ab[0].0)]);
 }
 
 /// `choose-client -Z` lists the attached clients; Enter detaches the

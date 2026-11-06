@@ -35,6 +35,17 @@ fn start() -> TestServer {
         .expect("set");
     srv.cmd(&["split-window", "-h", "-t", "main", "exec sh"])
         .expect("split");
+    // A pane's title starts as the host name, and a long one (a macOS
+    // runner's) takes the room the right-aligned buttons need: tmux's
+    // format_draw trims the right part before the left. A short title
+    // keeps them on screen.
+    let panes = srv
+        .cmd(&["list-panes", "-t", "main", "-F", "#{pane_id}"])
+        .expect("list-panes");
+    for pane in panes.lines() {
+        srv.cmd(&["select-pane", "-t", pane, "-T", "sh"])
+            .expect("title");
+    }
     srv.cmd(&["select-pane", "-t", "main:.1"]).expect("select");
     srv
 }
