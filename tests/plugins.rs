@@ -673,14 +673,16 @@ fn a_plugin_inherits_only_stdio_from_the_server() {
         "p.sh",
         &format!(
             "sh -c '[ -e /dev/fd/3 ] && echo leak3; \
-             for f in /dev/fd/*; do echo \"${{f##*/}}\"; done' > {}\nexec sleep 600",
+             for f in /dev/fd/*; do echo \"${{f##*/}}\"; done; echo end' > {}\nexec sleep 600",
             out.display()
         ),
     );
     let srv = start_with(srv, &plugin_table("p", &p, "restart = \"never\""), None);
     running(&srv, "p");
     wait_until(
-        || fs::read_to_string(&out).is_ok_and(|t| t.ends_with('\n')),
+        // The list is whole only at its sentinel: a write can land
+        // between two of its lines.
+        || fs::read_to_string(&out).is_ok_and(|t| t.ends_with("end\n")),
         WAIT,
     )
     .expect("fd list");
