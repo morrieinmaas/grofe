@@ -123,9 +123,13 @@ clone_at() {
 # A leg exits 0 for PASS, 1 for FAIL, 3 for SKIP; its first line on fd 3
 # (the reason file) is printed after the verdict.
 
+# run <command...>: the command with fd 3 closed, so nothing it starts can
+# write a reason or hold the reason file open.
+run() { "$@" 3>&-; }
+
 leg_macos() {
   local rc=0
-  scripts/ci-local.sh macos || rc=$?
+  run scripts/ci-local.sh macos || rc=$?
   if [ "$(uname -s)" = Darwin ]; then
     # Any failure is 1: ci-local.sh's own status 3 must not read as SKIP.
     [ "$rc" -eq 0 ] || return 1
@@ -135,12 +139,12 @@ leg_macos() {
     echo "ci-local.sh macos exited $rc on this $(uname -s) host" >&3
     return 1
   fi
-  if ! rustup target list --installed 2>/dev/null | grep -qx aarch64-apple-darwin; then
+  if ! run rustup target list --installed 2>/dev/null | grep -qx aarch64-apple-darwin; then
     echo "not a macOS host, and no aarch64-apple-darwin std for the clippy cross-check" >&3
     return 1
   fi
   echo "### cargo clippy --all-targets --target aarch64-apple-darwin"
-  if ! cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings; then
+  if ! run cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings; then
     echo "clippy for aarch64-apple-darwin failed" >&3
     return 1
   fi
@@ -150,11 +154,11 @@ leg_macos() {
 
 # Any failure is 1, so that no runner's own exit status reads as SKIP.
 leg_linux() {
-  scripts/ci-local.sh linux || return 1
+  run scripts/ci-local.sh linux || return 1
 }
 
 leg_e2e() {
-  scripts/e2e.sh "$1" || return 1
+  run scripts/e2e.sh "$1" || return 1
 }
 
 leg_alias_day() {
@@ -165,7 +169,7 @@ leg_alias_day() {
   git clone --quiet --no-checkout "$GROFE_E2E_ATHOME_REPO" "$clone"
   git -C "$clone" branch --quiet --force "$ref" "$(pin_of athome)"
   echo "### athome: a throwaway clone with $ref at $(pin_of athome) (PINS)"
-  GROFE_E2E_ATHOME_REPO="$clone" scripts/e2e.sh alias-day || return 1
+  GROFE_E2E_ATHOME_REPO="$clone" run scripts/e2e.sh alias-day || return 1
 }
 
 # systemd_image: builds the systemd image once per gate run, from grofe at
@@ -204,11 +208,11 @@ leg_systemd() {
   # shellcheck source-path=SCRIPTDIR source=e2e.sh
   . "$repo/scripts/e2e.sh"
   host_state >"$GATE_WORK/$scenario.host.before"
-  systemd_image || { echo "the systemd image did not build" >&3; return 1; }
+  run systemd_image || { echo "the systemd image did not build" >&3; return 1; }
   name="grofe-gate-$scenario-$$"
   # shellcheck disable=SC2064 # the name is fixed now
   trap "engine rm -f -t 0 '$name' >/dev/null 2>&1 || true" EXIT
-  engine run -d --name "$name" ${net_args[@]+"${net_args[@]}"} --hostname e2e --systemd=always "$GATE_IMAGE" >/dev/null
+  run engine run -d --name "$name" ${net_args[@]+"${net_args[@]}"} --hostname e2e --systemd=always "$GATE_IMAGE" >/dev/null
   engine exec "$name" timeout 120 systemctl is-system-running --wait || true
   local i
   for i in $(seq 1 60); do
@@ -216,7 +220,7 @@ leg_systemd() {
     [ "$i" -lt 60 ] || { echo "the test user's bus never came up" >&3; return 1; }
     sleep 1
   done
-  local as_test=(engine exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test
+  local as_test=(run engine exec -u test -w /home/test -e HOME=/home/test -e USER=test -e LOGNAME=test
     -e E2E_STRICT="$E2E_STRICT" "$name")
   echo "### TA.1 stage 2: athome applied, canopy on grofe"
   if ! "${as_test[@]}" bash /opt/e2e/alias-day.sh apply; then
