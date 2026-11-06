@@ -29,13 +29,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The container CLI: docker where it is installed, else podman.
+# The container CLI: CONTAINER when set (as scripts/e2e.sh takes it), else
+# podman, else docker; podman, or CONTAINER, gets E2E_PODMAN_OPTS's global
+# options first.
 engine() {
-  if command -v docker >/dev/null; then
-    docker "$@"
-  else
-    podman "$@"
+  local cli="${CONTAINER:-}"
+  if [ -z "$cli" ]; then
+    if command -v podman >/dev/null; then
+      cli=podman
+    else
+      cli=docker
+    fi
   fi
+  local opts=()
+  if [ "$cli" != docker ]; then
+    # shellcheck disable=SC2206 # E2E_PODMAN_OPTS is a list of words
+    opts=(${E2E_PODMAN_OPTS:-})
+  fi
+  "$cli" ${opts[@]+"${opts[@]}"} "$@"
 }
 
 # Removes the containers carrying label `$1`: the ones this run started.
