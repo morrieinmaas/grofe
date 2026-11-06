@@ -71,7 +71,10 @@ linux() {
   trap "remove_labelled '$label'" EXIT
   # CI, as act and the hosted runner set it: the suites' require_tool,
   # private_tmp, plugin-binary and shellcheck checks fail rather than skip.
-  local opts=(--label "$label") envs=(-e CI=true) var dir sub common mounted=0
+  # No pids limit: a hosted runner VM has none, and the suites start
+  # thousands of processes over a run (podman's default of 2048 failed them
+  # with EAGAIN).
+  local opts=(--label "$label" --pids-limit=-1) envs=(-e CI=true) var dir sub common mounted=0
   if [ -n "${E2E_PODMAN_NETWORK:-}" ]; then
     opts+=("--network=$E2E_PODMAN_NETWORK")
   fi
