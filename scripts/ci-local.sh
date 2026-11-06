@@ -6,8 +6,8 @@
 # The Linux leg runs scripts/ci-linux.sh, the script ci.yml's Linux jobs
 # run, in a fresh ubuntu:26.04 container (ubuntu-latest's release, pinned by
 # digest) as `runner`, a non-root user with passwordless sudo, as on a
-# hosted runner. grofe goes in as a `git archive` of HEAD, never the working
-# tree. The unit steps run, then the acceptance steps, both always, so one
+# hosted runner. grofe goes in as a `git archive` of HEAD (or of
+# GROFE_CI_REV, the commit the release gate tests), never the working tree. The unit steps run, then the acceptance steps, both always, so one
 # red half cannot hide the other. The container is removed at the end.
 #
 # The e2e leg (T4.6) runs the container scenarios through scripts/e2e.sh:
@@ -97,7 +97,7 @@ linux() {
     printf "runner ALL=(ALL) NOPASSWD:ALL\n" >/etc/sudoers.d/runner
     chmod 440 /etc/sudoers.d/runner
     install -d -o runner -g runner /home/runner/grofe'
-  git archive HEAD | engine exec -i -u runner "$name" tar -x -C /home/runner/grofe
+  git archive "${GROFE_CI_REV:-HEAD}" | engine exec -i -u runner "$name" tar -x -C /home/runner/grofe
   local as_runner=(engine exec -u runner -w /home/runner/grofe -e HOME=/home/runner "${envs[@]}" "$name")
   echo "### ci-linux.sh toolchain"
   "${as_runner[@]}" scripts/ci-linux.sh toolchain

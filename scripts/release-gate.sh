@@ -16,6 +16,10 @@
 #   GROFE_E2E_CANOPY_REPO=<canopy clone> GROFE_E2E_ATHOME_REPO=<athome clone> \
 #     scripts/release-gate.sh
 #
+# It tests the commit at HEAD, and refuses to start with uncommitted
+# changes: every leg runs from a detached checkout of that commit under
+# target/release-gate/<run-id>/src, removed at the end.
+#
 # stdout is exactly one line per leg, in the order above:
 #
 #   PASS|FAIL|SKIP <leg> [(<why>)] <log>
@@ -153,7 +157,7 @@ leg_alias_day() {
 }
 
 # systemd_image: builds the systemd image once per gate run, from grofe at
-# HEAD and canopy and athome at PINS, as TA.1's runner lays its context out.
+# the gate's commit and canopy and athome at PINS, as TA.1's runner lays its context out.
 systemd_image() {
   if engine image exists "$GATE_IMAGE" 2>/dev/null; then
     echo "### systemd image $GATE_IMAGE: already built by an earlier leg"
@@ -162,7 +166,7 @@ systemd_image() {
   local w="$GATE_WORK/systemd" in
   rm -rf "$w"
   mkdir -p "$w/ctx/grofe"
-  git -C "$repo" archive HEAD | tar -x -C "$w/ctx/grofe"
+  git -C "$repo" archive "$GATE_SHA" | tar -x -C "$w/ctx/grofe"
   pinned_inputs "$w" canopy athome || return 1
   # The image wants athome as a tar and canopy's bundle on branch alias-day.
   in="$w/ctx/inputs"
@@ -251,14 +255,30 @@ main() {
   GROFE_E2E_ATHOME_REPO="$(cd "$GROFE_E2E_ATHOME_REPO" && pwd)"
   export GROFE_E2E_CANOPY_REPO GROFE_E2E_ATHOME_REPO
 
+  # The gate tests one commit: a change not committed would be tested by
+  # no leg, or by some legs and not others.
+  [ -z "$(git -C "$repo" status --porcelain)" ] ||
+    die "the working tree has changes; commit or stash them first (git status)"
   local sha run_id
   sha="$(git -C "$repo" rev-parse HEAD)"
   run_id="$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:7}"
   GATE_OUT="$repo/target/release-gate/$run_id"
   GATE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/grofe-gate.XXXXXX")"
   GATE_IMAGE="localhost/grofe-gate-systemd:$(printf '%s' "$run_id" | tr '[:upper:]' '[:lower:]')"
-  export GATE_OUT GATE_WORK GATE_IMAGE
+  # Every leg runs from this detached checkout of the commit, so a commit
+  # or an edit made while the gate runs changes nothing it tests. It lives
+  # on disk with the logs (its builds are large), and goes at the end.
+  GATE_SRC="$GATE_OUT/src"
+  GATE_SHA="$sha"
+  GROFE_CI_REV="$sha"
+  export GATE_OUT GATE_WORK GATE_IMAGE GATE_SHA GROFE_CI_REV
   mkdir -p "$GATE_OUT"
+  git -C "$repo" worktree add --quiet --detach "$GATE_SRC" "$sha" ||
+    die "could not check out $sha at $GATE_SRC"
+  # The e2e runners write their reports under target/e2e: the repo's, so
+  # they outlive the checkout.
+  mkdir -p "$repo/target/e2e" "$GATE_SRC/target"
+  ln -s "$repo/target/e2e" "$GATE_SRC/target/e2e"
   # shellcheck disable=SC2329 # invoked by the EXIT trap
   cleanup() {
     local engine_cmd=("${CONTAINER:-podman}")
@@ -271,6 +291,7 @@ main() {
     # the bases, pulled by digest, are shared and stay.
     grep -oE '^(--> |Using cache )[0-9a-f]{12,}' "$GATE_OUT/systemd-build.log" 2>/dev/null | awk '{ print $NF }' |
       sort -u | xargs -r "${engine_cmd[@]}" rmi -f >/dev/null 2>&1 || true
+    git -C "$repo" worktree remove --force "$GATE_SRC" >/dev/null 2>&1 || true
     rm -rf "$GATE_WORK"
   }
   trap cleanup EXIT
@@ -302,7 +323,7 @@ main() {
       rc=0
       start="$(date +%s)"
       : >"$GATE_WORK/why"
-      timeout --kill-after=60 "$(leg_timeout "$leg")" bash "$repo/scripts/release-gate.sh" --leg "$leg" \
+      timeout --kill-after=60 "$(leg_timeout "$leg")" bash "$GATE_SRC/scripts/release-gate.sh" --leg "$leg" \
         </dev/null >"$log" 2>&1 3>"$GATE_WORK/why" || rc=$?
       why="$(head -n 1 "$GATE_WORK/why")"
       case "$rc" in
