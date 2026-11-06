@@ -387,6 +387,9 @@ fn restore_window(
         active_points: Default::default(),
         floating: Vec::new(),
         pane_status: Default::default(),
+        frames: false,
+        pane_gap: 0,
+        drop_preview: None,
         links: Vec::new(),
     })
 }

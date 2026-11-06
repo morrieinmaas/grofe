@@ -1011,3 +1011,132 @@ fn a_failed_build_still_runs_on_stop_for_the_session_it_removed() {
     .expect("on_stop undid what before did");
     assert_eq!(fs::read_to_string(d.join("log")).unwrap(), "before\nstop\n");
 }
+
+/// A source session for the frames round trips: three tiled panes side
+/// by side, which [`save_and_up`] makes no preset's: the first wider by
+/// hand, the last split again below.
+const FRAMED_SRC: &str = r#"
+name = "fr"
+[[window]]
+name = "w"
+split = "h"
+[[window.pane]]
+[[window.pane]]
+[[window.pane]]
+"#;
+
+/// Saves `fr` from `from` and brings it up in `to`; returns the saved
+/// file's text after checking `up` worked and gave three tiled panes in
+/// the source's arrangement.
+fn save_and_up(from: &TestServer, to: &TestServer) -> String {
+    write_layout(from, "src", FRAMED_SRC);
+    up_ok(from, "src");
+    let ids: Vec<String> = panes(from, "fr:w")
+        .into_iter()
+        .map(|p| p[0].clone())
+        .collect();
+    from.cmd(&["resize-pane", "-t", &ids[0], "-R", "6"])
+        .unwrap();
+    from.cmd(&["split-window", "-d", "-v", "-t", &ids[2]])
+        .unwrap();
+    let saved = run(from, &["layout", "save", "fr", "saved"]);
+    assert!(saved.status.success(), "{}", saved.stderr);
+    let text = fs::read_to_string(layouts_dir(from).join("saved.toml")).unwrap();
+    write_layout(to, "saved", &text);
+    let out = run(to, &["layout", "up", "saved", "-d"]);
+    assert!(
+        out.status.success(),
+        "layout up: {}\nsaved:\n{text}",
+        out.stderr
+    );
+    let rects = |srv: &TestServer| -> Vec<Vec<u32>> {
+        panes(srv, "fr:w")
+            .iter()
+            .map(|p| p[5].split(',').map(|n| n.parse().unwrap()).collect())
+            .collect()
+    };
+    let (a, b) = (rects(from), rects(to));
+    assert_eq!(b.len(), 4, "{b:?}");
+    // [x, y, w, h]: each pair of panes sits the same way round.
+    for i in 0..4 {
+        for j in 0..4 {
+            let way = |r: &[Vec<u32>]| (r[i][0].cmp(&r[j][0]), r[i][1].cmp(&r[j][1]));
+            assert_eq!(way(&a), way(&b), "from {a:?} to {b:?}");
+        }
+    }
+    // The hand-made width comes across, give or take the frames.
+    assert!(a[0][2].abs_diff(b[0][2]) <= 3, "from {a:?} to {b:?}");
+    text
+}
+
+#[test]
+fn a_layout_saved_from_a_framed_window_comes_up_unframed() {
+    let framed = TestServer::builder().frames(true).unstarted();
+    let plain = TestServer::unstarted();
+    let text = save_and_up(&framed, &plain);
+    // What is stored is the framed window's own `#{window_layout}` (its
+    // content rects, the root inset from the corner), which a framed
+    // window takes back exactly.
+    assert!(text.contains(&srv_layout(&framed, "fr:w")), "{text}");
+    // The target is unframed: its first pane is at the corner.
+    let first = &panes(&plain, "fr:w")[0][5];
+    assert!(first.starts_with("0,0,"), "{first}");
+}
+
+#[test]
+fn a_layout_saved_from_an_unframed_window_comes_up_framed() {
+    let plain = TestServer::unstarted();
+    let framed = TestServer::builder().frames(true).unstarted();
+    save_and_up(&plain, &framed);
+    // The target really is framed: its content is inset from the corner.
+    let first = &panes(&framed, "fr:w")[0][5];
+    assert!(first.starts_with("2,2,"), "{first}");
+}
+
+#[test]
+fn a_framed_save_round_trips_exactly_into_a_framed_window() {
+    let a = TestServer::builder().frames(true).unstarted();
+    let b = TestServer::builder().frames(true).unstarted();
+    let text = save_and_up(&a, &b);
+    assert_eq!(windows(&a, "fr"), windows(&b, "fr"), "saved:\n{text}");
+}
+
+fn srv_layout(srv: &TestServer, target: &str) -> String {
+    srv.cmd(&["display-message", "-p", "-t", target, "#{window_layout}"])
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// A tmux-identity server whose config frames its windows. `grofe
+/// layout` speaks grofe's CLI to it, so it still sees `pane-frames`.
+fn tmux_identity_framed() -> TestServer {
+    let srv = TestServer::builder().frames(true).unstarted();
+    let dir = srv.config_home.join("grofe");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("config.toml"),
+        "compat-identity = \"tmux\"\npane-frames = true\n",
+    )
+    .unwrap();
+    srv
+}
+
+#[test]
+fn a_framed_tmux_identity_window_takes_a_layout_framed() {
+    let plain = TestServer::unstarted();
+    let framed = tmux_identity_framed();
+    save_and_up(&plain, &framed);
+    // Framed, with tmux identity's gap of 0: one cell in.
+    let first = &panes(&framed, "fr:w")[0][5];
+    assert!(first.starts_with("1,1,"), "{first}");
+}
+
+#[test]
+fn a_framed_tmux_identity_window_saves_a_layout_that_comes_up_unframed() {
+    let framed = tmux_identity_framed();
+    let plain = TestServer::unstarted();
+    save_and_up(&framed, &plain);
+    let first = &panes(&plain, "fr:w")[0][5];
+    assert!(first.starts_with("0,0,"), "{first}");
+}

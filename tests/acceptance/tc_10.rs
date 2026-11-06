@@ -607,6 +607,10 @@ fn a_custom_table_takes_the_next_key() {
 #[test]
 fn any_takes_a_mouse_event_its_table_leaves_unbound() {
     let srv = start("exec cat");
+    // grofe identity binds a right click on a pane to its pane menu (FR.4);
+    // the test needs that click unbound in root.
+    srv.cmd(&["unbind-key", "-n", "MouseDown3Pane"])
+        .expect("unbind-key");
     bind(&srv, &["-T", "kp", "Any", "set", "-g", "@any", "kp"]);
     bind(&srv, &["-n", "C-y", "switch-client", "-T", "kp"]);
     let mut a = attach(&srv, 80, 24);

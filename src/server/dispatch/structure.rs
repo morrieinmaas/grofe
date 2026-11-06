@@ -389,6 +389,9 @@ pub fn break_pane(state: &mut State, ctx: &ClientCtx, c: BreakPane) -> Result<St
             active_points: Default::default(),
             floating: Vec::new(),
             pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
             links: Vec::new(),
         });
         if let Some(p) = model.panes.get_mut(&pane) {

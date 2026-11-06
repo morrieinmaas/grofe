@@ -3,16 +3,17 @@
 //! renderer over its layout. The values and error texts are tmux 3.7b's, recorded
 //! on a private server.
 
-use crate::cmd::{DisplayPopup, FloatPane, NewPane, Offset, PlacePane, Resolve};
+use crate::cmd::{DisplayPopup, FloatPane, NewPane, Offset, PlacePane, Resolve, UnfloatPane};
 use crate::compat;
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::pane::print_pane;
 use crate::server::dispatch::{resolve_cwd, spawn_pane};
-use crate::server::model::Floating;
+use crate::server::layout::Insert;
+use crate::server::model::{Floating, HOLE};
 use crate::server::pane::{PaneSpawn, pane_shell, usable_cwd};
 use crate::server::popup::{self, Frame, Lines, Position};
 use crate::server::{State, clients, hooks, menu, prompt};
-use crate::types::{ClientId, PaneId, Rect, SplitSize};
+use crate::types::{ClientId, Dir, PaneId, Rect, SplitSize};
 
 /// `display-popup -C` closes the client's popup (or menu) and nothing else;
 /// on a client that has a popup open the command changes that popup
@@ -266,6 +267,75 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
         z,
     });
     model.relayout(window);
+    Ok(String::new())
+}
+
+/// `unfloat-pane` (grofe's own): the floating target pane goes back into
+/// the layout with its process and history, splitting `-s`, else the tiled
+/// pane under its centre, else the window's latest active tiled pane, else
+/// its first one; a window with no tiled pane left takes it as its only
+/// one. The split is `-h`/`-v`, else along the longer side of the pane
+/// split. The pane becomes the active one.
+pub fn unfloat_pane(state: &mut State, ctx: &ClientCtx, c: UnfloatPane) -> Result<String, String> {
+    let model = &mut state.model;
+    let pane = model.resolve_pane(&c.target, ctx)?;
+    let window = model.panes[&pane].window;
+    let w = &model.windows[&window];
+    let Some(f) = w.floating(pane).copied() else {
+        return Err("pane is not floating".to_string());
+    };
+    let mut rects = w.tiled_rects();
+    rects.retain(|(id, _)| *id != HOLE);
+    let rect_of = |p: PaneId| rects.iter().find(|(id, _)| *id == p).map(|(_, r)| *r);
+    let split = match &c.split {
+        Some(t) => {
+            let t = model.resolve_pane(t, ctx)?;
+            if rect_of(t).is_none() {
+                return Err("target pane is not a tiled pane of the window".to_string());
+            }
+            Some(t)
+        }
+        None => {
+            let (cx, cy) = (f.x + i32::from(f.cols / 2), f.y + i32::from(f.rows / 2));
+            let under = rects.iter().find(|(_, r)| {
+                (i32::from(r.x)..i32::from(r.x) + i32::from(r.cols)).contains(&cx)
+                    && (i32::from(r.y)..i32::from(r.y) + i32::from(r.rows)).contains(&cy)
+            });
+            under
+                .map(|(id, _)| *id)
+                .or_else(|| {
+                    // The active pane, if tiled, is the latest active one.
+                    std::iter::once(w.active)
+                        .chain(w.last_panes.iter().rev().copied())
+                        .find(|p| rect_of(*p).is_some())
+                })
+                .or_else(|| rects.first().map(|(id, _)| *id))
+        }
+    };
+    let mut layout = w.layout.clone();
+    match split.and_then(|t| rect_of(t).map(|r| (t, r))) {
+        Some((t, r)) => {
+            let dir = c.dir.unwrap_or(if r.cols > r.rows {
+                Dir::Horizontal
+            } else {
+                Dir::Vertical
+            });
+            let how = Insert {
+                dir,
+                size: SplitSize::Half,
+                before: false,
+                full: false,
+            };
+            layout
+                .insert(w.area(), t, pane, how)
+                .map_err(|_| "no space for a new pane".to_string())?;
+        }
+        // Only floating panes are left: the pane takes the layout's hole.
+        None => {
+            layout.replace(HOLE, pane);
+        }
+    }
+    crate::server::drop::apply(model, window, pane, layout);
     Ok(String::new())
 }
 

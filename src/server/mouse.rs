@@ -45,6 +45,14 @@
 //! with it until the release, or a floating pane by its edges
 //! (`tc_6/float-border-mouse`, [`drag_border_start`]).
 //!
+//! In a framed window (FR.3, spec 2026-11-05-frames.md "The mouse") every
+//! frame and gap cell is a border of the pane it belongs to
+//! ([`frame_owner`]). The border drag there resizes across the separator
+//! between two tiles, except from a tile's title, where it moves the pane;
+//! `drag-pane -M` (grofe's `C-MouseDrag1Pane`) moves any pane the same
+//! way. While the button is down the window's `drop_preview` shows where
+//! the pane lands, and the release drops it there ([`crate::server::drop`]).
+//!
 //! `focus-follows-mouse` makes motion over a pane its window's active pane,
 //! whether or not `mouse` is on ([`focus_follows`]), and has the client
 //! report every motion (`clients::sync_mouse_modes`).
@@ -116,6 +124,17 @@ struct Pointer {
     float_drag: Option<PaneId>,
     /// Waiting for another click (tmux's double- and triple-click flags).
     click: Option<Click>,
+    /// A pane being moved with the mouse until the release (FR.3,
+    /// [`start_move`]).
+    pane_move: Option<PaneMove>,
+}
+
+/// A pane moved with the mouse: a tile dragged by its title, or any pane by
+/// `drag-pane -M`. The window is the one whose drop preview it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaneMove {
+    pane: PaneId,
+    window: WindowId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -284,6 +303,50 @@ fn border_pane(panes: &[(PaneId, Rect)], (x, y): (u32, u32)) -> Option<PaneId> {
     })
 }
 
+/// The tile whose frame window cell `(x, y)` of framed window `w` is on,
+/// or for a gap cell the nearest frame's, a tie going to the pane on the
+/// left or above, as tmux's border ownership does (spec 2026-11-05-frames.md
+/// "The mouse"). `None` off the window.
+fn frame_owner(w: &Window, (x, y): (u32, u32)) -> Option<PaneId> {
+    if x >= u32::from(w.cols) || y >= u32::from(w.rows) {
+        return None;
+    }
+    let frames = w.frame_rects();
+    let away = |r: &Rect| {
+        let off = |v: u32, start: u16, len: u16| {
+            let (start, end) = (u32::from(start), u32::from(start) + u32::from(len));
+            if v < start {
+                start - v
+            } else if v >= end {
+                v + 1 - end
+            } else {
+                0
+            }
+        };
+        off(x, r.x, r.cols).max(off(y, r.y, r.rows))
+    };
+    // Before the cell (left of it or above it) wins a tie.
+    let after =
+        |r: &Rect| u32::from(r.x) + u32::from(r.cols) > x && u32::from(r.y) + u32::from(r.rows) > y;
+    frames
+        .iter()
+        .min_by_key(|(_, r)| (away(r), after(r)))
+        .map(|(pane, _)| *pane)
+}
+
+/// The tile whose top edge (its title), corners aside, window cell
+/// `(x, y)` is on in framed window `w`: where a drag moves the pane rather
+/// than resizing it. A zoomed window has none.
+fn title_at(w: &Window, (x, y): (u32, u32)) -> Option<PaneId> {
+    if w.zoomed {
+        return None;
+    }
+    w.frame_rects().into_iter().find_map(|(pane, r)| {
+        let (left, right) = (u32::from(r.x), u32::from(r.x) + u32::from(r.cols) - 1);
+        (y == u32::from(r.y) && left < x && x < right).then_some(pane)
+    })
+}
+
 /// What the pointer is over.
 enum Hit {
     Pane(PaneId, u16, u16),
@@ -328,6 +391,11 @@ fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
     let panes = pane_rects(w);
     if let Some((pane, x, y)) = pane_at(&panes, at) {
         return Hit::Pane(pane, x, y);
+    }
+    // Framed, every cell that is no pane's content is a frame or a gap,
+    // and belongs to a pane as a border does (FR.3).
+    if w.framed() {
+        return frame_owner(w, at).map_or(Hit::Nothing, Hit::Border);
     }
     if let Some(hit) = title_hit(state, client, w, &panes, at) {
         return hit;
@@ -619,15 +687,34 @@ fn on_mouse(state: &mut State, client: ClientId, m: &Mouse) -> Option<Routed> {
     if m.kind == MouseKind::Move {
         focus_follows(state, client, m);
     }
-    if !mouse_on(state, client) {
-        // The key tables drop it, as with no mouse at all.
+    if !mouse_on(state, client) || client_window(state, client).is_none() {
+        // A move whose release can no longer come is cancelled, its
+        // preview with it.
+        cancel_move(state, client);
+        // The key tables drop it, as with no mouse at all; a client showing
+        // no window has nothing to point at.
         return None;
     }
-    // A client showing no window has nothing to point at.
-    client_window(state, client)?;
     let from = state.mouse.pointers.get(&client).and_then(|p| p.last);
+    // The report that ends a drag drops a pane being moved, before the
+    // drag's end fires.
+    if matches!(
+        m.kind,
+        MouseKind::Up(_) | MouseKind::Down(_) | MouseKind::Move
+    ) && let Some(mv) = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.pane_move.take())
+    {
+        drop_move(state, client, mv, (m.col, m.row));
+    }
     let Some(key) = classify(state, client, m) else {
         let pointer = state.mouse.pointers.get(&client);
+        if let Some(mv) = pointer.and_then(|p| p.pane_move) {
+            preview_move(state, client, mv, (m.col, m.row));
+            return Some(Routed::Consumed);
+        }
         let border = pointer.and_then(|p| p.drag).is_some_and(|d| d.border);
         let floating = pointer.and_then(|p| p.float_drag);
         if border && let (Some(pane), Some(from)) = (floating, from) {
@@ -767,7 +854,97 @@ fn drag_border_start(state: &mut State, client: ClientId, m: &Mouse, target: &Mo
             clients::changed(state);
             drag_float(state, client, pane, from, (m.col, m.row));
         }
-        None => drag_border(state, client, from, (m.col, m.row)),
+        None => match title_under(state, client, from) {
+            // A framed tile's title moves the pane (FR.3).
+            Some(pane) => start_move(state, client, pane, (m.col, m.row)),
+            None => drag_border(state, client, from, (m.col, m.row)),
+        },
+    }
+}
+
+/// The framed tile whose title is under client cell `cell`, if any.
+fn title_under(state: &State, client: ClientId, cell: (u16, u16)) -> Option<PaneId> {
+    let cx = clients::overlay_ctx(state, client)?;
+    let w = client_window(state, client).filter(|w| w.framed())?;
+    title_at(w, window_cell(&cx, cell)?)
+}
+
+/// `drag-pane -M` (grofe's own): the pane of the running mouse key starts
+/// moving with the pointer, as a framed tile dragged by its title does.
+/// Outside a mouse key's commands it is tmux's own failure, as
+/// `send-keys -M`'s.
+pub fn drag_pane(state: &mut State) -> Result<String, String> {
+    let Some(t) = state.mouse.current.clone() else {
+        return Err(crate::cmd::target::NO_MOUSE_TARGET.to_string());
+    };
+    // The status line has no pane to move.
+    if t.range.is_none() {
+        start_move(state, t.client, t.pane, t.report);
+    }
+    Ok(String::new())
+}
+
+/// Client `client` starts moving `pane`, a pane of its window, until the
+/// release ([`drop_move`]), the preview following the pointer from client
+/// cell `now`. A zoomed window does not start a move.
+fn start_move(state: &mut State, client: ClientId, pane: PaneId, now: (u16, u16)) {
+    let Some(w) = client_window(state, client) else {
+        return;
+    };
+    if w.zoomed || !w.pane_ids().contains(&pane) {
+        return;
+    }
+    let mv = PaneMove { pane, window: w.id };
+    let p = state.mouse.pointers.entry(client).or_default();
+    let button = p.drag.map_or(1, |d| d.button);
+    // The reports until the release are the move's, as a border drag's.
+    p.drag = Some(Drag {
+        button,
+        border: true,
+    });
+    p.float_drag = None;
+    p.pane_move = Some(mv);
+    preview_move(state, client, mv, now);
+}
+
+/// Where move `mv` lands with the pointer at client cell `cell`: `None`
+/// over the pane itself, a gap, no pane, or once the client shows another
+/// window.
+fn plan_move(
+    state: &State,
+    client: ClientId,
+    mv: PaneMove,
+    cell: (u16, u16),
+) -> Option<crate::server::drop::Drop> {
+    let cx = clients::overlay_ctx(state, client)?;
+    let w = client_window(state, client).filter(|w| w.id == mv.window)?;
+    crate::server::drop::plan(w, mv.pane, window_cell(&cx, cell)?)
+}
+
+/// A report during move `mv`: the drop preview follows the pointer.
+fn preview_move(state: &mut State, client: ClientId, mv: PaneMove, cell: (u16, u16)) {
+    let preview = plan_move(state, client, mv, cell).map(|d| d.preview);
+    set_preview(state, mv.window, preview);
+}
+
+fn set_preview(state: &mut State, window: WindowId, preview: Option<Rect>) {
+    let Some(w) = state.model.windows.get_mut(&window) else {
+        return;
+    };
+    if w.drop_preview != preview {
+        w.drop_preview = preview;
+        clients::changed(state);
+    }
+}
+
+/// The release of move `mv` at client cell `cell`: the preview goes, and
+/// the pane lands where it showed ([`crate::server::drop`]).
+fn drop_move(state: &mut State, client: ClientId, mv: PaneMove, cell: (u16, u16)) {
+    let planned = plan_move(state, client, mv, cell);
+    set_preview(state, mv.window, None);
+    if let Some(d) = planned {
+        crate::server::drop::apply(&mut state.model, mv.window, mv.pane, d.layout);
+        clients::changed(state);
     }
 }
 
@@ -863,14 +1040,31 @@ fn drag_border(state: &mut State, client: ClientId, from: (u16, u16), to: (u16, 
     let ((lx, ly), (x, y)) = (drag_cell(&cx, w, from), drag_cell(&cx, w, to));
     let area = w.area();
     let panes = pane_rects(w);
+    // Framed, the border between two tiles is the separator: the first
+    // one's frame, the gap and the second one's frame (FR.3).
+    let pad = if w.framed() {
+        i32::from(w.layout.pad_on(area))
+    } else {
+        0
+    };
+    let (cols, rows) = (i32::from(w.cols), i32::from(w.rows));
     let edge = |along_x: bool| {
         panes.iter().find_map(|&(pane, r)| {
             let (left, top) = (i32::from(r.x), i32::from(r.y));
             let (right, bottom) = (left + i32::from(r.cols), top + i32::from(r.rows));
-            let hit = if along_x {
-                right == lx && top <= ly + 1 && bottom >= ly
-            } else {
-                bottom == ly && left <= lx + 1 && right >= lx
+            let hit = match (along_x, pad) {
+                (true, 0) => right == lx && top <= ly + 1 && bottom >= ly,
+                (false, 0) => bottom == ly && left <= lx + 1 && right >= lx,
+                (true, pad) => {
+                    (right..=right + pad).contains(&lx)
+                        && (top - pad..bottom + pad).contains(&ly)
+                        && right + pad + 1 < cols
+                }
+                (false, pad) => {
+                    (bottom..=bottom + pad).contains(&ly)
+                        && (left - pad..right + pad).contains(&lx)
+                        && bottom + pad + 1 < rows
+                }
             };
             hit.then_some(pane)
         })
@@ -1249,9 +1443,24 @@ fn drag_tick(state: &mut State, client: ClientId, generation: u64) {
     }
 }
 
+/// Client `client`'s pane move, if any, ends without a drop, and its
+/// preview goes.
+fn cancel_move(state: &mut State, client: ClientId) {
+    let mv = state
+        .mouse
+        .pointers
+        .get_mut(&client)
+        .and_then(|p| p.pane_move.take());
+    if let Some(mv) = mv {
+        set_preview(state, mv.window, None);
+    }
+}
+
 /// Client `id` is gone: its pointer, and with it any drag and its timer,
 /// goes too (the client's removal calls this).
 pub fn client_gone(state: &mut State, id: ClientId) {
+    // A move it had going is cancelled, its preview with it.
+    cancel_move(state, id);
     state.mouse.pointers.remove(&id);
     if state.mouse.current.as_ref().is_some_and(|m| m.client == id) {
         state.mouse.current = None;

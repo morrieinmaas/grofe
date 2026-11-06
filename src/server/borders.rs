@@ -39,6 +39,9 @@ pub enum PaneLines {
     Simple,
     Number,
     Spaces,
+    /// `╭ ╮ ╰ ╯ ─ │` on a frame ([`frame_glyph`]); shared borders have
+    /// junctions a rounded corner cannot draw, so there it is `single`.
+    Rounded,
 }
 
 impl PaneLines {
@@ -49,6 +52,7 @@ impl PaneLines {
             "simple" => PaneLines::Simple,
             "number" => PaneLines::Number,
             "spaces" => PaneLines::Spaces,
+            "rounded" => PaneLines::Rounded,
             _ => PaneLines::Single,
         }
     }
@@ -131,7 +135,7 @@ pub fn glyph(lines: PaneLines, cell: u8, pane: Option<&PaneBox>) -> char {
     ];
     let i = usize::from(cell.min(CELL_OUTSIDE));
     match lines {
-        PaneLines::Single => SINGLE[i],
+        PaneLines::Single | PaneLines::Rounded => SINGLE[i],
         PaneLines::Double => DOUBLE[i],
         PaneLines::Heavy => HEAVY[i],
         PaneLines::Simple => SIMPLE[i],
@@ -143,6 +147,19 @@ pub fn glyph(lines: PaneLines, cell: u8, pane: Option<&PaneBox>) -> char {
                 pane.map_or('*', |p| char::from(b'0' + (p.index % 10) as u8))
             }
         }
+    }
+}
+
+/// The glyph for border cell type `cell` on a pane's own frame (spec
+/// 2026-11-05-frames.md): as [`glyph`], but `rounded` rounds the corners.
+/// A frame only has corners and edges, never a junction.
+pub fn frame_glyph(lines: PaneLines, cell: u8, pane: Option<&PaneBox>) -> char {
+    match (lines, cell) {
+        (PaneLines::Rounded, CELL_TOPLEFT) => '╭',
+        (PaneLines::Rounded, CELL_TOPRIGHT) => '╮',
+        (PaneLines::Rounded, CELL_BOTTOMLEFT) => '╰',
+        (PaneLines::Rounded, CELL_BOTTOMRIGHT) => '╯',
+        _ => glyph(lines, cell, pane),
     }
 }
 
@@ -513,6 +530,34 @@ mod tests {
         assert_eq!(glyph(PaneLines::Number, CELL_JOIN, Some(&p)), '7');
         assert_eq!(glyph(PaneLines::Number, CELL_JOIN, None), '*');
         assert_eq!(glyph(PaneLines::Spaces, CELL_JOIN, Some(&p)), ' ');
+    }
+
+    #[test]
+    fn rounded_is_single_on_shared_borders_and_rounded_on_a_frame() {
+        let p = boxed(1, 0, 0, 1, 1, 0);
+        assert_eq!(PaneLines::parse("rounded"), PaneLines::Rounded);
+        assert_eq!(glyph(PaneLines::Rounded, CELL_TOPLEFT, Some(&p)), '┌');
+        assert_eq!(glyph(PaneLines::Rounded, CELL_JOIN, Some(&p)), '┼');
+        let corners = [
+            CELL_TOPLEFT,
+            CELL_TOPRIGHT,
+            CELL_BOTTOMLEFT,
+            CELL_BOTTOMRIGHT,
+        ];
+        let drawn: String = corners
+            .iter()
+            .map(|c| frame_glyph(PaneLines::Rounded, *c, Some(&p)))
+            .collect();
+        assert_eq!(drawn, "╭╮╰╯");
+        assert_eq!(
+            frame_glyph(PaneLines::Rounded, CELL_LEFTRIGHT, Some(&p)),
+            '─'
+        );
+        assert_eq!(
+            frame_glyph(PaneLines::Rounded, CELL_TOPBOTTOM, Some(&p)),
+            '│'
+        );
+        assert_eq!(frame_glyph(PaneLines::Heavy, CELL_TOPLEFT, Some(&p)), '┏');
     }
 
     #[test]
