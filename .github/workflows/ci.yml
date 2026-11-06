@@ -76,14 +76,14 @@ jobs:
           less --version | head -1
           shellcheck --version | head -2
 
-      # The Linux job runs in a container (act, or a fresh runner), so /tmp
-      # is its own: the plugin cases that write fixed /tmp paths run here
-      # (TP.8, TP.9 cases 2 and 3, TP.12 case 2). Their release binaries
-      # come from canopy's checksum-verified provisioning: from the checkout
-      # GROFE_COMPAT_CANOPY names (scripts/ci-local.sh mounts it), else from
-      # canopy at the commit tc_13's PINS names.
-      - name: Provision plugin release binaries (Linux)
-        if: runner.os == 'Linux'
+      # Each job runs on a machine of its own (a fresh hosted runner VM, or
+      # act's container), so /tmp is its own: the plugin cases that write
+      # fixed /tmp paths run here (TP.8, TP.9 cases 2 and 3, TP.12 case 2).
+      # Their release binaries come from canopy's checksum-verified
+      # provisioning, for Linux and macOS alike: from the checkout
+      # GROFE_COMPAT_CANOPY names (scripts/ci-local.sh mounts it), else
+      # from canopy at the commit tc_13's PINS names.
+      - name: Provision plugin release binaries
         run: |
           echo GROFE_TEST_PRIVATE_TMP=1 >>"$GITHUB_ENV"
           canopy="${GROFE_COMPAT_CANOPY:-}"
