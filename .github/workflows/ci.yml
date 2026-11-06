@@ -42,19 +42,10 @@ jobs:
         if: runner.os == 'Linux'
         run: scripts/ci-linux.sh unit
 
-      - name: cargo fmt --check
+      # scripts/ci-macos.sh, which the release gate's macos leg runs too.
+      - name: fmt, clippy, lib, bin and doc tests (macOS)
         if: runner.os == 'macOS'
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        if: runner.os == 'macOS'
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: cargo test (lib, bins, doc)
-        if: runner.os == 'macOS'
-        run: |
-          cargo test --lib --bins
-          cargo test --doc
+        run: scripts/ci-macos.sh unit
 
   acceptance:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
@@ -87,46 +78,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install neovim fzf htop tmux bats-core shellcheck
 
-      - name: Verify tools present
+      # The plugin binaries, every integration test binary and bats, as the
+      # release gate's macos leg runs them (scripts/ci-macos.sh).
+      - name: Acceptance (macOS)
         if: runner.os == 'macOS'
-        run: |
-          nvim --version | head -1
-          fzf --version
-          htop --version
-          tmux -V
-          bats --version
-          less --version | head -1
-          shellcheck --version | head -2
-
-      # A hosted runner VM is the job's own, so /tmp is its own: the plugin
-      # cases that write fixed /tmp paths run here (TP.8, TP.9 cases 2 and
-      # 3, TP.12 case 2). Their release binaries come from canopy's
-      # checksum-verified provisioning, from canopy at the commit tc_13's
-      # PINS names.
-      - name: Provision plugin release binaries
-        if: runner.os == 'macOS'
-        run: |
-          echo GROFE_TEST_PRIVATE_TMP=1 >>"$GITHUB_ENV"
-          canopy="${GROFE_COMPAT_CANOPY:-}"
-          if [ -z "$canopy" ]; then
-            canopy="$RUNNER_TEMP/canopy"
-            sha="$(awk '$1 == "canopy" { print $2 }' tests/fixtures/compat/golden/tc_13/PINS)"
-            git clone --quiet https://github.com/morrieinmaas/canopy "$canopy"
-            git -C "$canopy" checkout --quiet "$sha"
-          fi
-          scripts/provision-plugin-binaries.sh "$canopy" "$RUNNER_TEMP/plugin-bin" >>"$GITHUB_ENV"
-
-      # Built first: self_test otherwise runs `cargo build --example spike`
-      # in the middle of the suite, and that compile starves the timing
-      # cases (m2_robust's resize storm) on the runner's few cores.
-      - name: cargo test (integration)
-        if: runner.os == 'macOS'
-        run: |
-          cargo build --example spike
-          cargo test --test '*' --no-fail-fast
-
-      - name: bats
-        if: runner.os == 'macOS'
-        run: |
-          cargo build
-          bats tests/cli.bats
+        run: scripts/ci-macos.sh acceptance

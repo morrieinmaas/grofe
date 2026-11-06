@@ -109,12 +109,13 @@ linux() {
   return "$rc"
 }
 
+# scripts/ci-macos.sh, ci.yml's macOS steps: the unit half, then the
+# acceptance half, both always, so one red half cannot hide the other.
 macos() {
-  cargo fmt --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test
-  cargo build
-  bats tests/cli.bats
+  local rc=0
+  scripts/ci-macos.sh unit || rc=1
+  scripts/ci-macos.sh acceptance || rc=1
+  return "$rc"
 }
 
 e2e() {
