@@ -68,7 +68,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y neovim bash procps
+          sudo apt-get install -y neovim bash
 
       # The owner's fzf pin (containers/compat/Containerfile). TC.13's
       # `fzf --tmux` check waits for a floating pane, and Ubuntu's older fzf
@@ -85,12 +85,6 @@ jobs:
           tar -xzf "$RUNNER_TEMP/fzf.tar.gz" -C "$RUNNER_TEMP/fzf" fzf
           echo "$RUNNER_TEMP/fzf" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/fzf/fzf" --version | grep -q "^${FZF_VERSION} "
-
-      - name: DEBUG processes
-        run: |
-          ps -o comm= -p1 || true
-          ps -u "$(id -u)" -o "command pid" || true
-          command -v ps fzf tmux zsh || true
 
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
