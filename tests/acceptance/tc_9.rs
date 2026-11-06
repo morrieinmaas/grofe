@@ -20,6 +20,8 @@ use common::{TestServer, wait_child, wait_until};
 use crate::harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
+/// The attached client's width.
+const COLS: u16 = 80;
 
 /// A server with session `main` running `cat`, sized for an 80x24 client.
 fn start() -> TestServer {
@@ -44,7 +46,7 @@ fn new_session(srv: &TestServer, name: &str) {
 }
 
 fn attach(srv: &TestServer, session: &str) -> Harness {
-    let mut a = Harness::spawn_attach_with_env(srv.command(), session, &[], 80, 24);
+    let mut a = Harness::spawn_attach_with_env(srv.command(), session, &[], COLS, 24);
     wait_last_row_starts(&mut a, &format!("[{session}]"));
     a
 }
@@ -399,7 +401,8 @@ fn find_window_globs_the_text_and_escapes_the_pattern() {
         } else {
             format!("{name}: \"{host}\"")
         };
-        let shown: String = full.chars().take(80usize.saturating_sub(at)).collect();
+        let room = usize::from(COLS).saturating_sub(at);
+        let shown: String = full.chars().take(room).collect();
         (at, shown.trim_end().to_string())
     };
     let one = listed(&mut a, "f?o");
