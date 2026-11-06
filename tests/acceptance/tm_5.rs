@@ -373,19 +373,21 @@ fn a_panes_osc52_makes_a_buffer_only_under_on() {
 }
 
 /// A pane cannot read the clipboard or a buffer: an OSC 52 query gets no
-/// answer and does not reach the outer terminal.
+/// answer and does not reach the outer terminal. GNU `od` ends even an
+/// empty dump with its offset, `0000000`, and BSD `od` prints nothing: the
+/// filter leaves only what was read.
 #[test]
 fn a_pane_cannot_read_the_clipboard() {
     let srv = start(
         "stty -echo -icanon min 0 time 10; printf '\\033]52;c;?\\007'; \
-         head -c 64 | od -c; echo END; exec sleep 100000",
+         head -c 64 | od -c | grep -v '^0000000$'; echo END; exec sleep 100000",
     );
     srv.cmd(&["set-buffer", "secret"]).unwrap();
     let mut a = attach(&srv, "main");
     wait_text(&srv, "END");
     let text = srv.capture("main");
     let dump: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert_eq!(dump, ["0000000", "END"], "the pane read something:\n{text}");
+    assert_eq!(dump, ["END"], "the pane read something:\n{text}");
     assert_eq!(count(a.output(), b"\x1b]52;"), 0);
 }
 
@@ -480,8 +482,12 @@ fn the_command_gets_the_server_environment_and_nothing_else() {
     srv.cmd(&["set-environment", "-t", "main", "TM5_SESSION", "sess"])
         .unwrap();
     select_first_line(&srv);
+    // The shell's own glob lists /dev/fd, and its directory handle is the
+    // one descriptor above 2 it adds (the lowest free, 3). `ls` would add
+    // its own: two on macOS, whose fts keeps `.` open as well.
     let script = format!(
-        "env > {env}; ls /dev/fd > {fds}; cat > {stdin}; \
+        "env > {env}; for f in /dev/fd/*; do echo \"$f\" >> {fds}; done; \
+         cat > {stdin}; \
          echo tm5-stdout-leak; echo tm5-stderr-leak >&2; echo ok > {done}",
         env = quote(&out("env")),
         fds = quote(&out("fds")),
@@ -507,6 +513,7 @@ fn the_command_gets_the_server_environment_and_nothing_else() {
     let fds = fs::read_to_string(out("fds")).unwrap();
     let extra: Vec<&str> = fds
         .split_whitespace()
+        .map(|f| f.trim_start_matches("/dev/fd/"))
         .filter(|fd| !["0", "1", "2", "3"].contains(fd))
         .collect();
     assert!(extra.is_empty(), "inherited descriptors {extra:?}");
