@@ -52,8 +52,8 @@
 # The systemd image (rollback, readme) is tests/e2e/Containerfile.alias-day:
 # TA.1's Debian image with systemd as PID 1, a lingering test user and real
 # tmux 3.7b built at /usr/local/bin/tmux, which is the systemd image the
-# plan's T7.8 would have built. Both legs share one build, which the gate
-# removes at the end with the layers its build log names. Its inputs are
+# plan's T7.8 would have built. Both legs share one build, labelled with
+# the run and removed by that label at the end. Its inputs are
 # canopy and athome at PINS, through scripts/e2e.sh's secrets gate.
 #
 # Environment:
@@ -187,7 +187,10 @@ systemd_image() {
     git -C "$w/clone-canopy" bundle create --quiet "$in/canopy.bundle" alias-day || return 1
   rm -rf "$in/canopy" "$w/gate-"*
   echo "### building $GATE_IMAGE (log: $GATE_OUT/systemd-build.log)"
-  "$TIMEOUT" 3600 "${engine_argv[@]}" build ${net_args[@]+"${net_args[@]}"} \
+  # No intermediate layers kept, and the one image labelled with the run,
+  # so the cleanup removes by that label and touches nothing else.
+  "$TIMEOUT" 3600 "${engine_argv[@]}" build ${net_args[@]+"${net_args[@]}"} --layers=false \
+    --label "grofe-gate=$GATE_RUN_ID" \
     -f "$w/ctx/grofe/tests/e2e/Containerfile.alias-day" -t "$GATE_IMAGE" "$w/ctx" \
     >"$GATE_OUT/systemd-build.log" 2>&1
 }
@@ -282,8 +285,9 @@ main() {
   # on disk with the logs (its builds are large), and goes at the end.
   GATE_SRC="$GATE_OUT/src"
   GATE_SHA="$sha"
+  GATE_RUN_ID="$run_id"
   GROFE_CI_REV="$sha"
-  export GATE_OUT GATE_WORK GATE_IMAGE GATE_SHA GROFE_CI_REV
+  export GATE_OUT GATE_WORK GATE_IMAGE GATE_SHA GATE_RUN_ID GROFE_CI_REV
   mkdir -p "$GATE_OUT"
   git -C "$repo" worktree add --quiet --detach "$GATE_SRC" "$sha" ||
     die "could not check out $sha at $GATE_SRC"
@@ -296,13 +300,10 @@ main() {
     local engine_cmd=("${CONTAINER:-podman}")
     # shellcheck disable=SC2206 # E2E_PODMAN_OPTS is a list of words
     engine_cmd+=(${E2E_PODMAN_OPTS:-})
-    if "${engine_cmd[@]}" image exists "$GATE_IMAGE" 2>/dev/null; then
-      "${engine_cmd[@]}" rmi -f "$GATE_IMAGE" >/dev/null 2>&1 || true
-    fi
-    # The layers the systemd build made or reused, as its log names them;
-    # the bases, pulled by digest, are shared and stay.
-    grep -oE '^(--> |Using cache )[0-9a-f]{12,}' "$GATE_OUT/systemd-build.log" 2>/dev/null | awk '{ print $NF }' |
-      sort -u | xargs -r "${engine_cmd[@]}" rmi -f >/dev/null 2>&1 || true
+    # The systemd image, by the label its build gave it; the bases, pulled
+    # by digest, are shared and stay.
+    "${engine_cmd[@]}" images -a -q --filter "label=grofe-gate=$GATE_RUN_ID" 2>/dev/null | sort -u |
+      xargs -r "${engine_cmd[@]}" rmi -f >/dev/null 2>&1 || true
     git -C "$repo" worktree remove --force "$GATE_SRC" >/dev/null 2>&1 || true
     rm -rf "$GATE_WORK"
   }
