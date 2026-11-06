@@ -58,7 +58,9 @@ linux() {
   name="grofe-ci-linux-$$"
   # shellcheck disable=SC2064 # the label is fixed now; the trap outlives it
   trap "remove_labelled '$label'" EXIT
-  local opts=(--label "$label") envs=() var dir sub common mounted=0
+  # CI, as act and the hosted runner set it: the suites' require_tool,
+  # private_tmp, plugin-binary and shellcheck checks fail rather than skip.
+  local opts=(--label "$label") envs=(-e CI=true) var dir sub common mounted=0
   if [ -n "${E2E_PODMAN_NETWORK:-}" ]; then
     opts+=("--network=$E2E_PODMAN_NETWORK")
   fi
@@ -90,13 +92,13 @@ linux() {
   engine exec "$name" bash -c 'set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq sudo curl git ca-certificates build-essential pkg-config >/dev/null
+    apt-get install -y -qq sudo curl git ca-certificates build-essential pkg-config procps lsof >/dev/null
     useradd -m -u 1001 -s /bin/bash runner
     printf "runner ALL=(ALL) NOPASSWD:ALL\n" >/etc/sudoers.d/runner
     chmod 440 /etc/sudoers.d/runner
     install -d -o runner -g runner /home/runner/grofe'
   git archive HEAD | engine exec -i -u runner "$name" tar -x -C /home/runner/grofe
-  local as_runner=(engine exec -u runner -w /home/runner/grofe -e HOME=/home/runner ${envs[@]+"${envs[@]}"} "$name")
+  local as_runner=(engine exec -u runner -w /home/runner/grofe -e HOME=/home/runner "${envs[@]}" "$name")
   echo "### ci-linux.sh toolchain"
   "${as_runner[@]}" scripts/ci-linux.sh toolchain
   local rc=0 path="/home/runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

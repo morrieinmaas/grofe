@@ -25,7 +25,9 @@ cd "$(dirname "$0")/.."
 RUST_TOOLCHAIN=1.98.1
 FZF_VERSION=0.74.4
 FZF_SHA256=05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504
-TOOLS=(neovim htop tmux bats less shellcheck)
+# The tools the suites run; under CI each one missing fails its test
+# (require_tool) instead of skipping it.
+TOOLS=(neovim htop tmux bats less shellcheck python3)
 
 tmp="${RUNNER_TEMP:-}"
 if [ -z "$tmp" ]; then
@@ -88,16 +90,18 @@ acceptance() {
   # paths run (TP.8, TP.9 cases 2 and 3, TP.12 case 2), with the release
   # binaries canopy's checksum-verified provisioning fetches.
   export GROFE_TEST_PRIVATE_TMP=1
-  local canopy="${GROFE_COMPAT_CANOPY:-}" sha line
+  local canopy="${GROFE_COMPAT_CANOPY:-}" sha line provisioned
   if [ -z "$canopy" ]; then
     canopy="$tmp/canopy"
     sha="$(awk '$1 == "canopy" { print $2 }' tests/fixtures/compat/golden/tc_13/PINS)"
     git clone --quiet https://github.com/morrieinmaas/canopy "$canopy"
     git -C "$canopy" checkout --quiet "$sha"
   fi
+  # Captured first, so a failed provisioning stops the run.
+  provisioned="$(scripts/provision-plugin-binaries.sh "$canopy" "$tmp/plugin-bin")"
   while IFS= read -r line; do
-    export "${line?}"
-  done < <(scripts/provision-plugin-binaries.sh "$canopy" "$tmp/plugin-bin")
+    [ -n "$line" ] && export "${line?}"
+  done <<<"$provisioned"
 
   # Built first: self_test otherwise runs `cargo build --example spike` in
   # the middle of the suite, and that compile starves the timing cases
