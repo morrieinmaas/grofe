@@ -127,7 +127,9 @@ leg_macos() {
   local rc=0
   scripts/ci-local.sh macos || rc=$?
   if [ "$(uname -s)" = Darwin ]; then
-    return "$rc"
+    # Any failure is 1: ci-local.sh's own status 3 must not read as SKIP.
+    [ "$rc" -eq 0 ] || return 1
+    return 0
   fi
   if [ "$rc" -ne 0 ]; then
     echo "ci-local.sh macos exited $rc on this $(uname -s) host" >&3
