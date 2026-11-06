@@ -3,8 +3,8 @@
 # of HEAD, one leg after another (never two builds at once):
 #
 #   macos       scripts/ci-local.sh macos (see "The macos leg" below)
-#   linux       scripts/ci-local.sh linux, the workflow's Linux jobs via act,
-#               one job at a time (CI_LOCAL_ACT_JOBS=1)
+#   linux       scripts/ci-local.sh linux: scripts/ci-linux.sh, CI's Linux
+#               steps, in a plain ubuntu:26.04 container as a sudo user
 #   acceptance  scripts/e2e.sh acceptance (TE.1)
 #   compat      scripts/e2e.sh compat (TE.2)
 #   reboot      scripts/e2e.sh reboot (T4.6)
@@ -133,9 +133,8 @@ leg_macos() {
 }
 
 # Any failure is 1, so that no runner's own exit status reads as SKIP.
-# act's jobs one at a time, so no job's timing tests share the host.
 leg_linux() {
-  CI_LOCAL_ACT_JOBS=1 scripts/ci-local.sh linux || return 1
+  scripts/ci-local.sh linux || return 1
 }
 
 leg_e2e() {

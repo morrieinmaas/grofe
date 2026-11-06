@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Run CI locally: the real workflow's Linux jobs in a container via act,
-# then the macOS leg natively. Stand-in while GitHub Actions is unavailable.
+# Run CI locally: the workflow's Linux steps in a plain Ubuntu container, then
+# the macOS leg natively. Stand-in while GitHub Actions is unavailable.
 # Usage: scripts/ci-local.sh [linux|macos|e2e]   (default: linux and macos)
+#
+# The Linux leg runs scripts/ci-linux.sh, the script ci.yml's Linux jobs
+# run, in a fresh ubuntu:26.04 container (ubuntu-latest's release, pinned by
+# digest) as `runner`, a non-root user with passwordless sudo, as on a
+# hosted runner. grofe goes in as a `git archive` of HEAD, never the working
+# tree. The unit steps run, then the acceptance steps, both always, so one
+# red half cannot hide the other. The container is removed at the end.
 #
 # The e2e leg (T4.6) runs the container scenarios through scripts/e2e.sh:
 # today `reboot`, on the Debian image (and Arch with E2E_ARCH=1, never
@@ -13,22 +20,16 @@
 # at the commits in tests/fixtures/compat/golden/tc_13/PINS. With
 # GROFE_COMPAT_REQUIRED=1 a missing checkout fails the run instead of
 # skipping the suite. The macOS leg inherits the three; the Linux leg gets
-# them through act, with both checkouts mounted read-only.
+# them with both checkouts mounted read-only.
 #
-# The Linux leg also runs the plugin cases that need a private /tmp (the
-# workflow sets GROFE_TEST_PRIVATE_TMP=1 there) with their release
-# binaries, GROFE_TEST_OPENSESSIONS and GROFE_TEST_XRE, which the job
-# provisions for its own platform (scripts/provision-plugin-binaries.sh)
+# The Linux leg also runs the plugin cases that need a private /tmp, with
+# the release binaries ci-linux.sh provisions for the container's platform
 # from the GROFE_COMPAT_CANOPY checkout mounted below. Host binaries are not
 # passed in: on macOS they are the wrong platform for the container.
-#
-# act runs the workflow's jobs side by side, one per CPU. CI_LOCAL_ACT_JOBS=<n>
-# caps that (act's --concurrent-jobs); scripts/release-gate.sh sets 1, so
-# the timing tests in one job never share the host with another job.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The container CLI act's daemon answers to (docker honours DOCKER_HOST).
+# The container CLI: docker where it is installed, else podman.
 engine() {
   if command -v docker >/dev/null; then
     docker "$@"
@@ -47,58 +48,63 @@ remove_labelled() {
   fi
 }
 
-linux() {
-  # A DOCKER_HOST pointing at a socket that does not exist is as good as unset.
-  if [ -n "${DOCKER_HOST:-}" ] && [ ! -S "${DOCKER_HOST#unix://}" ]; then
-    unset DOCKER_HOST
-  fi
-  if [ -z "${DOCKER_HOST:-}" ] && command -v podman >/dev/null; then
-    DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
-    export DOCKER_HOST
-  fi
+LINUX_IMAGE=docker.io/library/ubuntu:26.04@sha256:157dc3d6e4a3e4f2c68d12df9df9ed6e808b59af6d4c3757b432b4f519916725
 
-  # Every job container this run starts carries this label, so the exit
-  # trap removes exactly those, whether the job passed or failed (act keeps
-  # a failed job's container running), and nothing else.
-  local label
+linux() {
+  # Every container this run starts carries this label, so the exit trap
+  # removes exactly those, whether the run passed or failed.
+  local label name
   label="grofe-ci-local=$$-$(date +%s)"
+  name="grofe-ci-linux-$$"
   # shellcheck disable=SC2064 # the label is fixed now; the trap outlives it
   trap "remove_labelled '$label'" EXIT
-  local opts="--label $label" args=() var dir name common mounted=0
+  local opts=(--label "$label") envs=() var dir sub common mounted=0
+  if [ -n "${E2E_PODMAN_NETWORK:-}" ]; then
+    opts+=("--network=$E2E_PODMAN_NETWORK")
+  fi
   if [ -n "${GROFE_COMPAT_REQUIRED:-}" ]; then
-    args+=(--env "GROFE_COMPAT_REQUIRED=$GROFE_COMPAT_REQUIRED")
+    envs+=(-e "GROFE_COMPAT_REQUIRED=$GROFE_COMPAT_REQUIRED")
   fi
   for var in GROFE_COMPAT_CANOPY GROFE_COMPAT_ATHOME; do
     dir="${!var:-}"
     [ -n "$dir" ] || continue
     dir="$(cd "$dir" && pwd)"
-    case "$dir" in
-      *[[:space:]]*) echo "ci-local: $var has whitespace in it: $dir" >&2; exit 2 ;;
-    esac
-    name="$(echo "${var#GROFE_COMPAT_}" | tr '[:upper:]' '[:lower:]')"
-    opts+=" -v $dir:/compat/$name:ro"
+    sub="$(echo "${var#GROFE_COMPAT_}" | tr '[:upper:]' '[:lower:]')"
+    opts+=(-v "$dir:/compat/$sub:ro")
     # A worktree's .git names its repository's git dir; mounted at the same
     # path, the suite can read the checkout's HEAD for the PINS check.
     common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir)"
     if [ "$common" != "$dir/.git" ]; then
-      opts+=" -v $common:$common:ro"
+      opts+=(-v "$common:$common:ro")
     fi
-    args+=(--env "$var=/compat/$name")
+    envs+=(-e "$var=/compat/$sub")
     mounted=1
   done
   if [ "$mounted" -eq 1 ]; then
     # The mounts belong to another user inside the container.
-    args+=(--env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory
-      --env 'GIT_CONFIG_VALUE_0=*')
+    envs+=(-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e 'GIT_CONFIG_VALUE_0=*')
   fi
 
-  if [ -n "${CI_LOCAL_ACT_JOBS:-}" ]; then
-    args+=(--concurrent-jobs "$CI_LOCAL_ACT_JOBS")
-  fi
-
-  act workflow_dispatch --matrix os:ubuntu-latest \
-    -P ubuntu-latest=catthehacker/ubuntu:act-24.04 --container-daemon-socket - \
-    --container-options "$opts" ${args[@]+"${args[@]}"}
+  engine run -d --name "$name" "${opts[@]}" "$LINUX_IMAGE" sleep infinity >/dev/null
+  echo "### the runner user, as on a hosted runner"
+  engine exec "$name" bash -c 'set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq sudo curl git ca-certificates build-essential pkg-config >/dev/null
+    useradd -m -u 1001 -s /bin/bash runner
+    printf "runner ALL=(ALL) NOPASSWD:ALL\n" >/etc/sudoers.d/runner
+    chmod 440 /etc/sudoers.d/runner
+    install -d -o runner -g runner /home/runner/grofe'
+  git archive HEAD | engine exec -i -u runner "$name" tar -x -C /home/runner/grofe
+  local as_runner=(engine exec -u runner -w /home/runner/grofe -e HOME=/home/runner ${envs[@]+"${envs[@]}"} "$name")
+  echo "### ci-linux.sh toolchain"
+  "${as_runner[@]}" scripts/ci-linux.sh toolchain
+  local rc=0 path="/home/runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  echo "### ci-linux.sh unit"
+  "${as_runner[@]}" env PATH="$path" scripts/ci-linux.sh unit || rc=1
+  echo "### ci-linux.sh acceptance"
+  "${as_runner[@]}" env PATH="$path" scripts/ci-linux.sh acceptance || rc=1
+  return "$rc"
 }
 
 macos() {

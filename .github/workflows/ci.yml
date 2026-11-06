@@ -13,9 +13,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FZF_VERSION: 0.74.4
-
 jobs:
   unit:
     timeout-minutes: 20
@@ -27,19 +24,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Linux runs scripts/ci-linux.sh, the same steps the release gate's
+      # linux leg runs in a container, with the toolchain it pins.
+      - name: Rust (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh toolchain
+
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: fmt, clippy, lib, bin and doc tests (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh unit
+
       - name: cargo fmt --check
+        if: runner.os == 'macOS'
         run: cargo fmt --check
 
       - name: cargo clippy
+        if: runner.os == 'macOS'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test (lib, bins, doc)
+        if: runner.os == 'macOS'
         run: |
           cargo test --lib --bins
           cargo test --doc
@@ -55,37 +66,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Rust (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh toolchain
+
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install tools (Linux)
+      # The tools, fzf's pin, the plugin binaries, every integration test
+      # binary and bats, as the release gate runs them.
+      - name: Acceptance (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y neovim htop tmux bats less shellcheck
+        run: scripts/ci-linux.sh acceptance
 
-      # The owner's fzf pin, as compat.yml. fe_4's `fzf-tmux` case waits for
-      # a floating pane, and Ubuntu's older fzf opens a popup instead.
       # Homebrew's fzf on macOS is current.
-      - name: fzf ${{ env.FZF_VERSION }} (Linux)
-        if: runner.os == 'Linux'
-        env:
-          FZF_SHA256: 05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504
-        run: |
-          mkdir -p "$RUNNER_TEMP/fzf"
-          curl -fsSLo "$RUNNER_TEMP/fzf.tar.gz" \
-            "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz"
-          echo "${FZF_SHA256}  $RUNNER_TEMP/fzf.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/fzf.tar.gz" -C "$RUNNER_TEMP/fzf" fzf
-          echo "$RUNNER_TEMP/fzf" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/fzf/fzf" --version | grep -q "^${FZF_VERSION} "
-
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
         run: brew install neovim fzf htop tmux bats-core shellcheck
 
       - name: Verify tools present
+        if: runner.os == 'macOS'
         run: |
           nvim --version | head -1
           fzf --version
@@ -95,14 +97,13 @@ jobs:
           less --version | head -1
           shellcheck --version | head -2
 
-      # Each job runs on a machine of its own (a fresh hosted runner VM, or
-      # act's container), so /tmp is its own: the plugin cases that write
-      # fixed /tmp paths run here (TP.8, TP.9 cases 2 and 3, TP.12 case 2).
-      # Their release binaries come from canopy's checksum-verified
-      # provisioning, for Linux and macOS alike: from the checkout
-      # GROFE_COMPAT_CANOPY names (scripts/ci-local.sh mounts it), else
-      # from canopy at the commit tc_13's PINS names.
+      # A hosted runner VM is the job's own, so /tmp is its own: the plugin
+      # cases that write fixed /tmp paths run here (TP.8, TP.9 cases 2 and
+      # 3, TP.12 case 2). Their release binaries come from canopy's
+      # checksum-verified provisioning, from canopy at the commit tc_13's
+      # PINS names.
       - name: Provision plugin release binaries
+        if: runner.os == 'macOS'
         run: |
           echo GROFE_TEST_PRIVATE_TMP=1 >>"$GITHUB_ENV"
           canopy="${GROFE_COMPAT_CANOPY:-}"
@@ -118,11 +119,13 @@ jobs:
       # in the middle of the suite, and that compile starves the timing
       # cases (m2_robust's resize storm) on the runner's few cores.
       - name: cargo test (integration)
+        if: runner.os == 'macOS'
         run: |
           cargo build --example spike
           cargo test --test '*' --no-fail-fast
 
       - name: bats
+        if: runner.os == 'macOS'
         run: |
           cargo build
           bats tests/cli.bats
