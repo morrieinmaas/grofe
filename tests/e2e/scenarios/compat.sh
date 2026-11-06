@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # compat.sh <phase>: the in-container half of TE.2, grofe's compat suites
 # in a clean image. Run by scripts/e2e.sh as the test user, one phase per
-# call, never on a host, in the Containerfile's `compat` stage (the
-# acceptance stage plus real tmux 3.7b and its sixel build on
-# /usr/local/bin, canopy and athome at their pinned commits, the compat
-# tests prebuilt):
+# call, never on a host, in the Containerfile's `compat` stage (TC.0b's
+# recording image again, real tmux 3.7b and its sixel build on
+# /usr/local/bin, with the suites' fzf and Neovim off the recorder's PATH,
+# canopy and athome at their pinned commits, the compat tests prebuilt):
 #
 # e2e-target: compat
 # e2e-inputs: canopy athome
@@ -13,11 +13,10 @@
 # e2e-run: rerecord rerecord
 #
 #   tools      what the phases below rely on: real tmux 3.7b (and
-#              tmux-sixel) first on the recorder's PATH and not grofe, fzf
-#              at the owner's 0.74.4,
-#              /usr/bin/tmux grofe answering as 3.7b, canopy's checkout at
-#              its PINS commit with a clean tree, athome's tree and the
-#              recording trees present
+#              tmux-sixel) first on the recorder's PATH, which holds no
+#              grofe, fzf, nvim or git, as in TC.0b's image; the suites'
+#              fzf (the owner's 0.74.4) and Neovim; canopy's and athome's
+#              exported trees, the same for the suites and the recorder
 #   tc13       TC.13's suite (`scenarios::`, copy mode aside) with canopy
 #              and athome required: its scenarios against their goldens,
 #              the live fzf and Neovim checks, and the corpus replay, whose
@@ -50,7 +49,10 @@ set -uo pipefail
 XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR
 SRC="$HOME/grofe"
-GROFE=/usr/local/lib/grofe/grofe
+# The PATH TC.0b's recorder gives every tmux (record.rs's fixed_env), and
+# the suites' own tools, kept off it.
+RECORDER_PATH=/usr/local/bin:/usr/bin:/bin
+TOOLS=/opt/compat-tools/bin
 GOLDEN="$SRC/tests/fixtures/compat/golden"
 export GROFE_COMPAT_CANOPY="$HOME/compat/canopy"
 export GROFE_COMPAT_ATHOME="$HOME/compat/athome"
@@ -66,53 +68,44 @@ fail() {
 pin() { awk -v n="$1" '$1 == n { print $2 }' "$GOLDEN/tc_13/PINS"; }
 
 tools() {
-  local t real head
+  local t found
   for t in /usr/local/bin/tmux /usr/local/bin/tmux-sixel; do
-    real="$(readlink -f "$t")"
-    if [ ! -x "$real" ]; then
+    if [ ! -x "$t" ]; then
       fail "real tmux: no $t"
-    elif [ "$real" -ef "$GROFE" ]; then
-      fail "real tmux: $t is grofe"
     elif [ "$(env -u TMUX "$t" -V)" != "tmux 3.7b" ]; then
       fail "real tmux: $t -V prints '$(env -u TMUX "$t" -V 2>&1)', not 'tmux 3.7b'"
     else
-      pass "real tmux: $t ($real) -V prints tmux 3.7b"
+      pass "real tmux: $t -V prints tmux 3.7b"
     fi
   done
-  if [ "$(env -i PATH=/usr/local/bin:/usr/bin:/bin sh -c 'command -v tmux')" = /usr/local/bin/tmux ]; then
-    pass "the recorder's PATH finds real tmux first"
+  # The recorder's PATH holds what TC.0b's image holds: real tmux first,
+  # no grofe, none of the suites' tools.
+  for t in tmux grofe fzf nvim git; do
+    found="$(env -i PATH="$RECORDER_PATH" sh -c "command -v $t")"
+    case "$t:$found" in
+      tmux:/usr/local/bin/tmux | grofe: | fzf: | nvim: | git:) pass "the recorder's PATH: $t is '${found:-none}'" ;;
+      *) fail "the recorder's PATH: $t is '${found:-none}'" ;;
+    esac
+  done
+  if [ "$(PATH="$TOOLS:$PATH" command -v fzf)" = "$TOOLS/fzf" ] && "$TOOLS/fzf" --version | grep -q '^0\.74\.4 '; then
+    pass "the suites' fzf: $TOOLS/fzf is 0.74.4, the owner's version"
   else
-    fail "the recorder's PATH does not find /usr/local/bin/tmux first"
+    fail "the suites' fzf: not $TOOLS/fzf 0.74.4"
   fi
-  if [ "$(command -v fzf)" = /usr/local/bin/fzf ] && fzf --version | grep -q '^0\.74\.4 '; then
-    pass "fzf: /usr/local/bin/fzf is 0.74.4, the owner's version"
+  if "$TOOLS/nvim" --headless --version 2>/dev/null | grep -q '^NVIM v'; then
+    pass "the suites' nvim: $("$TOOLS/nvim" --version | head -n 1)"
   else
-    fail "fzf: PATH finds '$(command -v fzf)', $(fzf --version 2>&1), not /usr/local/bin/fzf 0.74.4"
+    fail "the suites' nvim: $TOOLS/nvim does not run"
   fi
-  if [ /usr/bin/tmux -ef "$GROFE" ] && [ "$(env -u TMUX /usr/bin/tmux -V)" = "tmux 3.7b" ]; then
-    pass "grofe as tmux: /usr/bin/tmux is grofe and prints tmux 3.7b"
-  else
-    fail "grofe as tmux: /usr/bin/tmux is not grofe answering as tmux 3.7b"
-  fi
-
-  head="$(git -C "$GROFE_COMPAT_CANOPY" rev-parse HEAD 2>&1)"
-  if [ "$head" != "$(pin canopy)" ]; then
-    fail "canopy: $GROFE_COMPAT_CANOPY is at '$head', PINS says $(pin canopy)"
-  elif [ -n "$(git -C "$GROFE_COMPAT_CANOPY" status --porcelain)" ]; then
-    fail "canopy: $GROFE_COMPAT_CANOPY has changes"
-  else
-    pass "canopy: $GROFE_COMPAT_CANOPY at the PINS commit $head, clean"
-  fi
-  if [ -f "$GROFE_COMPAT_ATHOME/home/dot_config/grofe/config.toml" ] && [ ! -e "$GROFE_COMPAT_ATHOME/.git" ]; then
-    pass "athome: the archive of the PINS commit $(pin athome) at $GROFE_COMPAT_ATHOME"
-  else
-    fail "athome: no exported tree at $GROFE_COMPAT_ATHOME"
-  fi
+  # canopy and athome are `git archive` exports of their PINS commits
+  # (scripts/e2e.sh's pinned_inputs): pinned by construction.
   for t in canopy athome; do
-    if [ -d "$SRC/tests/compat/scenarios/trees/$t/.git" ] || [ -z "$(ls -A "$SRC/tests/compat/scenarios/trees/$t" 2>/dev/null)" ]; then
-      fail "recording tree: tests/compat/scenarios/trees/$t is not an exported tree"
+    if [ -e "$HOME/compat/$t/.git" ] || [ -z "$(ls -A "$HOME/compat/$t" 2>/dev/null)" ]; then
+      fail "$t: no exported tree at ~/compat/$t"
+    elif ! diff -rq "$HOME/compat/$t" "$SRC/tests/compat/scenarios/trees/$t" >/dev/null; then
+      fail "$t: the suites' tree and the recording tree differ"
     else
-      pass "recording tree: tests/compat/scenarios/trees/$t"
+      pass "$t: the export of $(pin "$t") at ~/compat/$t and tests/compat/scenarios/trees/$t"
     fi
   done
   if [ "$(as_golden id -un)" = golden ]; then
@@ -141,6 +134,7 @@ suite() {
   local label="$1" log="$HOME/$1.log" relog="$HOME/$1-retry.log" rc=0 failed=()
   shift
   cd "$SRC" || { fail "no source at $SRC"; return; }
+  export PATH="$TOOLS:$PATH"
   cargo test --locked --offline --test compat -- --show-output "$@" 2>&1 | tee "$log" || rc=$?
   grep -E '^test result:' "$log" | sed 's/^/SUMMARY /'
   if grep -E '^SKIPP(ED|ING)' "$log" | sort -u | sed 's/^/FAIL skip: /' | grep .; then
@@ -191,6 +185,7 @@ rerecord() {
     >"$HOME/rerecord.log" 2>&1 || rc=$?
   tail -n 5 "$HOME/rerecord.log"
   if [ "$rc" -ne 0 ]; then
+    grep -A 20 'panicked at' "$HOME/rerecord.log" | head -n 40
     fail "rerecord: the recorder exited $rc (see the lines above)"
     return
   fi
