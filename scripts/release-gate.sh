@@ -139,7 +139,9 @@ leg_macos() {
     echo "ci-local.sh macos exited $rc on this $(uname -s) host" >&3
     return 1
   fi
-  if ! run rustup target list --installed 2>/dev/null | grep -qx aarch64-apple-darwin; then
+  local targets
+  targets="$(run rustup target list --installed 2>/dev/null)" || targets=""
+  if ! grep -qx aarch64-apple-darwin <<<"$targets"; then
     echo "not a macOS host, and no aarch64-apple-darwin std for the clippy cross-check" >&3
     return 1
   fi
