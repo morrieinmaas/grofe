@@ -95,8 +95,14 @@ jobs:
           fi
           scripts/provision-plugin-binaries.sh "$canopy" "$RUNNER_TEMP/plugin-bin" >>"$GITHUB_ENV"
 
+      # Built first: self_test otherwise runs `cargo build --example spike`
+      # in the middle of the suite, and that compile starves the timing
+      # cases (m2_robust's resize storm) on the runner's few cores.
       - name: cargo test (integration)
-        run: cargo test --test '*'
+        run: |
+          cargo build --example spike
+          cargo test --test '*' --no-run
+          cargo test --test '*'
 
       - name: bats
         run: |
