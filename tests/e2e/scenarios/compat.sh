@@ -36,6 +36,17 @@
 # namespace maps the test user's uid onto golden's (uid 1001), so the
 # test user's files are still its own.
 #
+# Debian only: Containerfile.debian has the compat stage and Arch's has
+# none, so with E2E_ARCH=1 scripts/e2e.sh skips Arch for this scenario.
+# The recorder's user namespace is nested inside the container's, so the
+# host must allow nested unprivileged user namespaces: an Ubuntu host that
+# restricts them (kernel.apparmor_restrict_unprivileged_userns=1) fails
+# the tools phase's user-namespace check. The run needs local canopy
+# and athome clones holding their PINS commits, and gitleaks:
+#
+#   GROFE_E2E_CANOPY_REPO=<canopy clone> GROFE_E2E_ATHOME_REPO=<athome clone> \
+#     scripts/e2e.sh compat
+#
 # A failed suite case gets one serial rerun, as in acceptance.sh: passing
 # there is reported as FLAKY and counted (`FLAKY-COUNT <n>`), and with
 # E2E_STRICT=1 a FLAKY case fails the phase. A skipped scenario fails.
@@ -141,7 +152,7 @@ suite() {
   if grep -E '^SKIPP(ED|ING)' "$log" | sort -u | sed 's/^/FAIL skip: /' | grep .; then
     fails=$((fails + 1))
   fi
-  if ! grep -qE '^test result: .* [1-9][0-9]* passed' "$log"; then
+  if ! grep -qE '^test result: .* ([1-9][0-9]* passed|[1-9][0-9]* failed)' "$log"; then
     fail "$label: no case ran"
     return
   fi
@@ -160,6 +171,9 @@ suite() {
   cargo test --locked --offline --test compat -- --show-output --exact --test-threads=1 "${failed[@]}" 2>&1 |
     tee "$relog" || rc=$?
   grep -E '^test result:' "$relog" | sed 's/^/RETRY-SUMMARY /'
+  if grep -E '^SKIPP(ED|ING)' "$relog" | sort -u | sed 's/^/FAIL skip in the rerun: /' | grep .; then
+    fails=$((fails + 1))
+  fi
   if [ "$rc" -ne 0 ]; then
     mapfile -t failed < <(failed_tests "$relog")
     for t in "${failed[@]}"; do fail "$label: $t failed in the full run and again alone"; done

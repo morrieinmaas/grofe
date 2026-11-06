@@ -18,9 +18,15 @@
 #   cargo   `cargo test --test acceptance`; a skip is a FAIL naming its
 #           reason (the plugin cases' opensessions and xre binaries are
 #           provisioned in the image); a failed case gets one serial
-#           rerun, and passing there is reported as FLAKY and counted (`FLAKY-COUNT <n>`); with E2E_STRICT=1 (the
-#           release gate's setting) a FLAKY case fails the phase
+#           rerun, and passing there is reported as FLAKY and counted
+#           (`FLAKY-COUNT <n>`); with E2E_STRICT=1 (the release gate's
+#           setting) a FLAKY case fails the phase
 #   bats    `bats tests/cli.bats` against the debug binary
+#
+# The image provisions the plugin binaries from canopy at its PINS commit,
+# so the run needs a local canopy clone holding it, and gitleaks:
+#
+#   GROFE_E2E_CANOPY_REPO=<canopy clone> scripts/e2e.sh acceptance
 #
 # Each check prints `PASS <what>` or `FAIL <what>`; a phase exits nonzero
 # on any FAIL.
@@ -155,6 +161,6 @@ case "${1:-}" in
   tools) tools ;;
   cargo) cargo_suite ;;
   bats) bats_suite ;;
-  *) echo "usage: acceptance.sh tools|cargo|bats" >&2; exit 2 ;;
+  *) echo "usage: acceptance.sh tools|cargo|bats (run as GROFE_E2E_CANOPY_REPO=<canopy clone> scripts/e2e.sh acceptance)" >&2; exit 2 ;;
 esac
 [ "$fails" -eq 0 ]
