@@ -65,8 +65,9 @@ login() {
   zsh -lic "$1" </dev/null 2>/dev/null | tail -n 1
 }
 
-# The home as bytes: every entry's path, kind, mode and size, a symlink's
-# target, and every file's sha256. Left out: this drill's own output,
+# The home as bytes: every entry's path, kind and mode, a symlink's
+# target, and every file's sha256 (a directory's size is the filesystem's
+# bookkeeping, not content). Left out: this drill's own output,
 # canopy's own state tree (its restore points, which canopy documents as
 # left behind by a restore), ~/.cache, and what a login zsh rewrites each
 # time it starts (history, completion dumps). canopy's store, a git
@@ -77,7 +78,7 @@ login() {
 snapshot() {
   local prune=(\( -path ./e2e-out -o -path ./.local/state/canopy -o -path ./.cache
     -o -path ./.local/share/canopy -o -name '.zcompdump*' -o -name .zsh_history \) -prune -o)
-  (cd "$HOME" && find . "${prune[@]}" -printf '%p %y %m %s %l\n' | LC_ALL=C sort &&
+  (cd "$HOME" && find . "${prune[@]}" -printf '%p %y %m %l\n' | LC_ALL=C sort &&
     find . "${prune[@]}" -type f -print0 | xargs -0 -r sha256sum | LC_ALL=C sort -k2)
   printf '== canopy store\n'
   git -C "$STORE" rev-parse HEAD
