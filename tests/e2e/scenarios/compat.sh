@@ -48,7 +48,8 @@ set -uo pipefail
 
 XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR
-SRC="$HOME/grofe"
+# Where the recording image mounts grofe: its tmux errors name the path.
+SRC=/src
 # The PATH TC.0b's recorder gives every tmux (record.rs's fixed_env), and
 # the suites' own tools, kept off it.
 RECORDER_PATH=/usr/local/bin:/usr/bin:/bin

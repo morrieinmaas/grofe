@@ -97,7 +97,13 @@ CMD ["sleep", "infinity"]
 # Neovim 0.10.4's release build (Debian trixie's version) for the
 # navigator check. canopy and athome are their exported trees at the PINS
 # commits, in ~/compat for the suites and in tests/compat/scenarios/trees
-# for the recorder. `golden` (uid 1001) is the recorder's user name, which
+# for the recorder. grofe's source is at /src, as the recording image
+# mounts it: a tmux error names the config file it read. procps is the one
+# package more than that image holds: without `ps`, TC.13's corpus replay
+# logs one miss-log line MISS_ALLOWED does not list (`send-keys -X (not a
+# name): ignored`, a corpus line reaching a pane still in copy mode), and
+# no golden changes with it.
+# `golden` (uid 1001) is the recorder's user name, which
 # normalization replaces: compat.sh maps the test user onto it.
 FROM docker.io/library/rust:1.98-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS compat
 
@@ -107,7 +113,7 @@ ARG FZF_VERSION=0.74.4
 ARG NVIM_VERSION=0.10.4
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    bison ca-certificates curl libevent-dev libncurses-dev make pkg-config \
+    bison ca-certificates curl libevent-dev libncurses-dev make pkg-config procps \
   && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSLo /tmp/tmux.tar.gz \
     "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
@@ -143,15 +149,16 @@ RUN case "$(uname -m)" in \
   && /opt/compat-tools/bin/nvim --version | grep -q "^NVIM v${NVIM_VERSION}$"
 
 RUN useradd -m -u 1000 -s /bin/bash test && useradd -M -u 1001 -s /bin/sh golden
-COPY --chown=test:test grofe/ /home/test/grofe/
+RUN install -d -o test -g test /src
+COPY --chown=test:test grofe/ /src/
 COPY --chown=test:test inputs/canopy/ /home/test/compat/canopy/
 COPY --chown=test:test inputs/athome/ /home/test/compat/athome/
-COPY --chown=test:test inputs/canopy/ /home/test/grofe/tests/compat/scenarios/trees/canopy/
-COPY --chown=test:test inputs/athome/ /home/test/grofe/tests/compat/scenarios/trees/athome/
+COPY --chown=test:test inputs/canopy/ /src/tests/compat/scenarios/trees/canopy/
+COPY --chown=test:test inputs/athome/ /src/tests/compat/scenarios/trees/athome/
 USER test
 ENV CARGO_HOME=/home/test/.cargo CARGO_BUILD_JOBS=4 CARGO_TERM_COLOR=never \
   CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_INCREMENTAL=0
-WORKDIR /home/test/grofe
+WORKDIR /src
 RUN cargo test --locked --test compat --no-run
 USER root
 COPY grofe/tests/e2e/scenarios/ /opt/e2e/scenarios/
