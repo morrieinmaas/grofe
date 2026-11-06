@@ -131,8 +131,13 @@ impl TestServer {
         for d in [&home, &config_home, &state_home, &runtime_dir] {
             fs::create_dir_all(d).expect("create test dir");
         }
-        fs::write(root.join(SHRC), format!("PS1='{PROMPT}'\n"))
-            .expect("write the shell's ENV file");
+        // Only a login shell (`-sh`) reads the profile; a shell started with
+        // its own `PS1` keeps it.
+        fs::write(
+            root.join(SHRC),
+            format!("case $0 in -*) PS1='{PROMPT}' ;; esac\n"),
+        )
+        .expect("write the shell's ENV file");
         TestServer {
             socket: runtime_dir.join("test.sock"),
             dir,
@@ -275,7 +280,8 @@ impl TestServer {
     /// drops the exported `PS1`). A pane's shell is a login shell, and a
     /// system `/etc/profile` may set its own `PS1` (Debian's and Ubuntu's set
     /// `# ` for root), so `ENV` names a file that sets [`PROMPT`] again: an
-    /// interactive `sh` reads it after the profile.
+    /// interactive `sh` reads it after the profile. Only a login shell's
+    /// prompt is set there, so a test's own `PS1` for a plain `sh` stands.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
         if self.path_env.is_some() {
