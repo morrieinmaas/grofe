@@ -442,6 +442,8 @@ fn attached(config: &str) -> (TestServer, Harness) {
     fs::create_dir_all(&dir).expect("config dir");
     fs::write(dir.join("config.toml"), config).expect("write config");
     srv.cmd(&["start-server"]).expect("start-server");
+    // `exec`, so the pane runs cat whatever `sh` is: dash keeps itself as
+    // the parent of a `-c` command on a terminal, and titles name `sh`.
     let cmds: [&[&str]; 5] = [
         &[
             "new-session",
@@ -452,7 +454,7 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "40",
             "-y",
             "12",
-            "cat",
+            "exec cat",
         ],
         &[
             "set",
@@ -461,8 +463,8 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "#{pane_index}: #{pane_current_command}",
         ],
         &["set", "-g", "status", "off"],
-        &["split-window", "-h", "-t", "f", "cat"],
-        &["split-window", "-v", "-t", "f:.1", "cat"],
+        &["split-window", "-h", "-t", "f", "exec cat"],
+        &["split-window", "-v", "-t", "f:.1", "exec cat"],
     ];
     for args in cmds {
         srv.cmd(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
