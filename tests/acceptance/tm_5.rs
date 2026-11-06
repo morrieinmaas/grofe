@@ -482,11 +482,13 @@ fn the_command_gets_the_server_environment_and_nothing_else() {
     srv.cmd(&["set-environment", "-t", "main", "TM5_SESSION", "sess"])
         .unwrap();
     select_first_line(&srv);
-    // The shell's own glob lists /dev/fd, and its directory handle is the
-    // one descriptor above 2 it adds (the lowest free, 3). `ls` would add
-    // its own: two on macOS, whose fts keeps `.` open as well.
+    // fd 3 is checked on its own first: the shell's glob then lists
+    // /dev/fd, and its directory handle is the one descriptor above 2 it
+    // adds (the lowest free, 3). `ls` would add its own: two on macOS,
+    // whose fts keeps `.` open as well.
     let script = format!(
-        "env > {env}; for f in /dev/fd/*; do echo \"$f\" >> {fds}; done; \
+        "env > {env}; [ -e /dev/fd/3 ] && echo leak3 >> {fds}; \
+         for f in /dev/fd/*; do echo \"$f\" >> {fds}; done; \
          cat > {stdin}; \
          echo tm5-stdout-leak; echo tm5-stderr-leak >&2; echo ok > {done}",
         env = quote(&out("env")),
