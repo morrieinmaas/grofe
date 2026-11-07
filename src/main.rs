@@ -146,11 +146,14 @@ fn main() -> ExitCode {
             }
         }
     };
-    let rest = rest.as_slice();
-    let Some(verb) = rest.first() else {
-        println!("{USAGE}");
-        return ExitCode::SUCCESS;
+    // Bare `grofe`, like bare `tmux`, means `new-session`.
+    let rest = if rest.is_empty() {
+        vec!["new-session".to_string()]
+    } else {
+        rest
     };
+    let rest = rest.as_slice();
+    let verb = &rest[0];
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.

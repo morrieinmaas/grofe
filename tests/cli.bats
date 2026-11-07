@@ -37,9 +37,11 @@ wait_for_line() {
     return 1
 }
 
-@test "grofe binary runs" {
-    run "$BIN"
-    [ "$status" -eq 0 ]
+@test "bare grofe means new-session, as bare tmux does" {
+    # No terminal here, so new-session stops where tmux's does.
+    run "$BIN" -S "$SOCK" </dev/null
+    [ "$status" -eq 1 ]
+    [ "$output" = "open terminal failed: not a terminal" ]
 }
 
 @test "--version and -V print grofe's version" {

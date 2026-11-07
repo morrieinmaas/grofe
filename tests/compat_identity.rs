@@ -677,6 +677,7 @@ fn other_names_behave_as_grofe() {
         let link = bin.join(name);
         symlink(env!("CARGO_BIN_EXE_grofe"), &link).unwrap();
         let mut cmd = Command::new(&link);
+        cmd.arg("-h");
         isolate(&srv, &mut cmd);
         let out = run_bounded(cmd, CMD_TIMEOUT);
         assert!(out.status.success(), "{name}: {}", out.stderr);

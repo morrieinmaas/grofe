@@ -9,6 +9,7 @@ fn binary_runs() {
         .env("HOME", tmp.path())
         .env("XDG_STATE_HOME", tmp.path().join("state"))
         .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .arg("--version")
         .output()
         .expect("failed to run grofe binary");
     assert!(output.status.success());
